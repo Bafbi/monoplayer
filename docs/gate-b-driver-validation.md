@@ -71,6 +71,23 @@ Prism is closed if the console window should be removed entirely.
 
 ## Remaining G0 work
 
-- The unmodded Prism client witness (no driver) is still the anti-masking check.
-- Repeat the movement/edit/disconnect/rejoin row 2/2.
+- The driver lane is now **2/2**: `node src/gate-b.js --runs 2 --tunnel` passed
+  twice on 2026-11-06, 38/38 assertions each, with server-side position and
+  block checks. Reports:
+  [`testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json`](../testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json)
+  and
+  [`testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json`](../testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json).
+- The unmodded Prism client witness (no driver) is still pending and remains
+  the anti-masking blocker; `gate-b:g0` will keep exiting nonzero until it is
+  completed.
 - Assert a survival (non-creative) break/place hold, not just the creative row.
+
+The repeatable runner for exactly this row is now in `src/gate-b/` +
+`src/gate-b.js`; see the runbook [docs/gate-b-g0.md](gate-b-g0.md). It
+automates: fresh-process relaunch per run (quit + SSH/Prism, no reconnect op),
+run-scoped arena coordinates with preflight block states, paired client/RCON
+assertions (positive `execute if block` only — "Could not set" is never a
+pass), classified RCON ops (setup/assertion/probe), screenshot copy-back via
+scp, per-run reports, and the `--runs 2` / `--verify-g0` gates
+(`mise run gate-b:scenario`, `mise run gate-b:g0`). The one-off manual checks
+that validated this driver remain recorded above.
