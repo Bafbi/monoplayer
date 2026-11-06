@@ -51,7 +51,9 @@ generates the manual anti-masking witness checklist, and
 real 2/2 plus a completed witness. The runbook with commands, evidence rules,
 and failure modes is [docs/gate-b-g0.md](docs/gate-b-g0.md).
 
-The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run); G0
-remains blocked only on the manual unmodded witness.
+The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run), and
+the manual unmodded witness passed the full join/render/move/break/place/
+disconnect/rejoin row. **G0 is green.** Next: G1 auth readiness and the M4
+Paper-behind-Velocity lane.
 
 Created in [T3 Code](https://t3.codes).

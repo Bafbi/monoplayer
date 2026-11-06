@@ -31,9 +31,9 @@ not the testbed itself.
   Prism 11.0.3, Java 25, 26.1.2 instance).
 - G0 backend: Paper 26.1.2 b74 in `monoplayer-gate-b`, Tailscale endpoint
   `monoplayer-gate-b-paper.tail41e568.ts.net:25565`, online-mode and
-  secure-profile. Official client joined. The Fabric driver lane passed
-  **2/2** on 2026-11-06 (38/38 assertions per run) with the repeatable
-  `src/gate-b/` runner; the unmodded witness is still pending.
+  secure-profile. The Fabric driver lane passed **2/2** on 2026-11-06 (38/38
+  assertions per run) with the repeatable `src/gate-b/` runner, and the
+  unmodded Prism witness passed the full manual row. **G0 is green.**
 - Account roles (user-confirmed): `Bafbi` = player, `GlowSquidye` = puppet.
 - Target topology (user-confirmed): Paper behind a proxy; Velocity is core, not
   a compatibility lane. Read-only/blocked chat is acceptable.
@@ -57,7 +57,8 @@ not the testbed itself.
   **2/2** consecutive runs against Paper 26.1.2 b74, 38/38 assertions each,
   with server-side position/block checks. The window is named
   `Monoplayer Gate B` so the Hyprland workspace-9 rule cannot catch normal
-  Minecraft. Remaining: the manual unmodded witness.
+  Minecraft. The unmodded witness also passed; G0 is complete and the next
+  slice is G1 auth readiness plus the M4 Paper-behind-Velocity lane.
 - [Research: backend matrix and network harness](issues/02-research-backend-matrix.md):
   Vanilla 26.1.2 + Paper 26.1.2 b74 direct are the core; Fabric is a required
   compatibility report; Velocity is a proxy lane only if the target uses one;
@@ -78,7 +79,9 @@ not the testbed itself.
 ## Not yet specified
 
 - Which Prism account is the player and which is the headless puppet.
-- Whether the unmodded witness runs before or after the 2/2 driver repetitions.
+- G1 auth readiness: device-code bootstrap and real `hasJoined` for the two
+  accounts.
+- M4: Paper behind Velocity; do not start Monoplayer integration first.
 - Whether Fabric is an advertised target, which would promote M3 to
   gate-blocking.
 - Whether the real target server sits behind Velocity/BungeeCord, which would

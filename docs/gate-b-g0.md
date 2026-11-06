@@ -94,8 +94,14 @@ break/place, disconnect, and rejoin. Reports and screenshots:
 - `testdata/gate-b-screenshot-mw52bqrgu38etw-gate-b-1793974882660.png`
 - `testdata/gate-b-screenshot-mw52co9wuw3sck-gate-b-1793974926080.png`
 
-G0 is **not yet complete**: `node src/gate-b.js --verify-g0` exits 1 because
-the unmodded witness has not been recorded. The driver lane itself is done.
+**G0 passes.** The manual unmodded witness was completed on 2026-11-06
+(join, render, move, break, place, screenshot, disconnect, rejoin). Its
+checklist and evidence are
+[`testdata/gate-b-unmodded-witness.json`](../testdata/gate-b-unmodded-witness.json)
+and
+[`testdata/gate-b-witness-2026-11-06.png`](../testdata/gate-b-witness-2026-11-06.png).
+`mise run gate-b:g0` exits 0; the verdict is
+[`testdata/gate-b-g0-verdict.json`](../testdata/gate-b-g0-verdict.json).
 
 ## The unmodded witness lane
 

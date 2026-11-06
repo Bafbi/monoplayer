@@ -111,7 +111,7 @@
     </div>
     <p class="small" style="color:#9fb0c9;margin-top:22px;margin-bottom:0;">
       Prepared 5 November 2026 · Updated 6 November 2026 · Research: 4 delegates ·
-      Decision council: 3 delegates · Status: G0 underway · Gate A: 37/37 protocol assertions
+      Decision council: 3 delegates · Status: G0 PASS (2/2 driver + unmodded witness) · Gate A: 37/37 protocol assertions
     </p>
   </div>
 </header>
@@ -182,7 +182,7 @@
 
 <section id="status">
   <div class="section-kicker">Live status · 6 November 2026</div>
-  <h2>G0 is underway</h2>
+  <h2>G0 passed: host readiness</h2>
   <p class="section-lede">
     The host and cluster are no longer hypothetical. A Paper 26.1.2 backend is running in
     <code>monoplayer-gate-b</code>, exposed on Tailscale, and an official 26.1.2 Prism client has
@@ -193,7 +193,7 @@
     <div class="stat"><div class="k">Display host</div><div class="v">nath</div><div class="n">Omarchy, Hyprland, AMD Radeon, 14 GiB</div></div>
     <div class="stat"><div class="k">Backend</div><div class="v">Paper 26.1.2</div><div class="n"><code>monoplayer-gate-b</code>, online-mode</div></div>
     <div class="stat"><div class="k">Client</div><div class="v">Prism 11.0.3</div><div class="n">26.1.2, Java 25, joined</div></div>
-    <div class="stat"><div class="k">Next</div><div class="v">Move/edit/detach</div><div class="n">Then 2/2 for G0</div></div>
+    <div class="stat"><div class="k">Next</div><div class="v">G1 auth / M4</div><div class="n">Paper behind Velocity</div></div>
   </div>
 
   <div class="callout good">
@@ -206,14 +206,14 @@
     </ul>
   </div>
 
-  <div class="callout warn">
-    <span class="label">Still pending for G0</span>
+  <div class="callout good">
+    <span class="label">G0 result</span>
     <p class="mb0">
-      Movement, break/place, disconnect, rejoin, and a second clean run. The client is on a
-      Wayland laptop and the user is using the T3 Code workspace; the next evidence step is a
-      short driver pass, not more backend setup. The backend is ready; the harness is not.
-      The Fabric driver is built at <code>tools/gate-b-driver</code>; installation and the G0 run
-      wait for <code>nath</code> to come back online.
+      G0 passed on 2026-11-06. The repeatable driver-lane runner passed 2/2 consecutive runs
+      with 38/38 assertions each, including server-side movement, break, place, disconnect,
+      and rejoin checks. The mandatory unmodded Prism witness also passed join, render, move,
+      break, place, screenshot, disconnect, and rejoin. Runbook and evidence:
+      <code>docs/gate-b-g0.md</code>, <code>testdata/gate-b-g0-verdict.json</code>.
     </p>
   </div>
 
@@ -245,13 +245,15 @@
   </table>
 
   <div class="callout good">
-    <span class="label">Current G0 evidence</span>
+    <span class="label">G0 evidence bundle</span>
     <p class="mb0">
-      The official 26.1.2 client joined Paper 26.1.2 through
-      <code>monoplayer-gate-b-paper.tail41e568.ts.net:25565</code>; the backend RCON reports
-      <code>Bafbi</code> online, and the client log says “Bafbi joined the game”. This proves the
-      host, launcher, Java 25, online-mode backend, Tailscale path, and basic join. Movement,
-      block edit, disconnect, and rejoin are the remaining G0 steps.
+      Driver lane: two consecutive reports with 38/38 assertions each, server-verified move,
+      break, place, disconnect, and rejoin, plus screenshots. Unmodded witness: the official
+      client joined Paper 26.1.2 through <code>monoplayer-gate-b-paper.tail41e568.ts.net:25565</code>,
+      rendered, moved, broke, placed, disconnected, and rejoined; the Paper log shows the
+      disconnect/rejoin pair. Renderer: AMD Radeon Graphics (radeonsi, Rembrandt), OpenGL 4.6
+      Mesa 26.2.2. Route: Tailscale direct. Verdict:
+      <code>testdata/gate-b-g0-verdict.json</code>.
     </p>
   </div>
 
@@ -888,9 +890,9 @@
   <div class="callout good">
     <span class="label">Recommended next action</span>
     <p class="mb0">
-      When <code>nath</code> is online: install the driver into a Fabric 26.1.2 Prism instance,
-      launch it against Paper, and drive move → break → place → disconnect → rejoin. Then deploy
-      the Velocity + Paper proxy lane. Do not start Monoplayer integration until G0 is 2/2.
+      G0 is done. Next is G1 auth readiness (two accounts, device-code bootstrap, real
+      <code>hasJoined</code>) and the M4 Paper-behind-Velocity lane. Do not start Monoplayer
+      integration until G1 is ready and the M4 proxy path is green.
     </p>
   </div>
 </section>

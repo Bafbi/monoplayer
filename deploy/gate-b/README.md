@@ -4,8 +4,8 @@
 `monoplayer-gate-b`; an official 26.1.2 client joined through
 `monoplayer-gate-b-paper.tail41e568.ts.net:25565`. The Fabric driver lane now
 passes **2/2** consecutive runs (38/38 assertions each) with the repeatable
-`src/gate-b/` runner. G0 still needs the manual unmodded Prism witness.
-Evidence: [docs/gate-b-g0.md](../../docs/gate-b-g0.md) and
+`src/gate-b/` runner, and the manual unmodded Prism witness is completed.
+**G0 passes.** Evidence: [docs/gate-b-g0.md](../../docs/gate-b-g0.md) and
 [docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
 
 The `monoplayer-gate-b` namespace holds the real-backend matrix. It is not the
