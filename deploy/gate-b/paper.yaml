@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer-gate-b-paper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer-gate-b-paper
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      containers:
+        - name: paper
+          image: itzg/minecraft-server:2026.10.1-java25
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: EULA
+              value: "TRUE"
+            - name: TYPE
+              value: PAPER
+            - name: VERSION
+              value: "26.1.2"
+            - name: PAPER_BUILD
+              value: "74"
+            - name: MEMORY
+              value: 2G
+            - name: ONLINE_MODE
+              value: "TRUE"
+            - name: ENFORCE_SECURE_PROFILE
+              value: "TRUE"
+            - name: ENFORCE_WHITELIST
+              value: "FALSE"
+            - name: LEVEL_TYPE
+              value: minecraft:flat
+            - name: GENERATE_STRUCTURES
+              value: "false"
+            - name: LEVEL_SEED
+              value: "775"
+            - name: VIEW_DISTANCE
+              value: "4"
+            - name: SIMULATION_DISTANCE
+              value: "4"
+            - name: SPAWN_PROTECTION
+              value: "0"
+            - name: DIFFICULTY
+              value: peaceful
+            - name: MODE
+              value: creative
+            - name: MAX_PLAYERS
+              value: "4"
+            - name: ENABLE_RCON
+              value: "TRUE"
+            - name: RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gate-b-rcon
+                  key: password
+          ports:
+            - name: minecraft
+              containerPort: 25565
+            - name: rcon
+              containerPort: 25575
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          startupProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer-gate-b-paper
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
+    - name: rcon
+      port: 25575
+      targetPort: rcon
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-g0
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/part-of: monoplayer
+  annotations:
+    tailscale.com/hostname: monoplayer-gate-b-paper
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:
+    app.kubernetes.io/name: monoplayer-gate-b-paper
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft

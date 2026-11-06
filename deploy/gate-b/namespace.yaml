@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/part-of: monoplayer
+    monoplayer.eu/environment: gate-b
