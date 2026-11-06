@@ -1,0 +1,35 @@
+[tools]
+node = "26.7.0"
+pnpm = "11.25.0"
+java = "25.0.2"
+gradle = "9.8.2"
+
+[tasks.install]
+description = "Install the Gate A harness dependencies."
+run = "pnpm install --frozen-lockfile"
+
+[tasks.lint]
+description = "Syntax-check every harness source file."
+run = "find src test -name '*.js' -print0 | xargs -0 -n1 node --check"
+
+[tasks.test]
+description = "Run the protocol-level Gate A tests."
+depends = ["install"]
+run = "node --test test/*.test.js"
+
+[tasks.check]
+description = "Fast local gate: lint plus protocol tests."
+depends = ["lint", "test"]
+
+[tasks."gate-a"]
+description = "Run the standalone Gate A scenario and write a report."
+depends = ["install"]
+run = "node src/gate-a.js"
+
+[tasks."gate-b:driver:build"]
+description = "Build the Gate B Fabric client driver."
+run = "gradle -p tools/gate-b-driver --no-daemon build"
+
+[tasks."gate-b:driver:install"]
+description = "Install the built driver into the display host's Prism root (run on the host)."
+run = "tools/gate-b-driver/install.sh tools/gate-b-driver/build/libs/gate-b-driver-0.1.0.jar"
