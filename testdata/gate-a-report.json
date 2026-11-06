@@ -1,0 +1,635 @@
+{
+  "timestamp": "2026-11-05T21:54:37.163Z",
+  "started": "2026-11-05T21:54:26.116Z",
+  "passed": true,
+  "assertionCount": 37,
+  "failedAssertions": [],
+  "assertions": [
+    {
+      "name": "cache holds the join sequence",
+      "ok": true,
+      "detail": {
+        "cacheNames": [
+          "login",
+          "game_state_change",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished"
+        ]
+      }
+    },
+    {
+      "name": "client1 join order is exact",
+      "ok": true,
+      "detail": {
+        "names": [
+          "login",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished"
+        ]
+      }
+    },
+    {
+      "name": "client1 receives play login",
+      "ok": true,
+      "detail": {
+        "entityId": 42
+      }
+    },
+    {
+      "name": "client1 receives position",
+      "ok": true,
+      "detail": {
+        "first": {
+          "teleportId": 1,
+          "x": 0.5,
+          "y": 1.62,
+          "z": 0.5,
+          "dx": 0,
+          "dy": 0,
+          "dz": 0,
+          "yaw": 0,
+          "pitch": 0,
+          "flags": {
+            "_value": 0,
+            "x": false,
+            "y": false,
+            "z": false,
+            "yaw": false,
+            "pitch": false,
+            "dx": false,
+            "dy": false,
+            "dz": false,
+            "yawDelta": false
+          }
+        }
+      }
+    },
+    {
+      "name": "client1 receives map_chunk",
+      "ok": true,
+      "detail": {
+        "mapChunk": {
+          "x": 0,
+          "z": 0,
+          "bytes": 2242
+        }
+      }
+    },
+    {
+      "name": "client1 receives game_state_change 13",
+      "ok": true,
+      "detail": {}
+    },
+    {
+      "name": "client1 sees the puppet profile",
+      "ok": true,
+      "detail": {
+        "profile": {
+          "username": "Puppet",
+          "uuid": "00000000-0000-0000-0000-000000000001"
+        }
+      }
+    },
+    {
+      "name": "attach replayed cached frames plus a synthesized position",
+      "ok": true,
+      "detail": {
+        "framesReplayed": 5,
+        "positionsSynthesized": 1
+      }
+    },
+    {
+      "name": "backend receives client1 position",
+      "ok": true,
+      "detail": {
+        "positions": [
+          {
+            "x": 2.5,
+            "y": 1.62,
+            "z": 2.5,
+            "flags": {
+              "_value": 1,
+              "onGround": true,
+              "hasHorizontalCollision": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "backend receives block_dig exactly once",
+      "ok": true,
+      "detail": {
+        "digs": [
+          {
+            "status": 2,
+            "location": {
+              "x": 1,
+              "z": 1,
+              "y": 0
+            },
+            "face": 1,
+            "sequence": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "backend receives block_place exactly once",
+      "ok": true,
+      "detail": {
+        "places": [
+          {
+            "hand": "main_hand",
+            "location": {
+              "x": 2,
+              "z": 2,
+              "y": 0
+            },
+            "direction": 1,
+            "cursorX": 0.5,
+            "cursorY": 1,
+            "cursorZ": 0.5,
+            "insideBlock": false,
+            "worldBorderHit": false,
+            "sequence": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "serverbound relay counted",
+      "ok": true,
+      "detail": {
+        "serverboundForwarded": 3
+      }
+    },
+    {
+      "name": "client teleport confirm sentinel did not reach backend",
+      "ok": true,
+      "detail": {
+        "teleportConfirms": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "client chunk-batch ack sentinel did not reach backend",
+      "ok": true,
+      "detail": {
+        "chunkBatchAcks": [
+          32
+        ]
+      }
+    },
+    {
+      "name": "client keep-alive sentinel did not reach backend",
+      "ok": true,
+      "detail": {
+        "keepAlives": []
+      }
+    },
+    {
+      "name": "client1 stayed connected through the soak",
+      "ok": true,
+      "detail": {
+        "ended": null,
+        "errors": []
+      }
+    },
+    {
+      "name": "front keep-alive observed",
+      "ok": true,
+      "detail": {
+        "names": [
+          "login",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished",
+          "keep_alive"
+        ]
+      }
+    },
+    {
+      "name": "proxy still considers client1 attached",
+      "ok": true,
+      "detail": {
+        "attached": true
+      }
+    },
+    {
+      "name": "backend leg still in play",
+      "ok": true,
+      "detail": {
+        "backendState": "play"
+      }
+    },
+    {
+      "name": "backend keep-alive observed while attached",
+      "ok": true,
+      "detail": {
+        "keepAlives": [
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "detach recorded",
+      "ok": true,
+      "detail": {}
+    },
+    {
+      "name": "backend still has exactly one login",
+      "ok": true,
+      "detail": {
+        "logins": 1
+      }
+    },
+    {
+      "name": "proxy backendLogins is 1",
+      "ok": true,
+      "detail": {}
+    },
+    {
+      "name": "backend leg still in play after detach",
+      "ok": true,
+      "detail": {
+        "backendState": "play"
+      }
+    },
+    {
+      "name": "backend keep-alive observed while detached",
+      "ok": true,
+      "detail": {
+        "keepAlives": [
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "client2 receives the current block_change",
+      "ok": true,
+      "detail": {
+        "blockChanges": [
+          {
+            "location": {
+              "x": 3,
+              "z": 3,
+              "y": 0
+            },
+            "type": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "client2 lands on client1 current pose, not the stale backend teleport",
+      "ok": true,
+      "detail": {
+        "lastPos": {
+          "teleportId": 2,
+          "x": 2.5,
+          "y": 1.62,
+          "z": 2.5,
+          "dx": 0,
+          "dy": 0,
+          "dz": 0,
+          "yaw": 0,
+          "pitch": 0,
+          "flags": {
+            "_value": 0,
+            "x": false,
+            "y": false,
+            "z": false,
+            "yaw": false,
+            "pitch": false,
+            "dx": false,
+            "dy": false,
+            "dz": false,
+            "yawDelta": false
+          }
+        }
+      }
+    },
+    {
+      "name": "client2 sees the puppet profile",
+      "ok": true,
+      "detail": {
+        "profile": {
+          "username": "Puppet",
+          "uuid": "00000000-0000-0000-0000-000000000001"
+        }
+      }
+    },
+    {
+      "name": "clientbound player_chat was not cached or replayed",
+      "ok": true,
+      "detail": {
+        "clientNames": [
+          "login",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished",
+          "block_change",
+          "position"
+        ],
+        "cacheNames": [
+          "login",
+          "game_state_change",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished",
+          "block_change"
+        ]
+      }
+    },
+    {
+      "name": "client2 receives the live backend teleport",
+      "ok": true,
+      "detail": {
+        "lastPos": {
+          "teleportId": 3,
+          "x": 8.5,
+          "y": 1.62,
+          "z": 8.5,
+          "dx": 0,
+          "dy": 0,
+          "dz": 0,
+          "yaw": 0,
+          "pitch": 0,
+          "flags": {
+            "_value": 0,
+            "x": false,
+            "y": false,
+            "z": false,
+            "yaw": false,
+            "pitch": false,
+            "dx": false,
+            "dy": false,
+            "dz": false,
+            "yawDelta": false
+          }
+        }
+      }
+    },
+    {
+      "name": "backend saw proxy-owned teleport confirms",
+      "ok": true,
+      "detail": {
+        "teleportConfirms": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "backend saw the proxy chunk-batch ack",
+      "ok": true,
+      "detail": {
+        "chunkBatchAcks": [
+          32
+        ]
+      }
+    },
+    {
+      "name": "second attach counted",
+      "ok": true,
+      "detail": {
+        "attachTotal": 2
+      }
+    },
+    {
+      "name": "backend logins exactly 1 after reattach",
+      "ok": true,
+      "detail": {
+        "backendLogins": 1,
+        "proxyBackendLogins": 1
+      }
+    },
+    {
+      "name": "serverbound chat blocked at proxy",
+      "ok": true,
+      "detail": {
+        "chatBlocked": 1
+      }
+    },
+    {
+      "name": "serverbound chat never reached the backend",
+      "ok": true,
+      "detail": {
+        "chats": 0,
+        "commands": 0,
+        "acks": 0,
+        "sessions": 0
+      }
+    },
+    {
+      "name": "clientbound chat never reached the client",
+      "ok": true,
+      "detail": {
+        "names": [
+          "login",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished",
+          "block_change",
+          "position"
+        ]
+      }
+    }
+  ],
+  "metrics": {
+    "backendLogins": 1,
+    "attachTotal": 2,
+    "detachTotal": 1,
+    "frontRejected": 0,
+    "backendDisconnects": 0,
+    "cacheOverflow": 0,
+    "framesCached": 6,
+    "framesReplayed": 11,
+    "serverboundForwarded": 3,
+    "chatBlocked": 1,
+    "positionsSynthesized": 3
+  },
+  "cache": {
+    "size": 6,
+    "names": [
+      "login",
+      "game_state_change",
+      "chunk_batch_start",
+      "map_chunk",
+      "chunk_batch_finished",
+      "block_change"
+    ]
+  },
+  "backend": {
+    "port": 45753,
+    "logins": 1,
+    "positions": 1,
+    "digs": 1,
+    "places": 1,
+    "chats": 0,
+    "chatCommands": 0,
+    "chatAcks": 0,
+    "chatSessionUpdates": 0,
+    "teleportConfirms": [
+      1,
+      2
+    ],
+    "keepAlives": [
+      "0",
+      "0"
+    ],
+    "chunkBatchAcks": [
+      32
+    ]
+  },
+  "client1": {
+    "profile": {
+      "username": "Puppet",
+      "uuid": "00000000-0000-0000-0000-000000000001"
+    },
+    "names": [
+      "login",
+      "game_state_change",
+      "position",
+      "chunk_batch_start",
+      "map_chunk",
+      "chunk_batch_finished",
+      "keep_alive"
+    ],
+    "positions": [
+      {
+        "teleportId": 1,
+        "x": 0.5,
+        "y": 1.62,
+        "z": 0.5,
+        "dx": 0,
+        "dy": 0,
+        "dz": 0,
+        "yaw": 0,
+        "pitch": 0,
+        "flags": {
+          "_value": 0,
+          "x": false,
+          "y": false,
+          "z": false,
+          "yaw": false,
+          "pitch": false,
+          "dx": false,
+          "dy": false,
+          "dz": false,
+          "yawDelta": false
+        }
+      }
+    ],
+    "errors": [],
+    "ended": "socketClosed"
+  },
+  "client2": {
+    "profile": {
+      "username": "Puppet",
+      "uuid": "00000000-0000-0000-0000-000000000001"
+    },
+    "names": [
+      "login",
+      "game_state_change",
+      "position",
+      "chunk_batch_start",
+      "map_chunk",
+      "chunk_batch_finished",
+      "block_change",
+      "position"
+    ],
+    "positions": [
+      {
+        "teleportId": 2,
+        "x": 2.5,
+        "y": 1.62,
+        "z": 2.5,
+        "dx": 0,
+        "dy": 0,
+        "dz": 0,
+        "yaw": 0,
+        "pitch": 0,
+        "flags": {
+          "_value": 0,
+          "x": false,
+          "y": false,
+          "z": false,
+          "yaw": false,
+          "pitch": false,
+          "dx": false,
+          "dy": false,
+          "dz": false,
+          "yawDelta": false
+        }
+      },
+      {
+        "teleportId": 3,
+        "x": 8.5,
+        "y": 1.62,
+        "z": 8.5,
+        "dx": 0,
+        "dy": 0,
+        "dz": 0,
+        "yaw": 0,
+        "pitch": 0,
+        "flags": {
+          "_value": 0,
+          "x": false,
+          "y": false,
+          "z": false,
+          "yaw": false,
+          "pitch": false,
+          "dx": false,
+          "dy": false,
+          "dz": false,
+          "yawDelta": false
+        }
+      }
+    ],
+    "blockChanges": [
+      {
+        "location": {
+          "x": 3,
+          "z": 3,
+          "y": 0
+        },
+        "type": 1
+      }
+    ],
+    "errors": [],
+    "ended": null
+  },
+  "versions": {
+    "minecraftVersion": "26.1",
+    "protocol": 775,
+    "node": "v26.7.0",
+    "minecraftProtocol": "1.68.0",
+    "minecraftData": "3.119.0",
+    "prismarineChunk": "1.41.0",
+    "vec3": "0.1.10"
+  },
+  "notes": [
+    "Spike uses library auto-config on the front leg; config-phase replay is not exercised.",
+    "Fake client is a protocol client, not the official vanilla client.",
+    "Both legs are offline; encryption and online-mode hasJoined are not exercised.",
+    "Chat is blocked in both directions; clientbound player_chat is not cached or replayed.",
+    "The attach pose is reconstructed from the attaching client movement, with a proxy-owned teleport id.",
+    "Attach/detach liveness soak is 5000 ms, not the architecture's 5-minute window.",
+    "One backend login for the whole scenario (no reconnect on attach)."
+  ]
+}
