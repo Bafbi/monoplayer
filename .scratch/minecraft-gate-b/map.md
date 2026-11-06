@@ -31,12 +31,17 @@ not the testbed itself.
   Prism 11.0.3, Java 25, 26.1.2 instance).
 - G0 backend: Paper 26.1.2 b74 in `monoplayer-gate-b`, Tailscale endpoint
   `monoplayer-gate-b-paper.tail41e568.ts.net:25565`, online-mode and
-  secure-profile. Official client joined; movement/edit/detach/rejoin pending.
+  secure-profile. Official client joined. The Fabric driver row passed
+  status/move/look/break/place/respawn/disconnect/rejoin on 2026-11-06;
+  the unmodded witness and 2/2 repetition are still pending.
 - Account roles (user-confirmed): `Bafbi` = player, `GlowSquidye` = puppet.
 - Target topology (user-confirmed): Paper behind a proxy; Velocity is core, not
   a compatibility lane. Read-only/blocked chat is acceptable.
 - Driver: `tools/gate-b-driver` builds a 26.1.2 Fabric client driver with a
-  loopback JSON socket; host `nath` was offline before install/run.
+  loopback JSON socket. Installed and validated on `nath`; the window is named
+  `Monoplayer Gate B` and a Hyprland rule keeps it on workspace 9 without
+  stealing focus. Evidence:
+  [`docs/gate-b-driver-validation.md`](../../docs/gate-b-driver-validation.md).
 
 ## Decisions so far
 
@@ -47,8 +52,12 @@ not the testbed itself.
 - [Research: controlling a real 26.1 client](issues/01-research-client-control.md):
   Prism + a thin Fabric driver is the deterministic instrument; one unmodded
   Prism run is the anti-masking witness. The `nath` host is confirmed and the
-  official client has joined the Paper backend; G0 still needs movement, block
-  edit, disconnect, rejoin, and 2/2 repetition.
+  official client has joined the Paper backend.
+- Driver validation (2026-11-06): status, move, look, break, place, screenshot,
+  respawn, disconnect, and quit pass against Paper 26.1.2 b74, with server-side
+  position and block checks. The window is named `Monoplayer Gate B` so the
+  Hyprland workspace-9 rule cannot catch normal Minecraft. Remaining: unmodded
+  witness and 2/2 repetition.
 - [Research: backend matrix and network harness](issues/02-research-backend-matrix.md):
   Vanilla 26.1.2 + Paper 26.1.2 b74 direct are the core; Fabric is a required
   compatibility report; Velocity is a proxy lane only if the target uses one;
@@ -69,8 +78,7 @@ not the testbed itself.
 ## Not yet specified
 
 - Which Prism account is the player and which is the headless puppet.
-- Whether G0 is driven manually or with the thin Fabric driver, and whether the
-  user permits temporary workspace/input automation on `nath`.
+- Whether the unmodded witness runs before or after the 2/2 driver repetitions.
 - Whether Fabric is an advertised target, which would promote M3 to
   gate-blocking.
 - Whether the real target server sits behind Velocity/BungeeCord, which would
