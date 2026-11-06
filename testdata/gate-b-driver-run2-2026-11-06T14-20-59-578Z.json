@@ -1,0 +1,1567 @@
+{
+  "gate": "B",
+  "row": "G0-host-readiness",
+  "lane": "driver",
+  "clientLane": "driver",
+  "run": 2,
+  "nonce": "mw52c7mw-2",
+  "startedAt": "2026-11-06T14:21:44.744Z",
+  "finishedAt": "2026-11-06T14:22:28.156Z",
+  "durationMs": 43412,
+  "passed": true,
+  "failure": null,
+  "phase": "rejoin: relaunch and reattach without a reconnect op",
+  "assertions": [
+    {
+      "name": "precondition: RCON reachable and lists players",
+      "ok": true,
+      "detail": {
+        "output": "There are 1 of a max of 4 players online: Bafbi",
+        "players": [
+          "Bafbi"
+        ]
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "precondition: driver socket answered status",
+      "ok": true,
+      "detail": {
+        "status": {
+          "screen": "none",
+          "level": true,
+          "player": true,
+          "connected": true,
+          "fps": 115,
+          "name": "Bafbi",
+          "health": 20,
+          "yaw": 90,
+          "pitch": 22.047947,
+          "selectedSlot": 0,
+          "pos": {
+            "x": 96.5,
+            "y": -60,
+            "z": 96.5
+          },
+          "held": "minecraft:stone",
+          "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+          "loadedChunks": 92,
+          "renderedSections": 26,
+          "totalSections": 1944
+        }
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "precondition: previous client quit before relaunch",
+      "ok": true,
+      "detail": {
+        "timeoutMs": 45000,
+        "detail": "op status (#46) connection closed before a response"
+      },
+      "source": "artifact",
+      "kind": "assertion"
+    },
+    {
+      "name": "launch: host-side relaunch accepted",
+      "ok": true,
+      "detail": {
+        "preview": "prismlauncher launched via ssh"
+      },
+      "source": "artifact",
+      "kind": "assertion"
+    },
+    {
+      "name": "launch: client settles into the world (screen none, level, rendered sections)",
+      "ok": true,
+      "detail": {
+        "status": {
+          "screen": "none",
+          "level": true,
+          "player": true,
+          "connected": true,
+          "fps": 32,
+          "name": "Bafbi",
+          "health": 20,
+          "yaw": 90,
+          "pitch": 22.047947,
+          "selectedSlot": 0,
+          "pos": {
+            "x": 96.5,
+            "y": -60,
+            "z": 96.5
+          },
+          "held": "minecraft:stone",
+          "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+          "loadedChunks": 54,
+          "renderedSections": 15,
+          "totalSections": 1944
+        },
+        "settleMs": 10640
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "baseline: server sees the player in the overworld",
+      "ok": true,
+      "detail": {
+        "pos": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "output": "Bafbi has the following entity data: \"minecraft:overworld\""
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "baseline: client connected with a player",
+      "ok": true,
+      "detail": {
+        "status": {
+          "screen": "none",
+          "level": true,
+          "player": true,
+          "connected": true,
+          "fps": 109,
+          "name": "Bafbi",
+          "health": 20,
+          "yaw": 90,
+          "pitch": 22.047947,
+          "selectedSlot": 0,
+          "pos": {
+            "x": 96.5,
+            "y": -60,
+            "z": 96.5
+          },
+          "held": "minecraft:stone",
+          "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+          "loadedChunks": 81,
+          "renderedSections": 25,
+          "totalSections": 1944
+        }
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "baseline: client name matches the driven account",
+      "ok": true,
+      "detail": {
+        "name": "Bafbi",
+        "expected": "Bafbi"
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "baseline: client and server positions agree",
+      "ok": true,
+      "detail": {
+        "client": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "server": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "toleranceBlocks": 1.5
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "setup: /give accepted for item hand",
+      "ok": true,
+      "detail": {
+        "output": "Gave 64 [Stone] to Bafbi"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "setup: client reports a non-empty held item (driver places from the selected slot)",
+      "ok": true,
+      "detail": {
+        "held": "minecraft:stone"
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "setup: plan safety invariants hold",
+      "ok": true,
+      "detail": {
+        "issues": [],
+        "plan": {
+          "center": {
+            "x": 160,
+            "z": 160
+          },
+          "run": 2,
+          "nonce": "mw52c7mw-2"
+        }
+      },
+      "source": "artifact",
+      "kind": "assertion"
+    },
+    {
+      "name": "setup: server position matches the teleport target",
+      "ok": true,
+      "detail": {
+        "server": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "target": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "toleranceBlocks": 1
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "preflight: break target is air before seeding",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 164 -60 160 minecraft:air",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "preflight: place support floor block is stone",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 156 -61 160 minecraft:stone",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "preflight: place target is air before placing",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 156 -60 160 minecraft:air",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "preflight: block under player is solid floor",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 160 -61 160 minecraft:stone",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "setup: client position tracks the teleport target",
+      "ok": true,
+      "detail": {
+        "client": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "target": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "toleranceBlocks": 1.5
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "move: server position changed by >= 1.5 blocks after 700 ms",
+      "ok": true,
+      "detail": {
+        "baseline": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "after": {
+          "x": 157.4817276551088,
+          "y": -60,
+          "z": 160.5
+        },
+        "deltaBlocks": 3.02
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "move: player stayed on the arena footprint",
+      "ok": true,
+      "detail": {
+        "after": {
+          "x": 157.4817276551088,
+          "y": -60,
+          "z": 160.5
+        },
+        "arena": {
+          "minX": 150,
+          "minZ": 150,
+          "maxX": 170,
+          "maxZ": 170
+        }
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "move: client and server positions agree after moving",
+      "ok": true,
+      "detail": {
+        "client": {
+          "x": 157.4817276551088,
+          "y": -60,
+          "z": 160.5
+        },
+        "server": {
+          "x": 157.4817276551088,
+          "y": -60,
+          "z": 160.5
+        },
+        "toleranceBlocks": 1.5
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "look: server rotation matches the requested yaw/pitch",
+      "ok": true,
+      "detail": {
+        "requested": {
+          "yaw": 90,
+          "pitch": 10,
+          "tolYaw": 2,
+          "tolPitch": 2
+        },
+        "server": {
+          "yaw": 90,
+          "pitch": 10
+        },
+        "toleranceDeg": {
+          "yaw": 2,
+          "pitch": 2
+        }
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "look: client rotation agrees with the request too",
+      "ok": true,
+      "detail": {
+        "client": {
+          "yaw": 90,
+          "pitch": 10
+        }
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "seed: server target block is stone",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 164 -60 160 minecraft:stone",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "break: client aimed at the seeded stone (client perceived it before breaking)",
+      "ok": true,
+      "detail": {
+        "before": "Block{minecraft:stone}",
+        "x": 164,
+        "y": -60,
+        "z": 160
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "break: client reports the block broke",
+      "ok": true,
+      "detail": {
+        "broke": true,
+        "after": "Block{minecraft:air}"
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "break: server block is air after the break",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 164 -60 160 minecraft:air",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "place: client reports a placed item on the support",
+      "ok": true,
+      "detail": {
+        "placed": true,
+        "base": "156,-61,160",
+        "held": "minecraft:stone"
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "place: server target block is not air",
+      "ok": true,
+      "detail": {
+        "command": "execute unless block 156 -60 160 minecraft:air",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "place: server target block is stone",
+      "ok": true,
+      "detail": {
+        "command": "execute if block 156 -60 160 minecraft:stone",
+        "verdict": "passed",
+        "output": "Test passed"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "screenshot: PNG copied back from the display host",
+      "ok": true,
+      "detail": {
+        "remotePath": "/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/gate-b-1793974926080.png",
+        "localPath": "/home/neudeline/.t3/projects/monoplayer/testdata/gate-b-screenshot-mw52co9wuw3sck-gate-b-1793974926080.png",
+        "bytes": 1395646
+      },
+      "source": "artifact",
+      "kind": "assertion"
+    },
+    {
+      "name": "disconnect: client reports connected=false",
+      "ok": true,
+      "detail": {
+        "status": {
+          "screen": "net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen",
+          "level": false,
+          "player": false,
+          "connected": false,
+          "fps": 60,
+          "renderedSections": 0,
+          "totalSections": 0
+        }
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "disconnect: RCON list no longer contains Bafbi",
+      "ok": true,
+      "detail": {
+        "players": []
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "quit: driver port closed after client quit",
+      "ok": true,
+      "detail": {
+        "detail": "op status (#73) connection closed before a response",
+        "timeoutMs": 45000
+      },
+      "source": "artifact",
+      "kind": "assertion"
+    },
+    {
+      "name": "quit: server still does not list Bafbi",
+      "ok": true,
+      "detail": {
+        "output": "There are 0 of a max of 4 players online:"
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "rejoin: client settles into the world again",
+      "ok": true,
+      "detail": {
+        "status": {
+          "screen": "none",
+          "level": true,
+          "player": true,
+          "connected": true,
+          "fps": 40,
+          "name": "Bafbi",
+          "health": 20,
+          "yaw": 90,
+          "pitch": 22.047947,
+          "selectedSlot": 0,
+          "pos": {
+            "x": 160.5,
+            "y": -60,
+            "z": 160.5
+          },
+          "held": "minecraft:stone",
+          "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+          "loadedChunks": 66,
+          "renderedSections": 19,
+          "totalSections": 1944
+        },
+        "settleMs": 10487
+      },
+      "source": "client",
+      "kind": "assertion"
+    },
+    {
+      "name": "rejoin: RCON list contains Bafbi after host-side relaunch (no driver reconnect op)",
+      "ok": true,
+      "detail": {
+        "players": [
+          "Bafbi"
+        ]
+      },
+      "source": "server",
+      "kind": "assertion"
+    },
+    {
+      "name": "rejoin: player rejoined at the last known position (near the arena centre)",
+      "ok": true,
+      "detail": {
+        "rejoin": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "lastTeleport": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "toleranceBlocks": 12
+      },
+      "source": "server",
+      "kind": "assertion"
+    }
+  ],
+  "rconOps": [
+    {
+      "at": "2026-11-06T14:21:44.934Z",
+      "kind": "probe",
+      "label": "list",
+      "command": "list",
+      "ok": true,
+      "output": "There are 1 of a max of 4 players online: Bafbi",
+      "stderr": "",
+      "durationMs": 190
+    },
+    {
+      "at": "2026-11-06T14:21:56.330Z",
+      "kind": "probe",
+      "label": "pos",
+      "command": "data get entity Bafbi Pos",
+      "ok": true,
+      "output": "Bafbi has the following entity data: [96.5d, -60.0d, 96.5d]",
+      "stderr": "",
+      "durationMs": 219
+    },
+    {
+      "at": "2026-11-06T14:21:56.536Z",
+      "kind": "probe",
+      "label": "dimension",
+      "command": "data get entity Bafbi Dimension",
+      "ok": true,
+      "output": "Bafbi has the following entity data: \"minecraft:overworld\"",
+      "stderr": "",
+      "durationMs": 206
+    },
+    {
+      "at": "2026-11-06T14:21:56.745Z",
+      "kind": "setup",
+      "label": "give",
+      "command": "give Bafbi minecraft:stone 64",
+      "ok": true,
+      "output": "Gave 64 [Stone] to Bafbi",
+      "stderr": "",
+      "durationMs": 201
+    },
+    {
+      "at": "2026-11-06T14:21:57.244Z",
+      "kind": "setup",
+      "label": "force-load chunk at 150,150",
+      "command": "forceload add 150 150",
+      "ok": true,
+      "output": "Marked chunk [9, 9] in minecraft:overworld to be force loaded",
+      "stderr": "",
+      "durationMs": 190
+    },
+    {
+      "at": "2026-11-06T14:21:57.422Z",
+      "kind": "setup",
+      "label": "force-load chunk at 170,150",
+      "command": "forceload add 170 150",
+      "ok": true,
+      "output": "Marked chunk [10, 9] in minecraft:overworld to be force loaded",
+      "stderr": "",
+      "durationMs": 178
+    },
+    {
+      "at": "2026-11-06T14:21:57.600Z",
+      "kind": "setup",
+      "label": "force-load chunk at 150,170",
+      "command": "forceload add 150 170",
+      "ok": true,
+      "output": "Marked chunk [9, 10] in minecraft:overworld to be force loaded",
+      "stderr": "",
+      "durationMs": 178
+    },
+    {
+      "at": "2026-11-06T14:21:57.793Z",
+      "kind": "setup",
+      "label": "force-load chunk at 170,170",
+      "command": "forceload add 170 170",
+      "ok": true,
+      "output": "Marked chunk [10, 10] in minecraft:overworld to be force loaded",
+      "stderr": "",
+      "durationMs": 193
+    },
+    {
+      "at": "2026-11-06T14:21:57.983Z",
+      "kind": "setup",
+      "label": "arena clear y=-59",
+      "command": "fill 150 -59 150 170 -59 170 minecraft:air",
+      "ok": true,
+      "output": "No blocks were filled",
+      "stderr": "",
+      "durationMs": 190
+    },
+    {
+      "at": "2026-11-06T14:21:58.149Z",
+      "kind": "setup",
+      "label": "arena clear y=-60",
+      "command": "fill 150 -60 150 170 -60 170 minecraft:air",
+      "ok": true,
+      "output": "No blocks were filled",
+      "stderr": "",
+      "durationMs": 166
+    },
+    {
+      "at": "2026-11-06T14:21:58.354Z",
+      "kind": "setup",
+      "label": "arena floor fill",
+      "command": "fill 150 -61 150 170 -61 170 minecraft:stone",
+      "ok": true,
+      "output": "Successfully filled 441 block(s)",
+      "stderr": "",
+      "durationMs": 205
+    },
+    {
+      "at": "2026-11-06T14:21:58.489Z",
+      "kind": "setup",
+      "label": "teleport to arena centre",
+      "command": "tp Bafbi 160.5 -60 160.5",
+      "ok": true,
+      "output": "Teleported Bafbi to 160.500000, -60.000000, 160.500000",
+      "stderr": "",
+      "durationMs": 134
+    },
+    {
+      "at": "2026-11-06T14:21:59.298Z",
+      "kind": "probe",
+      "label": "pos",
+      "command": "data get entity Bafbi Pos",
+      "ok": true,
+      "output": "Bafbi has the following entity data: [160.5d, -60.0d, 160.5d]",
+      "stderr": "",
+      "durationMs": 209
+    },
+    {
+      "at": "2026-11-06T14:21:59.460Z",
+      "kind": "assertion",
+      "label": "preflight: break target is air before seeding",
+      "command": "execute if block 164 -60 160 minecraft:air",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 162
+    },
+    {
+      "at": "2026-11-06T14:21:59.661Z",
+      "kind": "assertion",
+      "label": "preflight: place support floor block is stone",
+      "command": "execute if block 156 -61 160 minecraft:stone",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 201
+    },
+    {
+      "at": "2026-11-06T14:21:59.851Z",
+      "kind": "assertion",
+      "label": "preflight: place target is air before placing",
+      "command": "execute if block 156 -60 160 minecraft:air",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 190
+    },
+    {
+      "at": "2026-11-06T14:22:00.033Z",
+      "kind": "assertion",
+      "label": "preflight: block under player is solid floor",
+      "command": "execute if block 160 -61 160 minecraft:stone",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 182
+    },
+    {
+      "at": "2026-11-06T14:22:01.231Z",
+      "kind": "probe",
+      "label": "pos",
+      "command": "data get entity Bafbi Pos",
+      "ok": true,
+      "output": "Bafbi has the following entity data: [157.4817276551088d, -60.0d, 160.5d]",
+      "stderr": "",
+      "durationMs": 189
+    },
+    {
+      "at": "2026-11-06T14:22:01.432Z",
+      "kind": "setup",
+      "label": "teleport to arena centre",
+      "command": "tp Bafbi 160.5 -60 160.5",
+      "ok": true,
+      "output": "Teleported Bafbi to 160.500000, -60.000000, 160.500000",
+      "stderr": "",
+      "durationMs": 194
+    },
+    {
+      "at": "2026-11-06T14:22:02.176Z",
+      "kind": "probe",
+      "label": "rotation",
+      "command": "data get entity Bafbi Rotation",
+      "ok": true,
+      "output": "Bafbi has the following entity data: [90.0f, 10.0f]",
+      "stderr": "",
+      "durationMs": 139
+    },
+    {
+      "at": "2026-11-06T14:22:02.403Z",
+      "kind": "setup",
+      "label": "seed break target with stone",
+      "command": "setblock 164 -60 160 minecraft:stone",
+      "ok": true,
+      "output": "Changed the block at 164, -60, 160",
+      "stderr": "",
+      "durationMs": 215
+    },
+    {
+      "at": "2026-11-06T14:22:02.587Z",
+      "kind": "assertion",
+      "label": "seed: server target block is stone",
+      "command": "execute if block 164 -60 160 minecraft:stone",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 184
+    },
+    {
+      "at": "2026-11-06T14:22:04.905Z",
+      "kind": "assertion",
+      "label": "break: server block is air after the break",
+      "command": "execute if block 164 -60 160 minecraft:air",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 200
+    },
+    {
+      "at": "2026-11-06T14:22:05.795Z",
+      "kind": "assertion",
+      "label": "place: server target block is not air",
+      "command": "execute unless block 156 -60 160 minecraft:air",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 220
+    },
+    {
+      "at": "2026-11-06T14:22:06.074Z",
+      "kind": "assertion",
+      "label": "place: server target block is stone",
+      "command": "execute if block 156 -60 160 minecraft:stone",
+      "ok": true,
+      "output": "Test passed",
+      "stderr": "",
+      "durationMs": 279
+    },
+    {
+      "at": "2026-11-06T14:22:16.584Z",
+      "kind": "probe",
+      "label": "list",
+      "command": "list",
+      "ok": true,
+      "output": "There are 0 of a max of 4 players online:",
+      "stderr": "",
+      "durationMs": 154
+    },
+    {
+      "at": "2026-11-06T14:22:17.308Z",
+      "kind": "probe",
+      "label": "list",
+      "command": "list",
+      "ok": true,
+      "output": "There are 0 of a max of 4 players online:",
+      "stderr": "",
+      "durationMs": 198
+    },
+    {
+      "at": "2026-11-06T14:22:27.987Z",
+      "kind": "probe",
+      "label": "list",
+      "command": "list",
+      "ok": true,
+      "output": "There are 1 of a max of 4 players online: Bafbi",
+      "stderr": "",
+      "durationMs": 192
+    },
+    {
+      "at": "2026-11-06T14:22:28.156Z",
+      "kind": "probe",
+      "label": "pos",
+      "command": "data get entity Bafbi Pos",
+      "ok": true,
+      "output": "Bafbi has the following entity data: [160.5d, -60.0d, 160.5d]",
+      "stderr": "",
+      "durationMs": 169
+    }
+  ],
+  "driverOps": [
+    {
+      "at": "2026-11-06T14:21:44.939Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 115,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 92,
+        "renderedSections": 26,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:44.942Z",
+      "op": "quit",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "quitting": true
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:21:51.912Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.GenericMessageScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 0,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:52.938Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.GenericMessageScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 14,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:53.954Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.ConnectScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 52,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:55.098Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.LevelLoadingScreen",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 40,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 0,
+        "renderedSections": 0,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:56.111Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 32,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 54,
+        "renderedSections": 15,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:56.544Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 109,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 81,
+        "renderedSections": 25,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:21:57.054Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 109,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 96.5,
+          "y": -60,
+          "z": 96.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 117,
+        "renderedSections": 38,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:00.038Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 120,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 117,
+        "renderedSections": 38,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:00.042Z",
+      "op": "move",
+      "params": {
+        "ms": 700
+      },
+      "ok": true,
+      "error": null,
+      "data": {
+        "movingMs": 700
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:01.238Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 120,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 157.4817276551088,
+          "y": -60,
+          "z": 160.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 117,
+        "renderedSections": 39,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:01.737Z",
+      "op": "look",
+      "params": {
+        "yaw": 90,
+        "pitch": 10
+      },
+      "ok": true,
+      "error": null,
+      "data": {
+        "yaw": 90,
+        "pitch": 10
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:02.188Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 120,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 10,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 117,
+        "renderedSections": 38,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:04.405Z",
+      "op": "break",
+      "params": {
+        "x": 164,
+        "y": -60,
+        "z": 160
+      },
+      "ok": true,
+      "error": null,
+      "data": {
+        "x": 164,
+        "y": -60,
+        "z": 160,
+        "before": "Block{minecraft:stone}",
+        "after": "Block{minecraft:air}",
+        "broke": true
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:05.073Z",
+      "op": "place",
+      "params": {
+        "x": 156,
+        "y": -61,
+        "z": 160
+      },
+      "ok": true,
+      "error": null,
+      "data": {
+        "baseX": 156,
+        "baseY": -61,
+        "baseZ": 160,
+        "baseSource": "explicit",
+        "baseBlock": "Block{minecraft:stone}",
+        "targetBefore": "Block{minecraft:air}",
+        "targetBlock": "Block{minecraft:stone}",
+        "placed": true,
+        "held": "minecraft:stone"
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:06.308Z",
+      "op": "screenshot",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "path": "/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/gate-b-1793974926080.png"
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:06.416Z",
+      "op": "disconnect",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {},
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:16.430Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 60,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:16.589Z",
+      "op": "quit",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "quitting": true
+      },
+      "kind": "action"
+    },
+    {
+      "at": "2026-11-06T14:22:23.739Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.GenericMessageScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 0,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:24.749Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.GenericMessageScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 15,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:25.769Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.ConnectScreen",
+        "level": false,
+        "player": false,
+        "connected": false,
+        "fps": 52,
+        "renderedSections": 0,
+        "totalSections": 0
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:26.783Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "net.minecraft.client.gui.screens.LevelLoadingScreen",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 39,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 3,
+        "renderedSections": 0,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    },
+    {
+      "at": "2026-11-06T14:22:27.795Z",
+      "op": "status",
+      "params": {},
+      "ok": true,
+      "error": null,
+      "data": {
+        "screen": "none",
+        "level": true,
+        "player": true,
+        "connected": true,
+        "fps": 40,
+        "name": "Bafbi",
+        "health": 20,
+        "yaw": 90,
+        "pitch": 22.047947,
+        "selectedSlot": 0,
+        "pos": {
+          "x": 160.5,
+          "y": -60,
+          "z": 160.5
+        },
+        "held": "minecraft:stone",
+        "dimension": "ResourceKey[minecraft:dimension / minecraft:overworld]",
+        "loadedChunks": 66,
+        "renderedSections": 19,
+        "totalSections": 1944
+      },
+      "kind": "probe"
+    }
+  ],
+  "artifacts": [
+    {
+      "kind": "screenshot",
+      "remotePath": "/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/gate-b-1793974926080.png",
+      "localPath": "/home/neudeline/.t3/projects/monoplayer/testdata/gate-b-screenshot-mw52co9wuw3sck-gate-b-1793974926080.png",
+      "bytes": 1395646
+    }
+  ],
+  "metrics": {
+    "statusPolls": 24,
+    "settleMs": 10640,
+    "rejoinSettleMs": 10487,
+    "moveDeltaBlocks": 3.0182723448911872,
+    "rconOpCounts": {
+      "setup": 11,
+      "assertion": 8,
+      "probe": 10
+    },
+    "driverOpCounts": {
+      "action": 8,
+      "probe": 17
+    },
+    "baselineServerPos": {
+      "x": 96.5,
+      "y": -60,
+      "z": 96.5
+    },
+    "centerServerPos": {
+      "x": 160.5,
+      "y": -60,
+      "z": 160.5
+    },
+    "editTarget": {
+      "x": 164,
+      "y": -60,
+      "z": 160
+    },
+    "placeTarget": {
+      "x": 156,
+      "y": -60,
+      "z": 160
+    }
+  },
+  "limitations": [
+    "Client gamemode is creative; survival-rate break/place holds are not exercised by this lane.",
+    "No driver reconnect op exists by design (council correction #1): rejoin = driver quit + host-side relaunch through the injected relaunch adapter.",
+    "The unmodded Prism witness run is a separate, still-pending manual lane; no anti-masking evidence yet.",
+    "The driver does not select hotbar slots; the scenario relies on /give filling the first empty (selected) slot and verifies the held item client-side.",
+    "The backend world is an emptyDir flat void map: restarts wipe edits; all coordinates are run-scoped.",
+    "Generated report files are scanned for token/password-shaped content before writing; long hex-like strings may be over-redacted."
+  ],
+  "pins": {
+    "gate": "B",
+    "row": "G0 — host readiness, direct Paper",
+    "clientLane": "driver",
+    "minecraftVersion": "26.1.2",
+    "protocolVersion": 775,
+    "paperBuild": "26.1.2 build 74",
+    "fabricLoader": "0.20.1",
+    "javaRuntime": "25.0.1 (epsilon)",
+    "launcher": "Prism 11.0.3",
+    "backend": "direct Paper 26.1.2 (M2 row); Monoplayer and Velocity are not involved in G0",
+    "displayHost": "nath",
+    "backendRow": "M2 — Paper 26.1.2 direct (G0)"
+  },
+  "plan": {
+    "runIndex": 2,
+    "center": {
+      "x": 160,
+      "z": 160
+    },
+    "teleport": {
+      "x": 160.5,
+      "y": -60,
+      "z": 160.5
+    },
+    "blockUnderPlayer": {
+      "x": 160,
+      "y": -61,
+      "z": 160
+    },
+    "edits": {
+      "break": {
+        "target": {
+          "x": 164,
+          "y": -60,
+          "z": 160
+        }
+      },
+      "place": {
+        "support": {
+          "x": 156,
+          "y": -61,
+          "z": 160
+        },
+        "target": {
+          "x": 156,
+          "y": -60,
+          "z": 160
+        }
+      }
+    },
+    "arena": {
+      "side": 21,
+      "floorY": -61,
+      "clearBox": {
+        "minX": 150,
+        "minZ": 150,
+        "maxX": 170,
+        "maxZ": 170
+      }
+    },
+    "preflight": [
+      {
+        "name": "preflight: break target is air before seeding",
+        "kind": "assertion",
+        "at": {
+          "x": 164,
+          "y": -60,
+          "z": 160
+        },
+        "expect": "air"
+      },
+      {
+        "name": "preflight: place support floor block is stone",
+        "kind": "assertion",
+        "at": {
+          "x": 156,
+          "y": -61,
+          "z": 160
+        },
+        "expect": "stone"
+      },
+      {
+        "name": "preflight: place target is air before placing",
+        "kind": "assertion",
+        "at": {
+          "x": 156,
+          "y": -60,
+          "z": 160
+        },
+        "expect": "air"
+      },
+      {
+        "name": "preflight: block under player is solid floor",
+        "kind": "assertion",
+        "at": {
+          "x": 160,
+          "y": -61,
+          "z": 160
+        },
+        "expect": "stone"
+      }
+    ],
+    "safety": {
+      "minTargetDistanceBlocks": 3
+    }
+  }
+}
