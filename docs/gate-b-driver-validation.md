@@ -77,9 +77,12 @@ Prism is closed if the console window should be removed entirely.
   [`testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json`](../testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json)
   and
   [`testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json`](../testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json).
-- The unmodded Prism client witness (no driver) is still pending and remains
-  the anti-masking blocker; `gate-b:g0` will keep exiting nonzero until it is
-  completed.
+- The unmodded Prism client witness (no driver) was completed on 2026-11-06
+  (join, render, move, break, place, screenshot, disconnect, rejoin). See
+  [`testdata/gate-b-unmodded-witness.json`](../testdata/gate-b-unmodded-witness.json)
+  and
+  [`testdata/gate-b-witness-2026-11-06.png`](../testdata/gate-b-witness-2026-11-06.png).
+  `mise run gate-b:g0` now exits 0.
 - Assert a survival (non-creative) break/place hold, not just the creative row.
 
 The repeatable runner for exactly this row is now in `src/gate-b/` +
