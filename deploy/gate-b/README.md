@@ -2,8 +2,10 @@
 
 **Status (2026-11-06):** Paper 26.1.2 build 74 is running in
 `monoplayer-gate-b`; an official 26.1.2 client joined through
-`monoplayer-gate-b-paper.tail41e568.ts.net:25565`. G0 still needs movement,
-block edit, disconnect, rejoin, and a second clean run.
+`monoplayer-gate-b-paper.tail41e568.ts.net:25565`. The Fabric driver row passes
+status, movement, look, break, place, respawn, disconnect, and rejoin. One
+unmodded witness run and a second clean repetition remain.
+Evidence: [docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
 
 The `monoplayer-gate-b` namespace holds the real-backend matrix. It is not the
 product namespace; do not point the product at it.

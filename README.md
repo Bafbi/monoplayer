@@ -37,6 +37,7 @@ The research and council trail lives under
 [.scratch/minecraft-gate-b/](.scratch/minecraft-gate-b/).
 
 The client driver is in [tools/gate-b-driver/](tools/gate-b-driver/); build it with
-`mise run gate-b:driver:build`.
+`mise run gate-b:driver:build`. It was validated on `nath` against Paper 26.1.2
+on 2026-11-06: [docs/gate-b-driver-validation.md](docs/gate-b-driver-validation.md).
 
 Created in [T3 Code](https://t3.codes).
