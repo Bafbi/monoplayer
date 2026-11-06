@@ -15,11 +15,12 @@ if (op === 'look') {
   request.yaw = Number(args[0] || 0)
   request.pitch = Number(args[1] || 0)
 }
-if (op === 'break' && args.length >= 3) {
+if ((op === 'break' || op === 'place') && args.length >= 3) {
   request.x = Number(args[0])
   request.y = Number(args[1])
   request.z = Number(args[2])
 }
+if ((op === 'break' || op === 'place') && args.length >= 4) request.ms = Number(args[3])
 if (process.env.GATEB_DRIVER_TOKEN) request.token = process.env.GATEB_DRIVER_TOKEN
 
 const socket = net.createConnection({ host, port }, () => {

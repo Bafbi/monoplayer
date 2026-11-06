@@ -1,19 +1,14 @@
 package eu.monoplayer.gateb;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.io.BufferedReader;
@@ -125,12 +120,27 @@ public final class DriverServer {
                 result.addProperty("pitch", pitch);
                 return ok(result);
             }
-            case "break":
-                return ok(mc.submit(() -> breakBlock(request)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-            case "place":
-                return ok(mc.submit(() -> placeBlock()).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            case "break": {
+                long ms = request.has("ms") ? request.get("ms").getAsLong() : 1000L;
+                return ok(breakBlock(request, ms).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            }
+            case "place": {
+                long ms = request.has("ms") ? request.get("ms").getAsLong() : 150L;
+                return ok(placeBlock(request, ms).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            }
             case "screenshot":
                 return ok(takeScreenshot());
+            case "respawn":
+                return ok(mc.submit(() -> {
+                    JsonObject result = new JsonObject();
+                    if (mc.player == null) {
+                        result.addProperty("respawned", false);
+                    } else {
+                        mc.player.respawn();
+                        result.addProperty("respawned", true);
+                    }
+                    return result;
+                }).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             case "disconnect":
                 mc.execute(() -> mc.disconnectFromWorld(Component.literal("gate-b-driver")));
                 return ok(new JsonObject());
@@ -183,40 +193,103 @@ public final class DriverServer {
         return out;
     }
 
-    private JsonObject breakBlock(JsonObject request) {
-        requireWorld();
-        BlockPos pos = request.has("x")
-            ? new BlockPos(request.get("x").getAsInt(), request.get("y").getAsInt(), request.get("z").getAsInt())
-            : mc.player.blockPosition().below();
-        BlockState before = mc.level.getBlockState(pos);
-        boolean broke = mc.gameMode.destroyBlock(pos);
-        BlockState after = mc.level.getBlockState(pos);
-        JsonObject out = new JsonObject();
-        out.addProperty("x", pos.getX());
-        out.addProperty("y", pos.getY());
-        out.addProperty("z", pos.getZ());
-        out.addProperty("before", before.getBlock().toString());
-        out.addProperty("after", after.getBlock().toString());
-        out.addProperty("broke", broke);
-        return out;
+    /**
+     * Break through the normal input path: aim at the block, hold attack for
+     * {@code ms}, then release. {@code MultiPlayerGameMode.destroyBlock} only
+     * mutates the client level and never tells the server, so it cannot be used
+     * for a multiplayer break.
+     */
+    private CompletableFuture<JsonObject> breakBlock(JsonObject request, long ms) {
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        mc.execute(() -> {
+            try {
+                requireWorld();
+                // Default to the ground block in front, never the one directly
+                // under the player: on void/thin maps that drops them into the
+                // void. Callers that really want the footing pass coordinates.
+                BlockPos pos = request.has("x")
+                    ? new BlockPos(request.get("x").getAsInt(), request.get("y").getAsInt(), request.get("z").getAsInt())
+                    : mc.player.blockPosition().below().relative(mc.player.getDirection());
+                BlockState before = mc.level.getBlockState(pos);
+                aimAt(pos);
+                mc.options.keyAttack.setDown(true);
+                scheduler.schedule(() -> mc.execute(() -> {
+                    mc.options.keyAttack.setDown(false);
+                    BlockState after = mc.level.getBlockState(pos);
+                    JsonObject out = new JsonObject();
+                    out.addProperty("x", pos.getX());
+                    out.addProperty("y", pos.getY());
+                    out.addProperty("z", pos.getZ());
+                    out.addProperty("before", before.getBlock().toString());
+                    out.addProperty("after", after.getBlock().toString());
+                    out.addProperty("broke", after.isAir());
+                    future.complete(out);
+                }), ms, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            }
+        });
+        return future;
     }
 
-    private JsonObject placeBlock() {
-        requireWorld();
-        ItemStack held = mc.player.getInventory().getSelectedItem();
-        if (held.isEmpty()) {
-            throw new IllegalStateException("selected hotbar slot is empty; run /give first");
-        }
-        BlockPos base = mc.player.blockPosition().below().relative(mc.player.getDirection());
-        BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(base), Direction.UP, base, false);
-        InteractionResult result = mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hit);
-        JsonObject out = new JsonObject();
-        out.addProperty("baseX", base.getX());
-        out.addProperty("baseY", base.getY());
-        out.addProperty("baseZ", base.getZ());
-        out.addProperty("result", result.toString());
-        out.addProperty("held", held.getItem().toString());
-        return out;
+    private void aimAt(BlockPos pos) {
+        aimAt(Vec3.atCenterOf(pos));
+    }
+
+    private void aimAt(Vec3 target) {
+        Vec3 eye = mc.player.getEyePosition();
+        double dx = target.x - eye.x;
+        double dy = target.y - eye.y;
+        double dz = target.z - eye.z;
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+        mc.player.setYRot((float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0));
+        mc.player.setXRot((float) -Math.toDegrees(Math.atan2(dy, horizontal)));
+    }
+
+    /**
+     * Place through the normal input path: aim at the top face of the support
+     * block and hold use for one or two ticks. The direct {@code useItemOn}
+     * call predicts locally but can be rejected when the packet does not carry
+     * a contact point the server accepts.
+     */
+    private CompletableFuture<JsonObject> placeBlock(JsonObject request, long ms) {
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        mc.execute(() -> {
+            try {
+                requireWorld();
+                ItemStack held = mc.player.getInventory().getSelectedItem();
+                if (held.isEmpty()) {
+                    throw new IllegalStateException("selected hotbar slot is empty; run /give first");
+                }
+                boolean explicit = request.has("x");
+                BlockPos base = explicit
+                    ? new BlockPos(request.get("x").getAsInt(), request.get("y").getAsInt(), request.get("z").getAsInt())
+                    : mc.player.blockPosition().below().relative(mc.player.getDirection());
+                BlockPos target = base.above();
+                BlockState baseBefore = mc.level.getBlockState(base);
+                BlockState targetBefore = mc.level.getBlockState(target);
+                aimAt(Vec3.atBottomCenterOf(target));
+                mc.options.keyUse.setDown(true);
+                scheduler.schedule(() -> mc.execute(() -> {
+                    mc.options.keyUse.setDown(false);
+                    BlockState targetAfter = mc.level.getBlockState(target);
+                    JsonObject out = new JsonObject();
+                    out.addProperty("baseX", base.getX());
+                    out.addProperty("baseY", base.getY());
+                    out.addProperty("baseZ", base.getZ());
+                    out.addProperty("baseSource", explicit ? "explicit" : "front");
+                    out.addProperty("baseBlock", baseBefore.getBlock().toString());
+                    out.addProperty("targetBefore", targetBefore.getBlock().toString());
+                    out.addProperty("targetBlock", targetAfter.getBlock().toString());
+                    out.addProperty("placed", !targetAfter.isAir());
+                    out.addProperty("held", held.getItem().toString());
+                    future.complete(out);
+                }), ms, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            }
+        });
+        return future;
     }
 
     private JsonObject takeScreenshot() throws Exception {
