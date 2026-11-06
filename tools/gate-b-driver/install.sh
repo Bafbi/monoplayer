@@ -62,10 +62,10 @@ cat > "$instance_dir/mmc-pack.json" <<'JSON'
       "cachedRequires": [
         { "equals": "26.1.2", "uid": "net.minecraft" }
       ],
-      "cachedVersion": "0.0.0",
+      "cachedVersion": "26.1.2",
       "dependencyOnly": true,
       "uid": "net.fabricmc.intermediary",
-      "version": "0.0.0"
+      "version": "26.1.2"
     },
     {
       "cachedName": "Fabric Loader",
@@ -87,9 +87,19 @@ import re, sys
 p = Path(sys.argv[1])
 name = sys.argv[2]
 s = p.read_text()
+
+def set_key(s, key, value):
+    pat = re.compile(rf'^{re.escape(key)}=.*$', re.M)
+    if pat.search(s):
+        return pat.sub(f'{key}={value}', s)
+    return s.replace('[General]\n', f'[General]\n{key}={value}\n', 1)
+
 s = re.sub(r'^name=.*$', f'name={name}', s, flags=re.M)
 if 'OverrideMemory=' not in s:
     s = s.replace('[General]\n', '[General]\nOverrideMemory=true\nMaxMemAlloc=4096\nMinMemAlloc=1024\n', 1)
+# Keep Prism's console window out of the desktop; the driver socket is enough.
+s = set_key(s, 'OverrideConsole', 'true')
+s = set_key(s, 'ShowConsole', 'false')
 p.write_text(s)
 PY
 
