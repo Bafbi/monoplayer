@@ -1,0 +1,1439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monoplayer — Architecture Proposal</title>
+<style>
+  :root {
+    --ink: #101828;
+    --muted: #475467;
+    --faint: #5b6675;
+    --line: #d0d5dd;
+    --soft: #f2f4f7;
+    --paper: #ffffff;
+    --navy: #0b1222;
+    --navy-2: #111c33;
+    --green: #0f9f6e;
+    --green-soft: #e7f8f1;
+    --amber: #b54708;
+    --amber-soft: #fff4e5;
+    --red: #b42318;
+    --red-soft: #fef3f2;
+    --blue: #175cd3;
+    --blue-soft: #eff8ff;
+    --violet: #6941c6;
+    --violet-soft: #f4f3ff;
+    --radius: 14px;
+    --shadow: 0 10px 30px rgba(16, 24, 40, .08);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: #f8fafc;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { color: #0b4bb3; }
+  code, pre, .mono { font-family: var(--mono); }
+  code {
+    background: #eef2f6;
+    border: 1px solid #e1e7ef;
+    border-radius: 5px;
+    padding: .08em .34em;
+    font-size: .88em;
+  }
+  pre {
+    background: #0b1222;
+    color: #e6edf7;
+    padding: 18px 20px;
+    border-radius: 12px;
+    overflow: auto;
+    font-size: 13px;
+    line-height: 1.55;
+    border: 1px solid #1f2a44;
+  }
+  pre code { background: transparent; border: 0; padding: 0; color: inherit; font-size: inherit; }
+  h1, h2, h3, h4 { line-height: 1.18; letter-spacing: -.02em; }
+  h2 { font-size: 1.7rem; margin: 0 0 .6rem; }
+  h3 { font-size: 1.16rem; margin: 1.5rem 0 .45rem; }
+  h4 { font-size: 1rem; margin: 1.2rem 0 .35rem; }
+  p { margin: .65rem 0; }
+  ul, ol { margin: .6rem 0 .8rem; padding-left: 1.35rem; }
+  li { margin: .3rem 0; }
+  strong { font-weight: 650; }
+  .skip { position: absolute; left: -9999px; }
+  .skip:focus { left: 12px; top: 12px; z-index: 50; background: #fff; padding: 10px 14px; border-radius: 8px; }
+
+  .hero {
+    background:
+      radial-gradient(1200px 500px at 85% -10%, rgba(15, 159, 110, .28), transparent 60%),
+      radial-gradient(900px 500px at 10% 0%, rgba(23, 92, 211, .35), transparent 55%),
+      linear-gradient(135deg, var(--navy), var(--navy-2) 60%, #0d2a2a);
+    color: #fff;
+    padding: 54px 28px 42px;
+    border-bottom: 1px solid #1f2a44;
+  }
+  .hero-inner { max-width: 1180px; margin: 0 auto; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: .78rem; letter-spacing: .14em; text-transform: uppercase;
+    color: #a9f0d4; font-weight: 700;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: #55e0b2; display: inline-block; }
+  h1 { font-size: clamp(2.2rem, 5vw, 4rem); margin: 14px 0 10px; }
+  .lede { font-size: clamp(1.02rem, 1.6vw, 1.2rem); color: #c9d5e8; max-width: 850px; margin: 0 0 22px; }
+  .hero-badges { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 11px; border-radius: 999px;
+    font-size: .78rem; font-weight: 650; letter-spacing: .01em;
+    background: rgba(255,255,255,.10); color: #eaf2ff; border: 1px solid rgba(255,255,255,.18);
+  }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: #55e0b2; box-shadow: 0 0 0 3px rgba(85,224,178,.15); }
+  .badge.amber .dot { background: #fec84b; box-shadow: 0 0 0 3px rgba(254,200,75,.15); }
+  .badge.violet .dot { background: #b692f6; box-shadow: 0 0 0 3px rgba(182,146,246,.15); }
+
+  .layout { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 42px; }
+  .toc { position: sticky; top: 20px; align-self: start; max-height: calc(100vh - 40px); overflow: auto; padding-right: 8px; }
+  .toc-title { font-size: .72rem; letter-spacing: .13em; text-transform: uppercase; color: var(--faint); font-weight: 750; margin: 0 0 10px 10px; }
+  .toc a {
+    display: block; color: var(--muted); text-decoration: none; font-size: .88rem;
+    padding: 6px 10px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
+  }
+  .toc a:hover { background: #eef2f7; color: var(--ink); }
+  .toc a.active { border-left-color: var(--green); background: var(--green-soft); color: #05603a; font-weight: 650; }
+  .toc .sub { padding-left: 22px; font-size: .82rem; }
+
+  main { min-width: 0; }
+  section { padding: 8px 0 18px; scroll-margin-top: 18px; }
+  .section-kicker { color: var(--green); font-weight: 750; font-size: .75rem; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 6px; }
+  .section-lede { color: var(--muted); font-size: 1.02rem; margin-top: 0; }
+
+  .card {
+    background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px 22px; box-shadow: var(--shadow); margin: 16px 0;
+  }
+  .card.tight { padding: 16px 18px; }
+  .grid { display: grid; gap: 14px; }
+  .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .stat { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 15px 16px; }
+  .stat .k { color: var(--faint); font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+  .stat .v { font-size: 1.28rem; font-weight: 750; margin-top: 3px; letter-spacing: -.02em; }
+  .stat .n { color: var(--muted); font-size: .82rem; margin-top: 2px; }
+
+  .callout { border-radius: 12px; padding: 15px 17px; margin: 14px 0; border: 1px solid; }
+  .callout.good { background: var(--green-soft); border-color: #a6f4d2; }
+  .callout.info { background: var(--blue-soft); border-color: #b2ddff; }
+  .callout.warn { background: var(--amber-soft); border-color: #fedf89; }
+  .callout.bad { background: var(--red-soft); border-color: #fecdca; }
+  .callout.violet { background: var(--violet-soft); border-color: #d9d6fe; }
+  .callout .label { display: block; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 800; margin-bottom: 4px; }
+  .callout.good .label { color: #05603a; }
+  .callout.info .label { color: #175cd3; }
+  .callout.warn .label { color: #b54708; }
+  .callout.bad .label { color: #b42318; }
+  .callout.violet .label { color: #5925dc; }
+  .callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+  .pill.green { background: var(--green-soft); color: #05603a; }
+  .pill.amber { background: var(--amber-soft); color: #b54708; }
+  .pill.red { background: var(--red-soft); color: #b42318; }
+  .pill.blue { background: var(--blue-soft); color: #175cd3; }
+  .pill.violet { background: var(--violet-soft); color: #5925dc; }
+  .pill.gray { background: var(--soft); color: #344054; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; margin: 12px 0; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 11px; border-bottom: 1px solid #e7ebf0; }
+  th { background: #f8fafc; color: #344054; font-size: .76rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 750; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:nth-child(even) { background: #fcfdff; }
+  td code { white-space: nowrap; }
+
+  .diagram { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); margin: 16px 0; }
+  .diagram svg { display: block; width: 100%; height: auto; }
+  .diagram-caption { color: var(--faint); font-size: .82rem; text-align: center; margin: 8px 6px 2px; }
+
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+  .flow .step { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font-size: .85rem; font-weight: 600; }
+  .flow .arrow { color: var(--faint); font-weight: 800; }
+
+  .decision { border-left: 4px solid var(--green); background: #fff; border-radius: 0 12px 12px 0; padding: 14px 18px; margin: 14px 0; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .decision .id { font-family: var(--mono); font-size: .75rem; color: var(--faint); font-weight: 700; }
+  .decision h3 { margin: 3px 0 6px; }
+  .decision .why { color: var(--muted); font-size: .92rem; }
+
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+  .small { font-size: .84rem; }
+  .nowrap { white-space: nowrap; }
+  .mt0 { margin-top: 0; }
+  .mb0 { margin-bottom: 0; }
+
+  details { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 12px 0; }
+  summary { cursor: pointer; font-weight: 700; color: #344054; }
+  summary::marker { color: var(--green); }
+  details[open] summary { margin-bottom: 10px; }
+  .kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px 14px; font-size: .9rem; }
+  .kv dt { color: var(--faint); font-weight: 650; }
+  .kv dd { margin: 0; }
+
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { position: relative; padding-left: 28px; margin: .45rem 0; }
+  .checklist li::before { content: "✓"; position: absolute; left: 0; top: 1px; width: 18px; height: 18px; border-radius: 50%; background: var(--green-soft); color: #05603a; font-size: .72rem; font-weight: 900; display: grid; place-items: center; }
+  .checklist li.pending::before { content: "→"; background: var(--amber-soft); color: #b54708; }
+
+  .footer { border-top: 1px solid var(--line); background: #fff; padding: 28px 24px 40px; color: var(--faint); font-size: .86rem; }
+  .footer-inner { max-width: 1180px; margin: 0 auto; }
+
+  .copy-btn { float: right; font: inherit; font-size: .72rem; background: rgba(255,255,255,.1); color: #dbe7f7; border: 1px solid rgba(255,255,255,.2); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  .copy-btn:hover { background: rgba(255,255,255,.18); }
+
+  @media (max-width: 980px) {
+    .layout { grid-template-columns: 1fr; gap: 18px; }
+    .toc { position: static; max-height: none; display: none; }
+    .grid.four, .grid.three, .grid.two { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 640px) {
+    .hero { padding: 38px 18px 30px; }
+    .layout { padding: 20px 16px 60px; }
+    .grid.four, .grid.three, .grid.two { grid-template-columns: 1fr; }
+    .kv { grid-template-columns: 1fr; gap: 2px; }
+    .kv dt { margin-top: 8px; }
+    table { display: block; overflow-x: auto; }
+  }
+  @media print {
+    body { background: #fff; }
+    .hero { background: #0b1222 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .layout { display: block; max-width: none; padding: 18px 0; }
+    .toc, .copy-btn { display: none; }
+    .card, .diagram, details { box-shadow: none; break-inside: avoid; }
+    section { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#summary">Skip to summary</a>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow">Architecture proposal · draft for decision</div>
+    <h1>Monoplayer</h1>
+    <p class="lede">
+      A headless Minecraft account that stays online, and a whitelisted official client
+      that can attach to it and play normally. This document records what the research
+      proved, the architecture the council recommends, and the smallest test that kills
+      the idea if it is wrong.
+    </p>
+    <div class="hero-badges">
+      <span class="badge amber"><span class="dot"></span>Audited draft for decision</span>
+      <span class="badge"><span class="dot"></span>Semantic MITM</span>
+      <span class="badge"><span class="dot"></span>Node + minecraft-protocol</span>
+      <span class="badge"><span class="dot"></span>Pinned 26.1 / 775</span>
+      <span class="badge violet"><span class="dot"></span>Council confidence 78–80 / 100</span>
+    </div>
+    <p class="small" style="color:#9fb0c9;margin-top:22px;margin-bottom:0;">
+      Prepared 5 November 2026 · Research: 4 delegates · Decision council: 3 delegates ·
+      Audit: 3 delegates · Status: proposed, not built
+    </p>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <div class="toc-title">Contents</div>
+    <a href="#summary">Executive summary</a>
+    <a href="#answer">The short answer</a>
+    <a href="#prior-art">What already exists</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#lifecycle">Session lifecycle</a>
+    <a href="#attach">Late attach</a>
+    <a href="#rewrites">Relay rules</a>
+    <a href="#auth">Auth &amp; security</a>
+    <a href="#version">Version strategy</a>
+    <a href="#validation">Validation loop</a>
+    <a href="#observability">Observability</a>
+    <a href="#operations">Deployment</a>
+    <a href="#risks">Risks &amp; kill criteria</a>
+    <a href="#decisions">Decision log</a>
+    <a href="#plan">Plan</a>
+    <a href="#questions">What I need from you</a>
+    <a href="#sources">Sources</a>
+  </nav>
+
+  <main>
+    <section id="summary">
+      <div class="section-kicker">Executive summary</div>
+      <h2>Build the proven architecture, not a raw packet pipe</h2>
+      <p class="section-lede">
+        The idea is feasible. The core feature already ships in <strong>ZenithProxy</strong>,
+        a production Minecraft bot proxy that lets whitelisted players log in and control the
+        bot. The correct shape is a <strong>stateful semantic MITM</strong>: the service terminates
+        the client login, verifies the client with Mojang, holds the puppet's backend session,
+        caches the world state, and synthesizes a fresh join when a client attaches.
+      </p>
+
+      <div class="grid four">
+        <div class="stat"><div class="k">Approach</div><div class="v">Semantic MITM</div><div class="n">Two legs, one cache, one live session</div></div>
+        <div class="stat"><div class="k">Stack</div><div class="v">Node/TS</div><div class="n">minecraft-protocol + prismarine-auth</div></div>
+        <div class="stat"><div class="k">Time to demo</div><div class="v">~3 weeks</div><div class="n">2-day gate, then a two-week slice</div></div>
+        <div class="stat"><div class="k">Kill switch</div><div class="v">Gate A</div><div class="n">Official client, real attach, 60 s</div></div>
+      </div>
+
+      <div class="callout good">
+        <span class="label">The one-sentence recommendation</span>
+        <p class="mb0">
+          Run one Node pod that owns a Microsoft-authenticated puppet connection to your
+          backend, accepts your official client through an online-mode front leg with a UUID
+          whitelist, replays the cached configuration and a synthesized join into the live
+          session, and relays play packets with targeted rewrites — never dropping the puppet
+          when the client leaves.
+        </p>
+      </div>
+
+      <div class="callout warn">
+        <span class="label">The honest caveat</span>
+        <p class="mb0">
+          The architecture is proven, but not in Node. The production proof is Java
+          (ZenithProxy, AGPL-3.0). The Node implementation is the fast, license-clean path,
+          but it is still an implementation bet. That is why the plan starts with a two-day
+          falsifying experiment using a real official client, before product code.
+        </p>
+      </div>
+    </section>
+
+    <section id="answer">
+      <div class="section-kicker">The short answer</div>
+      <h2>What Monoplayer is, precisely</h2>
+      <p>
+        Monoplayer is a <strong>client-side proxy with a headless account</strong>. It is not a
+        Minecraft server, and it is not a server-side Velocity/Gate proxy. It sits between an
+        official client and a real backend:
+      </p>
+      <div class="flow" aria-label="Traffic flow">
+        <span class="step">Official client</span><span class="arrow">→</span>
+        <span class="step">Monoplayer front leg</span><span class="arrow">→</span>
+        <span class="step">Relay + state cache</span><span class="arrow">→</span>
+        <span class="step">Puppet leg</span><span class="arrow">→</span>
+        <span class="step">Real backend</span>
+      </div>
+      <p>
+        The <strong>puppet</strong> is an official Microsoft account logged in headlessly by the
+        service. It is the account the backend sees. The <strong>attaching client</strong> is
+        another official account, whitelisted by UUID, that proves its identity to Monoplayer
+        and then controls the puppet's body. The client never logs into the backend as the
+        puppet; that would kick the puppet's session.
+      </p>
+      <p>
+        The service is <strong>stateful</strong>. The backend TCP session, the world cache, and the
+        puppet's position live in one pod. That is what lets the puppet stay in the world when
+        the client disconnects. It is also the main operational constraint: a pod restart loses
+        the live session and requires a reconnect.
+      </p>
+
+      <div class="grid two">
+        <div class="card tight">
+          <h3 class="mt0">What it is</h3>
+          <ul class="mb0">
+            <li>A headless official-account client that stays online.</li>
+            <li>A packet-aware relay that lets a whitelisted official client take control.</li>
+            <li>A bounded state cache that makes late attach look like a fresh vanilla join.</li>
+            <li>A small Kubernetes service with a fast fake-backend test loop.</li>
+          </ul>
+        </div>
+        <div class="card tight">
+          <h3 class="mt0">What it is not</h3>
+          <ul class="mb0">
+            <li>A raw byte pipe. Encryption and compression are per-connection.</li>
+            <li>A server-side routing proxy like Deepmine Gate.</li>
+            <li>A bot that plays by itself. The puppet is inert when nobody is attached.</li>
+            <li>A way to share an account with the public or bypass server rules.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="prior-art">
+      <div class="section-kicker">Prior art</div>
+      <h2>The pattern is proven. The Node implementation is not.</h2>
+      <p class="section-lede">
+        The research found the same pattern in production, plus adjacent implementations.
+        That changes the risk profile: the question is not “can this work?”, but “which
+        implementation and scope do we choose?”
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Project</th><th>What it proves</th><th>Why it is not the default</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>ZenithProxy</strong><br><span class="pill red">AGPL-3.0</span></td>
+            <td>Production 2b2t bot that players log into and control. Secure whitelist via <code>hasJoined</code>, spectator mode, persistence, Microsoft device-code auth, ViaVersion, &lt;300 MB, GraalVM native.</td>
+            <td>Java + AGPL + 2b2t-specific scope (Baritone, queue handling, Discord). It is the behavioral spec and the fallback deployment, not the build target. It presents the attaching player's own profile; Monoplayer's puppet-profile presentation is a deliberate addition, not a claim about ZenithProxy.</td>
+          </tr>
+          <tr>
+            <td><strong>Pork2b2tBot</strong><br><span class="pill green">MIT + attribution</span></td>
+            <td>Earlier existence proof of the same “bot that also works as a proxy” pattern.</td>
+            <td>Frozen development, behind on protocol versions.</td>
+          </tr>
+          <tr>
+            <td><strong>azalea-reflection-proxy</strong><br><span class="pill green">Rust / open source</span></td>
+            <td>Cached config frames, synthesized FinishConfiguration/Login, Game Event 13, raw chunk cache, world snapshot. Documents why byte forwarding is impossible.</td>
+            <td>Reference for the attach sequence, not a Node library or a product.</td>
+          </tr>
+          <tr>
+            <td><strong>mineflayer-reflection-proxy</strong><br><span class="pill green">JS</span></td>
+            <td>World persistence from bot memory and attach/link behavior in the Prismarine ecosystem.</td>
+            <td>Inspection-oriented; not a full Minecraft proxy with production auth and cache.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout info">
+        <span class="label">What the prior art settles</span>
+        <ul class="mb0">
+          <li>The front leg must terminate encryption with its own RSA key and call Mojang <code>hasJoined</code>.</li>
+          <li>The back leg must authenticate as the puppet with Microsoft device-code auth.</li>
+          <li>The configuration phase must be cached and replayed; it cannot be forwarded to a late client.</li>
+          <li>Play packets can be relayed 1:1 only while attached, same version, with targeted rewrites.</li>
+          <li>The backend session must be owned by the proxy, not the client.</li>
+        </ul>
+      </div>
+
+      <div class="callout warn">
+        <span class="label">One deliberate difference from ZenithProxy</span>
+        <p class="mb0">
+          ZenithProxy lets the attaching player keep their own rendered profile. Monoplayer's
+          design presents the <em>puppet's</em> profile to the attaching client so the client sees
+          the puppet's name and skin. This is protocol-legal — vanilla does not validate Login
+          Success against the client's session profile — but it is not the exact ZenithProxy
+          behavior. The profile is a rendering choice: the backend session is always the puppet,
+          while chat signatures are made by the attaching client and must be stripped or
+          re-signed. Client-side reporting is outside the relay and is not remapped.
+        </p>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="section-kicker">Architecture</div>
+      <h2>Two legs, one cache, one live session</h2>
+      <p class="section-lede">
+        The service is a single process with two protocol endpoints and a shared state cache.
+        The front leg is a Minecraft server to the attaching client. The back leg is a
+        Minecraft client to the backend. The relay never passes encrypted bytes between them.
+      </p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 1060 620" role="img" aria-label="Architecture diagram: official client connects to Monoplayer front leg, relay and state cache sit in the middle, puppet leg connects to the backend.">
+          <defs>
+            <linearGradient id="gClient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#eff8ff"/><stop offset="1" stop-color="#d1e9ff"/>
+            </linearGradient>
+            <linearGradient id="gProxy" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f4f3ff"/><stop offset="1" stop-color="#e4e1ff"/>
+            </linearGradient>
+            <linearGradient id="gBackend" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#e7f8f1"/><stop offset="1" stop-color="#c9f2e0"/>
+            </linearGradient>
+            <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#101828" flood-opacity=".10"/>
+            </filter>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#475467"/>
+            </marker>
+          </defs>
+
+          <rect x="20" y="190" width="200" height="180" rx="16" fill="url(#gClient)" stroke="#84caff" filter="url(#shadow)"/>
+          <text x="120" y="225" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="16" font-weight="750" fill="#0b1222">Official client</text>
+          <text x="120" y="248" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11.5" fill="#344054">Whitelisted account</text>
+          <text x="120" y="266" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11.5" fill="#344054">Vanilla, unmodded</text>
+          <text x="120" y="306" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#175cd3">online-mode handshake</text>
+          <text x="120" y="323" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#175cd3">hasJoined → UUID</text>
+          <text x="120" y="340" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#175cd3">whitelist check</text>
+
+          <rect x="270" y="70" width="520" height="480" rx="20" fill="url(#gProxy)" stroke="#b692f6" filter="url(#shadow)"/>
+          <text x="530" y="104" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="17" font-weight="800" fill="#3b1d8f">Monoplayer pod</text>
+          <text x="530" y="125" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11.5" fill="#5925dc">Node/TypeScript · one replica · one puppet</text>
+
+          <rect x="296" y="150" width="468" height="92" rx="12" fill="#fff" stroke="#d9d6fe"/>
+          <text x="316" y="177" font-family="ui-sans-serif, system-ui" font-size="13.5" font-weight="750" fill="#344054">Front leg — server half</text>
+          <text x="316" y="198" font-family="ui-monospace, monospace" font-size="10.5" fill="#475467">createServer({ online-mode: true, encryption: true })</text>
+          <text x="316" y="216" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Own RSA keypair · verify client's own account · forge puppet profile</text>
+          <text x="316" y="232" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Deny before relay if UUID is not whitelisted</text>
+
+          <rect x="296" y="258" width="468" height="150" rx="12" fill="#fff" stroke="#d9d6fe"/>
+          <text x="316" y="285" font-family="ui-sans-serif, system-ui" font-size="13.5" font-weight="750" fill="#344054">Relay + bounded state cache</text>
+          <text x="316" y="306" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Config frames · raw chunks · entities · inventory · tab list</text>
+          <text x="316" y="324" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Scoreboard · boss bars · time/weather · health/XP · held slot</text>
+          <text x="316" y="342" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Attach: replay config, synthesize join, semantic buffering</text>
+          <text x="316" y="360" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Detached: answer keep-alives and teleport confirms</text>
+          <text x="316" y="386" font-family="ui-monospace, monospace" font-size="10.5" fill="#5925dc">play packets relayed 1:1 + targeted rewrites</text>
+
+          <rect x="296" y="424" width="468" height="98" rx="12" fill="#fff" stroke="#d9d6fe"/>
+          <text x="316" y="451" font-family="ui-sans-serif, system-ui" font-size="13.5" font-weight="750" fill="#344054">Puppet leg — client half</text>
+          <text x="316" y="472" font-family="ui-monospace, monospace" font-size="10.5" fill="#475467">createClient({ auth: 'microsoft', username: puppet })</text>
+          <text x="316" y="490" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">prismarine-auth · device code · rolling refresh token</text>
+          <text x="316" y="508" font-family="ui-sans-serif, system-ui" font-size="11" fill="#475467">Owns the backend TCP session; survives client detach</text>
+
+          <rect x="840" y="190" width="200" height="180" rx="16" fill="url(#gBackend)" stroke="#75e0b7" filter="url(#shadow)"/>
+          <text x="940" y="225" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="16" font-weight="750" fill="#0b1222">Real backend</text>
+          <text x="940" y="248" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11.5" fill="#344054">Your own server</text>
+          <text x="940" y="266" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11.5" fill="#344054">Pinned to 26.1 / 775</text>
+          <text x="940" y="306" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#05603a">sees only the puppet</text>
+          <text x="940" y="323" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#05603a">one login per session</text>
+          <text x="940" y="340" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#05603a">never the attaching client</text>
+
+          <line x1="220" y1="280" x2="266" y2="280" stroke="#475467" stroke-width="2" marker-end="url(#arrow)"/>
+          <line x1="764" y1="280" x2="836" y2="280" stroke="#475467" stroke-width="2" marker-end="url(#arrow)"/>
+
+          <text x="243" y="270" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="10" fill="#475467">TCP</text>
+          <text x="800" y="270" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="10" fill="#475467">TCP</text>
+
+          <rect x="270" y="573" width="520" height="32" rx="8" fill="#0b1222"/>
+          <text x="530" y="593" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10.5" fill="#a9f0d4">cache is authoritative for attach; backend is authoritative for play</text>
+        </svg>
+        <div class="diagram-caption">
+          The front leg is a server to the client; the back leg is a client to the backend.
+          The relay decodes, re-frames, and rewrites; it never forwards encrypted bytes.
+        </div>
+      </div>
+
+      <h3>The front leg (client → Monoplayer)</h3>
+      <p>
+        The front leg uses <code>minecraft-protocol</code>'s server half with
+        <code>online-mode: true</code> and encryption enabled. The proxy generates its own RSA
+        keypair, completes the standard Minecraft login, and calls Mojang's
+        <code>hasJoined</code> endpoint. The returned profile is the <em>attaching player's</em>
+        identity. If that UUID is not in the whitelist, the connection is closed during login,
+        before any packet is relayed.
+      </p>
+      <p>
+        After the whitelist gate, the proxy sends <strong>Login Success with the puppet's
+        profile</strong> (UUID, name, skin properties). The client believes it is joining as the
+        puppet. This is the subtle part: the client's own account is used only to prove
+        permission to attach; the backend never sees it.
+      </p>
+
+      <h3>The back leg (Monoplayer → backend)</h3>
+      <p>
+        The back leg is a long-lived <code>createClient</code> connection authenticated with
+        the puppet's Microsoft account. It is established when the pod starts and is owned by
+        the pod, not by any client. It answers the backend's keep-alives and teleport confirms
+        while detached, so the server does not time the session out.
+      </p>
+      <p>
+        The backend must already whitelist the puppet account, if the server uses a whitelist.
+        That is separate from Monoplayer's own attach whitelist: the backend whitelist says
+        “the puppet may join”; the Monoplayer whitelist says “these clients may control the
+        puppet.”
+      </p>
+
+      <h3>The state cache</h3>
+      <p>
+        The cache is the product. A late-attaching client has never seen the backend's login
+        or configuration phase, so the proxy must reconstruct a valid current view. The cache
+        is deliberately bounded:
+      </p>
+      <table>
+        <thead><tr><th>Domain</th><th>What is cached</th><th>Bound / approach</th></tr></thead>
+        <tbody>
+          <tr><td>Configuration</td><td>Registry data, tags, feature flags, brand, resource-pack push, cookies, finish-configuration frames</td><td>Raw frames; deterministic replay; tens of KB</td></tr>
+          <tr><td>Chunks</td><td>Raw <code>Level Chunk With Light</code> frames, including light</td><td>LRU around the puppet's view radius; tens of MB</td></tr>
+          <tr><td>Entities</td><td>Full metadata, equipment, passengers, attributes, absolute pose</td><td>Entity registry; relative deltas accumulated</td></tr>
+          <tr><td>Inventory</td><td>Container contents per window, cursor, open screen</td><td>Snapshot per window; slot deltas applied</td></tr>
+          <tr><td>Player list</td><td>UUID, name, properties, game mode, latency, display name, list order</td><td>Full snapshot; add/remove/update actions</td></tr>
+          <tr><td>Scoreboard / boss bars</td><td>Objectives, scores, teams, boss-bar state</td><td>Per-objective / per-UUID maps</td></tr>
+          <tr><td>World/HUD</td><td>Time, weather, border, health, XP, held slot, abilities, difficulty</td><td>Last absolute values</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <span class="label">MVP cache trade-off</span>
+        <p class="mb0">
+          Applying block updates into cached chunk bytes is the hairiest component and is not
+          demonstrated by the cited projects. The MVP <strong>evicts</strong> a chunk when a block
+          update touches it, rather than patching its palette — <strong>except the chunk under the
+          puppet and its cardinal neighbours</strong>, which are pinned. If a pinned chunk is
+          mutated, the proxy patches it or forces a backend resend before attach (a small,
+          server-acknowledged puppet nudge). Without this exception, a single block edit near the
+          puppet could leave the client stuck on “Loading terrain…” forever. Other mutated chunks
+          may be unrendered until the puppet returns; general block-update patching is slice 2.
+        </p>
+      </div>
+    </section>
+
+    <section id="lifecycle">
+      <div class="section-kicker">Session lifecycle</div>
+      <h2>The puppet outlives the client</h2>
+      <p class="section-lede">
+        The service has two independent state machines: the backend session and the client
+        attachment. Client attach/detach changes only the client leg. A backend drop is a
+        session event; a pod restart is a service event.
+      </p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 1060 310" role="img" aria-label="State machine: bootstrapping, authenticating, connected unattached, attaching, attached, detaching, reconnecting.">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#475467"/>
+            </marker>
+          </defs>
+          <rect x="20" y="100" width="142" height="62" rx="12" fill="#fff" stroke="#d0d5dd"/>
+          <text x="91" y="126" text-anchor="middle" font-size="12.5" font-weight="700" fill="#344054">BOOTSTRAPPING</text>
+          <text x="91" y="145" text-anchor="middle" font-size="10.5" fill="#667085">load token, config</text>
+
+          <rect x="202" y="100" width="142" height="62" rx="12" fill="#fff" stroke="#d0d5dd"/>
+          <text x="273" y="126" text-anchor="middle" font-size="12.5" font-weight="700" fill="#344054">AUTHENTICATING</text>
+          <text x="273" y="145" text-anchor="middle" font-size="10.5" fill="#667085">device code / refresh</text>
+
+          <rect x="384" y="100" width="164" height="62" rx="12" fill="#eff8ff" stroke="#84caff"/>
+          <text x="466" y="126" text-anchor="middle" font-size="12.5" font-weight="700" fill="#175cd3">CONNECTED_UNATTACHED</text>
+          <text x="466" y="145" text-anchor="middle" font-size="10.5" fill="#475467">puppet in world, cache live</text>
+
+          <rect x="588" y="100" width="142" height="62" rx="12" fill="#f4f3ff" stroke="#b692f6"/>
+          <text x="659" y="126" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5925dc">ATTACHING</text>
+          <text x="659" y="145" text-anchor="middle" font-size="10.5" fill="#475467">replay config, synth join</text>
+
+          <rect x="770" y="100" width="142" height="62" rx="12" fill="#e7f8f1" stroke="#75e0b7"/>
+          <text x="841" y="126" text-anchor="middle" font-size="12.5" font-weight="700" fill="#05603a">ATTACHED</text>
+          <text x="841" y="145" text-anchor="middle" font-size="10.5" fill="#475467">play relay, live control</text>
+
+          <rect x="588" y="220" width="142" height="58" rx="12" fill="#fff" stroke="#fec84b"/>
+          <text x="659" y="245" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b54708">DETACHING</text>
+          <text x="659" y="263" text-anchor="middle" font-size="10.5" fill="#667085">client leg closes only</text>
+
+          <rect x="384" y="220" width="164" height="58" rx="12" fill="#fef3f2" stroke="#fecdca"/>
+          <text x="466" y="245" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b42318">RECONNECTING</text>
+          <text x="466" y="263" text-anchor="middle" font-size="10.5" fill="#667085">backend drop / pod restart</text>
+
+          <line x1="162" y1="131" x2="198" y2="131" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="344" y1="131" x2="380" y2="131" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="548" y1="131" x2="584" y2="131" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="730" y1="131" x2="766" y2="131" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="841" y1="162" x2="841" y2="196" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="841" y1="196" x2="733" y2="230" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <path d="M 588 235 C 560 200 560 170 550 142" fill="none" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="466" y1="220" x2="466" y2="166" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <line x1="659" y1="162" x2="659" y2="216" stroke="#475467" stroke-width="1.8" marker-end="url(#arrow2)"/>
+          <text x="669" y="195" font-size="10" fill="#667085">attach fails</text>
+        </svg>
+        <div class="diagram-caption">
+          DETACHING returns to CONNECTED_UNATTACHED, never to the backend. RECONNECTING is the
+          only path that re-establishes the puppet session.
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>Event</th><th>What happens</th><th>What survives</th></tr></thead>
+        <tbody>
+          <tr><td>Client disconnects</td><td>Client leg closes. Proxy keeps answering backend keep-alives and teleport confirms. Cache keeps updating.</td><td>Puppet session, position, inventory, world state.</td></tr>
+          <tr><td>Client reattaches</td><td>Fresh vanilla join into the live session: config replay, synthesized join, chunk/entity burst, live cutover.</td><td>Everything the cache holds; ~1–3 s attach.</td></tr>
+          <tr><td>Backend drops the puppet</td><td>Transition to RECONNECTING; exponential backoff; re-auth if needed; cache reset. If a client is attached, disconnect it with a clear reason; it may reattach once RECONNECTING completes.</td><td>Service and token cache; backend world state depends on the server.</td></tr>
+          <tr><td>Pod restarts</td><td>Same as backend drop: re-establish the puppet session. No live TCP session survives.</td><td>Token Secret, config, whitelist; not the live session.</td></tr>
+          <tr><td>Second pod starts</td><td>Forbidden. Two pods race the rolling refresh token and kick each other's sessions.</td><td>Nothing; this is the critical operational invariant.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout info">
+        <span class="label">Reconnect policy</span>
+        <p class="mb0">
+          The service never exits because nobody is attached. If the backend drops the puppet,
+          it reconnects immediately with exponential backoff; a player connection is not required
+          to trigger it. A lazy “wait for a player” mode is possible later, but it risks queue
+          position and is not in the MVP.
+        </p>
+      </div>
+
+      <div class="callout bad">
+        <span class="label">Hard invariant</span>
+        <p class="mb0">
+          <strong>Exactly one Monoplayer pod may own a puppet at a time.</strong> The Microsoft
+          refresh token is rolling and single-use; a second replica can invalidate it and
+          trigger “logged in from another location” kicks. Use <code>replicas: 1</code>,
+          <code>strategy: Recreate</code>, no HPA, and an alert if the pod count ever exceeds one.
+          This is discipline, not a cluster mechanism: nothing in Kubernetes prevents a second
+          Deployment or a manual scale-up. A future admission guard or leader lock is the
+          mechanical fix if the service graduates.
+        </p>
+      </div>
+    </section>
+
+    <section id="attach">
+      <div class="section-kicker">Late attach</div>
+      <h2>A fresh vanilla join into a session that never ended</h2>
+      <p class="section-lede">
+        The client cannot resume a session it never had. The honest UX is a normal “Loading
+        terrain…” join, typically 1–3 seconds, landing exactly where the puppet is. This is
+        what ZenithProxy ships; it is not a custom attach screen.
+      </p>
+
+      <div class="card">
+        <h3 class="mt0">Attach sequence</h3>
+        <ol>
+          <li><strong>Terminate login.</strong> Online-mode handshake, <code>hasJoined</code>, UUID whitelist. Cross-check Login Start against the <code>hasJoined</code> result; deny before relay if not allowed.</li>
+          <li><strong>Forge Login Success</strong> with the puppet's profile: UUID, name, skin properties. This is protocol-legal, but it is Monoplayer's choice, not ZenithProxy's behavior.</li>
+          <li><strong>Replay cached configuration.</strong> Brand, enabled features, registry data, tags, resource-pack state, cookies, finish configuration. Answer the client's <em>Select Known Packs</em> from cache, not by replaying the client's selection. Raw frames, deterministic order.</li>
+          <li><strong>Synthesize the play join.</strong> Login (puppet entity ID), <code>Change Difficulty</code>, abilities, held slot, commands, player-list adds, border, spawn, time, weather, container contents, health, XP, recipes/tags where required, entity events.</li>
+          <li><strong>Send Game Event 13</strong> (“start waiting for level chunks”). Without it the client stays on “Loading terrain…”.</li>
+          <li><strong>Synchronize position</strong> to the puppet's exact pose with a proxy-owned teleport ID; swallow both <code>Confirm Teleportation</code> and <code>Accept Teleportation</code> from the client.</li>
+          <li><strong>Set the chunk center</strong> and send chunks in fresh <code>Chunk Batch Start</code>/<code>Finished</code> pairs, full radius around the puppet, paced on the client's <code>Chunk Batch Received</code> acknowledgements.</li>
+          <li><strong>Spawn entities</strong> with full metadata, equipment, passengers, and boss bars synthesized as <em>Add</em> first. Then live cutover.</li>
+          <li><strong>Coalesce state, but queue chat.</strong> During the replay, live backend state frames update the cache semantically (absolute poses, metadata patches, chunk evictions); they are not byte-queued. Clientbound chat is the exception: from synthesized Login onward, chat frames must be delivered in order with zero drops or reorders, or the client's global-index chain breaks.</li>
+        </ol>
+      </div>
+
+      <div class="callout bad">
+        <span class="label">Chat is a stretch goal, not core control</span>
+        <p>
+          “Strip signatures” is necessary but <strong>not sufficient</strong>. Serverbound chat also
+          carries a <code>last_seen</code> acknowledgement window tied to that connection's message
+          history. The client's window is not the puppet's window, and vanilla disconnects on a
+          bad window even when <code>enforce-secure-profile=false</code>. The backend also expects
+          the puppet leg to acknowledge messages it receives. A correct implementation needs a
+          per-leg chat state machine: the puppet leg acknowledges and maintains its own window;
+          client chat is re-emitted with the puppet's window, never the client's; clientbound
+          chat is ordered and lossless.
+        </p>
+        <p class="mb0">
+          <strong>MVP decision:</strong> movement, blocks, inventory, and interaction are the core
+          demo. Chat is <strong>read-only or blocked</strong> unless Gate A proves the per-leg
+          state machine. Re-signing with the puppet's certificates is slice 2. This is a smaller
+          promise than “normal chat,” and it avoids a known kick.
+        </p>
+      </div>
+
+      <div class="grid two">
+        <div class="card tight">
+          <h3 class="mt0">Why not full replay?</h3>
+          <p class="mb0">
+            Chunks are about 79% of server-to-client bytes and entity deltas about 86% of packet
+            count. A long session would mean gigabytes and minutes of replay. The bounded cache
+            keeps memory in tens of MB and attach latency flat with session age.
+          </p>
+        </div>
+        <div class="card tight">
+          <h3 class="mt0">Why not reconnect on attach?</h3>
+          <p class="mb0">
+            Reconnecting as the puppet resets position, inventory, and effects, and on queue
+            servers it can mean hours. It also races “logged in from another location.” It is a
+            failure-recovery path, not the normal attach path.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="rewrites">
+      <div class="section-kicker">Relay rules</div>
+      <h2>What is forwarded, what is rewritten</h2>
+      <p class="section-lede">
+        “Forward all packets when it can” is the right instinct, but the exceptions are where
+        the bugs live. This table is the data-plane contract.
+      </p>
+
+      <table>
+        <thead><tr><th>Traffic</th><th>Rule</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Handshake / login</td><td><span class="pill red">Terminate per leg</span></td><td>Per-connection encryption and <code>hasJoined</code>; never forwardable.</td></tr>
+          <tr><td>Configuration</td><td><span class="pill amber">Cache + replay</span></td><td>Arrives before any late client exists; registries and tags are required.</td></tr>
+          <tr><td>Play, clientbound</td><td><span class="pill green">Relay</span></td><td>Same version and phase; re-frame compression/encryption only.</td></tr>
+          <tr><td>Play, serverbound</td><td><span class="pill green">Relay</span></td><td>Movement, dig, place, interact. Exactly one position loop reaches the backend.</td></tr>
+          <tr><td>Keep-alive</td><td><span class="pill amber">Rewrite / own</span></td><td>Proxy answers backend while detached; owns its own cadence to the client; IDs never bridge.</td></tr>
+          <tr><td>Teleport / position sync</td><td><span class="pill amber">Own IDs</span></td><td>Proxy confirms backend teleports on the puppet leg; issues its own IDs to the client and swallows both <code>Confirm Teleportation</code> and <code>Accept Teleportation</code>.</td></tr>
+          <tr><td>Chat</td><td><span class="pill red">Per-leg state machine</span></td><td>Client signatures are invalid for the puppet's profile, and the <code>last_seen</code> window is per-connection. Puppet leg acknowledges backend messages and maintains its own window; client chat is re-emitted with the puppet's window; clientbound chat is ordered and lossless. MVP default: read-only/blocked unless Gate A proves it. <code>enforce-secure-profile=false</code> removes signatures, not last-seen validation.</td></tr>
+          <tr><td>Cookies</td><td><span class="pill amber">Store + replay</span></td><td>Answer backend <code>Cookie Request</code> from cache and swallow the attaching client's <code>Cookie Response</code>; a fresh client's empty response must never reach the backend.</td></tr>
+          <tr><td>Transfer</td><td><span class="pill amber">Absorb / reconnect</span></td><td>Rewrite target to the proxy or block and reconnect the puppet; never send the client elsewhere.</td></tr>
+          <tr><td>Start Configuration</td><td><span class="pill red">Not in slice 1</span></td><td>If the backend re-enters configuration mid-play, disconnect the client with a clear reason and re-attach after the puppet finishes; state this as an explicit non-goal rather than a silent desync.</td></tr>
+          <tr><td>Entity IDs</td><td><span class="pill green">Pass through</span></td><td>Single controlling client; the puppet's entity ID is reused so serverbound packets stay valid. Never synthesize entity ID 0 on 26.x.</td></tr>
+          <tr><td>Resource packs</td><td><span class="pill amber">Replay status</span></td><td>Client responses are connection-scoped; cached pushes must be replayed on attach. MVP targets servers with no <em>required</em> pack: a required pack that the reattaching client declines is a refusal, not a fake acceptance.</td></tr>
+          <tr><td>Tab list / scoreboard / boss bars</td><td><span class="pill amber">Snapshot + replay</span></td><td>State is absolute per client; synthesize before live deltas.</td></tr>
+        </tbody>
+      </table>
+
+      <details>
+        <summary>Packet-level details worth pinning before implementation</summary>
+        <ul>
+          <li><strong>Login Success</strong> must carry the puppet's profile, not the attaching client's. The client's own identity is only the whitelist proof. Vanilla does not validate the profile against the session profile, so this is legal, but it is a Monoplayer choice.</li>
+          <li><strong>Game Event 13</strong> (“start waiting for level chunks”) is mandatory after Login or the client never leaves the loading screen.</li>
+          <li><strong>Set Center Chunk</strong> is required so the client centers its chunk view on the puppet, not on 0,0.</li>
+          <li><strong>Chunk batches</strong> are one in flight at a time in vanilla behavior; the client acknowledges each batch. Do not blast all chunks without pacing.</li>
+          <li><strong>Boss bars</strong> must be synthesized as Add before any live Update, or the client can kick on an unknown UUID.</li>
+          <li><strong>Chat history</strong> is never replayed. From synthesized Login onward, live clientbound chat must be delivered in order with zero drops: the client validates a contiguous <code>global_index</code> and its signature cache.</li>
+          <li><strong>Chat acknowledgements</strong> are per-connection. The puppet leg must acknowledge backend messages; the client's <code>last_seen</code> window must never be forwarded verbatim.</li>
+          <li><strong>Teleport IDs</strong> are per-connection. Backend IDs must not leak to the client, and both client acknowledgements must not reach the backend.</li>
+          <li><strong>Keep-alive</strong> is a 30-second deadline. The proxy must answer both legs independently, even during a long attach replay.</li>
+          <li><strong>Cookie requests</strong> can arrive in play, not only configuration. Answer from the proxy's cache; never let a fresh client's empty cookie response reach the backend.</li>
+          <li><strong>Pinned chunks</strong>: never evict the chunk under the puppet or its cardinal neighbours without a patch or a forced backend resend; otherwise attach can deadlock on “Loading terrain…”.</li>
+          <li><strong>Protocol bump fields</strong>: 26.2/776 adds <code>online_mode</code> to play Login and <code>sessionId</code> to Login Success. 26.x treats entity ID 0 as an unassigned sentinel. The 26.1 pin avoids them; the bump task must handle them.</li>
+        </ul>
+      </details>
+    </section>
+
+    <section id="auth">
+      <div class="section-kicker">Auth &amp; security</div>
+      <h2>The refresh token is the password</h2>
+      <p class="section-lede">
+        The puppet's Microsoft login uses the device-code flow. The resulting refresh token is
+        rolling, single-use, and valid for up to 90 days of inactivity. It bypasses 2FA for its
+        lifetime. Treat it as the account password.
+      </p>
+
+      <div class="grid two">
+        <div class="card">
+          <h3 class="mt0">Puppet login</h3>
+          <dl class="kv">
+            <dt>Flow</dt><dd>Microsoft device code, <code>consumers</code> tenant, <code>XboxLive.signin offline_access</code>.</dd>
+            <dt>Client ID</dt><dd>Public launcher ID <code>00000000402b5328</code> for the MVP. A custom Azure app needs Mojang review.</dd>
+            <dt>Token lifetime</dt><dd>Minecraft access token ~24 h; refresh token rolling, 90-day max inactivity.</dd>
+            <dt>Storage</dt><dd>Namespaced Kubernetes Secret, untracked by ArgoCD, RBAC-scoped. <strong>Encryption at rest is TBD</strong>: Talos does not encrypt Secrets at rest by default. Verify the setting before storing the token, or use an external secret store.</dd>
+            <dt>Write-back</dt><dd>The pod must persist each refreshed token; otherwise a restart loses the chain. Mount the Secret read-only, keep the live cache in an <code>emptyDir</code>, and patch exactly <code>monoplayer-puppet-auth</code> through the Kubernetes API with a scoped ServiceAccount.</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h3 class="mt0">Client attach</h3>
+          <dl class="kv">
+            <dt>Proof</dt><dd>Online-mode <code>hasJoined</code> returns a Mojang-issued UUID. No credentials reach the proxy.</dd>
+            <dt>Whitelist</dt><dd>UUIDs, never usernames. Reloadable without restarting the pod.</dd>
+            <dt>Second factor</dt><dd>Optional single-use attach token, bound to UUID and 60 s TTL. Deferred; Tailscale ACL is the outer ring.</dd>
+            <dt>Deny</dt><dd>Close during login, before Login Success and before any relay.</dd>
+            <dt>Display</dt><dd>Client sees the puppet's profile after Login Success. This is rendering only: the backend session is the puppet, chat is stripped or re-signed by the proxy, and client-side reporting is not remapped.</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="mt0">Three layers of identity</h3>
+        <table>
+          <thead><tr><th>Layer</th><th>Whose identity wins?</th><th>What the backend sees</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Transport / session</strong></td><td><span class="pill green">Puppet</span></td><td>The puppet's TCP connection, UUID, entity, inventory, position, block edits, and interactions.</td></tr>
+            <tr><td><strong>Client rendering</strong></td><td><span class="pill green">Puppet</span></td><td>Nothing. Login Success gives the client the puppet's profile so the HUD shows the puppet's name and skin.</td></tr>
+            <tr><td><strong>Chat signatures</strong></td><td><span class="pill amber">Attaching client's keys</span></td><td>An invalid signature for the puppet if forwarded verbatim. The proxy must strip or re-sign; it cannot pass it through.</td></tr>
+            <tr><td><strong>Reporting / social UI</strong></td><td><span class="pill amber">Attaching client</span></td><td>Nothing. This is client-to-Mojang, outside the packet relay; Monoplayer cannot make it puppet without modifying the client.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout good" style="margin-bottom:0">
+          <span class="label">Short answer</span>
+          <p class="mb0">
+            <strong>Yes for gameplay:</strong> every action the proxy relays reaches the backend on
+            the puppet's connection and is attributed to the puppet. <strong>No for client-side
+            cryptography:</strong> chat is signed by the attaching client, so the proxy must strip
+            or re-sign it. Reporting stays the client's identity and is out of scope.
+          </p>
+        </div>
+      </div>
+
+      <div class="callout bad">
+        <span class="label">Non-negotiables</span>
+        <ul class="mb0">
+          <li><strong>One pod.</strong> Two replicas break the rolling refresh token and kick each other.</li>
+          <li><strong>No tokens in git, logs, traces, or images.</strong> Redact at the logger and OTel exporter.</li>
+          <li><strong>No public ingress.</strong> Tailscale-only data plane; default-deny ingress and egress.</li>
+          <li><strong>Owner-operated only.</strong> No selling attach slots, no third-party accounts, no anti-cheat evasion.</li>
+          <li><strong>Your own backend, or explicit permission.</strong> Public servers and anti-cheat are the immediate risk.</li>
+          <li><strong>No required resource pack.</strong> A client that declines a pack the backend already applied cannot be silently faked into acceptance.</li>
+        </ul>
+      </div>
+
+      <details>
+        <summary>Legal / acceptable-use position</summary>
+        <p>
+          The Microsoft Services Agreement forbids transferring account credentials and makes
+          the owner responsible for all activity. The Minecraft EULA forbids unfair or
+          unreasonable access distribution but permits tools and plugins. An owner-operated,
+          single-account, no-automation proxy stays in the gray zone; enforcement risk is real
+          but unquantified. The clear red lines are handing the account to others, selling
+          access, running other people's puppets, and evading server anti-cheat. The MVP must
+          target only your own server or one that explicitly permits it.
+        </p>
+      </details>
+    </section>
+
+    <section id="version">
+      <div class="section-kicker">Version strategy</div>
+      <h2>Pin one version. Do not chase Mojang quarterly.</h2>
+      <p class="section-lede">
+        Packet IDs shift every minor release. A proxy that supports “any version” is a
+        translation project, not an MVP. The first slice pins the client, the proxy, and the
+        backend to the same protocol.
+      </p>
+
+      <div class="grid three">
+        <div class="stat"><div class="k">Latest release</div><div class="v">26.3 / 777</div><div class="n">As researched on 2026-11-05</div></div>
+        <div class="stat"><div class="k">Node library support</div><div class="v">≤ 26.1 / 775</div><div class="n">minecraft-data; 26.3 in flight</div></div>
+        <div class="stat"><div class="k">MVP target</div><div class="v">26.1 / 775</div><div class="n">Both legs and the backend</div></div>
+      </div>
+
+      <p>
+        This is deliberately one release behind. The library's version support is the constraint,
+        and a pinned backend makes it an ops decision, not a product risk. If your backend is
+        fixed at 26.3, the options are: insert ViaProxy as a translation front (GPL-3.0, extra
+        moving part), or use the Java/MCProtocolLib path (faster protocol currency). The
+        architecture does not change; the substrate does.
+      </p>
+
+      <div class="callout info">
+        <span class="label">Operational rule</span>
+        <p>
+          A protocol bump is a scheduled maintenance task, not a surprise. Budget 0.5–2 days per
+          quarter: bump <code>minecraft-data</code>, re-run the golden packet logs, fix renames
+          and ID shifts, re-pin the backend. If two consecutive bumps exceed four days, that is a
+          signal to move to MCProtocolLib or accept a ViaProxy front.
+        </p>
+        <p class="mb0">
+          Two known bump hazards: 26.2/776 adds <code>online_mode</code> to the play Login packet
+          and <code>sessionId</code> to Login Success; 26.x clients treat entity ID 0 as an
+          unassigned sentinel. The 26.1 pin avoids both, but the bump checklist must name them.
+        </p>
+      </div>
+    </section>
+
+    <section id="validation">
+      <div class="section-kicker">Validation loop</div>
+      <h2>Prove the risky thing first</h2>
+      <p class="section-lede">
+        The plan starts with a two-day experiment that can kill the Node implementation, then a
+        two-week vertical slice. Both live inside the same fast local loop: fake backend, fake
+        client, and no <em>puppet</em> Microsoft account until the final smoke. The attaching
+        client is still a real official client, and the front-leg <code>hasJoined</code> can be
+        stubbed for protocol tests.
+      </p>
+
+      <div class="card">
+        <h3 class="mt0">Gate A — the 2-day falsifier</h3>
+        <p>
+          This is the smallest test that proves an official client can attach to and drive the
+          puppet's live session. It is throwaway code, not product code.
+        </p>
+        <ol>
+          <li><strong>Use a fake backend with a local <code>hasJoined</code> stub for the go/no-go.</strong> A real online-mode backend is optional if you already have the puppet secret; the gate must not depend on it.</li>
+          <li>Run a minimal Node proxy: online-mode front leg, injected puppet login, cached config, synthesized join, play relay, keep-alive responder.</li>
+          <li>Attach a real official client. Walk 100 blocks, break and place a block. Run chat as a <em>separate</em> sub-test: first with <code>enforce-secure-profile=false</code>, then with <code>true</code> if cheap.</li>
+          <li>Disconnect the client. Confirm with an observer bot or server console that the puppet stayed in world for at least 5 minutes.</li>
+          <li>Reattach. Confirm the client lands on the current state, not a stale snapshot.</li>
+        </ol>
+        <p>
+          <strong>Falsified if:</strong> the client cannot attach, movement desyncs within the
+          first minute, or reattach is stuck on “Loading terrain…”. If that happens, the pivot is
+          the Java/ZenithProxy path, not more Node code.
+        </p>
+        <p class="mb0">
+          <strong>Chat failure is a descope signal, not a substrate failure.</strong> If the
+          per-leg chat state machine fails, proceed with read-only/blocked chat; do not kill the
+          build on <code>enforce-secure-profile=true</code> alone.
+        </p>
+      </div>
+
+      <div class="callout good">
+        <span class="label">Protocol-level Gate A status</span>
+        <p class="mb0">
+          A loopback harness now passes 37/37 assertions: two-leg relay, synthesized play
+          join, current-pose reconstruction, a 5-second attach/detach liveness soak,
+          per-leg keep-alive/teleport/chunk-ack ownership, exactly one backend login, and
+          chat blocked in both directions. See <a href="gate-a.md">docs/gate-a.md</a> and
+          <code>testdata/gate-a-report.json</code>. This is <strong>not</strong> the official-client
+          gate: encryption, vanilla rendering, online-mode <code>hasJoined</code>, Microsoft
+          auth, secure-chat re-signing, config-phase replay, and the full 5-minute detach
+          window remain unproven. The independent verifier's memo is
+          <a href="../.scratch/minecraft-puppet-proxy/audit/gate-a-verifier.md">here</a>.
+          The next gate's testbed plan is <a href="gate-b-plan.html">docs/gate-b-plan.html</a>.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3 class="mt0">Auth gate — the half-day lifeline</h3>
+        <p>
+          The refresh-token write-back loop is a Critical risk and cannot wait for a 90-day
+          surprise. Run this before the live demo:
+        </p>
+        <ol>
+          <li>Device-code bootstrap with the public launcher client ID; record the profile UUID.</li>
+          <li>Confirm Java ownership via <code>/entitlements/mcstore</code>.</li>
+          <li>Start the pod, let it refresh, then restart the pod. It must refresh silently, without a new device code, and the replacement token must persist in the Secret.</li>
+          <li>Run <code>mise run auth:status</code>; it should report token age and last refresh from the Secret timestamp, even if the pod is down.</li>
+          <li>Verify the backend's <code>prevent-proxy-connections</code> path sees the same egress IP for <code>/join</code> and the TCP connection.</li>
+        </ol>
+      </div>
+
+      <h3>Test layers</h3>
+      <table>
+        <thead><tr><th>Layer</th><th>What it proves</th><th>Cost</th></tr></thead>
+        <tbody>
+          <tr><td><strong>L1 — unit</strong></td><td>Frame re-framing, cache models, whitelist policy, keep-alive demux, auth wrapper with a fake provider.</td><td>Milliseconds–seconds; no network.</td></tr>
+          <tr><td><strong>L2 — integration</strong></td><td>In-process fake backend + service + fake client: encrypted join, attach, control, detach survival, reattach with current state.</td><td>Seconds; localhost only.</td></tr>
+          <tr><td><strong>L3 — cluster</strong></td><td>Real image in <code>monoplayer-dev</code> with a fake backend and a one-shot fake client. Catches image and environment regressions.</td><td>Minutes; no Mojang.</td></tr>
+          <tr><td><strong>L4 — telemetry</strong></td><td>L3 plus assertions that attach/disconnect counters and traces reach OpenObserve.</td><td>Minutes; no Mojang.</td></tr>
+          <tr><td><strong>Live smoke</strong></td><td>Real Microsoft account, real backend, official client, plus the auth gate's restart/refresh check. The only test that needs the puppet secret.</td><td>Manual; final gate.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="grid two">
+        <div class="card tight">
+          <h3 class="mt0">The five L2 invariants</h3>
+          <ol class="mb0">
+            <li>Puppet joins the backend with encryption active.</li>
+            <li>Client attaches and receives live backend frames.</li>
+            <li>Client movement reaches the backend as the puppet, exactly once.</li>
+            <li>Client disconnect leaves the puppet connected.</li>
+            <li>A second attach receives current state, not a stale replay.</li>
+          </ol>
+        </div>
+        <div class="card tight">
+          <h3 class="mt0">Deterministic fixtures</h3>
+          <ul class="mb0">
+            <li>Fake backend: scripted config, chunks, entities, chat, keep-alives, block edits.</li>
+            <li>Fake client: offline UUID, canned movement, records every frame.</li>
+            <li>Auth seam: inject a fake session provider; only the auth gate and live smoke touch Microsoft.</li>
+            <li>Golden sessions: normalized frames under <code>testdata/sessions/</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="observability">
+      <div class="section-kicker">Observability</div>
+      <h2>Make the session explain itself</h2>
+      <p class="section-lede">
+        The service lives or dies by session state. Logs, metrics, and traces should answer four
+        questions without attaching a debugger: who is attached, what the puppet is doing, where
+        the latency is, and why a session dropped.
+      </p>
+
+      <table>
+        <thead><tr><th>Signal</th><th>Type</th><th>Why it matters</th></tr></thead>
+        <tbody>
+          <tr><td><code>monoplayer_attach_total{result,client_uuid}</code></td><td>counter</td><td>Who tried to attach and whether the whitelist admitted them.</td></tr>
+          <tr><td><code>monoplayer_attach_duration_seconds</code></td><td>histogram</td><td>Login → last cached chunk. Target &lt;2 s at RD 8; flat with session age.</td></tr>
+          <tr><td><code>monoplayer_puppet_state{state}</code></td><td>gauge</td><td>Handshaking / login / config / play / reconnecting.</td></tr>
+          <tr><td><code>monoplayer_backend_login_count</code></td><td>gauge</td><td>Must be exactly one for the current puppet session. A second login is a bug; a counter cannot express this.</td></tr>
+          <tr><td><code>monoplayer_attached</code></td><td>gauge</td><td>0 or 1. The single-attach invariant.</td></tr>
+          <tr><td><code>monoplayer_attach_rejected_total{reason}</code></td><td>counter</td><td>Whitelist, handshake, rate-limit, sessionserver failure. Makes attach failures diagnosable.</td></tr>
+          <tr><td><code>monoplayer_packets_total{leg,direction,packet}</code></td><td>counter</td><td>Traffic shape and unexpected packet classes.</td></tr>
+          <tr><td><code>monoplayer_cache_bytes{kind}</code></td><td>gauge</td><td>Chunk/entity/inventory cache bounds; alert on growth.</td></tr>
+          <tr><td><code>monoplayer_keepalive_rtt_seconds{leg}</code></td><td>histogram</td><td>Backend and client health; 30 s deadline.</td></tr>
+          <tr><td><code>monoplayer_disconnect_total{leg,reason}</code></td><td>counter</td><td>Client quit, backend kick, timeout, auth failure.</td></tr>
+          <tr><td><code>monoplayer_out_of_state_packet_total</code></td><td>counter</td><td>Must be zero; an out-of-state frame is fatal by design.</td></tr>
+          <tr><td><code>monoplayer_auth_refresh_total{result}</code></td><td>counter</td><td>Refresh success/failure; the account's lifeline.</td></tr>
+          <tr><td><code>monoplayer_refresh_token_age_days</code></td><td>gauge</td><td>Emitted by <code>mise run auth:status</code> from the Secret timestamp, not by the pod: a dead pod cannot alert on its own token. Alert at 60 days.</td></tr>
+          <tr><td>Deployment replica count</td><td>gauge</td><td>From kube-state-metrics; alert if available replicas ≠ 1. The single-pod invariant needs an external check.</td></tr>
+        </tbody>
+      </table>
+
+      <p>
+        Traces: one span per attach with child spans for login, config replay, join synthesis,
+        chunk burst, and live cutover; one span per auth refresh; one span per backend reconnect.
+        Logs: structured JSON with session ID, puppet UUID (not display name), attach UUID,
+        packet class, and disconnect reason. Never log tokens.
+      </p>
+    </section>
+
+    <section id="operations">
+      <div class="section-kicker">Deployment</div>
+      <h2>One namespace, one pod, the proven homelab loop</h2>
+      <p class="section-lede">
+        The deployment is deliberately boring. It reuses the Deepmine homelab patterns:
+        mise tasks, in-cluster BuildKit, zot, a single namespace, Tailscale exposure, and OTLP
+        to the shared OpenObserve stack.
+      </p>
+
+      <div class="grid two">
+        <div class="card">
+          <h3 class="mt0">Cluster topology</h3>
+          <dl class="kv">
+            <dt>Namespace</dt><dd><code>monoplayer-dev</code></dd>
+            <dt>Workload</dt><dd>Deployment, <code>replicas: 1</code>, <code>strategy: Recreate</code>, no HPA</dd>
+            <dt>Service</dt><dd>TCP 25565, <code>loadBalancerClass: tailscale</code></dd>
+            <dt>Network</dt><dd>default-deny ingress (own ns + tailscale); egress allowlist to DNS, Microsoft/Mojang hosts, backend, registry, OTel, K8s API. <strong>Egress default-deny is new work</strong>: Cilium FQDN rules plus DNS scoping, not a copy-paste of the ingress-only homelab pattern.</dd>
+            <dt>Secrets</dt><dd><code>monoplayer-puppet-auth</code>, untracked, RBAC-scoped. Secret volume is read-only: live cache in <code>emptyDir</code>, patch the Secret via the K8s API with a ServiceAccount limited to that object.</dd>
+            <dt>Pod security</dt><dd><code>restricted</code> Pod Security, non-root, read-only root filesystem where possible.</dd>
+            <dt>Readiness</dt><dd>Puppet leg in PLAY, cache warm, auth healthy. Liveness is process-level; readiness is session-level.</dd>
+            <dt>Rate limit</dt><dd>Handshake timeout, per-IP attach rate limit, one attach at a time, bounded backlog.</dd>
+            <dt>Storage</dt><dd>No PVC. Token cache fits in the Secret. Longhorn later if session persistence is ever added.</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h3 class="mt0">Build &amp; deploy</h3>
+          <dl class="kv">
+            <dt>BuildKit</dt><dd>existing <code>buildkitd</code> in <code>deepmine-build</code>, port-forward 1234</dd>
+            <dt>Registry</dt><dd>push <code>zot.deepmine-core.svc:5000/monoplayer/...</code>; pull <code>registry.internal/monoplayer/...</code></dd>
+            <dt>Tag</dt><dd><code>sha-&lt;7&gt;</code>, digest-pinned in the manifest</dd>
+            <dt>Deploy</dt><dd><code>kubectl apply -k deploy/env/dev</code></dd>
+            <dt>Telemetry</dt><dd>OTLP gRPC to the shared collector; OpenObserve dashboards</dd>
+            <dt>ArgoCD</dt><dd>Not in the MVP. Add when the service graduates.</dd>
+          </dl>
+        </div>
+      </div>
+
+      <h3>mise task interface</h3>
+      <pre><button class="copy-btn" type="button">copy</button><code># Local loop
+mise run check          # format, lint, typecheck, unit tests
+mise run test:l2        # fake backend + fake client integration
+mise run ci             # check + L2 + audit
+
+# Images
+mise run images:build   # port-forward buildkitd, build, push, print digest
+mise run deploy         # kubectl apply -k deploy/env/dev
+mise run smoke          # L3 job: real image + fake backend + fake client
+mise run logs           # kubectl -n monoplayer-dev logs -f
+mise run metrics        # OpenObserve query helper
+
+# Account lifecycle
+mise run secret:apply   # device-code bootstrap -> namespaced Secret
+mise run secret:rotate  # new device code, replace the Secret
+mise run auth:status    # token age + last refresh from the Secret timestamp
+mise run whitelist:add  # resolve username -> UUID, reload without restart
+mise run down           # rotate/revoke, then delete the namespace</code></pre>
+
+      <div class="callout info">
+        <span class="label">Why this loop is fast</span>
+        <p class="mb0">
+          L1 and L2 run in-process on the developer machine with no cluster and no puppet
+          Microsoft account. The slow path (BuildKit, cluster, OpenObserve) only runs after the
+          protocol invariants are green. The live account is the auth gate and final smoke, not
+          the inner loop.
+        </p>
+      </div>
+
+      <h3>Before the first deploy</h3>
+      <ul class="checklist">
+        <li class="pending">Puppet account is your own MSA, owns Java Edition, and can join the backend.</li>
+        <li class="pending">Device-code bootstrap works; a pod restart refreshes silently; the replacement token persists.</li>
+        <li class="pending">No token, UUID, or Secret value exists in git, logs, traces, or images.</li>
+        <li class="pending">Secret encryption at rest is verified on Talos, or an external secret store is used.</li>
+        <li class="pending">Default-deny ingress and egress are installed; Tailscale is the only data-plane path.</li>
+        <li class="pending">Attach gate is online-mode <code>hasJoined</code> + UUID whitelist; denied clients never relay.</li>
+        <li class="pending">Replicas are exactly one; pod-count alert exists; attach rate limit and readiness probe are set.</li>
+        <li class="pending">Backend is your own or explicitly permits the proxy; <code>prevent-proxy-connections</code> is verified.</li>
+        <li class="pending">No required resource pack; chat is read-only/blocked or the per-leg state machine is proven.</li>
+        <li class="pending"><code>mise run down</code> rotates/revokes tokens before deleting the namespace.</li>
+      </ul>
+    </section>
+
+    <section id="risks">
+      <div class="section-kicker">Risks &amp; kill criteria</div>
+      <h2>What can go wrong, and when to stop</h2>
+      <p class="section-lede">
+        The architecture is proven; the implementation is not. These are the risks that matter,
+        in order of whether they can kill the project.
+      </p>
+
+      <table>
+        <thead><tr><th>Risk</th><th>Sev.</th><th>Mitigation / kill</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Synthesized join rejected by the official client</strong> — stuck on “Loading terrain”, kick on session verification, movement desync.</td><td><span class="pill red">Critical</span></td><td>Gate A in 2 days. If it fails, abandon the Node substrate; pivot to MCProtocolLib or deploy ZenithProxy.</td></tr>
+          <tr><td><strong>Refresh-token chain broken</strong> — two pods, failed write-back, 90-day expiry, token theft.</td><td><span class="pill red">Critical</span></td><td>One pod, Recreate, no HPA; RBAC write-back; age alert at 60 days; untracked Secret; rotate on incident.</td></tr>
+          <tr><td><strong>Chunk cache incoherence</strong> — block edits while detached, palette surgery, memory growth.</td><td><span class="pill amber">High</span></td><td>Pin the puppet's chunk and cardinal neighbours; evict other mutated chunks; patch in slice 2; assert cache bytes and attach logs.</td></tr>
+          <tr><td><strong>Secure chat</strong> — signals invalid for the puppet profile and <code>last_seen</code> windows are per-connection.</td><td><span class="pill amber">High</span></td><td>Per-leg chat state machine (acknowledge, rebuild window, ordered clientbound chat). MVP default: read-only/blocked. <code>enforce-secure-profile=false</code> removes signatures, not last-seen checks. Re-sign with puppet certs in slice 2.</td></tr>
+          <tr><td><strong>AFK kick</strong> — the puppet is inert while detached; a server idle kicker drops it anyway.</td><td><span class="pill amber">High</span></td><td>Disable idle kicks on your own backend or accept session death as residual risk. This is outside the proxy's control.</td></tr>
+          <tr><td><strong>Secret encryption at rest unverified</strong> — Talos does not encrypt Secrets by default.</td><td><span class="pill amber">High</span></td><td>Verify the machine-config setting before storing the token, or use an external secret store. Do not claim encryption until checked.</td></tr>
+          <tr><td><strong>Version treadmill</strong> — quarterly protocol bumps; library lags.</td><td><span class="pill amber">High</span></td><td>Pin one version; scheduled bump task; ViaProxy stopgap; Java fallback if two bumps exceed 4 days.</td></tr>
+          <tr><td><strong>Account / server enforcement</strong> — Microsoft lock, server ban, anti-cheat flag.</td><td><span class="pill amber">High</span></td><td>Owner-operated only; own server or explicit permission; no automation; loud ban/privilege signals.</td></tr>
+          <tr><td><strong>Single-pod state loss</strong> — node reboot, OOM, rollout, scale-down.</td><td><span class="pill amber">High</span></td><td>Accept for MVP; preStop drain; reconnect with backoff; document that live TCP state does not survive a pod restart.</td></tr>
+          <tr><td><strong>Event-loop saturation</strong> — chunk floods, many entities.</td><td><span class="pill blue">Medium</span></td><td>Raw-frame relay, bounded cache, measure first; worker threads/clustering only if measured.</td></tr>
+          <tr><td><strong>PrismarineJS bus factor</strong> — small maintainer team.</td><td><span class="pill blue">Medium</span></td><td>Depend on the wire format, own the auth wrapper, keep the Java pivot viable.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout bad">
+        <span class="label">Kill criteria</span>
+        <ul class="mb0">
+          <li><strong>Gate A fails:</strong> official client cannot attach, movement desyncs in the first minute, or reattach is stuck on “Loading terrain…”. A chat-only failure descopes chat; it does not kill the substrate.</li>
+          <li><strong>Slice 1 misses acceptance by week 3:</strong> the 60-second demo cannot be produced.</li>
+          <li><strong>Post-demo soak (not part of the three-week demo):</strong> first-try attach success &lt;95%, puppet median lifetime &lt;24 h from proxy-caused drops, or a second refresh-token incident within 90 days.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="decisions">
+      <div class="section-kicker">Decision log</div>
+      <h2>The council's calls</h2>
+      <p class="section-lede">
+        Three independent delegates reviewed the same research. All three recommended building
+        the Node semantic MITM; the delivery delegate recorded the strongest dissent (deploy
+        ZenithProxy instead). Confidence is per delegate, not a vote count.
+      </p>
+
+      <div class="decision">
+        <div class="id">D1</div>
+        <h3>Approach: stateful semantic MITM</h3>
+        <p class="why">Bounded cache + synthesized join + cached config replay. The backend session is never dropped for client lifecycle events. Rejected: full byte replay (unbounded), reconnect-on-attach (loses state), bot-world synthesis (speculative).</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D2</div>
+        <h3>Stack: build in Node/TypeScript, don't fork ZenithProxy</h3>
+        <p class="why"><code>minecraft-protocol</code> + <code>prismarine-auth</code>; MCProtocolLib is the fallback. ZenithProxy is the behavioral spec and the fallback deployment. Forking inherits AGPL, Java/Gradle, and 2b2t scope. AGPL only binds distribution, so private deployment remains a legitimate fallback.</p>
+        <p class="mb0"><span class="pill green">3 / 3 recommend build</span> <span class="pill amber">Delivery confidence 78</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D3</div>
+        <h3>Version: pin 26.1 / protocol 775</h3>
+        <p class="why">The newest version the Node stack supports. Pin the backend too. No translation layer in slice 1. ViaProxy is the escape hatch; Java is the substrate pivot if currency becomes the bottleneck.</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D4</div>
+        <h3>Attach gate: online-mode hasJoined + UUID whitelist</h3>
+        <p class="why">The client proves its own Mojang identity to the proxy; the proxy sends the puppet's profile to the client. Never authenticate the client to the backend as the puppet. Attach token is an optional second factor, not the primary gate.</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D5</div>
+        <h3>Late attach: fresh join into the live session</h3>
+        <p class="why">No custom attach screen. The vanilla loading screen is the UX. ~1–3 s, flat with session age. The cache radius is the trade-off.</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D6</div>
+        <h3>Validation: Gate A first, then a 2-week slice</h3>
+        <p class="why">Gate A is throwaway and can kill the Node implementation. The slice adds the product surface, L1–L4, and the 60-second demo. The live account is a final manual smoke.</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D7</div>
+        <h3>Ops: one pod, one namespace, Tailscale-only, OTLP</h3>
+        <p class="why">Reuse the deepmine loop. Secrets outside git with pod write-back. Default-deny NetworkPolicy. No ArgoCD, no PVC, no HPA for the MVP.</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <div class="decision">
+        <div class="id">D8</div>
+        <h3>Biggest risk: join synthesis and chat</h3>
+        <p class="why">The synthesized join must be indistinguishable from a fresh vanilla join. If the official client rejects it, the architecture needs a different substrate. Kill criterion is Gate A.</p>
+        <p class="mb0"><span class="pill green">Unanimous</span></p>
+      </div>
+
+      <details>
+        <summary>Council dissent, in full</summary>
+        <p>
+          The delivery delegate's strongest counter: <em>“You can have this product this
+          weekend.”</em> ZenithProxy already does everything Monoplayer needs, with more features,
+          on a current protocol, in production. Deploying it is days of configuration; building
+          is roughly three weeks plus a permanent quarterly treadmill. The build is justified
+          only if you value license cleanliness for distribution, a small owned codebase, a
+          Node-native ops loop, and future extension (multi-account, custom control plane) enough
+          to pay for it. If the goal is simply “make it exist for me,” deploy ZenithProxy.
+        </p>
+        <p class="mb0">
+          The recommendation is still to build, but Gate A and the three-week cap are there to
+          make the fallback cheap. The product survives a failed build.
+        </p>
+      </details>
+    </section>
+
+    <section id="plan">
+      <div class="section-kicker">Plan</div>
+      <h2>Three weeks to a demo, with an early exit</h2>
+
+      <table>
+        <thead><tr><th>Phase</th><th>Effort</th><th>Output / gate</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Gate A — falsifier</strong></td><td>2 days</td><td>Throwaway proxy + official client attach + walk/break/place + detach/reattach + chat sub-test. Go/no-go on Node; chat failure descopes chat.</td></tr>
+          <tr><td><strong>Auth gate</strong></td><td>0.5 day</td><td>Device code, restart, silent refresh, token persists, <code>auth:status</code>, <code>prevent-proxy-connections</code> check.</td></tr>
+          <tr><td><strong>Slice 1 — data plane</strong></td><td>7 days</td><td>Puppet leg, config cache, synthesized join, play relay, whitelist, detach survival, L1/L2 green, golden baseline.</td></tr>
+          <tr><td><strong>Slice 1 — operations</strong></td><td>4 days</td><td>mise tasks, BuildKit image, <code>monoplayer-dev</code>, NetworkPolicy, Secret, OTLP, L3/L4 smoke.</td></tr>
+          <tr><td><strong>Live smoke</strong></td><td>1 day</td><td>Real Microsoft account + real backend + official client. The 60-second demo.</td></tr>
+          <tr><td><strong>Total to demo</strong></td><td><strong>~3 weeks</strong></td><td>Accept, or deploy ZenithProxy as the fallback and re-scope.</td></tr>
+          <tr><td><strong>Post-demo soak</strong></td><td>1 week</td><td>Daily use; measure attach success and session lifetime against the kill criteria. Not part of the demo.</td></tr>
+          <tr><td><strong>Recurring</strong></td><td>0.5–2 days / quarter</td><td>Protocol bump, golden re-run, re-pin backend. &gt;4 days twice = pivot.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="grid three">
+        <div class="stat"><div class="k">Day 2</div><div class="v">Go / no-go</div><div class="n">Official client attaches</div></div>
+        <div class="stat"><div class="k">Week 2</div><div class="v">Local green</div><div class="n">L1/L2 invariants</div></div>
+        <div class="stat"><div class="k">Week 3</div><div class="v">Demo</div><div class="n">Cluster + live smoke</div></div>
+      </div>
+    </section>
+
+    <section id="questions">
+      <div class="section-kicker">What I need from you</div>
+      <h2>Six decisions; four block Gate A</h2>
+      <p class="section-lede">
+        The research answered the mechanism questions. These are values and scope questions
+        that change the plan, so they should be answered by you, not guessed. Q1–Q3 and Q5
+        gate Gate A; Q4 and Q6 gate the first deploy.
+      </p>
+
+      <div class="card">
+        <ol>
+          <li>
+            <strong>Target backend and version.</strong> Is this your own server? Can you pin it
+            to 26.1 / 775, or is it fixed at 26.3 or another version? If it is fixed, we choose
+            ViaProxy or the Java path before writing Node code. Also confirm the puppet account
+            owns Java Edition and can join the backend.
+          </li>
+          <li>
+            <strong>Whitelist.</strong> Which Minecraft accounts may attach? Give UUIDs (or
+            usernames we resolve to UUIDs). Is this single-user, a few friends, or a product?
+          </li>
+          <li>
+            <strong>Build vs deploy, and what it is for.</strong> Do you want the Node
+            implementation (ownership, license cleanliness, extension) or the fastest path
+            (deploy ZenithProxy as config)? Is the primary use case keeping an account online,
+            remote play, or queue avoidance? That decides how much persistence complexity is
+            earned. The recommendation is build, with Gate A and a three-week cap.
+          </li>
+          <li>
+            <strong>Pod restart semantics.</strong> Is it acceptable that a pod restart drops the
+            live backend session and reconnects (position/inventory may reset depending on the
+            server)? Persisting a live TCP session across restarts is not in the MVP.
+          </li>
+          <li>
+            <strong>Chat.</strong> Is the backend's <code>enforce-secure-profile</code> off? Even
+            if it is, outgoing chat needs a per-leg <code>last_seen</code> state machine. Is
+            read-only/blocked chat acceptable for the demo, or is chat a must-have? If it is a
+            must-have, Gate A must prove the full state machine, not just signature stripping.
+          </li>
+          <li>
+            <strong>Exposure and scope.</strong> Confirm Tailscale-only, owner-operated, own-server
+            use. If you need public ingress or third-party users, the security and legal design
+            changes materially.
+          </li>
+        </ol>
+      </div>
+
+      <div class="callout good">
+        <span class="label">Recommended next action</span>
+        <p class="mb0">
+          Answer 1–3 and 5, then run Gate A. Do not build the product slice until an official
+          client has attached to a live puppet and reattached after a disconnect. Answer 4 and
+          6 before the first deploy.
+        </p>
+      </div>
+    </section>
+
+    <section id="sources">
+      <div class="section-kicker">Sources</div>
+      <h2>Research and decision trail</h2>
+      <p class="section-lede">
+        The working notes are in the repo. They contain the full evidence, links, packet tables,
+        risk register, and test plans behind this document.
+      </p>
+
+      <div class="grid two">
+        <div class="card tight">
+          <h3 class="mt0">Internal</h3>
+          <ul class="mb0">
+            <li><a href="../.scratch/minecraft-puppet-proxy/map.md">Wayfinder map</a> — destination, notes, decisions, open fog.</li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/research/01-protocol-auth-prior-art.md">Research 01 — protocol, auth, prior art</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/research/02-late-attach.md">Research 02 — late attach and state</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/research/03-runtime-validation.md">Research 03 — runtime and validation</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/research/04-security-legal-ops.md">Research 04 — security, legal, ops</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/issues/05-grilling-mvp-scope.md">Ticket 05 — MVP scope (open, HITL)</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/council/protocol-architect.md">Council — protocol architect</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/council/reliability-security-architect.md">Council — reliability/security architect</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/council/delivery-product-architect.md">Council — delivery/product architect</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/audit/protocol-correctness-auditor.md">Audit — protocol correctness</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/audit/ops-security-auditor.md">Audit — ops and security</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/audit/document-product-auditor.md">Audit — document and product</a></li>
+            <li><a href="../.scratch/minecraft-puppet-proxy/audit/gate-a-verifier.md">Audit — Gate A verifier</a></li>
+          </ul>
+        </div>
+        <div class="card tight">
+          <h3 class="mt0">External</h3>
+          <ul class="mb0">
+            <li><a href="https://github.com/rfresh2/ZenithProxy">ZenithProxy</a> — production reference implementation.</li>
+            <li><a href="https://github.com/PorkStudios/Pork2b2tBot">Pork2b2tBot</a> — earlier existence proof.</li>
+            <li><a href="https://crates.io/crates/azalea-reflection-proxy">azalea-reflection-proxy</a> — cached config, synthesized join, raw chunk cache.</li>
+            <li><a href="https://github.com/IceTank/mineflayer-proxy-inspector">mineflayer-proxy-inspector</a> — attach/link world inspection.</li>
+            <li><a href="https://github.com/PrismarineJS/node-minecraft-protocol">node-minecraft-protocol</a> — both protocol legs.</li>
+            <li><a href="https://github.com/PrismarineJS/prismarine-auth">prismarine-auth</a> — Microsoft device-code auth.</li>
+            <li><a href="https://github.com/PrismarineJS/minecraft-data">minecraft-data</a> — versioned packet data.</li>
+            <li><a href="https://github.com/GeyserMC/MCProtocolLib">MCProtocolLib</a> — Java fallback substrate.</li>
+            <li><a href="https://github.com/RaphiMC/MinecraftAuth">MinecraftAuth</a> — Java-side auth for the fallback.</li>
+            <li><a href="https://github.com/ViaVersion/ViaProxy">ViaProxy</a> — version translation stopgap.</li>
+            <li><a href="https://minecraft.wiki/w/Java_Edition_protocol/Packets">Minecraft Java protocol — packets</a></li>
+            <li><a href="https://wikivg.booky.dev/Protocol_Encryption">Protocol encryption and hasJoined</a></li>
+            <li><a href="https://minecraft.wiki/w/Protocol_version">Protocol version table</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout info">
+        <span class="label">Provenance</span>
+        <p class="mb0">
+          This document synthesizes four independent research delegates, a three-delegate
+          decision council, and three independent audits. Audit fixes incorporated: the per-leg
+          chat <code>last_seen</code> contract, pinned feet chunks, the Gate A secure-profile
+          split, the Secret encryption-at-rest caveat, the token write-back gate, the external
+          pod-count alert, and the corrected lifecycle diagram. It is a proposal for decision,
+          not a final spec. The open HITL ticket
+          <a href="../.scratch/minecraft-puppet-proxy/issues/05-grilling-mvp-scope.md">“MVP scope and non-goals”</a>
+          is the next step once the six questions above are answered.
+        </p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer-inner">
+    Monoplayer architecture proposal · 5 November 2026 · Draft for decision.
+    Built from research notes and council memos in <code>.scratch/minecraft-puppet-proxy/</code>.
+  </div>
+</footer>
+
+<script>
+  // Active table of contents.
+  const links = Array.from(document.querySelectorAll('.toc a'));
+  const sections = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const setActive = () => {
+    let current = sections[0];
+    for (const section of sections) {
+      if (section.getBoundingClientRect().top <= 120) current = section;
+    }
+    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current.id));
+  };
+  document.addEventListener('scroll', setActive, { passive: true });
+  setActive();
+
+  // Copy buttons for code blocks.
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const code = btn.parentElement.querySelector('code');
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code.innerText);
+        const old = btn.textContent;
+        btn.textContent = 'copied';
+        setTimeout(() => { btn.textContent = old; }, 1200);
+      } catch (_) {
+        btn.textContent = 'select';
+      }
+    });
+  });
+
+  // Print: open closed details so the legal position and dissent survive paper.
+  const detailBlocks = Array.from(document.querySelectorAll('details'));
+  window.addEventListener('beforeprint', () => {
+    detailBlocks.forEach(d => {
+      d.dataset.wasOpen = String(d.open);
+      d.open = true;
+    });
+  });
+  window.addEventListener('afterprint', () => {
+    detailBlocks.forEach(d => {
+      d.open = d.dataset.wasOpen === 'true';
+    });
+  });
+
+  // Accessibility: every generated table header is a row header for its column.
+  document.querySelectorAll('thead th').forEach(th => th.setAttribute('scope', 'col'));
+</script>
+</body>
+</html>
