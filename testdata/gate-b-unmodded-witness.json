@@ -1,0 +1,60 @@
+{
+  "gate": "B",
+  "row": "B5-unmodded-witness (G0 manual lane)",
+  "lane": "unmodded",
+  "clientLane": "unmodded",
+  "generatedAt": "2026-11-06T14:23:48.781Z",
+  "completed": false,
+  "status": "NOT COMPLETE — exits nonzero until the operator records the manual run",
+  "how": [
+    "Launch the UNMODDED Prism 26.1.2 instance (no gate-b-driver mod installed) where you normally play Minecraft.",
+    "Join the G0 Paper backend directly (monoplayer-gate-b-paper.tail41e568.ts.net:25565).",
+    "For each step below, do the action by hand, capture a grim screenshot, and record ok/pending."
+  ],
+  "steps": [
+    {
+      "name": "join: official unmodded client reaches the world in <= 120 s",
+      "state": "pending",
+      "evidence": "[MANUAL: grim screenshot + notes]"
+    },
+    {
+      "name": "render: chunks visible (not stuck on Loading terrain)",
+      "state": "pending",
+      "evidence": "[MANUAL]"
+    },
+    {
+      "name": "move: walk a few blocks; server-side position changed (RCON data get entity Pos)",
+      "state": "pending",
+      "evidence": "[MANUAL: RCON output]"
+    },
+    {
+      "name": "break: mine a block at an explicit coordinate; server-side air (execute if block)",
+      "state": "pending",
+      "evidence": "[MANUAL: RCON output]"
+    },
+    {
+      "name": "place: place a block on a support; server-side non-air",
+      "state": "pending",
+      "evidence": "[MANUAL: RCON output]"
+    },
+    {
+      "name": "screenshot: at least one artifact preserved alongside this checklist",
+      "state": "pending",
+      "evidence": "[MANUAL: file path]"
+    },
+    {
+      "name": "disconnect: leave the world; RCON list no longer shows the player",
+      "state": "pending",
+      "evidence": "[MANUAL]"
+    },
+    {
+      "name": "rejoin: relaunch the instance, reattach at the current position",
+      "state": "pending",
+      "evidence": "[MANUAL]"
+    }
+  ],
+  "limitations": [
+    "Manual lane: no driver. Evidence quality relies on coupled client observation + RCON checks, honestly labelled.",
+    "When every step is recorded, copy this file to testdata/gate-b-unmodded-witness.json with completed: true."
+  ]
+}
