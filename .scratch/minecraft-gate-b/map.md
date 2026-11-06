@@ -31,9 +31,9 @@ not the testbed itself.
   Prism 11.0.3, Java 25, 26.1.2 instance).
 - G0 backend: Paper 26.1.2 b74 in `monoplayer-gate-b`, Tailscale endpoint
   `monoplayer-gate-b-paper.tail41e568.ts.net:25565`, online-mode and
-  secure-profile. Official client joined. The Fabric driver row passed
-  status/move/look/break/place/respawn/disconnect/rejoin on 2026-11-06;
-  the unmodded witness and 2/2 repetition are still pending.
+  secure-profile. Official client joined. The Fabric driver lane passed
+  **2/2** on 2026-11-06 (38/38 assertions per run) with the repeatable
+  `src/gate-b/` runner; the unmodded witness is still pending.
 - Account roles (user-confirmed): `Bafbi` = player, `GlowSquidye` = puppet.
 - Target topology (user-confirmed): Paper behind a proxy; Velocity is core, not
   a compatibility lane. Read-only/blocked chat is acceptable.
@@ -53,11 +53,11 @@ not the testbed itself.
   Prism + a thin Fabric driver is the deterministic instrument; one unmodded
   Prism run is the anti-masking witness. The `nath` host is confirmed and the
   official client has joined the Paper backend.
-- Driver validation (2026-11-06): status, move, look, break, place, screenshot,
-  respawn, disconnect, and quit pass against Paper 26.1.2 b74, with server-side
-  position and block checks. The window is named `Monoplayer Gate B` so the
-  Hyprland workspace-9 rule cannot catch normal Minecraft. Remaining: unmodded
-  witness and 2/2 repetition.
+- Driver validation (2026-11-06): the repeatable `src/gate-b/` runner passed
+  **2/2** consecutive runs against Paper 26.1.2 b74, 38/38 assertions each,
+  with server-side position/block checks. The window is named
+  `Monoplayer Gate B` so the Hyprland workspace-9 rule cannot catch normal
+  Minecraft. Remaining: the manual unmodded witness.
 - [Research: backend matrix and network harness](issues/02-research-backend-matrix.md):
   Vanilla 26.1.2 + Paper 26.1.2 b74 direct are the core; Fabric is a required
   compatibility report; Velocity is a proxy lane only if the target uses one;

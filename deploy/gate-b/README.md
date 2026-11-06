@@ -2,10 +2,11 @@
 
 **Status (2026-11-06):** Paper 26.1.2 build 74 is running in
 `monoplayer-gate-b`; an official 26.1.2 client joined through
-`monoplayer-gate-b-paper.tail41e568.ts.net:25565`. The Fabric driver row passes
-status, movement, look, break, place, respawn, disconnect, and rejoin. One
-unmodded witness run and a second clean repetition remain.
-Evidence: [docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
+`monoplayer-gate-b-paper.tail41e568.ts.net:25565`. The Fabric driver lane now
+passes **2/2** consecutive runs (38/38 assertions each) with the repeatable
+`src/gate-b/` runner. G0 still needs the manual unmodded Prism witness.
+Evidence: [docs/gate-b-g0.md](../../docs/gate-b-g0.md) and
+[docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
 
 The `monoplayer-gate-b` namespace holds the real-backend matrix. It is not the
 product namespace; do not point the product at it.

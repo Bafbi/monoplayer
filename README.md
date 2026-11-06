@@ -40,4 +40,18 @@ The client driver is in [tools/gate-b-driver/](tools/gate-b-driver/); build it w
 `mise run gate-b:driver:build`. It was validated on `nath` against Paper 26.1.2
 on 2026-11-06: [docs/gate-b-driver-validation.md](docs/gate-b-driver-validation.md).
 
+The G0 scenario controller for the driver lane is in `src/gate-b/` driven by
+`src/gate-b.js`: `node src/gate-b.js --runs 2` runs two consecutive fresh
+client runs (quit + host-side relaunch between runs, no reconnect op), pairs
+every client-side claim with positive RCON assertions, classifies every RCON
+op as setup/assertion/probe, screenshots via `scp`, and writes per-run reports
+plus a summary under `testdata/`. `node src/gate-b.js --lane unmodded`
+generates the manual anti-masking witness checklist, and
+`node src/gate-b.js --verify-g0` (= `mise run gate-b:g0`) exits 0 only for a
+real 2/2 plus a completed witness. The runbook with commands, evidence rules,
+and failure modes is [docs/gate-b-g0.md](docs/gate-b-g0.md).
+
+The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run); G0
+remains blocked only on the manual unmodded witness.
+
 Created in [T3 Code](https://t3.codes).

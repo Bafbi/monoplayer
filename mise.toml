@@ -30,6 +30,16 @@ run = "node src/gate-a.js"
 description = "Build the Gate B Fabric client driver."
 run = "gradle -p tools/gate-b-driver --no-daemon build"
 
+[tasks."gate-b:scenario"]
+description = "Run the Gate B driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the live backend)."
+depends = ["install"]
+run = "node src/gate-b.js --runs 2"
+
+[tasks."gate-b:g0"]
+description = "Gate B G0 verdict: requires two consecutive PASSED driver reports plus a completed unmodded witness."
+depends = ["install"]
+run = "node src/gate-b.js --verify-g0"
+
 [tasks."gate-b:driver:install"]
 description = "Install the built driver into the display host's Prism root (run on the host)."
 run = "tools/gate-b-driver/install.sh tools/gate-b-driver/build/libs/gate-b-driver-0.1.0.jar"

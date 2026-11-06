@@ -100,6 +100,7 @@ if 'OverrideMemory=' not in s:
 # Keep Prism's console window out of the desktop; the driver socket is enough.
 s = set_key(s, 'OverrideConsole', 'true')
 s = set_key(s, 'ShowConsole', 'false')
+s = set_key(s, 'ShowConsoleOnError', 'false')
 p.write_text(s)
 PY
 
