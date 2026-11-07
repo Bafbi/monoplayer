@@ -1,9 +1,15 @@
-// The live backend leg (M4/G1 lane): mc.createClient with Microsoft auth.
+// The Monoplayer backend leg: one session as the puppet against the backend.
+//
+// Two constructors share one body, and the offline path is a separate
+// constructor, never a config flag:
+//   createLiveBackendLeg    Microsoft auth through the G1 token custody,
+//                           cache-key = cacheAccount, writer lock held.
+//   createOfflineBackendLeg auth 'offline', fixed username, loopback only,
+//                           no custody, no lock, no .secrets read.
 //
 // This is the backendLeg adapter for the B1 core (see docs/gate-b-b1.md):
-// it opens ONE authenticated session as the puppet (GlowSquidye) against the
-// real backend (Paper G0 direct in B1) and forwards every clientbound
-// configuration + login + play frame to the core frame handler as
+// it opens ONE session as the puppet against the backend and forwards every
+// clientbound configuration + login + play frame to the core frame handler as
 //   { state, name, buffer, data }
 // where `buffer` is the minecraft-protocol `raw` frame (packet ID + body,
 // re-frameable with writeRaw on any leg) and `data` is the decoded packet
@@ -18,8 +24,8 @@
 //   - teleport_confirm / chunk_batch_received / pong answering stays in the
 //     core router (backendLeg.write).
 //
-// Token custody: the Microsoft auth MUST reuse the G1 custody caches in
-// `.secrets/puppet/` (prismarine-auth `<sha1(cacheAccount).slice(0,6)>_*-cache.json`)
+// Token custody (live only): the Microsoft auth MUST reuse the G1 custody
+// caches in `.secrets/puppet/` (prismarine-auth `<sha1(cacheAccount).slice(0,6)>_*-cache.json`)
 // — never mint new refresh tokens. G1's public API (src/auth/cache.js
 // createTokenCustody) provides the atomic prismarine-compatible cache
 // factory; the flow `username` is set to the cache account so prismarine-auth
@@ -32,10 +38,11 @@
 import mc from 'minecraft-protocol'
 
 import { createTokenCustody } from '../auth/cache.js'
+import { isLoopbackHost } from './offline-identity.js'
 
 // Frames consumed by the library keep-alive plugin, never delivered to the
 // core (the core router would answer them a second time).
-const LEG_SWALLOWED = new Set(['keep_alive'])
+export const LEG_SWALLOWED = new Set(['keep_alive'])
 
 // Decoded data capture: minecraft-protocol emits, synchronously and in order,
 // `packet` (decoded) then the named event then `raw` (frame buffer) for every
@@ -51,6 +58,8 @@ export function createBackendFrameForwarder ({ deliver, swallowed = LEG_SWALLOWE
     decoded.byName[meta.name] = data
     decoded.state = meta.state
   }
+
+  const nameCounts = {}
 
   function onRaw (buffer, meta) {
     // Same parsed frame as the 'packet' event consumed above (raw fires after
@@ -77,8 +86,6 @@ export function createBackendFrameForwarder ({ deliver, swallowed = LEG_SWALLOWE
     deliver({ state: meta.state ?? decoded.state, name: meta.name, buffer, data })
   }
 
-  const nameCounts = {}
-
   function reset () {
     decoded = { state: null, byName: {} }
     inBundle = false
@@ -87,80 +94,106 @@ export function createBackendFrameForwarder ({ deliver, swallowed = LEG_SWALLOWE
   return { onPacket, onRaw, reset, counters, nameCounts }
 }
 
-export function createLiveBackendLeg ({
+// Shared body. The constructors own the mode-specific pieces (token custody
+// or the offline auth), and this body never chooses the auth path itself.
+function createBackendLeg ({
+  kind,
   host,
   port,
-  version = '26.1',
-  cacheDir = '.secrets/puppet',
-  cacheAccount = 'puppet',
-  log = () => {}
-} = {}) {
-  if (!host) throw new TypeError('host is required')
-  if (!port) throw new TypeError('port is required')
-  if (!cacheDir) throw new TypeError('cacheDir is required')
-
+  version,
+  log,
+  connectTimeoutMs,
+  prepareConnection,
+  releaseTokens,
+  connectLogFields
+}) {
   let frameHandler = null
   let endHandler = null
   let errorHandler = null
   let client = null
-  let custody = null
-  let lockHeldLock = false
   let ended = false
+  let forwarder = null
+  let closePromise = null
 
-  function lockTokens () {
-    custody = createTokenCustody({ account: cacheAccount, dir: cacheDir })
-    const acquired = custody.writerLock.acquire()
-    if (!acquired.ok) {
-      const holder = acquired.holder?.pid
-      throw new Error(`puppet token custody writer lock held (refusing to touch tokens; holder pid ${holder ?? '?'})`)
-    }
-    lockHeldLock = true
-  }
-
-  function releaseTokens () {
-    if (lockHeldLock) { // ONLY this process's lock instance may release
-      try { custody?.writerLock.release() } catch { /* best effort on shutdown */ }
-      lockHeldLock = false
-    }
+  function onError ({ error } = {}) {
+    const message = String(error?.message ?? error).slice(0, 200)
+    // Token/auth internals can appear in some library error messages; the
+    // core log line passes through redact() but we keep the surface minimal.
+    log('backendError', { error: message })
+    errorHandler?.({ error })
   }
 
   function connect () {
     if (client) return Promise.resolve()
-    lockTokens()
-    log('backendConnect', { host, port, cacheAccount, cacheDir, auth: 'microsoft' }) // custody paths only — no token material
+
+    // May throw synchronously (the live writer-lock refusal keeps that shape).
+    const connection = prepareConnection()
+    log('backendConnect', connectLogFields(connection))
+
     return new Promise((resolve, reject) => {
       let settled = false
+      let timer = null
+
+      const settleResolve = value => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        resolve(value)
+      }
+      const settleReject = error => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        reject(error)
+      }
+
+      if (connectTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          settleReject(new Error(`backend connect timed out after ${connectTimeoutMs} ms`))
+          releaseTokens()
+          try { client?.end('connect_timeout') } catch { /* already down */ }
+        }, connectTimeoutMs)
+        timer.unref?.()
+      }
+
       try {
-        client = mc.createClient({
+        const options = {
           host,
           port,
           version,
-          // cache-key = the G1 custody account, so prismarine-auth reads/writes
-          // the exact cache files G1 created (sha1('puppet') prefix). The real
-          // profile (name/uuid) always comes from the fetched session profile.
-          username: cacheAccount,
-          auth: 'microsoft',
-          profilesFolder: custody.cacheFactory, // a function => Authflow uses it as its cache factory
+          username: connection.username,
+          auth: connection.auth,
           keepAlive: true // the plugin answers keep-alives on this leg (both states)
-        })
+        }
+        if (connection.profilesFolder !== undefined) {
+          options.profilesFolder = connection.profilesFolder // a function => Authflow uses it as its cache factory
+        }
+        client = mc.createClient(options)
       } catch (error) {
         releaseTokens()
         log('backendConnectFailed', { error: error.message })
         onError({ error })
-        reject(error)
+        settleReject(error)
         return
       }
 
       client.on('error', error => {
         onError({ error })
-        if (!settled) { settled = true; reject(error) }
+        if (!settled) {
+          releaseTokens() // do not hold the token lock after a pre-join failure
+          settleReject(error)
+        }
       })
       client.on('end', reason => {
-        if (!settled) { settled = true; resolve(client) /* connected then dropped: leg lifecycle continues via endHandler */ }
         log('backendEnd', { reason: String(reason).slice(0, 120) })
         ended = true
         releaseTokens()
         endHandler?.({ reason: String(reason) })
+        // An end before playerJoin is a dead leg: reject instead of handing a
+        // half-connected client to the runner (which would then wait out its
+        // readiness timeout). After settlement this is a no-op.
+        settleReject(new Error(`backend ended before join: ${String(reason).slice(0, 120)}`))
+        settleResolve(client)
       })
       client.on('session', session => {
         log('backendSession', { name: session?.selectedProfile?.name ?? null, uuid: session?.selectedProfile?.id ?? null })
@@ -179,7 +212,7 @@ export function createLiveBackendLeg ({
           client.write('player_loaded', {})
           log('backendLegPlayerLoaded', {})
         } catch { /* the leg may already be down */ }
-        if (!settled) { settled = true; resolve(client) }
+        settleResolve(client)
       })
 
       forwarder = createBackendFrameForwarder({ deliver: frame => frameHandler?.(frame) })
@@ -188,19 +221,9 @@ export function createLiveBackendLeg ({
     })
   }
 
-  function onError ({ error } = {}) {
-    const message = String(error?.message ?? error).slice(0, 200)
-    // Token/auth internals can appear in some library error messages; the
-    // core log line passes through redact() but we keep the surface minimal.
-    log('backendError', { error: message })
-    errorHandler?.({ error })
-  }
-
-  let forwarder = null
-
   // --- backendLeg interface (docs/gate-b-b1.md) ---
   return {
-    kind: 'live-backend-leg',
+    kind,
     connect,
     setFrameHandler (fn) { frameHandler = fn },
     setEndHandler (fn) { endHandler = fn },
@@ -221,9 +244,125 @@ export function createLiveBackendLeg ({
     get client () { return client },
     get ended () { return ended },
     forwarderStats () { return forwarder ? { ...forwarder.counters, names: { ...forwarder.nameCounts } } : null },
-    close () { // process exit
-      try { client?._end?.('proxy_stopped') } catch { /* ignore */ }
-      releaseTokens()
+    close () {
+      if (closePromise) return closePromise
+      closePromise = new Promise(resolve => {
+        const current = client
+        if (!current || ended) {
+          releaseTokens()
+          resolve()
+          return
+        }
+        let done = false
+        const finish = () => {
+          if (done) return
+          done = true
+          releaseTokens()
+          resolve()
+        }
+        current.once('end', finish)
+        try {
+          if (typeof current._end === 'function') current._end('proxy_stopped')
+          else current.end('proxy_stopped')
+        } catch {
+          finish()
+        }
+      })
+      return closePromise
     }
   }
+}
+
+export function createLiveBackendLeg (options = {}) {
+  const {
+    host,
+    port,
+    version = '26.1',
+    cacheDir,
+    cacheAccount,
+    log = () => {}
+  } = options
+
+  if (!host) throw new TypeError('host is required')
+  if (!port) throw new TypeError('port is required')
+  if (!cacheDir) throw new TypeError('cacheDir is required')
+  if (!cacheAccount) throw new TypeError('cacheAccount is required')
+
+  let custody = null
+  let lockHeld = false
+
+  function acquireTokens () {
+    custody = createTokenCustody({ account: cacheAccount, dir: cacheDir })
+    const acquired = custody.writerLock.acquire()
+    if (!acquired.ok) {
+      const holder = acquired.holder?.pid
+      throw new Error(`puppet token custody writer lock held (refusing to touch tokens; holder pid ${holder ?? '?'})`)
+    }
+    lockHeld = true
+    return {
+      username: cacheAccount, // cache-key = the G1 custody account
+      auth: 'microsoft',
+      profilesFolder: custody.cacheFactory
+    }
+  }
+
+  function releaseTokens () {
+    if (lockHeld) { // ONLY this process's lock instance may release
+      try { custody?.writerLock.release() } catch { /* best effort on shutdown */ }
+      lockHeld = false
+    }
+  }
+
+  return createBackendLeg({
+    kind: 'live-backend-leg',
+    host,
+    port,
+    version,
+    log,
+    connectTimeoutMs: 0, // live connect behavior is unchanged
+    prepareConnection: acquireTokens,
+    releaseTokens,
+    connectLogFields: () => ({ host, port, cacheAccount, cacheDir, auth: 'microsoft' }) // custody paths only — no token material
+  })
+}
+
+export function createOfflineBackendLeg (options = {}) {
+  const {
+    host,
+    port,
+    version = '26.1',
+    username = 'GlowSquidye',
+    log = () => {},
+    connectTimeoutMs = 15000
+  } = options
+
+  if (options.cacheDir !== undefined) {
+    throw new TypeError('createOfflineBackendLeg does not accept cacheDir; the offline leg has no token custody')
+  }
+  if (options.cacheAccount !== undefined) {
+    throw new TypeError('createOfflineBackendLeg does not accept cacheAccount; the offline leg has no token custody')
+  }
+  if (!host) throw new TypeError('host is required')
+  if (!port) throw new TypeError('port is required')
+  if (!isLoopbackHost(host)) {
+    throw new TypeError(`offline backend leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
+  }
+  if (typeof username !== 'string' || username.length === 0) {
+    throw new TypeError('username must be a non-empty string')
+  }
+  if (!Number.isFinite(connectTimeoutMs) || connectTimeoutMs < 0) {
+    throw new TypeError('connectTimeoutMs must be a non-negative number')
+  }
+
+  return createBackendLeg({
+    kind: 'offline-backend-leg',
+    host,
+    port,
+    version,
+    log,
+    connectTimeoutMs,
+    prepareConnection: () => ({ username, auth: 'offline' }),
+    releaseTokens: () => {},
+    connectLogFields: () => ({ host, port, username, auth: 'offline' })
+  })
 }
