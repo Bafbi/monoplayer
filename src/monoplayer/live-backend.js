@@ -124,15 +124,20 @@ function createBackendLeg ({
   }
 
   function connect () {
-    if (client) return Promise.resolve()
+    // A live client that has not ended is already connected. An ended client
+    // is cleared by its end handler, so a reconnect creates a fresh one.
+    if (client && !ended) return Promise.resolve()
 
     // May throw synchronously (the live writer-lock refusal keeps that shape).
+    // A reconnect re-acquires the custody lock the ended connection released.
     const connection = prepareConnection()
     log('backendConnect', connectLogFields(connection))
+    ended = false
 
     return new Promise((resolve, reject) => {
       let settled = false
       let timer = null
+      let socketClient = null
 
       const settleResolve = value => {
         if (settled) return
@@ -151,7 +156,7 @@ function createBackendLeg ({
         timer = setTimeout(() => {
           settleReject(new Error(`backend connect timed out after ${connectTimeoutMs} ms`))
           releaseTokens()
-          try { client?.end('connect_timeout') } catch { /* already down */ }
+          try { socketClient?.end('connect_timeout') } catch { /* already down */ }
         }, connectTimeoutMs)
         timer.unref?.()
       }
@@ -168,7 +173,8 @@ function createBackendLeg ({
         if (connection.profilesFolder !== undefined) {
           options.profilesFolder = connection.profilesFolder // a function => Authflow uses it as its cache factory
         }
-        client = mc.createClient(options)
+        socketClient = mc.createClient(options)
+        client = socketClient
       } catch (error) {
         releaseTokens()
         log('backendConnectFailed', { error: error.message })
@@ -177,47 +183,55 @@ function createBackendLeg ({
         return
       }
 
-      client.on('error', error => {
+      socketClient.on('error', error => {
         onError({ error })
         if (!settled) {
           releaseTokens() // do not hold the token lock after a pre-join failure
           settleReject(error)
         }
       })
-      client.on('end', reason => {
+      socketClient.on('end', reason => {
         log('backendEnd', { reason: String(reason).slice(0, 120) })
-        ended = true
-        releaseTokens()
-        endHandler?.({ reason: String(reason) })
+        // Only the current connection owns the teardown: a late end from a
+        // client this leg already replaced must not release the fresh lock or
+        // clear the fresh client.
+        if (client === socketClient) {
+          ended = true
+          releaseTokens()
+          endHandler?.({ reason: String(reason) })
+          client = null // connect() may now create a new client
+        }
         // An end before playerJoin is a dead leg: reject instead of handing a
         // half-connected client to the runner (which would then wait out its
         // readiness timeout). After settlement this is a no-op.
         settleReject(new Error(`backend ended before join: ${String(reason).slice(0, 120)}`))
-        settleResolve(client)
+        settleResolve(socketClient)
       })
-      client.on('session', session => {
+      socketClient.on('session', session => {
         log('backendSession', { name: session?.selectedProfile?.name ?? null, uuid: session?.selectedProfile?.id ?? null })
       })
       // One backend login = the play-state Login packet (26.x protocol).
-      client.on('login', packet => {
+      socketClient.on('login', packet => {
         log('backendLegLogin', { entityId: packet.entityId })
       })
-      client.on('playerJoin', () => {
+      socketClient.on('playerJoin', () => {
         log('backendLegJoin', { joined: true })
         // 26.1 vanilla clients tell the server the level loaded before chunk
         // batching starts (ServerboundPlayerLoaded, empty packet). A leg that
         // skips this may sit in Paper's unbatched fallback — send it once on
         // play entry like the vanilla client does.
         try {
-          client.write('player_loaded', {})
+          socketClient.write('player_loaded', {})
           log('backendLegPlayerLoaded', {})
         } catch { /* the leg may already be down */ }
-        settleResolve(client)
+        settleResolve(socketClient)
       })
 
+      // One forwarder per connection: counters and pairing state never leak
+      // across a reconnect.
       forwarder = createBackendFrameForwarder({ deliver: frame => frameHandler?.(frame) })
-      client.on('packet', forwarder.onPacket)
-      client.on('raw', forwarder.onRaw)
+      socketClient.on('packet', forwarder.onPacket)
+      socketClient.on('raw', forwarder.onRaw)
     })
   }
 

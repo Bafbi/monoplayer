@@ -41,7 +41,11 @@ const inertClock = Object.freeze({
 export function createSession ({
   clock = inertClock,
   reconnectDelayMs = 1000,
-  pose = DEFAULT_POSE
+  pose = DEFAULT_POSE,
+  // Called once each time a scheduled reconnect fires (the session has moved
+  // to boot and the adapter may now re-open the backend). Null keeps the
+  // inert-clock behavior: the timer never fires, so the callback never runs.
+  onReconnect = null
 } = {}) {
   let state = STATES.BOOT
   let warmReady = false // join prefix warm: attach requires this
@@ -128,6 +132,9 @@ export function createSession ({
       pendingReconnect = false
       reconnectTimer = null
       transition('reconnect_fired', STATES.BOOT, { delayMs: reconnectDelayMs })
+      // Exactly one call per scheduled reconnect. A fault that arrives while
+      // RECONNECTING returns before scheduling, so it never lands here.
+      if (onReconnect) onReconnect({ delayMs: reconnectDelayMs })
     }, reconnectDelayMs)
     emit('reconnect_scheduled', { delayMs: reconnectDelayMs })
     return { scheduled: true, state, wasAttached }
