@@ -1,5 +1,9 @@
-// Protocol bot for the ladder's loopback rung: a real 26.1 client that joins
-// the product front leg with offline auth and records what it receives.
+// Protocol bot for the ladder's loopback and online rungs: a real 26.1 client
+// that joins the product front leg and records what it receives.
+//
+// Offline is the default (rung 2). The online rung passes auth 'microsoft'
+// with a token-custody cache factory, so the same recorder proves the real
+// hasJoined path (rung 3).
 //
 // The bot is deliberately thin. It is not a vanilla oracle: minecraft-protocol
 // accepts frames a vanilla client would reject (trailing bytes, wrong name for
@@ -14,6 +18,45 @@ import mc from 'minecraft-protocol'
 
 const VERSION = '26.1'
 
+// Build the createClient options. Pure, so tests can prove the auth material
+// is only present when set. `profilesFolder` must be the token-custody cache
+// factory (a function); a plain cache path would let the library mint its own
+// token store, which the G1 custody rules forbid.
+export function buildClientOptions ({
+  host = '127.0.0.1',
+  port,
+  username,
+  version = VERSION,
+  auth = 'offline',
+  profilesFolder = null,
+  authTitle = null,
+  deviceType = null,
+  flow = null,
+  keepAlive = true
+} = {}) {
+  if (!port) throw new TypeError('port is required')
+  if (typeof username !== 'string' || username.length === 0) {
+    throw new TypeError('username must be a non-empty string')
+  }
+  if (typeof auth !== 'string' || auth.length === 0) {
+    throw new TypeError('auth must be a non-empty string')
+  }
+
+  const options = { host, port, username, version, auth, keepAlive }
+  if (profilesFolder !== null && profilesFolder !== undefined) {
+    if (typeof profilesFolder !== 'function') {
+      throw new TypeError('profilesFolder must be a token-custody cache factory, never a path')
+    }
+    options.profilesFolder = profilesFolder
+  }
+  if (authTitle !== null && authTitle !== undefined) options.authTitle = authTitle
+  if (deviceType !== null && deviceType !== undefined) options.deviceType = deviceType
+  // prismarine-auth needs an explicit flow whenever authTitle is overridden;
+  // its defaults only apply when authTitle is undefined. 'live' is the Java flow.
+  if (auth === 'microsoft') options.flow = flow ?? 'live'
+  return options
+}
+
 export function createBot ({
   host = '127.0.0.1',
   port,
@@ -21,13 +64,11 @@ export function createBot ({
   version = VERSION,
   auth = 'offline',
   profilesFolder = null,
+  authTitle = null,
+  deviceType = null,
+  flow = null,
   logStream = null
 } = {}) {
-  if (!port) throw new TypeError('port is required')
-  if (typeof username !== 'string' || username.length === 0) {
-    throw new TypeError('username must be a non-empty string')
-  }
-
   const received = {
     names: [], // every clientbound frame: { state, name }
     byState: {}, // state -> [name]
@@ -46,8 +87,17 @@ export function createBot ({
     if (logStream) logStream.write(JSON.stringify({ t: new Date().toISOString(), event, ...fields }) + '\n')
   }
 
-  const options = { host, port, username, version, auth, keepAlive: true }
-  if (profilesFolder) options.profilesFolder = profilesFolder
+  const options = buildClientOptions({
+    host,
+    port,
+    username,
+    version,
+    auth,
+    profilesFolder,
+    authTitle,
+    deviceType,
+    flow
+  })
 
   const client = mc.createClient(options)
 
@@ -94,7 +144,11 @@ export function createBot ({
       const deadline = Date.now() + ms
       const tick = () => {
         let ok = false
-        try { ok = pred() } catch { /* predicate reads the recorder; treat as not-ready */ }
+        try {
+          ok = pred()
+        } catch (error) {
+          return reject(error)
+        }
         if (ok) return resolve()
         if (Date.now() >= deadline) {
           return reject(new Error(`bot ${username}: timed out after ${ms} ms waiting for ${label}`))
@@ -106,11 +160,18 @@ export function createBot ({
   }
 
   // The play join is ready when the login packet, a position, and a chunk have
-  // all arrived. Configuration state is already behind us by then.
-  function ready () {
+  // all arrived. Configuration state is already behind us by then. The online
+  // rung allows a longer window: the Microsoft token refresh runs before the
+  // socket ever connects.
+  function ready (ms = 10_000) {
     return waitFor(
-      () => received.login !== null && received.positions.length > 0 && received.mapChunks.length > 0,
-      'play login + position + map_chunk'
+      () => {
+        if (received.errors.length > 0) throw new Error(`bot ${username}: ${received.errors[0]}`)
+        if (received.ended !== null) throw new Error(`bot ${username}: ended before play (${String(received.ended).slice(0, 120)})`)
+        return received.login !== null && received.positions.length > 0 && received.mapChunks.length > 0
+      },
+      'play login + position + map_chunk',
+      ms
     )
   }
 
@@ -122,10 +183,16 @@ export function createBot ({
     if (closePromise) return closePromise
     closePromise = new Promise(resolve => {
       if (received.ended !== null) return resolve()
-      client.once('end', () => resolve())
+      const timer = setTimeout(() => {
+        try { client.socket?.destroy() } catch { /* already gone */ }
+        resolve()
+      }, 2000)
+      timer.unref?.()
+      client.once('end', () => { clearTimeout(timer); resolve() })
       try {
         client.end()
       } catch {
+        clearTimeout(timer)
         resolve()
       }
     })
@@ -133,7 +200,7 @@ export function createBot ({
   }
 
   return {
-    kind: 'offline-bot',
+    kind: auth === 'microsoft' ? 'online-bot' : 'offline-bot',
     client,
     received,
     ended,
