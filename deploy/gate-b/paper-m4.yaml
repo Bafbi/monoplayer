@@ -1,0 +1,175 @@
+# Paper 26.1.2 b74 BEHIND Velocity — the M4 backend row (plan: proxy online;
+# backend offline/insecure; modern forwarding; mandatory pass path).
+#
+# Differences vs paper.yaml (G0 direct row, untouched):
+#   - ONLINE_MODE=FALSE / ENFORCE_SECURE_PROFILE=FALSE  (Velocity does auth)
+#   - whitelist = puppet only (GlowSquidye), enforced
+#   - modern forwarding: proxies.velocity.enabled/online-mode come from a
+#     partial config/paper-global.yml pre-seed (ConfigMap, mounted through the
+#     itzg /config sync); the SECRET itself is never in config or git — Paper
+#     reads PAPER_VELOCITY_SECRET (official env override, PaperMC PR #10127 /
+#     docs.papermc.io/paper/reference/system-properties) from the
+#     gate-b-velocity Secret.
+#   - no Tailscale Service: the backend must only be reachable from Velocity
+#     on the ClusterIP. Anything that can reach an offline-mode backend can
+#     claim any player identity.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gate-b-paper-m4-config
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/part-of: monoplayer
+data:
+  # Deliberately partial: Paper merges every key left out with its defaults
+  # and fills in _version on first load (an unversioned file is valid; no
+  # `_version` key may be guessed here). The secret is not set via key at all.
+  paper-global.yml: |
+    proxies:
+      velocity:
+        enabled: true
+        online-mode: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper-m4
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      containers:
+        - name: paper
+          image: itzg/minecraft-server:2026.10.1-java25
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: EULA
+              value: "TRUE"
+            - name: TYPE
+              value: PAPER
+            - name: VERSION
+              value: "26.1.2"
+            - name: PAPER_BUILD
+              value: "74"
+            - name: MEMORY
+              value: 2G
+            # Velocity does the Mojang authentication; the backend is offline.
+            - name: ONLINE_MODE
+              value: "FALSE"
+            # Offline-mode backends have no chat signing sessions.
+            - name: ENFORCE_SECURE_PROFILE
+              value: "FALSE"
+            # Backend whitelist: the puppet account only (player stays on the
+            # client side of Monoplayer; backendLogins may only ever be the puppet).
+            - name: WHITELIST
+              value: GlowSquidye
+            - name: ENFORCE_WHITELIST
+              value: "TRUE"
+            # Common Gate B world config (plan: flat/seed 775/RD-SD 4).
+            - name: LEVEL_TYPE
+              value: minecraft:flat
+            - name: GENERATE_STRUCTURES
+              value: "false"
+            - name: LEVEL_SEED
+              value: "775"
+            - name: VIEW_DISTANCE
+              value: "4"
+            - name: SIMULATION_DISTANCE
+              value: "4"
+            - name: SPAWN_PROTECTION
+              value: "0"
+            - name: DIFFICULTY
+              value: peaceful
+            - name: MODE
+              value: creative
+            - name: MAX_PLAYERS
+              value: "4"
+            - name: ENABLE_RCON
+              value: "TRUE"
+            - name: RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gate-b-rcon
+                  key: password
+            # Modern forwarding secret: imported from the cluster Secret and
+            # NOT baked into the pre-seeded YAML.
+            - name: PAPER_VELOCITY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gate-b-velocity
+                  key: forwarding-secret
+            # Re-apply the pre-seeded partial config on every start so Paper's
+            # own expanded copy can never drift the forwarding state.
+            - name: SYNC_SKIP_NEWER_IN_DESTINATION
+              value: "false"
+          ports:
+            - name: minecraft
+              containerPort: 25565
+            - name: rcon
+              containerPort: 25575
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          startupProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: gate-b-paper-m4-config
+            items:
+              - key: paper-global.yml
+                path: paper-global.yml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-m4
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
+    - name: rcon
+      port: 25575
+      targetPort: rcon
