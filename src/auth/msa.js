@@ -16,7 +16,7 @@
 // entitlements reports for affected accounts).
 import prismarineAuth from 'prismarine-auth'
 
-import { createTokenCustody, readCacheFile } from './cache.js'
+import { createTokenCustody } from './cache.js'
 import { normalizeUuid } from './util.js'
 import { redactSecrets } from '../gate-b/checks.js'
 
@@ -131,16 +131,17 @@ async function defaultFetchPlayerAttributes (mcToken, { fetchImpl = globalThis.f
 }
 
 export function createMsaAuth ({
-  account = 'puppet',
+  account = null,
+  uuid = null,
   dir,
-  custody = createTokenCustody({ account, dir }),
+  custody = createTokenCustody({ account, uuid, dir, create: false }),
   AuthflowImpl = prismarineAuth.Authflow,
   titleProfiles = DEFAULT_AUTH_TITLE_PROFILES,
   fetchPlayerAttributes = defaultFetchPlayerAttributes,
   flow = 'live',
 } = {}) {
-  if (!custody.cacheFactory || !custody.writerLock || !custody.identityMeta) {
-    throw new Error('custody must provide cacheFactory, writerLock and identityMeta (use createTokenCustody)')
+  if (!custody.cacheFactory || !custody.writerLock || !custody.profile) {
+    throw new Error('custody must provide cacheFactory, writerLock and profile (use createTokenCustody)')
   }
 
   // codeCallback: device code goes wherever the caller sends it (CLI →
@@ -169,12 +170,22 @@ export function createMsaAuth ({
     if (!identity.uuid) {
       throw new Error('auth succeeded but the profile response had no usable UUID (account may not own Java)')
     }
-    custody.identityMeta.write({ uuid: identity.uuid, name: identity.name, authTitle, deviceType })
+    // The account directory is keyed by UUID. A login that resolves to another
+    // account must never overwrite this directory's profile.json.
+    if (custody.uuid && identity.uuid !== custody.uuid) {
+      const error = new Error(`identity uuid ${identity.uuid} does not match account uuid ${custody.uuid}`)
+      error.code = 'identity_mismatch'
+      throw error
+    }
+    custody.profile.write({ uuid: identity.uuid, name: identity.name, authTitle, deviceType })
     return identity
   }
 
+  // The custody factory owns the cache paths; the auth flow username is never
+  // used to compute a file name. uuid ?? account keeps the identity stable for
+  // the flow's own session bookkeeping.
   function newFlow ({ authTitle, deviceType = DEFAULT_DEVICE_TYPE, silent = false, codeSink = null } = {}) {
-    return new AuthflowImpl(custody.account, (opts) => custody.cacheFactory(opts), {
+    return new AuthflowImpl(custody.uuid ?? custody.account ?? 'monoplayer', (opts) => custody.cacheFactory(opts), {
       flow,
       authTitle,
       deviceType,
@@ -203,11 +214,16 @@ export function createMsaAuth ({
           const attempt = {
             authTitle: profile.authTitle,
             deviceType: profile.deviceType,
-            failure: classifyAuthFailure(error),
+            failure: error.code === 'identity_mismatch' ? 'identity_mismatch' : classifyAuthFailure(error),
             ...sanitizeError(error),
           }
           attempts.push(attempt)
           onAttempt?.(attempt)
+          // A different account resolved from the same token cache: no title
+          // can change that, and the profile must stay untouched.
+          if (error.code === 'identity_mismatch') {
+            return { ok: false, reason: 'identity_mismatch', attempts }
+          }
           if (attempt.failure !== 'title-auth') break
           // next title
         }
@@ -238,12 +254,12 @@ export function createMsaAuth ({
       return { ok: false, refused: true, reason: lock.reason, holder: lock.holder ?? null }
     }
     try {
-      const live = readCacheFile(custody.dir, custody.account, 'live')
+      const live = custody.readCache('live')
       if (!live || !live.token || typeof live.token.refresh_token !== 'string' || live.token.refresh_token === '') {
         return { ok: false, reason: 'needs_bootstrap' }
       }
       try {
-        const before = custody.identityMeta.read()
+        const before = custody.profile.read()
         const profile = titleProfiles.find(item => item.authTitle === before?.authTitle) ??
           { authTitle: before?.authTitle ?? titleProfiles[0].authTitle, deviceType: before?.deviceType ?? titleProfiles[0].deviceType }
         const identity = await toIdentity(
@@ -260,6 +276,10 @@ export function createMsaAuth ({
       } catch (error) {
         if (error.code === 'unexpected_device_code') {
           return { ok: false, reason: 'needs_reauthentication' }
+        }
+        if (error.code === 'identity_mismatch') {
+          // Do not try another title: the account is wrong, not the title.
+          return { ok: false, reason: 'identity_mismatch' }
         }
         return { ok: false, reason: 'refresh_failed', error: sanitizeError(error) }
       }

@@ -25,7 +25,12 @@ function msExpiry (token) {
   return obtainedOn + expiresInMs
 }
 
-export function createAuthStatus ({ account = 'puppet', dir, custody = createTokenCustody({ account, dir }) } = {}) {
+export function createAuthStatus ({
+  account = null,
+  uuid = null,
+  dir,
+  custody = createTokenCustody({ account, uuid, dir, create: false }),
+} = {}) {
   function cacheSummary (cacheName) {
     const file = custody.cacheFile(cacheName)
     let exists = false
@@ -65,21 +70,32 @@ export function createAuthStatus ({ account = 'puppet', dir, custody = createTok
   }
 
   // Read-only health snapshot. Pure file custody: no network, no token
-  // rotation, no device-code path.
+  // rotation, no device-code path, no directory creation. custody.ensure() is
+  // deliberately not called — status against a missing account dir must
+  // report absence, not mkdir it.
   async function collect () {
-    custody.ensure()
     const files = custody.listFiles()
-    const meta = custody.identityMeta.read()
+    const profile = custody.profile.read()
     return {
-      account: custody.account,
-      cacheDir: custody.dir,
-      cacheDirMode: custody.mode(),
+      account: {
+        uuid: profile?.uuid ?? custody.uuid ?? null,
+        name: profile?.name ?? null,
+        alias: profile?.alias ?? null,
+      },
+      dir: custody.dir,
+      profile,
       files,
       live: cacheSummary('live'),
       xbl: { exists: fs.existsSync(custody.cacheFile('xbl')), hasAccessToken: false, expiresAt: null },
       mca: mcaSummary(),
-      identity: meta
-        ? { uuid: meta.uuid, name: meta.name ?? null, authTitle: meta.authTitle ?? null, updatedAt: meta.updatedAt ?? null }
+      identity: profile
+        ? {
+            uuid: profile.uuid,
+            name: profile.name ?? null,
+            alias: profile.alias ?? null,
+            authTitle: profile.authTitle ?? null,
+            updatedAt: profile.updatedAt ?? null,
+          }
         : null,
       writerLock: {
         file: custody.writerLock.file,
@@ -87,6 +103,9 @@ export function createAuthStatus ({ account = 'puppet', dir, custody = createTok
         holder: custody.writerLock.holder(),
       },
       generatedAt: new Date().toISOString(),
+      // Compatibility aliases for the single-account reports.
+      cacheDir: custody.dir,
+      cacheDirMode: custody.mode(),
     }
   }
 
@@ -94,10 +113,18 @@ export function createAuthStatus ({ account = 'puppet', dir, custody = createTok
   // successful silent refresh to document the G1 "same UUID across refresh"
   // criterion. Read-only: file meta only.
   async function refreshLedger () {
-    const meta = custody.identityMeta.read()
+    const profile = custody.profile.read()
     const live = cacheSummary('live')
     return {
-      identity: meta ? { uuid: meta.uuid, name: meta.name, authTitle: meta.authTitle, updatedAt: meta.updatedAt } : null,
+      identity: profile
+        ? {
+            uuid: profile.uuid,
+            name: profile.name,
+            alias: profile.alias ?? null,
+            authTitle: profile.authTitle,
+            updatedAt: profile.updatedAt,
+          }
+        : null,
       liveCache: { hasRefreshToken: live.hasRefreshToken, accessTokenExpiresAt: live.accessTokenExpiresAt },
     }
   }
@@ -107,7 +134,12 @@ export function createAuthStatus ({ account = 'puppet', dir, custody = createTok
   async function refresh () {
     const ledger = await refreshLedger()
     const beforeUuid = ledger.identity?.uuid ?? null
-    const msa = createMsaAuth({ account: custody.account, dir: custody.dir, custody })
+    const msa = createMsaAuth({
+      account: custody.account,
+      uuid: custody.uuid,
+      dir: custody.dir,
+      custody,
+    })
     const result = await msa.refreshSilently()
     if (result.refused) {
       return { ok: false, refused: true, reason: result.reason, holder: result.holder, ledger }

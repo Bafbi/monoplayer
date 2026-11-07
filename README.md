@@ -64,12 +64,24 @@ The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run), and
 the manual unmodded witness passed the full join/render/move/break/place/
 disconnect/rejoin row. **G0 is green.**
 
-**G1 auth** is live: `GlowSquidye` is bootstrapped headlessly (Switch/Nintendo
-title), stable across silent refreshes, Java-owned, multiplayer-allowed, with
-the player allowed and denied before play by the real online-mode
-`hasJoined`/attach whitelist. **M4** is up: Velocity 4.3.1 build 45 in front of
-Paper 26.1.2 b74 with modern forwarding; the authenticated puppet joined
-through the proxy. Evidence: [testdata/gate-b-g1-verdict.json](testdata/gate-b-g1-verdict.json),
+**G1 auth** has live evidence from 2026-11-07: `GlowSquidye` was bootstrapped
+headlessly (Switch/Nintendo title), stable across silent refreshes,
+Java-owned, multiplayer-allowed, with the player allowed and denied before
+play by the real online-mode `hasJoined`/attach whitelist.
+
+Token custody uses one directory per Minecraft UUID:
+`.secrets/accounts/<uuid>/` holds `profile.json` and readable
+`<family>-cache.json` files, with a per-account `writer.lock`. The GlowSquidye
+account was migrated in place on 2026-11-07: every token file is byte-identical,
+`profile.json` keeps the alias `puppet`, and the failed `puppet-java-403`
+attempt is quarantined under `.secrets/retired/`. The dated evidence above was
+recorded against the older `.secrets/puppet/` layout. Check the current tree
+with `node src/auth/cli.js accounts` and `node src/auth/cli.js status --account
+puppet`; the runbook is [docs/gate-b-g1.md](docs/gate-b-g1.md).
+
+**M4** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
+forwarding; the authenticated puppet joined through the proxy. Evidence:
+[testdata/gate-b-g1-verdict.json](testdata/gate-b-g1-verdict.json),
 [testdata/gate-b-m4-verdict.json](testdata/gate-b-m4-verdict.json). B1 live is
 green; next are B2-B6.
 

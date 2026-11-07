@@ -3,7 +3,8 @@
 // Two constructors share one body, and the offline path is a separate
 // constructor, never a config flag:
 //   createLiveBackendLeg    Microsoft auth through the G1 token custody,
-//                           cache-key = cacheAccount, writer lock held.
+//                           account directory = .secrets/accounts/<uuid>,
+//                           writer lock held.
 //   createOfflineBackendLeg auth 'offline', fixed username, loopback only,
 //                           no custody, no lock, no .secrets read.
 //
@@ -25,13 +26,12 @@
 //     core router (backendLeg.write).
 //
 // Token custody (live only): the Microsoft auth MUST reuse the G1 custody
-// caches in `.secrets/puppet/` (prismarine-auth `<sha1(cacheAccount).slice(0,6)>_*-cache.json`)
-// — never mint new refresh tokens. G1's public API (src/auth/cache.js
-// createTokenCustody) provides the atomic prismarine-compatible cache
-// factory; the flow `username` is set to the cache account so prismarine-auth
-// hashes to exactly the G1-managed file names. The custody writer lock is
-// held for the process life so `auth status --refresh` refuses while the
-// proxy runs (G1 rule: one writer, never double-rotate the rolling token).
+// caches in the account's directory (`.secrets/accounts/<uuid>/`), never mint
+// new refresh tokens. G1's public API (src/auth/cache.js createTokenCustody)
+// provides the atomic prismarine-compatible cache factory; the factory owns
+// the file paths (`<family>-cache.json`). The custody writer lock is held for
+// the process life so `auth status --refresh` refuses while the proxy runs
+// (G1 rule: one writer, never double-rotate the rolling token).
 //
 // Token values never leave this module: no logging of token fields, the cache
 // objects, or session secrets. Errors are logged name-only.
@@ -278,32 +278,61 @@ export function createLiveBackendLeg (options = {}) {
     host,
     port,
     version = '26.1',
-    cacheDir,
-    cacheAccount,
+    accountDir = null,
+    account = null,
+    uuid = null,
+    authTitle = null,
+    deviceType = null,
+    cacheDir = null,
+    cacheAccount = null,
     log = () => {}
   } = options
 
   if (!host) throw new TypeError('host is required')
   if (!port) throw new TypeError('port is required')
-  if (!cacheDir) throw new TypeError('cacheDir is required')
-  if (!cacheAccount) throw new TypeError('cacheAccount is required')
+  if (accountDir && cacheDir) {
+    // The raw directory override is deprecated; the account directory wins.
+    try {
+      log('deprecation', {
+        message: 'cacheDir is deprecated and ignored when accountDir is set',
+        accountDir,
+        cacheDir
+      })
+    } catch { /* logging must not break construction */ }
+  }
+  const dir = accountDir ?? cacheDir
+  if (!dir) throw new TypeError('accountDir is required (cacheDir is deprecated)')
 
   let custody = null
   let lockHeld = false
 
   function acquireTokens () {
-    custody = createTokenCustody({ account: cacheAccount, dir: cacheDir })
+    custody = createTokenCustody({
+      account: account ?? cacheAccount ?? null,
+      dir,
+      uuid,
+      create: false,
+      legacyAccount: cacheAccount ?? account ?? null
+    })
+    if (typeof custody.cacheFactory !== 'function') {
+      throw new TypeError('token custody did not provide a cache factory')
+    }
     const acquired = custody.writerLock.acquire()
     if (!acquired.ok) {
       const holder = acquired.holder?.pid
       throw new Error(`puppet token custody writer lock held (refusing to touch tokens; holder pid ${holder ?? '?'})`)
     }
     lockHeld = true
-    return {
-      username: cacheAccount, // cache-key = the G1 custody account
+    const connection = {
+      username: uuid ?? account ?? cacheAccount,
       auth: 'microsoft',
       profilesFolder: custody.cacheFactory
     }
+    // Only override the library defaults when the profile recorded a working
+    // title/device pair; otherwise let minecraft-protocol pick its default.
+    if (authTitle !== null) connection.authTitle = authTitle
+    if (deviceType !== null) connection.deviceType = deviceType
+    return connection
   }
 
   function releaseTokens () {
@@ -322,7 +351,16 @@ export function createLiveBackendLeg (options = {}) {
     connectTimeoutMs: 0, // live connect behavior is unchanged
     prepareConnection: acquireTokens,
     releaseTokens,
-    connectLogFields: () => ({ host, port, cacheAccount, cacheDir, auth: 'microsoft' }) // custody paths only — no token material
+    // Custody paths and identity labels only — no token material. cacheAccount
+    // is a legacy selector, never an identity label.
+    connectLogFields: () => ({
+      host,
+      port,
+      accountUuid: uuid ?? custody?.uuid ?? null,
+      accountAlias: account ?? null,
+      dir,
+      auth: 'microsoft'
+    })
   })
 }
 
@@ -341,6 +379,15 @@ export function createOfflineBackendLeg (options = {}) {
   }
   if (options.cacheAccount !== undefined) {
     throw new TypeError('createOfflineBackendLeg does not accept cacheAccount; the offline leg has no token custody')
+  }
+  if (options.accountDir !== undefined) {
+    throw new TypeError('createOfflineBackendLeg does not accept accountDir; the offline leg has no token custody')
+  }
+  if (options.account !== undefined) {
+    throw new TypeError('createOfflineBackendLeg does not accept account; the offline leg has no token custody')
+  }
+  if (options.uuid !== undefined) {
+    throw new TypeError('createOfflineBackendLeg does not accept uuid; the offline leg has no token custody')
   }
   if (!host) throw new TypeError('host is required')
   if (!port) throw new TypeError('port is required')

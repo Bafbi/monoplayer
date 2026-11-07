@@ -6,14 +6,19 @@
 //
 //   MONOPLAYER_FRONT_HOST / MONOPLAYER_FRONT_PORT       front leg bind
 //   MONOPLAYER_BACKEND_HOST / MONOPLAYER_BACKEND_PORT   puppet session target
-//   MONOPLAYER_PUPPET_USERNAME                          puppet profile name (cache key stays the custody account)
+//   MONOPLAYER_PUPPET_ACCOUNT                           selector: uuid, alias, or name
+//   MONOPLAYER_PUPPET_ACCOUNTS_DIR                      account tree (default .secrets/accounts)
+//   MONOPLAYER_PUPPET_UUID                              assertion: resolved uuid must match
+//   MONOPLAYER_PUPPET_USERNAME                          assertion: resolved name must match
+//   MONOPLAYER_PUPPET_CACHE_DIR                         raw custody dir override (deprecated)
+//   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
-//   MONOPLAYER_PUPPET_CACHE_DIR / MONOPLAYER_PUPPET_CACHE_ACCOUNT
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_LOG                                      JSONL log file (default: stdout)
 //
 // Sequence (simplicity rules; one client, one backend leg, direct Paper):
-//   1. resolve config (JSON + env), load the attach whitelist (UUIDs only)
+//   1. resolve config (JSON + env), resolve the puppet account, load the
+//      attach whitelist (UUIDs only)
 //   2. build the core with the live legs, core.start()
 //   3. backend leg connect (Microsoft auth through the G1 token custody; the
 //      writer lock is taken by the leg, so auth CLI refreshes refuse meanwhile)
@@ -26,6 +31,8 @@ import fs from 'node:fs'
 import { createMonoplayer, loadConfig } from '../monoplayer.js'
 import { redact } from './redact.js'
 import { createWhitelistStore } from '../auth/store.js'
+import { resolveAccount } from '../auth/accounts.js'
+import { normalizeUuid } from '../auth/util.js'
 import { createLiveBackendLeg } from './live-backend.js'
 import { createLiveFrontLeg } from './live-front.js'
 import { waitForReady } from './live-readiness.js'
@@ -37,7 +44,7 @@ const flag = (argv, name) => {
 }
 const has = (argv, name) => argv.includes(name)
 
-function envOverlay (doc, env = process.env) {
+export function envOverlay (doc, env = process.env, warn = () => {}) {
   const out = { ...doc }
   const front = { ...doc.front }
   if (env.MONOPLAYER_FRONT_HOST) front.host = env.MONOPLAYER_FRONT_HOST
@@ -48,13 +55,34 @@ function envOverlay (doc, env = process.env) {
   if (env.MONOPLAYER_BACKEND_PORT) backend.port = Number(env.MONOPLAYER_BACKEND_PORT)
   out.backend = backend
   const puppet = { ...doc.puppet }
+  if (env.MONOPLAYER_PUPPET_ACCOUNT) puppet.account = env.MONOPLAYER_PUPPET_ACCOUNT
+  if (env.MONOPLAYER_PUPPET_ACCOUNTS_DIR) puppet.accountsDir = env.MONOPLAYER_PUPPET_ACCOUNTS_DIR
+  if (env.MONOPLAYER_PUPPET_UUID) puppet.uuid = env.MONOPLAYER_PUPPET_UUID
   if (env.MONOPLAYER_PUPPET_USERNAME) puppet.username = env.MONOPLAYER_PUPPET_USERNAME
   if (env.MONOPLAYER_PUPPET_CACHE_DIR) puppet.cacheDir = env.MONOPLAYER_PUPPET_CACHE_DIR
-  if (env.MONOPLAYER_PUPPET_CACHE_ACCOUNT) puppet.cacheAccount = env.MONOPLAYER_PUPPET_CACHE_ACCOUNT
+  if (env.MONOPLAYER_PUPPET_CACHE_ACCOUNT) {
+    warn('MONOPLAYER_PUPPET_CACHE_ACCOUNT is deprecated and ignored; use MONOPLAYER_PUPPET_ACCOUNT')
+  }
   out.puppet = puppet
   if (env.MONOPLAYER_ATTACH_WHITELIST) out.attachWhitelistFile = env.MONOPLAYER_ATTACH_WHITELIST
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   return out
+}
+
+function candidateLines (candidates = []) {
+  if (candidates.length === 0) return '  candidates: (none)'
+  return candidates
+    .map(candidate =>
+      `  uuid=${candidate.uuid} name=${candidate.name ?? '?'} alias=${candidate.alias ?? '-'} dir=${candidate.dir}`)
+    .join('\n')
+}
+
+function accountHint () {
+  return [
+    '  bootstrap a new account: node src/auth/cli.js device-code',
+    '  migrate the single-account layout: node src/auth/cli.js migrate --apply',
+    '  list accounts: node src/auth/cli.js accounts'
+  ].join('\n')
 }
 
 export async function startLive ({ argv = [], io = process } = {}) {
@@ -82,7 +110,59 @@ export async function startLive ({ argv = [], io = process } = {}) {
   if (docPath) {
     doc = JSON.parse(fs.readFileSync(docPath, 'utf8'))
   }
-  const cfg = loadConfig(envOverlay(doc))
+  const cfg = loadConfig(envOverlay(
+    doc,
+    process.env,
+    message => stderr.write(`monoplayer --start: warning: ${message}\n`)
+  ))
+
+  // --- 1b. puppet account (before any leg exists) ---
+  // Raw cacheDir override: use the directory as given. It cannot be combined
+  // with an account selector, because the selector would have nothing to
+  // resolve against.
+  let resolved = null
+  if (cfg.puppet.cacheDir) {
+    if (cfg.puppet.account) {
+      stderr.write(
+        'monoplayer --start: config_conflict: puppet.cacheDir (raw dir override) ' +
+        'cannot be combined with puppet.account\n')
+      return 2
+    }
+  } else {
+    resolved = resolveAccount({
+      accountsDir: cfg.puppet.accountsDir,
+      selector: cfg.puppet.account ?? cfg.puppet.uuid
+    })
+    if (!resolved.ok) {
+      stderr.write(
+        `monoplayer --start: cannot resolve a puppet account in ${cfg.puppet.accountsDir}: ${resolved.reason}\n` +
+        `${candidateLines(resolved.candidates)}\n${accountHint()}\n`)
+      return 2
+    }
+    const account = resolved.account
+    if (cfg.puppet.uuid) {
+      const asserted = normalizeUuid(cfg.puppet.uuid)
+      if (asserted === null || asserted !== account.uuid) {
+        stderr.write(
+          `monoplayer --start: puppet_uuid_mismatch: config asserts ${cfg.puppet.uuid}, ` +
+          `resolved account is ${account.uuid}\n`)
+        return 2
+      }
+    }
+    if (cfg.puppet.username) {
+      const profileName = account.profile?.name ?? null
+      if (typeof profileName !== 'string' ||
+          profileName.toLowerCase() !== String(cfg.puppet.username).toLowerCase()) {
+        stderr.write(
+          `monoplayer --start: puppet_name_mismatch: config asserts ${cfg.puppet.username}, ` +
+          `resolved profile name is ${profileName ?? '(none)'}\n`)
+        return 2
+      }
+    }
+    cfg.puppet.uuid = account.uuid
+    cfg.puppet.username = account.profile?.name ?? cfg.puppet.username ?? null
+  }
+
   if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
     const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
     cfg.attachWhitelist = store.list().map(player => player.uuid)
@@ -133,14 +213,26 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
 
   // --- 2. legs + core ---
-  const backend = createLiveBackendLeg({
-    host: cfg.backend.host,
-    port: cfg.backend.port,
-    version: cfg.version,
-    cacheDir: cfg.puppet.cacheDir,
-    cacheAccount: cfg.puppet.cacheAccount,
-    log
-  })
+  const backend = resolved
+    ? createLiveBackendLeg({
+        host: cfg.backend.host,
+        port: cfg.backend.port,
+        version: cfg.version,
+        accountDir: resolved.account.dir,
+        account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
+        uuid: resolved.account.uuid,
+        authTitle: resolved.account.profile?.authTitle ?? null,
+        deviceType: resolved.account.profile?.deviceType ?? null,
+        log
+      })
+    : createLiveBackendLeg({
+        host: cfg.backend.host,
+        port: cfg.backend.port,
+        version: cfg.version,
+        cacheDir: cfg.puppet.cacheDir,
+        cacheAccount: cfg.puppet.cacheAccount,
+        log
+      })
   // Strict frame check on every client-facing raw replay/relay. The live path
   // runs it in warn mode first: a checker bug must not kick a real player, but
   // every failure is logged and counted in front.wireStats.
@@ -182,11 +274,24 @@ export async function startLive ({ argv = [], io = process } = {}) {
     if (sink !== stdout) sink.end?.()
   }
 
+  const accountLogFields = resolved
+    ? {
+        accountUuid: resolved.account.uuid,
+        accountName: resolved.account.profile?.name ?? null,
+        accountAlias: resolved.account.alias ?? null,
+        accountDir: resolved.account.dir
+      }
+    : {
+        accountUuid: cfg.puppet.uuid,
+        accountName: cfg.puppet.username,
+        accountAlias: null,
+        accountDir: cfg.puppet.cacheDir
+      }
   log('startLive', {
     version: cfg.version,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
-    puppet: cfg.puppet.username,
+    ...accountLogFields,
     attachWhitelist: cfg.attachWhitelistFile,
     whitelistCount: cfg.attachWhitelist.length
   })
@@ -228,6 +333,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
   log('liveReady', {
     front: `${bound.host}:${bound.port}`,
+    ...accountLogFields,
     backendConnected: !backend.ended,
     configFrames: readiness.configFrames,
     prefixFrames: readiness.prefixFrames,
