@@ -3,6 +3,7 @@ node = "26.7.0"
 pnpm = "11.25.0"
 java = "25.0.2"
 gradle = "9.8.2"
+"github:moby/buildkit" = "0.33.1"
 
 [tasks.install]
 description = "Install the workspace dependencies."
@@ -58,3 +59,7 @@ run = "node src/gate-b.js --verify-g0"
 [tasks."gate-b:driver:install"]
 description = "Install the built driver into the display host's Prism root (run on the host)."
 run = "tools/gate-b-driver/install.sh tools/gate-b-driver/build/libs/gate-b-driver-0.1.0.jar"
+
+[tasks."image:build"]
+description = "Build and push the Monoplayer image to the cluster Zot registry."
+run = "scripts/build-image.sh"
