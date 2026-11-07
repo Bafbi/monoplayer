@@ -12,8 +12,8 @@ importers:
         specifier: 3.119.0
         version: 3.119.0
       minecraft-protocol:
-        specifier: 1.68.0
-        version: 1.68.0
+        specifier: github:Cyverno/node-minecraft-protocol#5527f8aa8d94bf2e2fdd5f5ab7963917cb96df37
+        version: https://codeload.github.com/Cyverno/node-minecraft-protocol/tar.gz/5527f8aa8d94bf2e2fdd5f5ab7963917cb96df37
       prismarine-auth:
         specifier: 3.1.1
         version: 3.1.1
@@ -163,8 +163,9 @@ packages:
   minecraft-folder-path@1.2.0:
     resolution: {integrity: sha512-qaUSbKWoOsH9brn0JQuBhxNAzTDMwrOXorwuRxdJKKKDYvZhtml+6GVCUrY5HRiEsieBEjCUnhVpDuQiKsiFaw==}
 
-  minecraft-protocol@1.68.0:
-    resolution: {integrity: sha512-atAGg/fhIVqyK6voWvED5QA+4ah65PNwpoDnkHawWhVzQbwFii77KcF6OpsU/Xlbi0o9GpihHiPdORSxXEA+Ug==}
+  minecraft-protocol@https://codeload.github.com/Cyverno/node-minecraft-protocol/tar.gz/5527f8aa8d94bf2e2fdd5f5ab7963917cb96df37:
+    resolution: {gitHosted: true, integrity: sha512-ItW0PxHYGsRXHylgXbBatU9dlIuuo3A+DfwEgq1qs7ZXs+MPDVqUja3PvTQ4ZperZMfntDe78rh+hWn9tkGnLA==, tarball: https://codeload.github.com/Cyverno/node-minecraft-protocol/tar.gz/5527f8aa8d94bf2e2fdd5f5ab7963917cb96df37}
+    version: 1.68.0
     engines: {node: '>=22'}
 
   mojangson@2.1.0:
@@ -432,7 +433,7 @@ snapshots:
 
   minecraft-folder-path@1.2.0: {}
 
-  minecraft-protocol@1.68.0:
+  minecraft-protocol@https://codeload.github.com/Cyverno/node-minecraft-protocol/tar.gz/5527f8aa8d94bf2e2fdd5f5ab7963917cb96df37:
     dependencies:
       '@types/node-rsa': 1.1.4
       '@types/readable-stream': 4.0.25
