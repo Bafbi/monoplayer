@@ -37,6 +37,8 @@
 // objects, or session secrets. Errors are logged name-only.
 import mc from 'minecraft-protocol'
 
+import nbt from 'prismarine-nbt'
+
 import { createTokenCustody } from '../auth/cache.js'
 import { isLoopbackHost } from './offline-identity.js'
 
@@ -97,6 +99,43 @@ export function chooseDialogAction (data, policy = 'last') {
     total: actions.length,
     dialogType: dialog?.type?.value ?? dialog?.type ?? null
   }
+}
+
+// VarInt encoder for the packet id, identifier length, and the payload length.
+function varint (value) {
+  const out = []
+  let n = value
+  while (n >= 0x80) {
+    out.push((n & 0x7f) | 0x80)
+    n >>>= 7
+  }
+  out.push(n)
+  return Buffer.from(out)
+}
+
+// The vanilla `ServerboundCustomClickActionPacket` codec is
+//   Identifier id, lengthPrefixed(optional anonymous NBT) payload
+// (see the 26.1.2 client: UNTRUSTED_TAG_CODEC = optionalTagCodec.apply(
+// lengthPrefixed(65536))). minecraft-data's packet shape omits the length
+// prefix, so the library's `write` produces a frame the server rejects. Build
+// the body from the dialog's action and send it with writeRaw.
+export function buildCustomClickAction ({ state, id, additions }) {
+  const packetId = state === 'play' ? 0x44 : state === 'configuration' ? 0x08 : null
+  if (packetId === null) return null
+  if (typeof id !== 'string' || id.length === 0) return null
+
+  const identifier = Buffer.from(id, 'utf8')
+  const tag = additions && additions.value
+    ? Buffer.concat([Buffer.from([1]), nbt.writeUncompressed({ type: 'compound', name: '', value: additions.value })])
+    : Buffer.from([0])
+
+  return Buffer.concat([
+    Buffer.from([packetId]),
+    varint(identifier.length),
+    identifier,
+    varint(tag.length),
+    tag
+  ])
 }
 
 // Decoded data capture: minecraft-protocol emits, synchronously and in order,
@@ -302,14 +341,24 @@ function createBackendLeg ({
           log('dialogUnhandled', { reason: 'no_action' })
           return
         }
+        const body = buildCustomClickAction({
+          state: socketClient.state,
+          id: choice.id,
+          additions: choice.additions
+        })
+        if (!body) {
+          log('dialogUnhandled', { reason: 'unsupported_state', state: socketClient.state })
+          return
+        }
         dialogResponses++
         try {
-          socketClient.write('custom_click_action', { id: choice.id, nbt: choice.additions ?? null })
+          socketClient.writeRaw(body)
           log('dialogClicked', {
             dialogType: choice.dialogType,
             index: choice.index,
             total: choice.total,
-            label: choice.label
+            label: choice.label,
+            bytes: body.length
           })
         } catch (error) {
           log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
