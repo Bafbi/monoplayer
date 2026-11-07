@@ -20,10 +20,19 @@ The protocol-level Gate A harness is in `src/` and `test/`. It proves the
 two-leg relay, synthesized play join, detach survival, reattach state, and
 single backend login on loopback.
 
+The default gate runs the bottom three rungs of the testing ladder:
+
 ```bash
-mise run check    # lint + node:test
-mise run gate-a   # full scenario, writes testdata/gate-a-report.json
+mise run check             # lint + node:test + offline loopback
+mise run test              # unit tests only (no sockets, no auth)
+mise run loopback          # product offline loopback rung (real legs, fake backend)
+mise run spike             # frozen Gate A spike (real sockets, offline protocol)
+mise run gate-a            # full Gate A scenario, writes testdata/gate-a-report.json
+mise run gate-b:scenario   # driver-lane G0 scenario (live testbed)
 ```
+
+Rungs, cost, prerequisites, and what each catches:
+[docs/testing-ladder.md](docs/testing-ladder.md).
 
 What it does and does not prove: [docs/gate-a.md](docs/gate-a.md).
 
@@ -61,7 +70,7 @@ the player allowed and denied before play by the real online-mode
 `hasJoined`/attach whitelist. **M4** is up: Velocity 4.3.1 build 45 in front of
 Paper 26.1.2 b74 with modern forwarding; the authenticated puppet joined
 through the proxy. Evidence: [testdata/gate-b-g1-verdict.json](testdata/gate-b-g1-verdict.json),
-[testdata/gate-b-m4-verdict.json](testdata/gate-b-m4-verdict.json). Next: B1
-live, B2 Vanilla parity, and the B3 fault rows.
+[testdata/gate-b-m4-verdict.json](testdata/gate-b-m4-verdict.json). B1 live is
+green; next are B2-B6.
 
 Created in [T3 Code](https://t3.codes).

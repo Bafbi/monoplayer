@@ -1,7 +1,7 @@
-// Targeted tests for the live-leg interfaces (src/monoplayer/live-backend.js,
-// live-front.js) with fakes — no sockets, no auth, no Microsoft involvement.
-// The real legs plug into the same interfaces the fake legs test in
-// monoplayer-integration.test.js; here we test the adapter-local decisions:
+// Adapter-local unit tests for the leg interfaces (src/monoplayer/live-backend.js,
+// live-front.js), driven with fakes — no sockets, no auth, no Microsoft
+// involvement. The real legs plug into the same interfaces the fake legs test
+// in monoplayer-integration.test.js; here we test the adapter-local decisions:
 //
 //   live-backend: raw/decoded frame pairing, keep-alive swallowing
 //   join-synth + core: includeConfig:false omit configuration on attach

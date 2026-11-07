@@ -5,21 +5,31 @@ java = "25.0.2"
 gradle = "9.8.2"
 
 [tasks.install]
-description = "Install the Gate A harness dependencies."
+description = "Install the workspace dependencies."
 run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
-description = "Syntax-check every harness source file."
+description = "Syntax-check every source and test file."
 run = "find src test -name '*.js' -print0 | xargs -0 -n1 node --check"
 
 [tasks.test]
-description = "Run the protocol-level Gate A tests."
+description = "Run the pure unit/fake tests (no sockets, no auth)."
 depends = ["install"]
 run = "node --test test/*.test.js"
 
+[tasks.spike]
+description = "Run the frozen Gate A spike test (real sockets, offline protocol)."
+depends = ["install"]
+run = "node --test test/spikes/*.test.js"
+
+[tasks.loopback]
+description = "Run the product offline loopback rung (real legs, fake backend, protocol bot; no auth)."
+depends = ["install"]
+run = "node src/ladder/loopback.js"
+
 [tasks.check]
-description = "Fast local gate: lint plus protocol tests."
-depends = ["lint", "test"]
+description = "Default gate: lint, unit tests, offline loopback."
+depends = ["lint", "test", "loopback"]
 
 [tasks."gate-a"]
 description = "Run the standalone Gate A scenario and write a report."

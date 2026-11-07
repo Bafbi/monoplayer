@@ -1,5 +1,5 @@
 // Gate A scenario, shared by the CLI runner (src/gate-a.js) and the test
-// wrapper (test/gate-a.test.js). Proves, on loopback:
+// wrapper (test/spikes/gate-a.test.js). Proves, on loopback:
 //
 //  1. the proxy relays login/config/play from backend to an attaching client
 //  2. the synthesized play join (login, game_state_change, position, chunk batch)
