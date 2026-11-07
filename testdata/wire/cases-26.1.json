@@ -1,0 +1,98 @@
+{
+  "version": "26.1",
+  "protocol": 775,
+  "cases": [
+    {
+      "id": "valid-play-login",
+      "state": "play",
+      "name": "login",
+      "b64": "MQAAACoAAxNtaW5lY3JhZnQ6b3ZlcndvcmxkFG1pbmVjcmFmdDp0aGVfbmV0aGVyEW1pbmVjcmFmdDp0aGVfZW5keAoKAAEAABNtaW5lY3JhZnQ6b3Zlcndvcmxk4Ss6Hrt0KXAA/wABAADB////DwA=",
+      "expect": {
+        "ok": true,
+        "code": "ok",
+        "parsedName": "login",
+        "consumed": 113,
+        "total": 113,
+        "leftover": 0
+      }
+    },
+    {
+      "id": "valid-config-finish",
+      "state": "configuration",
+      "name": "finish_configuration",
+      "b64": "Aw==",
+      "expect": {
+        "ok": true,
+        "code": "ok",
+        "parsedName": "finish_configuration",
+        "consumed": 1,
+        "total": 1,
+        "leftover": 0
+      }
+    },
+    {
+      "id": "login-frame-as-login",
+      "state": "login",
+      "name": "encryption_begin",
+      "b64": "AQCiAQcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwQJCQkJAA==",
+      "expect": {
+        "ok": false,
+        "code": "unsupported_state",
+        "total": 172
+      }
+    },
+    {
+      "id": "login-frame-in-play",
+      "state": "play",
+      "name": "encryption_begin",
+      "b64": "AQCiAQcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwQJCQkJAA==",
+      "expect": {
+        "ok": false,
+        "code": "leftover_bytes",
+        "parsedName": "spawn_entity",
+        "consumed": 54,
+        "total": 172,
+        "leftover": 118
+      }
+    },
+    {
+      "id": "play-login-plus-114-bytes",
+      "state": "play",
+      "name": "login",
+      "b64": "MQAAACoAAxNtaW5lY3JhZnQ6b3ZlcndvcmxkFG1pbmVjcmFmdDp0aGVfbmV0aGVyEW1pbmVjcmFmdDp0aGVfZW5keAoKAAEAABNtaW5lY3JhZnQ6b3Zlcndvcmxk4Ss6Hrt0KXAA/wABAADB////DwCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",
+      "expect": {
+        "ok": false,
+        "code": "leftover_bytes",
+        "parsedName": "login",
+        "consumed": 113,
+        "total": 227,
+        "leftover": 114
+      }
+    },
+    {
+      "id": "play-login-labeled-position",
+      "state": "play",
+      "name": "position",
+      "b64": "MQAAACoAAxNtaW5lY3JhZnQ6b3ZlcndvcmxkFG1pbmVjcmFmdDp0aGVfbmV0aGVyEW1pbmVjcmFmdDp0aGVfZW5keAoKAAEAABNtaW5lY3JhZnQ6b3Zlcndvcmxk4Ss6Hrt0KXAA/wABAADB////DwA=",
+      "expect": {
+        "ok": false,
+        "code": "name_mismatch",
+        "parsedName": "login",
+        "consumed": 113,
+        "total": 113,
+        "leftover": 0
+      }
+    },
+    {
+      "id": "truncated-play-login",
+      "state": "play",
+      "name": "login",
+      "b64": "MQAAACoAAxNtaW5lY3JhZnQ6b3ZlcndvcmxkFG1pbmVjcmFmdDp0aGVfbmV0aGVyEW1pbmVjcmFmdDp0",
+      "expect": {
+        "ok": false,
+        "code": "parse_error",
+        "total": 60
+      }
+    }
+  ]
+}
