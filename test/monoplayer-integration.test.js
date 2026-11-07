@@ -82,6 +82,26 @@ function attach ({ frontLeg, core }, uuid = PLAYER) {
   return { denied: false, ...core.attachPlayer({ name: 'Bafbi', uuid }) }
 }
 
+test('login-phase frames never enter the join cache or the replay', () => {
+  const rig = makeCore()
+  rig.backendLeg.deliver({ state: 'login', name: 'encryption_begin', data: {} })
+  rig.backendLeg.deliver({ state: 'login', name: 'compress', data: {} })
+  rig.backendLeg.deliver({ state: 'login', name: 'success', data: {} })
+  warmBackend(rig)
+
+  assert.equal(rig.core.metrics.nonPlayFramesIgnored, 3)
+  const snapshot = rig.core.cache.snapshot()
+  const cached = [...snapshot.config, ...snapshot.prefix].map(f => f.name)
+  assert.equal(cached.includes('encryption_begin'), false)
+  assert.equal(cached.includes('compress'), false)
+  assert.equal(cached.includes('success'), false)
+
+  attach(rig)
+  const replayed = rig.frontLeg.frames().map(f => f.name)
+  assert.equal(replayed.includes('encryption_begin'), false)
+  assert.equal(replayed[0], 'registry_data')
+})
+
 test('AC1-shape: attach replays config prefix, join prefix, one synthesized position', () => {
   const rig = makeCore()
   warmBackend(rig)
@@ -349,7 +369,7 @@ test('redaction sentinel: secret-shaped log content never survives', () => {
   assert.equal(quoted.includes('SUPERSECRET_QUOTED'), false)
 })
 
-test('CLI guardrails: default is inert (no sockets), --start refused in B1', async () => {
+test('CLI guardrails: default is inert (no sockets), --start needs explicit live config', async () => {
   let out = ''
   const io = { stdout: { write (s) { out += s } }, stderr: { write (s) { out += s } } }
 
@@ -360,7 +380,10 @@ test('CLI guardrails: default is inert (no sockets), --start refused in B1', asy
   assert.equal(codeHelp, 0)
   assert.ok(out.includes('--print-config'))
 
+  // --start is wired now, but stays inert without an explicit live config:
+  // no backend host env / no --config means sockets and token custody are
+  // never opened.
   const codeStart = await main(['--start'], io)
   assert.equal(codeStart, 2)
-  assert.ok(out.includes('not wired yet'))
+  assert.ok(out.includes('MONOPLAYER_BACKEND_HOST'))
 })

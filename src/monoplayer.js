@@ -40,8 +40,15 @@ export const DEFAULT_CONFIG = Object.freeze({
   version: '26.1',
   front: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   backend: Object.freeze({ host: '127.0.0.1', port: 25565 }),
-  puppet: Object.freeze({ username: 'GlowSquidye', uuid: null }),
+  puppet: Object.freeze({
+    username: 'GlowSquidye',
+    uuid: null,
+    // G1 token custody (field names only; tokens never appear in config):
+    cacheDir: '.secrets/puppet',
+    cacheAccount: 'puppet'
+  }),
   attachWhitelist: Object.freeze([]),
+  attachWhitelistFile: '.secrets/attach-whitelist.json',
   bounds: Object.freeze({
     maxPrefix: 8192,
     maxConfig: 1024,
@@ -101,6 +108,8 @@ export function createMonoplayer ({
     serverboundForwarded: 0,
     serverboundDropped: 0,
     chatBlocked: 0,
+    bundleDelimitersDropped: 0,
+    nonPlayFramesIgnored: 0,
     attaches: 0,
     denials: 0,
     frontKicks: 0
@@ -161,7 +170,10 @@ export function createMonoplayer ({
 
   // Called by the front-leg adapter after gates 1+2 pass and Login Success
   // (forged puppet profile) has been sent. Replay via join-synth.
-  function attachPlayer ({ name, uuid } = {}) {
+  // `includeConfig: false` omits the cached configuration replay prefix —
+  // the live front leg owns the configuration phase and has already replayed
+  // it (see docs/gate-b-b1.md); fakes keep the default (config included).
+  function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
     const attempt = session.attachAttempt({ uuid, name })
     if (!attempt.accepted) {
       log('attachFailed', { reason: attempt.reason, uuid, name })
@@ -175,7 +187,8 @@ export function createMonoplayer ({
     const synthesized = synthAttach({
       snapshot,
       pose: session.currentPose,
-      teleportId: frontTeleportSeq
+      teleportId: frontTeleportSeq,
+      includeConfig
     })
     frontTeleportSeq = synthesized.teleportId
 
@@ -191,6 +204,7 @@ export function createMonoplayer ({
       replayed: synthesized.counts.replayed,
       synthesizedPositions: synthesized.counts.synthesized,
       skippedLegOwned: synthesized.counts.skipped,
+      includeConfig,
       backendLogins: session.backendLogins,
       pose: session.currentPose
     })
@@ -252,6 +266,14 @@ export function createMonoplayer ({
         cache.push('configuration', name, buffer, data)
         return
       }
+      if (state !== 'play') {
+        // Handshake/login frames (encryption_begin, compress, login success)
+        // belong to the puppeted backend connection only. Replaying them in
+        // the front's play state makes the client read packet id 0x01 as
+        // add_entity and reject the joining client.
+        metrics.nonPlayFramesIgnored++
+        return
+      }
       backendPlayFrame({ name, buffer, data })
     })
 
@@ -296,6 +318,15 @@ export function createMonoplayer ({
   // teleports, cache, live forwarding).
   function backendPlayFrame ({ name, buffer, data }) {
     metrics.backendFrames++
+
+    if (name === 'bundle_delimiter') {
+      // Bundle delimiters are a transport grouping, not state. Replaying them
+      // alongside individually cached packets makes the client parse the
+      // bundle's concatenated payload as one oversized packet. Drop the
+      // delimiter and relay the enclosed packets individually.
+      metrics.bundleDelimitersDropped++
+      return
+    }
 
     if (name === 'login') {
       // The real backend login event backendLogins counts. Attach/detach never
@@ -416,10 +447,21 @@ export const USAGE = `monoplayer — one Minecraft account, one backend, many cl
 Usage:
   node src/monoplayer.js --print-config     print the resolved config and exit
   node src/monoplayer.js --config <file>    load a JSON config
-  node src/monoplayer.js --start            (not wired in B1)
+  node src/monoplayer.js --start            start the live legs (G1 + B1 lane)
 
-B1: the pure core runs with injected adapters in tests; the CLI never opens a
-socket. See docs/gate-b-b1.md for the live front/back leg interfaces.`
+Config (JSON via --config, then env, then defaults):
+  MONOPLAYER_FRONT_HOST / MONOPLAYER_FRONT_PORT       front leg bind address
+  MONOPLAYER_BACKEND_HOST / MONOPLAYER_BACKEND_PORT   puppet session target
+  MONOPLAYER_PUPPET_USERNAME                          puppet profile name
+  MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
+  MONOPLAYER_PUPPET_CACHE_DIR / MONOPLAYER_PUPPET_CACHE_ACCOUNT
+  MONOPLAYER_VERSION                                  protocol pin (default 26.1)
+  MONOPLAYER_LOG                                      JSONL log file (default stdout)
+
+--start brings up the live backend leg (authenticated puppet via the G1 token
+custody in .secrets/puppet/), waits until the state cache holds the backend
+configuration frames + join prefix (warm marker preferred), then starts the
+front leg for whitelisted attaching players. See docs/gate-b-b1.md.`
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)
@@ -439,12 +481,10 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
     return 0
   }
   if (has(argv, '--start')) {
-    io.stderr.write(
-      'monoplayer: --start is not wired yet. B1 is the pure core + fakes; ' +
-      'the live front/back legs land with G1 (auth) and M4 (Paper behind Velocity). ' +
-      'See docs/gate-b-b1.md.\n'
-    )
-    return 2
+    // Live legs live behind a dynamic import: with no --start the CLI keeps
+    // the pure-core property (no sockets, no minecraft-protocol load).
+    const { startLive } = await import('./monoplayer/start-live.js')
+    return startLive({ argv })
   }
   io.stdout.write(USAGE + '\n')
   return 0
