@@ -65,6 +65,7 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   }
   out.puppet = puppet
   if (env.MONOPLAYER_ATTACH_WHITELIST) out.attachWhitelistFile = env.MONOPLAYER_ATTACH_WHITELIST
+  if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   return out
 }
@@ -223,6 +224,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
         uuid: resolved.account.uuid,
         authTitle: resolved.account.profile?.authTitle ?? null,
         deviceType: resolved.account.profile?.deviceType ?? null,
+        dialogAction: cfg.dialogAction,
         log
       })
     : createLiveBackendLeg({
