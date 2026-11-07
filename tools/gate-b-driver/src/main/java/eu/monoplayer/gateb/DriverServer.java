@@ -1,10 +1,21 @@
 package eu.monoplayer.gateb;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
+import net.minecraft.client.gui.components.AbstractButton;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.ErrorScreen;
+import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
@@ -22,6 +33,9 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -98,6 +112,29 @@ public final class DriverServer {
         switch (op) {
             case "status":
                 return ok(mc.submit(this::status).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            case "screen":
+                return ok(mc.submit(this::screenInfo).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            case "click": {
+                String label = request.has("label") ? request.get("label").getAsString() : null;
+                int index = request.has("index") ? request.get("index").getAsInt() : -1;
+                JsonObject result = mc.submit(() -> clickButton(label, index))
+                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                if (result.get("clicked").getAsBoolean()) {
+                    return ok(result);
+                }
+                // Not found: tell the caller what was available instead.
+                JsonObject notFound = new JsonObject();
+                notFound.addProperty("ok", false);
+                notFound.addProperty("error", "no button matched: "
+                    + (label == null ? "index " + index : label));
+                notFound.add("labels", result.get("labels"));
+                return notFound;
+            }
+            case "pause":
+                return ok(mc.submit(() -> {
+                    mc.setScreen(new PauseScreen(true));
+                    return screenInfo();
+                }).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             case "move": {
                 long ms = request.has("ms") ? request.get("ms").getAsLong() : 1000L;
                 mc.execute(() -> mc.options.keyUp.setDown(true));
@@ -161,6 +198,8 @@ public final class DriverServer {
     private JsonObject status() {
         JsonObject out = new JsonObject();
         out.addProperty("screen", mc.screen == null ? "none" : mc.screen.getClass().getName());
+        out.addProperty("screenTitle", mc.screen == null ? null : mc.screen.getTitle().getString());
+        out.addProperty("screenNarration", mc.screen == null ? null : mc.screen.getNarrationMessage().getString());
         out.addProperty("level", mc.level != null);
         out.addProperty("player", mc.player != null);
         out.addProperty("connected",
@@ -190,6 +229,113 @@ public final class DriverServer {
             out.addProperty("renderedSections", mc.levelRenderer.countRenderedSections());
             out.addProperty("totalSections", mc.levelRenderer.getTotalSections());
         }
+        return out;
+    }
+
+    /**
+     * Read the current screen: class, title, narration, buttons and, for
+     * disconnect/connection screens, the reason as it is shown to the player.
+     * The disconnect reason is private on DisconnectedScreen, so the narration
+     * (which carries it) is reported instead.
+     */
+    private JsonObject screenInfo() {
+        JsonObject out = new JsonObject();
+        Screen screen = mc.screen;
+        String className;
+        Component title;
+        Component narration;
+        if (screen == null) {
+            className = "none";
+            title = null;
+            narration = null;
+            out.add("buttons", new JsonArray());
+        } else {
+            className = screen.getClass().getName();
+            title = screen.getTitle();
+            narration = screen.getNarrationMessage();
+            out.add("buttons", widgetRows(screen));
+        }
+        out.addProperty("screen", className);
+        out.addProperty("title", stringOf(title));
+        out.addProperty("narration", stringOf(narration));
+        if (screen instanceof DisconnectedScreen || screen instanceof ConnectScreen
+                || screen instanceof ErrorScreen) {
+            // Public message only: the raw reason fields are private, and the
+            // narration already spells the same text out for the player.
+            out.addProperty("reason", stringOf(narration != null ? narration : title));
+        }
+        return out;
+    }
+
+    private static String stringOf(Component component) {
+        return component == null ? null : component.getString();
+    }
+
+    private static JsonArray widgetRows(Screen screen) {
+        JsonArray rows = new JsonArray();
+        for (GuiEventListener child : screen.children()) {
+            if (child instanceof AbstractWidget widget) {
+                JsonObject row = new JsonObject();
+                row.addProperty("label", widget.getMessage().getString());
+                row.addProperty("active", widget.isActive());
+                row.addProperty("visible", widget.visible);
+                row.addProperty("x", widget.getX());
+                row.addProperty("y", widget.getY());
+                row.addProperty("width", widget.getWidth());
+                row.addProperty("height", widget.getHeight());
+                rows.add(row);
+            }
+        }
+        return rows;
+    }
+
+    /**
+     * Press a button on the current screen by case-insensitive label substring
+     * (or by index) without window focus; the synthetic input is delivered
+     * straight to the widget on the render thread. Returns the visible button
+     * labels either way so the caller can pick a better match.
+     */
+    private JsonObject clickButton(String label, int index) {
+        JsonObject out = new JsonObject();
+        JsonArray labels = new JsonArray();
+        List<AbstractButton> buttons = new ArrayList<>();
+        Screen screen = mc.screen;
+        if (screen != null) {
+            for (GuiEventListener child : screen.children()) {
+                if (child instanceof AbstractButton button && button.visible) {
+                    labels.add(button.getMessage().getString());
+                    buttons.add(button);
+                }
+            }
+        }
+        out.add("labels", labels);
+        out.addProperty("clicked", false);
+        if (screen == null) {
+            out.addProperty("error", "no screen");
+            return out;
+        }
+        AbstractButton target = null;
+        if (label != null) {
+            String needle = label.toLowerCase(Locale.ROOT);
+            for (AbstractButton button : buttons) {
+                if (button.getMessage().getString().toLowerCase(Locale.ROOT).contains(needle)) {
+                    target = button;
+                    break;
+                }
+            }
+        } else if (index >= 0 && index < buttons.size()) {
+            target = buttons.get(index);
+        }
+        if (target == null) {
+            return out;
+        }
+        Component targetLabel = target.getMessage();
+        double centerX = target.getX() + target.getWidth() / 2.0;
+        double centerY = target.getY() + target.getHeight() / 2.0;
+        target.onPress(new MouseButtonEvent(centerX, centerY, new MouseButtonInfo(0, 0)));
+        out.addProperty("clicked", true);
+        out.addProperty("label", targetLabel.getString());
+        out.addProperty("screen", mc.screen == null ? "none" : mc.screen.getClass().getName());
         return out;
     }
 

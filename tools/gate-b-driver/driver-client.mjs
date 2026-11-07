@@ -10,6 +10,7 @@ const host = process.env.GATEB_DRIVER_HOST || '127.0.0.1'
 const port = Number(process.env.GATEB_DRIVER_PORT || 25599)
 
 const request = { op }
+if (op === 'click') request.label = args.join(' ')
 if (op === 'move') request.ms = Number(args[0] || 1000)
 if (op === 'look') {
   request.yaw = Number(args[0] || 0)
