@@ -271,6 +271,13 @@ login. The live wire check inspected 1952 frames with zero rejects.
 
 Evidence: [`testdata/gate-b-m4-driver-verdict.json`](../testdata/gate-b-m4-driver-verdict.json)
 and [`testdata/gate-b-m4-driver-join.png`](../testdata/gate-b-m4-driver-join.png).
+
+The unmodded 26.1.2 client attached through the same front: 1786 replayed
+frames, two attaches, one backend login, and the client log reached
+`Loaded 20 advancements`. Manual move, disconnect, and reattach are the
+operator's visual pass. Evidence:
+[`testdata/gate-b-m4-vanilla-verdict.json`](../testdata/gate-b-m4-vanilla-verdict.json).
+
 The F1-F6 fault rows remain pending; that is the B3 lane.
 
 ## Teardown (operator; never leaves secrets behind casually)
