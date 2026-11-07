@@ -41,11 +41,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   front: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   backend: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   puppet: Object.freeze({
-    username: 'GlowSquidye',
+    // Assertions, not selectors: when set, the resolved account must match.
+    username: null,
     uuid: null,
+    // Account selector: UUID, alias, or profile name.
+    account: null,
     // G1 token custody (field names only; tokens never appear in config):
-    cacheDir: '.secrets/puppet',
-    cacheAccount: 'puppet'
+    accountsDir: '.secrets/accounts',
+    // Raw directory override (deprecated) and its legacy selector.
+    cacheDir: null,
+    cacheAccount: null
   }),
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
@@ -452,16 +457,21 @@ Usage:
 Config (JSON via --config, then env, then defaults):
   MONOPLAYER_FRONT_HOST / MONOPLAYER_FRONT_PORT       front leg bind address
   MONOPLAYER_BACKEND_HOST / MONOPLAYER_BACKEND_PORT   puppet session target
-  MONOPLAYER_PUPPET_USERNAME                          puppet profile name
+  MONOPLAYER_PUPPET_ACCOUNT                           account selector: uuid, alias, or name
+  MONOPLAYER_PUPPET_ACCOUNTS_DIR                      account tree (default .secrets/accounts)
+  MONOPLAYER_PUPPET_UUID                              assertion: resolved account uuid must match
+  MONOPLAYER_PUPPET_USERNAME                          assertion: resolved profile name must match
+  MONOPLAYER_PUPPET_CACHE_DIR                         raw custody dir override (deprecated)
+  MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
-  MONOPLAYER_PUPPET_CACHE_DIR / MONOPLAYER_PUPPET_CACHE_ACCOUNT
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
 
 --start brings up the live backend leg (authenticated puppet via the G1 token
-custody in .secrets/puppet/), waits until the state cache holds the backend
-configuration frames + join prefix (warm marker preferred), then starts the
-front leg for whitelisted attaching players. See docs/gate-b-b1.md.`
+custody in .secrets/accounts/<uuid>/), waits until the state cache holds the
+backend configuration frames + join prefix (warm marker preferred), then
+starts the front leg for whitelisted attaching players. See
+docs/gate-b-b1.md and docs/gate-b-g1.md.`
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)

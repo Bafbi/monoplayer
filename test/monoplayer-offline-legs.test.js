@@ -109,15 +109,22 @@ test('live front leg requires attachWhitelistFile and rejects offlineWhitelist',
   assert.equal(leg.lastConfigMode, 'pending')
 })
 
-test('offline backend leg has no custody, no lock, and rejects cache options', () => {
-  assert.throws(
-    () => createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, cacheDir: '.secrets/puppet' }),
-    TypeError
-  )
-  assert.throws(
-    () => createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, cacheAccount: 'puppet' }),
-    TypeError
-  )
+const ACCOUNT_UUID = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
+
+test('offline backend leg has no custody, no lock, and rejects account options', () => {
+  for (const option of [
+    { cacheDir: '.secrets/puppet' },
+    { cacheAccount: 'puppet' },
+    { accountDir: '.secrets/accounts/' + ACCOUNT_UUID },
+    { account: 'puppet' },
+    { uuid: ACCOUNT_UUID },
+  ]) {
+    assert.throws(
+      () => createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, ...option }),
+      TypeError,
+      JSON.stringify(option)
+    )
+  }
   assert.throws(
     () => createOfflineBackendLeg({ host: 'localhost', port: 25565 }),
     TypeError
@@ -132,16 +139,47 @@ test('offline backend leg has no custody, no lock, and rejects cache options', (
   assert.equal(leg.forwarderStats(), null)
 })
 
-test('live backend leg requires cacheDir and cacheAccount (no connect)', () => {
+test('live backend leg requires an accountDir (or the deprecated cacheDir), no connect', () => {
   assert.throws(() => createLiveBackendLeg({ host: '127.0.0.1', port: 25565 }), TypeError)
-  assert.throws(
-    () => createLiveBackendLeg({ host: '127.0.0.1', port: 25565, cacheDir: '/tmp/opencode/cache' }),
-    TypeError
-  )
-  assert.throws(
-    () => createLiveBackendLeg({ host: '127.0.0.1', port: 25565, cacheAccount: 'puppet' }),
-    TypeError
-  )
+
+  const logs = []
+  const leg = createLiveBackendLeg({
+    host: '127.0.0.1',
+    port: 25565,
+    accountDir: '/tmp/opencode/accounts/' + ACCOUNT_UUID,
+    account: 'puppet',
+    uuid: ACCOUNT_UUID,
+    authTitle: '00000000441cc96b',
+    deviceType: 'Nintendo',
+    log: (event, fields) => logs.push({ event, fields })
+  })
+  assert.equal(leg.kind, 'live-backend-leg')
+  assert.equal(leg.ended, false)
+  assert.equal(leg.client, null)
+  assert.equal(logs.length, 0, 'construction opens no socket and logs nothing')
+
+  // The raw directory override still works for one release.
+  const legacy = createLiveBackendLeg({
+    host: '127.0.0.1',
+    port: 25565,
+    cacheDir: '/tmp/opencode/puppet',
+    cacheAccount: 'puppet',
+    log: noop
+  })
+  assert.equal(legacy.kind, 'live-backend-leg')
+
+  // When both are set, accountDir wins and the deprecation is logged.
+  const conflictLogs = []
+  createLiveBackendLeg({
+    host: '127.0.0.1',
+    port: 25565,
+    accountDir: '/tmp/opencode/accounts/' + ACCOUNT_UUID,
+    cacheDir: '/tmp/opencode/puppet',
+    log: (event, fields) => conflictLogs.push({ event, fields })
+  })
+  assert.equal(conflictLogs.length, 1)
+  assert.equal(conflictLogs[0].event, 'deprecation')
+  assert.equal(conflictLogs[0].fields.accountDir, '/tmp/opencode/accounts/' + ACCOUNT_UUID)
 })
 
 test('config interceptor writes cached frames with configuration meta', () => {

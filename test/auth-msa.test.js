@@ -205,7 +205,7 @@ test('silent refresh: absent refresh token → needs_bootstrap without touching 
 test('silent refresh: an in-flow device code is caught as needs_reauthentication, never shown to the user', async () => {
   const root = scratch()
   // Warm the live cache by hand: a refresh token exists but is unusable.
-  atomicWriteFile(cacheFilePath(root, 'puppet', 'live'), JSON.stringify({
+  atomicWriteFile(cacheFilePath(root, 'live'), JSON.stringify({
     token: { access_token: SENTINEL_TOKEN, refresh_token: 'SYNTHETIC_REFRESH', obtainedOn: Date.now() - 7_200_000, expires_in: 3600 },
   }))
   const sinkLines = []
@@ -227,7 +227,7 @@ test('silent refresh: an in-flow device code is caught as needs_reauthentication
 
 test('silent refresh succeeds headless and proves the same UUID across refresh', async () => {
   const root = scratch()
-  atomicWriteFile(cacheFilePath(root, 'puppet', 'live'), JSON.stringify({
+  atomicWriteFile(cacheFilePath(root, 'live'), JSON.stringify({
     token: { access_token: SENTINEL_TOKEN, refresh_token: 'SYNTHETIC_REFRESH', obtainedOn: Date.now() - 60_000, expires_in: 3600 },
   }))
   // Pre-existing ledger uuid (what a previous bootstrap wrote).
@@ -241,20 +241,47 @@ test('silent refresh succeeds headless and proves the same UUID across refresh',
   assert.equal(result.identity.multiplayer.known, true)
 })
 
-test('silent refresh: a different profile uuid flags the change instead of passing silently', async () => {
+test('bootstrap: a different UUID is refused before profile.json is overwritten', async () => {
   const root = scratch()
-  atomicWriteFile(cacheFilePath(root, 'puppet', 'live'), JSON.stringify({
+  const stub = stubAuthflow(() => ({
+    token: SENTINEL_TOKEN,
+    profile: { id: 'dead0000-0000-0000-0000-000000000001', name: 'SomeoneElse' },
+    entitlements: { items: [{ name: 'game_minecraft' }] },
+  }))
+  const msa = createMsaAuth({
+    account: 'puppet', uuid: PLAYER.dashed, dir: root, AuthflowImpl: stub.Class,
+    fetchPlayerAttributes: goodAttributes,
+  })
+  msa.custody.profile.write({ uuid: PLAYER.dashed, name: PLAYER.name, authTitle: JAVA_AUTH_TITLE })
+  const before = fs.readFileSync(path.join(root, 'profile.json'), 'utf8')
+
+  const result = await msa.bootstrapDeviceCode({ codeSink: () => {} })
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'identity_mismatch')
+  assert.equal(result.attempts.length, 1, 'an identity mismatch never tries another title')
+  assert.equal(fs.readFileSync(path.join(root, 'profile.json'), 'utf8'), before, 'profile.json is untouched')
+  assert.equal(msa.custody.writerLock.isHeld(), false, 'lock released after the refusal')
+})
+
+test('silent refresh: a different UUID maps to identity_mismatch and keeps the profile', async () => {
+  const root = scratch()
+  atomicWriteFile(cacheFilePath(root, 'live'), JSON.stringify({
     token: { access_token: SENTINEL_TOKEN, refresh_token: 'SYNTHETIC_REFRESH', obtainedOn: Date.now() - 60_000, expires_in: 3600 },
   }))
   const stub = stubAuthflow(() => ({
     token: SENTINEL_TOKEN,
-    profile: { id: 'dead0000-0000-0000-0000-000000000001', name: impostorName() },
+    profile: { id: 'dead0000-0000-0000-0000-000000000001', name: 'SomeoneElse' },
     entitlements: { items: [] },
   }))
-  function impostorName () { return 'SomeoneElse' }
-  const msa = createMsaAuth({ account: 'puppet', dir: root, AuthflowImpl: stub.Class, fetchPlayerAttributes: goodAttributes })
-  msa.custody.identityMeta.write({ uuid: PLAYER.dashed, name: PLAYER.name })
+  const msa = createMsaAuth({
+    account: 'puppet', uuid: PLAYER.dashed, dir: root, AuthflowImpl: stub.Class,
+    fetchPlayerAttributes: goodAttributes,
+  })
+  msa.custody.profile.write({ uuid: PLAYER.dashed, name: PLAYER.name, authTitle: JAVA_AUTH_TITLE })
+  const before = fs.readFileSync(path.join(root, 'profile.json'), 'utf8')
+
   const result = await msa.refreshSilently()
-  assert.equal(result.ok, true)
-  assert.equal(result.uuidStable, false, 'the ledger comparison must catch the change')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'identity_mismatch')
+  assert.equal(fs.readFileSync(path.join(root, 'profile.json'), 'utf8'), before, 'profile.json is untouched')
 })

@@ -149,7 +149,7 @@ above (real Paper, online-mode, official client) stays the acceptance record.
 ## What needs G1 / M4 (explicitly not done in B1)
 
 - **G1**: real puppet Microsoft auth (device-code bootstrap, rolling refresh
-  token in `.secrets/puppet/`, `prismarine-auth`), real `hasJoined` verifier
+  token in `.secrets/accounts/<uuid>/`, `prismarine-auth`), real `hasJoined` verifier
   injected into `createFrontIdentity({ verifyProfile })`, real secret custody.
 - **M4**: real backend leg against Velocity (modern forwarding), real front
   leg (encryption, Login Success forging, per-leg keep-alive timers),

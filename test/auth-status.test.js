@@ -26,7 +26,10 @@ test('collect(): read-only custody report, lock state, no token values', async (
   fs.mkdirSync(root, { mode: 0o700 })
   const status = createAuthStatus({ account: 'puppet', dir: root })
   const report = await status.collect()
-  assert.equal(report.account, 'puppet')
+  assert.deepEqual(report.account, { uuid: null, name: null, alias: null })
+  assert.equal(report.dir, root)
+  assert.equal(report.cacheDir, root)
+  assert.equal(report.profile, null)
   assert.equal(report.cacheDirMode, '700')
   assert.equal(report.live.hasAccessToken, false)
   assert.equal(report.live.hasRefreshToken, false)
@@ -34,6 +37,31 @@ test('collect(): read-only custody report, lock state, no token values', async (
   assert.equal(report.identity, null)
   // The report carries file names and flags only.
   assert.equal(JSON.stringify(report).includes('access-token-value'), false)
+})
+
+test('collect(): uuid/name/alias come from the account profile', async () => {
+  const root = dir()
+  fs.mkdirSync(root, { mode: 0o700 })
+  const status = createAuthStatus({ account: 'puppet', uuid: PLAYER.dashed, dir: root })
+  status.custody.profile.write({ uuid: PLAYER.dashed, name: PLAYER.name, alias: 'main', authTitle: '00000000402b5328' })
+  const report = await status.collect()
+  assert.deepEqual(report.account, { uuid: PLAYER.dashed, name: PLAYER.name, alias: 'main' })
+  assert.equal(report.profile.uuid, PLAYER.dashed)
+  assert.equal(report.identity.alias, 'main')
+  assert.equal(report.identity.authTitle, '00000000402b5328')
+})
+
+test('collect(): a missing account directory is reported, never created', async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-status-missing-'))
+  const root = path.join(parent, 'accounts', PLAYER.dashed)
+  const status = createAuthStatus({ uuid: PLAYER.dashed, dir: root })
+  const report = await status.collect()
+  assert.equal(fs.existsSync(root), false, 'status must not mkdir the account directory')
+  assert.equal(report.dir, root)
+  assert.equal(report.account.uuid, PLAYER.dashed)
+  assert.equal(report.account.name, null)
+  assert.equal(report.cacheDirMode, null)
+  assert.equal(report.identity, null)
 })
 
 test('collect(): a warm cache is summarized by meta only — tokens never surface', async () => {
@@ -79,8 +107,8 @@ test('refresh(): without a live refresh token it refuses before any network or d
 test('refresh(): uuid stability against the recorded identity meta', async () => {
   const root = dir()
   fs.mkdirSync(root, { mode: 0o700 })
-  const status = createAuthStatus({ account: 'puppet', dir: root })
-  status.custody.identityMeta.write({ uuid: PLAYER.dashed, name: PLAYER.name, authTitle: '00000000402b5328' })
+  const status = createAuthStatus({ account: 'puppet', uuid: PLAYER.dashed, dir: root })
+  status.custody.profile.write({ uuid: PLAYER.dashed, name: PLAYER.name, authTitle: '00000000402b5328' })
   const result = await status.refresh()
   // needs_bootstrap: the stability check itself is exercised through the
   // msa flow tests (stub Authflow); here we assert the ledger shape.

@@ -15,40 +15,110 @@ are listed in [The G1 live sequence](#the-g1-live-sequence).
 
 | File | Role |
 |---|---|
-| `src/auth/cache.js` | Atomic token-cache custody: 0700 dir, 0600 cache files, temp-write + fsync + rename, prismarine-auth-compatible cache factory (same `<sha1(username).slice(0,6)>_<family>-cache.json` naming), one-writer lock, path-only API. |
-| `src/auth/msa.js` | prismarine-auth `Authflow` (flow `live`, per-title device type) wrapper: device-code bootstrap with **authTitle `00000000441cc96b` (MinecraftNintendoSwitch) + `Nintendo` first** and the Java title `00000000402b5328` + `Win32` as fallback; silent refresh that never waits for a user; returns **identity only** (name, UUID, entitlement names, multiplayer privilege) — never tokens. |
-| `src/auth/status.js` | Read-only cache/lock health (`collect`), guarded `--refresh` (refuses with `writer_lock_held`), redaction-enforced report helpers (`redactForReport`, `scanForLeaks`). |
+| `src/auth/cache.js` | Atomic token-cache custody for one account directory: 0700 dir, 0600 files, temp-write + fsync + rename, readable `<family>-cache.json` names (the cache factory owns the path), `profile.json`, one-writer lock, path-only API. A legacy hashed file in the same directory is adopted on first touch. |
+| `src/auth/accounts.js` | The account tree: `listAccounts`, `resolveAccount` (UUID, then alias, then name), `accountDir`, `createStagingDir`, `finalizeStaging`, `detectLegacyLayout`. Pure filesystem logic; no token values. |
+| `src/auth/migrate.js` | One-shot plan/apply for the old single-account layout: rename the directory, rename hashed caches, write `profile.json`, quarantine the failed bootstrap. Dry-run by default. |
+| `src/auth/msa.js` | prismarine-auth `Authflow` (flow `live`, per-title device type) wrapper: device-code bootstrap with **authTitle `00000000441cc96b` (MinecraftNintendoSwitch) + `Nintendo` first** and the Java title `00000000402b5328` + `Win32` as fallback; silent refresh that never waits for a user; returns **identity only** (name, UUID, entitlement names, multiplayer privilege) — never tokens. Refuses a login whose UUID differs from the account directory. |
+| `src/auth/status.js` | Read-only cache/lock health (`collect`), guarded `--refresh` (refuses with `writer_lock_held`), redaction-enforced report helpers (`redactForReport`, `scanForLeaks`). `collect()` never creates a directory. |
 | `src/auth/hasjoined.js` | Real `GET sessionserver.mojang.com/session/minecraft/hasJoined?username=&serverId=` with injectable fetch, username/profile + optional expected-UUID cross-checks, UUID normalization, short TTL cache, fail-closed on any transport failure. `computeServerId` = vanilla handshake sha1. |
 | `src/auth/attach.js` | The one embeddable gate: `async ({ client, store, verify }) => { ok, reason, stage }`, run inside `beforeLogin` so a denial happens **before Login Success**; emits `attachAllowed` / `attachDenied` with sanitized payloads. |
 | `src/auth/store.js` | Attach whitelist file `{ version: 1, players: [{ uuid, name, addedAt }] }` in `.secrets/attach-whitelist.json`: add/remove with name→UUID resolution at add time (injectable lookup: minecraftservices, then legacy api.mojang.com), UUID-keyed `has/find`, atomic 0600 writes. `createBackendWhitelist` drives the **existing** `src/gate-b/rcon.js` adapter for the puppet-only backend whitelist. |
-| `src/auth/cli.js` | `device-code` / `status [--refresh]` / `whitelist attach|backend add|remove`. |
+| `src/auth/cli.js` | `accounts` / `device-code` / `status [--refresh]` / `migrate [--apply]` / `whitelist attach|backend add|remove`. |
 | `src/auth/fixture.js` | Minimal `mc.createServer` fixture embedding the gate (optional; not run in tests, no live login). |
 
-Unit tests: `node --test test/auth-*.test.js` — 68 pure tests (no network, no
-real account): cache atomicity + modes, stale/contended writer lock, refresh
-UUID stability against the ledger, silent-refresh guard, hasJoined
+Unit tests: `node --test test/auth-*.test.js` (no network, no real account):
+cache atomicity + modes, legacy file adoption, stale/contended writer lock,
+account listing/resolution, staging finalize, migration plan/apply, the
+identity-mismatch guard, silent-refresh guard, hasJoined
 allow/deny/cross-check, attach allow/deny, whitelist semantics, and the
 **redaction sentinel** (synthetic token strings never survive a report).
 
-## Custody rules (enforced by src/auth/cache.js)
+## Custody layout (enforced by src/auth/cache.js + src/auth/accounts.js)
 
-- Token lives **only** in `.secrets/puppet/` (gitignored): `<hash>_live-cache.json`
-  holds the refresh token ("the password"), `<hash>_xbl-cache.json` the XSTS
-  chain, `<hash>_mca-cache.json` the ~24 h Minecraft access token.
-- Directory `0700`; every cache/lock/meta file `0600`; writes are
+One directory per Minecraft UUID:
+
+```text
+.secrets/
+  accounts/
+    <uuid>/                      selectable account (mode 0700)
+      profile.json               uuid, name, alias, authTitle, deviceType, updatedAt
+      live-cache.json            refresh token ("the password") + access token
+      xbl-cache.json             XSTS chain
+      mca-cache.json             ~24 h Minecraft access token
+      writer.lock                transient, one writer per account
+  staging/<16-hex>/              pre-login bootstrap; never selectable
+  retired/                       quarantined legacy directories
+  .accounts.lock                 short structure lock for finalize/migrate
+```
+
+**The layout changed after the dated evidence.** The live G1 run on
+2026-11-06/07 used the old single-account directory `.secrets/puppet/` with
+`<sha1(username).slice(0,6)>_<family>-cache.json` file names and
+`identity.meta.json`. That evidence describes the account, not the current
+paths. Today the same token files live under
+`.secrets/accounts/<uuid>/` with readable `<family>-cache.json` names, and the
+profile is `profile.json`. Do not point commands at `.secrets/puppet/`; run
+`node src/auth/cli.js accounts` to see whether a legacy directory is still
+waiting for migration.
+
+### Selector rules
+
+A selector is resolved before any custody object is built:
+
+1. A UUID (dashed or undashed) matches only that UUID.
+2. Otherwise an alias matches case-insensitively.
+3. Otherwise a profile name matches case-insensitively.
+4. No selector is allowed only when exactly one account exists.
+
+A path-like selector never becomes a path. `--dir <accountDir>` is the raw
+escape hatch: the directory must already contain a readable `profile.json`.
+`--dir` and `--account` are mutually exclusive.
+
+### Custody rules
+
+- Directory `0700`; every cache/lock/profile file `0600`; writes are
   temp + fsync + rename; a failed write leaves the previous cache intact.
-- **One writer.** `writer.lock` (pid + random owner id, dead holders are
-  stale-stealable) is held by whichever process may rotate the token: the
-  proxy during its life; the CLI during device-code or `--refresh`. A second
-  writer is refused (`writer_lock_held`), never queued.
+- **One writer per account.** `writer.lock` (pid + random owner id, dead
+  holders are stale-stealable) lives inside the account directory, so account
+  A's lock never blocks account B. The proxy holds it for its life; the CLI
+  holds it during device-code or `--refresh`. A second writer is refused
+  (`writer_lock_held`), never queued.
+- **UUID is the identity.** A login that resolves to a different UUID is
+  refused (`identity_mismatch`) and `profile.json` is not overwritten.
 - **No restore of old caches.** After a refresh the old refresh token is
   invalid; recovery is always: sign-out-everywhere / password change →
   re-run `device-code`.
-- `.secrets/`, `*.token-cache.json`, `*_live-cache.json`, `*_xbl-cache.json`,
-  `*_mca-cache.json` are already in `.gitignore`.
-- Non-secret ledger: `identity.meta.json` records the last bootstrapped
-  `{ uuid, name, authTitle, deviceType, updatedAt }` — this is what makes
-  "same UUID across refresh" a pass claim instead of an observation.
+- `.secrets/` and the cache file patterns are already in `.gitignore`.
+- `profile.json` records the last bootstrapped
+  `{ uuid, name, alias, authTitle, deviceType, updatedAt }` — this is what
+  makes "same UUID across refresh" a pass claim instead of an observation.
+
+### Commands
+
+```bash
+node src/auth/cli.js accounts                      # list usable, broken, pending, legacy
+node src/auth/cli.js accounts --json               # machine-readable
+node src/auth/cli.js migrate --dry-run             # plan the old-layout move
+node src/auth/cli.js migrate --apply               # perform it (quarantines puppet-java-403)
+node src/auth/cli.js migrate --apply --no-quarantine
+```
+
+`accounts` is read-only: it never creates an account directory. `migrate`
+defaults to dry-run, prints the UUID, target, files by family/size,
+`sameFilesystem`, `targetExists`, the legacy lock, and the quarantine
+candidate. Exit codes: `0` ok or dry-run, `1` failed apply, `2` refused
+(lock held, cross-device, target conflict). Run the real migration only after
+taking the proxy down; it renames the legacy directory, so it cannot run while
+the old leg holds a lock.
+
+`--accounts-dir` (or `GATEB_ACCOUNTS_DIR`) moves the account tree. `--from`
+names the legacy directory under `.secrets/` (default `puppet`).
+
+The real GlowSquidye tree was migrated on 2026-11-07 with `migrate --apply`.
+Every token file kept the same SHA-256 before and after, `profile.json` keeps
+`updatedAt` from the last identity write and records `migratedAt`, the alias is
+`puppet`, and `puppet-java-403` is under `.secrets/retired/`. A read-only
+`status --account puppet` finds the refresh token without a device code.
 
 ## authTitle policy (live result)
 
@@ -69,14 +139,34 @@ table. The live G1 verdict records `authTitle=00000000441cc96b`.
 ## The exact user device-code action
 
 One command, one interactive approval, then the account is headless forever
-(until the refresh chain is revoked):
+(until the refresh chain is revoked).
+
+Add a **new** account (no selector): the login runs in
+`.secrets/staging/<16-hex>/` and is renamed to
+`.secrets/accounts/<uuid>/` only after it succeeds. `--alias` is optional; a
+lowercase name that matches `^[a-z0-9][a-z0-9._-]{0,31}$` becomes the alias
+when you omit it.
+
+```bash
+node src/auth/cli.js device-code                  # new account, alias from the name
+node src/auth/cli.js device-code --alias puppet   # new account, explicit alias
+```
+
+Re-authenticate an **existing** account (UUID guard: a different login UUID is
+refused):
 
 ```bash
 node src/auth/cli.js device-code --account puppet
+node src/auth/cli.js device-code --account <uuid>
+node src/auth/cli.js device-code --dir .secrets/accounts/<uuid>
 ```
 
-1. The command refuses immediately if the writer lock is held (proxy running)
-   — exit code 2.
+An unknown UUID bootstraps that UUID as a new account; an unknown alias or
+name is refused with the candidate list, never turned into an accidental
+login.
+
+1. The command refuses immediately if the writer lock for that account is held
+   (proxy running) — exit code 2.
 2. It prints to **stderr**: the verification URL
    (`https://www.microsoft.com/link`-style page), the short user code, and
    Microsoft's message. Stderr only — device codes never touch stdout, files,
@@ -87,13 +177,16 @@ node src/auth/cli.js device-code --account puppet
 4. The command then fetches the Java token (used in-memory only), profile,
    entitlements, and the multiplayer privilege from
    `api.minecraftservices.com/player/attributes`, and prints to **stdout**
-   exactly one safe line, e.g.
-   `name=<puppet-name> uuid=<uuid> java=owned multiplayer=allowed authTitle=00000000402b5328`
-5. `identity.meta.json` and the token caches land in `.secrets/puppet/`.
+   the safe identity line plus `uuid=… name=… alias=… dir=…`.
+5. `profile.json` and the token caches land in
+   `.secrets/accounts/<uuid>/`. A failed bootstrap leaves its staging
+   directory for inspection; it is never selectable.
 
 Failure notes printed, never retried blind: `device_code_not_completed_or_timed_out`
 (user did not approve in time) → just run the command again;
 `auth_failed_after_all_titles` with the per-title attempts;
+`identity_mismatch` when the token cache belongs to another account → stop and
+investigate, the profile was not touched;
 `invalid_grant`/`AADSTS70008` on later refreshes → the rolling token was
 consumed or revoked → re-bootstrap; XErr `2148916233/238` → missing Xbox
 profile / child account (fix the account, not the code).
@@ -101,14 +194,18 @@ profile / child account (fix the account, not the code).
 ## status (read-only) and silent refresh
 
 ```bash
-node src/auth/cli.js status                     # read-only custody report
+node src/auth/cli.js status                     # one account, if only one exists
+node src/auth/cli.js status --account puppet    # selector: uuid, alias, or name
+node src/auth/cli.js status --dir .secrets/accounts/<uuid>
 node src/auth/cli.js status --json              # machine-readable
 node src/auth/cli.js status --refresh           # silent refresh, guarded
 ```
 
-- Read-only status shows: cache dir + mode, which cache files exist, whether
-  the live cache has a refresh token (presence only — never values), access
-  token expiry meta, the ledger identity, and writer-lock state.
+- Read-only status shows: `uuid`, `name`, `alias`, the account directory and
+  its mode, which cache files exist, whether the live cache has a refresh token
+  (presence only — never values), access token expiry meta, the profile
+  identity, and writer-lock state. `collect()` never creates the directory;
+  status against a missing account reports absence.
 - `--refresh` **refuses** (exit 2, reason `writer_lock_held`) if the proxy
   holds the lock. It never shows a device code: no cached refresh token →
   `needs_bootstrap`; a mid-flow prompt → `needs_reauthentication`.
