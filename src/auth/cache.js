@@ -1,18 +1,28 @@
-// Token-cache custody for the Gate B puppet account (G1).
+// Token-cache custody for Gate B puppet accounts.
 //
 // The refresh token is the password. This module owns the file custody:
-//   - one cache directory (default `.secrets/puppet/`), mode 0700,
-//   - cache files written 0600 via temp-file + fsync + rename (atomic),
-//   - a single writer lock so exactly one process ever rotates the token,
+//   - one account directory (default `.secrets/accounts/<uuid>/`), mode 0700,
+//   - readable cache files (`<family>-cache.json`) written 0600 via temp-file
+//     + fsync + rename (atomic),
+//   - one writer lock per account so exactly one process ever rotates a
+//     token,
+//   - a profile (`profile.json`) carrying uuid/name/alias/authTitle, never
+//     token values,
 //   - a path-only API: callers pass directories and receive file paths,
 //     never cached token values.
 //
 // The factory returned by createAtomicCacheFactory satisfies the
 // prismarine-auth Cache contract ({ getCached, setCached, setCachedPartial,
-// reset }) with the same on-disk naming prismarine-auth's own FileCache uses
-// (`<sha1(username).slice(0,6)>_<cacheName>-cache.json`), so token files land
-// in the custody directory with hardened permissions instead of the
-// library's default writeFileSync (no fsync, default umask).
+// reset }). prismarine-auth only computes a filename when the `cache`
+// argument is a string; when it is a function the library calls it with
+// `{ cacheName, username }` and uses whatever cache object we return
+// (node_modules/prismarine-auth/src/MicrosoftAuthFlow.js:44-70). Our factory
+// therefore owns the path and writes readable names.
+//
+// One-release compatibility: old custody directories used
+// `<sha1(username).slice(0,6)>_<cacheName>-cache.json`. cache.file is readable
+// now, and the factory adopts a legacy hashed file on first touch (same-dir
+// rename, atomic). Writes always use the readable name.
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -21,20 +31,33 @@ import { normalizeUuid } from './util.js'
 
 export const PRISMARINE_CACHE_IDS = ['msal', 'live', 'sisu', 'xbl', 'bed', 'mca', 'mcs', 'pfb']
 
+export const PROFILE_FILE = 'profile.json'
+export const LEGACY_PROFILE_FILE = 'identity.meta.json'
+export const WRITER_LOCK_FILE = 'writer.lock'
+
 export const CACHE_DIR_MODE = 0o700
 export const CACHE_FILE_MODE = 0o600
 
-// sha1 hex prefix — the same hash prismarine-auth uses for cache file names.
+// sha1 hex prefix — the name prismarine-auth's own FileCache writes.
 export function cacheIdHash (username) {
   return crypto.createHash('sha1').update(String(username ?? ''), 'binary').digest('hex').slice(0, 6)
 }
 
-// Path-only cache location. Both `puppet` (stable key) and the raw username
-// hash are supported inputs.
-export function cacheFilePath (dir, username, cacheName) {
+function assertCacheName (cacheName) {
   if (!PRISMARINE_CACHE_IDS.includes(cacheName)) {
     throw new Error(`Cannot compute a cache path for unknown cache ID: '${cacheName}'`)
   }
+}
+
+// Readable cache location: `<dir>/<family>-cache.json`.
+export function cacheFilePath (dir, cacheName) {
+  assertCacheName(cacheName)
+  return path.join(String(dir ?? ''), `${cacheName}-cache.json`)
+}
+
+// Legacy hashed location, kept for migration and one-release adoption only.
+export function legacyCacheFilePath (dir, username, cacheName) {
+  assertCacheName(cacheName)
   return path.join(String(dir ?? ''), `${cacheIdHash(username)}_${cacheName}-cache.json`)
 }
 
@@ -55,17 +78,103 @@ export function dirMode (dir) {
   }
 }
 
-// One cache-file read for exactly one cache family. Returns the parsed JSON
-// object or null. This is the *meta* reading API for status; callers must
-// never log the returned object raw (it contains tokens when the cache is
-// warm — status picks only expiry/obtain fields out of it).
-export function readCacheFile (dir, username, cacheName, readFile = fs.readFileSync) {
-  const file = cacheFilePath(dir, username, cacheName)
+function safeJson (readFile, file) {
   try {
     return JSON.parse(String(readFile(file, 'utf8')))
   } catch {
     return null
   }
+}
+
+// Canonical profile shape. Unknown fields are dropped; token values are never
+// part of a profile.
+function normalizeProfile (raw) {
+  const uuid = normalizeUuid(raw?.uuid)
+  if (!uuid) return null
+  const profile = {
+    version: Number.isInteger(raw.version) ? raw.version : 1,
+    uuid,
+    name: typeof raw.name === 'string' ? raw.name : null,
+    alias: typeof raw.alias === 'string' ? raw.alias : null,
+    authTitle: typeof raw.authTitle === 'string' ? raw.authTitle : null,
+    deviceType: typeof raw.deviceType === 'string' ? raw.deviceType : null,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+  }
+  if (typeof raw.createdAt === 'string') profile.createdAt = raw.createdAt
+  if (typeof raw.migratedAt === 'string') profile.migratedAt = raw.migratedAt
+  if (typeof raw.migratedFrom === 'string') profile.migratedFrom = raw.migratedFrom
+  return profile
+}
+
+// Read the account profile. Try profile.json first; fall back to the legacy
+// identity.meta.json (mapping its `account` field to `alias`). Bad JSON or a
+// missing uuid yields null. Never writes.
+export function readProfile (dir, { readFile = fs.readFileSync } = {}) {
+  const fromProfile = normalizeProfile(safeJson(readFile, path.join(String(dir), PROFILE_FILE)))
+  if (fromProfile) return fromProfile
+
+  const meta = safeJson(readFile, path.join(String(dir), LEGACY_PROFILE_FILE))
+  if (!meta) return null
+  return normalizeProfile({
+    uuid: meta.uuid,
+    name: meta.name,
+    alias: meta.alias ?? meta.account ?? null,
+    authTitle: meta.authTitle,
+    deviceType: meta.deviceType,
+    updatedAt: meta.updatedAt,
+    createdAt: meta.createdAt,
+    migratedAt: meta.migratedAt,
+    migratedFrom: meta.migratedFrom,
+  })
+}
+
+function definedEntries (value) {
+  return Object.entries(value ?? {}).filter(([, entry]) => entry !== undefined)
+}
+
+// Atomic 0600 profile write. Merges with the existing profile so a refresh
+// that supplies only uuid/name/authTitle keeps alias/version/createdAt and
+// migration provenance. A uuid change is refused unless the caller opts in.
+export function writeProfile (dir, profile, { allowUuidChange = false, now = Date.now, ...writeOpts } = {}) {
+  const uuid = normalizeUuid(profile?.uuid)
+  if (!uuid) {
+    throw new Error('refusing to write a profile without a normalized uuid')
+  }
+  const existing = readProfile(dir)
+  if (existing && existing.uuid !== uuid && !allowUuidChange) {
+    throw new Error(`refusing to change profile uuid from ${existing.uuid} to ${uuid}`)
+  }
+  const merged = {
+    ...(existing ?? {}),
+    ...Object.fromEntries(definedEntries(profile)),
+    uuid,
+  }
+  merged.version = Number.isInteger(merged.version) ? merged.version : 1
+  merged.updatedAt = typeof profile.updatedAt === 'string'
+    ? profile.updatedAt
+    : new Date(now()).toISOString()
+  if (!merged.createdAt) merged.createdAt = existing?.createdAt ?? merged.updatedAt
+  const normalized = normalizeProfile(merged)
+  ensureCacheDir(dir)
+  atomicWriteFile(path.join(String(dir), PROFILE_FILE), JSON.stringify(normalized), writeOpts)
+  return normalized
+}
+
+// One cache-file read for exactly one cache family. Readable name first, then
+// the legacy hashed name. Returns the parsed JSON object or null. This is the
+// *meta* reading API for status; callers must never log the returned object
+// raw (it contains tokens when the cache is warm — status picks only
+// expiry/obtain fields out of it).
+export function readCacheFile (dir, username, cacheName, readFile = fs.readFileSync) {
+  const candidates = [cacheFilePath(dir, cacheName)]
+  if (username !== null && username !== undefined) {
+    candidates.push(legacyCacheFilePath(dir, username, cacheName))
+  }
+  for (const file of candidates) {
+    const parsed = safeJson(readFile, file)
+    if (parsed !== null) return parsed
+  }
+  return null
 }
 
 // Atomic JSON write: temp file in the same directory (mode 0600), fsync,
@@ -97,19 +206,46 @@ export function atomicWriteFile (file, data, { beforeRename = null, mode = CACHE
 
 // Cache factory compatible with prismarine-auth's Authflow `cache` argument:
 // Authflow calls it with { cacheName, username } for each of the cache
-// families it manages.
-export function createAtomicCacheFactory ({ dir, beforeRename = null, now = Date.now } = {}) {
-  ensureCacheDir(dir)
+// families it manages. Writes always use the readable name. On the first
+// getCached/setCached for a family, a legacy hashed file (if present and the
+// readable file is absent) is renamed into place — same directory, atomic.
+export function createAtomicCacheFactory ({ dir, create = true, legacyAccount = null, beforeRename = null, now = Date.now } = {}) {
+  if (create) ensureCacheDir(dir)
   return function cacheFactory ({ username, cacheName }) {
-    const file = cacheFilePath(dir, username, cacheName)
+    const file = cacheFilePath(dir, cacheName)
+    const legacyUser = legacyAccount ?? username
+    const legacyFile = legacyUser === null || legacyUser === undefined
+      ? null
+      : legacyCacheFilePath(dir, legacyUser, cacheName)
+    let adopted = false
     let memory
+
+    function adoptLegacy () {
+      if (adopted) return
+      adopted = true
+      if (!legacyFile || legacyFile === file) return
+      try {
+        if (!fs.existsSync(file) && fs.existsSync(legacyFile)) {
+          if (create) ensureCacheDir(dir)
+          fs.renameSync(legacyFile, file)
+          try { fs.chmodSync(file, CACHE_FILE_MODE) } catch { /* best effort */ }
+        }
+      } catch {
+        // Adoption is best effort; a read then starts empty and a write uses
+        // the readable name anyway.
+      }
+    }
+
     const legit = {
       async reset () {
+        adoptLegacy()
         memory = {}
+        if (create) ensureCacheDir(dir)
         atomicWriteFile(file, JSON.stringify({}), { beforeRename })
         return memory
       },
       async getCached () {
+        adoptLegacy()
         if (memory === undefined) {
           try {
             memory = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -120,7 +256,9 @@ export function createAtomicCacheFactory ({ dir, beforeRename = null, now = Date
         return memory
       },
       async setCached (value) {
+        adoptLegacy()
         memory = value ?? {}
+        if (create) ensureCacheDir(dir)
         atomicWriteFile(file, JSON.stringify(memory), { beforeRename })
         return memory
       },
@@ -146,7 +284,7 @@ export function listCacheFiles (dir) {
     return []
   }
   return entries
-    .filter(name => name.endsWith('-cache.json') || name === 'writer.lock' || name === 'identity.meta.json')
+    .filter(name => name.endsWith('-cache.json') || name === WRITER_LOCK_FILE || name === PROFILE_FILE || name === LEGACY_PROFILE_FILE)
     .map(name => {
       const full = path.join(String(dir), name)
       let stat = null
@@ -156,27 +294,16 @@ export function listCacheFiles (dir) {
     .filter(Boolean)
 }
 
-// Non-secret identity metadata the custody keeps between operations so a
-// later refresh can prove the UUID did not change (G1: same UUID across
-// refresh). Written 0600; contains uuid/name/authTitle/updatedAt only —
-// never tokens.
+// Compatibility aliases: old callers read/write identity.meta.json through
+// these. Both now go through the profile, so a refresh cannot fork the
+// identity record into two files. readIdentityMeta still falls back to a
+// pre-migration identity.meta.json (readProfile does that).
 export function readIdentityMeta (dir, readFile = fs.readFileSync) {
-  try {
-    const meta = JSON.parse(String(readFile(path.join(String(dir), 'identity.meta.json'), 'utf8')))
-    return meta && normalizeUuid(meta.uuid) ? meta : null
-  } catch {
-    return null
-  }
+  return readProfile(dir, { readFile })
 }
 
 export function writeIdentityMeta (dir, meta, opts = {}) {
-  const uuid = normalizeUuid(meta.uuid)
-  if (!uuid) {
-    throw new Error('refusing to write identity metadata without a normalized uuid')
-  }
-  return atomicWriteFile(path.join(String(dir), 'identity.meta.json'), JSON.stringify({
-    ...meta, uuid, updatedAt: new Date().toISOString(),
-  }), opts)
+  return writeProfile(dir, meta, opts)
 }
 
 // ---------------------------------------------------------------------------
@@ -186,10 +313,11 @@ export function writeIdentityMeta (dir, meta, opts = {}) {
 // The refresh token is rolling/single-use: two refreshers race and can leave
 // every cached value invalid (`invalid_grant`). The proxy (later workstream)
 // is the only writer while it runs; the CLI's device-code / --refresh paths
-// acquire this lock and refuse while it is held.
+// acquire this lock and refuse while it is held. Locks live inside the
+// account directory, so account A's lock never blocks account B.
 export function createWriterLock ({
   dir,
-  name = 'writer.lock',
+  name = WRITER_LOCK_FILE,
   now = Date.now,
   // Injectable liveness check for the polling case; default: same-machine pid.
   isProcessAlive = pid => {
@@ -281,21 +409,44 @@ export function createWriterLock ({
 
 // Everything the rest of the auth slice needs, under one custody object.
 // Path-only: no token value ever leaves this module through its surface.
-export function createTokenCustody ({ account = 'puppet', dir }) {
+//
+// create=false is the read-only mode: it never creates the directory (status
+// and live inspection must not mkdir) and ensure() is a no-op.
+export function createTokenCustody ({ account = null, dir, uuid = null, create = true, legacyAccount = account } = {}) {
   const resolvedDir = String(dir)
-  ensureCacheDir(resolvedDir)
+  if (create) ensureCacheDir(resolvedDir)
+
+  const explicitUuid = uuid === null || uuid === undefined ? null : normalizeUuid(uuid)
+  if (uuid !== null && uuid !== undefined && !explicitUuid) {
+    throw new Error(`createTokenCustody received an invalid uuid: ${JSON.stringify(uuid)}`)
+  }
+  const existingProfile = readProfile(resolvedDir)
+  const base = path.basename(resolvedDir)
+  const baseUuid = normalizeUuid(base)
+  const canonicalBaseUuid = baseUuid !== null && base === baseUuid ? baseUuid : null
+  const derivedUuid = explicitUuid ?? existingProfile?.uuid ?? canonicalBaseUuid
+
   const writerLock = createWriterLock({ dir: resolvedDir })
+  const profile = {
+    read: () => readProfile(resolvedDir),
+    write: (next, opts) => writeProfile(resolvedDir, next, opts),
+  }
+
   return {
     account,
+    uuid: derivedUuid,
     dir: resolvedDir,
-    ensure: () => ensureCacheDir(resolvedDir),
-    cacheFile: (cacheName) => cacheFilePath(resolvedDir, account, cacheName),
-    cacheFactory: createAtomicCacheFactory({ dir: resolvedDir }),
+    ensure: () => (create ? ensureCacheDir(resolvedDir) : resolvedDir),
+    cacheFile: (cacheName) => cacheFilePath(resolvedDir, cacheName),
+    legacyCacheFile: (cacheName) => legacyCacheFilePath(resolvedDir, legacyAccount ?? account ?? '', cacheName),
+    cacheFactory: createAtomicCacheFactory({ dir: resolvedDir, create, legacyAccount }),
     listFiles: () => listCacheFiles(resolvedDir),
-    readCache: (cacheName) => readCacheFile(resolvedDir, account, cacheName),
+    readCache: (cacheName) => readCacheFile(resolvedDir, legacyAccount, cacheName),
+    profile,
+    // Compatibility surface used by msa.js/status.js today.
     identityMeta: {
-      read: () => readIdentityMeta(resolvedDir),
-      write: (meta) => writeIdentityMeta(resolvedDir, { ...meta, account }),
+      read: () => profile.read(),
+      write: (meta, opts) => writeProfile(resolvedDir, meta, opts),
     },
     writerLock,
     mode: () => dirMode(resolvedDir),
