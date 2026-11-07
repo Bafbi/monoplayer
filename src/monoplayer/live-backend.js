@@ -346,6 +346,9 @@ export function createLiveBackendLeg (options = {}) {
     // title/device pair; otherwise let minecraft-protocol pick its default.
     if (authTitle !== null) connection.authTitle = authTitle
     if (deviceType !== null) connection.deviceType = deviceType
+    // Passing authTitle disables the library's defaulting, so set the flow and
+    // device type explicitly. 'live' is the Java flow.
+    connection.flow = 'live'
     return connection
   }
 

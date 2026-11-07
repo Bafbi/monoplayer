@@ -27,6 +27,11 @@ description = "Run the product offline loopback rung (real legs, fake backend, p
 depends = ["install"]
 run = "node src/ladder/loopback.js"
 
+[tasks.online]
+description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and the live backend)."
+depends = ["install"]
+run = "node src/ladder/online.js"
+
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback."
 depends = ["lint", "test", "loopback"]
