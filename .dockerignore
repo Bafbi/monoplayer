@@ -1,0 +1,12 @@
+node_modules
+.git
+.secrets
+.scratch
+.gate-b
+test
+testdata
+tools
+docs
+assets
+*.png
+*.jsonl
