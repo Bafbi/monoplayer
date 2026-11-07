@@ -260,6 +260,19 @@ Toxiproxy is deployed but the F1–F6 fault rows are still pending. This smoke i
 `twoAccount=false`: it proves the proxy/forwarding path, not the player attach
 path.
 
+## Real-client pass (2026-11-07)
+
+The official 26.1.2 Fabric client attached through Monoplayer to `paper-m4`
+via Velocity. The front replayed 1374 frames from the cached configuration and
+play prefix; the client loaded 81 chunks and rendered 26 sections. Driver
+commands moved the player, broke a seeded stone block, and placed stone on a
+dirt support; the backend position followed and the backend saw exactly one
+login. The live wire check inspected 1952 frames with zero rejects.
+
+Evidence: [`testdata/gate-b-m4-driver-verdict.json`](../testdata/gate-b-m4-driver-verdict.json)
+and [`testdata/gate-b-m4-driver-join.png`](../testdata/gate-b-m4-driver-join.png).
+The F1-F6 fault rows remain pending; that is the B3 lane.
+
 ## Teardown (operator; never leaves secrets behind casually)
 
 ```bash

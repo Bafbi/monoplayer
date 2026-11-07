@@ -83,7 +83,9 @@ glowsquidye`; the runbook is [docs/gate-b-g1.md](docs/gate-b-g1.md).
 **M4** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
 forwarding; the authenticated puppet joined through the proxy. Evidence:
 [testdata/gate-b-g1-verdict.json](testdata/gate-b-g1-verdict.json),
-[testdata/gate-b-m4-verdict.json](testdata/gate-b-m4-verdict.json). B1 live is
+[testdata/gate-b-m4-verdict.json](testdata/gate-b-m4-verdict.json). The official
+26.1.2 client has since attached through the full Velocity + Paper path,
+rendered, moved, and edited blocks: [testdata/gate-b-m4-driver-verdict.json](testdata/gate-b-m4-driver-verdict.json). B1 live is
 green; next are B2-B6.
 
 Created in [T3 Code](https://t3.codes).
