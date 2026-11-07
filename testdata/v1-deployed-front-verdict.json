@@ -1,0 +1,173 @@
+{
+  "name": "v1 deployed front: Bafbi attaches to the GlowSquidye puppet on Excalia Season 3",
+  "observedAt": "2026-11-07T23:51:50Z",
+  "topology": {
+    "cluster": "deepmine",
+    "namespace": "monoplayer",
+    "argoApp": "deepmine-dev-monoplayer",
+    "sync": "Synced/Healthy",
+    "gitopsCommit": "5a82b13",
+    "replicas": 1,
+    "strategy": "Recreate",
+    "pod": "monoplayer-5d48c777d6-9tkvn",
+    "image": "registry.internal/deepmine/monoplayer@sha256:bf0741b224a53793af574eb28aa3c04f90ee43e3648ee4134b4d8f37a19cc266",
+    "imageTag": "sha-f26bc38",
+    "front": {
+      "kind": "tailscale-service",
+      "host": "glowsquidye.tail41e568.ts.net",
+      "port": 25565,
+      "loadBalancerIp": "100.66.20.83"
+    },
+    "backend": {
+      "kind": "live-backend-leg",
+      "host": "play2.excalia.fr",
+      "port": 25565,
+      "version": "26.2",
+      "protocol": 776,
+      "note": "Season 3 backend reached directly; the play.excalia.fr limbo dialog and its transfer are bypassed"
+    }
+  },
+  "accounts": {
+    "puppet": {
+      "uuid": "73e0e19b-d4e4-4cc1-a553-a3952f0c1aed",
+      "name": "GlowSquidye",
+      "alias": "glowsquidye"
+    },
+    "attach": {
+      "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
+      "name": "Bafbi",
+      "alias": "bafbi"
+    }
+  },
+  "client": {
+    "kind": "vanilla-prism",
+    "instance": "gate-b-player-262",
+    "host": "nath.tail41e568.ts.net",
+    "version": "26.2",
+    "joinLog": [
+      "Connecting to glowsquidye.tail41e568.ts.net, 25565"
+    ]
+  },
+  "passed": true,
+  "assertions": [
+    {
+      "id": "V1",
+      "name": "the puppet logs in to Season 3 as GlowSquidye on 26.2",
+      "status": "pass",
+      "detail": {
+        "backendSession": "GlowSquidye",
+        "backendLegJoin": true,
+        "backendLegPlayerLoaded": true,
+        "evidence": ["backendSession", "backendLegJoin", "backendLegPlayerLoaded"]
+      }
+    },
+    {
+      "id": "V2",
+      "name": "the front is ready from backend frames before the attach",
+      "status": "pass",
+      "detail": {
+        "warmFallback": true,
+        "prefixFrames": 573,
+        "configFrames": 34
+      }
+    },
+    {
+      "id": "V3",
+      "name": "the online-mode Bafbi attach is allowed by the whitelist",
+      "status": "pass",
+      "detail": {
+        "verifier": "online-mode_hasjoined",
+        "attachAllowed": true,
+        "whitelist": "/config/attach-whitelist.json",
+        "denials": 0
+      }
+    },
+    {
+      "id": "V4",
+      "name": "configuration is replayed from the cache",
+      "status": "pass",
+      "detail": {
+        "mode": "cached_replay",
+        "suppressedRegistryData": 28,
+        "replayedConfigFrames": 33
+      }
+    },
+    {
+      "id": "V5",
+      "name": "the play prefix replays and the client reaches the world",
+      "status": "pass",
+      "detail": {
+        "replayed": 673,
+        "mapChunkCached": 401,
+        "clientLog": "chunk section buffers resized to 128 during world load"
+      }
+    },
+    {
+      "id": "V6",
+      "name": "one backend login across the attach",
+      "status": "pass",
+      "detail": {
+        "backendLogins": 1,
+        "attaches": 1
+      }
+    },
+    {
+      "id": "V7",
+      "name": "serverbound traffic flows through the front",
+      "status": "pass",
+      "detail": {
+        "serverboundForwarded": 572,
+        "serverboundDropped": 8,
+        "chatBlocked": 1
+      }
+    },
+    {
+      "id": "V8",
+      "name": "the wire checker inspects frames and rejects none",
+      "status": "pass",
+      "detail": {
+        "checked": 785,
+        "rejected": 0,
+        "byState": {
+          "configuration": 33,
+          "play": 752
+        },
+        "lastFailure": null
+      }
+    },
+    {
+      "id": "V9",
+      "name": "the player moves, breaks, and places blocks in the world",
+      "status": "not_observed",
+      "detail": {
+        "reason": "needs the player's in-world confirmation; client frames alone do not prove the backend accepted the actions"
+      }
+    }
+  ],
+  "notObserved": ["V9"],
+  "metrics": {
+    "backendFrames": 779,
+    "configFrames": 34,
+    "framesCached": 752,
+    "framesReplayed": 673,
+    "positionsSynthesized": 1,
+    "serverboundForwarded": 572,
+    "serverboundDropped": 8,
+    "chatBlocked": 1,
+    "bundleDelimitersDropped": 0,
+    "nonPlayFramesIgnored": 3,
+    "attaches": 1,
+    "denials": 0,
+    "frontKicks": 0
+  },
+  "backendFrameNames": {
+    "map_chunk": 401,
+    "entity_metadata": 81,
+    "entity_teleport": 78,
+    "keep_alive": 78,
+    "update_time": 82,
+    "system_chat": 25,
+    "player_info": 10
+  },
+  "regenerate": "kubectl -n monoplayer logs deploy/monoplayer | grep '\"event\":\"heartbeat\"' | tail -1"
+}
