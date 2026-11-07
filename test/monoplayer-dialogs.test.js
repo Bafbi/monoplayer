@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { chooseDialogAction } from '../src/monoplayer/live-backend.js'
+import { chooseDialogAction, buildCustomClickAction } from '../src/monoplayer/live-backend.js'
 
 function action (label, id, buttonId) {
   return {
@@ -77,4 +77,36 @@ test('no actions or a missing callback id yields null', () => {
   assert.equal(chooseDialogAction(dialog([]), 'last'), null)
   const noId = dialog([{ action: { type: 'compound', value: {} }, label: { type: 'compound', value: {} } }])
   assert.equal(chooseDialogAction(noId, 'last'), null)
+})
+
+test('the click body includes the identifier and the length-prefixed optional NBT', () => {
+  const choice = chooseDialogAction(TWO_SEASONS, 'last')
+  const body = buildCustomClickAction({
+    state: 'configuration',
+    id: choice.id,
+    additions: choice.additions
+  })
+
+  assert.equal(body[0], 0x08)
+  assert.equal(body[1], choice.id.length)
+  assert.equal(body.subarray(2, 2 + choice.id.length).toString('utf8'), choice.id)
+
+  let offset = 2 + choice.id.length
+  const payloadLength = body[offset++]
+  assert.equal(payloadLength, body.length - offset)
+  assert.equal(body[offset], 1) // optional NBT present
+  assert.equal(body[offset + 1], 0x0a) // compound root
+  assert.equal(body[offset + 2], 0x00) // empty root name length
+  assert.equal(body[offset + 3], 0x00)
+})
+
+test('play uses the play packet id and a missing NBT is optional-absent', () => {
+  const play = buildCustomClickAction({ state: 'play', id: 'paper:dialog', additions: null })
+  assert.equal(play[0], 0x44)
+  const offset = 2 + 'paper:dialog'.length
+  assert.equal(play[offset], 1) // payload length
+  assert.equal(play[offset + 1], 0) // optional absent
+
+  assert.equal(buildCustomClickAction({ state: 'login', id: 'x' }), null)
+  assert.equal(buildCustomClickAction({ state: 'configuration', id: '' }), null)
 })
