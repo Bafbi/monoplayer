@@ -102,7 +102,13 @@ export function createMonoplayer ({
     attachWhitelist: cfg.attachWhitelist,
     puppetProfile: cfg.puppet
   })
-  const session = createSession({ clock, reconnectDelayMs: cfg.reconnect.delayMs })
+  const session = createSession({
+    clock,
+    reconnectDelayMs: cfg.reconnect.delayMs,
+    // The core announces the due reconnect; the adapter/orchestrator owns the
+    // actual backend connect (the core never touches the backend leg here).
+    onReconnect: ({ delayMs }) => emit('reconnect_due', { delayMs })
+  })
 
   const metrics = {
     backendFrames: 0,

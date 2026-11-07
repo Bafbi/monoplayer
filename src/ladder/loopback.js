@@ -78,6 +78,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let core = null
   let bot1 = null
   let bot2 = null
+  let bot3 = null
   let stranger = null
 
   const evidence = {
@@ -148,10 +149,33 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       config,
       backendLeg: backend,
       frontLeg: front,
+      clock: {
+        now: Date.now,
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout
+      },
       logStream: { write: line => log('core', { line }) }
     })
     front.setCoreAttach(({ name, uuid }) => core.attachPlayer({ name, uuid, includeConfig: false }))
     core.start()
+
+    // One backend.connect() per reconnect_due. The guard makes a loop
+    // impossible even if two dues were ever emitted close together.
+    let reconnecting = false
+    core.on('reconnect_due', async ({ delayMs } = {}) => {
+      if (reconnecting) return
+      reconnecting = true
+      core.session.backendConnecting({ initial: false })
+      try {
+        await backend.connect()
+        log('backendReconnect', { delayMs, backendLogins: core.session.backendLogins })
+      } catch (error) {
+        core.session.fail()
+        log('backendReconnectFailed', { delayMs, error: String(error?.message ?? error).slice(0, 300) })
+      } finally {
+        reconnecting = false
+      }
+    })
 
     // --- run: connect, readiness, listen ---
     phase = 'run'
@@ -383,12 +407,65 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       b2.leftovers.length === 0 && front.wireStats.rejected === 0,
       { leftovers: b2.leftovers.length, rejected: front.wireStats.rejected }
     )
+
+    // --- O15-O16: one backend fault, one reconnect, one fresh login ---
+    // Destroying the backend leg's socket is the same path a dropped Paper
+    // connection takes: client 'end' -> core backend_down -> one timer ->
+    // reconnect_due -> one backend.connect().
+    const loginsBeforeFault = fake.received.logins
+    backend.client.socket.destroy()
+    await waitFor(() => core.session.state === 'reconnecting', 'session reconnecting', 10_000)
+    await waitFor(
+      () => core.session.backendLogins === 2 && core.cache.stats().warm,
+      'second backend login and warm cache',
+      10_000
+    )
+
+    // The attached client cannot survive the backend fault; let its end land
+    // before the fresh attach claims the slot.
+    await withTimeout(bot2.ended, 10_000, 'bot2 end after backend fault')
+
+    bot3 = createBot({ port: evidence.frontPort, username: 'Attach' })
+    await bot3.ready()
+    const b3 = bot3.received
+    const play3 = bot3.playNames()
+    const prefix3Ok = expectedPrefix.every((name, i) => play3[i] === name)
+
+    // Bounded observation: a reconnect loop would add a third login here.
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    evidence.reconnect = {
+      loginsBeforeFault,
+      fakeLogins: fake.received.logins,
+      backendLogins: core.session.backendLogins,
+      attaches: core.metrics.attaches
+    }
+    check(
+      'O15',
+      'one reconnect: two backend logins, no loop',
+      loginsBeforeFault === 1 && fake.received.logins === 2 &&
+        core.session.backendLogins === 2 && core.session.state === 'attached',
+      evidence.reconnect
+    )
+    check(
+      'O16',
+      'post-reconnect attach replays the join prefix and a chunk',
+      core.metrics.attaches === 3 && prefix3Ok && b3.login?.entityId === 42 &&
+        b3.mapChunks.length > 0 && b3.leftovers.length === 0 && b3.errors.length === 0,
+      {
+        attaches: core.metrics.attaches,
+        prefix: play3.slice(0, 6),
+        entityId: b3.login?.entityId ?? null,
+        chunks: b3.mapChunks.length,
+        leftovers: b3.leftovers.length,
+        errors: b3.errors.length
+      }
+    )
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
-    for (const bot of [bot2, bot1, stranger]) {
+    for (const bot of [bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }

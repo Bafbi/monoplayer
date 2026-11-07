@@ -251,10 +251,19 @@ export async function startLive ({ argv = [], io = process } = {}) {
   })
   let core = null // assigned before any configured usage below
 
+  // Real timers for the session's reconnect delay. The core stays pure: it
+  // announces reconnect_due, this orchestrator performs the backend connect.
+  const clock = {
+    now: Date.now,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout
+  }
+
   core = createMonoplayer({
     config: cfg,
     backendLeg: backend,
     frontLeg: front,
+    clock,
     logStream: { write: line => log('core', { line }) }
   })
 
@@ -262,6 +271,32 @@ export async function startLive ({ argv = [], io = process } = {}) {
     core.attachPlayer({ name, uuid, includeConfig: false })
   )
   core.start()
+
+  // One backend.connect() per reconnect_due: the guard refuses a second
+  // attempt while one is in flight, so the reconnect can never loop.
+  let reconnecting = false
+  core.on('reconnect_due', async ({ delayMs } = {}) => {
+    if (reconnecting) return
+    reconnecting = true
+    core.session.backendConnecting({ initial: false })
+    try {
+      await backend.connect()
+      log('backendReconnect', {
+        delayMs,
+        backendLogins: core.session.backendLogins,
+        state: core.session.state
+      })
+    } catch (error) {
+      core.session.fail()
+      log('backendReconnectFailed', {
+        delayMs,
+        error: String(error?.message ?? error).slice(0, 300),
+        state: core.session.state
+      })
+    } finally {
+      reconnecting = false
+    }
+  })
 
   // Every failure after this point owns a live backend client and (online) the
   // token-custody writer lock. Release both before returning, or the process
