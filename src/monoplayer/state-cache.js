@@ -33,7 +33,8 @@ const DROP_PLAY = new Set([
   'profileless_chat',
   'hide_message',
   'system_chat', // read-only chat is a later slice
-  'ping' // per-leg
+  'ping', // per-leg
+  'bundle_delimiter' // bundles are relayed as individual packets
 ])
 
 // Per-leg owned in the configuration phase: keep-alives and connection pings
@@ -128,7 +129,8 @@ export function createStateCache (overrides = {}) {
     framesDropped: 0,
     overflows: { prefix: 0, config: 0, chunk: 0, block: 0, entity: 0, generic: 0 },
     evictions: { inventory: 0, latest: 0 },
-    warmComplete: 0
+    warmComplete: 0,
+    warmFallback: 0
   }
 
   let warm = false
@@ -243,6 +245,20 @@ export function createStateCache (overrides = {}) {
     return { cached, domain: classification.domain, warmed: warm }
   }
 
+  // Live-leg fallback for backends that stream chunks unbatched (empirically:
+  // Paper 26.x never sends chunk_batch_finished to a protocol-leg client):
+  // the join prefix is declared pinned at the CURRENT edge so the cache moves
+  // to warm-domain behavior (recency per chunk, bounded rings) instead of
+  // growing the prefix until eviction eats the login frame. Pure state
+  // mutation, counted separately; the marker path is untouched. Caller owns
+  // the decided-ness (the orchestrator's grace policy).
+  function forceWarm () {
+    if (warm) return { forced: false, warm }
+    warm = true
+    metrics.warmFallback++
+    return { forced: true, warm }
+  }
+
   // Grouped snapshot for join synthesis. Ordering across warm domains is
   // chunk -> block -> entity -> inventory -> latest -> generic; within each
   // domain it is capture/recency order. Cross-domain interleaving is
@@ -289,7 +305,7 @@ export function createStateCache (overrides = {}) {
     warm = false
   }
 
-  return { push, snapshot, stats, reset, get warm () { return warm } }
+  return { push, snapshot, stats, reset, forceWarm, get warm () { return warm } }
 }
 
 // Joined convenience: warm completion + unload handling already hold through a

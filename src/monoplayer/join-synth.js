@@ -25,7 +25,8 @@ export const LEG_OWNED = new Set([
   'hide_message',
   'system_chat',
   'ping',
-  'pong'
+  'pong',
+  'bundle_delimiter'
 ])
 
 const POSITION_PACKET_DEFAULTS = Object.freeze({
@@ -39,10 +40,12 @@ export function synthAttach ({
   snapshot,
   pose,
   teleportId = 0,
-  positionName = 'position'
+  positionName = 'position',
+  includeConfig = true
 } = {}) {
   if (!snapshot) throw new TypeError('snapshot is required')
   if (!pose || typeof pose !== 'object') throw new TypeError('pose is required')
+  if (typeof includeConfig !== 'boolean') throw new TypeError('includeConfig must be a boolean')
 
   const frames = []
   const counts = { replayed: 0, skipped: 0, synthesized: 0 }
@@ -69,8 +72,12 @@ export function synthAttach ({
     })
   }
 
+  // When omitConfiguration is set the configuration replay prefix is left
+  // out entirely: the live front leg already replays the cached configuration
+  // frames during its own configuration phase, so the play-state attach must
+  // not replay them a second time. Default keeps B1 fake-test behavior.
   const sections = [
-    snapshot.config,
+    ...(includeConfig ? [snapshot.config] : []),
     snapshot.prefix,
     snapshot.chunks,
     snapshot.blocks,

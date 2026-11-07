@@ -7,9 +7,19 @@ const buf = label => Buffer.from(`cache:${label}`)
 const frame = name => ({ name, buffer: buf(name), data: {} })
 
 test('classification: per-leg-owned play frames are never cached', () => {
-  for (const name of ['keep_alive', 'position', 'player_chat', 'profileless_chat', 'hide_message', 'system_chat', 'ping']) {
+  for (const name of ['keep_alive', 'position', 'player_chat', 'profileless_chat', 'hide_message', 'system_chat', 'ping', 'bundle_delimiter']) {
     assert.equal(classifyPlay(name).domain, 'drop', name)
   }
+})
+
+test('bundle delimiters are dropped; enclosed packets remain cacheable', () => {
+  const cache = createStateCache()
+  cache.push('play', 'bundle_delimiter', buf('bundle_delimiter'), {})
+  cache.push('play', 'add_entity', buf('add_entity'), { entityId: 5 })
+  cache.push('play', 'bundle_delimiter', buf('bundle_delimiter'), {})
+  const snapshot = cache.snapshot()
+  assert.equal(snapshot.prefix.some(f => f.name === 'bundle_delimiter'), false)
+  assert.equal(snapshot.prefix.some(f => f.name === 'add_entity'), true)
 })
 
 test('classification: chunk/block/entity/inventory/latest/generic domains', () => {

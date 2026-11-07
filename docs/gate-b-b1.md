@@ -1,8 +1,17 @@
 # Gate B B1 — Monoplayer product core (pure, fake-integrated)
 
-Status: **code complete** for the B1 slice. 44/44 targeted tests pass
-(`node --test test/monoplayer-*.test.js`); every module passes
-`node --check`. The Gate A spike (`src/proxy.js`) is frozen and untouched.
+Status: **live-verified** for attach, render, move, break, place, and
+detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
+59/59 targeted tests pass (`node --test test/monoplayer-*.test.js`) and
+`mise run check` passes 185/185. The Gate A spike (`src/proxy.js`) is frozen
+and untouched.
+
+Live note: the first live attach failed with `add_entity ... 114 bytes
+extra` because backend login-phase frames (`encryption_begin`, `compress`,
+`success`) entered the play join prefix. The core now ignores every frame
+state except `configuration` and `play` (`metrics.nonPlayFramesIgnored`).
+Bundle delimiters are dropped while their enclosed frames are relayed
+individually, so chunks and entities replay without the bundle wrapper.
 
 B1 is the product-shaped core with **no real tokens, no sockets, no Microsoft
 auth**: adapters and the clock are injected. The CLI never opens a network
