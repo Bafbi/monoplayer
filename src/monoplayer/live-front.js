@@ -1,18 +1,26 @@
-// The live front leg: mc.createServer online-mode=true, one attaching client
-// (Bafbi, the whitelisted attach account) — the frontLeg adapter for the B1
-// core.
+// The Monoplayer front leg: one authenticated player attaches through a
+// minecraft-protocol server while the puppet holds the backend session.
+//
+// Two constructors share one body, and the offline path is a separate
+// constructor, never a config flag:
+//   createLiveFrontLeg    online-mode=true, real sessionserver hasJoined,
+//                         UUID-keyed attach whitelist file (.secrets).
+//   createOfflineFrontLeg online-mode=false, loopback only, local offline
+//                         UUID whitelist, no .secrets read.
 //
 // Flow per connection:
-//   1. library login: encryption + real sessionserver hasJoined (real
+//   1. library login. Online: encryption + real sessionserver hasJoined (real
 //      client.uuid / client.username / client.profile are set by the library
-//      BEFORE our synchronous beforeLogin hook runs).
-//   2. beforeLogin (synchronous; createServer option): attach gate —
-//      src/auth/attach.js createAttachGate().gateVerified with the attach
-//      whitelist store (.secrets/attach-whitelist.json, UUID-keyed).
-//      Deny = client.end('attach denied (...)'): Server.end override writes
-//      the login-state disconnect then ends the serializer chain, so the
-//      library's follow-up compress/success writes in loginClient are
-//      mechanically dropped (client.write no-ops on an ended serializer).
+//      BEFORE our synchronous beforeLogin hook runs). Offline: the library
+//      sets client.uuid to the vanilla offline UUID (MD5 of
+//      "OfflinePlayer:<name>").
+//   2. beforeLogin (synchronous; createServer option): deny a second attach
+//      before any verification, then run the core login decision (fail closed)
+//      and the mode's gate. Deny = client.end('attach denied (...)'): the
+//      Server.end override writes the login-state disconnect then ends the
+//      serializer chain, so the library's follow-up compress/success writes in
+//      loginClient are mechanically dropped (client.write no-ops on an ended
+//      serializer).
 //   3. allow — cached configuration replay path: the library's automatic
 //      configuration (segmented registry_data from its own built-in codec,
 //      then finish_configuration) is intercepted via beforeLogin write
@@ -31,14 +39,17 @@
 //   5. serverbound play frames (raw buffer + decoded data) go to the core's
 //      setServerboundHandler pipeline; client end/error go to the core detach.
 //
-// Identity: deliberately NOT forged in this slice. The attaching client is
-// whitelisted as itself (real hasJoined profile); the replayed play stream
-// still describes the puppet's session (backend entity id and state). Profile
-// forging is the B4 identity-separation row's question.
+// Identity: the attaching client is whitelisted as itself (real hasJoined
+// profile online, vanilla offline UUID offline). The replayed play stream
+// still describes the puppet's session (backend entity id and state).
 import mc from 'minecraft-protocol'
 
-import { createAttachGate } from '../auth/attach.js'
+import { createAttachGate, DENY_REASONS } from '../auth/attach.js'
 import { createWhitelistStore } from '../auth/store.js'
+import { normalizeUuid } from '../auth/util.js'
+import { isLoopbackHost } from './offline-identity.js'
+
+const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 
 // Pure configuration-phase interceptor (unit-testable without sockets):
 // wraps a client write so the library's generated configuration resolves to
@@ -67,7 +78,7 @@ export function createConfigPathInterceptor ({
     if (cachedConfigFrames.length > 0) {
       for (const frame of cachedConfigFrames) {
         if (frame.name === finishName) continue // finish goes out exactly once, from the call site below
-        writeRaw(frame.buffer)
+        writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
         stats.replayedConfigFrames++
       }
     } else {
@@ -103,20 +114,163 @@ export function createConfigPathInterceptor ({
   }
 }
 
-export function createLiveFrontLeg ({
-  host = '127.0.0.1',
-  port = 25565,
-  version = '26.1',
-  attachWhitelistFile,
-  getSnapshotConfig, // () => [{ name, buffer }] — the core's cached configuration frames
-  log = () => {},
-  dumpRaw = null, // ({ kind, buffer }) => — optional diagnostic hook, never logs content by default
-  dumpWire = null // (buffer) => — exact plaintext wire frames, diagnostic only
+// One client-facing raw frame, with the optional strict wire check applied.
+// `wireCheck` is ({ state, name, buffer }) => { ok, code, ... }. Returns true
+// when the frame reached writeRaw, false when mode 'throw' suppressed it.
+// `stats` is the front leg's wireStats body: checked/rejected/lastFailure.
+export function emitCheckedRaw ({
+  client,
+  buffer,
+  meta = null,
+  wireCheck = null,
+  wireMode = 'warn',
+  stats = { checked: 0, rejected: 0, lastFailure: null, byState: {} },
+  log = () => {}
 } = {}) {
-  if (typeof getSnapshotConfig !== 'function') throw new TypeError('getSnapshotConfig is required')
-  if (!attachWhitelistFile) throw new TypeError('attachWhitelistFile is required')
+  const state = meta?.state ?? null
+  const name = meta?.name ?? null
+
+  if (wireCheck && wireMode !== 'off') {
+    stats.checked++
+    if (!stats.byState) stats.byState = {}
+    const stateKey = state ?? 'unknown'
+    stats.byState[stateKey] = (stats.byState[stateKey] ?? 0) + 1
+    let result
+    try {
+      result = wireCheck({ state, name, buffer })
+    } catch {
+      result = { ok: false, code: 'wire_check_error' }
+    }
+    if (!result || result.ok !== true) {
+      stats.rejected++
+      const failure = {
+        state,
+        name,
+        code: result?.code ?? 'wire_check_failed',
+        parsedName: result?.parsedName ?? null,
+        consumed: result?.consumed ?? null,
+        total: result?.total ?? null,
+        leftover: result?.leftover ?? null
+      }
+      stats.lastFailure = failure
+      // Never log frame bytes; the failure report is metadata only.
+      log('wireReject', failure)
+      if (wireMode === 'throw') {
+        try { client?.end('wire_reject') } catch { /* client already gone */ }
+        return false
+      }
+    }
+  }
+
+  client?.writeRaw(buffer)
+  return true
+}
+
+// The attach slot holds one client. A second connection must be denied before
+// verification, not kicked after configuration.
+export function shouldDenySecondAttach (attached, client) {
+  return Boolean(attached && attached !== client)
+}
+
+// Core loginStart decisions fail closed: an exception, a missing decision from
+// a handler that ran, or any decision that is not allowed === true denies.
+function evaluateCoreDecision (coreDecision) {
+  if (coreDecision === null || coreDecision === undefined) return { ok: true, reason: null }
+
+  let decision = coreDecision
+  if (typeof coreDecision === 'function') {
+    try {
+      decision = coreDecision()
+    } catch (error) {
+      return { ok: false, reason: 'core_decision_error', detail: String(error?.message ?? error).slice(0, 200) }
+    }
+  }
+  if (decision === null || decision === undefined) {
+    return { ok: false, reason: 'core_decision_invalid' }
+  }
+  if (decision.allowed !== true) {
+    return { ok: false, reason: decision.reason ?? 'core_denied' }
+  }
+  return { ok: true, reason: null }
+}
+
+function decideViaGate ({ client, store = null, gate, coreDecision = null } = {}) {
+  const core = evaluateCoreDecision(coreDecision)
+  if (!core.ok) return core
+  if (!gate || typeof gate.gateVerified !== 'function') {
+    return { ok: false, reason: 'gate_unavailable' }
+  }
+
+  let decision
+  try {
+    decision = gate.gateVerified({ client, store })
+  } catch (error) {
+    return { ok: false, reason: 'gate_error', detail: String(error?.message ?? error).slice(0, 200) }
+  }
+  if (!decision || decision.ok !== true) {
+    return { ok: false, reason: decision?.reason ?? 'gate_denied' }
+  }
+  return { ok: true, reason: null, uuid: decision.uuid ?? null, username: decision.username ?? null }
+}
+
+// Pure online attach decision: core loginStart (fail closed), then the real
+// hasJoined-backed whitelist gate. Exported for socket-free tests.
+export function decideOnlineAttach (input = {}) {
+  return decideViaGate(input)
+}
+
+// Offline gate: username and uuid must be strings; the normalized uuid must be
+// on the offline whitelist. No name matching, no wildcard.
+function createOfflineAttachGate ({ whitelist }) {
+  return {
+    gateVerified ({ client } = {}) {
+      const username = typeof client?.username === 'string' && client.username.length > 0
+        ? client.username
+        : null
+      if (!username) {
+        return { ok: false, reason: DENY_REASONS.MISSING_USERNAME, stage: 'login', username: null, uuid: null }
+      }
+      if (typeof client?.uuid !== 'string') {
+        return { ok: false, reason: DENY_REASONS.PROFILE_INVALID, stage: 'login', username, uuid: null }
+      }
+      const uuid = normalizeUuid(client.uuid)
+      if (!uuid) {
+        return { ok: false, reason: DENY_REASONS.PROFILE_INVALID, stage: 'login', username, uuid: null }
+      }
+      if (!whitelist.includes(uuid)) {
+        return { ok: false, reason: DENY_REASONS.NOT_WHITELISTED, stage: 'login', username, uuid }
+      }
+      return { ok: true, reason: null, stage: 'login', username, uuid }
+    }
+  }
+}
+
+// Shared body. The constructors below own the mode-specific pieces (gate,
+// store, loopback checks); this body never decides the mode itself.
+function createFrontLeg ({
+  kind,
+  onlineMode,
+  verifier,
+  host,
+  port,
+  version,
+  gate,
+  store,
+  getSnapshotConfig,
+  log,
+  wireCheck,
+  wireMode,
+  dumpRaw,
+  dumpFramed
+}) {
+  if (!WIRE_MODES.has(wireMode)) {
+    throw new TypeError(`wireMode must be one of ${[...WIRE_MODES].join(', ')}, got ${JSON.stringify(wireMode)}`)
+  }
+  if (wireMode !== 'off' && typeof wireCheck !== 'function') {
+    throw new TypeError('wireCheck is required unless wireMode is off')
+  }
   if (dumpRaw !== null && typeof dumpRaw !== 'function') throw new TypeError('dumpRaw must be null or a function')
-  if (dumpWire !== null && typeof dumpWire !== 'function') throw new TypeError('dumpWire must be null or a function')
+  if (dumpFramed !== null && typeof dumpFramed !== 'function') throw new TypeError('dumpFramed must be null or a function')
 
   let loginStartHandler = null // core gate 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
@@ -124,103 +278,119 @@ export function createLiveFrontLeg ({
   let errorHandler = null
   let attached = null // the one client through the pipeline (gate pass or attached)
 
-  const gate = createAttachGate({
-    log: () => {} // decision reasons are logged by the core / front leg lines below
-  })
-  const store = createWhitelistStore({ file: attachWhitelistFile })
+  const wireStats = { checked: 0, rejected: 0, lastFailure: null }
 
   let server = null
+  let listenPromise = null
+  let closePromise = null
+  let lastInterceptor = null
 
-  // Defensive snapshot materialization: cache the core's cached-config frames
-  // once per listen() round. Buffers are opaque and safe to hold.
-  let snapshotConfig = null
-  function configFrames () {
-    if (snapshotConfig === null) {
-      snapshotConfig = getSnapshotConfig().filter(
-        frame => typeof frame?.name === 'string' && Buffer.isBuffer(frame.buffer)
-      )
-    }
-    return snapshotConfig
+  const metrics = { denied: 0, allowed: 0, attaches: 0 }
+  const clients = new Map() // Client -> { interceptor }
+
+  function actualPort () {
+    return server?.socketServer?.address()?.port ?? null
   }
 
-  // Start listening. Handlers must be set first.
+  // Start listening. Handlers must be set first. Safe to call once: repeat
+  // calls return the same promise.
   function listen () {
-    if (server) throw new Error('front leg already listening')
+    if (closePromise) return Promise.reject(new Error('front leg is closed'))
+    if (listenPromise) return listenPromise
 
-    server = mc.createServer({
-      host,
-      port,
-      version,
-      'online-mode': true, // real hasJoined by the library before beforeLogin
-      keepAlive: true, // the library answers per-connection keep-alives for the client
-      hideErrors: true, // errors surface through our own server/client error log lines
-      versionChecking: false,
-      beforeLogin: client => { handleBeforeLogin(client) }
+    listenPromise = new Promise((resolve, reject) => {
+      let settled = false
+
+      server = mc.createServer({
+        host,
+        port,
+        version,
+        'online-mode': onlineMode,
+        keepAlive: true, // the library answers per-connection keep-alives for the client
+        hideErrors: true, // errors surface through our own server/client error log lines
+        versionChecking: false,
+        beforeLogin: client => { handleBeforeLogin(client) }
+      })
+
+      server.on('error', err => {
+        log('frontServerError', { error: String(err?.message ?? err).slice(0, 200) })
+        errorHandler?.({ error: err })
+        if (!settled) { settled = true; reject(err) }
+      })
+      server.on('listening', () => {
+        log('frontListening', { host, port: actualPort() })
+        if (!settled) { settled = true; resolve({ host, port: actualPort() }) }
+      })
+
+      server.on('connection', client => {
+        wireClient(client)
+        if (dumpFramed) {
+          // Diagnostic: framer output is framed (and compressed) bytes.
+          client.framer.on('data', buf => { try { dumpFramed(buf) } catch { /* best effort */ } })
+        }
+      })
+
+      // configuration done: resolve the per-client interceptor + hand the
+      // attach to the core (playerJoin is a server-level event in
+      // minecraft-protocol; per-client state lives in the ctx map).
+      server.on('playerJoin', client => {
+        const ctx = clients.get(client)
+        if (ctx) {
+          log('configResolved', { mode: ctx.interceptor.replayMode, ...ctx.interceptor.stats })
+        }
+        onClientJoined(client)
+      })
     })
 
-    server.on('error', err => {
-      log('frontServerError', { error: String(err.message).slice(0, 200) })
-      errorHandler?.({ error: err })
-    })
-    server.on('listening', () => {
-      log('frontListening', { host, port })
-    })
+    return listenPromise
+  }
 
-    server.on('connection', client => {
-      wireClient(client)
-      if (dumpWire) {
-        // Diagnostic: framer output = exact plaintext wire frames piped to
-        // the client (pre-encryption; the cipher pipes after the framer).
-        client.framer.on('data', buf => { try { dumpWire(buf) } catch { /* best effort */ } })
-      }
-    })
-
-    // configuration done: resolve the per-client interceptor + hand the
-    // attach to the core (playerJoin is a server-level event in
-    // minecraft-protocol; per-client state lives in the ctx map).
-    server.on('playerJoin', client => {
-      const ctx = clients.get(client)
-      if (ctx) {
-        log('configResolved', { mode: ctx.interceptor.replayMode, ...ctx.interceptor.stats })
-      }
-      onClientJoined(client)
-    })
+  function coreDecisionFor (client) {
+    if (typeof loginStartHandler !== 'function') return null
+    const claimed = { uuid: client.uuid, name: client.username, username: client.username }
+    return () => {
+      const decision = loginStartHandler(claimed)
+      // A handler that ran but produced no decision is not an allow.
+      return decision == null ? { allowed: false, reason: 'core_decision_invalid' } : decision
+    }
   }
 
   // beforeLogin: synchronous, called by loginClient AFTER the library's
-  // online-mode hasJoined resolved (real uuid/profile on the client) and
-  // BEFORE compress + success writes.
+  // hasJoined (online) or offline UUID assignment (offline) and BEFORE
+  // compress + success writes.
   function handleBeforeLogin (client) {
     const username = client.username
     const uuid = client.uuid
-    log('frontLoginReview', { username, uuid: uuid ?? null, onlineMode: true })
+    log('frontLoginReview', { username, uuid: uuid ?? null, onlineMode, verifier })
 
-    // Core gate 1 (whitelist review + metrics emission) — the config's
-    // attachWhitelist is loaded from the same file this store reads, so the
-    // two agree; the store is the source of truth.
-    const claimed = { uuid, name: username, username }
-    let coreDecision = null
-    try {
-      coreDecision = loginStartHandler?.(claimed) ?? null
-    } catch { /* the core decision is advisory here; gateVerified leads */ }
-
-    const decision = gate.gateVerified({ client, store })
-    if (!decision.ok ||
-        (coreDecision && coreDecision.allowed === false)) {
-      const reason = !decision.ok ? decision.reason : coreDecision.reason
+    // Early second-attach deny: before any verification or configuration.
+    if (shouldDenySecondAttach(attached, client)) {
       metrics.denied++
-      log('attachDenied', { username, uuid: uuid ?? null, reason })
-      const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
-      if (originalWrite) {
-        client.write = (name, ...args) =>
-          (name === 'compress' || name === 'success') ? false : originalWrite(name, ...args)
-      }
-      client.end(`attach denied (${reason})`)
+      log('attachDenied', { username, uuid: uuid ?? null, reason: 'already_attached' })
+      denyConnection(client, 'already_attached')
+      return
+    }
+
+    const decision = decideViaGate({
+      client,
+      store,
+      gate,
+      coreDecision: coreDecisionFor(client)
+    })
+    if (!decision.ok) {
+      metrics.denied++
+      log('attachDenied', { username, uuid: uuid ?? null, reason: decision.reason })
+      denyConnection(client, decision.reason)
       return
     }
 
     metrics.allowed++
-    log('attachAllowed', { username, uuid, verifier: 'online-mode_hasjoined', whitelist: attachWhitelistFile })
+    log('attachAllowed', {
+      username: decision.username ?? username,
+      uuid: decision.uuid ?? uuid,
+      verifier,
+      whitelist: store?.file ?? null
+    })
 
     // Install the cached-config interceptor BEFORE loginClient's subsequent
     // writes/completion (we are inside the synchronous beforeLogin window).
@@ -228,6 +398,15 @@ export function createLiveFrontLeg ({
 
     // Own the client slot: a second connection is denied at the next gate.
     attachCandidate(client)
+  }
+
+  function denyConnection (client, reason) {
+    const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
+    if (originalWrite) {
+      client.write = (name, ...args) =>
+        (name === 'compress' || name === 'success') ? false : originalWrite(name, ...args)
+    }
+    try { client.end(`attach denied (${reason})`) } catch { /* client already gone */ }
   }
 
   // The attach slot is claimed at gate-pass time so a second racing client
@@ -238,26 +417,34 @@ export function createLiveFrontLeg ({
   }
 
   function installConfigInterceptor (client) {
+    // Read the snapshot per connection: a backend cache reset must never be
+    // masked by a stale per-listen memo.
+    const cachedConfigFrames = getSnapshotConfig().filter(
+      frame => typeof frame?.name === 'string' && Buffer.isBuffer(frame.buffer)
+    )
+
     const interceptor = createConfigPathInterceptor({
       write: client.write.bind(client),
-      // Optional raw-dump hook (MONOPLAYER_DEBUG_REPLAY): every clientbound
-      // raw byte we push to the attaching client, in order — diagnostic only.
-      writeRaw: buffer => {
-        if (dumpRaw) dumpRaw({ kind: 'raw', buffer })
-        client.writeRaw(buffer)
+      // Every clientbound raw byte we push to the attaching client, in order.
+      writeRaw: (buffer, meta) => {
+        if (dumpRaw) {
+          dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
+        }
+        return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
       },
       isConfigurationState: () => client.state === 'configuration',
-      cachedConfigFrames: configFrames()
+      cachedConfigFrames
     })
     client.write = interceptor.write
     clients.set(client, { interceptor })
+    lastInterceptor = interceptor
   }
 
   // The client reached play. Hand the attach to the core: replay the join
   // prefix + warm state (configuration frames are omitted — the front leg
   // owns the configuration phase).
   function onClientJoined (client) {
-    if (attached && attached !== client) {
+    if (shouldDenySecondAttach(attached, client)) {
       log('frontRejected', { reason: 'already_attached', username: client.username })
       client.end('attach denied (already attached)')
       return
@@ -301,13 +488,11 @@ export function createLiveFrontLeg ({
     // clears the slot and notifies the core; a pre-attach client (denied or
     // failed during configuration) just clears its claim.
     client.on('end', reason => {
-      const wasAttached = attached === client
       if (attached === client) {
         attached = null
         log('frontDetach', { reason: String(reason).slice(0, 160), attached: true })
         detachHandler?.({ reason: String(reason) })
       } else if (clients.has(client)) {
-        attached = attached ?? null // never revive another client's claim
         log('frontClientEnd', { reason: String(reason).slice(0, 160), attached: false })
       }
     })
@@ -317,11 +502,8 @@ export function createLiveFrontLeg ({
     })
   }
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0 }
-  const clients = new Map() // Client -> { interceptor }
-
   return {
-    kind: 'live-front-leg',
+    kind,
     listen,
 
     // --- frontLeg interface (docs/gate-b-b1.md) ---
@@ -331,12 +513,17 @@ export function createLiveFrontLeg ({
     setErrorHandler (fn) { errorHandler = fn },
     setCoreAttach,
     write (name, packet) {
-      if (dumpRaw) dumpRaw({ kind: `write:${name}`, buffer: Buffer.alloc(0) })
+      // Library-serialized packet (the synthesized position). The wire checker
+      // guards raw replayed/relayed frames in writeRaw; a packet object cannot
+      // carry trailing bytes.
       attached?.write(name, packet)
     },
-    writeRaw (buffer) {
-      if (dumpRaw) dumpRaw({ kind: 'raw', buffer })
-      attached?.writeRaw(buffer)
+    writeRaw (buffer, meta = null) {
+      if (!attached) return false
+      if (dumpRaw) {
+        dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
+      }
+      return emitCheckedRaw({ client: attached, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
     },
     end (reason) {
       try { attached?.end(reason) } catch { /* client already gone */ }
@@ -344,12 +531,128 @@ export function createLiveFrontLeg ({
     get listening () { return Boolean(server) },
     get attached () { return attached ?? null },
     get metrics () { return { ...metrics } },
-    get gateStoreFile () { return store.file },
-    close () {
-      try { server?.close() } catch { /* not open */ }
-      for (const client of Object.values(server?.clients ?? {})) {
-        try { client.socket?.destroy() } catch { /* ignore */ }
+    get gateStoreFile () { return store?.file ?? null },
+    get port () { return actualPort() },
+    get wireStats () {
+      return {
+        checked: wireStats.checked,
+        rejected: wireStats.rejected,
+        byState: { ...wireStats.byState },
+        lastFailure: wireStats.lastFailure ? { ...wireStats.lastFailure } : null
       }
+    },
+    get lastConfigMode () { return lastInterceptor?.replayMode ?? 'pending' },
+    close () {
+      if (closePromise) return closePromise
+      closePromise = new Promise(resolve => {
+        const current = server
+        if (!current) { resolve(); return }
+        for (const client of Object.values(current.clients ?? {})) {
+          try { client.socket?.destroy() } catch { /* already gone */ }
+        }
+        const socketServer = current.socketServer
+        if (!socketServer) { server = null; resolve(); return }
+        try {
+          socketServer.close(() => { server = null; resolve() })
+        } catch {
+          server = null
+          resolve()
+        }
+      })
+      return closePromise
     }
   }
+}
+
+export function createLiveFrontLeg (options = {}) {
+  const {
+    host = '127.0.0.1',
+    port = 25565,
+    version = '26.1',
+    attachWhitelistFile,
+    getSnapshotConfig,
+    log = () => {},
+    wireCheck = null,
+    wireMode = 'off',
+    dumpRaw = null,
+    dumpFramed = null
+  } = options
+
+  if (options.offlineWhitelist !== undefined) {
+    throw new TypeError('createLiveFrontLeg does not accept offlineWhitelist; use createOfflineFrontLeg')
+  }
+  if (!attachWhitelistFile) throw new TypeError('attachWhitelistFile is required')
+  if (typeof getSnapshotConfig !== 'function') throw new TypeError('getSnapshotConfig is required')
+
+  return createFrontLeg({
+    kind: 'live-front-leg',
+    onlineMode: true,
+    verifier: 'online-mode_hasjoined',
+    host,
+    port,
+    version,
+    gate: createAttachGate({ log: () => {} }),
+    store: createWhitelistStore({ file: attachWhitelistFile }),
+    getSnapshotConfig,
+    log,
+    wireCheck,
+    wireMode,
+    dumpRaw,
+    dumpFramed
+  })
+}
+
+export function createOfflineFrontLeg (options = {}) {
+  const {
+    host = '127.0.0.1',
+    port = 0,
+    version = '26.1',
+    offlineWhitelist,
+    getSnapshotConfig,
+    log = () => {},
+    wireCheck = null,
+    wireMode = 'throw',
+    dumpRaw = null,
+    dumpFramed = null
+  } = options
+
+  if (options.attachWhitelistFile !== undefined) {
+    throw new TypeError('createOfflineFrontLeg does not accept attachWhitelistFile; use createLiveFrontLeg')
+  }
+  if (!isLoopbackHost(host)) {
+    throw new TypeError(`offline front leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
+  }
+  if (!Array.isArray(offlineWhitelist) || offlineWhitelist.length === 0) {
+    throw new TypeError('offlineWhitelist must be a non-empty array of UUID strings')
+  }
+
+  const whitelist = []
+  for (const entry of offlineWhitelist) {
+    if (typeof entry !== 'string') {
+      throw new TypeError('offlineWhitelist entries must be UUID strings')
+    }
+    const uuid = normalizeUuid(entry)
+    if (!uuid) {
+      throw new TypeError(`offlineWhitelist entry is not a UUID: ${JSON.stringify(entry)}`)
+    }
+    whitelist.push(uuid)
+  }
+  if (typeof getSnapshotConfig !== 'function') throw new TypeError('getSnapshotConfig is required')
+
+  return createFrontLeg({
+    kind: 'offline-front-leg',
+    onlineMode: false,
+    verifier: 'offline_uuid',
+    host,
+    port,
+    version,
+    gate: createOfflineAttachGate({ whitelist }),
+    store: null,
+    getSnapshotConfig,
+    log,
+    wireCheck,
+    wireMode,
+    dumpRaw,
+    dumpFramed
+  })
 }
