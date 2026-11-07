@@ -1,12 +1,13 @@
 # Gate B cluster lane
 
-**Status (2026-11-06):** Paper 26.1.2 build 74 is running in
-`monoplayer-gate-b`; an official 26.1.2 client joined through
-`monoplayer-gate-b-paper.tail41e568.ts.net:25565`. The Fabric driver lane now
-passes **2/2** consecutive runs (38/38 assertions each) with the repeatable
-`src/gate-b/` runner, and the manual unmodded Prism witness is completed.
-**G0 passes.** Evidence: [docs/gate-b-g0.md](../../docs/gate-b-g0.md) and
-[docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
+**Status (2026-11-07):** G0 and G1 pass. Paper 26.1.2 build 74 is running
+directly for G0, and Velocity 4.3.1 build 45 is now in front of Paper 26.1.2
+build 74 for M4; the authenticated puppet joined through the proxy as
+`GlowSquidye`. Toxiproxy is running; fault rows are pending. The Fabric driver
+lane passed **2/2** consecutive runs and the unmodded witness is completed.
+Evidence: [docs/gate-b-g0.md](../../docs/gate-b-g0.md),
+[docs/gate-b-g1.md](../../docs/gate-b-g1.md), [docs/gate-b-m4.md](../../docs/gate-b-m4.md),
+and [docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
 
 The `monoplayer-gate-b` namespace holds the real-backend matrix. It is not the
 product namespace; do not point the product at it.
