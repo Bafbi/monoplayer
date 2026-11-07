@@ -1,0 +1,3 @@
+fixture listening on 127.0.0.1:25565 version=26.1 whitelist=.secrets/attach-whitelist.json
+attachDenied reason=not_whitelisted user=Bafbi uuid=6eb73524-ff88-4a62-a8d0-c63905e7afba
+{"event":"attachDenied","username":"Bafbi","uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","reason":"not_whitelisted","detail":null,"stage":"login"}
