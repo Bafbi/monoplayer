@@ -19,7 +19,7 @@ Files:
 | `src/fake-client.js` | Attaching protocol client: records clientbound frames and parsed data, sends position/dig/place/chat. |
 | `src/scenario.js` | The scenario + assertions, shared by the CLI and the test. |
 | `src/gate-a.js` | CLI runner: prints PASS/FAIL, writes `testdata/gate-a-report.json`, exits non-zero on failure. |
-| `test/gate-a.test.js` | The same scenario under `node:test`. |
+| `test/spikes/gate-a.test.js` | The same scenario under `node:test`. |
 
 ## What this proves
 

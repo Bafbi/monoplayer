@@ -28,7 +28,8 @@ import { redact } from './redact.js'
 import { createWhitelistStore } from '../auth/store.js'
 import { createLiveBackendLeg } from './live-backend.js'
 import { createLiveFrontLeg } from './live-front.js'
-import { cacheStatsLine } from './live-readiness.js'
+import { waitForReady } from './live-readiness.js'
+import { createWireChecker } from './wire-check.js'
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)
@@ -115,19 +116,20 @@ export async function startLive ({ argv = [], io = process } = {}) {
     }
     log('debugReplayDump', { file: dumpFile })
   }
-  // Exact wire-frame dump (config + play, pre-encryption): the client-facing
-  // truth for decode-desync forensics (off by default).
-  let dumpWire = null
-  if (process.env.MONOPLAYER_DEBUG_WIRE) {
-    const wireFile = process.env.MONOPLAYER_DEBUG_WIRE
-    const fd = fs.openSync(wireFile, 'w')
+  // Framed-byte dump (config + play): the client.framer output is framed and
+  // possibly compressed, not plaintext. This is the client-facing truth for
+  // decode-desync forensics (off by default).
+  let dumpFramed = null
+  if (process.env.MONOPLAYER_DEBUG_FRAMED) {
+    const framedFile = process.env.MONOPLAYER_DEBUG_FRAMED
+    const fd = fs.openSync(framedFile, 'w')
     let index = 0
-    dumpWire = buffer => {
+    dumpFramed = buffer => {
       try {
         fs.writeSync(fd, JSON.stringify({ i: index++, b64: buffer.toString('base64') }) + '\n')
       } catch { /* diagnostic sink is best effort */ }
     }
-    log('debugWireDump', { file: wireFile })
+    log('debugFramedDump', { file: framedFile })
   }
 
   // --- 2. legs + core ---
@@ -139,15 +141,21 @@ export async function startLive ({ argv = [], io = process } = {}) {
     cacheAccount: cfg.puppet.cacheAccount,
     log
   })
+  // Strict frame check on every client-facing raw replay/relay. The live path
+  // runs it in warn mode first: a checker bug must not kick a real player, but
+  // every failure is logged and counted in front.wireStats.
+  const wire = createWireChecker({ version: cfg.version })
   const front = createLiveFrontLeg({
     host: cfg.front.host,
     port: cfg.front.port,
     version: cfg.version,
     attachWhitelistFile: cfg.attachWhitelistFile,
     getSnapshotConfig: () => core.cache.snapshot().config,
+    wireCheck: payload => wire.check(payload),
+    wireMode: 'warn',
     log,
     dumpRaw,
-    dumpWire
+    dumpFramed
   })
   let core = null // assigned before any configured usage below
 
@@ -163,6 +171,17 @@ export async function startLive ({ argv = [], io = process } = {}) {
   )
   core.start()
 
+  // Every failure after this point owns a live backend client and (online) the
+  // token-custody writer lock. Release both before returning, or the process
+  // hangs with the lock held.
+  async function stopAfterFailure (stage, fields = {}) {
+    log('startLiveFailed', { stage, ...fields })
+    try { await core.stop({ reason: `startup_failed:${stage}` }) } catch { /* best effort */ }
+    try { await front.close() } catch { /* best effort */ }
+    try { await backend.close() } catch { /* best effort */ }
+    if (sink !== stdout) sink.end?.()
+  }
+
   log('startLive', {
     version: cfg.version,
     front: `${cfg.front.host}:${cfg.front.port}`,
@@ -177,14 +196,14 @@ export async function startLive ({ argv = [], io = process } = {}) {
   try {
     await withTimeout(backend.connect(), connectTimeoutMs, 'backend_leg_connect')
   } catch (error) {
-    log('startLiveFailed', { stage: 'backend_connect', error: String(error?.message ?? error).slice(0, 300) })
+    await stopAfterFailure('backend_connect', { error: String(error?.message ?? error).slice(0, 300) })
     return 1
   }
 
   // --- 4. readiness: cached config + join prefix (warm preferred) ---
-  const readiness = await waitReady({ core, log, maxWarmMs: 20_000 })
+  const readiness = await waitForReady({ core, log, maxWarmMs: 20_000 })
   if (!readiness.hasConfig || !readiness.hasPrefix) {
-    log('startLiveFailed', { stage: 'cache_readiness', ...readiness })
+    await stopAfterFailure('cache_readiness', readiness)
     return 1
   }
   // Warm fallback for unbatched backends: after the grace window the marker
@@ -200,18 +219,20 @@ export async function startLive ({ argv = [], io = process } = {}) {
   log('readiness', readiness)
 
   // --- 5. front listen + readiness log ---
+  let bound = null
   try {
-    front.listen()
+    bound = await front.listen()
   } catch (error) {
-    log('startLiveFailed', { stage: 'front_listen', error: String(error?.message ?? error).slice(0, 300) })
+    await stopAfterFailure('front_listen', { error: String(error?.message ?? error).slice(0, 300) })
     return 1
   }
   log('liveReady', {
-    front: `${cfg.front.host}:${cfg.front.port}`,
+    front: `${bound.host}:${bound.port}`,
     backendConnected: !backend.ended,
     configFrames: readiness.configFrames,
     prefixFrames: readiness.prefixFrames,
-    warm: readiness.warm
+    warm: readiness.warm,
+    wire: front.wireStats
   })
 
   await runForever({ core, backend, front, log, sink })
@@ -226,35 +247,6 @@ function withTimeout (promise, ms, label) {
       error => { clearTimeout(timer); reject(error) }
     )
   })
-}
-
-async function waitReady ({ core, log, maxWarmMs = 60_000, maxTotalMs = 240_000 }) {
-  const startedAt = Date.now()
-  let warmMs = null
-  for (;;) {
-    const stats = core.cache.stats()
-    const hasConfig = stats.sizes.config > 0
-    const hasPrefix = stats.sizes.prefix > 0
-    const elapsed = Date.now() - startedAt
-    if (stats.warm && warmMs === null) {
-      warmMs = elapsed
-      log('warmComplete', { afterMs: warmMs, ...stats.sizes })
-    }
-    log('cacheStats', cacheStatsLine(stats, elapsed))
-    const readyEnough = hasConfig && hasPrefix && ((warmMs !== null) || elapsed >= maxWarmMs)
-    if (readyEnough || elapsed >= maxTotalMs) {
-      return {
-        hasConfig,
-        hasPrefix,
-        warm: warmMs !== null,
-        warmMs,
-        elapsedMs: elapsed,
-        configFrames: stats.sizes.config,
-        prefixFrames: stats.sizes.prefix
-      }
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000))
-  }
 }
 
 async function runForever ({ core, backend, front, log, sink }) {
@@ -281,6 +273,7 @@ async function runForever ({ core, backend, front, log, sink }) {
       backendLogins: core.session.backendLogins,
       warm: stats.warm,
       metrics: { ...core.metrics },
+      wire: front.wireStats,
       backendFrames: forwarder ? { ...forwarder.counters, names: forwarder.names } : null
     })
   }, 30_000)

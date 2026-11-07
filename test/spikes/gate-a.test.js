@@ -1,9 +1,9 @@
 // Gate A protocol test: the full scenario under node:test.
-// Run via `mise run test` (which `mise run check` includes).
+// Run via `mise run spike`. The default `mise run test` is socket-free.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runGateAScenario } from '../src/scenario.js'
-import { PUPPET_PROFILE } from '../src/proxy.js'
+import { runGateAScenario } from '../../src/scenario.js'
+import { PUPPET_PROFILE } from '../../src/proxy.js'
 
 test('Gate A: relay, synthesized join, detach survival, reattach current state', async () => {
   // silence proxy/backend/fake-client JSON logs during the test run

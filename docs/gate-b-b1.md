@@ -2,8 +2,9 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
-59/59 targeted tests pass (`node --test test/monoplayer-*.test.js`) and
-`mise run check` passes 185/185. The Gate A spike (`src/proxy.js`) is frozen
+78/78 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
+socket-free unit suite runs 202 tests, and `mise run check` also runs the
+16-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -133,6 +134,17 @@ What B1 does **not** prove: real config replay acceptance by an official
 client (the plan's product kill rule), chunk pacing/batch acks against real
 backend semantics, encryption/`hasJoined` live, transparent chat-read-only,
 Timing against real Paper. Each is the G1/M1/M4 row's job.
+
+## Before the real client
+
+`mise run loopback` now exercises the product offline path without auth:
+attach through the offline front leg, cached configuration replay, join order,
+serverbound position/dig/place relay, detach, and reattach at the retained pose
+with a block edit cached while detached. The runner and its O1-O14 contract are
+documented in [testing-ladder.md](testing-ladder.md).
+
+That rung is a protocol-bot check, not a vanilla oracle. The live evidence
+above (real Paper, online-mode, official client) stays the acceptance record.
 
 ## What needs G1 / M4 (explicitly not done in B1)
 

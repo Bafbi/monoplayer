@@ -1,4 +1,8 @@
-// Gate A spike: scripted fake backend (26.1) serving a one-chunk flat world.
+// Scripted fake backend (26.1) serving a one-chunk flat world.
+//
+// Shared by the frozen Gate A spike and the product offline loopback rung
+// (`src/ladder/loopback.js`). Changes here affect both; run `mise run spike`
+// and `mise run loopback` after editing.
 //
 // On playerJoin it sends a minimal but valid join sequence:
 //   login (entityId 42) -> game_state_change 13 -> position 0.5/1.62/0.5 ->
