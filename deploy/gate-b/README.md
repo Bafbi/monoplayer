@@ -24,6 +24,10 @@ kubectl -n monoplayer-gate-b create secret generic gate-b-rcon \
   --from-literal=password="$(openssl rand -hex 16)" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+# For the M4 lane, also create gate-b-velocity (see the M4 section) before
+# step 2, or the velocity/paper-m4 pods will fail with
+# CreateContainerConfigError.
+
 # 2. Apply the backend.
 kubectl apply -k deploy/gate-b
 
@@ -49,3 +53,26 @@ The Tailscale service should publish a hostname like
   will need a StatefulSet + PVC before they are meaningful.
 - RCON is exposed only on the ClusterIP Service, never the Tailscale Service.
 - This namespace is not in ArgoCD. It is a test lane.
+
+## M4 lane — Paper behind Velocity 4.3.1 (+ toxiproxy)
+
+Second backend row per [docs/gate-b-m4.md](../../docs/gate-b-m4.md):
+`velocity.yaml` (Velocity 4.3.1 b45, online-mode, modern forwarding),
+`paper-m4.yaml` (Paper 26.1.2 b74, offline, puppet-only whitelist),
+`toxiproxy.yaml` (puppet-leg faults). Full bring-up, smoke and teardown
+commands (including the `gate-b-velocity` forwarding-secret, which is created
+by `kubectl` and never committed) are in the M4 runbook:
+
+```bash
+# Secret (operator, once). VALUES NEVER GO INTO GIT OR THE MANIFESTS.
+kubectl -n monoplayer-gate-b create secret generic gate-b-velocity \
+  --from-literal=forwarding-secret="$(openssl rand -hex 16)" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Offline validation of the manifests without touching the cluster:
+
+```bash
+kubectl kustomize deploy/gate-b > /tmp/gate-b.yaml
+kubectl apply -k deploy/gate-b --dry-run=client
+```
