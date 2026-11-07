@@ -44,6 +44,61 @@ import { isLoopbackHost } from './offline-identity.js'
 // core (the core router would answer them a second time).
 export const LEG_SWALLOWED = new Set(['keep_alive'])
 
+// Text component reader for a dialog label. The library decodes the dialog NBT
+// into { type, value } wrappers; a label is a compound whose `text` and `extra`
+// fields carry the visible string.
+function dialogText (node) {
+  const value = node?.value ?? node
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(dialogText).join('')
+  if (value && typeof value === 'object') {
+    const text = typeof value.text?.value === 'string'
+      ? value.text.value
+      : (typeof value.text === 'string' ? value.text : '')
+    const extra = value.extra?.value ?? value.extra
+    return `${text}${Array.isArray(extra) ? extra.map(dialogText).join('') : ''}`
+  }
+  return ''
+}
+
+// Choose one action from a `show_dialog` packet. `policy` is `first`, `last`,
+// or a case-insensitive label substring. Default is the last action, which is
+// the current season on the Excalia selection dialog. Exported for tests; the
+// backend leg sends the matching `custom_click_action`.
+export function chooseDialogAction (data, policy = 'last') {
+  const dialog = data?.dialog?.value ?? data?.dialog ?? data
+  const entries = dialog?.actions?.value?.value
+  if (!Array.isArray(entries) || entries.length === 0) return null
+
+  const actions = entries.map((entry, index) => {
+    const action = entry?.action?.value ?? entry?.action ?? {}
+    return {
+      index,
+      id: action.id?.value ?? action.id ?? null,
+      additions: action.additions ?? null,
+      type: action.type?.value ?? action.type ?? null,
+      label: dialogText(entry?.label)
+    }
+  }).filter(action => typeof action.id === 'string')
+
+  if (actions.length === 0) return null
+
+  let index = actions.length - 1
+  const wanted = String(policy ?? '').toLowerCase()
+  if (wanted === 'first') {
+    index = 0
+  } else if (wanted !== '' && wanted !== 'last') {
+    const found = actions.findIndex(action => action.label.toLowerCase().includes(wanted))
+    if (found >= 0) index = found
+  }
+
+  return {
+    ...actions[index],
+    total: actions.length,
+    dialogType: dialog?.type?.value ?? dialog?.type ?? null
+  }
+}
+
 // Decoded data capture: minecraft-protocol emits, synchronously and in order,
 // `packet` (decoded) then the named event then `raw` (frame buffer) for every
 // parsed clientbound frame. This forwarder pairs them up: each raw frame is
@@ -103,6 +158,7 @@ function createBackendLeg ({
   version,
   log,
   connectTimeoutMs,
+  dialogAction,
   prepareConnection,
   releaseTokens,
   connectLogFields
@@ -227,6 +283,39 @@ function createBackendLeg ({
         settleResolve(socketClient)
       })
 
+      // A public server may present a configuration or play dialog (season
+      // selection, rules, queue). A headless puppet cannot click it; answer
+      // with the configured action. Only `custom_click_action` dialogs are
+      // handled; anything else is logged and left alone.
+      let dialogResponses = 0
+      socketClient.on('show_dialog', data => {
+        if (!dialogAction) {
+          log('dialogUnhandled', { reason: 'no_policy' })
+          return
+        }
+        if (dialogResponses >= 5) {
+          log('dialogUnhandled', { reason: 'too_many' })
+          return
+        }
+        const choice = chooseDialogAction(data, dialogAction)
+        if (!choice) {
+          log('dialogUnhandled', { reason: 'no_action' })
+          return
+        }
+        dialogResponses++
+        try {
+          socketClient.write('custom_click_action', { id: choice.id, nbt: choice.additions ?? null })
+          log('dialogClicked', {
+            dialogType: choice.dialogType,
+            index: choice.index,
+            total: choice.total,
+            label: choice.label
+          })
+        } catch (error) {
+          log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
+        }
+      })
+
       // One forwarder per connection: counters and pairing state never leak
       // across a reconnect.
       forwarder = createBackendFrameForwarder({ deliver: frame => frameHandler?.(frame) })
@@ -299,6 +388,7 @@ export function createLiveBackendLeg (options = {}) {
     deviceType = null,
     cacheDir = null,
     cacheAccount = null,
+    dialogAction = null,
     log = () => {}
   } = options
 
@@ -366,6 +456,7 @@ export function createLiveBackendLeg (options = {}) {
     version,
     log,
     connectTimeoutMs: 0, // live connect behavior is unchanged
+    dialogAction,
     prepareConnection: acquireTokens,
     releaseTokens,
     // Custody paths and identity labels only — no token material. cacheAccount
@@ -425,6 +516,7 @@ export function createOfflineBackendLeg (options = {}) {
     version,
     log,
     connectTimeoutMs,
+    dialogAction: null,
     prepareConnection: () => ({ username, auth: 'offline' }),
     releaseTokens: () => {},
     connectLogFields: () => ({ host, port, username, auth: 'offline' })

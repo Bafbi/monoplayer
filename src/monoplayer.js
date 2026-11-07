@@ -52,6 +52,9 @@ export const DEFAULT_CONFIG = Object.freeze({
     cacheDir: null,
     cacheAccount: null
   }),
+  // Backend onboarding dialog: first, last, or a label substring. Null leaves
+  // the dialog unanswered and a headless leg waits.
+  dialogAction: null,
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
   bounds: Object.freeze({
@@ -469,6 +472,7 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_PUPPET_USERNAME                          assertion: resolved profile name must match
   MONOPLAYER_PUPPET_CACHE_DIR                         raw custody dir override (deprecated)
   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
+  MONOPLAYER_DIALOG_ACTION                            first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
