@@ -5,11 +5,12 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:spike": "node --test test/spikes/*.test.js",
-    "gate-a": "node src/gate-a.js"
+    "gate-a": "node src/gate-a.js",
+    "postinstall": "node scripts/patch-minecraft-data-26.2.mjs"
   },
   "dependencies": {
     "minecraft-data": "3.119.0",
-    "minecraft-protocol": "1.68.0",
+    "minecraft-protocol": "github:Cyverno/node-minecraft-protocol#5527f8aa8d94bf2e2fdd5f5ab7963917cb96df37",
     "prismarine-auth": "3.1.1",
     "prismarine-chunk": "^1.39.0",
     "prismarine-nbt": "^2.8.0",
