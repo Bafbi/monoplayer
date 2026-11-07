@@ -111,7 +111,7 @@
     </div>
     <p class="small" style="color:#9fb0c9;margin-top:22px;margin-bottom:0;">
       Prepared 5 November 2026 · Updated 6 November 2026 · Research: 4 delegates ·
-      Decision council: 3 delegates · Status: G0 PASS (2/2 driver + unmodded witness) · Gate A: 37/37 protocol assertions
+      Decision council: 3 delegates · Status: G0 PASS · G1 PASS · M4 proxy lane up · Gate A: 37/37 protocol assertions
     </p>
   </div>
 </header>
@@ -193,7 +193,7 @@
     <div class="stat"><div class="k">Display host</div><div class="v">nath</div><div class="n">Omarchy, Hyprland, AMD Radeon, 14 GiB</div></div>
     <div class="stat"><div class="k">Backend</div><div class="v">Paper 26.1.2</div><div class="n"><code>monoplayer-gate-b</code>, online-mode</div></div>
     <div class="stat"><div class="k">Client</div><div class="v">Prism 11.0.3</div><div class="n">26.1.2, Java 25, joined</div></div>
-    <div class="stat"><div class="k">Next</div><div class="v">G1 auth / M4</div><div class="n">Paper behind Velocity</div></div>
+    <div class="stat"><div class="k">Next</div><div class="v">B1 live / B2-B3</div><div class="n">Monoplayer + Vanilla + faults</div></div>
   </div>
 
   <div class="callout good">
@@ -214,6 +214,19 @@
       and rejoin checks. The mandatory unmodded Prism witness also passed join, render, move,
       break, place, screenshot, disconnect, and rejoin. Runbook and evidence:
       <code>docs/gate-b-g0.md</code>, <code>testdata/gate-b-g0-verdict.json</code>.
+    </p>
+  </div>
+
+  <div class="callout good">
+    <span class="label">G1 + M4 · 7 November 2026</span>
+    <p class="mb0">
+      The puppet is bootstrapped headlessly as <code>GlowSquidye</code> with the
+      working Switch/Nintendo title, java=owned, multiplayer=allowed, and a stable
+      UUID across silent refreshes. The real online-mode hasJoined + attach whitelist
+      allowed the player and denied it before play after removal. Velocity 4.3.1 b45
+      is in front of Paper 26.1.2 b74 with modern forwarding; the authenticated puppet
+      joined through the proxy. Evidence: <code>testdata/gate-b-g1-verdict.json</code>,
+      <code>testdata/gate-b-m4-verdict.json</code>.
     </p>
   </div>
 
@@ -890,9 +903,10 @@
   <div class="callout good">
     <span class="label">Recommended next action</span>
     <p class="mb0">
-      G0 is done. Next is G1 auth readiness (two accounts, device-code bootstrap, real
-      <code>hasJoined</code>) and the M4 Paper-behind-Velocity lane. Do not start Monoplayer
-      integration until G1 is ready and the M4 proxy path is green.
+      G0, G1, and the M4 proxy lane are green. Next is the B1 live front/back leg:
+      GlowSquidye on the backend, Bafbi through the online-mode front, cached
+      configuration replay, detach/reattach, and one backend login, direct Paper first.
+      Then B2 Vanilla parity and the B3 fault rows through the Toxiproxy/Velocity seam.
     </p>
   </div>
 </section>

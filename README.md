@@ -53,7 +53,15 @@ and failure modes is [docs/gate-b-g0.md](docs/gate-b-g0.md).
 
 The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run), and
 the manual unmodded witness passed the full join/render/move/break/place/
-disconnect/rejoin row. **G0 is green.** Next: G1 auth readiness and the M4
-Paper-behind-Velocity lane.
+disconnect/rejoin row. **G0 is green.**
+
+**G1 auth** is live: `GlowSquidye` is bootstrapped headlessly (Switch/Nintendo
+title), stable across silent refreshes, Java-owned, multiplayer-allowed, with
+the player allowed and denied before play by the real online-mode
+`hasJoined`/attach whitelist. **M4** is up: Velocity 4.3.1 build 45 in front of
+Paper 26.1.2 b74 with modern forwarding; the authenticated puppet joined
+through the proxy. Evidence: [testdata/gate-b-g1-verdict.json](testdata/gate-b-g1-verdict.json),
+[testdata/gate-b-m4-verdict.json](testdata/gate-b-m4-verdict.json). Next: B1
+live, B2 Vanilla parity, and the B3 fault rows.
 
 Created in [T3 Code](https://t3.codes).

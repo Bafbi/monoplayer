@@ -237,6 +237,29 @@ node --test test/gate-b-m4-backends.test.js \
   the puppet leg is `Monoplayer → toxiproxy(puppet-velocity) → velocity →
   paper-m4`, and the pre-Monoplayer `velocity-m4` Tailscale Service goes away.
 
+## Result — 2026-11-07
+
+M4 is up and the forwarding smoke passes. Velocity 4.3.1 build 45 is listening
+at `monoplayer-gate-b-velocity.tail41e568.ts.net:25565`, Paper 26.1.2 build 74
+is behind it with modern forwarding, and both `Paper: Using libdeflate …
+from Velocity` and `Paper: Using OpenSSL … cipher from Velocity` appear in the
+backend log.
+
+The authenticated puppet protocol client joined through Velocity and Paper
+reported the forwarded identity:
+
+```text
+UUID of player GlowSquidye is 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed
+GlowSquidye joined the game
+GlowSquidye logged in with entity id 23 at 0.5, -60.0, -2.5
+```
+
+Evidence: [`testdata/gate-b-m4-verdict.json`](../testdata/gate-b-m4-verdict.json)
+and [`testdata/gate-b-m4-puppet-smoke.log`](../testdata/gate-b-m4-puppet-smoke.log).
+Toxiproxy is deployed but the F1–F6 fault rows are still pending. This smoke is
+`twoAccount=false`: it proves the proxy/forwarding path, not the player attach
+path.
+
 ## Teardown (operator; never leaves secrets behind casually)
 
 ```bash

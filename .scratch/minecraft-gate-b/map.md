@@ -57,8 +57,16 @@ not the testbed itself.
   **2/2** consecutive runs against Paper 26.1.2 b74, 38/38 assertions each,
   with server-side position/block checks. The window is named
   `Monoplayer Gate B` so the Hyprland workspace-9 rule cannot catch normal
-  Minecraft. The unmodded witness also passed; G0 is complete and the next
-  slice is G1 auth readiness plus the M4 Paper-behind-Velocity lane.
+  Minecraft. The unmodded witness also passed; G0 is complete.
+- G1 auth (2026-11-07): the puppet `GlowSquidye` is bootstrapped with the
+  working Switch/Nintendo title, java=owned, multiplayer=allowed, and the same
+  UUID across two silent refreshes. The real online-mode hasJoined + attach
+  whitelist allowed `Bafbi` and denied it before play after removal; evidence
+  in `testdata/gate-b-g1-verdict.json`.
+- M4 (2026-11-07): Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with
+  modern forwarding; the authenticated puppet joined as
+  `GlowSquidye`/`73e0e19b-…` through the proxy. Toxiproxy is deployed; fault
+  rows remain. Evidence in `testdata/gate-b-m4-verdict.json`.
 - [Research: backend matrix and network harness](issues/02-research-backend-matrix.md):
   Vanilla 26.1.2 + Paper 26.1.2 b74 direct are the core; Fabric is a required
   compatibility report; Velocity is a proxy lane only if the target uses one;
@@ -78,10 +86,9 @@ not the testbed itself.
 
 ## Not yet specified
 
-- Which Prism account is the player and which is the headless puppet.
-- G1 auth readiness: device-code bootstrap and real `hasJoined` for the two
-  accounts.
-- M4: Paper behind Velocity; do not start Monoplayer integration first.
+- B1 live: real front/back legs, cached configuration replay accepted by the
+  26.1 client, detach/reattach, and one backend login.
+- B3 fault thresholds and the exact F1-F6 repetition schedule.
 - Whether Fabric is an advertised target, which would promote M3 to
   gate-blocking.
 - Whether the real target server sits behind Velocity/BungeeCord, which would
