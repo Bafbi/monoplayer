@@ -70,12 +70,14 @@ Run the container as uid `1000` (`node`). The image sets `USER node` and
 Required:
 
 - `MONOPLAYER_BACKEND_HOST`: `--start` refuses to run without it. Point it at
-  the Paper backend.
+  the Season 3 backend, `play2.excalia.fr`, for the live deployment.
 - `MONOPLAYER_FRONT_HOST=0.0.0.0`: the default is `127.0.0.1`, which only
   accepts pod-local connections.
 
 Common:
 
+- `MONOPLAYER_VERSION`: the protocol version, default `26.1`. The image also
+  carries the 26.2 data, so set `26.2` for Excalia Season 3.
 - `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye`
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/app/.secrets/accounts` (the default,
   relative to the `WORKDIR`) or the mount path
