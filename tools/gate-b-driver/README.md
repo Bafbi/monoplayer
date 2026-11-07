@@ -43,7 +43,10 @@ node tools/gate-b-driver/driver-client.mjs status
 
 | Command | What it does |
 |---|---|
-| `status` | screen, level/player, connected, position, dimension, loaded chunks, rendered sections, FPS, held item |
+| `status` | screen (class/title/narration), level/player, connected, position, dimension, loaded chunks, rendered sections, FPS, held item |
+| `screen` | current screen class, title, narration, and widget list (label/active/visible/x/y/width/height); disconnect screens also report `reason` |
+| `click <label>` | press the first visible button whose label contains `<label>` (case-insensitive); `{"label":".."}` or `{"index":n}` in raw JSON also work by exact label or position |
+| `pause` | open the vanilla pause menu (Escape screen) |
 | `move [ms]` | hold vanilla forward for `ms` (default 1000) |
 | `look <yaw> <pitch>` | set player rotation |
 | `break [x y z] [ms]` | break the block at the position; defaults to the ground block in front (never directly under the player) |
@@ -60,6 +63,16 @@ node tools/gate-b-driver/driver-client.mjs status
 sees the action, not just a client-side prediction. On void or thin maps, pass
 explicit coordinates for the target/support block; the default break target is
 the ground block in front, never the block underfoot.
+
+## Menus and screenshots
+
+The scenario can drive menus without touching the compositor: `screen` reads
+the active screen (title, narration, buttons, and the disconnect/connection
+reason when one is shown), `click Back to Game` presses a button by label, and
+`pause` opens the pause menu. `screenshot` captures the live main render
+target, so it works on pause, disconnect, and title screens even when the
+window is unfocused — the driver owns screenshots; no Hyprland focus, window
+activation, or grim involvement.
 
 ## Window name and desktop placement
 
@@ -83,8 +96,11 @@ separate; disable it per-instance (`OverrideConsole=true`,
 
 Validated on `nath` against Paper 26.1.2 build 74 on 2026-11-06: status, move,
 look, break, place, screenshot, respawn, disconnect, and quit all passed, with
-server-side block and position checks. See
-[docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
+server-side block and position checks. On 2026-11-07, `screen`, `pause`,
+`click`, and the unfocused pause-menu screenshot were validated live; the
+client returned to play with `click Back to Game` and the driver-owned pause
+screenshot is [testdata/gate-b-driver-ui-pause.png](../../testdata/gate-b-driver-ui-pause.png).
+See [docs/gate-b-driver-validation.md](../../docs/gate-b-driver-validation.md).
 
 ## Safety
 
