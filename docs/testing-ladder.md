@@ -11,7 +11,7 @@ cheapest rung that can fail for the defect you are chasing.
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers; no sockets, no auth | socket framing, leg wiring, real timers, backend behavior |
 | 2 loopback | `mise run loopback` | about 3 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny; no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
-| 3 online bot | not built yet | minutes | live backend, G1 token custody, real account | the same shape as rung 2 through the online front leg and a live backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
+| 3 online bot | `mise run online` | minutes | live backend, both account custodians | the same shape as rung 2 through the online front leg and a live backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
 | 4 real client | `mise run gate-b:scenario` then `mise run gate-b:g0` | tens of minutes | Fabric driver build, SSH tunnel, live Velocity/Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window | it is expensive and flaky, so it stays the last rung |
 
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
@@ -20,6 +20,19 @@ loopback. It is the default gate.
 The frozen Gate A spike (`mise run spike`) and the Gate A scenario
 (`mise run gate-a`) sit beside the ladder. They prove the two-leg relay on
 loopback with the older harness. Keep them green; do not extend them.
+
+## Production topology rule
+
+Only two checks run on the production topology, Velocity + Paper (ultimately
+`play.excalia.fr`):
+
+- the Fabric driver lane, and
+- the unmodded vanilla client.
+
+Everything else — reconnect, the F1-F6 faults, identity separation, denial,
+and replay — is validated first offline (loopback, fake backend, Toxiproxy) and
+then with online bots through the real front. There is no separate Vanilla
+backend-parity row: Paper behind Velocity is the only backend target.
 
 ## The loopback rung
 

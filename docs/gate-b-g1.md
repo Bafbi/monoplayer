@@ -93,6 +93,20 @@ escape hatch: the directory must already contain a readable `profile.json`.
   `{ uuid, name, alias, authTitle, deviceType, updatedAt }` — this is what
   makes "same UUID across refresh" a pass claim instead of an observation.
 
+### Accounts
+
+Two UUID directories exist:
+
+| Name | UUID | Alias | Role |
+|---|---|---|---|
+| GlowSquidye | `73e0e19b-d4e4-4cc1-a553-a3952f0c1aed` | `glowsquidye` | puppet backend session |
+| Bafbi | `6eb73524-ff88-4a62-a8d0-c63905e7afba` | `bafbi` | attaching player, on the attach whitelist |
+
+With more than one account there is no default: `--start` must pin the puppet
+with `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye` (or the UUID/name). The CLI
+resolves `--account` by UUID, then alias, then name. A text selector that does
+not exist never creates an account by accident.
+
 ### Commands
 
 ```bash
@@ -118,7 +132,7 @@ The real GlowSquidye tree was migrated on 2026-11-07 with `migrate --apply`.
 Every token file kept the same SHA-256 before and after, `profile.json` keeps
 `updatedAt` from the last identity write and records `migratedAt`, the alias is
 `puppet`, and `puppet-java-403` is under `.secrets/retired/`. A read-only
-`status --account puppet` finds the refresh token without a device code.
+`status --account glowsquidye` finds the refresh token without a device code.
 
 ## authTitle policy (live result)
 
@@ -149,14 +163,14 @@ when you omit it.
 
 ```bash
 node src/auth/cli.js device-code                  # new account, alias from the name
-node src/auth/cli.js device-code --alias puppet   # new account, explicit alias
+node src/auth/cli.js device-code --alias glowsquidye   # new account, explicit alias
 ```
 
 Re-authenticate an **existing** account (UUID guard: a different login UUID is
 refused):
 
 ```bash
-node src/auth/cli.js device-code --account puppet
+node src/auth/cli.js device-code --account glowsquidye
 node src/auth/cli.js device-code --account <uuid>
 node src/auth/cli.js device-code --dir .secrets/accounts/<uuid>
 ```
@@ -195,7 +209,7 @@ profile / child account (fix the account, not the code).
 
 ```bash
 node src/auth/cli.js status                     # one account, if only one exists
-node src/auth/cli.js status --account puppet    # selector: uuid, alias, or name
+node src/auth/cli.js status --account glowsquidye    # selector: uuid, alias, or name
 node src/auth/cli.js status --dir .secrets/accounts/<uuid>
 node src/auth/cli.js status --json              # machine-readable
 node src/auth/cli.js status --refresh           # silent refresh, guarded
