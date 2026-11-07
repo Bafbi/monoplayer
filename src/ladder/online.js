@@ -30,7 +30,7 @@ import { waitForReady } from '../monoplayer/live-readiness.js'
 import { createWireChecker } from '../monoplayer/wire-check.js'
 import { createBot } from './bot.js'
 
-const VERSION = '26.1'
+const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
 const DEFAULT_REPORT = '.gate-b/online-report.json'
 const WHITELIST_FILE = '.secrets/attach-whitelist.json'
 const PUPPET_SELECTOR = 'glowsquidye'
