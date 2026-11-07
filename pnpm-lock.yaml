@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       minecraft-data:
-        specifier: ^3.119.0
+        specifier: 3.119.0
         version: 3.119.0
       minecraft-protocol:
         specifier: 1.68.0
