@@ -8,13 +8,37 @@
 //   login (entityId 42) -> game_state_change 13 -> position 0.5/1.62/0.5 ->
 //   chunk_batch_start -> map_chunk (0,0) -> chunk_batch_finished
 // It records serverbound position, block_dig, block_place and chat packets,
-// and exposes sendBlockChange / sendPosition for scenario mutations.
+// and exposes sendBlockChange, sendPosition, sendWindowItems and sendSetSlot
+// for scenario mutations.
 import mc from 'minecraft-protocol'
 import prismarineChunk from 'prismarine-chunk'
 import minecraftData from 'minecraft-data'
 import nbt from 'prismarine-nbt'
 
 const VERSION = '26.1'
+
+// Vanilla player-inventory window (window id 0): 5 crafting/armor slots, 27
+// main slots, 9 hotbar slots, 4 armor slots, and the offhand. The join frame
+// fills every slot so a later full frame can prove it replaced the base.
+const INVENTORY_SLOTS = 46
+const JOIN_SENTINEL_SLOT = 9
+
+// 26.1 Slot shape from minecraft-data: an empty slot carries itemCount 0 only.
+// A present item also needs the component counts and arrays the codec reads.
+export function emptySlot () {
+  return { itemCount: 0 }
+}
+
+export function itemStack (itemId, itemCount = 1) {
+  return {
+    itemId,
+    itemCount,
+    addedComponentCount: 0,
+    removedComponentCount: 0,
+    components: [],
+    removeComponents: []
+  }
+}
 
 export async function createFakeBackend ({ port = 0, logStream = process.stdout } = {}) {
   const mcData = minecraftData(VERSION)
@@ -98,6 +122,13 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     })
     client.write('chunk_batch_finished', { batchSize: 1 })
 
+    // A real backend sends the player inventory after the join settles. One
+    // sentinel slot makes a later full frame detectable: if the cache layered
+    // the frames instead of replacing the base, the sentinel would survive.
+    const joinItems = Array.from({ length: INVENTORY_SLOTS }, emptySlot)
+    joinItems[JOIN_SENTINEL_SLOT] = itemStack(3, 1)
+    client.write('window_items', { windowId: 0, stateId: 0, items: joinItems, carriedItem: emptySlot() })
+
     client.on('position', p => {
       received.positions.push(p)
       log('receivedPosition', { x: p.x, y: p.y, z: p.z })
@@ -170,6 +201,24 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     log('sendPosition', { pos, teleportId: teleportSeq })
   }
 
+  // Send a full inventory window frame to every connected client. `items`
+  // uses the 26.1 Slot shape (see emptySlot/itemStack).
+  function sendWindowItems ({ windowId = 0, stateId = 0, items } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('window_items', { windowId, stateId, items, carriedItem: emptySlot() })
+    }
+    log('sendWindowItems', { windowId, stateId, slots: items?.length ?? 0 })
+  }
+
+  // Send one slot update to every connected client. `item` uses the same
+  // 26.1 Slot shape as sendWindowItems.
+  function sendSetSlot ({ windowId = 0, stateId = 0, slot, item } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('set_slot', { windowId, stateId, slot, item })
+    }
+    log('sendSetSlot', { windowId, stateId, slot, itemId: item?.itemId ?? null })
+  }
+
   // Clientbound chat while detached: the proxy must not replay it to a later
   // client. It carries per-connection indexes and signature state.
   function sendPlayerChat (message, globalIndex = 1) {
@@ -210,5 +259,5 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     try { server.socketServer.close() } catch {}
   }
 
-  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendPlayerChat, sendSystemChat, close }
+  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendWindowItems, sendSetSlot, sendPlayerChat, sendSystemChat, close }
 }
