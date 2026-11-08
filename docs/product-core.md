@@ -45,7 +45,9 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 - `config` (configuration-phase replay prefix, max 1024). Per-leg config
   keep-alives/pings are dropped at capture.
 - Warm domains: `chunk` (latest per `cx,cz`, `unload_chunk` deletes the key,
-  max 1024), `block` (FIFO ring, max 2048), `entity` (FIFO ring, max 2048),
+  max 1024), `block` (FIFO ring, max 2048), `entity` (FIFO ring, max 2048; every
+  position-bearing entity frame the policy accepts, so their capture order
+  survives the replay — the relative-move frames stay in `generic`),
   `inventory` (newest per windowId, max 32 windows), `latest` (health/food/
   abilities/experience/held_item_slot/game_state_change/entity_event/
   advancements — newest wins), `generic` (anything else state-bearing, FIFO,

@@ -194,6 +194,74 @@ test('replay equals the stream: entity metadata merge, removal, and the entity b
   )
 })
 
+test('replay equals the stream: sync_entity_position then entity_teleport ends at the teleport', () => {
+  // GitHub issue #23 repro. Both frames carry an absolute position for entity 9.
+  // If sync_entity_position falls through to the generic ring, join-synth
+  // replays `entity` before `generic`, so the client applies teleport (x=7)
+  // then sync (x=5) and ends at 5 while the backend ended at 7.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'sync_entity_position', data: { entityId: 9, x: 5, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_teleport', data: { entityId: 9, x: 7, y: 64, z: 0, yaw: 0, pitch: 0 } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(
+    snapshot.entities.map(frame => frame.name),
+    ['sync_entity_position', 'entity_teleport']
+  )
+  assert.deepEqual(snapshot.generic, [])
+
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 7)
+})
+
+test('replay equals the stream: a generic frame between two entity frames keeps entity order', () => {
+  // A frame from another domain landing between two entity frames must not
+  // reorder the entity pair. The generic ring replays after the entity ring, so
+  // the last absolute position captured for the entity still wins.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'sync_entity_position', data: { entityId: 9, x: 5, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'update_health', data: { health: 12, food: 20, foodSaturation: 5 } },
+    { name: 'entity_teleport', data: { entityId: 9, x: 7, y: 64, z: 0, yaw: 0, pitch: 0 } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(
+    snapshot.entities.map(frame => frame.name),
+    ['sync_entity_position', 'entity_teleport']
+  )
+  assert.deepEqual(snapshot.generic.map(frame => frame.name), ['update_health'])
+
+  const state = stateSnapshot(replayed)
+  const entity = state.entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 7)
+  assert.equal(state.latest.find(entry => entry.name === 'update_health').data.health, 12)
+})
+
+test('replay equals the stream: entity_destroy lands in the entity ring', () => {
+  // 26.2 sends entity_destroy, not remove_entities. A destroy kept out of the
+  // entity ring replays after the entity frames it was meant to remove.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'entity_destroy', data: { entityIds: [9] } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(snapshot.entities.map(frame => frame.name), ['entity_metadata', 'entity_destroy'])
+  assert.deepEqual(snapshot.generic, [])
+
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  assert.equal(entity.removed, true)
+})
+
 test('replay equals the stream: repeated latest health and abilities', () => {
   const stream = [
     ...joinPrefix(),
