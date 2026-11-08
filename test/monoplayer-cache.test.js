@@ -72,6 +72,10 @@ test('warm chunk map_chunk is keyed and unload_chunk removes it', () => {
   cache.push('play', 'unload_chunk', buf('unload'), { x: 1, z: 0 })
   assert.deepEqual(cache.snapshot().chunks.map(f => f.data.x), [0])
   assert.equal(cache.stats().sizes.chunks, 1)
+  // The wire decodes unload_chunk as chunkX/chunkZ, not x/z. Keying only on
+  // x/z made every live unload a silent no-op.
+  cache.push('play', 'unload_chunk', buf('unload-decoded'), { chunkX: 0, chunkZ: 0 })
+  assert.equal(cache.stats().sizes.chunks, 0)
 })
 
 test('bounded rings overflow honestly (counted eviction, FIFO)', () => {
@@ -90,6 +94,14 @@ test('bounded rings overflow honestly (counted eviction, FIFO)', () => {
   assert.equal(m.block, 2)
   assert.equal(m.generic, 2)
   assert.equal(m.entity, 1)
+})
+
+test('the entity ring uses maxEntities, not maxGeneric', () => {
+  const cache = createStateCache({ maxEntities: 2, maxGeneric: 8 })
+  cache.push('play', 'chunk_batch_finished', buf('warm'))
+  for (let i = 0; i < 4; i++) cache.push('play', 'entity_metadata', buf(`e${i}`), { entityId: i })
+  assert.deepEqual(cache.snapshot().entities.map(f => f.buffer.toString()), ['cache:e2', 'cache:e3'])
+  assert.equal(cache.stats().metrics.overflows.entity, 2)
 })
 
 test('inventories keep the newest frame per windowId and bound the map', () => {
