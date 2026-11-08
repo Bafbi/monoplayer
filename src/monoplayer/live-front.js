@@ -48,6 +48,7 @@ import { createAttachGate, DENY_REASONS } from '../auth/attach.js'
 import { createWhitelistStore } from '../auth/store.js'
 import { normalizeUuid } from '../auth/util.js'
 import { isLoopbackHost } from './offline-identity.js'
+import { clientboundPolicy } from './clientbound-policy.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 
@@ -297,7 +298,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   function actualPort () {
@@ -430,9 +431,12 @@ function createFrontLeg ({
 
   function installConfigInterceptor (client) {
     // Read the snapshot per connection: a backend cache reset must never be
-    // masked by a stale per-listen memo.
+    // masked by a stale per-listen memo. Connection-control frames (a config
+    // transfer, a cookie, a dialog, the code of conduct) never replay.
     const cachedConfigFrames = getSnapshotConfig().filter(
-      frame => typeof frame?.name === 'string' && Buffer.isBuffer(frame.buffer)
+      frame => typeof frame?.name === 'string' &&
+        Buffer.isBuffer(frame.buffer) &&
+        clientboundPolicy('configuration', frame.name).decision !== 'block'
     )
 
     const interceptor = createConfigPathInterceptor({
@@ -540,6 +544,21 @@ function createFrontLeg ({
     },
     writeRaw (buffer, meta = null) {
       if (!attached) return false
+      // Last-write gate: even if the core router regresses, a frame the
+      // clientbound policy blocks never reaches the client. The cache and
+      // router already drop these; this is the independent backstop.
+      if (meta && (meta.state === 'play' || meta.state === 'configuration')) {
+        const policy = clientboundPolicy(meta.state, meta.name)
+        if (policy.decision === 'block') {
+          metrics.policyRefused++
+          log('clientboundRefused', {
+            state: meta.state,
+            name: meta.name,
+            unknown: policy.unknown === true
+          })
+          return false
+        }
+      }
       if (dumpRaw) {
         dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
       }

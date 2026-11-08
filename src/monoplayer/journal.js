@@ -31,8 +31,9 @@ const SKIP_FRAMES = new Set([
   // Commands can carry private message text, so they are skipped too.
   'chat_command',
   'chat_command_signed',
-  // A cookie response payload is a credential.
-  'cookie_response'
+  // A cookie response payload is a credential, and so is a stored cookie.
+  'cookie_response',
+  'store_cookie'
 ])
 const SECRET_NAME = /token|secret|password/i
 const SECRET_KEY = /(token|secret|password|authorization|cookie|credential|device_code|user_code)/i

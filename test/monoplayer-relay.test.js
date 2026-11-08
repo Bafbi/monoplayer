@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { classifyServerbound, capturePose, CHAT_SERVERBOUND, SERVERBOUND_DROPS } from '../src/monoplayer/relay.js'
 
 test('per-leg connection mechanics drop serverbound', () => {
-  for (const name of ['teleport_confirm', 'keep_alive', 'configuration_acknowledged', 'chunk_batch_received', 'cookie_response', 'resource_pack_receive', 'pong']) {
+  for (const name of ['teleport_confirm', 'keep_alive', 'configuration_acknowledged', 'chunk_batch_received', 'cookie_response', 'resource_pack_receive', 'pong', 'message_acknowledgement']) {
     assert.equal(classifyServerbound(name).action, 'drop', name)
     assert.equal(classifyServerbound(name).chat, false, name)
   }

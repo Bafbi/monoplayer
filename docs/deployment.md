@@ -130,6 +130,9 @@ Common:
 - `MONOPLAYER_VERSION`: the protocol version, default `26.1`. The image also
   carries the 26.2 data, so set `26.2` for Excalia Season 3.
 - `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye`
+- `MONOPLAYER_CHAT=read-only` (default): relay server chat to the attached
+  client, never forward the client's own chat. Set `off` to block both
+  directions.
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
   `WORKDIR`) or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
@@ -158,5 +161,9 @@ See `docs/telemetry.md` for the signals and the journal layout.
 - **The front never attaches without a warm backend.** While the puppet has no
   session, a login is denied with `backend_not_ready` instead of being handed
   an incomplete configuration.
+- **The front client is never told to connect elsewhere.** Clientbound
+  `transfer`, `start_configuration`, cookies, dialogs, and kicks are blocked by
+  `clientbound-policy.js`, and the cache never holds them, so a later attach
+  cannot replay one. See `docs/gate-b-b1.md`.
 - **The journal lives on the custody volume.** 128 MiB per file, one rotation,
   at most 256 MiB of the 1 GiB claim.

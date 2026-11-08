@@ -15,31 +15,18 @@
 //   latest    - latest volatile state frame (health, abilities, ...) per name
 //   generic   - FIFO ring for everything else state-bearing
 //
-// Per-leg-owned frames are never cached: keep-alives, position (synthesized
-// per attach), chat frames, pings, pong.
+// Whether a frame is cacheable comes from clientbound-policy.js. Per-leg
+// frames, live-only chat, and blocked connection-control frames never enter
+// the cache and therefore cannot be replayed onto a later attach.
 //
 // Purity: no I/O, no timers, no sockets. `buffer` is opaque; `data` (the
 // decoded fields used for keys) is optional but recommended. The caller owns
 // both.
 
+import { clientboundPolicy } from './clientbound-policy.js'
+
 const CHUNK_OP = { domain: 'chunk', op: 'set' }
 const UNLOAD_OP = { domain: 'chunk', op: 'remove' }
-
-// Never cached; per-leg ownership or forbidden content.
-const DROP_PLAY = new Set([
-  'keep_alive',
-  'position', // synthesized from the live pose on attach
-  'player_chat',
-  'profileless_chat',
-  'hide_message',
-  'system_chat', // read-only chat is a later slice
-  'ping', // per-leg
-  'bundle_delimiter' // bundles are relayed as individual packets
-])
-
-// Per-leg owned in the configuration phase: keep-alives and connection pings
-// must be answered on the leg that received them, never replayed.
-const DROP_CONFIG = new Set(['keep_alive', 'ping', 'pong'])
 
 const BLOCK_FRAMES = new Set([
   'block_update',
@@ -86,7 +73,7 @@ export const DOMAINS = ['prefix', 'config', 'chunk', 'block', 'entity', 'invento
 
 // Classify one clientbound play frame.
 export function classifyPlay (name) {
-  if (DROP_PLAY.has(name)) return { domain: 'drop', op: 'discard' }
+  if (!clientboundPolicy('play', name).cache) return { domain: 'drop', op: 'discard' }
   if (name === 'map_chunk') return CHUNK_OP
   if (name === 'unload_chunk') return UNLOAD_OP
   if (BLOCK_FRAMES.has(name)) return { domain: 'block', op: 'append' }
@@ -96,11 +83,11 @@ export function classifyPlay (name) {
   return { domain: 'generic', op: 'append' }
 }
 
-// Classify one clientbound configuration frame.
-// Unknown config frames are cached (append); the config replay path decides
-// replay order live, so staying conservative here is safe.
+// Classify one clientbound configuration frame. Names the policy does not
+// classify fail closed (drop), so a protocol bump cannot silently replay a
+// new connection-control frame.
 export function classifyConfig (name) {
-  if (DROP_CONFIG.has(name)) return { domain: 'drop', op: 'discard' }
+  if (!clientboundPolicy('configuration', name).cache) return { domain: 'drop', op: 'discard' }
   return { domain: 'config', op: 'append' }
 }
 

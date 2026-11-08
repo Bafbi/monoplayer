@@ -14,6 +14,7 @@
 //   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
+//   MONOPLAYER_CHAT                                     read-only (default) or off
 //   MONOPLAYER_LOG                                      JSONL log file (default: stdout)
 //   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
@@ -74,6 +75,7 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   if (env.MONOPLAYER_ATTACH_WHITELIST) out.attachWhitelistFile = env.MONOPLAYER_ATTACH_WHITELIST
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
+  if (env.MONOPLAYER_CHAT) out.chat = env.MONOPLAYER_CHAT
   // A deployed puppet must keep retrying: the backend can restart, and giving
   // up after one attempt leaves the front alive with no session. Attempts: 0
   // or unset means unlimited; the delay caps at MONOPLAYER_RECONNECT_MAX_DELAY_MS.
@@ -370,6 +372,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
       }
   log('startLive', {
     version: cfg.version,
+    chat: cfg.chat,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
     ...accountLogFields,
@@ -378,6 +381,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   })
   journal.event('startLive', {
     version: cfg.version,
+    chat: cfg.chat,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
     ...accountLogFields,

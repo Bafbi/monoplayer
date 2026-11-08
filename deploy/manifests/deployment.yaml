@@ -104,6 +104,10 @@ spec:
               value: /config/attach-whitelist.json
             - name: MONOPLAYER_VERSION
               value: "26.2"
+            # Read-only chat: the attached client reads server and plugin chat
+            # (system_chat) but its own messages are never forwarded.
+            - name: MONOPLAYER_CHAT
+              value: read-only
             - name: MONOPLAYER_DIALOG_ACTION
               value: last
             # Telemetry goes to the cluster collector, which fans out logs,
