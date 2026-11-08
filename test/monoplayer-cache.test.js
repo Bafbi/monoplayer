@@ -96,16 +96,34 @@ test('inventories keep the newest frame per windowId and bound the map', () => {
   const cache = createStateCache({ maxInventories: 2 })
   cache.push('play', 'chunk_batch_finished', buf('warm'))
   cache.push('play', 'window_items', buf('win0-v1'), { windowId: 0 })
-  cache.push('play', 'set_slot', buf('win0-v2'), { windowId: 0 })
+  cache.push('play', 'set_slot', buf('win0-v2'), { windowId: 0, slot: 36 })
   cache.push('play', 'window_items', buf('win1'), { windowId: 1 })
   cache.push('play', 'window_items', buf('win9'), { windowId: 9 }) // evicts win0 (oldest insertion)
 
-  // Evicted oldest-by-last-update; insertion order preserved for replay.
+  // Evicted oldest-by-last-update; insertion order preserved for replay. The
+  // evicted window takes its slot updates with it.
   const inv = cache.snapshot().inventories
   assert.equal(inv.length, 2)
-  assert.deepEqual(inv.map(f => f.data.windowId), [1, 9]) // win0 was the overflow eviction
+  assert.deepEqual(inv.map(f => f.data.windowId), [1, 9])
   assert(inv.some(f => f.buffer.toString() === 'cache:win0-v2') === false)
   assert.equal(cache.stats().metrics.evictions.inventory, 1)
+})
+
+test('inventory replay keeps the full window frame and the slots changed after it', () => {
+  const cache = createStateCache()
+  cache.push('play', 'chunk_batch_finished', buf('warm'))
+  cache.push('play', 'window_items', buf('win0-v1'), { windowId: 0 })
+  cache.push('play', 'set_slot', buf('slot36'), { windowId: 0, slot: 36 })
+  cache.push('play', 'set_slot', buf('slot40'), { windowId: 0, slot: 40 })
+
+  let inv = cache.snapshot().inventories
+  assert.deepEqual(inv.map(f => f.buffer.toString()), ['cache:win0-v1', 'cache:slot36', 'cache:slot40'])
+
+  // A newer full window frame supersedes the earlier per-slot updates.
+  cache.push('play', 'window_items', buf('win0-v2'), { windowId: 0 })
+  cache.push('play', 'set_slot', buf('slot44'), { windowId: 0, slot: 44 })
+  inv = cache.snapshot().inventories
+  assert.deepEqual(inv.map(f => f.buffer.toString()), ['cache:win0-v2', 'cache:slot44'])
 })
 
 test('latest domain keeps one newest frame per volatile name', () => {

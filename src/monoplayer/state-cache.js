@@ -112,6 +112,7 @@ export function createStateCache (overrides = {}) {
     maxBlocks: 2048,
     maxEntities: 2048,
     maxInventories: 32,
+    maxInventorySlots: 512,
     maxGeneric: 512,
     blockBreakFrames: false, // dig animations are transient noise unless asked for
     ...overrides
@@ -120,7 +121,12 @@ export function createStateCache (overrides = {}) {
   const prefix = []
   const config = []
   const chunks = new Map() // 'x,z' -> {name, buffer, data}
-  const inventories = new Map() // windowId -> {name, buffer, data}
+  // Inventory state splits in two: the latest full window frame (`window_items`)
+  // per window, and the latest per-slot update (`set_slot`) per window+slot.
+  // A single map keyed by windowId would let one set_slot overwrite the full
+  // window frame, so an attaching client would replay one slot and no base.
+  const inventoryBase = new Map() // windowId -> {name, buffer, data}
+  const inventorySlots = new Map() // 'windowId:slot' -> {name, buffer, data}
   const latest = new Map() // frame name -> {name, buffer, data}
   const rings = { block: [], entity: [], generic: [] }
 
@@ -134,6 +140,7 @@ export function createStateCache (overrides = {}) {
   }
 
   let warm = false
+  let frameSeq = 0
 
   function ringPush (domain, entry) {
     const ring = rings[domain]
@@ -155,11 +162,26 @@ export function createStateCache (overrides = {}) {
     }
   }
 
+  // A window base evicted without its slot updates would replay orphan slots
+  // against a window the client never received, so evict the pair together.
+  function insertInventoryBase (windowId, entry) {
+    if (inventoryBase.has(windowId)) inventoryBase.delete(windowId)
+    inventoryBase.set(windowId, entry)
+    while (inventoryBase.size > opts.maxInventories) {
+      const oldest = inventoryBase.keys().next().value
+      inventoryBase.delete(oldest)
+      for (const [key, slot] of inventorySlots) {
+        if (slot.windowId === oldest) inventorySlots.delete(key)
+      }
+      metrics.evictions.inventory++
+    }
+  }
+
   // state: 'configuration' | 'play'. data: decoded fields for keys (optional).
   // Returns { cached, domain, warmed } for logging/tests.
   function push (state, name, buffer, data = {}) {
     const classification = state === 'configuration' ? classifyConfig(name) : classifyPlay(name)
-    const entry = { name, buffer, data }
+    const entry = { name, buffer, data, seq: ++frameSeq }
     let cached = false
 
     if (classification.domain === 'drop') {
@@ -221,7 +243,13 @@ export function createStateCache (overrides = {}) {
           cached = true
           break
         case 'inventory':
-          boundedInsert(inventories, data.windowId ?? 'main', entry, opts.maxInventories, 'inventory')
+          entry.windowId = data.windowId ?? 'main'
+          if (name === 'window_items') {
+            insertInventoryBase(entry.windowId, entry)
+          } else {
+            const key = `${entry.windowId}:${data.slot ?? 'cursor'}`
+            boundedInsert(inventorySlots, key, entry, opts.maxInventorySlots, 'inventory')
+          }
           cached = true
           break
         case 'latest':
@@ -263,6 +291,31 @@ export function createStateCache (overrides = {}) {
   // chunk -> block -> entity -> inventory -> latest -> generic; within each
   // domain it is capture/recency order. Cross-domain interleaving is
   // deliberately flattened (see docs/gate-b-b1.md limits).
+  //
+  // Inventory replays the newest full window frame first, then only the
+  // per-slot updates captured after it. Slots from before that frame are
+  // already inside it, and replaying their older stateId after it would
+  // desync the client's container state.
+  function inventoryFrames () {
+    const frames = []
+    const based = new Set()
+    for (const base of inventoryBase.values()) {
+      frames.push(base)
+      based.add(base.windowId)
+      for (const slot of inventorySlots.values()) {
+        if (slot.windowId === base.windowId && slot.seq > base.seq) frames.push(slot)
+      }
+    }
+    // A window that only ever sent set_slot frames keeps its latest slots.
+    for (const windowId of new Set([...inventorySlots.values()].map(slot => slot.windowId))) {
+      if (based.has(windowId)) continue
+      for (const slot of inventorySlots.values()) {
+        if (slot.windowId === windowId) frames.push(slot)
+      }
+    }
+    return frames
+  }
+
   function snapshot () {
     return {
       config: [...config],
@@ -270,7 +323,7 @@ export function createStateCache (overrides = {}) {
       chunks: [...chunks.values()],
       blocks: [...rings.block],
       entities: [...rings.entity],
-      inventories: [...inventories.values()],
+      inventories: inventoryFrames(),
       latest: [...latest.values()],
       generic: [...rings.generic]
     }
@@ -285,7 +338,7 @@ export function createStateCache (overrides = {}) {
         chunks: chunks.size,
         blocks: rings.block.length,
         entities: rings.entity.length,
-        inventories: inventories.size,
+        inventories: inventoryBase.size + inventorySlots.size,
         latest: latest.size,
         generic: rings.generic.length
       },
@@ -297,12 +350,14 @@ export function createStateCache (overrides = {}) {
     prefix.length = 0
     config.length = 0
     chunks.clear()
-    inventories.clear()
+    inventoryBase.clear()
+    inventorySlots.clear()
     latest.clear()
     rings.block.length = 0
     rings.entity.length = 0
     rings.generic.length = 0
     warm = false
+    frameSeq = 0
   }
 
   return { push, snapshot, stats, reset, forceWarm, get warm () { return warm } }

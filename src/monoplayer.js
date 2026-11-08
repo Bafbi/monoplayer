@@ -121,6 +121,9 @@ export function createMonoplayer ({
     positionsSynthesized: 0,
     serverboundForwarded: 0,
     serverboundDropped: 0,
+    serverboundNotAttached: 0,
+    serverboundByName: {},
+    serverboundDroppedByName: {},
     chatBlocked: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
@@ -128,6 +131,24 @@ export function createMonoplayer ({
     denials: 0,
     frontKicks: 0
   }
+
+  // Bounded per-name counters. Packet names are a fixed protocol vocabulary,
+  // so the cap only guards against a client sending nonsense names.
+  const MAX_NAMES = 128
+  function bumpName (map, name) {
+    const key = name ?? 'unknown'
+    if (map[key] !== undefined) { map[key]++; return }
+    if (Object.keys(map).length >= MAX_NAMES) { map.other = (map.other ?? 0) + 1; return }
+    map[key] = 1
+  }
+  // Interactions are rare and are the ones that fail silently on a real
+  // backend, so each one gets its own log line (name only, no payload).
+  const ACTION_SERVERBOUND = new Set([
+    'use_item', 'block_place', 'block_dig', 'use_entity', 'attack',
+    'held_item_slot', 'window_click', 'close_window', 'set_creative_slot',
+    'set_slot_state', 'select_bundle_item', 'pick_item_from_block',
+    'pick_item_from_entity', 'arm_animation', 'player_loaded', 'player_input'
+  ])
 
   const logs = [] // redacted JSON lines, bounded
   const listeners = new Map() // type -> Set<fn>
@@ -300,12 +321,14 @@ export function createMonoplayer ({
 
     frontLeg.setServerboundHandler(serverbound => {
       if (!isAttached()) {
+        metrics.serverboundNotAttached++
         log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
         return
       }
       const decision = classifyServerbound(serverbound.name)
       if (decision.action === 'drop') {
         metrics.serverboundDropped++
+        bumpName(metrics.serverboundDroppedByName, serverbound.name)
         if (decision.chat) {
           metrics.chatBlocked++
           log('chatBlocked', { name: serverbound.name })
@@ -318,6 +341,10 @@ export function createMonoplayer ({
       )
       backendLeg.writeRaw(serverbound.buffer, { state: 'play', name: serverbound.name })
       metrics.serverboundForwarded++
+      bumpName(metrics.serverboundByName, serverbound.name)
+      if (ACTION_SERVERBOUND.has(serverbound.name)) {
+        log('serverboundAction', { name: serverbound.name, attached: true })
+      }
     })
 
     frontLeg.setDetachHandler(({ reason = 'player_quit' } = {}) => {
