@@ -11,31 +11,56 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source and test file."
-run = "find src test -name '*.js' -print0 | xargs -0 -n1 node --check"
+run = "find src test -name '*.js' -print0 | xargs -0 -n1 node --check || node src/ladder/next-rung.js lint $?"
 
 [tasks.test]
 description = "Run the pure unit/fake tests (no sockets, no auth)."
 depends = ["install"]
-run = "node --test test/*.test.js"
+run = "node --test test/*.test.js || node src/ladder/next-rung.js test $?"
 
 [tasks.spike]
 description = "Run the frozen Gate A spike test (real sockets, offline protocol)."
 depends = ["install"]
+wait_for = ["check"]
 run = "node --test test/spikes/*.test.js"
 
 [tasks.loopback]
 description = "Run the product offline loopback rung (real legs, fake backend, protocol bot; no auth)."
 depends = ["install"]
-run = "node src/ladder/loopback.js"
+run = "node src/ladder/loopback.js || node src/ladder/next-rung.js loopback $?"
 
 [tasks.online]
 description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and the live backend)."
 depends = ["install"]
-run = "node src/ladder/online.js"
+wait_for = ["check"]
+run = "node src/ladder/online.js || node src/ladder/next-rung.js online $?"
 
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback."
 depends = ["lint", "test", "loopback"]
+
+# The check that covers each area, on top of the gate. Each one composes the
+# rung tasks through depends, so a rung command is defined once.
+#
+# mise runs sibling depends concurrently, so an expensive rung waits for the
+# gate through its own wait_for: a red gate stops it before it starts. wait_for
+# schedules nothing, so a bare `mise run online` is unchanged.
+
+[tasks."verify:relay"]
+description = "Verify a relay change: the gate, then the frozen Gate A spike."
+depends = ["check", "spike"]
+
+[tasks."verify:auth"]
+description = "Verify an auth change: the gate, then the online bot rung (needs the live backend and both custodians)."
+depends = ["check", "online"]
+
+[tasks."verify:driver"]
+description = "Verify a driver change: the gate, the Fabric driver build, then the real-client scenario (needs the SSH tunnel and the live backend)."
+depends = ["check", "gate-b:driver:build", "gate-b:scenario"]
+
+[tasks."verify:deploy"]
+description = "Verify a deploy change: the gate, then the image build (needs cluster access; it publishes to the Zot registry)."
+depends = ["check", "image:build"]
 
 [tasks."gate-a"]
 description = "Run the standalone Gate A scenario and write a report."
@@ -49,12 +74,13 @@ run = "gradle -p tools/gate-b-driver --no-daemon build"
 [tasks."gate-b:scenario"]
 description = "Run the Gate B driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the live backend)."
 depends = ["install"]
-run = "node src/gate-b.js --runs 2"
+wait_for = ["check", "gate-b:driver:build"]
+run = "node src/gate-b.js --runs 2 || node src/ladder/next-rung.js gate-b:scenario $?"
 
 [tasks."gate-b:g0"]
 description = "Gate B G0 verdict: requires two consecutive PASSED driver reports plus a completed unmodded witness."
 depends = ["install"]
-run = "node src/gate-b.js --verify-g0"
+run = "node src/gate-b.js --verify-g0 || node src/ladder/next-rung.js gate-b:g0 $?"
 
 [tasks."gate-b:driver:install"]
 description = "Install the built driver into the display host's Prism root (run on the host)."
@@ -62,6 +88,7 @@ run = "tools/gate-b-driver/install.sh tools/gate-b-driver/build/libs/gate-b-driv
 
 [tasks."image:build"]
 description = "Build and push the Monoplayer image to the cluster Zot registry."
+wait_for = ["check"]
 run = "scripts/build-image.sh"
 
 [tasks."testbed:up"]
@@ -92,4 +119,4 @@ run = "node src/testbed/switch.js down"
 [tasks."testbed:run"]
 description = "Full puppet transfer: up, transfer, down, always restoring the live proxy."
 depends = ["install"]
-run = "node src/testbed/switch.js run"
+run = "node src/testbed/switch.js run || node src/ladder/next-rung.js testbed:run $?"

@@ -31,7 +31,8 @@ mise run gate-a            # full Gate A scenario, writes testdata/gate-a-report
 mise run gate-b:scenario   # driver-lane G0 scenario (live testbed)
 ```
 
-Rungs, cost, prerequisites, and what each catches:
+Rungs, cost, prerequisites, what each catches, and which `verify:<area>` task
+to run after touching relay, auth, driver, or deploy:
 [docs/testing-ladder.md](docs/testing-ladder.md).
 
 What it does and does not prove: [docs/gate-a.md](docs/gate-a.md).
