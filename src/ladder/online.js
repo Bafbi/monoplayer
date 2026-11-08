@@ -52,7 +52,10 @@ const PARITY_FRAME_NAMES = new Set([
   'multi_block_change',
   'entity_metadata',
   'entity_teleport',
+  'entity_position',
+  'sync_entity_position',
   'remove_entities',
+  'entity_destroy',
   'update_health'
 ])
 
@@ -164,6 +167,27 @@ function record (id, name, status, info = null) {
     ok: status === 'pass' ? true : status === 'fail' ? false : null,
     detail: info
   }
+}
+
+// Trim the parity report for the run report. A domain with a diff keeps the
+// changed entries; a passing domain keeps only its verdict. A scalar domain has
+// no diff, so keep expected/actual as the only record of the mismatch.
+export function parityEvidence (domains) {
+  const out = {}
+  for (const [name, result] of Object.entries(domains ?? {})) {
+    if (result?.ok === true) {
+      out[name] = { ok: true }
+    } else if (result?.diff) {
+      out[name] = { ok: false, diff: result.diff }
+    } else {
+      out[name] = {
+        ok: result?.ok ?? null,
+        expected: result?.expected ?? null,
+        actual: result?.actual ?? null
+      }
+    }
+  }
+  return out
 }
 
 // Pure assertion evaluator: takes the evidence the run collected and returns
@@ -619,7 +643,14 @@ export async function runOnline (argv = process.argv.slice(2)) {
     } catch (error) {
       parity = { ok: false, domains: {}, error: String(error?.message ?? error).slice(0, 200) }
     }
-    evidence.parity = { ...parity, settled: paritySettled, capturedFrames: capturedFrames.length }
+    // Keep the verdict and the changed entries, not the full replayed state:
+    // a warm cache can hold thousands of block and entity entries.
+    evidence.parity = {
+      ...parity,
+      domains: parityEvidence(parity.domains),
+      settled: paritySettled,
+      capturedFrames: capturedFrames.length
+    }
 
     const playFrames = bot.playNames()
     const firstPosition = bot.received.positions[0]
