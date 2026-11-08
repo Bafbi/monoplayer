@@ -6,6 +6,7 @@ import { withTransferIntent } from '/home/neudeline/.t3/projects/monoplayer/src/
 
 const host = process.argv[2] ?? 'sky-2.excalia.fr'
 const intent = Number(process.argv[3] ?? 3)
+const port = Number(process.argv[4] ?? 25565)
 const dir = '/home/neudeline/.t3/projects/monoplayer/.secrets/accounts/6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const uuid = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const profile = JSON.parse(fs.readFileSync(dir + '/profile.json', 'utf8'))
@@ -14,7 +15,7 @@ const lock = custody.writerLock.acquire()
 if (!lock.ok) { console.log('LOCK HELD'); process.exit(2) }
 
 const client = mc.createClient({
-  host, port: 25565, version: '26.2', username: uuid, auth: 'microsoft',
+  host, port, version: '26.2', username: uuid, auth: 'microsoft',
   profilesFolder: custody.cacheFactory, authTitle: profile.authTitle,
   deviceType: profile.deviceType, flow: 'live', keepAlive: true
 })
