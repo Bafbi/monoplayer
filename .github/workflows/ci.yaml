@@ -16,10 +16,12 @@ on:
 permissions:
   contents: read
 
-# The workflow name is in the key because image.yaml calls this file on the same
-# ref. A shared group would cancel the job the build waits on.
+# image.yaml calls this file, and a called workflow reads the caller's name from
+# github.workflow. The literal `check` between the name and the ref keeps this
+# group distinct from the caller's own group and from a direct ci run on the same
+# ref, so neither cancels the other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-check-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
