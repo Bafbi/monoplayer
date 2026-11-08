@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
-155/155 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
-socket-free unit suite runs 346 tests, and `mise run check` also runs the
+159/159 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
+socket-free unit suite runs 350 tests, and `mise run check` also runs the
 26-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
 and untouched.
 
@@ -128,12 +128,17 @@ leg. The frame still never reaches the front. The sequence:
    one reconnect with the target, then end the old backend leg. The teardown
    does not depend on the socket's end event; a missed event would strand the
    front on a dead cache.
-3. The orchestrator dials the target with the same Microsoft account. Cookies
-   continue across the chain: `store_cookie` is kept on the puppet leg and
-   answered on `cookie_request`; the jar clears only on a return to the
-   configured base. The cache resets, the new configuration and join prefix
-   arrive, and the warm fallback pins it after 5 s if the backend never sends
-   the batch marker.
+3. The orchestrator dials the target with the same Microsoft account. The
+   handshake uses **intent 3 (TRANSFER)**, not 2 (LOGIN). minecraft-protocol
+   hardcodes 2, so the backend leg wraps the handshake writer. A
+   transfer-only target rejects intent 2: sky-2 answered "Vous ne pouvez pas
+   vous connecter sur le serveur par cette méthode!" on 2026-11-08, and a
+   headless client with intent 3 reached play on sky-2. Cookies continue
+   across the chain: `store_cookie` is kept on the puppet leg and answered on
+   `cookie_request`; the jar clears only on a return to the configured base.
+   The cache resets, the new configuration and join prefix arrive, and the
+   warm fallback pins it after 5 s if the backend never sends the batch
+   marker.
 4. The user rejoins the proxy after warm. The replay is the new server's
    state: position, inventory, and chat are the new server's, and chat history
    is never replayed.
@@ -147,7 +152,23 @@ A configuration-state transfer happens before the play login, when there is no
 warm session to move. It stays blocked and counted.
 
 The live backend leg has a 60 s connect timeout: a target that accepts TCP and
-stalls must not hold the custody lock forever.
+stalls must not hold the custody lock forever. It logs the target's
+`disconnect`/`kick_disconnect` text (`backendDisconnect`, `backendKick`); the
+socket close alone hides the rejection reason.
+
+The loopback proves the intent on the wire with
+`src/ladder/handshake-proxy.js`: the fake backend's nmp server predates intent
+3, so the proxy records the real intent and rewrites it to 2 for the fake
+target.
+
+**Seamless switch (next slice).** The attached client is still detached on a
+follow and must rejoin. The hub and sky-2 differ in `dimension_type` (4 vs 9
+entries) and `timeline` (4 vs 5), so a `respawn` alone would leave the client
+without the target's dimensions. The client needs a mid-play reconfiguration
+on the same connection: `start_configuration`, replay the target's
+configuration frames, `finish_configuration`, then the target's play login and
+join state, with the pre-transfer snapshot as the fallback if the target
+fails. That keeps the connection alive through the loading screen.
 
 ### Read-only chat (`config.chat`)
 
