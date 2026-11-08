@@ -36,7 +36,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The gate comes from ci.yaml so a red main never builds.
+  check:
+    uses: ./.github/workflows/ci.yaml
+
   build:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

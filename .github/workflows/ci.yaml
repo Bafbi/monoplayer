@@ -1,0 +1,47 @@
+# Default gate from mise.toml: `mise run check`.
+#
+# Runs on every push except `deploy`, and on every pull request. image.yaml
+# calls this file as a reusable workflow, so a red main never builds.
+
+name: ci
+
+on:
+  push:
+    # The deploy branch is bot-written from an already-green main.
+    branches-ignore: [deploy]
+  pull_request:
+  # image.yaml calls this file as a reusable workflow.
+  workflow_call:
+
+permissions:
+  contents: read
+
+# The workflow name is in the key because image.yaml calls this file on the same
+# ref. A shared group would cancel the job the build waits on.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # java 25 and gradle 9.8 build the Gate B driver only, and mise run check
+      # never calls them.
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: node pnpm
+
+      - name: Resolve the pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - run: mise run check
