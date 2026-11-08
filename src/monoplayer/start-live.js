@@ -355,7 +355,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
     const due = follow.onDue({ target })
     const dialTarget = due.target ?? currentTarget
     try {
-      backend.setTarget(dialTarget, { keepCookies: !isBase(dialTarget) })
+      backend.setTarget(dialTarget, {
+        keepCookies: !isBase(dialTarget),
+        transfer: !isBase(dialTarget)
+      })
       if (due.target) {
         currentTarget = { ...due.target }
         log('transferFollowConnect', {

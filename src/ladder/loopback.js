@@ -21,6 +21,7 @@ import { waitForReady } from '../monoplayer/live-readiness.js'
 import { offlineUuid } from '../monoplayer/offline-identity.js'
 import { createWireChecker } from '../monoplayer/wire-check.js'
 import { createBot } from './bot.js'
+import { createHandshakeProxy } from './handshake-proxy.js'
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.gate-b/loopback-report.json'
@@ -76,6 +77,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
   let fake = null
   let fake2 = null
+  let handshakeProxy = null
   let front = null
   let backend = null
   let core = null
@@ -117,6 +119,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // A second backend is the target of the followed transfer (O21-O24).
     fake2 = await createFakeBackend({ port: 0, logStream: null })
     evidence.backend2Port = fake2.port
+    // The nmp fake server predates intent 3. The proxy records the real
+    // intent on the wire and rewrites it for the fake target; without this,
+    // the loopback cannot catch the sky-2 "not by this method" failure.
+    handshakeProxy = await createHandshakeProxy({ targetPort: fake2.port, log })
+    evidence.handshakeProxyPort = handshakeProxy.port
     const baseTarget = { host: '127.0.0.1', port: fake.port }
 
     const offlineWhitelist = [offlineUuid('Attach'), offlineUuid('Second')]
@@ -175,7 +182,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       reconnecting = true
       core.session.backendConnecting({ initial: false })
       try {
-        backend.setTarget(target ?? baseTarget, { keepCookies: target !== undefined && target !== null })
+        backend.setTarget(target ?? baseTarget, {
+          keepCookies: target !== undefined && target !== null,
+          transfer: target !== undefined && target !== null
+        })
         await backend.connect()
         log('backendReconnect', {
           delayMs,
@@ -594,7 +604,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // attaches and sees the new server's state.
     const transferMark = b3.names.length
     const loginsBeforeTransfer = core.session.backendLogins
-    const target = { host: '127.0.0.1', port: fake2.port }
+    const target = { host: '127.0.0.1', port: handshakeProxy.port }
     fake.sendTransfer(target.host, target.port)
     await waitFor(() => core.metrics.transfersFollowed === 1, 'transfer follow decided')
     await waitFor(() => fake2.received.logins === 1, 'puppet login on the target')
@@ -626,12 +636,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O22',
       'the puppet follows the target and re-warms there',
       fake2.received.logins === 1 &&
+        handshakeProxy.nextStates.includes(3) &&
         core.session.backendLogins === loginsBeforeTransfer + 1 &&
         core.session.warmReady === true &&
         core.session.state === 'warm',
       {
         loginsBeforeTransfer,
         fake2Logins: fake2.received.logins,
+        handshakeIntents: handshakeProxy.nextStates,
         backendLogins: core.session.backendLogins,
         warmReady: core.session.warmReady,
         state: core.session.state
@@ -691,6 +703,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
     evidence.transfer = {
       target,
+      handshakeIntents: [...handshakeProxy.nextStates],
       fake2Logins: fake2.received.logins,
       backendLogins: core.session.backendLogins,
       botEnded: b3.ended
@@ -707,6 +720,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await front?.close?.() } catch { /* best effort */ }
     try { await backend?.close?.() } catch { /* best effort */ }
     try { fake?.close?.() } catch { /* best effort */ }
+    try { handshakeProxy?.close?.() } catch { /* best effort */ }
     try { fake2?.close?.() } catch { /* best effort */ }
 
     if (failed && exitCode === 0) exitCode = 1

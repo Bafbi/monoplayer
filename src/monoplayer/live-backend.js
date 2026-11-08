@@ -188,6 +188,23 @@ export function createBackendFrameForwarder ({ deliver, swallowed = LEG_SWALLOWE
   return { onPacket, onRaw, reset, counters, nameCounts }
 }
 
+// Wrap the library's handshake writer so a followed transfer advertises
+// intent 3. minecraft-protocol's setProtocol.js hardcodes nextState 2.
+export function withTransferIntent (originalWrite, transfer = true) {
+  if (typeof originalWrite !== 'function') throw new TypeError('write is required')
+  return (name, params, ...rest) => {
+    if (transfer && name === 'set_protocol' && params && typeof params === 'object') {
+      return originalWrite(name, { ...params, nextState: 3 }, ...rest)
+    }
+    return originalWrite(name, params, ...rest)
+  }
+}
+
+function textReason (reason) {
+  if (typeof reason === 'string') return reason.slice(0, 300)
+  try { return JSON.stringify(reason).slice(0, 300) } catch { return null }
+}
+
 // Shared body. The constructors own the mode-specific pieces (token custody
 // or the offline auth), and this body never chooses the auth path itself.
 function createBackendLeg ({
@@ -215,6 +232,10 @@ function createBackendLeg ({
   // clears only when the orchestrator returns to the configured base target.
   const cookies = new Map()
   let target = { host, port }
+  // A client that follows a transfer handshakes with intent 3 (TRANSFER), not
+  // 2 (LOGIN). Direct-login-only targets reject intent 2 with a custom message
+  // (sky-2: "Vous ne pouvez pas vous connecter ... par cette méthode!").
+  let nextTransferIntent = false
 
   function onError ({ error } = {}) {
     const message = String(error?.message ?? error).slice(0, 200)
@@ -276,6 +297,7 @@ function createBackendLeg ({
         }
         socketClient = mc.createClient(options)
         client = socketClient
+        if (nextTransferIntent) socketClient.write = withTransferIntent(socketClient.write.bind(socketClient), true)
       } catch (error) {
         releaseTokens()
         log('backendConnectFailed', { error: error.message })
@@ -290,6 +312,14 @@ function createBackendLeg ({
           releaseTokens() // do not hold the token lock after a pre-join failure
           settleReject(error)
         }
+      })
+      // The target's rejection reason is otherwise invisible: the leg only
+      // sees the socket close. Log it (text only, no secrets).
+      socketClient.on('disconnect', data => {
+        log('backendDisconnect', { state: socketClient.state, reason: textReason(data?.reason) })
+      })
+      socketClient.on('kick_disconnect', data => {
+        log('backendKick', { reason: textReason(data?.reason) })
       })
       socketClient.on('end', reason => {
         log('backendEnd', { reason: String(reason).slice(0, 120) })
@@ -414,7 +444,8 @@ function createBackendLeg ({
     // Point the next connect at another backend. The caller must have ended
     // the current connection first. `keepCookies` carries the session cookie
     // across a transfer chain; a return to the base target clears it.
-    setTarget (next = {}, { keepCookies = false } = {}) {
+    // `transfer` makes the next handshake use intent 3.
+    setTarget (next = {}, { keepCookies = false, transfer = false } = {}) {
       if (client && !ended) throw new Error('cannot change the backend target while connected')
       const nextHost = typeof next.host === 'string' ? next.host.trim() : ''
       const nextPort = Number(next.port)
@@ -425,6 +456,7 @@ function createBackendLeg ({
         throw new TypeError(`backend target rejected: ${nextHost}:${nextPort}`)
       }
       target = { host: nextHost, port: nextPort }
+      nextTransferIntent = transfer === true
       if (!keepCookies) cookies.clear()
       return { ...target }
     },
