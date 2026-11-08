@@ -6,13 +6,14 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions O1-O14 are the contract (docs/testing-ladder.md). A FAIL is a
-// real finding; do not weaken a check to get a green run.
+// Assertions R0 and O1-O20 (including O11b) are the contract
+// (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
+// get a green run.
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { createFakeBackend } from '../fake-backend.js'
+import { createFakeBackend, emptySlot, itemStack } from '../fake-backend.js'
 import { createMonoplayer, loadConfig } from '../monoplayer.js'
 import { createOfflineBackendLeg } from '../monoplayer/live-backend.js'
 import { createOfflineFrontLeg } from '../monoplayer/live-front.js'
@@ -192,10 +193,49 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const bound = await front.listen()
     evidence.frontPort = bound.port ?? front.port
 
+    // --- late-attach churn: mutate cached state before the first attach ---
+    // Production attaches minutes after the puppet joined, so the replay must
+    // carry the newest inventory base, every slot update after it, and the
+    // detached block edit. The base fills every other slot empty so a join
+    // frame that survived would show up as a stale slot.
+    const LATE_BLOCK = { x: 4, y: 0, z: 4 }
+    const LATE_POSE = { x: 4.5, y: 1.62, z: 4.5 }
+    const lateItems = Array.from({ length: 46 }, emptySlot)
+    lateItems[36] = itemStack(1, 1)
+    fake.sendWindowItems({ windowId: 0, stateId: 1, items: lateItems })
+    fake.sendSetSlot({ windowId: 0, stateId: 1, slot: 40, item: itemStack(2, 3) })
+    fake.sendSetSlot({ windowId: 0, stateId: 1, slot: 41, item: itemStack(5, 2) })
+    fake.sendBlockChange(LATE_BLOCK)
+    await waitFor(() => {
+      const snapshot = core.cache.snapshot()
+      const base = snapshot.inventories.find(entry =>
+        entry.name === 'window_items' && entry.data?.windowId === 0)
+      const slots = snapshot.inventories.filter(entry =>
+        entry.name === 'set_slot' && entry.data?.windowId === 0)
+      const block = snapshot.blocks.some(entry =>
+        entry.data?.location?.x === LATE_BLOCK.x &&
+        entry.data?.location?.y === LATE_BLOCK.y &&
+        entry.data?.location?.z === LATE_BLOCK.z)
+      return base?.data?.items?.[36]?.itemId === 1 &&
+        slots.some(entry => entry.data.slot === 40 && entry.data.item?.itemId === 2) &&
+        slots.some(entry => entry.data.slot === 41 && entry.data.item?.itemId === 5) &&
+        block
+    }, 'late-attach inventory, slots, and block in the cache')
+
     // --- O1-O9: first attach and replay ---
     bot1 = createBot({ port: evidence.frontPort, username: 'Attach' })
     await bot1.ready()
     const b1 = bot1.received
+    // The replay streams the warm domains after the join prefix; wait for the
+    // late-attach frames before O1 snapshots the play-name list.
+    await bot1.waitFor(
+      () => b1.windowItems.some(packet => packet.windowId === 0) &&
+        b1.setSlots.some(packet => packet.slot === 40) &&
+        b1.setSlots.some(packet => packet.slot === 41) &&
+        b1.blockChanges.some(change => change.location?.x === LATE_BLOCK.x &&
+          change.location?.y === LATE_BLOCK.y && change.location?.z === LATE_BLOCK.z),
+      'late-attach replay'
+    )
     const playNames = bot1.playNames()
 
     evidence.configReplayMode = front.lastConfigMode
@@ -278,6 +318,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'first bot saw no leftover bytes and no errors',
       b1.leftovers.length === 0 && b1.errors.length === 0,
       { leftovers: b1.leftovers.length, errors: b1.errors.length }
+    )
+
+    // Position churn lands after O6 has read the synthesized join pose: the
+    // first position in the replay must stay 0.5/1.62/0.5, so this mutation is
+    // applied live and asserted as O19. It is also what a late session sees.
+    fake.sendPosition(LATE_POSE)
+    await bot1.waitFor(
+      () => b1.positions.some(p => p.x === LATE_POSE.x && p.z === LATE_POSE.z),
+      'post-attach pose'
     )
 
     // --- O10: serverbound relay (position, dig, place) ---
@@ -458,6 +507,71 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         chunks: b3.mapChunks.length,
         leftovers: b3.leftovers.length,
         errors: b3.errors.length
+      }
+    )
+
+    // --- O17-O20: the late-attach replay kept the mutated state ---
+    // The first attach replayed the inventory base captured after the join,
+    // every later slot update, and the block edit. The second attach must not
+    // fall back to the join snapshot.
+    const b1PlayNames = b1.names.filter(frame => frame.state === 'play').map(frame => frame.name)
+    const baseIndex = b1PlayNames.indexOf('window_items')
+    const slotIndexes = b1PlayNames.map((name, i) => name === 'set_slot' ? i : -1).filter(i => i >= 0)
+    const baseFrame = b1.windowItems.find(packet => packet.windowId === 0)
+    const baseFilledSlots = (baseFrame?.items ?? [])
+      .map((item, slot) => item.itemCount > 0 ? slot : -1)
+      .filter(slot => slot >= 0)
+    check(
+      'O17',
+      'late-attach replay sends the window 0 base before every later set_slot',
+      baseFrame?.windowId === 0 && baseIndex >= 0 &&
+        slotIndexes.length >= 2 && slotIndexes.every(index => index > baseIndex),
+      { baseIndex, slotIndexes, windowItems: b1.windowItems.length, setSlots: b1.setSlots.length }
+    )
+    check(
+      'O18',
+      'first bot applied both items and no stale slot from the join frame',
+      baseFrame?.items?.[36]?.itemId === 1 &&
+        baseFilledSlots.length === 1 && baseFilledSlots[0] === 36 &&
+        b1.setSlots.some(packet => packet.slot === 40 && packet.item?.itemId === 2 && packet.item?.itemCount === 3) &&
+        b1.setSlots.some(packet => packet.slot === 41 && packet.item?.itemId === 5),
+      {
+        slot36: baseFrame?.items?.[36]?.itemId ?? null,
+        filledSlots: baseFilledSlots,
+        setSlots: b1.setSlots.map(packet => ({ slot: packet.slot, itemId: packet.item?.itemId ?? null }))
+      }
+    )
+    const latestPosition = b1.positions.at(-1)
+    const lateBlockReplayed = b1.blockChanges.some(change =>
+      change.location?.x === LATE_BLOCK.x &&
+      change.location?.y === LATE_BLOCK.y &&
+      change.location?.z === LATE_BLOCK.z)
+    check(
+      'O19',
+      'late block edit is replayed and the last pose is the post-mutation pose',
+      lateBlockReplayed &&
+        latestPosition?.x === LATE_POSE.x &&
+        latestPosition?.y === LATE_POSE.y &&
+        latestPosition?.z === LATE_POSE.z,
+      {
+        blockReplayed: lateBlockReplayed,
+        lastPosition: latestPosition ? { x: latestPosition.x, y: latestPosition.y, z: latestPosition.z } : null
+      }
+    )
+    const baseFrame2 = b2.windowItems.find(packet => packet.windowId === 0)
+    const baseFilledSlots2 = (baseFrame2?.items ?? [])
+      .map((item, slot) => item.itemCount > 0 ? slot : -1)
+      .filter(slot => slot >= 0)
+    check(
+      'O20',
+      'reattach replays the mutated inventory, not the join snapshot',
+      baseFrame2?.items?.[36]?.itemId === 1 &&
+        baseFilledSlots2.length === 1 && baseFilledSlots2[0] === 36 &&
+        b2.setSlots.some(packet => packet.slot === 40 && packet.item?.itemId === 2),
+      {
+        slot36: baseFrame2?.items?.[36]?.itemId ?? null,
+        filledSlots: baseFilledSlots2,
+        setSlots: b2.setSlots.map(packet => ({ slot: packet.slot, itemId: packet.item?.itemId ?? null }))
       }
     )
   } catch (error) {

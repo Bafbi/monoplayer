@@ -78,6 +78,10 @@ export function createBot ({
     positions: [],
     mapChunks: [],
     blockChanges: [],
+    windowItems: [], // decoded clientbound window_items frames
+    setSlots: [], // decoded clientbound set_slot frames
+    heldItemSlots: [], // decoded clientbound held_item_slot frames
+    health: [], // decoded clientbound update_health frames
     ended: null,
     errors: []
   }
@@ -128,6 +132,10 @@ export function createBot ({
   client.on('position', packet => received.positions.push(packet))
   client.on('map_chunk', packet => received.mapChunks.push(packet))
   client.on('block_change', packet => received.blockChanges.push(packet))
+  client.on('window_items', packet => received.windowItems.push(packet))
+  client.on('set_slot', packet => received.setSlots.push(packet))
+  client.on('held_item_slot', packet => received.heldItemSlots.push(packet))
+  client.on('update_health', packet => received.health.push(packet))
 
   client.on('error', error => {
     received.errors.push(String(error?.message ?? error).slice(0, 200))
