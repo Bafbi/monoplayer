@@ -1,4 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#7c3aed"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="32" font-weight="600" fill="#ffffff">M</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GlowSquidye player head">
+  <!-- Front face of the GlowSquidye skin and its hat layer, 8x8 pixels from
+       texture 6a135ebe458957acfc124312130966fc7d88eb0a31ebc15de443f9dbaec49629 -->
+  <defs><clipPath id="head"><rect width="64" height="64" rx="14"/></clipPath></defs>
+  <g clip-path="url(#head)" shape-rendering="crispEdges">
+    <rect width="64" height="64" fill="#126d6e"/>
+    <rect x="0" y="0" width="8" height="8" fill="#126d6e"/>
+    <rect x="8" y="0" width="8" height="8" fill="#eed008"/>
+    <rect x="16" y="0" width="8" height="8" fill="#227e81"/>
+    <rect x="24" y="0" width="16" height="8" fill="#eed008"/>
+    <rect x="40" y="0" width="8" height="8" fill="#227e81"/>
+    <rect x="48" y="0" width="8" height="8" fill="#eed008"/>
+    <rect x="56" y="0" width="8" height="8" fill="#126d6e"/>
+    <rect x="0" y="8" width="8" height="8" fill="#eed008"/>
+    <rect x="8" y="8" width="8" height="8" fill="#f5e420"/>
+    <rect x="16" y="8" width="16" height="8" fill="#f9ffac"/>
+    <rect x="32" y="8" width="16" height="8" fill="#fdfb25"/>
+    <rect x="48" y="8" width="8" height="8" fill="#f5e420"/>
+    <rect x="56" y="8" width="8" height="8" fill="#eed008"/>
+    <rect x="0" y="16" width="8" height="8" fill="#dca027"/>
+    <rect x="8" y="16" width="16" height="8" fill="#eed008"/>
+    <rect x="24" y="16" width="16" height="8" fill="#f5e420"/>
+    <rect x="40" y="16" width="16" height="8" fill="#eed008"/>
+    <rect x="56" y="16" width="8" height="8" fill="#dca027"/>
+    <rect x="0" y="24" width="8" height="8" fill="#227e81"/>
+    <rect x="8" y="24" width="16" height="8" fill="#c6ffdf"/>
+    <rect x="24" y="24" width="8" height="8" fill="#33a1a1"/>
+    <rect x="32" y="24" width="8" height="8" fill="#3ab5b2"/>
+    <rect x="40" y="24" width="16" height="8" fill="#004848"/>
+    <rect x="56" y="24" width="8" height="8" fill="#227e81"/>
+    <rect x="0" y="32" width="8" height="8" fill="#227e81"/>
+    <rect x="8" y="32" width="8" height="8" fill="#81ffc1"/>
+    <rect x="16" y="32" width="8" height="8" fill="#c6ffdf"/>
+    <rect x="24" y="32" width="16" height="8" fill="#2f9799"/>
+    <rect x="40" y="32" width="16" height="8" fill="#c6ffdf"/>
+    <rect x="56" y="32" width="8" height="8" fill="#227e81"/>
+    <rect x="0" y="40" width="8" height="8" fill="#227e81"/>
+    <rect x="8" y="40" width="16" height="8" fill="#2f9799"/>
+    <rect x="24" y="40" width="16" height="8" fill="#33a1a1"/>
+    <rect x="40" y="40" width="8" height="8" fill="#c6ffdf"/>
+    <rect x="48" y="40" width="8" height="8" fill="#81ffc1"/>
+    <rect x="56" y="40" width="8" height="8" fill="#227e81"/>
+    <rect x="0" y="48" width="8" height="8" fill="#126d6e"/>
+    <rect x="8" y="48" width="8" height="8" fill="#227e81"/>
+    <rect x="16" y="48" width="16" height="8" fill="#2f9799"/>
+    <rect x="32" y="48" width="8" height="8" fill="#3ab5b2"/>
+    <rect x="40" y="48" width="8" height="8" fill="#2f9799"/>
+    <rect x="48" y="48" width="8" height="8" fill="#227e81"/>
+    <rect x="56" y="48" width="8" height="8" fill="#126d6e"/>
+    <rect x="0" y="56" width="16" height="8" fill="#126d6e"/>
+    <rect x="16" y="56" width="32" height="8" fill="#227e81"/>
+    <rect x="48" y="56" width="16" height="8" fill="#126d6e"/>
+  </g>
 </svg>
