@@ -82,6 +82,36 @@ function attach ({ frontLeg, core }, uuid = PLAYER) {
   return { denied: false, ...core.attachPlayer({ name: 'Bafbi', uuid }) }
 }
 
+test('a backend resource pack request is answered on the puppet leg', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+
+  rig.backendLeg.deliver({
+    state: 'play',
+    name: 'add_resource_pack',
+    data: { uuid: PLAYER, url: 'https://example.invalid/pack.zip', hash: '', forced: false, prompt: null }
+  })
+  const acks = rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive')
+  assert.equal(acks.length, 2, 'accepted then loaded')
+  assert.deepEqual(acks.map(p => p.packet.result), [3, 0])
+  assert.equal(acks[0].packet.uuid, PLAYER)
+  assert.equal(rig.core.metrics.resourcePackAcks, 1)
+  assert.equal(
+    rig.core.cache.snapshot().generic.some(f => f.name === 'add_resource_pack'),
+    true,
+    'the request is still cached for the attaching client'
+  )
+
+  rig.backendLeg.deliver({
+    state: 'configuration',
+    name: 'add_resource_pack',
+    data: { uuid: OTHER, url: 'https://example.invalid/pack2.zip', hash: '', forced: false, prompt: null }
+  })
+  const configAcks = rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive').slice(2)
+  assert.deepEqual(configAcks.map(p => p.packet.result), [3, 0])
+  assert.equal(rig.core.metrics.resourcePackAcks, 2)
+})
+
 test('login-phase frames never enter the join cache or the replay', () => {
   const rig = makeCore()
   rig.backendLeg.deliver({ state: 'login', name: 'encryption_begin', data: {} })
