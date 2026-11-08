@@ -6,8 +6,9 @@
 //   warm          - backend logged in, cache warming or warmed; attach ready
 //   attached      - one player client attached and driving the puppet
 //   detached      - player gone; puppet session alive on the backend
-//   reconnecting  - backend fault; exactly ONE reconnect scheduled
-//   failed        - the single scheduled reconnect was exhausted
+//   reconnecting  - backend fault; one reconnect armed at a time, with an
+//                   optional retry budget and capped exponential backoff
+//   failed        - the retry budget was exhausted (default: after one attempt)
 //
 // Hard invariants:
 //   - backendLogins counts real backend login events only, so an
@@ -41,12 +42,22 @@ const inertClock = Object.freeze({
 export function createSession ({
   clock = inertClock,
   reconnectDelayMs = 1000,
+  // Production retries until the backend returns; the default keeps the Gate B
+  // fault contract ("one reconnect, total two backend logins") for the tests
+  // and the fake rigs.
+  reconnectPolicy = { attempts: 1, maxDelayMs: 60_000 },
   pose = DEFAULT_POSE,
   // Called once each time a scheduled reconnect fires (the session has moved
   // to boot and the adapter may now re-open the backend). Null keeps the
   // inert-clock behavior: the timer never fires, so the callback never runs.
   onReconnect = null
 } = {}) {
+  const attempts = Number.isFinite(reconnectPolicy?.attempts) && reconnectPolicy.attempts > 0
+    ? Math.floor(reconnectPolicy.attempts)
+    : Infinity
+  const maxDelayMs = Number.isFinite(reconnectPolicy?.maxDelayMs) && reconnectPolicy.maxDelayMs > 0
+    ? Math.floor(reconnectPolicy.maxDelayMs)
+    : 60_000
   let state = STATES.BOOT
   let warmReady = false // join prefix warm: attach requires this
   let backendLogins = 0
@@ -56,6 +67,7 @@ export function createSession ({
   let pendingReconnect = false
   let reconnectTimer = null
   let reconnectScheduledAt = null
+  let reconnectAttempts = 0
   let lastFault = null
 
   // Transition log: [{ t, type, from, to, ...fields }] with injected clock times.
@@ -77,6 +89,9 @@ export function createSession ({
   // Backend connection attempt started (initial boot or after a scheduled
   // reconnect fired). Attaches arriving in 'boot' are rejected.
   function backendConnecting ({ initial = false } = {}) {
+    // A reconnect starts from an empty cache: no attach until the fresh
+    // session completes its own warm.
+    if (!initial) warmReady = false
     if (!initial) {
       transition('reconnect_attempt', STATES.BOOT, { reconnecting: true })
       return
@@ -86,6 +101,8 @@ export function createSession ({
 
   function backendLogin (packet = {}) {
     backendLogins++ // counts real backend login events ONLY
+    reconnectAttempts = 0
+    pendingReconnect = false
     transition('backend_login', STATES.WARM, { backendLogins, entityId: packet.entityId })
     return { backendLogins }
   }
@@ -96,21 +113,58 @@ export function createSession ({
     return warmReady
   }
 
-  // Backend fault (end/error/status). Schedules exactly one reconnect while
-  // the session is alive. Never loops: a second fault while already
-  // reconnecting is recorded but never schedules another timer (F4/F5
-  // "one reconnect, total two backend logins", not a loop).
+  // Exponential backoff, capped. The first attempt uses the base delay so the
+  // Gate B fault contract (one reconnect at 1000 ms) is unchanged.
+  function backoffDelay () {
+    const exponent = Math.min(Math.max(0, reconnectAttempts - 1), 16)
+    return Math.min(reconnectDelayMs * 2 ** exponent, maxDelayMs)
+  }
+
+  function scheduleReconnect (reason) {
+    reconnectAttempts++
+    const delayMs = backoffDelay()
+    pendingReconnect = true
+    reconnectScheduledAt = clock.now()
+    if (reconnectTimer !== null) clock.clearTimeout(reconnectTimer)
+    reconnectTimer = clock.setTimeout(() => {
+      if (!pendingReconnect) return // backendUp() rescinded it
+      pendingReconnect = false
+      reconnectTimer = null
+      transition('reconnect_fired', STATES.BOOT, { delayMs, attempt: reconnectAttempts })
+      // Exactly one call per scheduled reconnect. A fault that arrives while
+      // RECONNECTING returns before scheduling, so it never lands here.
+      if (onReconnect) onReconnect({ delayMs, attempt: reconnectAttempts })
+    }, delayMs)
+    emit('reconnect_scheduled', { delayMs, attempt: reconnectAttempts, reason })
+    return { scheduled: true, state, delayMs, attempt: reconnectAttempts }
+  }
+
+  // A fired attempt failed. Retry while the budget lasts, otherwise fail
+  // closed. `attempts: 1` reproduces the Gate B behavior exactly.
+  function retryOrFail (reason) {
+    if (reconnectAttempts >= attempts) {
+      transition('failed', STATES.FAILED, { reason, backendLogins, attempts: reconnectAttempts })
+      return { scheduled: false, state, failed: true }
+    }
+    transition('reconnect_retry', STATES.RECONNECTING, { reason, attempt: reconnectAttempts })
+    return scheduleReconnect(reason)
+  }
+
+  // Backend fault (end/error/status). A second fault while a reconnect is
+  // already pending is recorded but never arms a second timer. A failed
+  // attempt retries with backoff while the policy allows it.
   function backendDown ({ reason = 'unknown', at = clock.now() } = {}) {
     lastFault = { reason, at }
+    warmReady = false // the cache is reset with the session; require a fresh warm
     if (state === STATES.RECONNECTING) {
       emit('fault_while_reconnecting', { reason }) // recorded, NOT a new timer
       return { scheduled: false, state }
     }
     if (state === STATES.BOOT) {
       if (backendLogins > 0) {
-        // The single reconnect attempt was fired and failed again.
-        transition('failed', STATES.FAILED, { reason, backendLogins })
-        return { scheduled: false, state, failed: true }
+        // A reconnect attempt was fired and the connection dropped before the
+        // play login: retry or fail per policy.
+        return retryOrFail(reason)
       }
       // Initial connect never succeeded: fail fast, no reconnect loop.
       transition('initial_connect_failed', STATES.FAILED, { reason })
@@ -123,21 +177,7 @@ export function createSession ({
     } else {
       transition('backend_down', STATES.RECONNECTING, { reason, frontEnded: false })
     }
-    // Schedule exactly one reconnect.
-    pendingReconnect = true
-    reconnectScheduledAt = clock.now()
-    if (reconnectTimer !== null) clock.clearTimeout(reconnectTimer)
-    reconnectTimer = clock.setTimeout(() => {
-      if (!pendingReconnect) return // backendUp() rescinded it
-      pendingReconnect = false
-      reconnectTimer = null
-      transition('reconnect_fired', STATES.BOOT, { delayMs: reconnectDelayMs })
-      // Exactly one call per scheduled reconnect. A fault that arrives while
-      // RECONNECTING returns before scheduling, so it never lands here.
-      if (onReconnect) onReconnect({ delayMs: reconnectDelayMs })
-    }, reconnectDelayMs)
-    emit('reconnect_scheduled', { delayMs: reconnectDelayMs })
-    return { scheduled: true, state, wasAttached }
+    return { ...scheduleReconnect(reason), wasAttached }
   }
 
   // Backend is reachable again while a reconnect was pending: rescind the
@@ -153,12 +193,11 @@ export function createSession ({
     return { ignored: false, state }
   }
 
-  // The single scheduled reconnect was exhausted (adapter saw the reset
-  // connect fail); called by the adapter after a reconnect attempt fails.
+  // The adapter's connect() threw while the attempt was in flight. Retry while
+  // the policy allows it; the Gate B default fails closed after one attempt.
   function fail () {
-    if (state === STATES.BOOT && backendLogins > 0) {
-      transition('failed', STATES.FAILED, { reason: 'reconnect_exhausted' })
-    }
+    if (state !== STATES.BOOT || backendLogins === 0) return { scheduled: false, state }
+    return retryOrFail('reconnect_failed')
   }
 
   // --- front-leg lifecycle ---

@@ -68,7 +68,7 @@ test('backendDown schedules exactly one onReconnect; a second fault adds none', 
   assert.equal(calls.length, 0, 'the callback waits for the timer')
 
   clock.tick(1000)
-  assert.deepEqual(calls, [{ delayMs: 1000 }], 'exactly one callback per scheduled reconnect')
+  assert.deepEqual(calls, [{ delayMs: 1000, attempt: 1 }], 'exactly one callback per scheduled reconnect')
   assert.equal(s.state, STATES.BOOT)
   assert.equal(clock.pending, 0)
 
@@ -76,6 +76,67 @@ test('backendDown schedules exactly one onReconnect; a second fault adds none', 
   s.backendDown({ reason: 'refused' })
   assert.equal(s.state, STATES.FAILED)
   assert.equal(calls.length, 1)
+})
+
+test('a retry policy keeps reconnecting with capped backoff until the budget runs out', () => {
+  const clock = fakeClock()
+  const calls = []
+  const s = createSession({
+    clock,
+    reconnectDelayMs: 1000,
+    reconnectPolicy: { attempts: 3, maxDelayMs: 5000 },
+    onReconnect: payload => calls.push(payload)
+  })
+  s.backendLogin({})
+  s.warmComplete({})
+
+  s.backendDown({ reason: 'drop' })
+  assert.equal(clock.pending, 1)
+
+  clock.tick(1000)
+  assert.deepEqual(calls, [{ delayMs: 1000, attempt: 1 }])
+  assert.equal(s.state, STATES.BOOT)
+
+  // The fired attempt failed before the play login: back off and retry.
+  s.backendDown({ reason: 'refused' })
+  assert.equal(s.state, STATES.RECONNECTING)
+  clock.tick(2000)
+  assert.deepEqual(calls.at(-1), { delayMs: 2000, attempt: 2 })
+  assert.equal(s.state, STATES.BOOT)
+
+  s.backendDown({ reason: 'refused_again' })
+  clock.tick(4000)
+  assert.deepEqual(calls.at(-1), { delayMs: 4000, attempt: 3 })
+
+  // Budget exhausted: fail closed, no fourth timer.
+  s.backendDown({ reason: 'still_down' })
+  assert.equal(s.state, STATES.FAILED)
+  assert.equal(clock.pending, 0)
+  assert.equal(calls.length, 3)
+})
+
+test('a successful reconnect resets the backoff budget', () => {
+  const clock = fakeClock()
+  const calls = []
+  const s = createSession({
+    clock,
+    reconnectDelayMs: 1000,
+    reconnectPolicy: { attempts: 2, maxDelayMs: 60_000 },
+    onReconnect: payload => calls.push(payload)
+  })
+  s.backendLogin({})
+  s.warmComplete({})
+
+  s.backendDown({ reason: 'drop' })
+  clock.tick(1000)
+  s.backendDown({ reason: 'refused' })
+  clock.tick(2000)
+  assert.equal(calls.length, 2)
+
+  s.backendLogin({ entityId: 7 }) // the second attempt succeeded
+  s.backendDown({ reason: 'later_drop' })
+  clock.tick(1000)
+  assert.deepEqual(calls.at(-1), { delayMs: 1000, attempt: 1 }, 'back to the base delay')
 })
 
 test('a rescinded reconnect never calls onReconnect', () => {
@@ -110,7 +171,7 @@ test('core emits one reconnect_due and the next backend login returns WARM', () 
   assert.equal(dues.length, 0)
 
   clock.tick(1000)
-  assert.deepEqual(dues, [{ delayMs: 1000 }])
+  assert.deepEqual(dues, [{ delayMs: 1000, attempt: 1 }])
   assert.equal(core.session.state, STATES.BOOT)
 
   // A fresh backend login finishes the one reconnect.

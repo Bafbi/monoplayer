@@ -67,7 +67,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxInventories: 32,
     maxGeneric: 512
   }),
-  reconnect: Object.freeze({ delayMs: 1000 }),
+  reconnect: Object.freeze({ delayMs: 1000, attempts: 1, maxDelayMs: 60_000 }),
   redaction: Object.freeze({ sentinel: SENTINEL })
 })
 
@@ -129,9 +129,13 @@ export function createMonoplayer ({
   const session = createSession({
     clock,
     reconnectDelayMs: cfg.reconnect.delayMs,
+    reconnectPolicy: {
+      attempts: cfg.reconnect.attempts ?? 1,
+      maxDelayMs: cfg.reconnect.maxDelayMs ?? 60_000
+    },
     // The core announces the due reconnect; the adapter/orchestrator owns the
     // actual backend connect (the core never touches the backend leg here).
-    onReconnect: ({ delayMs }) => emit('reconnect_due', { delayMs })
+    onReconnect: ({ delayMs, attempt }) => emit('reconnect_due', { delayMs, attempt })
   })
 
   const metrics = {
@@ -206,7 +210,10 @@ export function createMonoplayer ({
   // --- front-leg login pipeline (pure decisions; adapter owns kick/close IO) ---
 
   // Gate 1: Login Start whitelist review. Denied here, i.e. strictly before
-  // Login Success can ever be sent for that connection.
+  // Login Success can ever be sent for that connection. The backend readiness
+  // gate sits here too: a client that logs in while the puppet has no backend
+  // session would be handed an incomplete configuration and crash in registry
+  // loading, so deny early with a reason the front turns into a clear kick.
   function processLoginStart (payload = {}) {
     const decision = identity.reviewLoginStart(payload)
     if (!decision.allowed) {
@@ -214,6 +221,24 @@ export function createMonoplayer ({
       telemetry.metric('monoplayer.denials', 1, { reason: decision.reason, phase: decision.phase })
       log('attachDenied', { reason: decision.reason, phase: decision.phase, uuid: payload.uuid })
       emit('attach_denied', decision)
+      return decision
+    }
+    // Warm/WARM-or-DETACHED is the attach-ready set. A second login while
+    // already attached still passes here so attachPlayer can answer
+    // 'already_attached' with the reason the caller expects.
+    if (!session.isAttachReady() && session.state !== STATES.ATTACHED) {
+      const denied = {
+        allowed: false,
+        reason: 'backend_not_ready',
+        phase: decision.phase,
+        uuid: payload.uuid,
+        name: payload.name
+      }
+      metrics.denials++
+      telemetry.metric('monoplayer.denials', 1, { reason: denied.reason, phase: denied.phase })
+      log('attachDenied', { reason: denied.reason, phase: denied.phase, uuid: payload.uuid })
+      emit('attach_denied', denied)
+      return denied
     }
     return decision
   }
@@ -226,6 +251,21 @@ export function createMonoplayer ({
       telemetry.metric('monoplayer.denials', 1, { reason: decision.reason, phase: decision.phase })
       log('verifyDenied', { reason: decision.reason, phase: decision.phase, uuid: payload.uuid, name: payload.name })
       emit('verify_denied', decision)
+      return decision
+    }
+    if (!session.isAttachReady() && session.state !== STATES.ATTACHED) {
+      const denied = {
+        allowed: false,
+        reason: 'backend_not_ready',
+        phase: decision.phase,
+        uuid: decision.uuid ?? payload.uuid,
+        name: decision.name ?? payload.name
+      }
+      metrics.denials++
+      telemetry.metric('monoplayer.denials', 1, { reason: denied.reason, phase: denied.phase })
+      log('verifyDenied', { reason: denied.reason, phase: denied.phase, uuid: denied.uuid, name: denied.name })
+      emit('verify_denied', denied)
+      return denied
     }
     return decision
   }
