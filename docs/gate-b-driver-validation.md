@@ -16,8 +16,9 @@ display host. This is the driver leg of G0, not the unmodded witness.
 ## Driving the host from the workspace
 
 `tools/nath.sh` wraps the host commands this document used to spell out by
-hand. Every call derives `HYPRLAND_INSTANCE_SIGNATURE` on the host with
-`hyprctl instances -j` and stores nothing, so no caller pastes a session triple:
+hand. `env`, `launch`, and the `kill` fallback derive the session on the host
+with `hyprctl instances -j` and store nothing, so no caller pastes a session
+triple. `shot` and the driver `quit` need no session at all.
 
 ```bash
 tools/nath.sh env
@@ -114,7 +115,10 @@ o.window("Monoplayer Gate B", {
 ```
 
 Verified on `nath`: the window landed on workspace 9 without switching the
-active workspace (T3 Code stayed focused on workspace 3). Normal Minecraft
+active workspace (T3 Code stayed focused on workspace 3). That rule covers the
+runner's CLI launches. `tools/nath.sh launch` passes the same placement as
+exec rules to the compositor, so it keeps the window off your workspace even on
+a host without the config entry. Normal Minecraft
 windows keep their `Minecraft* 26.1.2` class and are not matched.
 
 Prism's per-instance console window is reused across launches, so the console

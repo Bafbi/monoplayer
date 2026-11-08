@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -76,8 +76,14 @@ case "$1" in
   ".[0].instance") echo "$FAKE_SIGNATURE" ;;
   ".[0].wl_socket") echo "$FAKE_WL_SOCKET" ;;
   ".id") sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' ;;
+  ".address") sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' ;;
   "(.class // \\"\\")") sed -n 's/.*"class"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' ;;
-  *"select(.workspace.name"*) sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' ;;
+  *"select(.workspace.name"*)
+    input=$(cat)
+    address=$(sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' <<<"$input")
+    pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' <<<"$input")
+    if [ -n "$address" ]; then echo "$address $pid"; fi
+    ;;
   *) echo "fake jq: unsupported program: $1" >&2; exit 1 ;;
 esac
 `
@@ -110,6 +116,7 @@ esac
 
 // One temp dir per test: the shims, the call log, and the canned replies.
 function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
+  let stop = () => {}
   const dir = mkdtempSync(path.join(tmpdir(), 'nath-'))
   const bin = path.join(dir, 'bin')
   mkdirSync(bin)
@@ -133,7 +140,15 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
     const clients = path.join(dir, 'clients.json')
     const activeWindow = path.join(dir, 'activewindow.json')
     const workspaceSequence = path.join(dir, 'workspaces.txt')
-    writeFileSync(clients, host.clients ?? JSON.stringify([{ class: 'Monoplayer Gate B', address: '0xabc', workspace: { name: '9' } }]))
+    // A real process whose command line carries the instance library path, so
+    // the wrapper's pid check has something to match. t.after stops it.
+    // A real process whose command line carries the instance library path, so the
+    // wrapper's pid check has something to match. t.after stops it; unref keeps
+    // the test process from waiting on it.
+    const keeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)', 'nath-test', 'instances/gate-b-player-fabric/natives'], { stdio: 'ignore' })
+    keeper.unref()
+    stop = () => keeper.kill()
+    writeFileSync(clients, host.clients ?? JSON.stringify([{ class: 'Monoplayer Gate B', address: '0xabc', pid: keeper.pid, workspace: { name: '9' } }]))
     writeFileSync(activeWindow, host.activeWindow ?? JSON.stringify({ class: 'com.t3tools.T3Code' }))
     // One workspace id per activeworkspace call: before the launch, then after.
     writeFileSync(workspaceSequence, (host.workspaces ?? ['2', '2']).join('\n') + '\n')
@@ -154,6 +169,7 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   return {
     dir,
     env,
+    stop: () => stop(),
     run: (args, extra = {}) => spawnSync(TOOL, args, { env: { ...env, ...extra }, encoding: 'utf8' }),
     answer: text => writeFileSync(reply, text),
     answerScript: text => writeFileSync(scriptReply, text),
@@ -398,8 +414,9 @@ test('the wrapper carries no stored signature', () => {
 // launch, with the remote script actually executed against a fake compositor
 // ---------------------------------------------------------------------------
 
-test('launch builds the Lua, waits for the window, and reports a silent launch', () => {
+test('launch builds the Lua, waits for the window, and reports a silent launch', (t) => {
   const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   const run = h.run(['launch', 'gate-b-player-fabric', '-a', 'Bafbi'])
   assert.equal(run.status, 0, run.stderr)
   assert.match(run.stdout, /^INSTANCE=gate-b-player-fabric$/m)
@@ -416,23 +433,27 @@ test('launch builds the Lua, waits for the window, and reports a silent launch',
   assert.match(lua, /focus_on_activate = false/)
 })
 
-test('launch fails when the launch moved the active workspace', () => {
+test('launch fails when the launch moved the active workspace', (t) => {
   const h = harness({ sshBody: EXEC_SSH, host: { workspaces: ['2', '9'] } })
+  t.after(h.stop)
   const run = h.run(['launch', 'gate-b-player-fabric'])
   assert.equal(run.status, 1)
   assert.match(run.stdout, /^SILENT=no$/m)
-  assert.match(run.stderr, /the active workspace moved from 2 to 9/)
+  assert.match(run.stderr, /the launch was not silent: active workspace 2 -> 9/)
+  assert.match(run.stderr, /stop it with: tools\/nath\.sh kill gate-b-player-fabric/)
 })
 
-test('launch fails when the compositor refuses the Lua', () => {
+test('launch fails when the compositor refuses the Lua', (t) => {
   const h = harness({ sshBody: EXEC_SSH, host: { evalMode: 'fail' } })
+  t.after(h.stop)
   const run = h.run(['launch', 'gate-b-player-fabric'])
   assert.equal(run.status, 1)
   assert.match(run.stderr, /the compositor refused the launch: error: bad lua/)
 })
 
-test('launch fails when the client opens no window in the budget', () => {
+test('launch fails when the client opens no window in the budget', (t) => {
   const h = harness({ sshBody: EXEC_SSH, host: { clients: '[]' } })
+  t.after(h.stop)
   const run = h.run(['launch', 'gate-b-player-fabric'], { NATH_LAUNCH_TIMEOUT: '1' })
   assert.equal(run.status, 1)
   assert.match(run.stderr, /opened no window on workspace 9/)
@@ -446,8 +467,9 @@ test('an unreachable host says so instead of leaking ssh exit 255', () => {
   assert.match(run.stderr, /cannot reach bafbi@nath\.tail41e568\.ts\.net/)
 })
 
-test('launch argument quoting survives the transport', () => {
+test('launch argument quoting survives the transport', (t) => {
   const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   const run = h.run(['launch', 'gate-b-player-fabric', '-a', 'x;echo INJECTED'])
   assert.equal(run.status, 0, run.stderr)
   assert.doesNotMatch(run.stdout, /INJECTED/)
@@ -457,4 +479,16 @@ test('launch argument quoting survives the transport', () => {
   // printf %q turned the argument into x\;echo\ INJECTED, and the Lua string
   // doubled each backslash, so the host shell sees one literal argument.
   assert.ok(lua.includes('x\\\\;echo\\\\ INJECTED'), lua)
+})
+
+test('a command substitution in an argument stays text', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric', '-a', '$(id)'])
+  assert.equal(run.status, 0, run.stderr)
+  const lua = readFileSync(path.join(h.dir, 'eval.log'), 'utf8')
+  // printf %q escaped the argument, and the Lua string doubled each backslash,
+  // so the host shell receives one literal argument instead of a substitution.
+  assert.ok(lua.includes('\\\\$\\\\(id\\\\)'), lua)
+  assert.doesNotMatch(run.stdout, /uid=/)
 })

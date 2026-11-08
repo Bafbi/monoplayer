@@ -153,9 +153,9 @@ or carried over between runs.
   on `nath` to be alive, with `DISPLAY`, `XDG_RUNTIME_DIR`, and
   `WAYLAND_DISPLAY` set. `DISPLAY` is required: Minecraft's GLFW uses
   XWayland even on this Wayland session, and without it the client crashes
-  during init and Prism opens its error console. `tools/nath.sh launch` derives
-  all three from the compositor; `tools/nath.sh env` prints them for a manual
-  run. See
+  during init and Prism opens its error console. `tools/nath.sh launch` inherits
+  all three from the compositor; `tools/nath.sh env` derives and prints them for
+  a manual run. See
   [gate-b-driver-validation.md](gate-b-driver-validation.md#driving-the-host-from-the-workspace).
   Under the runner the client lands on workspace 9 silently via the
   `Monoplayer Gate B` window rule. Prism's per-instance

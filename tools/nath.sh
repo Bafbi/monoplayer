@@ -6,10 +6,11 @@
 #   tools/nath.sh kill [instance]            stop the driver client
 #   tools/nath.sh shot <path>                capture the client render to <path>
 #
-# Every call derives the Hyprland signature on the host from
-# "hyprctl instances -j" and never stores it. No caller supplies DISPLAY,
-# XDG_RUNTIME_DIR, WAYLAND_DISPLAY, or HYPRLAND_INSTANCE_SIGNATURE: launch
-# inherits them from the compositor, and shot asks the driver.
+# env, launch, and the kill fallback read the session on the host, deriving the
+# Hyprland signature from "hyprctl instances -j" and storing nothing. No caller
+# supplies DISPLAY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, or
+# HYPRLAND_INSTANCE_SIGNATURE: launch inherits them from the compositor, and
+# shot and the driver quit need no session at all.
 #
 # Environment:
 #   NATH_HOST            SSH target       (default bafbi@nath.tail41e568.ts.net)
@@ -33,7 +34,7 @@ read -r -a ssh_cmd <<<"${NATH_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 ${h
 read -r -a scp_cmd <<<"${NATH_SCP:-scp -q}"
 
 die() { printf 'nath: %s\n' "$1" >&2; exit "${2:-1}"; }
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Values that reach a remote shell are whitelisted, never escaped.
 require_instance() {
@@ -122,7 +123,7 @@ escaped=${launch//\\/\\\\}
 escaped=${escaped//\"/\\\"}
 lua="hl.dispatch(hl.dsp.exec_cmd(\"$escaped\", { workspace = \"9 silent\", no_initial_focus = true, focus_on_activate = false }))"
 
-active_before=$(hyprctl activeworkspace -j | jq -r ".id")
+active_before=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
 # exec_cmd runs the client as a compositor child, so it inherits DISPLAY,
 # WAYLAND_DISPLAY, XDG_RUNTIME_DIR, and the signature. The rules put its window
 # on workspace 9 without switching to it.
@@ -134,8 +135,14 @@ fi
 window=
 deadline=$((SECONDS + ${NATH_LAUNCH_TIMEOUT:-90}))
 while [ $SECONDS -lt $deadline ]; do
-  window=$(hyprctl clients -j | jq -r ".[] | select((.class // \"\") | test(\"^(Monoplayer Gate B|Minecraft)\")) | select(.workspace.name == \"9\") | .address" | head -1)
-  [ -n "$window" ] && break
+  # The window belongs to the instance when its process carries the instance
+  # library path, so another instance cannot stand in.
+  candidate=$(hyprctl clients -j | jq -r ".[] | select((.class // \"\") | test(\"^(Monoplayer Gate B|Minecraft)\")) | select(.workspace.name == \"9\") | \"\(.address) \(.pid)\"" | head -1) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
+  pid=${candidate#* }
+  if [ -n "$candidate" ] && tr "\0" " " < "/proc/$pid/cmdline" | grep -qF -- "instances/$instance/natives"; then
+    window=${candidate%% *}
+    break
+  fi
   sleep 2
 done
 if [ -z "$window" ]; then
@@ -143,16 +150,18 @@ if [ -z "$window" ]; then
   exit 1
 fi
 
-active_after=$(hyprctl activeworkspace -j | jq -r ".id")
-focused=$(hyprctl activewindow -j | jq -r "(.class // \"\")")
+active_after=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
+focused=$(hyprctl activewindow -j | jq -r "(.class // \"\")") || { echo "nath: hyprctl activewindow failed" >&2; exit 1; }
+focused_window=$(hyprctl activewindow -j | jq -r ".address") || focused_window=
 printf "INSTANCE=%s\n" "$instance"
 printf "WINDOW=%s\n" "$window"
 printf "WORKSPACE=9\n"
-if [ "$active_after" = "$active_before" ]; then
+if [ "$active_after" = "$active_before" ] && [ "$focused_window" != "$window" ]; then
   printf "SILENT=yes\n"
 else
   printf "SILENT=no\n"
-  echo "nath: the active workspace moved from $active_before to $active_after during launch" >&2
+  echo "nath: the launch was not silent: active workspace $active_before -> $active_after" >&2
+  echo "nath: the client is running; stop it with: tools/nath.sh kill $instance" >&2
   exit 1
 fi
 printf "ACTIVE_WORKSPACE=%s\n" "$active_after"
@@ -234,7 +243,10 @@ cmd_shot() {
   mkdir -p "$(dirname "$target")"
   # Copy beside the target and move only after the PNG check, so a failed
   # capture never leaves a file that looks like evidence.
-  "${scp_cmd[@]}" "${host}:${path}" "$target.part" || die "scp failed for ${host}:${path}"
+  if ! "${scp_cmd[@]}" "${host}:${path}" "$target.part"; then
+    rm -f "$target.part"
+    die "scp failed for ${host}:${path}"
+  fi
   magic=$(od -An -tx1 -N8 "$target.part" | tr -d ' \n')
   if [ "$magic" != 89504e470d0a1a0a ]; then
     rm -f "$target.part"
