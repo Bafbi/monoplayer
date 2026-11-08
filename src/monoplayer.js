@@ -72,6 +72,16 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxGeneric: 512
   }),
   reconnect: Object.freeze({ delayMs: 1000, attempts: 1, maxDelayMs: 60_000 }),
+  transfer: Object.freeze({
+    // Follow a backend transfer on the puppet leg. The front client is always
+    // detached; it rejoins the proxy after the puppet is warm on the target.
+    follow: true,
+    // A chain deeper than this, or a repeated target, is refused.
+    chainLimit: 8,
+    // After this long on one server, the chain history resets, so a later
+    // transfer to a previously visited server is allowed again.
+    chainResetMs: 120_000
+  }),
   redaction: Object.freeze({ sentinel: SENTINEL })
 })
 
@@ -81,6 +91,7 @@ export function loadConfig (doc = {}) {
     ...doc,
     bounds: { ...DEFAULT_CONFIG.bounds, ...(doc.bounds ?? {}) },
     reconnect: { ...DEFAULT_CONFIG.reconnect, ...(doc.reconnect ?? {}) },
+    transfer: { ...DEFAULT_CONFIG.transfer, ...(doc.transfer ?? {}) },
     front: { ...DEFAULT_CONFIG.front, ...(doc.front ?? {}) },
     backend: { ...DEFAULT_CONFIG.backend, ...(doc.backend ?? {}) },
     puppet: { ...DEFAULT_CONFIG.puppet, ...(doc.puppet ?? {}) }
@@ -90,6 +101,15 @@ export function loadConfig (doc = {}) {
   }
   if (merged.chat !== 'read-only' && merged.chat !== 'off') {
     throw new TypeError("config.chat must be 'read-only' or 'off'")
+  }
+  if (typeof merged.transfer.follow !== 'boolean') {
+    throw new TypeError('config.transfer.follow must be a boolean')
+  }
+  if (!Number.isInteger(merged.transfer.chainLimit) || merged.transfer.chainLimit < 1) {
+    throw new TypeError('config.transfer.chainLimit must be a positive integer')
+  }
+  if (!Number.isFinite(merged.transfer.chainResetMs) || merged.transfer.chainResetMs < 0) {
+    throw new TypeError('config.transfer.chainResetMs must be a non-negative number')
   }
   return merged
 }
@@ -142,7 +162,11 @@ export function createMonoplayer ({
     },
     // The core announces the due reconnect; the adapter/orchestrator owns the
     // actual backend connect (the core never touches the backend leg here).
-    onReconnect: ({ delayMs, attempt }) => emit('reconnect_due', { delayMs, attempt })
+    onReconnect: ({ delayMs, attempt }) => {
+      const target = pendingTransfer
+      pendingTransfer = null
+      emit('reconnect_due', { delayMs, attempt, target })
+    }
   })
 
   const metrics = {
@@ -162,6 +186,8 @@ export function createMonoplayer ({
     clientboundBlockedByName: {},
     clientboundUnclassified: 0,
     transfersBlocked: 0,
+    transfersFollowed: 0,
+    transfersRefused: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
@@ -192,7 +218,6 @@ export function createMonoplayer ({
   // Connection-control frames that are worth one log line each. Chat stays
   // out: a blocked signed chat frame is counted, not logged per message.
   const LOGGED_BLOCKS = new Set([
-    'transfer',
     'start_configuration',
     'kick_disconnect',
     'cookie_request',
@@ -202,9 +227,11 @@ export function createMonoplayer ({
     'disconnect',
     'code_of_conduct'
   ])
-  const TRANSFER_NOTICE =
+  const TRANSFER_REFUSED_NOTICE =
     '[Monoplayer] The server asked to move this session elsewhere. ' +
-    'The proxy blocked it, so you stay on the current server.'
+    'The proxy could not follow it, so you stay on the current server.'
+  const TRANSFER_FOLLOW_REASON =
+    'This session is moving. Reconnect in a few seconds to continue.'
   const RECONFIGURE_REASON =
     'The server reconfigured this session. Reconnect in a few seconds.'
 
@@ -214,8 +241,10 @@ export function createMonoplayer ({
   let started = false
   let attached = false // mirrors session state === ATTACHED
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
-  let transferNoticeSent = false // one notice per attach
+  let transferNoticeSent = false // one refusal notice per attach
   let reconfigureRequested = false // this backend end is a server reconfiguration
+  let pendingTransfer = null // target for the next reconnect_due
+  const transferChain = { visited: new Set(), depth: 0, resetTimer: null }
 
   function log (event, fields = {}) {
     const line = redact(JSON.stringify({ t: clock?.now?.() ?? Date.now(), event, ...fields }))
@@ -323,10 +352,11 @@ export function createMonoplayer ({
   }
 
   // Every clientbound frame that must not cross to the front goes through
-  // here: count, log the rare ones, and (for a transfer) tell the player once.
+  // here: count, log the rare ones. A transfer is handled separately because
+  // it has a follow decision (and a refused transfer gets the local notice).
   // The cache and join-synth consult the same policy, so this is the visible
   // half of one decision, not a separate rule.
-  function blockClientbound (state, name, policy = {}, data = {}) {
+  function blockClientbound (state, name, policy = {}) {
     metrics.clientboundBlocked++
     bumpName(metrics.clientboundBlockedByName, name)
     if (policy.unknown) {
@@ -337,30 +367,139 @@ export function createMonoplayer ({
       }
       return
     }
-    if (name === 'transfer') {
-      metrics.transfersBlocked++
-      log('transferBlocked', { state, host: data.host ?? null, port: data.port ?? null })
-      if (state === 'play' && isAttached() && !transferNoticeSent) sendTransferNotice()
-      return
-    }
     if (LOGGED_BLOCKS.has(name)) log('clientboundBlocked', { state, name })
   }
 
+  // The refusal notice is local proxy speech, not server speech. It never
+  // carries the target address.
   function sendTransferNotice () {
     transferNoticeSent = true
     try {
-      // A local proxy notice, not server speech. The hand-built NBT matches
-      // the prismarine-nbt shape the library serializes for anonymousNbt.
       frontLeg.write('system_chat', {
         content: {
           type: 'compound',
-          value: { text: { type: 'string', value: TRANSFER_NOTICE } }
+          value: { text: { type: 'string', value: TRANSFER_REFUSED_NOTICE } }
         },
         isActionBar: false
       })
     } catch (error) {
       log('transferNoticeFailed', { error: String(error?.message ?? error) })
     }
+  }
+
+  // Shared teardown for a session that cannot continue: a backend fault, a
+  // server reconfiguration, or a followed transfer. The transfer branch calls
+  // this synchronously before ending the leg, because a socket end event can
+  // be skipped when the next connect replaces the client first.
+  function teardownBackend ({ reason, kickReason = 'backend_disconnected', reconfiguring = false } = {}) {
+    if (session.state === STATES.RECONNECTING) {
+      const outcome = session.backendDown({ reason })
+      log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
+      return outcome
+    }
+    cache.reset()
+    log('cacheReset', { reason: 'backend_down', backendLogins: session.backendLogins, reconfiguring })
+    if (isAttached()) {
+      // Session invariant: the attaching client cannot survive the backend.
+      detachedHandoff()
+      session.detach({ reason: `backend_down:${reason}` })
+      const outcome = session.backendDown({ reason })
+      log('backendDown', { reason, frontEnded: true, outcome, reconfiguring })
+      frontLeg.end(kickReason)
+      emit('backend_down', { reason, target: pendingTransfer })
+      return outcome
+    }
+    const outcome = session.backendDown({ reason })
+    log('backendDown', { reason, frontEnded: false, outcome, reconfiguring })
+    emit('backend_down', { reason, target: pendingTransfer })
+    return outcome
+  }
+
+  function clearTransferChain (reason) {
+    const had = transferChain.depth > 0
+    if (transferChain.resetTimer) {
+      clock?.clearTimeout?.(transferChain.resetTimer)
+      transferChain.resetTimer = null
+    }
+    transferChain.visited.clear()
+    transferChain.depth = 0
+    if (had) log('transferChainReset', { reason })
+  }
+
+  // A server we stay on for a while is no longer part of a redirect chain.
+  // Without this, returning to a previously visited server later in the same
+  // process would look like a loop.
+  function scheduleTransferChainReset () {
+    if (transferChain.resetTimer) {
+      clock?.clearTimeout?.(transferChain.resetTimer)
+      transferChain.resetTimer = null
+    }
+    if (!clock?.setTimeout || !cfg.transfer.chainResetMs) return
+    transferChain.resetTimer = clock.setTimeout(() => {
+      transferChain.resetTimer = null
+      clearTransferChain('dwell')
+    }, cfg.transfer.chainResetMs)
+    transferChain.resetTimer?.unref?.()
+  }
+
+  function refuseTransfer (reason, host, port, valid) {
+    metrics.transfersRefused++
+    log('transferRefused', {
+      reason,
+      host: valid ? host : null,
+      port: valid ? port : null,
+      depth: transferChain.depth
+    })
+    if (isAttached() && !transferNoticeSent) sendTransferNotice()
+  }
+
+  // A backend transfer. The frame never crosses to the front; the decision is
+  // whether the puppet follows it. Following means: end this session, dial the
+  // target on the next reconnect, reset the cache, detach the front client.
+  function handleTransfer (data = {}) {
+    metrics.clientboundBlocked++
+    metrics.transfersBlocked++
+    bumpName(metrics.clientboundBlockedByName, 'transfer')
+
+    const host = typeof data.host === 'string' ? data.host.trim() : ''
+    const port = Number(data.port)
+    const valid = host.length > 0 && Number.isInteger(port) && port > 0 && port <= 65535
+    if (!cfg.transfer.follow) return refuseTransfer('disabled', host, port, valid)
+    if (!valid) return refuseTransfer('invalid_target', host, port, valid)
+    const key = `${host}:${port}`
+    if (transferChain.visited.has(key)) return refuseTransfer('loop', host, port, true)
+    if (transferChain.depth >= cfg.transfer.chainLimit) return refuseTransfer('chain_limit', host, port, true)
+
+    if (transferChain.resetTimer) {
+      clock?.clearTimeout?.(transferChain.resetTimer)
+      transferChain.resetTimer = null
+    }
+    transferChain.visited.add(key)
+    transferChain.depth++
+    pendingTransfer = { host, port }
+    metrics.transfersFollowed++
+    log('transferFollow', { host, port, depth: transferChain.depth })
+
+    teardownBackend({ reason: 'backend_transfer', kickReason: TRANSFER_FOLLOW_REASON })
+    try {
+      backendLeg.end('backend_transfer')
+    } catch (error) {
+      log('transferFollowEndFailed', { error: String(error?.message ?? error) })
+    }
+  }
+
+  // The orchestrator calls this when a followed target cannot be reached; the
+  // next reconnect must use the configured base backend.
+  function abortTransfer (reason = 'aborted') {
+    const abandoned = pendingTransfer
+    pendingTransfer = null
+    clearTransferChain(reason)
+    log('transferAborted', {
+      reason,
+      host: abandoned?.host ?? null,
+      port: abandoned?.port ?? null
+    })
+    return { abandoned }
   }
 
   // Called by the front-leg adapter after gates 1+2 pass and Login Success
@@ -430,31 +569,22 @@ export function createMonoplayer ({
     started = true
 
     backendLeg.setEndHandler(({ reason = 'backend_end' } = {}) => {
-      // A server-initiated reconfiguration kills the puppet's play session on
-      // purpose; the reconnect below is the recovery, not a fault reaction.
       const reconfiguring = reconfigureRequested
       reconfigureRequested = false
-      // P1#1: a backend end invalidates the whole state cache. Frames pinned
-      // from the dead session (config prefix, join prefix, warm-state
-      // domains) must never replay onto an attaching client after a
-      // reconnect + fresh login. The fresh session's own configuration and
-      // join prefix re-pin the cache from scratch (warm recompletes at its
-      // first chunk_batch_finished), so a reattach replays exactly one
-      // login and the new prefix — never the dead session's state mid-play.
-      cache.reset()
-      log('cacheReset', { reason: 'backend_down', backendLogins: session.backendLogins, reconfiguring })
-      if (isAttached()) {
-        // Session invariant: the attaching client cannot survive the backend.
-        detachedHandoff()
-        session.detach({ reason: `backend_down:${reason}` })
+      // A transfer already tore the session down synchronously; the late
+      // socket end is recorded, not replayed.
+      if (session.state === STATES.RECONNECTING) {
         const outcome = session.backendDown({ reason })
-        log('backendDown', { reason, frontEnded: true, outcome, reconfiguring })
-        frontLeg.end(reconfiguring ? RECONFIGURE_REASON : 'backend_disconnected')
-      } else {
-        const outcome = session.backendDown({ reason })
-        log('backendDown', { reason, frontEnded: false, outcome, reconfiguring })
+        log('backendEndLate', { reason, outcome })
+        return
       }
-      emit('backend_down', { reason })
+      // A normal fault resets the redirect chain; a followed transfer keeps it.
+      if (pendingTransfer === null) clearTransferChain('backend_end')
+      teardownBackend({
+        reason,
+        reconfiguring,
+        kickReason: reconfiguring ? RECONFIGURE_REASON : 'backend_disconnected'
+      })
     })
 
     backendLeg.setErrorHandler(({ error } = {}) => {
@@ -484,6 +614,19 @@ export function createMonoplayer ({
         if (name === 'ping') {
           // Per-leg latency ping: answer on the puppet leg, never replay.
           backendLeg.write('pong', { id: data.id })
+          return
+        }
+        if (name === 'transfer') {
+          // A configuration-phase transfer happens before the play login, when
+          // the session has no warm state to move. v1 blocks it (counted) and
+          // leaves the session where it is; the play-state follow path is the
+          // product behavior.
+          metrics.transfersBlocked++
+          log('transferBlocked', {
+            state: 'configuration',
+            host: typeof data.host === 'string' ? data.host : null,
+            port: Number.isInteger(data.port) ? data.port : null
+          })
           return
         }
         if (policy.decision === DECISION.BLOCK) {
@@ -579,6 +722,7 @@ export function createMonoplayer ({
       // replayed login frame during an already-warm session is not a login.
       if (session.state === STATES.BOOT) {
         session.backendLogin({ entityId: data.entityId })
+        scheduleTransferChainReset()
         log('backendLogin', { entityId: data.entityId, backendLogins: session.backendLogins })
         emit('backend_login', { entityId: data.entityId })
       }
@@ -643,6 +787,11 @@ export function createMonoplayer ({
     }
     if (name === 'add_resource_pack') answerResourcePack(data)
 
+    if (name === 'transfer') {
+      handleTransfer(data)
+      return
+    }
+
     if (name === 'start_configuration') {
       // The server wants this connection to re-enter configuration. The front
       // client cannot follow that on its own connection (the proxy would have
@@ -705,6 +854,7 @@ export function createMonoplayer ({
     processVerifySession,
     attachPlayer,
     detachPlayer,
+    abortTransfer,
     // lifecycle:
     start,
     stop,

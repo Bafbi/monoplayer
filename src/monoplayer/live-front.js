@@ -592,6 +592,7 @@ function createFrontLeg ({
         const socketServer = current.socketServer
         if (!socketServer) { server = null; resolve(); return }
         try {
+          socketServer.closeAllConnections?.()
           socketServer.close(() => { server = null; resolve() })
         } catch {
           server = null

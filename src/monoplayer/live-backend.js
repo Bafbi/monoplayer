@@ -200,7 +200,8 @@ function createBackendLeg ({
   dialogAction,
   prepareConnection,
   releaseTokens,
-  connectLogFields
+  connectLogFields,
+  validateTarget = () => true
 }) {
   let frameHandler = null
   let endHandler = null
@@ -209,6 +210,11 @@ function createBackendLeg ({
   let ended = false
   let forwarder = null
   let closePromise = null
+  // Cookies are per backend chain: a transfer target is another front of the
+  // same network and may need the cookie the previous front stored. The jar
+  // clears only when the orchestrator returns to the configured base target.
+  const cookies = new Map()
+  let target = { host, port }
 
   function onError ({ error } = {}) {
     const message = String(error?.message ?? error).slice(0, 200)
@@ -226,7 +232,7 @@ function createBackendLeg ({
     // May throw synchronously (the live writer-lock refusal keeps that shape).
     // A reconnect re-acquires the custody lock the ended connection released.
     const connection = prepareConnection()
-    log('backendConnect', connectLogFields(connection))
+    log('backendConnect', connectLogFields(connection, target))
     ended = false
 
     return new Promise((resolve, reject) => {
@@ -258,8 +264,8 @@ function createBackendLeg ({
 
       try {
         const options = {
-          host,
-          port,
+          host: target.host,
+          port: target.port,
           version,
           username: connection.username,
           auth: connection.auth,
@@ -366,8 +372,25 @@ function createBackendLeg ({
       })
 
       // One forwarder per connection: counters and pairing state never leak
-      // across a reconnect.
-      forwarder = createBackendFrameForwarder({ deliver: frame => frameHandler?.(frame) })
+      // across a reconnect. Cookies are answered on this leg; the core blocks
+      // them from the front.
+      forwarder = createBackendFrameForwarder({
+        deliver: frame => {
+          if (frame.name === 'store_cookie' && typeof frame.data?.key === 'string') {
+            cookies.set(frame.data.key, frame.data.value)
+          } else if (frame.name === 'cookie_request' && typeof frame.data?.cookie === 'string') {
+            try {
+              socketClient.write('cookie_response', {
+                key: frame.data.cookie,
+                value: cookies.get(frame.data.cookie) ?? undefined
+              })
+            } catch (error) {
+              log('cookieResponseFailed', { error: String(error?.message ?? error).slice(0, 200) })
+            }
+          }
+          frameHandler?.(frame)
+        }
+      })
       socketClient.on('packet', forwarder.onPacket)
       socketClient.on('raw', forwarder.onRaw)
     })
@@ -388,6 +411,25 @@ function createBackendLeg ({
       if (!client) throw new Error('backend leg not connected')
       client.writeRaw(buffer)
     },
+    // Point the next connect at another backend. The caller must have ended
+    // the current connection first. `keepCookies` carries the session cookie
+    // across a transfer chain; a return to the base target clears it.
+    setTarget (next = {}, { keepCookies = false } = {}) {
+      if (client && !ended) throw new Error('cannot change the backend target while connected')
+      const nextHost = typeof next.host === 'string' ? next.host.trim() : ''
+      const nextPort = Number(next.port)
+      if (!nextHost || !Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) {
+        throw new TypeError('invalid backend target')
+      }
+      if (!validateTarget({ host: nextHost, port: nextPort })) {
+        throw new TypeError(`backend target rejected: ${nextHost}:${nextPort}`)
+      }
+      target = { host: nextHost, port: nextPort }
+      if (!keepCookies) cookies.clear()
+      return { ...target }
+    },
+    get target () { return { ...target } },
+    get cookieCount () { return cookies.size },
     end () {
       ended = true
       try { client?.end('proxy_stopped') } catch { /* already down */ }
@@ -504,15 +546,17 @@ export function createLiveBackendLeg (options = {}) {
     port,
     version,
     log,
-    connectTimeoutMs: 0, // live connect behavior is unchanged
+    // A followed target that accepts TCP and then stalls must not leave the
+    // connect promise pending forever; the timeout releases the token lock.
+    connectTimeoutMs: 60_000,
     dialogAction,
     prepareConnection: acquireTokens,
     releaseTokens,
     // Custody paths and identity labels only — no token material. cacheAccount
     // is a legacy selector, never an identity label.
-    connectLogFields: () => ({
-      host,
-      port,
+    connectLogFields: (connection, currentTarget) => ({
+      host: currentTarget.host,
+      port: currentTarget.port,
       accountUuid: uuid ?? custody?.uuid ?? null,
       accountAlias: account ?? null,
       dir,
@@ -568,6 +612,12 @@ export function createOfflineBackendLeg (options = {}) {
     dialogAction: null,
     prepareConnection: () => ({ username, auth: 'offline' }),
     releaseTokens: () => {},
-    connectLogFields: () => ({ host, port, username, auth: 'offline' })
+    connectLogFields: (connection, currentTarget) => ({
+      host: currentTarget.host,
+      port: currentTarget.port,
+      username,
+      auth: 'offline'
+    }),
+    validateTarget: next => isLoopbackHost(next.host)
   })
 }

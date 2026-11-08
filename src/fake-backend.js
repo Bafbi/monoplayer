@@ -261,12 +261,28 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     log('sendTransfer', { host, port })
   }
 
+  // Cookie round trip on the puppet leg: store, then request.
+  function sendStoreCookie (key, value) {
+    for (const client of Object.values(server.clients)) {
+      client.write('store_cookie', { key, value: Buffer.from(String(value)) })
+    }
+    log('sendStoreCookie', { key })
+  }
+
+  function sendCookieRequest (cookie) {
+    for (const client of Object.values(server.clients)) {
+      client.write('cookie_request', { cookie })
+    }
+    log('sendCookieRequest', { cookie })
+  }
+
   function close () {
     for (const client of Object.values(server.clients)) {
       try { client.socket?.destroy() } catch {}
     }
+    try { server.socketServer.closeAllConnections?.() } catch {}
     try { server.socketServer.close() } catch {}
   }
 
-  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendWindowItems, sendSetSlot, sendPlayerChat, sendSystemChat, sendTransfer, close }
+  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendWindowItems, sendSetSlot, sendPlayerChat, sendSystemChat, sendTransfer, sendStoreCookie, sendCookieRequest, close }
 }

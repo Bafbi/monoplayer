@@ -68,18 +68,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
   const assertions = []
   const logs = []
+  let stopping = false
   let failed = false
   let phase = 'setup'
   let exitCode = 0
   let runError = null
 
   let fake = null
+  let fake2 = null
   let front = null
   let backend = null
   let core = null
   let bot1 = null
   let bot2 = null
   let bot3 = null
+  let bot4 = null
   let stranger = null
 
   const evidence = {
@@ -111,6 +114,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // --- setup: fake backend, config, real legs, core ---
     fake = await createFakeBackend({ port: 0, logStream: null })
     evidence.backendPort = fake.port
+    // A second backend is the target of the followed transfer (O21-O24).
+    fake2 = await createFakeBackend({ port: 0, logStream: null })
+    evidence.backend2Port = fake2.port
+    const baseTarget = { host: '127.0.0.1', port: fake.port }
 
     const offlineWhitelist = [offlineUuid('Attach'), offlineUuid('Second')]
     const puppetUuid = offlineUuid('GlowSquidye')
@@ -163,13 +170,18 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // One backend.connect() per reconnect_due. The guard makes a loop
     // impossible even if two dues were ever emitted close together.
     let reconnecting = false
-    core.on('reconnect_due', async ({ delayMs } = {}) => {
-      if (reconnecting) return
+    core.on('reconnect_due', async ({ delayMs, target } = {}) => {
+      if (stopping || reconnecting) return
       reconnecting = true
       core.session.backendConnecting({ initial: false })
       try {
+        backend.setTarget(target ?? baseTarget, { keepCookies: target !== undefined && target !== null })
         await backend.connect()
-        log('backendReconnect', { delayMs, backendLogins: core.session.backendLogins })
+        log('backendReconnect', {
+          delayMs,
+          target: target ? `${target.host}:${target.port}` : null,
+          backendLogins: core.session.backendLogins
+        })
       } catch (error) {
         core.session.fail()
         log('backendReconnectFailed', { delayMs, error: String(error?.message ?? error).slice(0, 300) })
@@ -575,44 +587,127 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
-    // --- O21: transfer containment ---
-    // A clientbound transfer tells the *attached client* to reconnect
-    // elsewhere. Relaying it moved the human off the proxy as their own
-    // account on 2026-11-08. The bot must stay connected, never see the
-    // frame, and get one local notice instead.
+    // --- O21-O24: follow a transfer on the puppet leg ---
+    // The transfer frame never reaches the attached client (that is the
+    // 2026-11-08 bypass). The puppet moves to the second fake backend, warms
+    // there, and the bot is detached with a clear reason; a fresh bot then
+    // attaches and sees the new server's state.
     const transferMark = b3.names.length
-    fake.sendTransfer('sky-2.excalia.fr', 25565)
-    await waitFor(() => core.metrics.transfersBlocked === 1, 'transfer blocked')
-    await bot3.waitFor(
-      () => b3.systemChat.some(packet => JSON.stringify(packet).includes('blocked')),
-      'transfer notice'
+    const loginsBeforeTransfer = core.session.backendLogins
+    const target = { host: '127.0.0.1', port: fake2.port }
+    fake.sendTransfer(target.host, target.port)
+    await waitFor(() => core.metrics.transfersFollowed === 1, 'transfer follow decided')
+    await waitFor(() => fake2.received.logins === 1, 'puppet login on the target')
+    await waitFor(
+      () => core.session.backendLogins === loginsBeforeTransfer + 1 && core.session.warmReady === true,
+      'target warm after the move',
+      15_000
     )
+    await withTimeout(bot3.ended, 10_000, 'bot3 end after transfer')
+
     const afterTransfer = b3.names.slice(transferMark).map(frame => frame.name)
+    const kickText = JSON.stringify(b3.kick ?? '')
     check(
       'O21',
-      'a backend transfer is blocked, never moves the client, and notifies locally',
+      'a followed transfer never reaches the client and detaches it with a moving reason',
       !afterTransfer.includes('transfer') &&
-        afterTransfer.includes('system_chat') &&
-        b3.ended === null &&
-        b3.errors.length === 0,
+        core.metrics.transfersBlocked === 1 &&
+        core.metrics.transfersFollowed === 1 &&
+        /moving/i.test(kickText),
       {
         frames: afterTransfer,
+        kick: kickText,
         ended: b3.ended,
-        errors: b3.errors.length,
-        transfersBlocked: core.metrics.transfersBlocked
+        blocked: core.metrics.transfersBlocked,
+        followed: core.metrics.transfersFollowed
       }
     )
+    check(
+      'O22',
+      'the puppet follows the target and re-warms there',
+      fake2.received.logins === 1 &&
+        core.session.backendLogins === loginsBeforeTransfer + 1 &&
+        core.session.warmReady === true &&
+        core.session.state === 'warm',
+      {
+        loginsBeforeTransfer,
+        fake2Logins: fake2.received.logins,
+        backendLogins: core.session.backendLogins,
+        warmReady: core.session.warmReady,
+        state: core.session.state
+      }
+    )
+
+    // Target-specific state, cached before the fresh client attaches.
+    const TARGET_BLOCK = { x: 9, y: 0, z: 9 }
+    fake2.sendBlockChange(TARGET_BLOCK)
+    await waitFor(
+      () => core.cache.snapshot().blocks.some(entry =>
+        entry.data?.location?.x === 9 &&
+        entry.data?.location?.y === 0 &&
+        entry.data?.location?.z === 9),
+      'target block cached'
+    )
+
+    // Cookies on the puppet leg: store_cookie is answered on the next request.
+    fake2.sendStoreCookie('session', 'abc')
+    fake2.sendCookieRequest('session')
+    await waitFor(
+      () => fake2.received.cookieResponses.some(packet =>
+        packet.key === 'session' && Buffer.from(packet.value ?? []).toString() === 'abc'),
+      'cookie response on the puppet leg'
+    )
+
+    await waitFor(() => front.attached === null, 'front attach slot cleared after the kick')
+    bot4 = createBot({ port: evidence.frontPort, username: 'Attach' })
+    await bot4.ready()
+    const b4 = bot4.received
+    check(
+      'O23',
+      'a fresh attach after the move replays the target server state',
+      b4.login?.entityId === 42 &&
+        b4.blockChanges.some(change =>
+          change.location?.x === 9 && change.location?.y === 0 && change.location?.z === 9) &&
+        b4.leftovers.length === 0 &&
+        b4.errors.length === 0,
+      {
+        entityId: b4.login?.entityId ?? null,
+        blocks: b4.blockChanges.map(change => change.location),
+        leftovers: b4.leftovers.length,
+        errors: b4.errors.length
+      }
+    )
+    check(
+      'O24',
+      'the puppet leg answers a stored cookie request',
+      fake2.received.cookieResponses.some(packet =>
+        packet.key === 'session' && Buffer.from(packet.value ?? []).toString() === 'abc'),
+      {
+        responses: fake2.received.cookieResponses.map(packet => ({
+          key: packet.key,
+          value: Buffer.from(packet.value ?? []).toString()
+        }))
+      }
+    )
+    evidence.transfer = {
+      target,
+      fake2Logins: fake2.received.logins,
+      backendLogins: core.session.backendLogins,
+      botEnded: b3.ended
+    }
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
-    for (const bot of [bot3, bot2, bot1, stranger]) {
+    stopping = true
+    for (const bot of [bot4, bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }
     try { await backend?.close?.() } catch { /* best effort */ }
     try { fake?.close?.() } catch { /* best effort */ }
+    try { fake2?.close?.() } catch { /* best effort */ }
 
     if (failed && exitCode === 0) exitCode = 1
     if (runError && exitCode === 0) exitCode = 1
