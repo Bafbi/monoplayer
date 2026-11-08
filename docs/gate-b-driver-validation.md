@@ -37,6 +37,8 @@ tools/nath.sh shot testdata/gate-b-witness-2026-11-06.png
   `prismlauncher`.
 - `shot` asks the driver for its render target and copies the PNG back with
   `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
+  This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
+  which already rejects screen-reading automation on the official client.
 - `kill` sends the driver `quit`, then falls back to the client JVM's
   `-Djava.library.path` anchor for a wedged client.
 
