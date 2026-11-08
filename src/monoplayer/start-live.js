@@ -15,6 +15,10 @@
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_LOG                                      JSONL log file (default: stdout)
+//   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL
+//   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
+//   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory
+//   MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 256 MiB)
 //
 // Sequence (simplicity rules; one client, one backend leg, direct Paper):
 //   1. resolve config (JSON + env), resolve the puppet account, load the
@@ -37,12 +41,13 @@ import { createLiveBackendLeg } from './live-backend.js'
 import { createLiveFrontLeg } from './live-front.js'
 import { waitForReady } from './live-readiness.js'
 import { createWireChecker } from './wire-check.js'
+import { createTelemetry } from './telemetry.js'
+import { createJournal } from './journal.js'
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)
   return i >= 0 ? argv[i + 1] : undefined
 }
-const has = (argv, name) => argv.includes(name)
 
 export function envOverlay (doc, env = process.env, warn = () => {}) {
   const out = { ...doc }
@@ -213,28 +218,43 @@ export async function startLive ({ argv = [], io = process } = {}) {
     log('debugFramedDump', { file: framedFile })
   }
 
+  // --- telemetry + journal (both inert unless their env is set) ---
+  // Telemetry carries the puppet alias as a resource attribute; the alias and
+  // account UUID are not secrets.
+  const accountAlias = resolved?.account.alias ?? null
+  const telemetryEnv = { ...process.env }
+  if (accountAlias) telemetryEnv.MONOPLAYER_ACCOUNT_ALIAS = accountAlias
+  const telemetry = createTelemetry({ env: telemetryEnv, log })
+  const journalMaxBytes = Number(process.env.MONOPLAYER_JOURNAL_MAX_BYTES)
+  const journal = createJournal({
+    dir: process.env.MONOPLAYER_JOURNAL_DIR,
+    maxBytes: Number.isFinite(journalMaxBytes) && journalMaxBytes > 0
+      ? Math.floor(journalMaxBytes)
+      : undefined
+  })
+
   // --- 2. legs + core ---
   const backend = resolved
     ? createLiveBackendLeg({
-        host: cfg.backend.host,
-        port: cfg.backend.port,
-        version: cfg.version,
-        accountDir: resolved.account.dir,
-        account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
-        uuid: resolved.account.uuid,
-        authTitle: resolved.account.profile?.authTitle ?? null,
-        deviceType: resolved.account.profile?.deviceType ?? null,
-        dialogAction: cfg.dialogAction,
-        log
-      })
+      host: cfg.backend.host,
+      port: cfg.backend.port,
+      version: cfg.version,
+      accountDir: resolved.account.dir,
+      account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
+      uuid: resolved.account.uuid,
+      authTitle: resolved.account.profile?.authTitle ?? null,
+      deviceType: resolved.account.profile?.deviceType ?? null,
+      dialogAction: cfg.dialogAction,
+      log
+    })
     : createLiveBackendLeg({
-        host: cfg.backend.host,
-        port: cfg.backend.port,
-        version: cfg.version,
-        cacheDir: cfg.puppet.cacheDir,
-        cacheAccount: cfg.puppet.cacheAccount,
-        log
-      })
+      host: cfg.backend.host,
+      port: cfg.backend.port,
+      version: cfg.version,
+      cacheDir: cfg.puppet.cacheDir,
+      cacheAccount: cfg.puppet.cacheAccount,
+      log
+    })
   // Strict frame check on every client-facing raw replay/relay. The live path
   // runs it in warn mode first: a checker bug must not kick a real player, but
   // every failure is logged and counted in front.wireStats.
@@ -266,7 +286,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
     backendLeg: backend,
     frontLeg: front,
     clock,
-    logStream: { write: line => log('core', { line }) }
+    logStream: { write: line => log('core', { line }) },
+    telemetry,
+    journal
   })
 
   front.setCoreAttach(({ name, uuid }) =>
@@ -305,9 +327,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // hangs with the lock held.
   async function stopAfterFailure (stage, fields = {}) {
     log('startLiveFailed', { stage, ...fields })
+    journal.event('startLiveFailed', { stage, ...fields })
     try { await core.stop({ reason: `startup_failed:${stage}` }) } catch { /* best effort */ }
     try { await front.close() } catch { /* best effort */ }
     try { await backend.close() } catch { /* best effort */ }
+    try { await telemetry.flush() } catch { /* best effort */ }
+    journal.close()
     if (sink !== stdout) sink.end?.()
   }
 
@@ -330,6 +355,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
     ...accountLogFields,
     attachWhitelist: cfg.attachWhitelistFile,
+    whitelistCount: cfg.attachWhitelist.length
+  })
+  journal.event('startLive', {
+    version: cfg.version,
+    front: `${cfg.front.host}:${cfg.front.port}`,
+    backend: `${cfg.backend.host}:${cfg.backend.port}`,
+    ...accountLogFields,
     whitelistCount: cfg.attachWhitelist.length
   })
 
@@ -377,8 +409,15 @@ export async function startLive ({ argv = [], io = process } = {}) {
     warm: readiness.warm,
     wire: front.wireStats
   })
+  journal.event('liveReady', {
+    front: `${bound.host}:${bound.port}`,
+    ...accountLogFields,
+    configFrames: readiness.configFrames,
+    prefixFrames: readiness.prefixFrames,
+    warm: readiness.warm
+  })
 
-  await runForever({ core, backend, front, log, sink })
+  await runForever({ core, backend, front, log, sink, telemetry, journal })
   return 0
 }
 
@@ -392,25 +431,47 @@ function withTimeout (promise, ms, label) {
   })
 }
 
-async function runForever ({ core, backend, front, log, sink }) {
+async function runForever ({ core, backend, front, log, sink, telemetry, journal }) {
   let stopping = false
+  let lastRejected = front.wireStats.rejected
+
+  // Heartbeat gauges: the same values the JSONL heartbeat logs, as OTLP gauges.
+  function emitGauges () {
+    const stats = core.cache.stats()
+    const cacheFrames = Object.values(stats.sizes).reduce((sum, count) => sum + count, 0)
+    telemetry.metric('monoplayer.attached', core.attached ? 1 : 0, {}, 'gauge')
+    telemetry.metric('monoplayer.warm', stats.warm ? 1 : 0, {}, 'gauge')
+    telemetry.metric('monoplayer.backend.logins', core.session.backendLogins, {}, 'gauge')
+    telemetry.metric('monoplayer.cache.frames', cacheFrames, {}, 'gauge')
+    const rejected = front.wireStats.rejected
+    if (rejected > lastRejected) {
+      telemetry.metric('monoplayer.wire.rejected', rejected - lastRejected, {})
+      lastRejected = rejected
+    }
+  }
+
   const stop = async (signal) => {
     if (stopping) return
     stopping = true
     log('shutdown', { signal })
+    journal.event('shutdown', { signal })
     try { await core.stop({ reason: `signal:${signal}` }) } catch { /* ignore */ }
     front.close()
     backend.close()
+    try { await telemetry.flush() } catch { /* telemetry never blocks shutdown */ }
+    journal.close()
     sink.end?.()
     process.exit(0)
   }
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.off(signal, stop)
-    process.on(signal, () => { void stop(signal) })
+    process.on(signal, () => { stop(signal).catch(() => {}) })
   }
+  emitGauges()
   const heartbeat = setInterval(() => {
     const stats = core.cache.stats()
     const forwarder = backend.forwarderStats()
+    emitGauges()
     log('heartbeat', {
       attached: core.attached,
       backendLogins: core.session.backendLogins,

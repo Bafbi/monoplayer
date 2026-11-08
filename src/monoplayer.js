@@ -28,11 +28,12 @@
 //   }
 
 import { createStateCache, WARM_MARKER } from './monoplayer/state-cache.js'
-import { createFrontIdentity, DENY_REASONS } from './monoplayer/identity.js'
+import { createFrontIdentity } from './monoplayer/identity.js'
 import { synthAttach, LEG_OWNED } from './monoplayer/join-synth.js'
-import { classifyServerbound, capturePose, CHAT_SERVERBOUND } from './monoplayer/relay.js'
+import { classifyServerbound, capturePose } from './monoplayer/relay.js'
 import { createSession, STATES } from './monoplayer/session.js'
 import { redact, SENTINEL } from './monoplayer/redact.js'
+import { pathToFileURL } from 'node:url'
 
 // --- config ---
 
@@ -88,12 +89,32 @@ export function loadConfig (doc = {}) {
 
 // --- core ---
 
+// Telemetry and journal defaults: inert objects, so a core built without them
+// behaves exactly as before (no timers, no sockets, no files).
+const NOOP_TELEMETRY = Object.freeze({
+  enabled: false,
+  log () {},
+  metric () {},
+  flush: () => Promise.resolve(),
+  close: () => Promise.resolve(),
+  stats: () => ({ enabled: false })
+})
+const NOOP_JOURNAL = Object.freeze({
+  enabled: false,
+  frame () {},
+  event () {},
+  close () {},
+  stats: () => ({ enabled: false })
+})
+
 export function createMonoplayer ({
   config = loadConfig(),
   backendLeg,
   frontLeg,
   clock,
-  logStream = null
+  logStream = null,
+  telemetry = NOOP_TELEMETRY,
+  journal = NOOP_JOURNAL
 } = {}) {
   if (!backendLeg) throw new TypeError('backendLeg adapter is required')
   if (!frontLeg) throw new TypeError('frontLeg adapter is required')
@@ -164,6 +185,8 @@ export function createMonoplayer ({
     if (logs.length > 4096) logs.shift()
     if (logStream) logStream.write(line + '\n')
     emit('log', { line })
+    // Lifecycle records only: one OTLP log per core log call, never per frame.
+    telemetry.log({ event, fields })
   }
 
   function emit (type, payload) {
@@ -188,6 +211,7 @@ export function createMonoplayer ({
     const decision = identity.reviewLoginStart(payload)
     if (!decision.allowed) {
       metrics.denials++
+      telemetry.metric('monoplayer.denials', 1, { reason: decision.reason, phase: decision.phase })
       log('attachDenied', { reason: decision.reason, phase: decision.phase, uuid: payload.uuid })
       emit('attach_denied', decision)
     }
@@ -199,6 +223,7 @@ export function createMonoplayer ({
     const decision = await identity.verifySession(payload)
     if (!decision.allowed) {
       metrics.denials++
+      telemetry.metric('monoplayer.denials', 1, { reason: decision.reason, phase: decision.phase })
       log('verifyDenied', { reason: decision.reason, phase: decision.phase, uuid: payload.uuid, name: payload.name })
       emit('verify_denied', decision)
     }
@@ -237,6 +262,7 @@ export function createMonoplayer ({
     }
     attached = true
     metrics.attaches++
+    telemetry.metric('monoplayer.attaches', 1, { player: name })
 
     const snapshot = cache.snapshot()
     const synthesized = synthAttach({
@@ -253,6 +279,7 @@ export function createMonoplayer ({
     }
     metrics.framesReplayed += synthesized.counts.replayed
     metrics.positionsSynthesized += synthesized.counts.synthesized
+    telemetry.metric('monoplayer.replay.frames', synthesized.counts.replayed, { player: name })
 
     log('attach', {
       name,
@@ -316,6 +343,15 @@ export function createMonoplayer ({
 
     backendLeg.setFrameHandler(frame => {
       const { state, name, buffer, data = {} } = frame
+      // Exact packet journal + one frame counter per backend frame. Lifecycle
+      // log records come only from the log() funnel, never one per frame.
+      journal.frame({ dir: 's2c', state, name, buffer })
+      telemetry.metric('monoplayer.frames', 1, {
+        direction: 's2c',
+        state,
+        name,
+        result: state === 'play' || state === 'configuration' ? 'forwarded' : 'ignored'
+      })
       if (state === 'configuration') {
         metrics.configFrames++
         if (name === 'add_resource_pack') answerResourcePack(data)
@@ -341,12 +377,23 @@ export function createMonoplayer ({
     })
 
     frontLeg.setServerboundHandler(serverbound => {
-      if (!isAttached()) {
+      const name = serverbound.name
+      const state = serverbound.state ?? 'play'
+      const attachedNow = isAttached()
+      // Classify before recording so the frame counter carries the outcome.
+      const decision = attachedNow ? classifyServerbound(name) : { action: 'drop', chat: false }
+      journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer })
+      telemetry.metric('monoplayer.frames', 1, {
+        direction: 'c2s',
+        state,
+        name,
+        result: decision.action === 'forward' ? 'forwarded' : 'dropped'
+      })
+      if (!attachedNow) {
         metrics.serverboundNotAttached++
         log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
         return
       }
-      const decision = classifyServerbound(serverbound.name)
       if (decision.action === 'drop') {
         metrics.serverboundDropped++
         bumpName(metrics.serverboundDroppedByName, serverbound.name)
@@ -396,6 +443,7 @@ export function createMonoplayer ({
       // replayed login frame during an already-warm session is not a login.
       if (session.state === STATES.BOOT) {
         session.backendLogin({ entityId: data.entityId })
+        telemetry.metric('monoplayer.backend.logins', 1, { entityId: data.entityId })
         log('backendLogin', { entityId: data.entityId, backendLogins: session.backendLogins })
         emit('backend_login', { entityId: data.entityId })
       }
@@ -526,6 +574,10 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
+  OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
+  OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
+  MONOPLAYER_JOURNAL_DIR                              exact packet journal directory (journal off when unset)
+  MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 268435456)
 
 --start brings up the live backend leg (authenticated puppet via the G1 token
 custody in .secrets/accounts/<uuid>/), waits until the state cache holds the
@@ -560,7 +612,6 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
   return 0
 }
 
-import { pathToFileURL } from 'node:url'
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().then(code => { process.exitCode = code })
 }
