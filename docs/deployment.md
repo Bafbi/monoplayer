@@ -11,10 +11,12 @@ push to main
                   └─ namespace monoplayer
 ```
 
-`main` is human history: one commit per change. `deploy` is bot-owned: the
-workflow force-pushes it as `main` plus the digest that was just built, so the
-running image is recorded in Git without adding commits to `main`. Argo tracks
-`deploy`. One Application, one project, one namespace. The image is pinned by
+`main` is human history: one commit per change. Its manifests reference the
+moving `ghcr.io/bafbi/monoplayer:main` tag and carry no digest, so nothing on
+main goes stale. `deploy` is bot-owned: the workflow force-pushes it as `main`
+plus an `images:` digest pin for the image it just built, so the running image
+is recorded in Git without adding commits to `main`. Argo tracks `deploy`. One
+Application, one project, one namespace. The deployed image is pinned by
 digest, never by a moving tag.
 
 ## What lives where
@@ -92,8 +94,8 @@ manifest or docs change:
 
 1. builds `linux/amd64` from the `Dockerfile`;
 2. pushes `ghcr.io/bafbi/monoplayer:sha-<7>` and `:main`;
-3. checks out a fresh `deploy` branch from `main`, writes the built digest into
-   `deploy/manifests/kustomization.yaml`, commits when it changed, and
+3. checks out a fresh `deploy` branch from `main`, appends an `images:` digest
+   pin to `deploy/manifests/kustomization.yaml`, commits when it changed, and
    force-pushes `deploy`.
 
 Do not edit `deploy` by hand: the next build overwrites it. Change

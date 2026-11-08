@@ -15,8 +15,6 @@ resources:
   - deployment.yaml
   - service.yaml
 
-images:
-  - name: ghcr.io/bafbi/monoplayer
-    # The bot replaces this digest on each build. Until the first build the
-    # placeholder is intentionally unresolvable, so nothing pulls it.
-    digest: sha256:704ae3f283a130e0b817c525c70ce77d88968e7b05630334af543ba6b7348bff
+# main references the moving `main` tag. The image workflow rebuilds the
+# `deploy` branch from main and appends an `images:` digest pin there, so this
+# file on main never carries a stale digest.
