@@ -10,6 +10,9 @@
 #
 # The build itself only needs the workflow GITHUB_TOKEN (packages: write). The
 # classic read:packages PAT is for the cluster, not for this job.
+#
+# workflow_dispatch runs on any ref it is handed. The guard on build keeps a
+# branch dispatch from tagging `:main` and rewriting `deploy`.
 
 name: image
 
@@ -42,6 +45,9 @@ jobs:
 
   build:
     needs: check
+    # A dispatch from anywhere but main would tag that branch `:main` and
+    # force-push `deploy`. Build runs on main only.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
