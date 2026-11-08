@@ -144,12 +144,25 @@ export function createStateCache (overrides = {}) {
 
   function ringPush (domain, entry) {
     const ring = rings[domain]
-    const max = domain === 'block' ? opts.maxBlocks : opts.maxGeneric
+    // Each ring has its own bound: the entity ring is the largest state domain,
+    // and folding it into maxGeneric silently capped it at 512 by default.
+    const max = domain === 'block'
+      ? opts.maxBlocks
+      : domain === 'entity' ? opts.maxEntities : opts.maxGeneric
     ring.push(entry)
     while (ring.length > max) {
       ring.shift()
       metrics.overflows[domain]++
     }
+  }
+
+  // Chunk frames disagree on field names: map_chunk carries x/z, unload_chunk
+  // carries chunkX/chunkZ. Key on both or every unload is a silent no-op and a
+  // reattach replays terrain the server already dropped.
+  function chunkKey (data = {}) {
+    const x = data.x ?? data.chunkX
+    const z = data.z ?? data.chunkZ
+    return `${x},${z}`
   }
 
   function boundedInsert (map, key, entry, max, overflowKind) {
@@ -219,9 +232,9 @@ export function createStateCache (overrides = {}) {
       switch (classification.domain) {
         case 'chunk':
           if (classification.op === 'remove') {
-            chunks.delete(`${data.x},${data.z}`)
+            chunks.delete(chunkKey(data))
           } else {
-            const key = `${data.x},${data.z}`
+            const key = chunkKey(data)
             if (chunks.has(key)) chunks.delete(key) // refresh insertion order
             chunks.set(key, entry)
             while (chunks.size > opts.maxChunks) {
