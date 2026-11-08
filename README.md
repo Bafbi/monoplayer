@@ -47,8 +47,10 @@ The research and council trail lives under
 [.scratch/minecraft-gate-b/](.scratch/minecraft-gate-b/).
 
 The client driver is in [tools/gate-b-driver/](tools/gate-b-driver/); build it with
-`mise run gate-b:driver:build`. It was validated on `nath` against Paper 26.1.2
-on 2026-11-06: [docs/gate-b-driver-validation.md](docs/gate-b-driver-validation.md).
+`mise run gate-b:driver:build`. The host `nath` is driven with
+`tools/nath.sh` (`env`, `launch`, `kill`, `shot`), which derives the Hyprland
+session itself. It was validated on `nath` against Paper 26.1.2 on 2026-11-06:
+[docs/gate-b-driver-validation.md](docs/gate-b-driver-validation.md).
 
 The G0 scenario controller for the driver lane is in `src/gate-b/` driven by
 `src/gate-b.js`: `node src/gate-b.js --runs 2` runs two consecutive fresh

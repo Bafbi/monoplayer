@@ -150,11 +150,15 @@ or carried over between runs.
   tunnel; the runner will relaunch a fresh client itself after preconditions
   (it only quits/relaunches; it never teleports a dead client).
 - **Relaunch fails:** the SSH/prismlauncher path requires the Hyprland session
-  on `nath` to be alive (`DISPLAY=:0`, `XDG_RUNTIME_DIR=/run/user/1000`,
-  `WAYLAND_DISPLAY=wayland-1`). `DISPLAY` is required: Minecraft's GLFW uses
+  on `nath` to be alive, with `DISPLAY`, `XDG_RUNTIME_DIR`, and
+  `WAYLAND_DISPLAY` set. `DISPLAY` is required: Minecraft's GLFW uses
   XWayland even on this Wayland session, and without it the client crashes
-  during init and Prism opens its error console. The client lands on workspace
-  9 silently via the `Monoplayer Gate B` window rule. Prism's per-instance
+  during init and Prism opens its error console. `tools/nath.sh launch` derives
+  all three from the compositor; `tools/nath.sh env` prints them for a manual
+  run. See
+  [gate-b-driver-validation.md](gate-b-driver-validation.md#driving-the-host-from-the-workspace).
+  Under the runner the client lands on workspace 9 silently via the
+  `Monoplayer Gate B` window rule. Prism's per-instance
   console is disabled (`OverrideConsole=true`, `ShowConsole=false`,
   `ShowConsoleOnError=false`) so a normal relaunch cannot raise a log panel.
 - **Place fails with an empty hotbar slot:** the driver places from the
