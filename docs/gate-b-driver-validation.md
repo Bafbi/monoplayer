@@ -13,6 +13,56 @@ display host. This is the driver leg of G0, not the unmodded witness.
 | Backend | Paper 26.1.2 build 74 in `monoplayer-gate-b` |
 | Server | `monoplayer-gate-b-paper.tail41e568.ts.net:25565` (online-mode) |
 
+## Driving the host from the workspace
+
+`tools/nath.sh` wraps the host commands this document used to spell out by
+hand. Every call derives `HYPRLAND_INSTANCE_SIGNATURE` on the host with
+`hyprctl instances -j` and stores nothing, so no caller pastes a session triple:
+
+```bash
+tools/nath.sh env
+tools/nath.sh launch gate-b-player-fabric \
+  -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi
+tools/nath.sh kill gate-b-player-fabric
+tools/nath.sh shot testdata/gate-b-witness-2026-11-06.png
+```
+
+- `env` prints `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and the
+  signature as `KEY=value`. Prefix each line with `export` when a child process
+  needs them.
+- `launch` hands the client to the compositor with `hl.dsp.exec_cmd` and the
+  rules `{ workspace = "9 silent", no_initial_focus = true, focus_on_activate = false }`.
+  The child inherits the session environment, and the window lands on workspace 9
+  without switching to it. Anything after the instance name goes to
+  `prismlauncher`.
+- `shot` asks the driver for its render target and copies the PNG back with
+  `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
+- `kill` sends the driver `quit`, then falls back to the client JVM's
+  `-Djava.library.path` anchor for a wedged client.
+
+Verified on `nath` on 2026-11-08 with no session variables exported:
+`launch` reported `SILENT=yes` and left the active workspace and the focused
+window untouched, `shot` returned
+[`testdata/nath-wrapper-2026-11-08.png`](../testdata/nath-wrapper-2026-11-08.png)
+(1916x1050), and `kill` reported `QUIT=ok`, stopped the client JVM, and closed
+the driver port. The host reported a Hyprland instance signature the earlier
+sessions never saw, which is why the wrapper derives it on every call instead of
+copying one.
+
+## Host quirks worth remembering
+
+- Hyprland 0.56.2 reads a Lua config. `hyprctl dispatch movetoworkspacesilent`
+  no longer parses; the working call is
+  `hyprctl eval 'hl.dispatch(hl.dsp.window.move({ ... }))'`.
+- `grim` needs `WAYLAND_DISPLAY`, not the signature. Without it grim fails with
+  `failed to create display`.
+- `grim -g` captures the active workspace only: a window parked on workspace 9 is
+  a picture of whatever the user is looking at. That is why `shot` uses the
+  driver, and why the manual witness lane needs the workspace on screen.
+- `pgrep -f gate-b-player` also matches the `ssh`/tailscaled/bash line that
+  carries the pattern. Anchor on `-Djava.library.path=.../instances/<name>/natives`.
+- `jq` on the host is fine. `kubectl` is not: RCON lives on the workspace side.
+
 ## What passed
 
 - `status`: connected, health 20, overworld, 117 loaded chunks, rendered
