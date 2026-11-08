@@ -84,6 +84,17 @@ function allPassEvidence () {
     },
     reattach: { attaches: 2, backendLogins: 1 },
     denial: { observed: false, reason: 'no stranger account' },
+    parity: {
+      ok: true,
+      settled: true,
+      capturedFrames: 30,
+      domains: {
+        inventory: { ok: true },
+        heldItemSlot: { ok: true },
+        pose: { ok: true },
+        chunks: { ok: true }
+      }
+    },
     custody: { puppetLockReleased: true }
   }
 }
@@ -200,7 +211,7 @@ test('a clean run passes N1-N10 and N12 and skips N11 honestly', () => {
   const assertions = evaluateOnlineAssertions(allPassEvidence())
   const byId = Object.fromEntries(assertions.map(assertion => [assertion.id, assertion]))
 
-  for (const id of ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N12']) {
+  for (const id of ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N12', 'N13']) {
     assert.equal(byId[id].status, 'pass', `${id}: ${JSON.stringify(byId[id].detail)}`)
     assert.equal(byId[id].ok, true)
   }
@@ -210,7 +221,7 @@ test('a clean run passes N1-N10 and N12 and skips N11 honestly', () => {
   const summary = summarizeAssertions(assertions)
   assert.deepEqual(
     { pass: summary.pass, fail: summary.fail, not_observed: summary.not_observed, total: summary.total },
-    { pass: 11, fail: 0, not_observed: 1, total: 12 }
+    { pass: 12, fail: 0, not_observed: 1, total: 13 }
   )
 })
 

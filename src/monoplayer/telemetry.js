@@ -269,9 +269,12 @@ export function createTelemetry ({
 
   function flushMetrics () {
     if (pending.size === 0) return metricTail
+    // Sums stay cumulative: every series keeps its first-seen start time and
+    // is re-sent each interval. Clearing them and sending the per-interval
+    // delta under cumulative temporality would make backends read a reset on
+    // every flush.
     const batch = [...pending.values()]
-    pending.clear()
-    stats.metrics.queued = 0
+    stats.metrics.queued = pending.size
     return sendMetrics(batch)
   }
 
