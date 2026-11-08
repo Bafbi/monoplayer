@@ -83,6 +83,7 @@ export function createBot ({
     heldItemSlots: [], // decoded clientbound held_item_slot frames
     health: [], // decoded clientbound update_health frames
     systemChat: [], // decoded clientbound system_chat frames
+    kick: null, // decoded clientbound kick_disconnect, if one arrived
     ended: null,
     errors: []
   }
@@ -138,6 +139,7 @@ export function createBot ({
   client.on('held_item_slot', packet => received.heldItemSlots.push(packet))
   client.on('update_health', packet => received.health.push(packet))
   client.on('system_chat', packet => received.systemChat.push(packet))
+  client.on('kick_disconnect', packet => { received.kick = packet })
 
   client.on('error', error => {
     received.errors.push(String(error?.message ?? error).slice(0, 200))

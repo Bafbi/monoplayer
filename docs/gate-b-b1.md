@@ -2,9 +2,9 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
-144/144 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
-socket-free unit suite runs 335 tests, and `mise run check` also runs the
-23-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
+155/155 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
+socket-free unit suite runs 346 tests, and `mise run check` also runs the
+26-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -104,9 +104,10 @@ The front leg's `writeRaw` keeps a counted last-write gate, so a router
 regression cannot leak a blocked frame. A coverage test walks the vendored
 26.2 protocol and fails when a name is not classified.
 
-A blocked `transfer` while attached sends one local `system_chat` notice per
-attach. The notice is proxy speech, not server speech, and never includes the
-target address.
+A **refused** transfer while attached (follow disabled, invalid target, a
+loop, or the chain limit) sends one local `system_chat` notice per attach. The
+notice is proxy speech, not server speech, and never includes the target
+address.
 
 `start_configuration` cannot be served to the front client on its connection.
 The core blocks it, ends the puppet leg on purpose, and lets the normal
@@ -114,9 +115,39 @@ backend-down path reset the cache, detach the client with
 `The server reconfigured this session. Reconnect in a few seconds.`, and
 reconnect.
 
-Following a transfer on the puppet leg (dial the target, re-authenticate,
-re-warm, let the client reattach) is a later slice. Relaying the frame is never
-acceptable, even then: it moves Bafbi, not the puppet.
+### Transfer follow (`config.transfer`)
+
+`transfer.follow` (default `true`) follows a play-state transfer on the puppet
+leg. The frame still never reaches the front. The sequence:
+
+1. Validate the target (`host` string, port 1-65535). Refuse with a local
+   notice on an invalid target, a repeated target, or a chain deeper than
+   `chainLimit` (default 8).
+2. Tear down synchronously: reset the cache, detach the front client with
+   `This session is moving. Reconnect in a few seconds to continue.`, schedule
+   one reconnect with the target, then end the old backend leg. The teardown
+   does not depend on the socket's end event; a missed event would strand the
+   front on a dead cache.
+3. The orchestrator dials the target with the same Microsoft account. Cookies
+   continue across the chain: `store_cookie` is kept on the puppet leg and
+   answered on `cookie_request`; the jar clears only on a return to the
+   configured base. The cache resets, the new configuration and join prefix
+   arrive, and the warm fallback pins it after 5 s if the backend never sends
+   the batch marker.
+4. The user rejoins the proxy after warm. The replay is the new server's
+   state: position, inventory, and chat are the new server's, and chat history
+   is never replayed.
+
+A followed target that cannot connect is retried 3 times. Then the controller
+reverts to the configured base backend and the puppet is never left offline.
+A plain backend fault reconnects to the server the puppet is on now, not
+always to the base.
+
+A configuration-state transfer happens before the play login, when there is no
+warm session to move. It stays blocked and counted.
+
+The live backend leg has a 60 s connect timeout: a target that accepts TCP and
+stalls must not hold the custody lock forever.
 
 ### Read-only chat (`config.chat`)
 

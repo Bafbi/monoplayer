@@ -1,6 +1,5 @@
-// Clientbound containment: a backend transfer can never move the attached
-// client off the proxy, and a server reconfiguration recovers through the
-// normal backend-down path.
+// Transfer handling: the frame never crosses to the front; the puppet follows
+// the target on the next reconnect, or refuses with a local notice.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createMonoplayer, DEFAULT_CONFIG } from '../src/monoplayer.js'
@@ -35,14 +34,17 @@ function makeCore (config = {}) {
       ...DEFAULT_CONFIG,
       puppet: { username: 'GlowSquidye', uuid: null },
       attachWhitelist: [PLAYER],
-      ...config
+      ...config,
+      transfer: { ...DEFAULT_CONFIG.transfer, ...(config.transfer ?? {}) }
     },
     backendLeg,
     frontLeg,
     clock
   })
   core.start()
-  return { clock, backendLeg, frontLeg, core }
+  const events = []
+  core.on('reconnect_due', event => events.push(event))
+  return { clock, backendLeg, frontLeg, core, events }
 }
 
 function warmBackend ({ backendLeg, core }) {
@@ -64,49 +66,106 @@ function attach ({ frontLeg, core }) {
   return result
 }
 
-const transfer = () => ({
-  name: 'transfer',
-  buffer: BUFFER('transfer'),
-  data: { host: 'sky-2.excalia.fr', port: 25565 }
-})
+function transfer (host = 'sky-2.excalia.fr', port = 25565) {
+  return { name: 'transfer', buffer: BUFFER('transfer'), data: { host, port } }
+}
 
-test('a transfer while attached never reaches the client, is not cached, and notifies once', () => {
+test('a followed transfer never reaches the client and dials the target next', () => {
   const rig = makeCore()
   warmBackend(rig)
   attach(rig)
 
-  const before = rig.frontLeg.frames().length
+  const framesBefore = rig.frontLeg.frames().length
   rig.backendLeg.deliver({ state: 'play', ...transfer() })
 
-  const live = rig.frontLeg.frames().slice(before)
-  assert.deepEqual(live.map(f => f.name), ['system_chat'], 'only the local notice crosses')
-  const notice = live[0].packet.content.value.text.value
-  assert.match(notice, /blocked/i)
-  assert.match(notice, /stay on the current server/i)
+  assert.equal(rig.frontLeg.frames().length, framesBefore, 'the transfer frame never crosses')
+  assert.equal(rig.core.metrics.transfersFollowed, 1)
   assert.equal(rig.core.metrics.transfersBlocked, 1)
-  assert.equal(rig.core.metrics.clientboundBlocked, 1)
-  assert.equal(rig.core.cache.snapshot().generic.some(f => f.name === 'transfer'), false)
+  assert.equal(rig.backendLeg.ended, 1, 'the old backend leg is ended')
+  assert.equal(rig.core.session.state, 'reconnecting')
+  assert.equal(rig.core.cache.warm, false, 'the old session cache is gone')
+  assert.equal(rig.clock.pending, 1, 'exactly one reconnect')
+  assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /moving/i)
 
-  // A second transfer is still blocked but does not repeat the notice.
-  rig.backendLeg.deliver({ state: 'play', ...transfer() })
-  const after = rig.frontLeg.frames().slice(before)
-  assert.equal(after.filter(f => f.name === 'system_chat').length, 1)
-  assert.equal(rig.core.metrics.transfersBlocked, 2)
+  rig.clock.tick(1000)
+  assert.equal(rig.events.length, 1)
+  assert.deepEqual(rig.events[0].target, { host: 'sky-2.excalia.fr', port: 25565 })
 })
 
-test('a transfer while detached is never cached or replayed into a later attach', () => {
+test('a followed transfer while detached still moves the puppet and sends no notice', () => {
   const rig = makeCore()
   warmBackend(rig)
 
   rig.backendLeg.deliver({ state: 'play', ...transfer() })
-  assert.equal(rig.core.metrics.transfersBlocked, 1)
-  assert.equal(rig.frontLeg.frames().length, 0, 'no client, no notice')
-  assert.equal(rig.core.cache.snapshot().generic.some(f => f.name === 'transfer'), false)
+  assert.equal(rig.frontLeg.frames().length, 0)
+  assert.equal(rig.frontLeg.endReasons().length, 0)
+  assert.equal(rig.core.metrics.transfersFollowed, 1)
+  assert.equal(rig.core.cache.snapshot().generic.some(frame => frame.name === 'transfer'), false)
 
+  rig.clock.tick(1000)
+  assert.deepEqual(rig.events[0].target, { host: 'sky-2.excalia.fr', port: 25565 })
+})
+
+test('follow disabled keeps the session and sends the refusal notice', () => {
+  const rig = makeCore({ transfer: { follow: false } })
+  warmBackend(rig)
   attach(rig)
-  const replayed = rig.frontLeg.frames().map(f => f.name)
-  assert.equal(replayed.includes('transfer'), false)
-  assert.equal(replayed.includes('system_chat'), false, 'the notice is live only')
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  assert.equal(rig.core.metrics.transfersFollowed, 0)
+  assert.equal(rig.core.metrics.transfersRefused, 1)
+  assert.equal(rig.backendLeg.ended, 0)
+  assert.equal(rig.core.session.state, 'attached')
+  const notice = rig.frontLeg.frames().at(-1)
+  assert.equal(notice.name, 'system_chat')
+  assert.match(notice.packet.content.value.text.value, /could not follow/i)
+})
+
+test('an invalid target is refused without ending the session', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', name: 'transfer', buffer: BUFFER('transfer'), data: { host: '', port: 0 } })
+  assert.equal(rig.core.metrics.transfersRefused, 1)
+  assert.equal(rig.backendLeg.ended, 0)
+  assert.equal(rig.frontLeg.frames().at(-1).name, 'system_chat')
+})
+
+test('a repeated target is refused as a loop after a re-warm', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer('sky-2.excalia.fr', 25565) })
+  rig.clock.tick(1000)
+  assert.deepEqual(rig.events[0].target, { host: 'sky-2.excalia.fr', port: 25565 })
+
+  // The new session comes up on the target, warms, and the user reattaches.
+  warmBackend(rig)
+  attach(rig)
+  rig.backendLeg.deliver({ state: 'play', ...transfer('sky-2.excalia.fr', 25565) })
+
+  assert.equal(rig.core.metrics.transfersFollowed, 1)
+  assert.equal(rig.core.metrics.transfersRefused, 1)
+  assert.equal(rig.backendLeg.ended, 1, 'the refused transfer does not end the leg again')
+  assert.equal(rig.frontLeg.frames().at(-1).name, 'system_chat')
+})
+
+test('the chain limit refuses the hop beyond it', () => {
+  const rig = makeCore({ transfer: { chainLimit: 1 } })
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer('a.excalia.fr', 25565) })
+  rig.clock.tick(1000)
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer('b.excalia.fr', 25565) })
+  assert.equal(rig.core.metrics.transfersFollowed, 1)
+  assert.equal(rig.core.metrics.transfersRefused, 1)
+  assert.equal(rig.frontLeg.frames().at(-1).name, 'system_chat')
 })
 
 test('start_configuration ends the backend leg and the client with a reconnect reason', () => {
@@ -138,7 +197,7 @@ test('connection-control frames are blocked in both states', () => {
   }
   assert.equal(rig.frontLeg.frames().length, before)
 
-  for (const name of ['transfer', 'disconnect', 'cookie_request', 'store_cookie', 'show_dialog', 'clear_dialog', 'code_of_conduct']) {
+  for (const name of ['disconnect', 'cookie_request', 'store_cookie', 'show_dialog', 'clear_dialog', 'code_of_conduct']) {
     rig.backendLeg.deliver({ state: 'configuration', name, buffer: BUFFER(name), data: {} })
   }
   assert.equal(rig.frontLeg.frames().length, before)
@@ -175,6 +234,7 @@ test('configuration transfer is blocked and configuration ping is answered per-l
 
   rig.backendLeg.deliver({ state: 'configuration', name: 'transfer', buffer: BUFFER('transfer'), data: { host: 'x.invalid', port: 1 } })
   assert.equal(rig.core.metrics.transfersBlocked, 1)
+  assert.equal(rig.core.metrics.transfersFollowed, 0, 'v1 does not follow configuration transfers')
   assert.equal(rig.frontLeg.frames().length, 0)
   assert.equal(rig.core.cache.snapshot().config.some(f => f.name === 'transfer'), false)
 

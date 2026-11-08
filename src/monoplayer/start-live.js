@@ -46,6 +46,7 @@ import { waitForReady } from './live-readiness.js'
 import { createWireChecker } from './wire-check.js'
 import { createTelemetry } from './telemetry.js'
 import { createJournal } from './journal.js'
+import { createTransferFollowController } from './transfer-follow.js'
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)
@@ -314,28 +315,107 @@ export async function startLive ({ argv = [], io = process } = {}) {
   )
   core.start()
 
+  // Readiness after a connect: the backend configuration and join prefix must
+  // be in the cache, and a backend that streams chunks unbatched needs the
+  // same bounded warm fallback the first connect uses. Without this a
+  // reconnect (or a followed transfer) sits attach-denied forever.
+  async function settleWarm ({ stage, maxWarmMs }) {
+    const readiness = await waitForReady({ core, log, maxWarmMs })
+    if (!readiness.hasConfig || !readiness.hasPrefix) return readiness
+    if (!readiness.warm) {
+      const forced = core.cache.forceWarm()
+      core.session.warmComplete({ marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished' })
+      log('warmFallback', {
+        stage,
+        forced: forced.forced,
+        prefixFrames: readiness.prefixFrames,
+        configFrames: readiness.configFrames
+      })
+    }
+    log('readiness', { stage, ...readiness })
+    return readiness
+  }
+
+  const baseTarget = { host: cfg.backend.host, port: cfg.backend.port }
+  const follow = createTransferFollowController()
+  // The server the puppet is on now. A plain backend fault reconnects here,
+  // not always to the configured base; only a failed transfer reverts.
+  let currentTarget = { ...baseTarget }
+  const isBase = target =>
+    target.host === baseTarget.host && target.port === baseTarget.port
+
   // One backend.connect() per reconnect_due: the guard refuses a second
   // attempt while one is in flight, so the reconnect can never loop.
   let reconnecting = false
-  core.on('reconnect_due', async ({ delayMs, attempt } = {}) => {
+  core.on('reconnect_due', async ({ delayMs, attempt, target } = {}) => {
     if (reconnecting) return
     reconnecting = true
     core.session.backendConnecting({ initial: false })
+
+    const due = follow.onDue({ target })
+    const dialTarget = due.target ?? currentTarget
+    try {
+      backend.setTarget(dialTarget, { keepCookies: !isBase(dialTarget) })
+      if (due.target) {
+        currentTarget = { ...due.target }
+        log('transferFollowConnect', {
+          host: due.target.host,
+          port: due.target.port,
+          attempt,
+          failures: due.failures
+        })
+      }
+    } catch (error) {
+      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
+      core.abortTransfer('invalid_target')
+      follow.abort('invalid_target')
+      currentTarget = { ...baseTarget }
+      backend.setTarget(baseTarget, { keepCookies: false })
+    }
+
     try {
       await backend.connect()
+      const readiness = await settleWarm({
+        stage: due.target ? 'transfer' : 'reconnect',
+        maxWarmMs: 5000
+      })
+      if (!readiness.hasConfig || !readiness.hasPrefix) {
+        throw new Error('backend reconnect did not produce configuration and join frames')
+      }
+      const outcome = follow.onSuccess()
       log('backendReconnect', {
         delayMs,
         attempt,
+        target: `${dialTarget.host}:${dialTarget.port}`,
+        followed: outcome.followed,
+        warm: readiness.warm,
         backendLogins: core.session.backendLogins,
         state: core.session.state
       })
     } catch (error) {
-      const outcome = core.session.fail()
+      const failure = follow.onFailure()
       log('backendReconnectFailed', {
         delayMs,
         attempt,
+        target: `${dialTarget.host}:${dialTarget.port}`,
         error: String(error?.message ?? error).slice(0, 300),
-        state: core.session.state,
+        failures: failure.failures,
+        state: core.session.state
+      })
+      if (failure.reverted) {
+        // The followed target is unreachable; the next reconnect goes back to
+        // the configured backend so the puppet is never stranded.
+        core.abortTransfer('target_unreachable')
+        currentTarget = { ...baseTarget }
+        backend.setTarget(baseTarget, { keepCookies: false })
+        log('transferFollowReverted', {
+          host: failure.abandoned?.host ?? null,
+          port: failure.abandoned?.port ?? null
+        })
+      }
+      const outcome = core.session.fail()
+      log('backendReconnectFailedRetry', {
+        scheduled: outcome?.scheduled === true,
         nextDelayMs: outcome?.scheduled === true ? outcome.delayMs : null
       })
     } finally {
@@ -373,6 +453,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   log('startLive', {
     version: cfg.version,
     chat: cfg.chat,
+    transferFollow: cfg.transfer.follow,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
     ...accountLogFields,
@@ -382,6 +463,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   journal.event('startLive', {
     version: cfg.version,
     chat: cfg.chat,
+    transferFollow: cfg.transfer.follow,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
     ...accountLogFields,
@@ -402,22 +484,16 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
 
   // --- 4. readiness: cached config + join prefix (warm preferred) ---
-  const readiness = await waitForReady({ core, log, maxWarmMs: 20_000 })
-  if (!readiness.hasConfig || !readiness.hasPrefix) {
-    await stopAfterFailure('cache_readiness', readiness)
-    return 1
-  }
   // Warm fallback for unbatched backends: after the grace window the marker
   // never arrived, so the join prefix is declared pinned at its current edge
   // (counted, logged; the marker path stays untouched for backends that do
   // batch). Attach readiness without this would never clear and the growing
   // prefix would eventually evict the login frame.
-  if (!readiness.warm) {
-    const forced = core.cache.forceWarm()
-    core.session.warmComplete({ marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished' })
-    log('warmFallback', { forced: forced.forced, prefixFrames: readiness.prefixFrames, configFrames: readiness.configFrames })
+  const readiness = await settleWarm({ stage: 'startup', maxWarmMs: 20_000 })
+  if (!readiness.hasConfig || !readiness.hasPrefix) {
+    await stopAfterFailure('cache_readiness', readiness)
+    return 1
   }
-  log('readiness', readiness)
 
   // --- 5. front listen + readiness log ---
   let bound = null
