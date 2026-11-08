@@ -22,6 +22,55 @@ The frozen Gate A spike (`mise run spike`) and the Gate A scenario
 (`mise run gate-a`) sit beside the ladder. They prove the two-leg relay on
 loopback with the older harness. Keep them green; do not extend them.
 
+## Pick the task for the area you touched
+
+Four tasks compose the gate and the check that covers their area through
+`depends`, so a rung command has one definition. Three of them add a task the
+table above does not list: `spike` sits beside the ladder, `gate-b:driver:build`
+builds rung 4's driver, and `image:build` builds the deployment. Run the task
+that covers the area you changed.
+
+| Task | Composes | Run it after touching |
+|---|---|---|
+| `mise run verify:relay` | `check`, `spike` | the relay, the legs, the join, the state cache |
+| `mise run verify:auth` | `check`, `online` (live backend, both custodians) | `src/auth/`, the custody store, `hasJoined`, offline identity |
+| `mise run verify:driver` | `check`, `gate-b:driver:build`, `gate-b:scenario` (SSH tunnel, live backend) | `tools/gate-b-driver/`, `src/gate-b/` |
+| `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
+
+mise runs sibling `depends` concurrently, so the area task does not order them.
+The expensive rung carries `wait_for = ["check"]` instead: a red gate stops it
+before it starts, and a bare `mise run online` still runs alone, because
+`wait_for` schedules nothing. `gate-b:scenario` also waits for
+`gate-b:driver:build`.
+
+Run one verify task at a time. The online rung holds the puppet's writer lock
+for its whole run, and two runs contend for the same two accounts. Run
+`verify:deploy` from a clean checkout: `image:build` publishes the working
+tree under the HEAD tag, so uncommitted bytes would carry a commit's name.
+
+`mise run check` stays the offline gate, unchanged: it runs rungs 0, 1, and 2,
+and CI runs it.
+
+## A failed rung names the next one
+
+Each rung task prints, on failure, the next rung to run, the class that rung
+catches, and what it needs. Rung 4 has nothing above it, so `mise run gate-b:g0`
+says that instead. `mise run test` failing prints:
+
+```
+mise run test failed (rung 1, unit).
+Next rung: mise run loopback (rung 2, loopback) — about 3 seconds
+  catches: real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip); no auth
+  needs: pnpm install
+```
+
+`src/ladder/next-rung.js` reads those sentences from the rungs table above, so
+editing the table edits the failure output. `test/mise-tasks.test.js` fails when
+a rung task stops printing the hint.
+
+A rung that exits 2 (its setup failed before the run) or that is interrupted
+prints no hint. A rung above cannot catch a missing prerequisite.
+
 ## Production topology rule
 
 Only two checks run on the production topology, Velocity + Paper (ultimately
