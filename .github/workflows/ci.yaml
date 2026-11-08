@@ -1,7 +1,7 @@
 # Default gate from mise.toml: `mise run check`.
 #
-# image.yaml calls this file as a reusable workflow and needs its `check` job, so
-# a red main never publishes an image.
+# image.yaml calls this file and needs its `check` job, so a red main never
+# publishes an image.
 
 name: ci
 
@@ -10,15 +10,14 @@ on:
     # The deploy branch is bot-written from an already-green main.
     branches-ignore: [deploy]
   pull_request:
-  # image.yaml calls this file as a reusable workflow.
   workflow_call:
 
 permissions:
   contents: read
 
-# image.yaml calls this file, and a called workflow reads the caller's name from
-# github.workflow. The `check` segment keeps this group distinct from the caller's
-# own group and from a direct ci run on the same ref.
+# A called workflow reads the caller's name from github.workflow, so the `check`
+# segment keeps this group distinct from the caller's own group and from a direct
+# ci run on the same ref.
 concurrency:
   group: ${{ github.workflow }}-check-${{ github.ref }}
   cancel-in-progress: true
@@ -33,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # java 25, gradle 9.8 and buildkit serve the Gate B driver and the image.
+      # java 25.0.2, gradle 9.8.2 and buildkit serve the Gate B driver and the image.
       # `mise run check` touches none of them, so install node and pnpm only.
       - uses: jdx/mise-action@v2
         with:
