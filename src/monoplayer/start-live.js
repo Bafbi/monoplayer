@@ -478,7 +478,11 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
       warm: stats.warm,
       metrics: { ...core.metrics },
       wire: front.wireStats,
-      backendFrames: forwarder ? { ...forwarder.counters, names: forwarder.names } : null
+      backendFrames: forwarder ? { ...forwarder.counters, names: forwarder.names } : null,
+      // Export health: a silent OTLP or journal failure must be visible from
+      // the pod log alone, without querying the collector.
+      telemetry: telemetry.stats(),
+      journal: journal.stats()
     })
   }, 30_000)
   heartbeat.unref?.()
