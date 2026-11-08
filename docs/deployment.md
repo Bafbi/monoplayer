@@ -6,13 +6,16 @@ another repository's GitOps tree.
 ```
 push to main
    └─ .github/workflows/image.yaml   builds and pushes ghcr.io/bafbi/monoplayer
-        └─ commits the digest to deploy/manifests/kustomization.yaml
-             └─ Argo CD Application "monoplayer" syncs deploy/manifests
+        └─ rebuilds the `deploy` branch as main + one digest commit
+             └─ Argo CD Application "monoplayer" tracks `deploy`
                   └─ namespace monoplayer
 ```
 
-Argo watches the `main` branch. One Application, one project, one namespace.
-The image is pinned by digest, never by a moving tag.
+`main` is human history: one commit per change. `deploy` is bot-owned: the
+workflow force-pushes it as `main` plus the digest that was just built, so the
+running image is recorded in Git without adding commits to `main`. Argo tracks
+`deploy`. One Application, one project, one namespace. The image is pinned by
+digest, never by a moving tag.
 
 ## What lives where
 
@@ -89,11 +92,16 @@ manifest or docs change:
 
 1. builds `linux/amd64` from the `Dockerfile`;
 2. pushes `ghcr.io/bafbi/monoplayer:sha-<7>` and `:main`;
-3. writes `digest: sha256:...` into `deploy/manifests/kustomization.yaml` and
-   commits it with `[skip ci]`.
+3. checks out a fresh `deploy` branch from `main`, writes the built digest into
+   `deploy/manifests/kustomization.yaml`, commits when it changed, and
+   force-pushes `deploy`.
+
+Do not edit `deploy` by hand: the next build overwrites it. Change
+`deploy/manifests` on `main` instead; the workflow carries the change onto the
+new `deploy` branch.
 
 The workflow authenticates to GHCR with its own `GITHUB_TOKEN`
-(`packages: write`) and commits with `contents: write`. If the repository's
+(`packages: write`) and pushes `deploy` with `contents: write`. If the repository's
 Actions settings are limited to read-only tokens, the push step fails; set
 Settings → Actions → General → Workflow permissions to "Read and write
 permissions".

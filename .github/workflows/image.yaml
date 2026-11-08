@@ -1,9 +1,12 @@
-# Build the image and pin its digest in the deploy manifest.
+# Build the image and publish the bot-owned deploy branch.
 #
 # One image per commit: `sha-<7>` plus `main`. The cluster pulls from GHCR with
-# the `ghcr-pull` imagePullSecret in the monoplayer namespace. Pushing the
-# digest commit to deploy/manifests is what makes Argo deploy: the workflow is
-# ignored for changes under deploy, so that commit cannot loop.
+# the `ghcr-pull` imagePullSecret in the monoplayer namespace.
+#
+# main is human history. This workflow rebuilds the `deploy` branch as
+# main + exactly one digest commit, and force-pushes it; Argo CD tracks
+# `deploy`. So a push to main produces no extra commit on main, and the digest
+# that actually runs is still recorded in Git on a branch nobody edits.
 #
 # The build itself only needs the workflow GITHUB_TOKEN (packages: write). The
 # classic read:packages PAT is for the cluster, not for this job.
@@ -14,7 +17,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - "deploy/**"
       - "docs/**"
       - "**/*.md"
       - "testdata/**"
@@ -62,7 +64,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Pin the digest
+      - name: Publish the deploy branch
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAG: ${{ steps.names.outputs.tag }}
@@ -81,10 +83,12 @@ jobs:
           PY
           git config user.name "monoplayer-bot"
           git config user.email "monoplayer-bot@users.noreply.github.com"
+          # deploy is bot-owned: always main plus at most one digest commit.
+          git checkout -B deploy
           git add deploy/manifests/kustomization.yaml
           if git diff --cached --quiet; then
-            echo "digest unchanged"
+            echo "digest unchanged; deploy matches main"
           else
             git commit -m "chore(deploy): image $TAG [skip ci]"
-            git push
           fi
+          git push --force origin deploy
