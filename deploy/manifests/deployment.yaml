@@ -45,7 +45,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: wait-custody
-          image: ghcr.io/bafbi/monoplayer
+          image: ghcr.io/bafbi/monoplayer:main
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -64,7 +64,7 @@ spec:
         # pid 1 always exists, so the pid lock would look held forever. One
         # replica plus Recreate makes this pod the only writer, so clear it.
         - name: clear-stale-lock
-          image: ghcr.io/bafbi/monoplayer
+          image: ghcr.io/bafbi/monoplayer:main
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -81,7 +81,7 @@ spec:
               mountPath: /data
       containers:
         - name: monoplayer
-          image: ghcr.io/bafbi/monoplayer
+          image: ghcr.io/bafbi/monoplayer:main
           imagePullPolicy: IfNotPresent
           env:
             - name: MONOPLAYER_BACKEND_HOST
