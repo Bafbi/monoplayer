@@ -44,7 +44,7 @@ export const DOMAIN_PARITY = Object.freeze({
 export const UNPARITY = Object.freeze({
   prefix: 'The join prefix is replayed verbatim. Its state frames are compared through chunks, blocks, entities, inventory, and heldItemSlot, but the prefix has no state of its own to compare.',
   config: 'The configuration phase replay carries no play state. The client-state model ignores configuration frame names, so the domain has nothing to compare.',
-  generic: 'The generic ring holds unclassified frames. entity_destroy and sync_entity_position are decoded and compared through entities. rel_entity_move, entity_move_look, and entity_look are not decoded. update_health decodes into latest, which is not compared.',
+  generic: 'The generic ring holds unclassified frames. rel_entity_move, entity_move_look, and entity_look are captured here and not decoded, so a moved entity is compared only at its last absolute position. update_health decodes into latest, which is not compared.',
   latest: 'Only held_item_slot is compared. health, food, experience, abilities, game_state_change, entity_event, and advancements are decoded but not compared by this issue.'
 })
 
