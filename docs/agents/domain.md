@@ -18,8 +18,8 @@ Single-context repo (most repos):
 /
 ├── GLOSSARY.md
 ├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+│   ├── event-sourced-orders.md
+│   └── postgres-for-the-write-model.md
 └── src/
 ```
 
@@ -38,6 +38,16 @@ Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
         └── docs/adr/
 ```
 
+## How this repo records decisions
+
+An ADR is a decision that has to be re-litigated before it changes, not a permanent record. A file exists because the decision stands.
+
+- **No numbering.** A file is named after the decision: `docs/adr/semantic-relay-with-state-cache.md`. A number says nothing and invites a supersession chain nobody reads.
+- **One decision per file.** Open with one to three sentences: the context, the decision, and why. Record the rejected alternatives under `## Considered options`, with the reason each was rejected.
+- **Edit it when the decision changes.** The file is a living record. Rewrite the decision and the alternatives in place; do not add a "superseded by" header.
+- **Delete it when it stops being true.** Git keeps the history. A stale ADR that nobody repealed reads as a current rule.
+- **No dates in the file.** `git log` already records when the decision was made and when it was last edited.
+
 ## Use the glossary's vocabulary
 
 When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
@@ -48,4 +58,4 @@ If the concept you need isn't in the glossary yet, that's a signal: either you'r
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
-> _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_
+> _Contradicts `docs/adr/event-sourced-orders.md`, but worth reopening because…_
