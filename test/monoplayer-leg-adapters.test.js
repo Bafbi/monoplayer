@@ -232,6 +232,29 @@ test('config interceptor: empty cache falls back to the library-generated config
   assert.equal(raws.length, 0)
 })
 
+test('config interceptor: the live path refuses the library fallback instead of crashing the client', () => {
+  const written = []
+  const raws = []
+  let unavailable = 0
+  const interceptor = createConfigPathInterceptor({
+    write: (name, params) => written.push({ name, params }),
+    writeRaw: (buffer) => raws.push(buffer),
+    isConfigurationState: () => true,
+    cachedConfigFrames: [],
+    allowLibraryFallback: false,
+    onUnavailable: () => { unavailable++ }
+  })
+
+  interceptor.write('registry_data', { codec: { lib: true } })
+  interceptor.write('finish_configuration', {})
+
+  assert.equal(unavailable, 1, 'the front is told to close the client')
+  assert.equal(interceptor.stats.unavailable, 1)
+  assert.equal(interceptor.stats.replayedConfigFrames, 0)
+  assert.equal(written.length, 0, 'no registry_data and no finish_configuration')
+  assert.equal(raws.length, 0)
+})
+
 test('config interceptor: play-state writes pass through untouched', () => {
   const written = []
   let configurationState = false

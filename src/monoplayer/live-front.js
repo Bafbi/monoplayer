@@ -61,7 +61,13 @@ export function createConfigPathInterceptor ({
   writeRaw,
   isConfigurationState,
   cachedConfigFrames,
-  finishName = 'finish_configuration'
+  finishName = 'finish_configuration',
+  // The library's generated registry_data is a fallback for fakes and the
+  // offline rung. The live path must never serve it: it carries no registry
+  // tags, so a 26.2 client fails registry loading and crashes. Set false to
+  // let onUnavailable close the client with a clear message instead.
+  allowLibraryFallback = true,
+  onUnavailable = null
 }) {
   if (typeof originalWrite !== 'function') throw new TypeError('write is required')
   if (typeof writeRaw !== 'function') throw new TypeError('writeRaw is required')
@@ -70,7 +76,7 @@ export function createConfigPathInterceptor ({
 
   let resolved = false
   const stashed = [] // library-authored registry_data params (fallback only)
-  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0 }
+  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, unavailable: 0 }
 
   function resolveConfigPath () {
     if (resolved) return
@@ -81,11 +87,17 @@ export function createConfigPathInterceptor ({
         writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
         stats.replayedConfigFrames++
       }
-    } else {
+    } else if (allowLibraryFallback) {
       for (const entry of stashed) {
         originalWrite('registry_data', entry.params)
         stats.replayedConfigFrames++
       }
+    } else {
+      // No backend configuration to replay and the library fallback is off:
+      // close instead of handing the client an incomplete registry set.
+      stats.unavailable++
+      if (onUnavailable) onUnavailable()
+      return
     }
     originalWrite('finish_configuration', {}) // the library call, now ordered after the replay
   }
@@ -433,7 +445,15 @@ function createFrontLeg ({
         return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
       },
       isConfigurationState: () => client.state === 'configuration',
-      cachedConfigFrames
+      cachedConfigFrames,
+      // Live only: an empty snapshot means the puppet has no backend session
+      // right now. Serving the library's registry_data would crash a 26.2
+      // client on missing registry tags, so deny and let the player retry.
+      allowLibraryFallback: false,
+      onUnavailable: () => {
+        log('configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
+        denyConnection(client, 'backend_not_ready')
+      }
     })
     client.write = interceptor.write
     clients.set(client, { interceptor })

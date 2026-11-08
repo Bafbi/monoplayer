@@ -112,6 +112,20 @@ test('a backend resource pack request is answered on the puppet leg', () => {
   assert.equal(rig.core.metrics.resourcePackAcks, 2)
 })
 
+test('an attach before the backend is ready is denied before configuration', () => {
+  const rig = makeCore()
+
+  const denied = rig.frontLeg.loginStart({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(denied.allowed, false)
+  assert.equal(denied.reason, 'backend_not_ready')
+  assert.deepEqual(rig.frontLeg.endReasons(), [{ reason: 'denied:backend_not_ready' }])
+  assert.equal(rig.core.metrics.denials, 1)
+
+  warmBackend(rig)
+  const allowed = rig.frontLeg.loginStart({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(allowed.allowed, true, JSON.stringify(allowed))
+})
+
 test('login-phase frames never enter the join cache or the replay', () => {
   const rig = makeCore()
   rig.backendLeg.deliver({ state: 'login', name: 'encryption_begin', data: {} })
@@ -281,10 +295,16 @@ test('F4-shape: backend death while attached -> front ended, one reconnect, back
   rig.backendLeg.deliverEnd({ reason: 'still_down' })
   assert.equal(rig.clock.pending, 1)
 
-  // The single reconnect fires, backend comes back, one fresh login.
+  // The single reconnect fires, backend comes back, one fresh login. The
+  // cache was reset with the dead session, so the fresh session must warm
+  // before an attach can replay it (the old attach-before-warm acceptance was
+  // the bug that handed a client an empty configuration).
   rig.clock.tick(1000)
   rig.backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 42 } })
   assert.equal(rig.core.session.backendLogins, 2)
+  assert.equal(rig.core.session.warmReady, false)
+  rig.backendLeg.deliver({ state: 'play', name: 'chunk_batch_finished', data: { batchSize: 1 } })
+  assert.equal(rig.core.session.warmReady, true)
 
   // Reattach after recovery: exactly one reconnect event, no loop.
   const ok = attach(rig)

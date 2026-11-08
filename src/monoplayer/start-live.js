@@ -19,6 +19,8 @@
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
 //   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory
 //   MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 256 MiB)
+//   MONOPLAYER_RECONNECT_ATTEMPTS                       backend retries (0/unset = unlimited)
+//   MONOPLAYER_RECONNECT_MAX_DELAY_MS                   backoff cap (default 60000)
 //
 // Sequence (simplicity rules; one client, one backend leg, direct Paper):
 //   1. resolve config (JSON + env), resolve the puppet account, load the
@@ -72,6 +74,20 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   if (env.MONOPLAYER_ATTACH_WHITELIST) out.attachWhitelistFile = env.MONOPLAYER_ATTACH_WHITELIST
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
+  // A deployed puppet must keep retrying: the backend can restart, and giving
+  // up after one attempt leaves the front alive with no session. Attempts: 0
+  // or unset means unlimited; the delay caps at MONOPLAYER_RECONNECT_MAX_DELAY_MS.
+  const reconnect = { ...doc.reconnect, attempts: Infinity }
+  const attemptsRaw = env.MONOPLAYER_RECONNECT_ATTEMPTS
+  if (attemptsRaw !== undefined && attemptsRaw !== '') {
+    const parsed = Number(attemptsRaw)
+    reconnect.attempts = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : Infinity
+  }
+  if (env.MONOPLAYER_RECONNECT_MAX_DELAY_MS) {
+    const parsed = Number(env.MONOPLAYER_RECONNECT_MAX_DELAY_MS)
+    if (Number.isFinite(parsed) && parsed > 0) reconnect.maxDelayMs = Math.floor(parsed)
+  }
+  out.reconnect = reconnect
   return out
 }
 
@@ -299,7 +315,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // One backend.connect() per reconnect_due: the guard refuses a second
   // attempt while one is in flight, so the reconnect can never loop.
   let reconnecting = false
-  core.on('reconnect_due', async ({ delayMs } = {}) => {
+  core.on('reconnect_due', async ({ delayMs, attempt } = {}) => {
     if (reconnecting) return
     reconnecting = true
     core.session.backendConnecting({ initial: false })
@@ -307,15 +323,18 @@ export async function startLive ({ argv = [], io = process } = {}) {
       await backend.connect()
       log('backendReconnect', {
         delayMs,
+        attempt,
         backendLogins: core.session.backendLogins,
         state: core.session.state
       })
     } catch (error) {
-      core.session.fail()
+      const outcome = core.session.fail()
       log('backendReconnectFailed', {
         delayMs,
+        attempt,
         error: String(error?.message ?? error).slice(0, 300),
-        state: core.session.state
+        state: core.session.state,
+        nextDelayMs: outcome?.scheduled === true ? outcome.delayMs : null
       })
     } finally {
       reconnecting = false
@@ -362,7 +381,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${cfg.backend.host}:${cfg.backend.port}`,
     ...accountLogFields,
-    whitelistCount: cfg.attachWhitelist.length
+    whitelistCount: cfg.attachWhitelist.length,
+    reconnect: {
+      attempts: cfg.reconnect.attempts === Infinity ? 'unlimited' : cfg.reconnect.attempts,
+      maxDelayMs: cfg.reconnect.maxDelayMs
+    }
   })
 
   // --- 3. backend connect ---
