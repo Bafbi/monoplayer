@@ -12,7 +12,7 @@
 // assertion/timeout failed, 2 setup failed (accounts, whitelist, legs). The
 // report is written in finally, even on failure.
 //
-// Assertions N1-N12 are the contract (docs/testing-ladder.md). A FAIL is a
+// Assertions N1-N13 are the contract (docs/testing-ladder.md). A FAIL is a
 // real finding; do not weaken a check to get a green run. A check the real
 // backend cannot expose is recorded as not_observed, never as a pass.
 import fs from 'node:fs'
@@ -29,6 +29,7 @@ import { createLiveFrontLeg } from '../monoplayer/live-front.js'
 import { waitForReady } from '../monoplayer/live-readiness.js'
 import { createWireChecker } from '../monoplayer/wire-check.js'
 import { createBot } from './bot.js'
+import { parityReport } from './state-parity.js'
 
 const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
 const DEFAULT_REPORT = '.gate-b/online-report.json'
@@ -38,8 +39,32 @@ const ATTACH_SELECTOR = 'bafbi'
 
 const LOGIN_STATE_FRAMES = Object.freeze(['encryption_begin', 'compress', 'success'])
 
+// The decoded frames the client-state model needs for the parity check (N13).
+const PARITY_FRAME_NAMES = new Set([
+  'window_items',
+  'set_slot',
+  'held_item_slot',
+  'position',
+  'map_chunk',
+  'unload_chunk',
+  'block_change',
+  'block_update',
+  'multi_block_change',
+  'entity_metadata',
+  'entity_teleport',
+  'remove_entities',
+  'update_health'
+])
+
+// Wait for the replay to finish, then for the bot to decode what the proxy
+// already sent. The quiet window makes the cache snapshot and the client
+// frame cut land on the same quiescent point.
+const PARITY_SETTLE_MS = 500
+const PARITY_QUIET_MS = 250
+const PARITY_QUIET_TIMEOUT_MS = 5_000
+
 export const ONLINE_ASSERTION_IDS = Object.freeze([
-  'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12'
+  'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N13'
 ])
 
 function flag (argv, name) {
@@ -142,7 +167,7 @@ function record (id, name, status, info = null) {
 }
 
 // Pure assertion evaluator: takes the evidence the run collected and returns
-// the N1-N12 records. Keeping this out of the socket code makes the contract
+// the N1-N13 records. Keeping this out of the socket code makes the contract
 // testable and the report reproducible.
 export function evaluateOnlineAssertions (evidence = {}) {
   const e = evidence ?? {}
@@ -295,6 +320,23 @@ export function evaluateOnlineAssertions (evidence = {}) {
     }
   ))
 
+  // N13 fails closed: no parity evidence, a thrown check, or any mismatch is a
+  // fail. A live backend misreading a replayed frame is a real finding, never
+  // a not_observed gap.
+  const parity = e.parity ?? {}
+  results.push(record(
+    'N13',
+    'attached client state matches the cache',
+    parity.ok === true ? 'pass' : 'fail',
+    {
+      ok: parity.ok ?? null,
+      settled: parity.settled ?? null,
+      capturedFrames: parity.capturedFrames ?? null,
+      domains: parity.domains ?? null,
+      error: parity.error ?? null
+    }
+  ))
+
   return results
 }
 
@@ -329,6 +371,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
     serverbound: null,
     reattach: null,
     denial: null,
+    parity: null,
     custody: { puppetLockReleased: null }
   }
 
@@ -533,7 +576,50 @@ export async function runOnline (argv = process.argv.slice(2)) {
     })
 
     bot = createBot(botOptions())
+    // Capture the decoded frames before ready(): the cache replay happens at
+    // attach time, so a listener installed after ready would miss the stream
+    // the parity check must compare.
+    const parityFrames = []
+    let parityCapture = true
+    let parityLastPacketAt = Date.now()
+    bot.client.on('packet', (data, meta) => {
+      parityLastPacketAt = Date.now()
+      if (!parityCapture || meta?.state !== 'play') return
+      if (!PARITY_FRAME_NAMES.has(meta.name)) return
+      parityFrames.push({ name: meta.name, data })
+    })
     await withTimeout(bot.ready(120_000), 125_000, 'online bot ready')
+
+    // --- N13: attached client state matches the cache ---
+    // Let the replayed stream land, then wait for a quiet window on the bot's
+    // packet events. With no packet in flight, the cache snapshot and the
+    // captured client frames describe the same state, so a live frame that
+    // arrives after the cut cannot show up on only one side.
+    await new Promise(resolve => setTimeout(resolve, PARITY_SETTLE_MS))
+    const quietDeadline = Date.now() + PARITY_QUIET_TIMEOUT_MS
+    while (Date.now() - parityLastPacketAt < PARITY_QUIET_MS && Date.now() < quietDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    const paritySettled = Date.now() - parityLastPacketAt >= PARITY_QUIET_MS
+
+    const cacheSnapshot = core.cache.snapshot()
+    // position is per-leg: the cache drops it, and the proxy synthesizes the
+    // attach position from the session pose. Carry that pose so the pose
+    // domain compares the position the client actually decoded.
+    const attachPose = core.session.currentPose
+    const capturedFrames = parityFrames.slice()
+    parityCapture = false
+
+    let parity
+    try {
+      parity = parityReport({
+        cacheSnapshot: { ...cacheSnapshot, pose: attachPose },
+        clientFrames: capturedFrames
+      })
+    } catch (error) {
+      parity = { ok: false, domains: {}, error: String(error?.message ?? error).slice(0, 200) }
+    }
+    evidence.parity = { ...parity, settled: paritySettled, capturedFrames: capturedFrames.length }
 
     const playFrames = bot.playNames()
     const firstPosition = bot.received.positions[0]

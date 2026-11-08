@@ -443,7 +443,6 @@ export function createMonoplayer ({
       // replayed login frame during an already-warm session is not a login.
       if (session.state === STATES.BOOT) {
         session.backendLogin({ entityId: data.entityId })
-        telemetry.metric('monoplayer.backend.logins', 1, { entityId: data.entityId })
         log('backendLogin', { entityId: data.entityId, backendLogins: session.backendLogins })
         emit('backend_login', { entityId: data.entityId })
       }

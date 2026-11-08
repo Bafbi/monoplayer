@@ -194,6 +194,30 @@ test('metrics emit the exact sum and gauge shapes, aggregating within a batch', 
   assert.equal(telemetry.stats().metrics.sent, 2)
 })
 
+test('cumulative sums keep their start time and total across flushes', async () => {
+  const fetchImpl = fakeFetch()
+  let nowMs = NOW
+  const telemetry = createTelemetry({
+    env: { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318' },
+    fetchImpl,
+    clock: () => nowMs
+  })
+
+  telemetry.metric('monoplayer.attaches', 2, {})
+  await telemetry.flush()
+  nowMs += 30_000
+  telemetry.metric('monoplayer.attaches', 3, {})
+  await telemetry.flush()
+
+  const points = fetchImpl.calls.map(call =>
+    call.body.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[0])
+  assert.equal(points.length, 2)
+  assert.equal(points[0].asInt, '2')
+  assert.equal(points[1].asInt, '5')
+  assert.equal(points[0].startTimeUnixNano, points[1].startTimeUnixNano)
+  await telemetry.close()
+})
+
 test('the log batch flushes at 512 records, not before', async () => {
   const fetchImpl = fakeFetch()
   const telemetry = createTelemetry({
@@ -357,6 +381,7 @@ test('the core forwards lifecycle logs, journals both directions, and emits fram
 
   assert.ok(telemetry.metrics.some(([name, value]) => name === 'monoplayer.attaches' && value === 1))
   assert.ok(telemetry.metrics.some(([name, value]) => name === 'monoplayer.denials' && value === 1))
-  assert.ok(telemetry.metrics.some(([name, value]) => name === 'monoplayer.backend.logins' && value === 1))
+  // Backend logins are a log event and the heartbeat gauge in start-live; the
+  // core does not also emit a same-name sum, which would collide in the backend.
   assert.ok(telemetry.metrics.some(([name, value]) => name === 'monoplayer.replay.frames' && value === 4))
 })
