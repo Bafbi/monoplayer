@@ -20,6 +20,11 @@ on:
       - "docs/**"
       - "**/*.md"
       - "testdata/**"
+      # The transfer testbed runs from the repo, not inside the app image.
+      - "src/testbed/**"
+      - "deploy/testbed/**"
+      - ".scratch/**"
+      - "mise.toml"
   workflow_dispatch:
 
 permissions:
