@@ -1,0 +1,24 @@
+# Token custody for the GlowSquidye account.
+#
+# The pod writes rotated refresh tokens here, so the volume must be writable.
+# Seed it once from `.secrets/accounts/73e0e19b-d4e4-4cc1-a553-a3952f0c1aed/`
+# after Argo creates the claim. Never put the token files in Git.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: monoplayer-custody
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/part-of: monoplayer
+  annotations:
+    # The account directory is the live refresh-token chain. A prune or an
+    # Application deletion must never delete this claim.
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

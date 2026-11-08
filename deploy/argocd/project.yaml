@@ -1,0 +1,24 @@
+# The one Argo CD project for this app.
+#
+# Applied by the operator, not by the app itself: Argo needs the project before
+# it can accept the Application. It allows exactly one source repository and one
+# destination namespace, plus the Namespace object itself.
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: monoplayer
+  namespace: argocd
+spec:
+  description: Monoplayer puppet proxy
+  sourceRepos:
+    - https://github.com/Bafbi/monoplayer.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: monoplayer
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
