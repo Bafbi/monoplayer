@@ -5,21 +5,19 @@
 // per-leg connection mechanics (keep-alive, teleport confirm, chunk batch
 // acks, configuration ack, cookie responses), fresh-client-only answers
 // (resource pack, ping/pong — a replayed ping must not be answered with the
-// fresh client's pong), and chat (blocked for Gate B v1; read-only chat is a
-// later slice).
-//
-// Relay pose: the puppet's authoritative pose comes from backend teleports,
-// but attaching-client movement must update it too, so a reattach lands
-// where the player actually left the puppet (Gate A invariant).
+// fresh client's pong), and chat. Chat is relayed read-only: the attached
+// client sees clientbound chat, but its own messages, commands, session key,
+// and acknowledgements stay on the front leg.
 
 export const SERVERBOUND_DROPS = new Set([
   'teleport_confirm', // proxy owns teleport IDs per leg
   'keep_alive', // the front leg answers its own keep-alives
-  'chat_message', // chat blocked in B1
+  'chat_message', // read-only chat: never forwarded
   'chat_command',
   'chat_command_signed',
   'chat_session_update',
   'chat_ack',
+  'message_acknowledgement', // the client acks its own chat stream, not the puppet's
   'configuration_acknowledged',
   'chunk_batch_received', // legs ack their own batch ends
   'cookie_response', // replayed cookie answers are the proxy's
@@ -43,6 +41,10 @@ export function classifyServerbound (name) {
 }
 
 const numeric = v => typeof v === 'number' && Number.isFinite(v)
+
+// Relay pose: the puppet's authoritative pose comes from backend teleports,
+// but attaching-client movement must update it too, so a reattach lands
+// where the player actually left the puppet (Gate A invariant).
 
 // Pure pose update. backend = true for a backend position frame (authoritative
 // teleport); false for a serverbound client movement frame.

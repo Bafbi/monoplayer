@@ -29,8 +29,9 @@
 
 import { createStateCache, WARM_MARKER } from './monoplayer/state-cache.js'
 import { createFrontIdentity } from './monoplayer/identity.js'
-import { synthAttach, LEG_OWNED } from './monoplayer/join-synth.js'
+import { synthAttach } from './monoplayer/join-synth.js'
 import { classifyServerbound, capturePose } from './monoplayer/relay.js'
+import { clientboundPolicy, DECISION } from './monoplayer/clientbound-policy.js'
 import { createSession, STATES } from './monoplayer/session.js'
 import { redact, SENTINEL } from './monoplayer/redact.js'
 import { pathToFileURL } from 'node:url'
@@ -39,6 +40,9 @@ import { pathToFileURL } from 'node:url'
 
 export const DEFAULT_CONFIG = Object.freeze({
   version: '26.1',
+  // Read-only chat: relay clientbound chat to the attached client, never
+  // forward the client's own chat. 'off' restores the fully blocked behavior.
+  chat: 'read-only',
   front: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   backend: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   puppet: Object.freeze({
@@ -83,6 +87,9 @@ export function loadConfig (doc = {}) {
   }
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
+  }
+  if (merged.chat !== 'read-only' && merged.chat !== 'off') {
+    throw new TypeError("config.chat must be 'read-only' or 'off'")
   }
   return merged
 }
@@ -150,6 +157,11 @@ export function createMonoplayer ({
     serverboundByName: {},
     serverboundDroppedByName: {},
     chatBlocked: 0,
+    chatRelayed: 0,
+    clientboundBlocked: 0,
+    clientboundBlockedByName: {},
+    clientboundUnclassified: 0,
+    transfersBlocked: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
@@ -177,11 +189,33 @@ export function createMonoplayer ({
     'pick_item_from_entity', 'arm_animation', 'player_loaded', 'player_input'
   ])
 
+  // Connection-control frames that are worth one log line each. Chat stays
+  // out: a blocked signed chat frame is counted, not logged per message.
+  const LOGGED_BLOCKS = new Set([
+    'transfer',
+    'start_configuration',
+    'kick_disconnect',
+    'cookie_request',
+    'store_cookie',
+    'show_dialog',
+    'clear_dialog',
+    'disconnect',
+    'code_of_conduct'
+  ])
+  const TRANSFER_NOTICE =
+    '[Monoplayer] The server asked to move this session elsewhere. ' +
+    'The proxy blocked it, so you stay on the current server.'
+  const RECONFIGURE_REASON =
+    'The server reconfigured this session. Reconnect in a few seconds.'
+
   const logs = [] // redacted JSON lines, bounded
   const listeners = new Map() // type -> Set<fn>
+  const unclassifiedLogged = new Set()
   let started = false
   let attached = false // mirrors session state === ATTACHED
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
+  let transferNoticeSent = false // one notice per attach
+  let reconfigureRequested = false // this backend end is a server reconfiguration
 
   function log (event, fields = {}) {
     const line = redact(JSON.stringify({ t: clock?.now?.() ?? Date.now(), event, ...fields }))
@@ -288,6 +322,47 @@ export function createMonoplayer ({
     }
   }
 
+  // Every clientbound frame that must not cross to the front goes through
+  // here: count, log the rare ones, and (for a transfer) tell the player once.
+  // The cache and join-synth consult the same policy, so this is the visible
+  // half of one decision, not a separate rule.
+  function blockClientbound (state, name, policy = {}, data = {}) {
+    metrics.clientboundBlocked++
+    bumpName(metrics.clientboundBlockedByName, name)
+    if (policy.unknown) {
+      metrics.clientboundUnclassified++
+      if (!unclassifiedLogged.has(name)) {
+        unclassifiedLogged.add(name)
+        log('clientboundUnclassified', { state, name })
+      }
+      return
+    }
+    if (name === 'transfer') {
+      metrics.transfersBlocked++
+      log('transferBlocked', { state, host: data.host ?? null, port: data.port ?? null })
+      if (state === 'play' && isAttached() && !transferNoticeSent) sendTransferNotice()
+      return
+    }
+    if (LOGGED_BLOCKS.has(name)) log('clientboundBlocked', { state, name })
+  }
+
+  function sendTransferNotice () {
+    transferNoticeSent = true
+    try {
+      // A local proxy notice, not server speech. The hand-built NBT matches
+      // the prismarine-nbt shape the library serializes for anonymousNbt.
+      frontLeg.write('system_chat', {
+        content: {
+          type: 'compound',
+          value: { text: { type: 'string', value: TRANSFER_NOTICE } }
+        },
+        isActionBar: false
+      })
+    } catch (error) {
+      log('transferNoticeFailed', { error: String(error?.message ?? error) })
+    }
+  }
+
   // Called by the front-leg adapter after gates 1+2 pass and Login Success
   // (forged puppet profile) has been sent. Replay via join-synth.
   // `includeConfig: false` omits the cached configuration replay prefix —
@@ -301,6 +376,7 @@ export function createMonoplayer ({
       return { attached: false, reason: attempt.reason }
     }
     attached = true
+    transferNoticeSent = false
     metrics.attaches++
     telemetry.metric('monoplayer.attaches', 1, { player: name })
 
@@ -354,6 +430,10 @@ export function createMonoplayer ({
     started = true
 
     backendLeg.setEndHandler(({ reason = 'backend_end' } = {}) => {
+      // A server-initiated reconfiguration kills the puppet's play session on
+      // purpose; the reconnect below is the recovery, not a fault reaction.
+      const reconfiguring = reconfigureRequested
+      reconfigureRequested = false
       // P1#1: a backend end invalidates the whole state cache. Frames pinned
       // from the dead session (config prefix, join prefix, warm-state
       // domains) must never replay onto an attaching client after a
@@ -362,17 +442,17 @@ export function createMonoplayer ({
       // first chunk_batch_finished), so a reattach replays exactly one
       // login and the new prefix — never the dead session's state mid-play.
       cache.reset()
-      log('cacheReset', { reason: 'backend_down', backendLogins: session.backendLogins })
+      log('cacheReset', { reason: 'backend_down', backendLogins: session.backendLogins, reconfiguring })
       if (isAttached()) {
         // Session invariant: the attaching client cannot survive the backend.
         detachedHandoff()
         session.detach({ reason: `backend_down:${reason}` })
         const outcome = session.backendDown({ reason })
-        log('backendDown', { reason, frontEnded: true, outcome })
-        frontLeg.end('backend_disconnected')
+        log('backendDown', { reason, frontEnded: true, outcome, reconfiguring })
+        frontLeg.end(reconfiguring ? RECONFIGURE_REASON : 'backend_disconnected')
       } else {
         const outcome = session.backendDown({ reason })
-        log('backendDown', { reason, frontEnded: false, outcome })
+        log('backendDown', { reason, frontEnded: false, outcome, reconfiguring })
       }
       emit('backend_down', { reason })
     })
@@ -386,15 +466,31 @@ export function createMonoplayer ({
       // Exact packet journal + one frame counter per backend frame. Lifecycle
       // log records come only from the log() funnel, never one per frame.
       journal.frame({ dir: 's2c', state, name, buffer })
+      const metricPolicy = state === 'play' || state === 'configuration'
+        ? clientboundPolicy(state, name)
+        : null
       telemetry.metric('monoplayer.frames', 1, {
         direction: 's2c',
         state,
         name,
-        result: state === 'play' || state === 'configuration' ? 'forwarded' : 'ignored'
+        result: !metricPolicy
+          ? 'ignored'
+          : metricPolicy.decision === DECISION.BLOCK ? 'blocked' : 'forwarded'
       })
       if (state === 'configuration') {
         metrics.configFrames++
+        const policy = clientboundPolicy('configuration', name)
         if (name === 'add_resource_pack') answerResourcePack(data)
+        if (name === 'ping') {
+          // Per-leg latency ping: answer on the puppet leg, never replay.
+          backendLeg.write('pong', { id: data.id })
+          return
+        }
+        if (policy.decision === DECISION.BLOCK) {
+          blockClientbound('configuration', name, policy, data)
+          return
+        }
+        if (!policy.cache) return
         cache.push('configuration', name, buffer, data)
         return
       }
@@ -488,7 +584,8 @@ export function createMonoplayer ({
       }
       const pushed = cache.push('play', name, buffer, data)
       if (pushed.cached) metrics.framesCached++
-      if (isAttached()) frontLeg.writeRaw(buffer, { state: 'play', name })
+      // Cache-only: a login frame is replayed to an attach, never relayed
+      // into an already-playing client's connection.
       return
     }
 
@@ -546,10 +643,39 @@ export function createMonoplayer ({
     }
     if (name === 'add_resource_pack') answerResourcePack(data)
 
-    if (LEG_OWNED.has(name)) {
-      // Defensive: chat/per-leg frames are not cached and not replayed; they
-      // are not relayed live either (chat block, per-leg handshake frames).
-      cache.push('play', name, buffer, data)
+    if (name === 'start_configuration') {
+      // The server wants this connection to re-enter configuration. The front
+      // client cannot follow that on its own connection (the proxy would have
+      // to serve a configuration phase it does not own), so block the frame
+      // and end the puppet leg on purpose. The end handler resets the cache,
+      // detaches the client with a clear reason, and schedules a fresh login.
+      blockClientbound('play', name, clientboundPolicy('play', name), data)
+      log('backendReconfigure', { name })
+      reconfigureRequested = true
+      try {
+        backendLeg.end('backend_reconfigure')
+      } catch (error) {
+        log('backendReconfigureFailed', { error: String(error?.message ?? error) })
+      }
+      return
+    }
+
+    const policy = clientboundPolicy('play', name)
+    if (policy.decision === DECISION.BLOCK) {
+      blockClientbound('play', name, policy, data)
+      return
+    }
+    if (policy.decision === DECISION.PER_LEG) return // handled above; defensive
+    if (policy.decision === DECISION.LIVE_ONLY) {
+      const chatFrame = name === 'system_chat' || name === 'profileless_chat'
+      if (chatFrame && cfg.chat !== 'read-only') return
+      if (chatFrame) metrics.chatRelayed++
+      if (isAttached()) frontLeg.writeRaw(buffer, { state: 'play', name })
+      return
+    }
+    if (policy.decision === DECISION.CACHE_ONLY) {
+      const pushed = cache.push('play', name, buffer, data)
+      if (pushed.cached) metrics.framesCached++
       return
     }
 
@@ -612,6 +738,7 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_DIALOG_ACTION                            first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
+  MONOPLAYER_CHAT                                     read-only (default) or off
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity

@@ -574,6 +574,34 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         setSlots: b2.setSlots.map(packet => ({ slot: packet.slot, itemId: packet.item?.itemId ?? null }))
       }
     )
+
+    // --- O21: transfer containment ---
+    // A clientbound transfer tells the *attached client* to reconnect
+    // elsewhere. Relaying it moved the human off the proxy as their own
+    // account on 2026-11-08. The bot must stay connected, never see the
+    // frame, and get one local notice instead.
+    const transferMark = b3.names.length
+    fake.sendTransfer('sky-2.excalia.fr', 25565)
+    await waitFor(() => core.metrics.transfersBlocked === 1, 'transfer blocked')
+    await bot3.waitFor(
+      () => b3.systemChat.some(packet => JSON.stringify(packet).includes('blocked')),
+      'transfer notice'
+    )
+    const afterTransfer = b3.names.slice(transferMark).map(frame => frame.name)
+    check(
+      'O21',
+      'a backend transfer is blocked, never moves the client, and notifies locally',
+      !afterTransfer.includes('transfer') &&
+        afterTransfer.includes('system_chat') &&
+        b3.ended === null &&
+        b3.errors.length === 0,
+      {
+        frames: afterTransfer,
+        ended: b3.ended,
+        errors: b3.errors.length,
+        transfersBlocked: core.metrics.transfersBlocked
+      }
+    )
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1

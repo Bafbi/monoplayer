@@ -10,23 +10,18 @@
 //   4. warm-state domains in snapshot order (chunks, blocks, entities,
 //      inventories, latest, generic)
 //
-// Never replayed, by cache and (defensively) here: keep_alive, position,
-// chat frames, ping/pong. Replayed keep-alives carry stale IDs on the fresh
-// client's connection and a replayed chat frame breaks the per-connection
-// message index.
+// Never replayed, by cache and (defensively) here: frames the clientbound
+// policy marks not replayable — per-leg mechanics, live-only chat, and blocked
+// connection control (transfer, cookies, dialogs, kick). A replayed transfer
+// would tell a later client to leave the proxy, and a replayed chat frame
+// breaks the per-connection message index.
 //
 // Purity: in = snapshot + pose, out = ordered frames. Buffers pass through.
 
+import { NOT_REPLAYABLE } from './clientbound-policy.js'
+
 export const LEG_OWNED = new Set([
-  'keep_alive',
-  'position',
-  'player_chat',
-  'profileless_chat',
-  'hide_message',
-  'system_chat',
-  'ping',
-  'pong',
-  'bundle_delimiter'
+  ...NOT_REPLAYABLE
 ])
 
 const POSITION_PACKET_DEFAULTS = Object.freeze({

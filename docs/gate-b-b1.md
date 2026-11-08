@@ -2,9 +2,9 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
-78/78 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
-socket-free unit suite runs 202 tests, and `mise run check` also runs the
-16-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
+144/144 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
+socket-free unit suite runs 335 tests, and `mise run check` also runs the
+23-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -13,6 +13,13 @@ extra` because backend login-phase frames (`encryption_begin`, `compress`,
 state except `configuration` and `play` (`metrics.nonPlayFramesIgnored`).
 Bundle delimiters are dropped while their enclosed frames are relayed
 individually, so chunks and entities replay without the bundle wrapper.
+
+Live note (2026-11-08, Skyblock): the backend sent a clientbound `transfer`
+to `sky-2.excalia.fr:25565`. The proxy relayed it, so the attaching client
+reconnected to that address as Bafbi, outside the puppet. The frame had also
+entered the generic cache, so it was replayed onto the next attach and killed
+that client in 1.65 s. Clientbound connection control is now blocked and
+uncacheable at one decision point; see "Clientbound policy" below.
 
 B1 is the product-shaped core with **no real tokens, no sockets, no Microsoft
 auth**: adapters and the clock are injected. The CLI never opens a network
@@ -25,7 +32,8 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 | `state-cache.js` | Bounded state cache: join prefix + configuration replay prefix + per-domain warm state | pure |
 | `join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
 | `identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
-| `relay.js` | Serverbound drop rules (per-leg mechanics + chat block), pose capture (backend teleport authoritative over client movement) | pure |
+| `relay.js` | Serverbound drop rules (per-leg mechanics + chat, which stays read-only), pose capture (backend teleport authoritative over client movement) | pure |
+| `clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
 | `session.js` | `boot → warm → attached ⇄ detached`, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
 | `redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
 | `fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
@@ -43,9 +51,11 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
   abilities/experience/held_item_slot/game_state_change/entity_event/
   advancements — newest wins), `generic` (anything else state-bearing, FIFO,
   max 512).
-- Never cached: `keep_alive`, `position` (synthesized per attach),
-  `player_chat`, `profileless_chat`, `hide_message`, `system_chat` (chat is
-  blocked in B1), `ping`/`pong`.
+- Not cacheable (from `clientbound-policy.js`): per-leg mechanics
+  (`keep_alive`, `position`, `ping`, bundle delimiters), live-only chat and
+  per-request answers (`system_chat`, `profileless_chat`, `ping_response`,
+  `nbt_query_response`), and every blocked connection-control frame. Chat is
+  relayed live read-only, never replayed.
 
 ### Attach stream order (`join-synth.synthAttach`)
 
@@ -59,8 +69,75 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 4. warm domains in snapshot order (chunks → blocks → entities → inventories →
    latest → generic)
 
-Replayed keep-alives, positions, chat frames, and pings are structurally
-impossible; the synth double-checks and counts rejections (`counts.skipped`).
+Replayed keep-alives, positions, chat frames, pings, and blocked
+connection-control frames are structurally impossible; the synth double-checks
+and counts rejections (`counts.skipped`).
+
+### Clientbound policy (containment)
+
+The front client is a separate connection authenticated as Bafbi. A frame that
+tells the puppet's connection to reconnect elsewhere must not be relayed: the
+client would follow it as Bafbi, outside the puppet and its custody. The
+2026-11-08 incident did exactly that, and the frame was cached too, so it also
+replayed onto the next attach.
+
+`src/monoplayer/clientbound-policy.js` is the one decision table for every
+clientbound frame in play and configuration.
+
+| Decision | Cache | Relay live | Replay | Use |
+|---|---|---|---|---|
+| `state` | yes | yes | yes | ordinary game state |
+| `cache_only` | yes | no | yes | `login` |
+| `live_only` | no | yes | no | chat, `ping_response`, `nbt_query_response` |
+| `per_leg` | no | no | no | keep-alive, position, ping, bundle delimiter |
+| `block` | no | no | no | connection control |
+
+Blocked frames: `transfer`, `start_configuration`, `kick_disconnect`,
+`cookie_request`, `store_cookie`, `show_dialog`, `clear_dialog`,
+`player_chat`, `hide_message`, plus the configuration-state `transfer`,
+`disconnect`, cookies, dialogs, and `code_of_conduct`. Unknown names and
+unknown states fail closed (`block`, `unknown: true`) and log once.
+
+The router, `state-cache` (`classifyPlay`/`classifyConfig`), `join-synth`
+(`LEG_OWNED`), and the front leg's configuration replay read the same policy.
+The front leg's `writeRaw` keeps a counted last-write gate, so a router
+regression cannot leak a blocked frame. A coverage test walks the vendored
+26.2 protocol and fails when a name is not classified.
+
+A blocked `transfer` while attached sends one local `system_chat` notice per
+attach. The notice is proxy speech, not server speech, and never includes the
+target address.
+
+`start_configuration` cannot be served to the front client on its connection.
+The core blocks it, ends the puppet leg on purpose, and lets the normal
+backend-down path reset the cache, detach the client with
+`The server reconfigured this session. Reconnect in a few seconds.`, and
+reconnect.
+
+Following a transfer on the puppet leg (dial the target, re-authenticate,
+re-warm, let the client reattach) is a later slice. Relaying the frame is never
+acceptable, even then: it moves Bafbi, not the puppet.
+
+### Read-only chat (`config.chat`)
+
+`chat: 'read-only'` (the default) relays clientbound `system_chat` and
+`profileless_chat` to the attached client while it is attached. Neither frame
+is cached, so an attach shows only chat that arrives after it; history from
+the puppet's connection is never replayed.
+
+- `system_chat` carries no signature state. It is what Excalia sends: 220
+  frames and zero `player_chat` in a 50-minute live session (backend
+  forwarder counters in the heartbeat).
+- `player_chat` stays blocked even in read-only mode: its global index and
+  previous-messages window belong to the puppet's connection, and a relayed
+  signed message would be validated against state the attaching client never
+  saw. `profileless_chat` is the unsigned player variant and is relayed.
+- Serverbound chat (`chat_message`, `chat_command`, `chat_command_signed`,
+  `chat_session_update`, `chat_ack`) and `message_acknowledgement` are still
+  dropped: the client cannot speak, and its acknowledgements describe its own
+  stream, not the puppet's.
+- `chat: 'off'` restores the old behavior (both directions blocked) without a
+  rebuild. `MONOPLAYER_CHAT` overrides the config.
 
 ### Session invariants (`session.js`)
 

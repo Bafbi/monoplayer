@@ -252,6 +252,15 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     log('sendSystemChat', { message })
   }
 
+  // A server transfer directive: the packet that must never reach the
+  // attaching client (see the 2026-11-08 Skyblock incident).
+  function sendTransfer (host = 'sky-2.excalia.fr', port = 25565) {
+    for (const client of Object.values(server.clients)) {
+      client.write('transfer', { host, port })
+    }
+    log('sendTransfer', { host, port })
+  }
+
   function close () {
     for (const client of Object.values(server.clients)) {
       try { client.socket?.destroy() } catch {}
@@ -259,5 +268,5 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     try { server.socketServer.close() } catch {}
   }
 
-  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendWindowItems, sendSetSlot, sendPlayerChat, sendSystemChat, close }
+  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendWindowItems, sendSetSlot, sendPlayerChat, sendSystemChat, sendTransfer, close }
 }
