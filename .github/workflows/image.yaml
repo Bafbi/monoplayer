@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The gate comes from ci.yaml so a red main never builds.
+  # Runs the gate from ci.yaml. A red main does not build.
   check:
     uses: ./.github/workflows/ci.yaml
 
