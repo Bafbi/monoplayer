@@ -87,11 +87,13 @@ jobs:
           git config user.name "monoplayer-bot"
           git config user.email "monoplayer-bot@users.noreply.github.com"
           # deploy is bot-owned: always main plus at most one digest commit.
+          # Its message mirrors the main commit it patches.
+          SUBJECT=$(git log -1 --pretty=%s)
           git checkout -B deploy
           git add deploy/manifests/kustomization.yaml
           if git diff --cached --quiet; then
             echo "digest unchanged; deploy matches main"
           else
-            git commit -m "chore(deploy): image $TAG [skip ci]"
+            git commit -m "${SUBJECT:-deploy} (patched)"
           fi
           git push --force origin deploy

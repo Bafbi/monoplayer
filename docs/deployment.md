@@ -95,8 +95,9 @@ manifest or docs change:
 1. builds `linux/amd64` from the `Dockerfile`;
 2. pushes `ghcr.io/bafbi/monoplayer:sha-<7>` and `:main`;
 3. checks out a fresh `deploy` branch from `main`, appends an `images:` digest
-   pin to `deploy/manifests/kustomization.yaml`, commits when it changed, and
-   force-pushes `deploy`.
+   pin to `deploy/manifests/kustomization.yaml`, and force-pushes `deploy`. The
+   deploy commit carries the main commit's subject with ` (patched)` appended,
+   so the branch reads as "that commit, with the image pinned".
 
 Do not edit `deploy` by hand: the next build overwrites it. Change
 `deploy/manifests` on `main` instead; the workflow carries the change onto the
