@@ -5,15 +5,18 @@
 // domain must fail and the others must pass.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createStateCache } from '../src/monoplayer/state-cache.js'
+import { DOMAINS, createStateCache } from '../src/monoplayer/state-cache.js'
 import { synthAttach } from '../src/monoplayer/join-synth.js'
 import {
   ONLINE_ASSERTION_IDS,
-  evaluateOnlineAssertions
+  evaluateOnlineAssertions,
+  parityEvidence
 } from '../src/ladder/online.js'
 import {
+  DOMAIN_PARITY,
   PARITY_DOMAINS,
   PARITY_SECTIONS,
+  UNPARITY,
   snapshotFrames,
   parityReport
 } from '../src/ladder/state-parity.js'
@@ -50,6 +53,38 @@ function assertDomains (report, expected) {
   }
 }
 
+// Fail closed like clientbound-policy.js: a cache domain must be compared by
+// at least one parity domain or carry a written UNPARITY reason. Kept local to
+// the test so no test-only helper leaks out of src.
+function assertDomainCoverage (domains) {
+  for (const domain of domains) {
+    const mapped = DOMAIN_PARITY[domain]
+    const reason = UNPARITY[domain]
+    const comparedByDomain = Array.isArray(mapped) && mapped.length > 0
+    const excused = typeof reason === 'string' && reason.trim().length > 0
+    if (!comparedByDomain && !excused) {
+      throw new Error(
+        `cache domain ${JSON.stringify(domain)} has no parity comparison and no UNPARITY reason`)
+    }
+    if (!comparedByDomain) continue
+    for (const name of mapped) {
+      if (!PARITY_DOMAINS.includes(name)) {
+        throw new Error(
+          `cache domain ${JSON.stringify(domain)} maps to unknown parity domain ${JSON.stringify(name)}`)
+      }
+    }
+  }
+
+  for (const [domain, reason] of Object.entries(UNPARITY)) {
+    if (!domains.includes(domain)) {
+      throw new Error(`UNPARITY entry ${JSON.stringify(domain)} is not a cache domain`)
+    }
+    if (typeof reason !== 'string' || reason.trim().length === 0) {
+      throw new Error(`UNPARITY entry ${JSON.stringify(domain)} has no reason`)
+    }
+  }
+}
+
 test('matching snapshot and client frames pass every domain', () => {
   const items = baseItems()
   items[36] = item(1)
@@ -57,7 +92,12 @@ test('matching snapshot and client frames pass every domain', () => {
     { name: 'window_items', data: { windowId: 0, stateId: 1, items } },
     { name: 'set_slot', data: { windowId: 0, stateId: 1, slot: 40, item: item(7) } },
     { name: 'held_item_slot', data: { slot: 3 } },
-    { name: 'map_chunk', data: { x: 1, z: 0 } }
+    { name: 'map_chunk', data: { x: 1, z: 0 } },
+    { name: 'block_change', data: { location: { x: 1, y: 64, z: 0 }, type: 5 } },
+    // state 7 at relative (1, 3, 2) in chunk (0, 4, 0) -> "1,67,2"
+    { name: 'multi_block_change', data: { chunkCoordinates: { x: 0, y: 4, z: 0 }, records: [28963] } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'entity_teleport', data: { entityId: 9, x: 1, y: 64, z: 2, yaw: 90, pitch: 0 } }
   ))
   // The proxy synthesizes the attach position; the cache never stores it.
   snapshot.pose = { x: 1.5, y: 64.62, z: -2.5, yaw: 90, pitch: -10 }
@@ -69,7 +109,9 @@ test('matching snapshot and client frames pass every domain', () => {
     inventory: true,
     heldItemSlot: true,
     pose: true,
-    chunks: true
+    chunks: true,
+    blocks: true,
+    entities: true
   })
 })
 
@@ -90,7 +132,9 @@ test('a set_slot missing from the client frames fails inventory and names the sl
     inventory: false,
     heldItemSlot: true,
     pose: true,
-    chunks: true
+    chunks: true,
+    blocks: true,
+    entities: true
   })
 
   const change = report.domains.inventory.diff.changes.find(entry => entry.slot === 36)
@@ -113,7 +157,9 @@ test('a different held slot fails only heldItemSlot', () => {
     inventory: true,
     heldItemSlot: false,
     pose: true,
-    chunks: true
+    chunks: true,
+    blocks: true,
+    entities: true
   })
   assert.equal(report.domains.heldItemSlot.expected, 3)
   assert.equal(report.domains.heldItemSlot.actual, 4)
@@ -132,7 +178,9 @@ test('a different pose fails only pose', () => {
     inventory: true,
     heldItemSlot: true,
     pose: false,
-    chunks: true
+    chunks: true,
+    blocks: true,
+    entities: true
   })
   assert.equal(report.domains.pose.expected.x, 1)
   assert.equal(report.domains.pose.actual.x, 9)
@@ -152,9 +200,221 @@ test('a missing chunk fails only chunks', () => {
     inventory: true,
     heldItemSlot: true,
     pose: true,
-    chunks: false
+    chunks: false,
+    blocks: true,
+    entities: true
   })
   assert.deepEqual(report.domains.chunks.diff.missing, ['1,0'])
+})
+
+test('a block change missing from the client frames fails only blocks and names the key', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'block_change', data: { location: { x: 2, y: 64, z: 3 }, type: 11 } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot).filter(frame => frame.name !== 'block_change')
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.equal(report.ok, false)
+  assertDomains(report, {
+    inventory: true,
+    heldItemSlot: true,
+    pose: true,
+    chunks: true,
+    blocks: false,
+    entities: true
+  })
+  assert.deepEqual(report.domains.blocks.diff.missing, ['2,64,3'])
+  assert.deepEqual(report.domains.blocks.diff.unexpected, [])
+  assert.deepEqual(report.domains.blocks.diff.changed, [])
+})
+
+test('a block value that differs on the client fails only blocks and names the key', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'block_change', data: { location: { x: 2, y: 64, z: 3 }, type: 11 } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot).map(frame =>
+    frame.name === 'block_change'
+      ? { ...frame, data: { ...frame.data, type: 12 } }
+      : frame)
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.equal(report.ok, false)
+  assertDomains(report, {
+    inventory: true,
+    heldItemSlot: true,
+    pose: true,
+    chunks: true,
+    blocks: false,
+    entities: true
+  })
+  assert.deepEqual(report.domains.blocks.diff.changed, [{
+    key: '2,64,3',
+    expected: 11,
+    actual: 12
+  }])
+  assert.deepEqual(report.domains.blocks.diff.missing, [])
+  assert.deepEqual(report.domains.blocks.diff.unexpected, [])
+})
+
+test('an entity metadata value that differs on the client fails only entities', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot).map(frame =>
+    frame.name === 'entity_metadata'
+      ? {
+          ...frame,
+          data: { ...frame.data, metadata: [{ key: 0, type: 'byte', value: 2 }] }
+        }
+      : frame)
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.equal(report.ok, false)
+  assertDomains(report, {
+    inventory: true,
+    heldItemSlot: true,
+    pose: true,
+    chunks: true,
+    blocks: true,
+    entities: false
+  })
+
+  const change = report.domains.entities.diff.changed.find(entry => entry.entityId === 9)
+  assert.ok(change, 'the diff names the entity id')
+  assert.deepEqual(change.expected.fields, [{ key: 0, value: 1 }])
+  assert.deepEqual(change.actual.fields, [{ key: 0, value: 2 }])
+  assert.equal(change.expected.removed, false)
+  assert.equal(change.actual.removed, false)
+})
+
+test('a dropped remove_entities tombstone fails entities', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'remove_entities', data: { entityIds: [9] } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot).filter(frame => frame.name !== 'remove_entities')
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.equal(report.ok, false)
+  assertDomains(report, {
+    inventory: true,
+    heldItemSlot: true,
+    pose: true,
+    chunks: true,
+    blocks: true,
+    entities: false
+  })
+
+  const change = report.domains.entities.diff.changed.find(entry => entry.entityId === 9)
+  assert.ok(change, 'the diff names the entity id')
+  assert.equal(change.expected.removed, true)
+  assert.deepEqual(change.expected.fields, [])
+  assert.equal(change.actual.removed, false)
+  assert.deepEqual(change.actual.fields, [{ key: 0, value: 1 }])
+})
+
+test('a dropped entity_destroy tombstone fails entities', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'entity_destroy', data: { entityIds: [9] } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot).filter(frame => frame.name !== 'entity_destroy')
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.equal(report.ok, false)
+  assertDomains(report, {
+    inventory: true,
+    heldItemSlot: true,
+    pose: true,
+    chunks: true,
+    blocks: true,
+    entities: false
+  })
+
+  const change = report.domains.entities.diff.changed.find(entry => entry.entityId === 9)
+  assert.ok(change, 'the diff names the entity id')
+  assert.equal(change.expected.removed, true)
+  assert.deepEqual(change.expected.fields, [])
+  assert.equal(change.actual.removed, false)
+  assert.deepEqual(change.actual.fields, [{ key: 0, value: 1 }])
+})
+
+test('block diffs order by coordinate and classify missing and unexpected keys', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'block_change', data: { location: { x: 10, y: 0, z: 0 }, type: 1 } },
+    { name: 'block_change', data: { location: { x: 2, y: 0, z: 0 }, type: 2 } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot)
+    .filter(frame => !(frame.name === 'block_change' && frame.data.location.x === 10))
+    .concat({ name: 'block_change', data: { location: { x: 3, y: 0, z: 0 }, type: 3 } })
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.deepEqual(report.domains.blocks.expected.map(entry => entry.key), ['2,0,0', '10,0,0'])
+  assert.deepEqual(report.domains.blocks.diff.missing, ['10,0,0'])
+  assert.deepEqual(report.domains.blocks.diff.unexpected, ['3,0,0'])
+  assert.deepEqual(report.domains.blocks.diff.changed, [])
+})
+
+test('entity diffs order by id and classify missing and unexpected ids', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 10, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } }
+  ))
+
+  const clientFrames = snapshotFrames(snapshot)
+    .filter(frame => !(frame.name === 'entity_metadata' && frame.data.entityId === 10))
+    .concat({ name: 'entity_metadata', data: { entityId: 8, metadata: [{ key: 0, type: 'byte', value: 1 }] } })
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames })
+
+  assert.deepEqual(report.domains.entities.expected.map(entry => entry.entityId), [9, 10])
+  assert.deepEqual(report.domains.entities.diff.missing, [10])
+  assert.deepEqual(report.domains.entities.diff.unexpected, [8])
+  assert.deepEqual(report.domains.entities.diff.changed, [])
+})
+
+test('a bigint entity id and field value stay JSON-safe', () => {
+  const snapshot = buildSnapshot(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 9n, metadata: [{ key: 0, type: 'long', value: 5n }] } }
+  ))
+
+  const report = parityReport({ cacheSnapshot: snapshot, clientFrames: snapshotFrames(snapshot) })
+
+  assert.equal(report.ok, true)
+  assert.doesNotThrow(() => JSON.stringify(report))
+  assert.deepEqual(report.domains.entities.expected, [{
+    entityId: '9',
+    removed: false,
+    fields: [{ key: 0, value: '5' }]
+  }])
+})
+
+test('every state-cache domain is compared or excused in UNPARITY', () => {
+  assertDomainCoverage(DOMAINS)
+
+  for (const [domain, reason] of Object.entries(UNPARITY)) {
+    assert.equal(typeof reason, 'string', `${domain} reason is a string`)
+    assert.ok(reason.trim().length > 0, `${domain} reason is non-empty`)
+  }
+  for (const domain of Object.keys(DOMAIN_PARITY)) {
+    assert.ok(DOMAINS.includes(domain), `${domain} is a state-cache domain`)
+  }
+
+  // A domain added to DOMAINS without a comparison must fail the check.
+  assert.throws(
+    () => assertDomainCoverage([...DOMAINS, 'new_domain']),
+    /no parity comparison/
+  )
+  // A name that happens to match a parity domain gains nothing from the name.
+  assert.throws(
+    () => assertDomainCoverage([...DOMAINS, 'blocks']),
+    /no parity comparison/
+  )
 })
 
 test('snapshotFrames order matches join-synth.synthAttach', () => {
@@ -197,6 +457,26 @@ test('parityReport returns JSON-safe values', () => {
   assert.equal(report.ok, true)
   assert.doesNotThrow(() => JSON.stringify(report))
   assert.deepEqual(report.domains.inventory.expected[0].slots[0].item, { itemCount: '1', itemId: 5 })
+})
+
+test('parityEvidence keeps diffs and scalar values but drops replayed state', () => {
+  const evidence = parityEvidence({
+    inventory: { ok: true, expected: [{ windowId: 0 }], actual: [{ windowId: 0 }] },
+    blocks: {
+      ok: false,
+      expected: [{ key: '1,2,3' }],
+      actual: [],
+      diff: { missing: ['1,2,3'], unexpected: [], changed: [] }
+    },
+    heldItemSlot: { ok: false, expected: 3, actual: 4 }
+  })
+
+  assert.deepEqual(evidence.inventory, { ok: true })
+  assert.deepEqual(evidence.blocks, {
+    ok: false,
+    diff: { missing: ['1,2,3'], unexpected: [], changed: [] }
+  })
+  assert.deepEqual(evidence.heldItemSlot, { ok: false, expected: 3, actual: 4 })
 })
 
 test('N13 fails the run on a parity mismatch and passes only on ok', () => {
