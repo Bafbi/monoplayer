@@ -1,0 +1,12 @@
+# The gate judges a pull request, so the gate's owner reviews any change to the
+# gate itself. Two paths make the gate: `mise.toml` holds `tasks.check`, and
+# `.github/workflows/` holds the job that runs it. This file is listed too,
+# because dropping a line here would leave the other two unowned.
+#
+# GitHub reads this file from the base branch to pick reviewers, but a request
+# is not a requirement. Branch protection or a ruleset has to require the
+# review, or the owner only gets a notification.
+
+/.github/workflows/ @Bafbi
+/.github/CODEOWNERS @Bafbi
+/mise.toml @Bafbi
