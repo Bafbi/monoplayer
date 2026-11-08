@@ -127,6 +127,8 @@ export function createMonoplayer ({
     chatBlocked: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
+    resourcePackAcks: 0,
+    resourcePackAckFailures: 0,
     attaches: 0,
     denials: 0,
     frontKicks: 0
@@ -201,6 +203,24 @@ export function createMonoplayer ({
       emit('verify_denied', decision)
     }
     return decision
+  }
+
+  // The puppet never renders a resource pack, but the backend keeps a
+  // per-player pack status, and server logic that ships a custom UI inside the
+  // pack can read it. Answer as a client that accepted the pack and finished
+  // loading it (3 = accepted, 0 = successfully loaded). The attaching client
+  // gets the same request in the replay and downloads the pack for real.
+  function answerResourcePack (data = {}) {
+    metrics.resourcePackAcks++
+    const uuid = data.uuid ?? data.id
+    try {
+      backendLeg.write('resource_pack_receive', { uuid, result: 3 })
+      backendLeg.write('resource_pack_receive', { uuid, result: 0 })
+      log('resourcePackAck', { uuid, result: 'accepted+loaded' })
+    } catch (error) {
+      metrics.resourcePackAckFailures++
+      log('resourcePackAckFailed', { error: String(error?.message ?? error) })
+    }
   }
 
   // Called by the front-leg adapter after gates 1+2 pass and Login Success
@@ -298,6 +318,7 @@ export function createMonoplayer ({
       const { state, name, buffer, data = {} } = frame
       if (state === 'configuration') {
         metrics.configFrames++
+        if (name === 'add_resource_pack') answerResourcePack(data)
         cache.push('configuration', name, buffer, data)
         return
       }
@@ -436,6 +457,8 @@ export function createMonoplayer ({
       if (cache.push('play', name, buffer, data).cached) metrics.framesCached++
       return
     }
+    if (name === 'add_resource_pack') answerResourcePack(data)
+
     if (LEG_OWNED.has(name)) {
       // Defensive: chat/per-leg frames are not cached and not replayed; they
       // are not relayed live either (chat block, per-leg handshake frames).
