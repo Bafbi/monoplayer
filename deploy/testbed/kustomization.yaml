@@ -1,0 +1,21 @@
+# The controlled transfer testbed.
+#
+# Two Paper 26.2 servers, both online-mode, with RCON. `paper-hub` is the
+# Monoplayer backend; `paper-sky` only accepts transferred clients
+# (accepts-transfers=true). The transfer is triggered from the hub console,
+# so the switch is deterministic and does not depend on a server menu.
+#
+# The testbed Monoplayer runs in the `monoplayer` namespace on the same
+# custody PVC as the live deployment, so the GlowSquidye token chain stays
+# single-writer. The orchestrator scales the live deployment to zero first.
+#
+# This tree is not managed by Argo. `src/testbed/switch.js` applies it, runs
+# the transfer, and restores the live deployment in a finally block.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - paper-hub.yaml
+  - paper-sky.yaml
+  - monoplayer-testbed.yaml

@@ -63,3 +63,33 @@ run = "tools/gate-b-driver/install.sh tools/gate-b-driver/build/libs/gate-b-driv
 [tasks."image:build"]
 description = "Build and push the Monoplayer image to the cluster Zot registry."
 run = "scripts/build-image.sh"
+
+[tasks."testbed:up"]
+description = "Take the live proxy offline, start the two-Paper transfer testbed, and compare registries."
+depends = ["install"]
+run = "node src/testbed/switch.js up"
+
+[tasks."testbed:client"]
+description = "Attach Bafbi's headless client to the testbed front."
+depends = ["install"]
+run = "node src/testbed/client.js"
+
+[tasks."testbed:transfer"]
+description = "RCON-transfer the puppet from paper-hub to paper-sky and verify it."
+depends = ["install"]
+run = "node src/testbed/switch.js transfer"
+
+[tasks."testbed:registry"]
+description = "Compare the hub and target dimension_type registries."
+depends = ["install"]
+run = "node src/testbed/switch.js registry"
+
+[tasks."testbed:down"]
+description = "Stop the testbed and restore the live Excalia proxy."
+depends = ["install"]
+run = "node src/testbed/switch.js down"
+
+[tasks."testbed:run"]
+description = "Full puppet transfer: up, transfer, down, always restoring the live proxy."
+depends = ["install"]
+run = "node src/testbed/switch.js run"

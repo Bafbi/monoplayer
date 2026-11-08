@@ -1,0 +1,177 @@
+# The testbed Monoplayer: the same image, the same custody PVC, and a
+# disposable front. It runs against paper-hub and exposes a Tailscale front
+# for the bot or the real client.
+#
+# replicas: 0 in Git. The orchestrator scales the live deployment to zero,
+# applies this tree, then scales this deployment to one. The custody PVC is
+# RWO and the GlowSquidye token has one writer, so the two deployments never
+# run together.
+#
+# Telemetry and the journal are intentionally off: the testbed's heartbeat and
+# stdout are the evidence, and the live journal must not be polluted.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monoplayer-testbed
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/name: monoplayer-testbed
+    app.kubernetes.io/part-of: monoplayer-testbed
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer-testbed
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer-testbed
+        app.kubernetes.io/part-of: monoplayer-testbed
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-custody
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - until [ -f /data/accounts/73e0e19b-d4e4-4cc1-a553-a3952f0c1aed/profile.json ]; do echo waiting-for-custody; sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+        - name: clear-stale-lock
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - rm -f /data/accounts/73e0e19b-d4e4-4cc1-a553-a3952f0c1aed/writer.lock
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+      containers:
+        - name: monoplayer
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: Always
+          env:
+            - name: MONOPLAYER_BACKEND_HOST
+              value: paper-hub.monoplayer-gate-b.svc.cluster.local
+            - name: MONOPLAYER_BACKEND_PORT
+              value: "25565"
+            - name: MONOPLAYER_FRONT_HOST
+              value: 0.0.0.0
+            - name: MONOPLAYER_FRONT_PORT
+              value: "25565"
+            - name: MONOPLAYER_PUPPET_ACCOUNTS_DIR
+              value: /data/accounts
+            - name: MONOPLAYER_PUPPET_ACCOUNT
+              value: glowsquidye
+            - name: MONOPLAYER_PUPPET_UUID
+              value: 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed
+            - name: MONOPLAYER_PUPPET_USERNAME
+              value: GlowSquidye
+            - name: MONOPLAYER_ATTACH_WHITELIST
+              value: /config/attach-whitelist.json
+            - name: MONOPLAYER_VERSION
+              value: "26.2"
+            - name: MONOPLAYER_CHAT
+              value: read-only
+            - name: MONOPLAYER_DIALOG_ACTION
+              value: last
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: minecraft
+              containerPort: 25565
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: custody
+          persistentVolumeClaim:
+            claimName: monoplayer-custody
+        - name: config
+          configMap:
+            name: monoplayer-config
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monoplayer-testbed
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/name: monoplayer-testbed
+    app.kubernetes.io/part-of: monoplayer-testbed
+  annotations:
+    tailscale.com/hostname: monoplayer-testbed
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:
+    app.kubernetes.io/name: monoplayer-testbed
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
+      protocol: TCP
