@@ -1,46 +1,66 @@
-# Build and publish the Monoplayer image
+# Deploy Monoplayer
 
-This is the image how-to only. The deployment is not part of this document.
+Monoplayer deploys from this repository. Nothing in the deployment belongs to
+another repository's GitOps tree.
 
-The image is built with the cluster BuildKit and pushed to Zot. Each build
-prints one line: the image, its tag, and its digest. Pin the deployment to the
-digest.
-
-## Build and push
-
-Prerequisites: a `kubectl` context that reaches `deepmine-build` and
-`deepmine-core`, and `mise`.
-
-```bash
-mise install
-mise run image:build
+```
+push to main
+   └─ .github/workflows/image.yaml   builds and pushes ghcr.io/bafbi/monoplayer
+        └─ commits the digest to deploy/manifests/kustomization.yaml
+             └─ Argo CD Application "monoplayer" syncs deploy/manifests
+                  └─ namespace monoplayer
 ```
 
-The task runs `scripts/build-image.sh`. It:
+Argo watches the `main` branch. One Application, one project, one namespace.
+The image is pinned by digest, never by a moving tag.
 
-1. port-forwards `svc/buildkitd` from `deepmine-build` to `127.0.0.2:1234`
-2. builds `Dockerfile` from the repo root
-3. pushes `zot.deepmine-core.svc:5000/deepmine/monoplayer:sha-<7>`
-4. prints `<image> <tag> <digest>`
+## What lives where
 
-The forwarder binds the loopback alias `127.0.0.2` because the dev harness
-probes `127.0.0.1` and a probe's connection reset kills `kubectl port-forward`
-mid-build. Override with `BUILDKIT_LOCAL_ADDR=127.0.0.1` where the alias is
-not available.
+| Path | Contents |
+|---|---|
+| `deploy/manifests/` | Kustomization: namespace, attach whitelist ConfigMap, custody PVC, Deployment, Tailscale Service |
+| `deploy/argocd/project.yaml` | AppProject `monoplayer`: one source repo, one destination namespace |
+| `deploy/argocd/application.yaml` | Application `monoplayer` |
+| `.github/workflows/image.yaml` | Build, push to GHCR, commit the digest |
+| `Dockerfile` | The runtime image: Node, the proxy, the 26.2 data patch |
 
-Sample output:
+## One-time cluster bootstrap
 
-```text
-zot.deepmine-core.svc:5000/deepmine/monoplayer sha-2438f35 sha256:...
-```
+These objects are not in Git. Create them once, in this order.
 
-Set `REGISTRY` to push somewhere else:
+1. **Argo repository credential.** The repository is private, so Argo needs a
+   token that can clone it. A fine-grained PAT with `Contents: read` and
+   `Metadata: read` on this repository is enough.
 
-```bash
-REGISTRY=zot.example.internal:5000 mise run image:build
-```
+   ```bash
+   kubectl -n argocd create secret generic monoplayer-repo \
+     --from-literal=type=git \
+     --from-literal=url=https://github.com/Bafbi/monoplayer.git \
+     --from-literal=username=Bafbi \
+     --from-literal=password="$GITHUB_TOKEN"
+   kubectl -n argocd label secret monoplayer-repo \
+     argocd.argoproj.io/secret-type=repository
+   ```
 
-The script exits nonzero when the push produced no digest.
+2. **Project and Application.**
+
+   ```bash
+   kubectl apply -f deploy/argocd/project.yaml -f deploy/argocd/application.yaml
+   ```
+
+3. **Image pull secret.** The GHCR package is private. A classic PAT with only
+   `read:packages` is enough; fine-grained PATs cannot read packages.
+
+   ```bash
+   kubectl -n monoplayer create secret docker-registry ghcr-pull \
+     --docker-server=ghcr.io \
+     --docker-username=Bafbi \
+     --docker-password="$GHCR_READ_TOKEN"
+   ```
+
+4. **Custody seed.** The image carries no tokens. Copy the account directory
+   into the claim after Argo creates it; the Deployment's init container waits
+   for `profile.json` before the app starts.
 
 ## Custody seed
 
@@ -48,19 +68,39 @@ The image carries no tokens and no whitelist. Seed both at run time.
 
 | Path | Content | Mode |
 |---|---|---|
-| `.secrets/accounts/<uuid>/` | `profile.json`, `*-cache.json` per account | `0700` dir, `0600` files |
-| `.secrets/accounts/<uuid>/writer.lock` | transient; the proxy writes it | `0600` |
-| `.secrets/attach-whitelist.json` | `{ "version": 1, "players": [...] }` | `0600` |
+| `/data/accounts/<uuid>/` | `profile.json`, `*-cache.json` per account | `0700` dir, `0600` files |
+| `/data/accounts/<uuid>/writer.lock` | transient; the proxy writes it | `0600` |
+| `/config/attach-whitelist.json` | `{ "version": 1, "players": [...] }` | ConfigMap, read-only |
 
 The account directory must be writable by the runtime user because the proxy
-takes `writer.lock` and refreshes the caches in place. Copy the directory as
-it is; do not rebuild or re-encode the files. A refresh invalidates the old
+takes `writer.lock` and refreshes the caches in place. Copy the directory as it
+is; do not rebuild or re-encode the files. A refresh invalidates the old
 refresh token, so a later seed must come from the live writer, not a stale
 backup.
 
 Two accounts exist: `glowsquidye` (the puppet) and `bafbi` (the attaching
-player, on the attach whitelist). With more than one account there is no
-default puppet: set `MONOPLAYER_PUPPET_ACCOUNT`.
+player, on the attach whitelist). Set `MONOPLAYER_PUPPET_ACCOUNT` when the
+account directories hold more than one.
+
+## The image pipeline
+
+`.github/workflows/image.yaml` runs on every push to `main` that is not a
+manifest or docs change:
+
+1. builds `linux/amd64` from the `Dockerfile`;
+2. pushes `ghcr.io/bafbi/monoplayer:sha-<7>` and `:main`;
+3. writes `digest: sha256:...` into `deploy/manifests/kustomization.yaml` and
+   commits it with `[skip ci]`.
+
+The workflow authenticates to GHCR with its own `GITHUB_TOKEN`
+(`packages: write`) and commits with `contents: write`. If the repository's
+Actions settings are limited to read-only tokens, the push step fails; set
+Settings → Actions → General → Workflow permissions to "Read and write
+permissions".
+
+A local build is still possible for debugging, but it publishes to the
+cluster's Zot registry, which the manifests do not reference. If you use it,
+pin the digest in `deploy/manifests/kustomization.yaml` yourself.
 
 ## What the deployment must set
 
@@ -79,12 +119,33 @@ Common:
 - `MONOPLAYER_VERSION`: the protocol version, default `26.1`. The image also
   carries the 26.2 data, so set `26.2` for Excalia Season 3.
 - `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye`
-- `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/app/.secrets/accounts` (the default,
-  relative to the `WORKDIR`) or the mount path
-- `MONOPLAYER_ATTACH_WHITELIST=/app/.secrets/attach-whitelist.json`
+- `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
+  `WORKDIR`) or the mount path
+- `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
 - `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT` (both default `25565`)
+- `MONOPLAYER_RECONNECT_ATTEMPTS` (0 or unset = unlimited) and
+  `MONOPLAYER_RECONNECT_MAX_DELAY_MS` (default `60000`)
 
-Mount the custody directory and the whitelist file from the same source the
-proxy writes to. The front leg listens on the container port `25565`. An empty
-or missing attach whitelist makes `--start` exit with status 2.
+Telemetry and journal:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT`, for example
+  `http://otel-collector.deepmine-shared.svc.cluster.local:4318`
+- `OTEL_SERVICE_NAME=monoplayer`
+- `MONOPLAYER_JOURNAL_DIR=/data/journal`
+- `MONOPLAYER_JOURNAL_MAX_BYTES` (default `268435456`)
+
+See `docs/telemetry.md` for the signals and the journal layout.
+
+## Invariants
+
+- **One replica, `Recreate`.** The backend login is a rolling refresh-token
+  chain; two writers would race it. The custody claim is `ReadWriteOnce`.
+- **The custody PVC is never pruned.** The PVC and the namespace carry
+  `argocd.argoproj.io/sync-options: Delete=false,Prune=false`, so removing the
+  Application or the manifest does not delete the tokens.
+- **The front never attaches without a warm backend.** While the puppet has no
+  session, a login is denied with `backend_not_ready` instead of being handed
+  an incomplete configuration.
+- **The journal lives on the custody volume.** 128 MiB per file, one rotation,
+  at most 256 MiB of the 1 GiB claim.

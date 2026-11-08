@@ -1,0 +1,40 @@
+# The one Argo CD Application for Monoplayer.
+#
+# Applied by the operator once:
+#   kubectl apply -f deploy/argocd/project.yaml -f deploy/argocd/application.yaml
+#
+# After that, every push to main that changes deploy/manifests (including the
+# image digest commit from the image workflow) reaches the cluster through
+# Argo. The repository credential is the `monoplayer-repo` Secret in the argocd
+# namespace; see docs/deployment.md.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monoplayer
+  namespace: argocd
+  finalizers:
+    # Deleting this Application deletes what it owns, except the resources
+    # annotated Delete=false: the namespace and the custody PVC.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: monoplayer
+  source:
+    repoURL: https://github.com/Bafbi/monoplayer.git
+    targetRevision: main
+    path: deploy/manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monoplayer
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m

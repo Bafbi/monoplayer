@@ -1,0 +1,22 @@
+# Monoplayer: the single puppet proxy for play2.excalia.fr.
+#
+# This directory is the app's whole GitOps state. The Argo CD Application in
+# ../argocd syncs it into the `monoplayer` namespace. The image comes from
+# GHCR and is pinned by digest; .github/workflows/image.yaml builds it on
+# every push to main and writes the new digest back here.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: ghcr.io/bafbi/monoplayer
+    # The bot replaces this digest on each build. Until the first build the
+    # placeholder is intentionally unresolvable, so nothing pulls it.
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

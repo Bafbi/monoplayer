@@ -1,0 +1,19 @@
+# The dedicated namespace for the production puppet proxy.
+#
+# It holds only Monoplayer: one Deployment, one custody PVC, one Tailscale
+# Service. The public Minecraft backend stays at play.excalia.fr; the player
+# reaches this proxy over the tailnet at glowsquidye.tail41e568.ts.net.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monoplayer
+  labels:
+    app.kubernetes.io/part-of: monoplayer
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    # Deleting the Application must never take the namespace (and the token
+    # volume inside it) with it.
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false

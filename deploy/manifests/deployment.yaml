@@ -1,0 +1,172 @@
+# The Monoplayer puppet proxy.
+#
+# One replica. The backend login is a rolling refresh-token chain, so two pods
+# must never run: the strategy is Recreate and the account PVC is
+# ReadWriteOnce. A second writer would race the token rotation.
+#
+# Startup waits for the custody seed. The PVC is created empty by Argo; the
+# operator copies the GlowSquidye account directory once, then the init
+# container releases the app.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monoplayer
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  # Season 3 is reachable directly at play2.excalia.fr. The puppet joins it
+  # with 26.2, so the limbo dialog is bypassed.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-custody
+          image: ghcr.io/bafbi/monoplayer
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - until [ -f /data/accounts/73e0e19b-d4e4-4cc1-a553-a3952f0c1aed/profile.json ]; do echo waiting-for-custody; sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+        # A crashed pod can leave writer.lock with pid 1. In a new container
+        # pid 1 always exists, so the pid lock would look held forever. One
+        # replica plus Recreate makes this pod the only writer, so clear it.
+        - name: clear-stale-lock
+          image: ghcr.io/bafbi/monoplayer
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - rm -f /data/accounts/73e0e19b-d4e4-4cc1-a553-a3952f0c1aed/writer.lock
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+      containers:
+        - name: monoplayer
+          image: ghcr.io/bafbi/monoplayer
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MONOPLAYER_BACKEND_HOST
+              value: play2.excalia.fr
+            - name: MONOPLAYER_BACKEND_PORT
+              value: "25565"
+            - name: MONOPLAYER_FRONT_HOST
+              value: 0.0.0.0
+            - name: MONOPLAYER_FRONT_PORT
+              value: "25565"
+            - name: MONOPLAYER_PUPPET_ACCOUNTS_DIR
+              value: /data/accounts
+            - name: MONOPLAYER_PUPPET_ACCOUNT
+              value: glowsquidye
+            - name: MONOPLAYER_PUPPET_UUID
+              value: 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed
+            - name: MONOPLAYER_PUPPET_USERNAME
+              value: GlowSquidye
+            - name: MONOPLAYER_ATTACH_WHITELIST
+              value: /config/attach-whitelist.json
+            - name: MONOPLAYER_VERSION
+              value: "26.2"
+            - name: MONOPLAYER_DIALOG_ACTION
+              value: last
+            # Telemetry goes to the cluster collector, which fans out logs,
+            # metrics, and traces to OpenObserve. Both signals are inert when
+            # the endpoint is empty.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.deepmine-shared.svc.cluster.local:4318
+            - name: OTEL_SERVICE_NAME
+              value: monoplayer
+            # Exact packet journal on the custody PVC: 128 MiB per file with one
+            # rotation, so at most 256 MiB of the 1 GiB volume.
+            - name: MONOPLAYER_JOURNAL_DIR
+              value: /data/journal
+            - name: MONOPLAYER_JOURNAL_MAX_BYTES
+              value: "134217728"
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: minecraft
+              containerPort: 25565
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: custody
+          persistentVolumeClaim:
+            claimName: monoplayer-custody
+        - name: config
+          configMap:
+            name: monoplayer-config
+        - name: tmp
+          emptyDir: {}

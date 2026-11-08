@@ -1,0 +1,23 @@
+# The attach whitelist. Not a secret: it holds public Minecraft UUIDs.
+#
+# Only Bafbi may attach. GlowSquidye is the puppet and must never appear here.
+# The front checks this file before Login Success; an unlisted account is
+# denied before it reaches play.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monoplayer-config
+  namespace: monoplayer
+data:
+  attach-whitelist.json: |
+    {
+      "version": 1,
+      "players": [
+        {
+          "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
+          "name": "Bafbi",
+          "addedAt": "2026-11-07T13:04:51.092Z"
+        }
+      ]
+    }
