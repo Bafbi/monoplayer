@@ -1,7 +1,7 @@
 # Default gate from mise.toml: `mise run check`.
 #
-# Runs on every push except `deploy`, and on every pull request. image.yaml
-# calls this file as a reusable workflow, so a red main never builds.
+# image.yaml calls this file as a reusable workflow and needs its `check` job, so
+# a red main never publishes an image.
 
 name: ci
 
@@ -17,9 +17,8 @@ permissions:
   contents: read
 
 # image.yaml calls this file, and a called workflow reads the caller's name from
-# github.workflow. The literal `check` between the name and the ref keeps this
-# group distinct from the caller's own group and from a direct ci run on the same
-# ref, so neither cancels the other.
+# github.workflow. The `check` segment keeps this group distinct from the caller's
+# own group and from a direct ci run on the same ref.
 concurrency:
   group: ${{ github.workflow }}-check-${{ github.ref }}
   cancel-in-progress: true
@@ -27,23 +26,31 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A hung loopback must not hold a required check for hours.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # java 25 and gradle 9.8 build the Gate B driver only, and mise run check
-      # never calls them.
+      # java 25, gradle 9.8 and buildkit serve the Gate B driver and the image.
+      # `mise run check` touches none of them, so install node and pnpm only.
       - uses: jdx/mise-action@v2
         with:
           install_args: node pnpm
 
       - name: Resolve the pnpm store path
         id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: |
+          path=$(pnpm store path --silent)
+          echo "path=$path" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
-          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('mise.toml', 'pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
 
-      - run: mise run check
+      # Without --skip-tools, mise installs every tool in mise.toml here: java,
+      # gradle and buildkit, because task.run_auto_install defaults to true.
+      - run: mise run --skip-tools check
