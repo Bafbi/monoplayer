@@ -29,7 +29,7 @@ import { createLiveFrontLeg } from '../legs/live-front.js'
 import { waitForReady } from '../service/readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
-import { parityReport } from './state-parity.js'
+import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 
 const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
 const DEFAULT_REPORT = '.reports/online-report.json'
@@ -39,32 +39,11 @@ const ATTACH_SELECTOR = 'bafbi'
 
 const LOGIN_STATE_FRAMES = Object.freeze(['encryption_begin', 'compress', 'success'])
 
-// The decoded frames the client-state model needs for the parity check (N13).
-const PARITY_FRAME_NAMES = new Set([
-  'window_items',
-  'set_slot',
-  'held_item_slot',
-  'position',
-  'map_chunk',
-  'unload_chunk',
-  'block_change',
-  'block_update',
-  'multi_block_change',
-  'entity_metadata',
-  'entity_teleport',
-  'entity_position',
-  'sync_entity_position',
-  'remove_entities',
-  'entity_destroy',
-  'update_health'
-])
-
-// Wait for the replay to finish, then for the bot to decode what the proxy
-// already sent. The quiet window makes the cache snapshot and the client
-// frame cut land on the same quiescent point.
-const PARITY_SETTLE_MS = 500
-const PARITY_QUIET_MS = 250
-const PARITY_QUIET_TIMEOUT_MS = 5_000
+// N13 waits, bounded, for the attach replay's parity frames to land. The
+// expectation is the cache snapshot taken when the replay was built, and the
+// client side is cut at the replay's frame count, so a live frame that arrives
+// later is ignored on both sides (issue #24).
+const PARITY_REPLAY_TIMEOUT_MS = 30_000
 
 export const ONLINE_ASSERTION_IDS = Object.freeze([
   'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N13'
@@ -166,6 +145,24 @@ function record (id, name, status, info = null) {
     status,
     ok: status === 'pass' ? true : status === 'fail' ? false : null,
     detail: info
+  }
+}
+
+// Trim the captured-versus-replayed name comparison for the run report. A
+// mismatch keeps where it starts and the first names of each side; a match
+// keeps only the counts.
+export function parityNameEvidence (names) {
+  if (!names) return null
+  if (names.ok === true) {
+    return { ok: true, expectedFrames: names.expected.length, actualFrames: names.actual.length }
+  }
+  return {
+    ok: false,
+    expectedFrames: names.expected.length,
+    actualFrames: names.actual.length,
+    mismatchAt: names.expected.findIndex((name, index) => name !== names.actual[index]),
+    expected: names.expected.slice(0, 12),
+    actual: names.actual.slice(0, 12)
   }
 }
 
@@ -344,18 +341,22 @@ export function evaluateOnlineAssertions (evidence = {}) {
     }
   ))
 
-  // N13 fails closed: no parity evidence, a thrown check, or any mismatch is a
-  // fail. A live backend misreading a replayed frame is a real finding, never
-  // a not_observed gap.
+  // N13 fails closed: no parity evidence, a thrown check, a replay that never
+  // finished, or any mismatch is a fail. The expectations come from the cache
+  // as it stood at attach time, so a live frame after the attach cannot make a
+  // correct replay fail. A live backend misreading a replayed frame is a real
+  // finding, never a not_observed gap.
   const parity = e.parity ?? {}
   results.push(record(
     'N13',
-    'attached client state matches the cache',
-    parity.ok === true ? 'pass' : 'fail',
+    'attached client state matches the replay',
+    parity.ok === true && parity.settled === true ? 'pass' : 'fail',
     {
       ok: parity.ok ?? null,
       settled: parity.settled ?? null,
+      expectedFrames: parity.expectedFrames ?? null,
       capturedFrames: parity.capturedFrames ?? null,
+      names: parity.names ?? null,
       domains: parity.domains ?? null,
       error: parity.error ?? null
     }
@@ -535,9 +536,25 @@ export async function runOnline (argv = process.argv.slice(2)) {
       },
       logStream: { write: line => log('core', { line }) }
     })
-    front.setCoreAttach(({ name, uuid }) =>
-      core.attachPlayer({ name, uuid, includeConfig: false })
-    )
+    // N13 needs the cache as it stood when the replay was built, not the cache
+    // later: the rings are bounded FIFOs, and live traffic can evict a frame
+    // this client already received. The snapshot, the pose, and the attach run
+    // in one synchronous turn, so they describe exactly the stream replayed.
+    let attachCut = null
+    front.setCoreAttach(({ name, uuid }) => {
+      const attachSnapshot = core.cache.snapshot()
+      const attachPose = core.session.currentPose
+      const outcome = core.attachPlayer({ name, uuid, includeConfig: false })
+      // N13 checks the first attach. A later reattach must not replace the cut:
+      // the captured frames it would compare against belong to the first.
+      if (outcome.attached && attachCut === null) {
+        attachCut = {
+          snapshot: { ...attachSnapshot, pose: attachPose },
+          replayFrames: outcome.frames ?? []
+        }
+      }
+      return outcome
+    })
     core.start()
 
     // --- run: backend connect, readiness, front listen ---
@@ -605,51 +622,51 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // the parity check must compare.
     const parityFrames = []
     let parityCapture = true
-    let parityLastPacketAt = Date.now()
     bot.client.on('packet', (data, meta) => {
-      parityLastPacketAt = Date.now()
       if (!parityCapture || meta?.state !== 'play') return
       if (!PARITY_FRAME_NAMES.has(meta.name)) return
       parityFrames.push({ name: meta.name, data })
     })
     await withTimeout(bot.ready(120_000), 125_000, 'online bot ready')
 
-    // --- N13: attached client state matches the cache ---
-    // Let the replayed stream land, then wait for a quiet window on the bot's
-    // packet events. With no packet in flight, the cache snapshot and the
-    // captured client frames describe the same state, so a live frame that
-    // arrives after the cut cannot show up on only one side.
-    await new Promise(resolve => setTimeout(resolve, PARITY_SETTLE_MS))
-    const quietDeadline = Date.now() + PARITY_QUIET_TIMEOUT_MS
-    while (Date.now() - parityLastPacketAt < PARITY_QUIET_MS && Date.now() < quietDeadline) {
+    // --- N13: the attach replay matches the state the client decoded ---
+    // Wait, bounded, for the replay's parity frames to land. The bot captures
+    // from before ready(), and the replay happens inside the attach, so the
+    // first K captured frames are the replay's. Anything after them is live
+    // traffic, and the cut ignores it.
+    const expectedParityFrames = attachCut ? parityReplayNames(attachCut.replayFrames).length : 0
+    const replayDeadline = Date.now() + PARITY_REPLAY_TIMEOUT_MS
+    while (parityFrames.length < expectedParityFrames && Date.now() < replayDeadline) {
       await new Promise(resolve => setTimeout(resolve, 25))
     }
-    const paritySettled = Date.now() - parityLastPacketAt >= PARITY_QUIET_MS
-
-    const cacheSnapshot = core.cache.snapshot()
-    // position is per-leg: the cache drops it, and the proxy synthesizes the
-    // attach position from the session pose. Carry that pose so the pose
-    // domain compares the position the client actually decoded.
-    const attachPose = core.session.currentPose
-    const capturedFrames = parityFrames.slice()
+    const paritySettled = expectedParityFrames > 0 && parityFrames.length >= expectedParityFrames
     parityCapture = false
 
     let parity
-    try {
-      parity = parityReport({
-        cacheSnapshot: { ...cacheSnapshot, pose: attachPose },
-        clientFrames: capturedFrames
+    if (attachCut === null) {
+      parity = {
+        ok: false,
+        settled: false,
+        expectedFrames: 0,
+        capturedFrames: parityFrames.length,
+        names: { ok: false, expected: [], actual: [] },
+        domains: {},
+        error: 'no attach replay was recorded'
+      }
+    } else {
+      parity = attachParity({
+        attachSnapshot: attachCut.snapshot,
+        replayFrames: attachCut.replayFrames,
+        clientFrames: parityFrames,
+        settled: paritySettled
       })
-    } catch (error) {
-      parity = { ok: false, domains: {}, error: String(error?.message ?? error).slice(0, 200) }
     }
-    // Keep the verdict and the changed entries, not the full replayed state:
-    // a warm cache can hold thousands of block and entity entries.
+    // Keep the verdict and the changed entries, not the full replayed state: a
+    // warm cache can hold thousands of block, entity, and replayed frames.
     evidence.parity = {
       ...parity,
       domains: parityEvidence(parity.domains),
-      settled: paritySettled,
-      capturedFrames: capturedFrames.length
+      names: parityNameEvidence(parity.names)
     }
 
     const playFrames = bot.playNames()

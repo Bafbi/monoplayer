@@ -36,23 +36,38 @@ const BLOCK_FRAMES = new Set([
   'block_break_animation'
 ])
 
+// Entity state stays in one ring, so its capture order survives the replay:
+// join-synth replays `entity` before `generic`, and a position frame split
+// across the two rings replays in the wrong order (issue #23).
+//
+// Only names the clientbound policy accepts appear here: the policy answers
+// `block` for an unknown name, and `classifyPlay` drops it before this set is
+// consulted. `entity_position` is the pre-rename spelling the older fakes
+// still send.
+//
+// The relative-move frames (`rel_entity_move`, `entity_move_look`,
+// `entity_look`) are deliberately absent. They are per-tick deltas, and this
+// ring is a 2048-entry FIFO, so promoting them lets move traffic evict
+// `spawn_entity` and `entity_metadata`, which tell the client the entity
+// exists. They stay in `generic` until the two rings are replayed in capture
+// order (issue #35). The cost until then: deltas captured before the last
+// absolute frame replay after it, so the client ends at that absolute plus the
+// deltas it had already applied. Only a live client shows it; the parity model
+// does not decode the relative moves.
 const ENTITY_FRAMES = new Set([
-  'entity_metadata',
-  'entity_position',
-  'entity_move',
-  'rel_move',
+  'sync_entity_position',
+  'entity_destroy',
   'entity_teleport',
+  'entity_metadata',
+  'spawn_entity',
   'entity_head_rotation',
   'entity_velocity',
   'entity_effect',
   'remove_entities',
   'add_entity',
-  'spawn_entity',
-  'named_entity_spawn',
   'attach_entity',
-  'collect_item',
   'entity_sound_effect',
-  'update_attributes'
+  'entity_position'
 ])
 
 const INVENTORY_FRAMES = new Set(['window_items', 'set_slot'])
