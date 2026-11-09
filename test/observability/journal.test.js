@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createJournal } from '../../src/observability/journal.js'
+import { createJournal, journalFileOrder, readJournal, readNdjson } from '../../src/observability/journal.js'
 
 const NOW = 1_700_000_000_000
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -161,4 +161,124 @@ test('close flushes, is idempotent, and a closed journal ignores new frames', t 
 
   const records = readLines(path.join(dir, fs.readdirSync(dir)[0]))
   assert.equal(records.length, 1)
+})
+
+// ---------------------------------------------------------------------------
+// The reader: one place knows the file names, their order, and the line format.
+// ---------------------------------------------------------------------------
+
+test('journal files sort by session, process, segment, then archive before live', () => {
+  assert.deepEqual(journalFileOrder([
+    'session-2026-11-09T01-01-01-000Z-100.ndjson',
+    'session-2026-11-09T01-01-01-000Z-100-2.ndjson',
+    'session-2026-11-09T01-01-01-000Z-100.ndjson.1',
+    'session-2026-11-09T01-01-01-000Z-100-2.ndjson.1',
+    'session-2026-11-09T01-01-01-000Z-100-10.ndjson',
+    'session-2026-11-08T23-00-00-000Z-99.ndjson',
+    'notes.txt'
+  ]), [
+    'session-2026-11-08T23-00-00-000Z-99.ndjson',
+    'session-2026-11-09T01-01-01-000Z-100.ndjson.1',
+    'session-2026-11-09T01-01-01-000Z-100.ndjson',
+    'session-2026-11-09T01-01-01-000Z-100-2.ndjson.1',
+    'session-2026-11-09T01-01-01-000Z-100-2.ndjson',
+    'session-2026-11-09T01-01-01-000Z-100-10.ndjson'
+  ])
+})
+
+async function collect (records) {
+  const entries = []
+  for await (const entry of records) entries.push(entry)
+  return entries
+}
+
+test('a journal written by createJournal reads back record for record', async t => {
+  const { dir, journal } = withJournal(t)
+  journal.frame({ dir: 's2c', state: 'play', name: 'map_chunk', buffer: Buffer.from('chunk') })
+  journal.event('liveReady', { warm: true })
+  journal.close()
+
+  const entries = await collect(readJournal(dir))
+  assert.equal(entries.length, 2)
+  assert.deepEqual(entries[0].record, {
+    t: NOW,
+    dir: 's2c',
+    state: 'play',
+    name: 'map_chunk',
+    len: 5,
+    b64: Buffer.from('chunk').toString('base64')
+  })
+  assert.equal(entries[1].record.event, 'liveReady')
+  assert.equal(entries[1].record.warm, true)
+  assert.match(entries[0].file, /session-.+\.ndjson$/)
+  assert.equal(entries[0].line, 1)
+})
+
+test('a malformed line fails with path and line number', async t => {
+  const dir = tempDir()
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'session-x.ndjson')
+  fs.writeFileSync(file, '{"t":1,"event":"start"}\nnot json\n')
+
+  await assert.rejects(collect(readNdjson(file)), (error) => {
+    assert.equal(error.message.startsWith(file + ':2: '), true, error.message)
+    assert.match(error.message, /JSON/)
+    return true
+  })
+})
+
+test('an unterminated last line is skipped, because the service may still be writing it', async t => {
+  const dir = tempDir()
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'session-x.ndjson')
+  fs.writeFileSync(file, '{"t":1,"event":"start"}\n{"t":2,"eve')
+
+  const entries = await collect(readNdjson(file))
+  assert.deepEqual(entries.map(entry => entry.record), [{ t: 1, event: 'start' }])
+})
+
+test('a file that rotates away mid-read is skipped, not fatal', async t => {
+  const dir = tempDir()
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  // Two sessions, so the listing holds two files. The second rotates away
+  // between the listing and its open, exactly as it would during a live read.
+  const first = createJournal({ dir, clock: () => NOW })
+  first.frame({ dir: 's2c', state: 'play', name: 'one', buffer: Buffer.from('1') })
+  first.close()
+  const second = createJournal({ dir, clock: () => NOW + 1000 })
+  second.frame({ dir: 's2c', state: 'play', name: 'two', buffer: Buffer.from('2') })
+  second.close()
+  const newer = journalFileOrder(fs.readdirSync(dir)).map(name => path.join(dir, name)).at(-1)
+
+  const records = readJournal(dir)
+  const names = []
+  names.push((await records.next()).value.record.name)
+  fs.rmSync(newer)
+  for await (const entry of records) names.push(entry.record.name)
+
+  assert.deepEqual(names, ['one'])
+})
+
+test('a file that is not a journal name is ignored, however session-shaped', () => {
+  assert.deepEqual(journalFileOrder(['session-backup.ndjson', 'session-2026-11-09T01-01-01-000Z-100.ndjson']), [
+    'session-2026-11-09T01-01-01-000Z-100.ndjson'
+  ])
+})
+
+test('a rotated journal reads back in write order', async t => {
+  const dir = tempDir()
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  // A small rotation threshold forces several segments and an archive; the
+  // reader has to put them back in the order the writer wrote them.
+  let clock = NOW
+  const journal = createJournal({ dir, maxBytes: 200, clock: () => clock })
+  for (let index = 0; index < 6; index++) {
+    journal.frame({ dir: 's2c', state: 'play', name: `frame_${index}`, buffer: Buffer.alloc(60, index) })
+    clock += 100
+  }
+  journal.close()
+  assert.ok(fs.readdirSync(dir).length > 1, 'the journal rotated')
+
+  const entries = await collect(readJournal(dir))
+  assert.deepEqual(entries.map(entry => entry.record.name), ['frame_0', 'frame_1', 'frame_2', 'frame_3', 'frame_4', 'frame_5'])
 })
