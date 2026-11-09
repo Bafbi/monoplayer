@@ -43,10 +43,13 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   with exit 1 reports a launch that switched the workspace or took focus, and
   stderr names which. Anything after the instance name goes to
   `prismlauncher`.
-- `shot` asks the driver for its render target and copies the PNG back with
-  `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
-  This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
-  which already rejects screen-reading automation on the official client.
+- `shot <path> [instance]` asks the driver for its render target and copies the
+  PNG back with `scp`. It names the instance, and the driver port has to be held
+  by that instance, so another client's frame cannot come back as this one's. It
+  needs the mod and no Hyprland state, and it never moves the desktop. An
+  unmodded instance cannot be captured this way yet (#67). This follows
+  [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md), which already
+  rejects screen-reading automation on the official client.
 - `kill` asks the driver for `quit` only when `ss` shows the driver port held
   by the requested instance. The quit op stops whichever client answers, so
   another instance goes straight to the fallback. The fallback is the client
