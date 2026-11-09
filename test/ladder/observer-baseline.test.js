@@ -7,7 +7,8 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { runBaseline } from '../../src/ladder/observer-baseline.js'
+import { announceBrand, runBaseline } from '../../src/ladder/observer-baseline.js'
+import { BRAND_CHANNEL, decodeBrand, FABRIC_BRAND } from '../../src/core/client-settings.js'
 
 const UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 
@@ -33,6 +34,58 @@ test('the port has to be a port', async () => {
       String(port)
     )
   }
+})
+
+// #78: the report's brand row is only a comparison if both clients announce one.
+// The fake client is the packet seam: what the baseline writes, and how often.
+const fakeClient = () => {
+  const handlers = new Map()
+  const written = []
+  return {
+    written,
+    once (event, handler) { handlers.set(event, () => { handlers.delete(event); handler() }) },
+    write (name, packet) { written.push({ name, packet }) },
+    emit (event) { handlers.get(event)?.() },
+    has (event) { return handlers.has(event) }
+  }
+}
+
+test('the baseline announces the Fabric brand the puppet announces', () => {
+  const client = fakeClient()
+  const log = []
+  announceBrand(client, { log: (event, fields) => log.push({ event, ...fields }) })
+  assert.equal(client.written.length, 0, 'nothing is written before the configuration phase')
+  client.emit('select_known_packs')
+  assert.equal(client.written.length, 1)
+  assert.equal(client.written[0].name, 'custom_payload')
+  assert.equal(client.written[0].packet.channel, BRAND_CHANNEL)
+  assert.equal(decodeBrand(client.written[0].packet.data), FABRIC_BRAND)
+  assert.deepEqual(log.at(-1), { event: 'baselineBrand', channel: BRAND_CHANNEL, brand: FABRIC_BRAND })
+})
+
+test('one connection announces once, as the proxy does per connection', () => {
+  // The listener is registered with once(), so a second configuration frame on
+  // the same connection does not announce a second brand.
+  const client = fakeClient()
+  announceBrand(client)
+  client.emit('select_known_packs')
+  client.emit('select_known_packs')
+  assert.equal(client.written.length, 1)
+})
+
+test('a write that the leg refuses is logged, never silent', () => {
+  const client = fakeClient()
+  client.write = () => { throw new Error('socket closed') }
+  const log = []
+  announceBrand(client, { log: (event, fields) => log.push({ event, ...fields }) })
+  client.emit('select_known_packs')
+  assert.equal(log.at(-1).event, 'baselineBrandFailed')
+  assert.match(log.at(-1).error, /socket closed/)
+})
+
+test('announceBrand refuses something that is not a client', () => {
+  assert.throws(() => announceBrand(null), /minecraft-protocol client/)
+  assert.throws(() => announceBrand({ write: () => {} }), /minecraft-protocol client/)
 })
 
 test('an account that does not resolve fails before any socket opens', async () => {

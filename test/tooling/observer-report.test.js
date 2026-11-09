@@ -32,13 +32,21 @@ const SHIM = [
   'last="${@: -1}"',
   'case " $* " in',
   '  *" get pods "*) printf \'%s\' "$POD"; exit 0 ;;',
-  // Two shapes of get deploy: the deployment's own selector label (matched first,
-  // because a real kubectl resolves the jsonpath), and the puppet's env.
+  // Three shapes of get deploy: the deployment's own selector label, its
+  // container name, and the whole deployment for the puppet's env (matched last,
+  // because a real kubectl resolves the jsonpath).
   '  *"matchLabels"*) printf \'%s\' "$PAPER_LABEL"; exit 0 ;;',
-  '  *" get deploy "*) printf \'{"spec":{"selector":{"matchLabels":{"app.kubernetes.io/name":"%s"}},"template":{"spec":{"containers":[{"image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PAPER_LABEL" "$PUPPET"; exit 0 ;;',
+  '  *"containers[0].name"*) printf \'paper\'; exit 0 ;;',
+  // The container restart count. It moves once per read unless the case models a
+  // restart that never completes: that is how a slow start is reproduced without
+  // waiting for one.
+  '  *"restartCount"*) N=0; [ -f "$KUBECTL_STATE/restarts" ] && N=$(cat "$KUBECTL_STATE/restarts"); printf \'%s\' "$N"; [ "$KUBECTL_STUCK" = 1 ] || echo $((N+1)) > "$KUBECTL_STATE/restarts"; exit 0 ;;',
+  '  *" get deploy "*) printf \'{"spec":{"selector":{"matchLabels":{"app.kubernetes.io/name":"%s"}},"template":{"spec":{"containers":[{"name":"paper","image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PAPER_LABEL" "$PUPPET"; exit 0 ;;',
   '  *" logs "*) printf \'[Server] MonoplayerObserver wire listeners registered\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*) exit 0 ;;',
+  // The gate Paper's own settings, which is where the absent reasons are read.
+  '  *"server.properties"*) printf \'%s\\n\' "$KUBECTL_SERVER_PROPERTIES"; exit 0 ;;',
   // Two records per connection, as the plugin writes them: the join, then the
   // resource-pack status. The report has to merge each pair.
   '  *views.jsonl*) mkdir -p "$(dirname "$last")"; { printf \'%s\\n\' "$KUBECTL_BASELINE_VIEW"; printf \'%s\\n\' "$KUBECTL_BASELINE_LATE"; printf \'%s\\n\' "$KUBECTL_PUPPET_VIEW"; printf \'%s\\n\' "$KUBECTL_PUPPET_LATE"; } > "$last"; exit 0 ;;',
@@ -63,7 +71,10 @@ function workspace () {
   const protocollib = path.join(root, 'ProtocolLib-9cb125f-plugin.jar')
   fs.writeFileSync(protocollib, 'jar')
 
-  return { root, bin, jar, protocollib, log: path.join(root, 'kubectl.log') }
+  const state = path.join(root, 'kubectl-state')
+  fs.mkdirSync(state, { recursive: true })
+
+  return { root, bin, jar, protocollib, state, log: path.join(root, 'kubectl.log') }
 }
 
 const view = (overrides = {}) => JSON.stringify({
@@ -90,6 +101,13 @@ function run (space, env = {}, args = []) {
       ...process.env,
       PATH: space.bin + ':' + process.env.PATH,
       KUBECTL_LOG: space.log,
+      KUBECTL_STATE: space.state,
+      KUBECTL_STUCK: '0',
+      KUBECTL_SERVER_PROPERTIES: [
+        'enable-code-of-conduct=false',
+        'resource-pack=',
+        'online-mode=true'
+      ].join('\n'),
       KUBECTL_PUPPET: PUPPET,
       KUBECTL_ATTACH: ATTACH,
       KUBECTL_POD: POD,
@@ -167,6 +185,53 @@ test('the run never changes the live deployment', () => {
   assert.equal(deletions.every(line => /\bdelete pod\b/.test(line)), true, 'only pods are deleted: ' + deletions.join(' / '))
 })
 
+test('the readiness wait reads the new container, not the previous log', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+  // #79: the marker line lives in the log of every container this pod has ever
+  // run, so a grep over the whole log satisfies itself on the previous boot and
+  // hands the joins a server that is still starting. Two facts make the wait
+  // mean the new process: the restart count moved, and the log read starts at
+  // the kill.
+  const kill = calls.findIndex(line => line.includes('kill 1'))
+  assert.ok(kill >= 0, 'the install restarts the container: ' + calls.join(' / '))
+  const counted = calls.findIndex(line => line.includes('restartCount'))
+  assert.ok(counted >= 0, 'the wait reads the container restart count: ' + calls.join(' / '))
+  assert.ok(counted < kill, 'the count is read before the kill, so a count that did not move means no restart')
+  const reads = calls.filter(line => line.includes(' logs '))
+  assert.ok(reads.length > 0, 'the wait reads the log')
+  assert.equal(reads.every(line => line.includes('--since-time=')), true,
+    'every readiness read is scoped to the log written since the kill: ' + reads.join(' / '))
+  assert.equal(reads.every(line => line.includes('-c paper')), true,
+    'the log read names the container the deployment declares: ' + reads.join(' / '))
+})
+
+test('a gate Paper that never finishes starting is reported as a start, not a join', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, { KUBECTL_STUCK: '1' }, ['--timeout', '1'])
+  assert.equal(status, 2, output)
+  assert.match(output, /did not finish starting/)
+  assert.match(output, /not a join failure/)
+  assert.equal(calls.some(line => line.includes('observer-baseline.js')), false,
+    'a server that never started never gets a join: ' + calls.join(' / '))
+  assert.equal(calls.some(line => line.includes('online.js')), false,
+    'neither join runs after a start that did not finish: ' + calls.join(' / '))
+})
+
+test('the install clears the previous run view log before the restart', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+  // The gate Paper's /data survives a container restart, so the log of the last
+  // run is still there. Reading it would compare the previous run's baseline with
+  // this run's puppet, and that has already happened once (#78).
+  const cleared = calls.findIndex(line => line.includes('views.jsonl') && line.includes('rm -f'))
+  assert.ok(cleared >= 0, 'the install clears the view log: ' + calls.join(' / '))
+  const kill = calls.findIndex(line => line.includes('kill 1'))
+  assert.ok(cleared < kill, 'the log is cleared before the restart, so the new container starts a fresh one')
+})
+
 test('the plugin install only ever names the gate namespace', () => {
   const space = workspace()
   const { status, output, calls } = run(space)
@@ -182,6 +247,30 @@ test('measuring the live lane is refused before anything runs', () => {
   assert.equal(status, 2)
   assert.match(output, /never measures the live lane/)
   assert.deepEqual(calls, [], 'kubectl was never called')
+})
+
+test('the absent reasons are read from the gate Paper, not asserted', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+  assert.ok(calls.some(line => line.includes('server.properties')), 'the run reads the server settings')
+  const report = JSON.parse(fs.readFileSync(path.join(space.root, '.reports', 'observer-report.json'), 'utf8'))
+  assert.match(report.fields.find(entry => entry.field === 'codeOfConduct').reason, /enable-code-of-conduct=false/)
+  assert.match(output, /2 absent \(2 with a reason\)/)
+})
+
+test('a gate Paper that serves the gate stops excusing the field', () => {
+  // The point of reading the facts: if someone turns the gate on for a run like
+  // this one, an absent codeOfConduct means the listener, not the setting, and the
+  // report must say so.
+  const space = workspace()
+  const { status, output } = run(space, {
+    KUBECTL_SERVER_PROPERTIES: ['enable-code-of-conduct=true', 'resource-pack=https://example.invalid/pack.zip'].join('\n')
+  })
+  assert.equal(status, 0, output)
+  const report = JSON.parse(fs.readFileSync(path.join(space.root, '.reports', 'observer-report.json'), 'utf8'))
+  assert.equal(report.fields.find(entry => entry.field === 'codeOfConduct').reason, null)
+  assert.match(output, /0 with a reason, 2 without: codeOfConduct, codeOfConductAccepted/)
 })
 
 test('an unexplained difference fails the run', () => {
