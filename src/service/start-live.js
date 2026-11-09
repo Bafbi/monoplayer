@@ -15,6 +15,9 @@
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default), full, or off
+//   MONOPLAYER_TRANSFER_KEEP_CONNECTION                 1 keeps the client's
+//                                                       connection through a
+//                                                       transfer (#22); off by default
 //   MONOPLAYER_LOG                                      JSONL log file (default: stdout)
 //   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
@@ -77,6 +80,15 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   if (env.MONOPLAYER_CHAT) out.chat = env.MONOPLAYER_CHAT
+  // The kept connection (#22) is off in the defaults, and one lane turns it on
+  // without moving that default. Only "1" and "0" are read, so a typo cannot
+  // silently change what a deployed lane does with a transfer.
+  const keepRaw = env.MONOPLAYER_TRANSFER_KEEP_CONNECTION
+  if (keepRaw === '1' || keepRaw === '0') {
+    out.transfer = { ...doc.transfer, keepConnection: keepRaw === '1' }
+  } else if (keepRaw !== undefined && keepRaw !== '') {
+    warn('MONOPLAYER_TRANSFER_KEEP_CONNECTION must be 1 or 0; ignoring ' + keepRaw)
+  }
   // A deployed puppet must keep retrying: the backend can restart, and giving
   // up after one attempt leaves the front alive with no session. Attempts: 0
   // or unset means unlimited; the delay caps at MONOPLAYER_RECONNECT_MAX_DELAY_MS.
