@@ -72,6 +72,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
   const assertions = []
   const logs = []
+  // Bounded wait for a check that must report what arrived instead of throwing.
+  const settleUntil = async (pred, ms) => {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      try { if (pred()) return true } catch { /* not ready yet */ }
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    return false
+  }
   let stopping = false
   let failed = false
   let phase = 'setup'
@@ -447,6 +456,38 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       { leftovers: b1.leftovers.length, errors: b1.errors.length }
     )
 
+    // --- O36: a bundled equipment frame reaches the client with its own bytes ---
+    // Paper batches equipment updates in a bundle, and the frame's array type
+    // carries its terminator flag in the high bit of each slot byte. A relay
+    // that hands the client bytes a decoder has already rewritten sends one
+    // entry plus trailing bytes, and the client disconnects (#82). Two frames,
+    // two and three entries: one entry would not need the flags at all.
+    const LIVE_BUNDLE = [
+      { entityId: 501, slots: [0, 1] },
+      { entityId: 502, slots: [0, 1, 2] }
+    ]
+    fake.sendEquipmentBundle({ updates: LIVE_BUNDLE })
+    // A relay that corrupts the frame makes the client fail the frame rather
+    // than delivering it, so the wait is bounded and the check reports what
+    // arrived. A bare wait would report a timeout and hide the evidence.
+    await settleUntil(
+      () => LIVE_BUNDLE.every(update => b1.equipment.some(frame => frame.entityId === update.entityId)),
+      3_000
+    )
+    const liveEquipment = LIVE_BUNDLE.map(update =>
+      b1.equipment.find(frame => frame.entityId === update.entityId)?.equipments?.length ?? 0)
+    check(
+      'O36',
+      'a bundled equipment frame keeps every entry when it is relayed live',
+      liveEquipment.every((count, i) => count === LIVE_BUNDLE[i].slots.length) &&
+        b1.leftovers.every(entry => entry.name !== 'entity_equipment'),
+      {
+        entries: liveEquipment,
+        expected: LIVE_BUNDLE.map(update => update.slots.length),
+        equipmentLeftovers: b1.leftovers.filter(entry => entry.name === 'entity_equipment').length
+      }
+    )
+
     // --- O27: the N13 frame cut is aligned on a real client ---
     // N13 compares the attach snapshot with the FIRST K captured play frames,
     // where K is the number of parity frames the replay sent. The assumption is
@@ -651,6 +692,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
+    // --- a bundled equipment frame cached while detached (replayed at O37) ---
+    // The bundle is the trigger, not the cause: whatever put the frame in the
+    // cache, the replay writes the same bytes (#82).
+    const DETACHED_BUNDLE = [
+      { entityId: 503, slots: [0, 1, 2, 3] },
+      { entityId: 504, slots: [0, 1] }
+    ]
+    fake.sendEquipmentBundle({ updates: DETACHED_BUNDLE })
+    await waitFor(
+      () => core.cache.snapshot().generic.filter(entry => entry.name === 'entity_equipment').length >= 2,
+      'the detached bundled equipment frames in the cache'
+    )
+
     // --- detached block mutation is cached for the next attach ---
     fake.sendBlockChange({ x: 3, y: 0, z: 3 })
     await waitFor(() => core.cache.snapshot().blocks.length >= 1, 'cached block change')
@@ -695,6 +749,27 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'second bot saw no leftover bytes and the wire stayed clean',
       b2.leftovers.length === 0 && front.wireStats.rejected === 0,
       { leftovers: b2.leftovers.length, rejected: front.wireStats.rejected }
+    )
+
+    // --- O37: the replay writes a bundled equipment frame's own bytes ---
+    await settleUntil(
+      () => DETACHED_BUNDLE.every(update => b2.equipment.some(frame => frame.entityId === update.entityId)),
+      3_000
+    )
+    const replayedEquipment = DETACHED_BUNDLE.map(update =>
+      b2.equipment.find(frame => frame.entityId === update.entityId)?.equipments?.length ?? 0)
+    check(
+      'O37',
+      'a bundled equipment frame replayed from the cache keeps every entry',
+      replayedEquipment.every((count, i) => count === DETACHED_BUNDLE[i].slots.length) &&
+        b2.leftovers.every(entry => entry.name !== 'entity_equipment') &&
+        front.wireStats.rejected === 0,
+      {
+        entries: replayedEquipment,
+        expected: DETACHED_BUNDLE.map(update => update.slots.length),
+        equipmentLeftovers: b2.leftovers.filter(entry => entry.name === 'entity_equipment').length,
+        rejected: front.wireStats.rejected
+      }
     )
 
     // --- O30-O31: the held dialog reaches the client, and its answer reaches the backend ---
