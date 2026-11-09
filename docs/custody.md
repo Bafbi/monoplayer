@@ -89,6 +89,14 @@ escape hatch: the directory must already contain a readable `profile.json`.
   invalid; recovery is always: sign-out-everywhere / password change →
   re-run `device-code`.
 - `.secrets/` and the cache file patterns are already in `.gitignore`.
+- **One secrets directory, many worktrees.** `mise run secrets:link` symlinks the
+  main working copy's `.secrets` into the worktree it runs in. It never copies:
+  the refresh token rotates on use, so two copies of one account invalidate each
+  other, and the writer lock only means anything when the directory is shared.
+  The task is idempotent, refuses to replace a real `.secrets` directory, exits 0
+  when there is nothing to link, and never prints file contents. Outside a git
+  work tree that has no source it links nothing, and the live rungs then fail
+  with their own message.
 - `profile.json` records the last bootstrapped
   `{ uuid, name, alias, authTitle, deviceType, updatedAt }` — this is what
   makes "same UUID across refresh" a pass claim instead of an observation.

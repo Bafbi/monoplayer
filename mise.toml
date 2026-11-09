@@ -11,7 +11,11 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh) || node src/ladder/next-rung.js lint $?"
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh) || node src/ladder/next-rung.js lint $?"
+
+[tasks."secrets:link"]
+description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
+run = "scripts/link-secrets.sh"
 
 [tasks.test]
 description = "Run the pure unit/fake tests (no sockets, no auth)."

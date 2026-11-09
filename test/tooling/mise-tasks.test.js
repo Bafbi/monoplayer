@@ -91,6 +91,23 @@ test('an expensive rung waits for the gate instead of racing it', () => {
   )
 })
 
+test('the secrets link stays out of the gate and off the network', () => {
+  const link = tasks.get('secrets:link')
+
+  assert.ok(link, 'mise.toml defines secrets:link')
+  assert.match(link.body, /run = "scripts\/link-secrets\.sh"/, 'secrets:link runs the script')
+  // CI checks out without secrets. A gate that linked them would either fail or,
+  // worse, pass a rung that only works on one machine.
+  assert.equal(link.depends.length, 0, 'secrets:link depends on nothing')
+  for (const [name, task] of tasks) {
+    assert.equal(
+      (task.depends ?? []).includes('secrets:link'),
+      false,
+      `${name} must not depend on secrets:link`
+    )
+  }
+})
+
 test('every rung task names the next rung when it fails', () => {
   for (const rung of loadLadder()) {
     for (const name of rung.tasks) {
