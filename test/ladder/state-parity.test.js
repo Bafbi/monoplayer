@@ -10,13 +10,17 @@ import { synthAttach } from '../../src/core/join-synth.js'
 import {
   ONLINE_ASSERTION_IDS,
   evaluateOnlineAssertions,
-  parityEvidence
+  parityEvidence,
+  parityNameEvidence
 } from '../../src/ladder/online.js'
 import {
   DOMAIN_PARITY,
   PARITY_DOMAINS,
+  PARITY_FRAME_NAMES,
   PARITY_SECTIONS,
   UNPARITY,
+  attachParity,
+  parityReplayNames,
   snapshotFrames,
   parityReport
 } from '../../src/ladder/state-parity.js'
@@ -479,17 +483,206 @@ test('parityEvidence keeps diffs and scalar values but drops replayed state', ()
   assert.deepEqual(evidence.heldItemSlot, { ok: false, expected: 3, actual: 4 })
 })
 
-test('N13 fails the run on a parity mismatch and passes only on ok', () => {
+// --- N13: the attach replay is the expectation, not the live cache ----------
+//
+// The cache rings are bounded FIFOs. Live traffic during the parity wait can
+// evict a frame the client already received, so comparing a post-settle
+// snapshot with every captured frame fails on a correct cache (issue #24).
+// attachParity compares the snapshot taken when the replay was built with the
+// first K captured frames, where K is the number of parity frames the replay
+// sent.
+
+// Build the attach the way the core does: snapshot, replay frames, and the
+// frames the client decodes from that replay.
+function attachCut (stream, overrides = {}) {
+  const cache = createStateCache(overrides)
+  stream.forEach((frame, index) => {
+    cache.push('play', frame.name, Buffer.from(`${frame.name}:${index}`), frame.data ?? {})
+  })
+  const snapshot = cache.snapshot()
+  const pose = { x: 0.5, y: 64, z: 0.5, yaw: 0, pitch: 0 }
+  const { frames } = synthAttach({ snapshot, pose })
+  return {
+    cache,
+    attachSnapshot: { ...snapshot, pose },
+    replayFrames: frames,
+    clientFrames: decodedReplay(snapshotFrames({ ...snapshot, pose }), frames)
+  }
+}
+
+// The frames the client decodes, in the order the proxy wrote them: the replay
+// order, restricted to the names the parity model captures. The cache snapshot
+// supplies the decoded fields for each replayed buffer.
+function decodedReplay (decoded, replayFrames) {
+  const pool = new Map()
+  for (const frame of decoded) {
+    if (!pool.has(frame.name)) pool.set(frame.name, [])
+    pool.get(frame.name).push(frame)
+  }
+  return parityReplayNames(replayFrames).map(name => {
+    const queue = pool.get(name)
+    if (!queue || queue.length === 0) throw new Error(`no decoded frame for replayed ${name}`)
+    return queue.shift()
+  })
+}
+
+test('attachParity passes when live traffic evicts the entity the client already has', () => {
+  const cut = attachCut(
+    joinedStream(
+      { name: 'entity_metadata', data: { entityId: 1, metadata: [{ key: 0, type: 'byte', value: 7 }] } }
+    ),
+    { maxEntities: 2 }
+  )
+
+  // Live frames after the attach push entity 1 out of the 2048-entry ring.
+  cut.cache.push('play', 'entity_metadata', Buffer.from('live:2'), { entityId: 2, metadata: [] })
+  cut.cache.push('play', 'entity_metadata', Buffer.from('live:3'), { entityId: 3, metadata: [] })
+  assert.equal(cut.cache.snapshot().entities.some(frame => frame.data.entityId === 1), false)
+
+  // The cut snapshot still holds entity 1, so the replay is verified.
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: cut.clientFrames,
+    settled: true
+  })
+  assert.equal(evidence.ok, true, JSON.stringify(evidence.domains))
+  assert.equal(evidence.expectedFrames, cut.replayFrames.filter(frame => PARITY_FRAME_NAMES.has(frame.name)).length)
+  assert.equal(evidence.capturedFrames, evidence.expectedFrames)
+})
+
+test('attachParity ignores live frames captured after the replay', () => {
+  const cut = attachCut(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 1, metadata: [] } }
+  ))
+
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    // A live frame the cache never replayed trails the capture.
+    clientFrames: [...cut.clientFrames, { name: 'entity_metadata', data: { entityId: 99, metadata: [] } }],
+    settled: true
+  })
+  assert.equal(evidence.ok, true, JSON.stringify(evidence.domains))
+})
+
+test('attachParity fails when the replay diverges from the cache', () => {
+  const cut = attachCut(joinedStream(
+    { name: 'entity_metadata', data: { entityId: 1, metadata: [] } },
+    { name: 'entity_teleport', data: { entityId: 9, x: 7, y: 64, z: 0, yaw: 0, pitch: 0 } }
+  ))
+
+  const clientFrames = cut.clientFrames.map(frame =>
+    frame.name === 'entity_teleport' ? { name: frame.name, data: { ...frame.data, x: 5 } } : frame)
+
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames,
+    settled: true
+  })
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.names.ok, true) // the same frames, a different state
+  assert.equal(evidence.domains.entities.ok, false)
+})
+
+test('attachParity fails when the replay never settled', () => {
+  const cut = attachCut(joinedStream())
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: cut.clientFrames,
+    settled: false
+  })
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.settled, false)
+  // Unsettled is the only reason this run fails: the compared state agrees.
+  assert.equal(evidence.domains.chunks.ok, true)
+})
+
+test('attachParity fails when fewer parity frames arrived than the replay sent', () => {
+  const cut = attachCut(joinedStream(
+    { name: 'block_change', data: { location: { x: 1, y: 64, z: 0 }, type: 5 } }
+  ))
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: cut.clientFrames.slice(0, cut.clientFrames.length - 1),
+    settled: true // the caller claims settled; the count says otherwise
+  })
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.capturedFrames, evidence.expectedFrames - 1)
+})
+
+test('attachParity fails when a live frame slips into the replay prefix', () => {
+  const cut = attachCut(joinedStream(
+    { name: 'block_change', data: { location: { x: 1, y: 64, z: 0 }, type: 5 } }
+  ))
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    // A frame the front relayed before the replay finished shifts the cut.
+    clientFrames: [{ name: 'set_slot', data: { windowId: 0, slot: 1, item: { itemCount: 1 } } }, ...cut.clientFrames],
+    settled: true
+  })
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.names.ok, false)
+  assert.ok(evidence.names.actual.includes('set_slot'))
+})
+
+test('attachParity fails closed when the replay carried no parity frame', () => {
+  const cut = attachCut(joinedStream())
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames.filter(frame => !PARITY_FRAME_NAMES.has(frame.name)),
+    clientFrames: [],
+    settled: true
+  })
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.expectedFrames, 0)
+})
+
+test('parityNameEvidence keeps the counts and trims a name mismatch', () => {
+  const expected = Array.from({ length: 40 }, (_, index) => `frame_${index}`)
+  const matched = parityNameEvidence({ ok: true, expected, actual: expected.slice() })
+  assert.deepEqual(matched, { ok: true, expectedFrames: 40, actualFrames: 40 })
+
+  const actual = expected.slice()
+  actual[3] = 'stray_frame'
+  const mismatch = parityNameEvidence({ ok: false, expected, actual })
+  assert.equal(mismatch.ok, false)
+  assert.equal(mismatch.mismatchAt, 3)
+  assert.equal(mismatch.expected.length, 12)
+  assert.equal(mismatch.actual.length, 12)
+  assert.equal(mismatch.expected[3], 'frame_3')
+  assert.equal(mismatch.actual[3], 'stray_frame')
+
+  // A short capture names its first missing index, not -1.
+  assert.equal(parityNameEvidence({ ok: false, expected, actual: expected.slice(0, 5) }).mismatchAt, 5)
+  assert.equal(parityNameEvidence(null), null)
+})
+
+test('N13 fails the run on a parity mismatch and passes only on a settled ok', () => {
   assert.ok(ONLINE_ASSERTION_IDS.includes('N13'))
 
-  const failed = evaluateOnlineAssertions({
-    parity: { ok: false, domains: { inventory: { ok: false, diff: { changes: [{ slot: 36 }] } } } }
-  }).find(assertion => assertion.id === 'N13')
-  assert.equal(failed.status, 'fail')
-  assert.equal(failed.detail.domains.inventory.ok, false)
-
-  const passed = evaluateOnlineAssertions({ parity: { ok: true, domains: {} } })
+  const n13 = evidence => evaluateOnlineAssertions({ parity: evidence })
     .find(assertion => assertion.id === 'N13')
+
+  const mismatch = n13({
+    ok: false,
+    settled: true,
+    domains: { inventory: { ok: false, diff: { changes: [{ slot: 36 }] } } }
+  })
+  assert.equal(mismatch.status, 'fail')
+  assert.equal(mismatch.detail.domains.inventory.ok, false)
+
+  // A cut that never settled cannot pass, even with an empty diff: the compared
+  // frames may be a prefix of a replay that had not finished.
+  const unsettled = n13({ ok: true, settled: false, domains: {} })
+  assert.equal(unsettled.status, 'fail')
+  assert.equal(unsettled.detail.settled, false)
+
+  const passed = n13({ ok: true, settled: true, domains: {} })
   assert.equal(passed.status, 'pass')
   assert.equal(passed.ok, true)
 })

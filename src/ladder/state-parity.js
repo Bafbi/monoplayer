@@ -22,6 +22,28 @@ export const PARITY_DOMAINS = Object.freeze([
   'inventory', 'heldItemSlot', 'pose', 'chunks', 'blocks', 'entities'
 ])
 
+// The decoded frames the parity model needs. One set feeds both sides of the
+// N13 cut: the capture filter on the client, and the count of frames the attach
+// replay sent. Two lists would drift and compare different frames.
+export const PARITY_FRAME_NAMES = Object.freeze(new Set([
+  'window_items',
+  'set_slot',
+  'held_item_slot',
+  'position',
+  'map_chunk',
+  'unload_chunk',
+  'block_change',
+  'block_update',
+  'multi_block_change',
+  'entity_metadata',
+  'entity_teleport',
+  'entity_position',
+  'sync_entity_position',
+  'remove_entities',
+  'entity_destroy',
+  'update_health'
+]))
+
 // Cache domains (state-cache.js DOMAINS) mapped to the parity domains that
 // compare them. This map and UNPARITY are the test contract: every DOMAINS
 // entry must be compared through a non-empty mapping or excused below. They are
@@ -96,6 +118,66 @@ export function parityReport ({ cacheSnapshot, clientFrames = [], domains = PARI
     if (!result.ok) ok = false
   }
   return { ok, domains: results }
+}
+
+// The attach replay's parity frames, in replay order. The synthesized attach
+// position is per-leg, so it appears here and not in the cache: without it the
+// pose domain would compare the attach pose with null.
+export function parityReplayNames (replayFrames = []) {
+  if (!Array.isArray(replayFrames)) throw new TypeError('replayFrames must be an array')
+  const names = []
+  for (const frame of replayFrames) {
+    if (PARITY_FRAME_NAMES.has(frame?.name)) names.push(frame.name)
+  }
+  return names
+}
+
+// N13: the attach replay against the client's decoded state.
+//
+// The expectation is the cache as it stood when the replay was built
+// (`attachSnapshot`, carrying the attach pose), and the client side is cut at
+// the number of parity frames that replay sent. A bounded ring that evicted a
+// frame after the attach therefore cannot fail the run, and a live frame that
+// arrived after the replay is ignored on both sides (issue #24).
+//
+// Fails closed: no replay parity frame, an unsettled cut, a captured frame the
+// replay never sent, a length mismatch, or any domain mismatch.
+export function attachParity ({
+  attachSnapshot,
+  replayFrames = [],
+  clientFrames = [],
+  settled = false
+} = {}) {
+  if (!attachSnapshot || typeof attachSnapshot !== 'object') {
+    throw new TypeError('attachSnapshot is required')
+  }
+  if (!Array.isArray(clientFrames)) throw new TypeError('clientFrames must be an array')
+
+  const expected = parityReplayNames(replayFrames)
+  const cut = clientFrames.slice(0, expected.length)
+  const actual = cut.map(frame => frame?.name ?? null)
+  const names = { ok: equal(expected, actual), expected, actual }
+  const evidence = {
+    ok: false,
+    settled: settled === true,
+    expectedFrames: expected.length,
+    capturedFrames: cut.length,
+    names
+  }
+
+  let report
+  try {
+    report = parityReport({ cacheSnapshot: attachSnapshot, clientFrames: cut })
+  } catch (error) {
+    return { ...evidence, domains: {}, error: String(error?.message ?? error).slice(0, 200) }
+  }
+
+  return {
+    ...evidence,
+    // An empty replay would otherwise pass on an empty diff.
+    ok: evidence.settled && expected.length > 0 && names.ok && report.ok,
+    domains: report.domains
+  }
 }
 
 function compareDomain (name, expected, actual) {

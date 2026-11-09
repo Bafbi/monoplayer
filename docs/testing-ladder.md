@@ -167,6 +167,11 @@ The runner builds:
   asked for `2`. Every Client Information frame on that backend carries the
   cap.
 
+- `O27` the N13 frame cut is aligned on a real client: the first-attach replay's
+  parity frame names equal the first K parity frames the bot decoded, in order.
+  N13 on the online rung compares one side of that cut, so a misaligned cut would
+  fail a correct cache.
+
 ## Why the rungs exist: the B1 lesson
 
 The first live B1 attach failed because login-phase frames

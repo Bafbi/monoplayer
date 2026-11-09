@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O20 (including O11b) are the contract
+// Assertions R0 and O1-O25 (including O11b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -22,6 +22,7 @@ import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
+import { PARITY_FRAME_NAMES, parityReplayNames } from './state-parity.js'
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
@@ -173,9 +174,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       },
       logStream: { write: line => log('core', { line }) }
     })
-    front.setCoreAttach(({ name, uuid }) => core.attachPlayer({ name, uuid, includeConfig: false }))
     front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
     front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
+    // Every successful attach records the cache as it stood when its replay was
+    // built, so O27 below can check the N13 frame cut against the real client's
+    // decode.
+    const attachCuts = []
+    front.setCoreAttach(({ name, uuid }) => {
+      const attachSnapshot = core.cache.snapshot()
+      const attachPose = core.session.currentPose
+      const outcome = core.attachPlayer({ name, uuid, includeConfig: false })
+      if (outcome.attached) {
+        attachCuts.push({ snapshot: { ...attachSnapshot, pose: attachPose }, replayFrames: outcome.frames ?? [] })
+      }
+      return outcome
+    })
     core.start()
 
     // One backend.connect() per reconnect_due. The guard makes a loop
@@ -358,6 +371,28 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'first bot saw no leftover bytes and no errors',
       b1.leftovers.length === 0 && b1.errors.length === 0,
       { leftovers: b1.leftovers.length, errors: b1.errors.length }
+    )
+
+    // --- O27: the N13 frame cut is aligned on a real client ---
+    // N13 compares the attach snapshot with the FIRST K captured play frames,
+    // where K is the number of parity frames the replay sent. The assumption is
+    // that the client decodes exactly the replay, in replay order; a real
+    // protocol bot is the only place to observe it.
+    const firstCut = attachCuts[0] ?? null
+    const replayedParityNames = firstCut ? parityReplayNames(firstCut.replayFrames) : []
+    const capturedParityNames = playNames
+      .filter(name => PARITY_FRAME_NAMES.has(name))
+      .slice(0, replayedParityNames.length)
+    check(
+      'O27',
+      'the N13 frame cut matches the replay the client decoded',
+      replayedParityNames.length > 0 &&
+        JSON.stringify(capturedParityNames) === JSON.stringify(replayedParityNames),
+      {
+        expectedFrames: replayedParityNames.length,
+        expected: replayedParityNames.slice(0, 12),
+        captured: capturedParityNames.slice(0, 12)
+      }
     )
 
     // Position churn lands after O6 has read the synthesized join pose: the
