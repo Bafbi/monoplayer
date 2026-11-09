@@ -34,10 +34,10 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
 - `launch` hands the client to the compositor with `hl.dsp.exec_cmd` and the
   rules `{ workspace = "9 silent", no_initial_focus = true, focus_on_activate = false }`.
   The child inherits the session environment. The rules place the window only
-  when the compositor spawns the process that opens it: a second launch goes to
+  when the compositor spawns the process that opens it. A second launch goes to
   the PrismLauncher that is already running, and that process carries no rule.
   So `launch` also finds the window by the instance library path on any
-  workspace, moves it to 9 without following, and reads the placement back,
+  workspace, then moves it to 9 without following. It reads the placement back,
   because `hyprctl eval` answers `ok` even when the dispatcher found no window.
   It prints `OPENED_WORKSPACE=`, `WORKSPACE=9`, and `SILENT=`. Anything after
   the instance name goes to `prismlauncher`.
@@ -46,9 +46,10 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
   which already rejects screen-reading automation on the official client.
 - `kill` asks the driver for `quit` only when `ss` shows the driver port held
-  by the requested instance, because the quit op stops whichever client answers.
-  It then falls back to the client JVM's `-Djava.library.path` anchor, for a
-  wedged client, a client without the mod, or a host without `ss`.
+  by the requested instance. The quit op stops whichever client answers, so
+  another instance goes straight to the fallback. The fallback is the client
+  JVM's `-Djava.library.path` anchor, which also covers a wedged client, a
+  client without the mod, and a host without `ss`.
 
 Verified on `nath` on 2026-11-08 with no session variables exported:
 `launch` reported `SILENT=yes` and left the active workspace and the focused
@@ -128,8 +129,8 @@ Minecraft windows keep their `Minecraft* 26.1.2` class and are not matched.
 
 `tools/nath.sh launch` keeps the window off your workspace on a host without the
 config entry, by moving it after it appears. It does not depend on the exec rule
-alone, and it does not depend on the window class: the instance library path in
-the window process names the client.
+alone. It does not depend on the window class either: the instance library path
+in the window process names the client.
 
 Prism's per-instance console window is reused across launches, so the console
 rule is best-effort. Set `OverrideConsole=true` and `ShowConsole=false` while

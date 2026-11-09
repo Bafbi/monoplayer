@@ -385,7 +385,6 @@ test('kill never asks the driver for another instance', (t) => {
   // belongs to the Fabric one.
   const h = harness({ sshBody: EXEC_SSH })
   t.after(h.stop)
-  h.answer('{"ok":true,"data":{"quitting":true}}')
   const run = h.run(['kill', 'gate-b-player'])
   assert.equal(run.status, 0, run.stderr)
   assert.match(run.stdout, /^QUIT=no$/m)

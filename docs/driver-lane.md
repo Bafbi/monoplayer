@@ -160,8 +160,8 @@ anything having run. Move the window with `--max-age-hours N`.
   [driver-validation.md](driver-validation.md#driving-the-host-from-the-workspace).
   Under the runner the client lands on workspace 9 silently via the
   window-title rule. A relaunch through `tools/nath.sh launch` while another
-  client is up goes to the running PrismLauncher, so the exec rule cannot place
-  the window and the wrapper moves it to 9 after it appears. Prism's per-instance
+  client is up goes to the running PrismLauncher, and the exec rule cannot reach
+  that process. `launch` moves the window to 9 after it appears. Prism's per-instance
   console is disabled (`OverrideConsole=true`, `ShowConsole=false`,
   `ShowConsoleOnError=false`) so a normal relaunch cannot raise a log panel.
 - **Place fails with an empty hotbar slot:** the driver places from the
