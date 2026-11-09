@@ -152,6 +152,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       port: fake.port,
       version: VERSION,
       username: 'GlowSquidye',
+      // The deployed lanes set this, and O30 proves it never reaches a play
+      // dialog: the dialog waits for the human instead of being clicked (#20).
+      dialogAction: 'last',
       log
     })
     const wire = createWireChecker({ version: VERSION })
@@ -667,16 +670,25 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
     // --- O30-O31: the held dialog reaches the client, and its answer reaches the backend ---
     await bot2.waitFor(() => b2.dialogs.length > 0, 'the held dialog re-sent on attach')
+    // The backend leg runs MONOPLAYER_DIALOG_ACTION=last, and it must not have
+    // clicked: a play dialog is the human's, so the leg logged the wait and the
+    // backend saw no click of its own (#20).
+    const puppetClicks = fake.received.customClickActions.length
+    const waited = logs.some(entry =>
+      entry.event === 'dialogUnhandled' && entry.fields?.reason === 'play_dialog_waits'
+    )
     check(
       'O30',
-      'a dialog sent with no client attached is delivered to the reattaching client',
+      'a dialog sent with no client attached waits, unclicked by the puppet, and is delivered to the reattaching client',
       b2.dialogs.length === 1 && core.metrics.controlDialogsHeld === 1 &&
-        core.metrics.controlDialogsResent === 1 &&
+        core.metrics.controlDialogsResent === 1 && puppetClicks === 0 && waited &&
         core.logs().some(line => line.includes('"event":"controlDialogResent"')),
       {
         dialogs: b2.dialogs.length,
         held: core.metrics.controlDialogsHeld,
-        resent: core.metrics.controlDialogsResent
+        resent: core.metrics.controlDialogsResent,
+        puppetClicks,
+        waited
       }
     )
 

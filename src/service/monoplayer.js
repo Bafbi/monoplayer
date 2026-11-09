@@ -80,8 +80,9 @@ export const DEFAULT_CONFIG = Object.freeze({
     cacheDir: null,
     cacheAccount: null
   }),
-  // Backend onboarding dialog: first, last, or a label substring. Null leaves
-  // the dialog unanswered and a headless leg waits.
+  // Configuration-phase gate answer: first, last, or a label substring (#21).
+  // It never answers a play dialog, which belongs to the human (#20). Null
+  // leaves the gate unanswered and a headless leg waits.
   dialogAction: null,
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
@@ -303,10 +304,10 @@ export function createMonoplayer ({
   // detach and is re-sent on attach. A control dialog is neither cached nor
   // replayed, so this is the one copy and a replay cannot deliver a stale one.
   const pendingDialog = createPendingDialog()
-  // #16: the state of a dialog the puppet answered itself (the headless
-  // auto-click) on this connection. The leg answers the frame before the core
-  // sees it, so the core consumes this marker instead of holding a question
-  // that is already closed.
+  // #16: the state of a dialog the puppet answered itself (the configuration
+  // gate click, #21) on this connection. The leg answers the frame before the
+  // core sees it, so the core consumes this marker instead of holding a
+  // question that is already closed.
   let puppetAnsweredDialog = null
   const transferChain = { visited: new Set(), depth: 0, resetTimer: null }
 
@@ -560,8 +561,9 @@ export function createMonoplayer ({
   // One path for every control dialog, in play and in configuration: hold the
   // last unanswered one, relay it to the human who can answer it, and let the
   // serverbound forwarder carry the answer back as the puppet's own frame. No
-  // timeout and no auto-click here: a dialog with no client waits, and which
-  // dialog is the human's to answer is #20's and #21's decision.
+  // timeout and no auto-click here: a dialog with no client waits. Which dialog
+  // the human answers is decided by the leg's policy: a play dialog is always
+  // the human's (#20), a configuration gate is #21's.
   function handleControlDialog ({ state, name, buffer, data = {} }) {
     // The puppet answered this one itself before the core heard about it, so
     // there is nothing to hold and no human to ask. The marker is spent here
@@ -1460,7 +1462,7 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_PUPPET_USERNAME                          assertion: resolved profile name must match
   MONOPLAYER_PUPPET_CACHE_DIR                         raw custody dir override (deprecated)
   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
-  MONOPLAYER_DIALOG_ACTION                            first|last|<label substring>
+  MONOPLAYER_DIALOG_ACTION                            configuration-gate answer: first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), full, or off
