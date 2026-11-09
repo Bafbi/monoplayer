@@ -183,8 +183,9 @@ fails. That keeps the connection alive through the loading screen.
 
 ### Chat and commands (`config.chat`)
 
-Three modes. `full` is the default since #19; `read-only` and `off` keep the
-earlier behaviour.
+Three modes. `read-only` is the default. `full` adds the speaking path from
+#19 and stays opt-in until a live run proves the signed path on the deployed
+backend. `off` blocks both directions.
 
 `chat: 'full'` speaks the attached client's chat and commands on the backend
 leg as the puppet. The core takes the text out of the frame and calls the
@@ -194,6 +195,12 @@ last-seen window, and picks `chat_command_signed` or `chat_command`. The
 human's signature, session key, offset, and acknowledgements never reach the
 backend: a `chat_message` signed with the human's key is rejected there, and
 its offset means nothing on the puppet's window.
+
+A leg without profile keys sends the message unsigned instead of failing, and a
+server that enforces secure profiles answers an unsigned message by closing the
+connection. The core logs `chatCapability` once per session, from
+`backendLeg.chatCapable()`, so a live run answers that question before anyone
+flips the default.
 
 In every mode, clientbound `system_chat` and `profileless_chat` are relayed to
 the attached client while it is attached. Neither frame is cached, so an attach

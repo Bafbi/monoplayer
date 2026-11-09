@@ -176,8 +176,16 @@ _Avoid_: location, coordinates
 A frame from the attaching player that Monoplayer answers or discards instead of forwarding, because it belongs to a connection rather than to the session.
 _Avoid_: filter, blocked packet
 
+**Speak**:
+To send the attaching player's message or command text on the backend leg as the puppet, signing it with the puppet's profile keys and its own last-seen window. The proxy never forwards the player's chat frame: its signature and window belong to the player's connection.
+_Avoid_: forward chat, proxy chat, relay chat
+
+**Chat mode**:
+The `config.chat` setting. `read-only` (the default) relays the server's chat and drops the player's text; `full` also speaks the player's text and relays the server's signed player chat; `off` blocks both directions.
+_Avoid_: mute, disable chat
+
 **Read-only chat**:
-The mode in which the attaching player sees the server's chat and cannot speak: clientbound chat is relayed, serverbound chat is dropped.
+The `read-only` chat mode: the attaching player sees the server's chat and cannot speak, because clientbound chat is relayed and serverbound chat is dropped.
 _Avoid_: muted chat, one-way chat
 
 **Wire check**:

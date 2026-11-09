@@ -167,9 +167,13 @@ test('the server signed chat reaches the human and is never cached', () => {
   assert.equal(rig.core.cache.snapshot().prefix.some(f => f.name === 'player_chat'), false)
 })
 
-test('the full chat mode is a valid mode and the default', () => {
-  assert.equal(loadConfig().chat, 'full')
+test('full is an available mode and read-only stays the default', () => {
+  // The signed path is proven offline only. A leg without profile keys sends an
+  // unsigned frame rather than throwing, and a secure-profile server answers
+  // that by closing the connection, so the default stays the proven mode until a
+  // live run on the deployed backend says otherwise.
+  assert.equal(loadConfig().chat, 'read-only')
   assert.equal(loadConfig({ chat: 'full' }).chat, 'full')
-  assert.equal(loadConfig({ chat: 'read-only' }).chat, 'read-only')
+  assert.equal(loadConfig({ chat: 'off' }).chat, 'off')
   assert.throws(() => loadConfig({ chat: 'write' }), /config\.chat/)
 })

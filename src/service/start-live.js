@@ -14,7 +14,7 @@
 //   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
-//   MONOPLAYER_CHAT                                     full (default), read-only, or off
+//   MONOPLAYER_CHAT                                     read-only (default), full, or off
 //   MONOPLAYER_LOG                                      JSONL log file (default: stdout)
 //   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity

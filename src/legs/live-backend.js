@@ -438,20 +438,29 @@ function createBackendLeg ({
       client.write(name, packet)
     },
     // #19: speak the human's text as the puppet. The library's signed-chat
-    // path signs with the puppet's profile keys (fetched at login by the
-    // Microsoft auth flow), fills the acknowledgement bitset and checksum from
-    // the puppet connection's own last-seen window, and picks
+    // path signs with this connection's profile keys, fills the acknowledgement
+    // bitset and checksum from this connection's last-seen window, and picks
     // `chat_command_signed` or `chat_command`. Building that by hand would
-    // duplicate the window tracking the library already does on this
-    // connection, so the leg calls it. It is an underscore-private method of
-    // the pinned minecraft-protocol fork; a version bump must re-check it.
+    // duplicate the window tracking the library already does here, so the leg
+    // calls it.
     chat (text) {
       if (!client || ended) throw new Error('backend leg not connected')
       if (typeof text !== 'string' || text.length === 0) throw new TypeError('chat text is required')
-      if (typeof client._signedChat !== 'function') {
-        throw new Error('minecraft-protocol has no signed chat path')
+      // The public alias is assigned when the client reaches play; the private
+      // signer is the same function under its own name. Prefer the public one
+      // and fall back, so one rename in a library bump does not break chat.
+      const speak = typeof client.chat === 'function' ? client.chat : client._signedChat
+      if (typeof speak !== 'function') {
+        throw new Error('minecraft-protocol has no chat path')
       }
-      client._signedChat(text)
+      speak.call(client, text)
+    },
+    // True when this connection holds the profile keys a signed message needs.
+    // The library sends an unsigned frame when it has none, and does not
+    // throw, so this is the only way a live run can tell the two apart before
+    // a server rejects one.
+    chatCapable () {
+      return Boolean(client && !ended && client.profileKeys)
     },
     writeRaw (buffer) {
       if (!client) throw new Error('backend leg not connected')

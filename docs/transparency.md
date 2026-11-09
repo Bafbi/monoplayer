@@ -44,15 +44,22 @@ memory is a later task.
 - **The proxy's egress address is the one accepted difference.** The backend
   sees the proxy host, which reads as a client behind a VPN. IP forwarding is
   out of scope.
-- **Chat and commands are spoken by the puppet, not by the human.** The
-  human's text is re-signed with the puppet's profile key and its own last-seen
-  window, so the server attributes it to GlowSquidye
-  ([#19](https://github.com/Bafbi/monoplayer/issues/19)). Three consequences:
-  the human's own signature and session key never reach the server; a message
-  the server rejects arrives back as a rejection on GlowSquidye; and the human's
-  client sees the server's signed `player_chat` as a frame from another
-  connection, so its per-sender signature chain reads as broken even though the
-  message displays.
+- **Chat and commands are read-only until `MONOPLAYER_CHAT=full`.** In `full`
+  mode the puppet speaks the human's text: it re-signs it with the puppet's
+  profile key and its own last-seen window, so the server attributes it to
+  GlowSquidye ([#19](https://github.com/Bafbi/monoplayer/issues/19)). The
+  default stays `read-only` because the signed path has been proven offline
+  only. Three consequences once it is on: the human's own signature and session
+  key never reach the server; a message the server rejects arrives back as a
+  rejection on GlowSquidye; and the human's client sees the server's signed
+  `player_chat` as a frame from another connection, so its per-sender
+  signature chain reads as broken even though the message displays.
+- **A service with no profile keys sends unsigned chat.** The pinned
+  minecraft-protocol sends an unsigned frame rather than failing, and a server
+  with `enforce-secure-profile` answers that by closing the connection. The
+  proxy logs `chatCapability` once per session with `signed: true` or
+  `signed: false` from the backend leg, so a live run answers the question
+  before the default is flipped.
 - **Dialogs and configuration gates are still answered by the puppet.** The
   human does not own a dialog yet
   ([#20](https://github.com/Bafbi/monoplayer/issues/20),

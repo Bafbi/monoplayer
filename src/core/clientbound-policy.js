@@ -46,9 +46,15 @@ export const PLAY_BLOCK = new Set([
 ])
 
 // Relayed live, never cached: chat, and answers to a request the *front*
-// client made. `player_chat` is the server's signed chat; the core relays it
-// only in the `full` chat mode (#19), because the human's client sees another
-// connection's per-sender message chain.
+// client made.
+//
+// `player_chat` is the server's signed chat. This table says it is a frame
+// that may cross; the chat mode decides whether the session includes it, and
+// the router applies that (#19). The split is deliberate: this table answers
+// "what is this frame", and a mode is session configuration, not frame
+// structure. The front leg's last-write gate therefore cannot see the mode, so
+// the router is the one place that enforces it, and
+// test/service/chat-send.test.js pins it there.
 export const PLAY_LIVE_ONLY = new Set([
   'system_chat',
   'profileless_chat',

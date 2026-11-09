@@ -165,7 +165,7 @@ test('chat off drops clientbound chat as before', () => {
 })
 
 test('the chat mode is validated', () => {
-  assert.equal(loadConfig().chat, 'full')
+  assert.equal(loadConfig().chat, 'read-only')
   assert.equal(loadConfig({ chat: 'off' }).chat, 'off')
   assert.throws(() => loadConfig({ chat: 'write' }), /config\.chat/)
 })
