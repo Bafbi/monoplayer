@@ -16,6 +16,8 @@
 // truncated buffer, so leftover accounting happens here.
 import mc from 'minecraft-protocol'
 
+import { buildCustomClickAction } from '../legs/live-backend.js'
+
 const VERSION = '26.1'
 
 // Build the createClient options. Pure, so tests can prove the auth material
@@ -91,6 +93,7 @@ export function createBot ({
     heldItemSlots: [], // decoded clientbound held_item_slot frames
     health: [], // decoded clientbound update_health frames
     systemChat: [], // decoded clientbound system_chat frames
+    dialogs: [], // decoded clientbound show_dialog frames (#16)
     kick: null, // decoded clientbound kick_disconnect, if one arrived
     ended: null,
     errors: []
@@ -148,6 +151,7 @@ export function createBot ({
   client.on('held_item_slot', packet => received.heldItemSlots.push(packet))
   client.on('update_health', packet => received.health.push(packet))
   client.on('system_chat', packet => received.systemChat.push(packet))
+  client.on('show_dialog', packet => received.dialogs.push(packet))
   client.on('kick_disconnect', packet => { received.kick = packet })
 
   client.on('error', error => {
@@ -270,6 +274,14 @@ export function createBot ({
     },
     sendMessageAck (count = 0) {
       client.write('message_acknowledgement', { count })
+    },
+    // #16: answer a dialog the way a client does. The library's own writer for
+    // this packet omits the payload's length prefix, so the body is built by
+    // the same helper the puppet leg uses and written raw.
+    answerDialog (id, additions = null) {
+      const body = buildCustomClickAction({ state: 'play', id, additions })
+      if (body === null) throw new Error(`cannot build a dialog answer for ${JSON.stringify(id)}`)
+      client.writeRaw(body)
     },
     close
   }

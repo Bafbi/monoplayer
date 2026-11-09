@@ -101,6 +101,16 @@ export function chooseDialogAction (data, policy = 'last') {
   }
 }
 
+// #16: who answers a control dialog. The auto-click exists for a headless
+// puppet; while a human is attached the dialog is theirs, so the puppet must
+// not answer it too. One decision, consulted per dialog, so a client that
+// attaches mid-session changes the answer without rebuilding the leg.
+export function decideDialogAutoAnswer ({ dialogAction, humanAttached }) {
+  if (!dialogAction) return { auto: false, reason: 'no_policy' }
+  if (humanAttached) return { auto: false, reason: 'human_attached' }
+  return { auto: true, reason: null }
+}
+
 // VarInt encoder for the packet id, identifier length, and the payload length.
 function varint (value) {
   const out = []
@@ -215,6 +225,12 @@ function createBackendLeg ({
   log,
   connectTimeoutMs,
   dialogAction,
+  // Consulted per dialog, so a leg built before any client exists still
+  // answers correctly once one attaches. The orchestrator reads the core.
+  isHumanAttached = () => false,
+  // Reported after the leg answers a dialog itself, so the core's pending
+  // holder does not offer an answered question to the next client (#16).
+  onDialogAnswered = null,
   prepareConnection,
   releaseTokens,
   connectLogFields,
@@ -373,8 +389,12 @@ function createBackendLeg ({
       // handled; anything else is logged and left alone.
       let dialogResponses = 0
       socketClient.on('show_dialog', data => {
-        if (!dialogAction) {
-          log('dialogUnhandled', { reason: 'no_policy' })
+        const decision = decideDialogAutoAnswer({
+          dialogAction,
+          humanAttached: isHumanAttached() === true
+        })
+        if (!decision.auto) {
+          log('dialogUnhandled', { reason: decision.reason })
           return
         }
         if (dialogResponses >= 5) {
@@ -405,6 +425,9 @@ function createBackendLeg ({
             label: choice.label,
             bytes: body.length
           })
+          // This frame answers the dialog before the core sees it, so the core
+          // must not hold it as the human's question.
+          onDialogAnswered?.({ state: socketClient.state, name: 'show_dialog' })
         } catch (error) {
           log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
         }
@@ -609,6 +632,8 @@ export function createLiveBackendLeg (options = {}) {
     // connect promise pending forever; the timeout releases the token lock.
     connectTimeoutMs: 60_000,
     dialogAction,
+    isHumanAttached: options.isHumanAttached ?? (() => false),
+    onDialogAnswered: options.onDialogAnswered ?? null,
     prepareConnection: acquireTokens,
     releaseTokens,
     // Custody paths and identity labels only — no token material. cacheAccount

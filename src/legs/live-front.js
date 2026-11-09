@@ -77,7 +77,12 @@ export function createConfigPathInterceptor ({
   // the core stream the puppet's frames; finishFromCore() ends the phase when
   // the backend's own finish arrives.
   live = false,
-  onUnavailable = null
+  onUnavailable = null,
+  // #16: fired once, when the library hands the client to its configuration
+  // phase. This is the first moment a configuration frame can reach the client
+  // in a state it parses; the attach call-in runs during login, before the
+  // library writes Login Success.
+  onConfiguring = null
 }) {
   if (typeof originalWrite !== 'function') throw new TypeError('write is required')
   if (typeof writeRaw !== 'function') throw new TypeError('writeRaw is required')
@@ -85,11 +90,21 @@ export function createConfigPathInterceptor ({
   if (!Array.isArray(cachedConfigFrames)) throw new TypeError('cachedConfigFrames must be an array')
 
   let resolved = false
+  let notified = false
   const stashed = [] // library-authored registry_data params (fallback only)
   const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, unavailable: 0, finishedByCore: 0 }
 
+  // #16: the client is in its configuration phase now. One notification per
+  // connection, whichever path resolves first.
+  function notifyConfiguring () {
+    if (notified) return
+    notified = true
+    onConfiguring?.()
+  }
+
   function resolveConfigPath () {
     if (resolved) return
+    notifyConfiguring()
     // Live: the core owns every configuration frame, including the finish, so
     // the library's finish write is dropped and the phase stays open.
     if (live) return
@@ -332,6 +347,7 @@ function createFrontLeg ({
   let serverboundHandler = null // core serverbound pipeline
   let detachHandler = null // core detach
   let clientSettingsHandler = null // core client-information capture (#18)
+  let configuringHandler = null // core call-in: the client entered configuration (#16)
   let errorHandler = null
   let attached = null // the one client through the pipeline (check pass or attached)
 
@@ -342,7 +358,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   function actualPort () {
@@ -515,6 +531,16 @@ function createFrontLeg ({
       },
       isConfigurationState: () => client.state === 'configuration',
       cachedConfigFrames,
+      // #16: the client can parse a configuration frame from here on. The core
+      // delivers a held configuration gate at this moment, not at the attach
+      // call-in, which runs before Login Success.
+      onConfiguring: () => {
+        try {
+          configuringHandler?.({ name: client.username ?? null, uuid: client.uuid ?? null })
+        } catch (error) {
+          log('configuringHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+        }
+      },
       // Live only: an empty snapshot means the puppet has no backend session
       // right now. Serving the library's registry_data would crash a 26.2
       // client on missing registry tags, so deny and let the player retry.
@@ -548,9 +574,6 @@ function createFrontLeg ({
     }
     metrics.attaches++
     log('attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })
-
-    // Play serverbound frames from here on: pipeline to the core.
-    wireServerbound(client)
   }
 
   let coreAttach = ({ name, uuid, includeConfig = false } = {}) => ({ attached: false, reason: 'no_core_attached' })
@@ -570,7 +593,10 @@ function createFrontLeg ({
       decoded.state = meta.state
     })
     client.on('raw', (buffer, meta) => {
-      if (meta.state !== 'play') return // configuration-phase serverbound frames are per-leg (acknowledgements to the replay), never forwarded
+      // #16: a configuration-phase frame reaches the core as well. The human's
+      // dialog answers belong to the puppet's session, and the core's own drop
+      // rules (classifyServerbound) keep this connection's handshake per-leg.
+      if (meta.state !== 'play' && meta.state !== 'configuration') return
       const same = decoded.state === meta.state && decoded.byName[meta.name] !== undefined
       const data = same ? decoded.byName[meta.name] : {}
       decoded.byName[meta.name] = undefined
@@ -579,6 +605,10 @@ function createFrontLeg ({
   }
 
   function wireClient (client) {
+    // #16: the serverbound pipeline is wired at connection time, not at
+    // playerJoin: a client that attaches during the puppet's configuration has
+    // configuration answers to send before it ever reaches play.
+    wireServerbound(client)
     // Detach bookkeeping from connection time: an attached client that ends
     // clears the slot and notifies the core; a pre-attach client (denied or
     // failed during configuration) just clears its claim.
@@ -624,6 +654,7 @@ function createFrontLeg ({
     setDetachHandler (fn) { detachHandler = fn },
     setErrorHandler (fn) { errorHandler = fn },
     setClientSettingsHandler (fn) { clientSettingsHandler = fn },
+    setConfiguringHandler (fn) { configuringHandler = fn },
     setCoreAttach,
     setCoreAttachConfiguring,
     write (name, packet) {
@@ -649,6 +680,18 @@ function createFrontLeg ({
           })
           return false
         }
+      }
+      // #16: a relayed frame must reach the client in a state it can parse. A
+      // configuration frame written while the client is still in login is read
+      // as a login packet, which kills the connection. Refuse and log instead.
+      if (meta?.state && attached?.state && meta.state !== attached.state) {
+        metrics.stateRefused++
+        log('clientboundStateMismatch', {
+          name: meta.name,
+          frameState: meta.state,
+          clientState: attached.state
+        })
+        return false
       }
       if (dumpRaw) {
         dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
