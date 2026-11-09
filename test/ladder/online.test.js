@@ -130,7 +130,10 @@ test('the rung builds its bots at the version it runs at', () => {
 })
 
 test('a bot option set names the version it was given', () => {
-  assert.equal(buildRungBotOptions().version, '26.1')
+  // No explicit version: the rung's own value is used, whatever the environment
+  // says, so an operator running the suite with MONOPLAYER_VERSION=26.2 still
+  // exercises the same path.
+  assert.equal(buildRungBotOptions().version, process.env.MONOPLAYER_VERSION ?? '26.1')
   assert.equal(buildOnlineBotOptions({
     frontPort: 25566,
     attach: { uuid: ATTACH_UUID, profile: {} },
