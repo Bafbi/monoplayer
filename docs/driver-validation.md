@@ -33,9 +33,14 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   needs them.
 - `launch` hands the client to the compositor with `hl.dsp.exec_cmd` and the
   rules `{ workspace = "9 silent", no_initial_focus = true, focus_on_activate = false }`.
-  The child inherits the session environment, and the window lands on workspace 9
-  without switching to it. Anything after the instance name goes to
-  `prismlauncher`.
+  The child inherits the session environment. The rules place the window only
+  when the compositor spawns the process that opens it: a second launch goes to
+  the PrismLauncher that is already running, and that process carries no rule.
+  So `launch` also finds the window by the instance library path on any
+  workspace, moves it to 9 without following, and reads the placement back,
+  because `hyprctl eval` answers `ok` even when the dispatcher found no window.
+  It prints `OPENED_WORKSPACE=`, `WORKSPACE=9`, and `SILENT=`. Anything after
+  the instance name goes to `prismlauncher`.
 - `shot` asks the driver for its render target and copies the PNG back with
   `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
   This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
@@ -116,10 +121,13 @@ o.window("Monoplayer Gate B", {
 
 Verified on `nath`: the window landed on workspace 9 without switching the
 active workspace (T3 Code stayed focused on workspace 3). That rule covers the
-runner's CLI launches. `tools/nath.sh launch` passes the same placement as
-exec rules to the compositor, so it keeps the window off your workspace even on
-a host without the config entry. Normal Minecraft
-windows keep their `Minecraft* 26.1.2` class and are not matched.
+driver client only, because it matches the driver window's title. Normal
+Minecraft windows keep their `Minecraft* 26.1.2` class and are not matched.
+
+`tools/nath.sh launch` keeps the window off your workspace on a host without the
+config entry, by moving it after it appears. It does not depend on the exec rule
+alone, and it does not depend on the window class: the instance library path in
+the window process names the client.
 
 Prism's per-instance console window is reused across launches, so the console
 rule is best-effort. Set `OverrideConsole=true` and `ShowConsole=false` while

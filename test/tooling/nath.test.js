@@ -16,6 +16,9 @@ const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 const SIGNATURE = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef_1700000000_1000000000'
 const SCREENSHOT_PATH = '/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/driver-1.png'
 
+// One canned client window for the keeper process, on the given workspace.
+const clientOn = (workspace, pid) => JSON.stringify([{ class: 'Minecraft 26.1.2', address: '0xdef', pid, mapped: true, workspace: { id: Number(workspace), name: String(workspace) } }])
+
 const RECORD_SSH = `#!/usr/bin/env bash
 {
   printf 'ARGV'
@@ -69,25 +72,33 @@ function writeScript (dir, name, body) {
 
 // The fake jq answers the exact programs the wrapper runs. It never sees a
 // program it does not know, so a new query in the wrapper fails loudly here.
-const JQ = `#!/usr/bin/env bash
-shift # -r
-case "$1" in
-  length) echo "$FAKE_INSTANCE_COUNT" ;;
-  ".[0].instance") echo "$FAKE_SIGNATURE" ;;
-  ".[0].wl_socket") echo "$FAKE_WL_SOCKET" ;;
-  ".id") sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' ;;
-  ".address") sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' ;;
-  "(.class // \\"\\")") sed -n 's/.*"class"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' ;;
-  *"select(.workspace.name"*)
-    input=$(cat)
-    address=$(sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' <<<"$input")
-    pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' <<<"$input")
-    if [ -n "$address" ]; then echo "$address $pid"; fi
-    ;;
-  *) echo "fake jq: unsupported program: $1" >&2; exit 1 ;;
-esac
+const JQ = `#!/usr/bin/env node
+const fs = require('node:fs')
+const [, , flag, program] = process.argv
+if (flag !== '-r') {
+  console.error('fake jq: expected -r, got ' + flag)
+  process.exit(1)
+}
+const input = fs.readFileSync(0, 'utf8')
+const data = input.trim() === '' ? null : JSON.parse(input)
+const out = (value) => process.stdout.write(value + '\\n')
+if (program === 'length') out(process.env.FAKE_INSTANCE_COUNT)
+else if (program === '.[0].instance') out(process.env.FAKE_SIGNATURE)
+else if (program === '.[0].wl_socket') out(process.env.FAKE_WL_SOCKET)
+else if (program === '.id') out(data.id)
+else if (program === '.address') out(data.address)
+else if (program === '(.class // "")') out(data.class ?? '')
+else if (program.startsWith('.[] | select(.mapped')) {
+  // The window list the launch reads: address, pid, workspace, mapped only.
+  for (const client of data) {
+    if (client.mapped === false) continue
+    out(client.address + ' ' + client.pid + ' ' + client.workspace.name)
+  }
+} else {
+  console.error('fake jq: unsupported program: ' + program)
+  process.exit(1)
+}
 `
-
 // Answers every hyprctl call the wrapper makes. The active workspace sequence is
 // read one line per call, so a launch can be silent or not; the clients and the
 // active window come from canned JSON.
@@ -95,28 +106,39 @@ const HYPRCTL = `#!/usr/bin/env bash
 case "$1" in
   instances) exit "$FAKE_HYPRCTL_EXIT" ;;
   eval)
-    printf '%s\n' "$*" >> "$FAKE_HYPRCTL_EVAL_LOG"
-    if [ "$FAKE_HYPRCTL_EVAL_MODE" = fail ]; then
-      echo "error: bad lua" >&2
-      exit 7
-    fi
+    printf '%s\\n' "$*" >> "$FAKE_HYPRCTL_EVAL_LOG"
+    case "$FAKE_HYPRCTL_EVAL_MODE" in
+      fail) echo "error: bad lua" >&2; exit 7 ;;
+      fail-move)
+        case "$*" in
+          *window.move*) echo "error: move refused" >&2; exit 7 ;;
+        esac
+        ;;
+    esac
     echo ok
     ;;
   activeworkspace)
     n=$(cat "$FAKE_AW_COUNT" 2>/dev/null || echo 0)
     n=$((n + 1))
     echo "$n" > "$FAKE_AW_COUNT"
-    printf '{"id":%s}\n' "$(sed -n "$n"p "$FAKE_AW_SEQUENCE")"
+    printf '{"id":%s}\\n' "$(sed -n "$n"p "$FAKE_AW_SEQUENCE")"
     ;;
   activewindow) cat "$FAKE_ACTIVEWINDOW" ;;
-  clients) cat "$FAKE_CLIENTS" ;;
+  clients)
+    n=$(cat "$FAKE_CLIENTS_COUNT" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" > "$FAKE_CLIENTS_COUNT"
+    file=$(sed -n "$n"p "$FAKE_CLIENTS_SEQUENCE")
+    [ -n "$file" ] || file=$(tail -1 "$FAKE_CLIENTS_SEQUENCE")
+    cat "$file"
+    ;;
   *) echo "fake hyprctl: unsupported command: $*" >&2; exit 1 ;;
 esac
 `
-
 // One temp dir per test: the shims, the call log, and the canned replies.
 function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   let stop = () => {}
+  let pid = null
   const dir = mkdtempSync(path.join(tmpdir(), 'nath-'))
   const bin = path.join(dir, 'bin')
   mkdirSync(bin)
@@ -137,18 +159,29 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   if (fake) {
     writeScript(bin, 'jq', JQ)
     writeScript(bin, 'hyprctl', HYPRCTL)
-    const clients = path.join(dir, 'clients.json')
     const activeWindow = path.join(dir, 'activewindow.json')
     const workspaceSequence = path.join(dir, 'workspaces.txt')
+    const clientsSequence = path.join(dir, 'clients-sequence.txt')
     // A real process whose command line carries the instance library path, so
-    // the wrapper's pid check has something to match. t.after stops it.
-    // A real process whose command line carries the instance library path, so the
-    // wrapper's pid check has something to match. t.after stops it; unref keeps
-    // the test process from waiting on it.
+    // the wrapper's pid check has something to match. t.after stops it; unref
+    // keeps the test process from waiting on it.
     const keeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)', 'nath-test', 'instances/gate-b-player-fabric/natives'], { stdio: 'ignore' })
     keeper.unref()
     stop = () => keeper.kill()
-    writeFileSync(clients, host.clients ?? JSON.stringify([{ class: 'Monoplayer Gate B', address: '0xabc', pid: keeper.pid, workspace: { name: '9' } }]))
+    pid = keeper.pid
+    // One canned client list per hyprctl clients call, the last one repeating:
+    // a launch reads the list while it waits, then reads it again to check the
+    // placement it just asked for.
+    const listed = typeof host.clients === 'function' ? host.clients(keeper.pid) : host.clients
+    const lists = listed === undefined
+      ? [JSON.stringify([{ class: 'Monoplayer Gate B', address: '0xabc', pid: keeper.pid, mapped: true, workspace: { id: 9, name: '9' } }])]
+      : [listed].flat()
+    const clientFiles = lists.map((json, index) => {
+      const file = path.join(dir, `clients-${index + 1}.json`)
+      writeFileSync(file, json)
+      return file
+    })
+    writeFileSync(clientsSequence, clientFiles.join('\n') + '\n')
     writeFileSync(activeWindow, host.activeWindow ?? JSON.stringify({ class: 'com.t3tools.T3Code' }))
     // One workspace id per activeworkspace call: before the launch, then after.
     writeFileSync(workspaceSequence, (host.workspaces ?? ['2', '2']).join('\n') + '\n')
@@ -161,7 +194,8 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
       FAKE_HYPRCTL_EVAL_LOG: path.join(dir, 'eval.log'),
       FAKE_AW_COUNT: path.join(dir, 'aw-count'),
       FAKE_AW_SEQUENCE: workspaceSequence,
-      FAKE_CLIENTS: clients,
+      FAKE_CLIENTS_SEQUENCE: clientsSequence,
+      FAKE_CLIENTS_COUNT: path.join(dir, 'clients-count'),
       FAKE_ACTIVEWINDOW: activeWindow,
     })
     env.PATH = bin + ':' + env.PATH
@@ -169,6 +203,7 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   return {
     dir,
     env,
+    pid,
     stop: () => stop(),
     run: (args, extra = {}) => spawnSync(TOOL, args, { env: { ...env, ...extra }, encoding: 'utf8' }),
     answer: text => writeFileSync(reply, text),
@@ -456,9 +491,74 @@ test('launch fails when the client opens no window in the budget', (t) => {
   t.after(h.stop)
   const run = h.run(['launch', 'gate-b-player-fabric'], { NATH_LAUNCH_TIMEOUT: '1' })
   assert.equal(run.status, 1)
-  assert.match(run.stderr, /opened no window on workspace 9/)
+  assert.match(run.stderr, /opened no window carrying instances\/gate-b-player-fabric\/natives/)
 })
 
+test('launch moves a window that opened on another workspace and reports the launch silent', (t) => {
+  const h = harness({ sshBody: EXEC_SSH, host: { clients: (pid) => [clientOn(2, pid), clientOn(9, pid)] } })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'])
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(run.stdout, /^WINDOW=0xdef$/m)
+  assert.match(run.stdout, /^OPENED_WORKSPACE=2$/m)
+  assert.match(run.stdout, /^WORKSPACE=9$/m)
+  assert.match(run.stdout, /^SILENT=yes$/m)
+
+  // The launch chunk, then the move: a silent move of the exact window, so no
+  // other client can be picked up and the active workspace stays put.
+  const chunks = readFileSync(path.join(h.dir, 'eval.log'), 'utf8').trim().split('\n')
+  assert.equal(chunks.length, 2)
+  assert.match(chunks[1], /hl\.dsp\.window\.move/)
+  assert.match(chunks[1], /window = "address:0xdef"/)
+  assert.match(chunks[1], /workspace = 9/)
+  assert.match(chunks[1], /follow = false/)
+})
+
+test('launch leaves a window that already opened on workspace 9 where it is', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'])
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(run.stdout, /^OPENED_WORKSPACE=9$/m)
+  assert.match(run.stdout, /^SILENT=yes$/m)
+  assert.doesNotMatch(readFileSync(path.join(h.dir, 'eval.log'), 'utf8'), /window\.move/)
+})
+
+test('launch names the workspace when the compositor refuses the move', (t) => {
+  const h = harness({ sshBody: EXEC_SSH, host: { evalMode: 'fail-move', clients: (pid) => clientOn(2, pid) } })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /refused to move 0xdef from workspace 2: error: move refused/)
+})
+
+test('launch fails when the window stays off workspace 9 after the move', (t) => {
+  // eval answers ok even when the dispatcher found no window, so the placement
+  // is read back rather than trusted.
+  const h = harness({ sshBody: EXEC_SSH, host: { clients: (pid) => [clientOn(2, pid), clientOn(2, pid)] } })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /0xdef is on workspace 2, not 9, after the move/)
+})
+
+test('launch says so when it cannot read the placement after the move', (t) => {
+  // The second list is empty: the client quit between the wait and the check.
+  const h = harness({ sshBody: EXEC_SSH, host: { clients: (pid) => [clientOn(2, pid), '[]'] } })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /cannot read the workspace of 0xdef after the move/)
+})
+
+test('launch ignores a window whose process is not the instance', (t) => {
+  // Another instance's client on workspace 9 must not stand in for this one.
+  const h = harness({ sshBody: EXEC_SSH, host: { clients: () => JSON.stringify([{ class: 'Minecraft 26.1.2', address: '0xfff', pid: process.pid, mapped: true, workspace: { id: 9, name: '9' } }]) } })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'], { NATH_LAUNCH_TIMEOUT: '1' })
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /opened no window carrying instances\/gate-b-player-fabric\/natives/)
+})
 test('an unreachable host says so instead of leaking ssh exit 255', () => {
   const h = harness()
   h.fail(255)
