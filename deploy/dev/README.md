@@ -39,10 +39,10 @@ The manifest carries `ghcr.io/bafbi/monoplayer:main`. Point it at the branch
 image ([#43](https://github.com/Bafbi/monoplayer/issues/43)):
 
 ```bash
-kubectl -n monoplayer-dev set image deploy/monoplayer \
-  monoplayer=$(scripts/dev-lane.sh image sha-$(git rev-parse --short=7 HEAD))
-kubectl -n monoplayer-dev rollout status deploy/monoplayer
+mise run dev:image sha-$(git rev-parse --short=7 HEAD)
 ```
+
+The image workflow for a branch prints the same command when it finishes.
 
 ## Before a bot can join
 

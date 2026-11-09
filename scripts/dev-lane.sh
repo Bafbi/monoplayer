@@ -5,6 +5,8 @@
 #   scripts/dev-lane.sh down      delete the dev lane
 #   scripts/dev-lane.sh status    what is running, and what the live lane runs
 #   scripts/dev-lane.sh image TAG the image reference the dev lane should run
+#   scripts/dev-lane.sh set-image TAG
+#                                 put that image on the dev proxy (#43)
 #
 # What this lane is for: validating a branch without taking the live front down.
 # The live lane holds one writer and one replica of the puppet custody, so a test
@@ -105,10 +107,23 @@ status() {
   esac
 }
 
+# Point the lane at a branch image (#43). The image is tagged with the commit, so
+# the lane runs exactly the tree under review.
+set_image() {
+  [ $# -ge 1 ] && [ -n "$1" ] || die 'set-image needs a tag or a commit sha' 2
+  guard
+  local ref="$IMAGE_REPO:$1"
+  kubectl -n "$DEV_NAMESPACE" set image deploy/monoplayer "monoplayer=$ref" >/dev/null
+  say "dev monoplayer now runs $ref"
+  kubectl -n "$DEV_NAMESPACE" rollout status deploy/monoplayer --timeout="$READY_TIMEOUT" >/dev/null \
+    || die "the dev proxy did not become ready on $ref" 1
+}
+
 case "${1:-}" in
   up) up ;;
   down) down ;;
   status) status ;;
+  set-image) shift; set_image "$@" ;;
   image)
     [ $# -ge 2 ] && [ -n "$2" ] || die 'image needs a tag or a commit sha' 2
     printf '%s:%s\n' "$IMAGE_REPO" "$2"
