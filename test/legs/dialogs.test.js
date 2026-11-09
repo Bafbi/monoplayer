@@ -1,4 +1,5 @@
-// Backend onboarding dialogs: choose the action a headless puppet clicks.
+// Configuration gates: which action the puppet clicks, and when it clicks
+// nothing.
 //
 // The fixture mirrors the decoded `show_dialog` shape: every NBT node is a
 // { type, value } wrapper, and `actions` is a list of compounds. The real
@@ -6,7 +7,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { chooseDialogAction, buildCustomClickAction, decideDialogAutoAnswer } from '../../src/legs/live-backend.js'
+import {
+  answerBackendDialog,
+  chooseDialogAction,
+  buildCustomClickAction,
+  decideDialogAutoAnswer
+} from '../../src/legs/live-backend.js'
 
 function action (label, id, buttonId) {
   return {
@@ -101,21 +107,101 @@ test('the click body includes the identifier and the length-prefixed optional NB
 })
 
 test('#16 no auto-answer while a human is attached', () => {
-  // A headless puppet answers with the configured action; the same policy with
-  // a human attached answers nothing, so the two answerers cannot both fire.
+  // A headless configuration gate is answered with the configured action; the
+  // same policy with a human attached answers nothing, so the two answerers
+  // cannot both fire.
   assert.deepEqual(
-    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: false }),
+    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: false, state: 'configuration' }),
     { auto: true, reason: null }
   )
   assert.deepEqual(
-    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: true }),
+    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: true, state: 'configuration' }),
     { auto: false, reason: 'human_attached' }
   )
   // No policy, no click, human or not.
   assert.deepEqual(
-    decideDialogAutoAnswer({ dialogAction: null, humanAttached: false }),
+    decideDialogAutoAnswer({ dialogAction: null, humanAttached: false, state: 'configuration' }),
     { auto: false, reason: 'no_policy' }
   )
+})
+
+test('#20 a play dialog is never answered by the puppet', () => {
+  // The human owns every play dialog: the attached client answers it or it
+  // waits. The configured action covers configuration-phase gates only, so no
+  // combination of attachment and policy makes the puppet click a play dialog.
+  const cases = [
+    ['play', false, 'last', { auto: false, reason: 'play_dialog_waits' }],
+    ['play', true, 'last', { auto: false, reason: 'play_dialog_waits' }],
+    ['play', false, 'Saison 3', { auto: false, reason: 'play_dialog_waits' }],
+    // The phase is checked before the policy, so a play dialog reports the same
+    // reason whether or not one is configured.
+    ['play', false, null, { auto: false, reason: 'play_dialog_waits' }],
+    // A phase nobody named fails closed: waiting is always safe, clicking is not.
+    [undefined, false, 'last', { auto: false, reason: 'unsupported_state' }],
+    ['login', false, 'last', { auto: false, reason: 'unsupported_state' }]
+  ]
+  for (const [state, humanAttached, dialogAction, expected] of cases) {
+    assert.deepEqual(
+      decideDialogAutoAnswer({ state, humanAttached, dialogAction }),
+      expected,
+      `state=${state} attached=${humanAttached} action=${dialogAction}`
+    )
+  }
+})
+
+// One handler call with its IO recorded: what it wrote, what it logged, and
+// what it reported to the core.
+function runAnswer (options) {
+  const written = []
+  const logs = []
+  const answers = []
+  const outcome = answerBackendDialog({
+    data: TWO_SEASONS,
+    dialogAction: 'last',
+    humanAttached: false,
+    writeRaw: body => written.push(body),
+    onAnswered: payload => answers.push(payload),
+    log: (event, fields) => logs.push({ event, fields }),
+    ...options
+  })
+  return { outcome, written, logs, answers }
+}
+
+test('#20 the show_dialog handler writes nothing for a play dialog', () => {
+  const { outcome, written, logs, answers } = runAnswer({ state: 'play' })
+
+  assert.deepEqual(outcome, { answered: false, reason: 'play_dialog_waits', responses: 0 })
+  assert.equal(written.length, 0, 'a play dialog is never clicked')
+  assert.equal(answers.length, 0, 'and the core is never told it was answered')
+  assert.deepEqual(logs.map(entry => entry.event), ['dialogUnhandled'])
+  assert.equal(logs[0].fields.reason, 'play_dialog_waits')
+  assert.equal(logs[0].fields.state, 'play')
+})
+
+test('#20 a headless configuration gate is still answered with the configured action', () => {
+  const { outcome, written, logs, answers } = runAnswer({ state: 'configuration' })
+
+  assert.equal(outcome.answered, true)
+  assert.equal(outcome.responses, 1)
+  assert.equal(written.length, 1)
+  assert.equal(written[0][0], 0x08, 'a configuration click uses the configuration packet id')
+  assert.deepEqual(answers, [{ state: 'configuration', name: 'show_dialog' }],
+    'the core spends its marker, so the gate is never offered to the next client')
+  assert.equal(logs[0].event, 'dialogClicked')
+  assert.equal(logs[0].fields.state, 'configuration')
+})
+
+test('#20 an attached client answers the configuration gate, not the puppet', () => {
+  const { outcome, written, answers } = runAnswer({ state: 'configuration', humanAttached: true })
+  assert.deepEqual(outcome, { answered: false, reason: 'human_attached', responses: 0 })
+  assert.equal(written.length, 0)
+  assert.equal(answers.length, 0)
+})
+
+test('#20 a server that keeps asking is capped, not looped', () => {
+  const { outcome, written } = runAnswer({ state: 'configuration', responses: 5 })
+  assert.deepEqual(outcome, { answered: false, reason: 'too_many', responses: 5 })
+  assert.equal(written.length, 0)
 })
 
 test('play uses the play packet id and a missing NBT is optional-absent', () => {

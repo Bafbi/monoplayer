@@ -101,6 +101,8 @@ spec:
               value: "26.2"
             - name: MONOPLAYER_CHAT
               value: read-only
+            # Configuration-phase gate only (#21). A play dialog waits for
+            # the human to attach and answer it (#20).
             - name: MONOPLAYER_DIALOG_ACTION
               value: last
             - name: HOME

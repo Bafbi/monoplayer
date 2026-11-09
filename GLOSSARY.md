@@ -152,6 +152,14 @@ _Avoid_: prompt, popup, form, UI
 The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog` or on the player's answer, and re-sends it when a player attaches in its phase.
 _Avoid_: dialog queue, dialog cache
 
+**Play dialog**:
+A control dialog the backend asks in the play phase. It belongs to the player: the attached client answers it or it waits, and the puppet never clicks one, attached or not. `MONOPLAYER_DIALOG_ACTION` does not cover it.
+_Avoid_: play gate, in-game dialog
+
+**Configuration gate**:
+A control dialog the backend asks in the configuration phase, including the code of conduct. A headless puppet may answer one with `MONOPLAYER_DIALOG_ACTION`; an attached player always gets it instead.
+_Avoid_: config dialog, join gate
+
 **Per-leg frame**:
 A frame that belongs to the connection that received it, such as a keep-alive, a position, a ping, or a bundle delimiter. Each leg answers or ignores its own.
 _Avoid_: connection frame, local frame

@@ -71,8 +71,8 @@ The two acceptance criteria are wider than the transfer itself:
 - **Client side:** playing through the proxy should be indistinguishable from
   a direct connection, except that the identity is GlowSquidye. Today the
   human's chat is spoken as the account only in `MONOPLAYER_CHAT=full` (off by
-  default), transfer detaches the client, and dialogs are answered by the
-  puppet.
+  default), transfer detaches the client, and a play dialog waits for the human
+  to answer it.
 - **Server side:** the observer measures it. The proxy writes the Fabric Loader
   brand in configuration and the human's client information with the backend's
   view distance cap (loopback `O25` and `O26`,
@@ -101,9 +101,11 @@ Anything not in that table is a finding, and the comparison fails the run for
 it.
 
 **Not recorded yet:** dialog interactions. The plugin has no dialog field, so a
-dialog and its click are invisible to this report until
-[#20](https://github.com/Bafbi/monoplayer/issues/20) and
-[#21](https://github.com/Bafbi/monoplayer/issues/21) give the human the dialog.
+dialog and its click are invisible to this report. The human-answer path is
+[#16](https://github.com/Bafbi/monoplayer/issues/16),
+[#20](https://github.com/Bafbi/monoplayer/issues/20), and
+[#21](https://github.com/Bafbi/monoplayer/issues/21); recording it here is not
+yet ticketed.
 
 A connection is written more than once: the record at join, then another when
 the resource-pack status arrives, because that status always comes later. The

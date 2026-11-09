@@ -19,7 +19,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | A client can attach while the puppet is still configuring | done | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human's chat and commands are spoken as the account | built, off by default | [#19](https://github.com/Bafbi/monoplayer/issues/19) |
 | A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
-| The human answers every play dialog | **not built** | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
+| The human answers every play dialog, and the puppet never clicks one | built | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | **not built** | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
 | A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
 | Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
@@ -92,12 +92,13 @@ is attached waits, and is re-sent when someone attaches in its phase. There is
 no timeout and no auto-click, so a dialog is never answered by the proxy while a
 human is looking at it.
 
-Two answerers could collide, and the proxy keeps them apart. The puppet's
-auto-click answers a dialog only while no player is attached, so
-`MONOPLAYER_DIALOG_ACTION` now covers a headless session and nothing else. What
-that headless session does with a configuration gate is
-[#21](https://github.com/Bafbi/monoplayer/issues/21), and the play-dialog policy
-is [#20](https://github.com/Bafbi/monoplayer/issues/20).
+Two answerers could collide, and the proxy keeps them apart. A play dialog is
+never the puppet's: `decideDialogAutoAnswer` refuses every play dialog, attached
+or not, so the human answers it or it waits
+([#20](https://github.com/Bafbi/monoplayer/issues/20)). The auto-click survives
+for one case only, a configuration gate with no player attached, and it stands
+down as soon as a player can answer. What that headless configuration session
+does is [#21](https://github.com/Bafbi/monoplayer/issues/21).
 
 The code of conduct is accepted by the protocol library itself, on the puppet's
 connection, before the core sees the frame. The gate therefore reaches the human

@@ -7,8 +7,8 @@
 // Nothing here answers, times out, or clicks. This module holds the frame that
 // still needs an answer so a client that attaches later receives it, and it
 // releases that frame when the backend clears it or the human answers. The
-// policy on top — which dialog is the human's to answer, and what a headless
-// puppet does instead — belongs to #20 and #21.
+// policy on top is the caller's: a play dialog always waits for the human
+// (#20), and what a headless puppet does with a configuration gate is #21.
 //
 // The held frame is deliberately outside the state cache: the clientbound
 // policy marks a control dialog as neither cacheable nor replayable, so this is
