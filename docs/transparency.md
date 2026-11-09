@@ -200,11 +200,15 @@ unexplained. The field table and the expected differences are in
 
 The gate is not among the fields this run measures. The gate Paper runs with
 `enable-code-of-conduct=false`, so the server never sends a code of conduct and
-there is no accept for the observer to witness: the report marks both
-`codeOfConduct` fields absent with that reason. The human-answer path in this
-section rests on the loopback rung and the fake backend (`O32`), not on a real
-server's view. A lane that serves the gate has to answer the screen for its own
-real clients, which the G0 driver lane cannot do.
+there is no accept for the observer to witness. The report marks both
+`codeOfConduct` fields absent, and prints that reason because it read it from the
+server. Turning the setting on is not enough: Paper 26.2 refuses to start without
+a `codeofconduct` folder, measured on this lane.
+
+The human-answer path in this section therefore rests on the loopback rung and
+the fake backend (`O32`), not on a real server's view. A lane that serves the
+gate has to answer the screen for its own real clients. The G0 driver lane cannot
+do that: its client is a human-witnessed run.
 
 ## What the testbed does and does not prove
 

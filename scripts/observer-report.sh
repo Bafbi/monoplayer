@@ -4,7 +4,7 @@
 #   scripts/observer-report.sh [--report PATH] [--views PATH]
 #                              [--backend-host H] [--backend-port P]
 #                              [--namespace NS] [--paper-deployment NAME]
-#                              [--jar PATH] [--timeout SECONDS]
+#                              [--jar PATH] [--start-timeout SECONDS]
 #
 # The question: does a Paper server see the puppet as an ordinary client? The
 # answer needs two records of the same server taking the same account, once
@@ -84,8 +84,10 @@ while [ $# -gt 0 ]; do
     --namespace) GATE_NAMESPACE=${2:?--namespace needs a value}; shift 2 ;;
     --paper-deployment) PAPER_DEPLOYMENT=${2:?--paper-deployment needs a value}; shift 2 ;;
     --jar) JAR=${2:?--jar needs a value}; shift 2 ;;
-    --timeout) START_TIMEOUT=${2:?--timeout needs a value}; shift 2 ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --start-timeout|--timeout) START_TIMEOUT=${2:?--start-timeout needs a value}; shift 2 ;;
+    # The whole comment block, whatever its length, so a new header line cannot
+    # silently push the exit codes out of the help.
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *) die "unknown argument: $1" 2 ;;
   esac
 done
@@ -138,6 +140,28 @@ paper_container() {
   printf '%s' "$container"
 }
 
+# A rung that never started is a setup refusal, not a refused join, and the two
+# send a reader to different places (#79). The rung's own message stays above it.
+run_join() {
+  local what=$1 status=0
+  shift
+  "$@" || status=$?
+  case "$status" in
+    0) return 0 ;;
+    2) die "$what never started: its setup was refused, and its own message is above" 2 ;;
+    *) die "$what failed against a server that had already started: this is the join" 1 ;;
+  esac
+}
+
+# The pod the run is pointed at, or a refusal. Two callers need it, and a missing
+# pod is the same setup refusal in both.
+require_paper_pod() {
+  local pod
+  pod=$(paper_pod)
+  [ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE" 2
+  printf '%s' "$pod"
+}
+
 # How often that container has restarted. The install asks the kubelet for a
 # restart, so a count that has not moved means the new process is not there yet,
 # whatever the previous process's log still says.
@@ -159,8 +183,7 @@ restart_count() {
 # never run.
 install_observer() {
   local pod container before started now current waited=0
-  pod=$(paper_pod)
-  [ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE" 2
+  pod=$(require_paper_pod)
   container=$(paper_container)
   kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c "mkdir -p $PLUGINS_DIR" >/dev/null
   kubectl -n "$GATE_NAMESPACE" cp "$PROTOCOLLIB" "$pod:$PLUGINS_DIR/$(basename "$PROTOCOLLIB")" >/dev/null
@@ -172,9 +195,11 @@ install_observer() {
   kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c "rm -f $PLUGINS_DIR/MonoplayerObserver/views.jsonl" >/dev/null 2>&1 || true
   before=$(restart_count "$pod" "$container")
   before=${before:-0}
+  # From the moment the install asks for the restart. Every readiness read below
+  # is scoped to it, so no earlier boot can answer for this one.
+  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # Restart the server process in place. Killing PID 1 is what the kubelet acts
   # on; the volume survives, the world does not, and this Paper is disposable.
-  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c 'kill 1' >/dev/null 2>&1 || true
   # The plugin logs this when its packet listeners are live, so it is the
   # readiness signal rather than a guess about boot time.
@@ -184,7 +209,9 @@ install_observer() {
     if [ -n "$current" ] && [ "$current" != "$pod" ]; then
       say "the gate Paper pod was replaced: $pod -> $current"
       pod=$current
-      before=0
+      # A new pod's first process has restart count 0, so nothing has to move for
+      # it to be the process this install asked for.
+      before=-1
       started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     fi
     now=$(restart_count "$pod" "$container")
@@ -197,32 +224,53 @@ install_observer() {
     sleep "$WAIT_INTERVAL"
     waited=$((waited + WAIT_INTERVAL))
   done
-  die "the gate Paper did not finish starting within ${START_TIMEOUT}s (container $container on $pod): this is a slow start, not a join failure, and the joins never ran. kubectl -n $GATE_NAMESPACE logs $pod -c $container" 2
+  die "the gate Paper did not finish starting within ${START_TIMEOUT}s (container $container on $pod, restarts ${before} -> ${now:-unread}): this is a slow start, not a join failure, and the joins never ran. kubectl -n $GATE_NAMESPACE logs $pod -c $container" 2
 }
 
 install_observer
 
 say "baseline join: the account straight to $BACKEND_HOST:$BACKEND_PORT"
-"$ROOT/scripts/online-cluster.sh" \
+run_join 'the direct baseline join' "$ROOT/scripts/online-cluster.sh" \
   --rung src/ladder/observer-baseline.js \
-  --backend-host "$BACKEND_HOST" --backend-port "$BACKEND_PORT" \
-  || die 'the direct baseline join failed (the gate Paper had started, so this is the join)' 1
+  --backend-host "$BACKEND_HOST" --backend-port "$BACKEND_PORT"
 
 say 'puppet join: the same account through Monoplayer'
-"$ROOT/scripts/online-cluster.sh" \
+run_join 'the puppet join' "$ROOT/scripts/online-cluster.sh" \
   --backend-host "$BACKEND_HOST" --backend-port "$BACKEND_PORT" \
-  --report "$(dirname "$REPORT")/online-from-observer.json" \
-  || die 'the puppet join failed (the gate Paper had started, so this is the join)' 1
+  --report "$(dirname "$REPORT")/online-from-observer.json"
 
-pod=$(paper_pod)
-[ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE" 2
+pod=$(require_paper_pod)
 if ! kubectl -n "$GATE_NAMESPACE" cp "$pod:$PLUGINS_DIR/MonoplayerObserver/views.jsonl" "$VIEWS" >/dev/null 2>&1; then
   die "no observer log on $pod; did the plugin load? kubectl -n $GATE_NAMESPACE logs $pod" 2
 fi
 say "observer log written to $VIEWS"
 
+# What the server is configured to do, read from the server. An absent field is
+# explained only when the run read the fact that makes it unobservable, so a
+# server that starts serving the gate stops excusing the field by itself.
+FACTS=$(dirname "$REPORT")/observer-server.json
+read_server_facts() {
+  local props
+  props=$(kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c 'cat /data/server.properties' 2>/dev/null) || return 0
+  printf '%s' "$props" | node -e '
+const settings = Object.fromEntries(
+  require("node:fs").readFileSync(0, "utf8").split("\n")
+    .map(line => line.split("="))
+    .filter(pair => pair.length === 2)
+    .map(([key, value]) => [key.trim(), value.trim()])
+)
+process.stdout.write(JSON.stringify({
+  source: "server.properties on the gate Paper",
+  codeOfConduct: settings["enable-code-of-conduct"] === "true",
+  resourcePack: (settings["resource-pack"] ?? "") !== ""
+}, null, 2) + "\n")
+' > "$FACTS"
+  say "server facts: $(tr -d '\n' < "$FACTS")"
+}
+read_server_facts
+
 set +e
-node "$ROOT/src/ladder/observer.js" --single "$VIEWS" --report "$REPORT"
+node "$ROOT/src/ladder/observer.js" --single "$VIEWS" --server "$FACTS" --report "$REPORT"
 status=$?
 set -e
 

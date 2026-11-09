@@ -115,16 +115,26 @@ from. An index read is kept as the fallback for a packet shape that still carrie
 flat fields, and a member that is not there leaves its field absent rather than
 guessed.
 
-**Three fields the gate Paper cannot show.** `codeOfConduct` and
-`codeOfConductAccepted` are absent because the gate Paper runs with
-`enable-code-of-conduct=false` in its `server.properties`: the server never
-sends the gate, so no accept can arrive, on any client version. `resourcePack`
-is absent because the gate Paper serves no resource pack, so no status event
-fires. The report marks each one absent and prints the reason, in
-`ABSENT_REASONS` in `src/ladder/observer.js`. Observing the gate needs a Paper
-that serves it, which the G0 driver lane cannot: a real client sitting at a
-code-of-conduct screen cannot finish joining, and that lane is a human-witnessed
-run.
+**Three fields this gate Paper cannot show.** The reason is the server's
+configuration, not the client version. The gate Paper runs with
+`enable-code-of-conduct=false` in its `server.properties`, so the server never
+sends the gate and no accept can arrive. It also serves no resource pack, so no
+status event fires. The report marks those three fields absent.
+
+Turning the gate on is not a one-line change. Paper 26.2 refuses to start when
+`enable-code-of-conduct=true` and no `codeofconduct` folder exists:
+`Failed to start the minecraft server: java.lang.IllegalArgumentException: Code of
+Conduct folder does not exist: codeofconduct`. A lane that serves the gate owes
+that folder, and every real client it admits then owes the screen an answer.
+
+The run reads both facts from the server that it measured, with
+`--server` on `src/ladder/observer.js`. A reason is attached only when the read
+agrees with it (see `ABSENT_FACTS`). So a server that starts serving the gate
+stops excusing the field, and the report says the absence is unexplained.
+
+Observing the gate needs a Paper that serves it. The G0 driver lane cannot be
+that Paper: a real client sitting at a code-of-conduct screen never finishes
+joining, and that lane is a human-witnessed run.
 
 **Not recorded yet:** dialog interactions. The plugin has no dialog field, so a
 dialog and its click are invisible to this report. The human-answer path is
