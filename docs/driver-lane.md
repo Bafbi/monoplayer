@@ -1,4 +1,4 @@
-# Gate B G0 runbook — driver lane
+# Driver lane runbook — G0
 
 This is the runbook for the **G0 driver-lane evidence slice**: an official
 Minecraft 26.1.2 client (Prism + the `gate-b-driver` Fabric mod on the
@@ -156,9 +156,9 @@ or carried over between runs.
   during init and Prism opens its error console. `tools/nath.sh launch` inherits
   all three from the compositor; `tools/nath.sh env` derives and prints them for
   a manual run. See
-  [gate-b-driver-validation.md](gate-b-driver-validation.md#driving-the-host-from-the-workspace).
+  [driver-validation.md](driver-validation.md#driving-the-host-from-the-workspace).
   Under the runner the client lands on workspace 9 silently via the
-  `Monoplayer Gate B` window rule. Prism's per-instance
+  window-title rule. Prism's per-instance
   console is disabled (`OverrideConsole=true`, `ShowConsole=false`,
   `ShowConsoleOnError=false`) so a normal relaunch cannot raise a log panel.
 - **Place fails with an empty hotbar slot:** the driver places from the

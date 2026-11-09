@@ -1,9 +1,9 @@
-# Gate B M4 runbook — Paper 26.1.2 behind Velocity (and the puppet-leg fault rig)
+# Paper behind Velocity runbook — and the puppet-leg fault rig
 
 This is the runbook for the **M4 network-plumbing slice**: Paper 26.1.2 b74
 (offline, puppet-only whitelist) behind **Velocity 4.3.1 build 45** (online
 mode, modern forwarding, force-key-authentication), plus **Toxiproxy 2.13.0**
-for the puppet-leg fault shapes. It is the pass path for Gate B row **M4** and
+for the puppet-leg fault shapes. It is the pass path for row **M4** and
 the rig for row **M5** (faults). Monoplayer itself is out of scope here.
 
 Scope split, so nothing is doubled by another workstream:
