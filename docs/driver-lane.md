@@ -90,12 +90,13 @@ break/place, disconnect, and rejoin.
 
 **G0 passes.** The manual unmodded witness was completed on 2026-11-06
 (join, render, move, break, place, screenshot, disconnect, rejoin).
-[`testdata/gate-b-driver.md`](../testdata/gate-b-driver.md) holds the verdict,
+[`testdata/driver-verdict.md`](../testdata/driver-verdict.md) holds the verdict,
 the per-run numbers, the witness record, and quotes the reports and screenshots
 git no longer carries.
 
-The checkout no longer carries those reports, so `mise run driver:g0` needs a
-fresh `--runs 2` and a re-recorded witness before it exits 0 again.
+`mise run driver:g0` reads those reports and the witness, and the checkout no longer
+carries them. Run `node src/driver/run.js --runs 2` and record a new witness to make
+the task pass again.
 
 ## The unmodded witness lane
 
