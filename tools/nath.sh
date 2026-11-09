@@ -3,10 +3,10 @@
 #
 #   tools/nath.sh env                        session environment, as KEY=value
 #   tools/nath.sh launch <instance> [args...] start a Prism client on workspace 9, silent
-#   tools/nath.sh kill [instance]            stop the driver client
+#   tools/nath.sh kill [instance]            stop the client of <instance>
 #   tools/nath.sh shot <path>                capture the client render to <path>
 #
-# env, launch, and the kill fallback read the session on the host, deriving the
+# env, launch, and kill read the session on the host, deriving the
 # Hyprland signature from "hyprctl instances -j" and storing nothing. No caller
 # supplies DISPLAY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, or
 # HYPRLAND_INSTANCE_SIGNATURE: launch inherits them from the compositor, and
@@ -79,6 +79,12 @@ WAYLAND_DISPLAY=$(jq -r '.[0].wl_socket' <<<"$instance_json")
 XDG_RUNTIME_DIR=/run/user/$(id -u)
 export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_RUNTIME_DIR
 
+# A process belongs to an instance when its command line carries the instance
+# library path. Two callers ask, so the rule lives here.
+pid_is_instance() {
+  tr "\0" " " < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "instances/$2/natives"
+}
+
 REMOTE
 cmd_env() {
   remote '
@@ -126,28 +132,64 @@ lua="hl.dispatch(hl.dsp.exec_cmd(\"$escaped\", { workspace = \"9 silent\", no_in
 active_before=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
 # exec_cmd runs the client as a compositor child, so it inherits DISPLAY,
 # WAYLAND_DISPLAY, XDG_RUNTIME_DIR, and the signature. The rules put its window
-# on workspace 9 without switching to it.
+# on workspace 9 without switching to it, but only when the compositor spawns
+# the process that opens the window. Prism hands a second launch to a
+# PrismLauncher that is already running, and that process carries no rule, so
+# the move below is the placement that always lands.
 if ! eval_reply=$(hyprctl eval "$lua" 2>&1); then
   echo "nath: the compositor refused the launch: $eval_reply" >&2
   exit 1
 fi
 
-window=
+# Every mapped window, on every workspace. The instance owns a window when the
+# window process carries the instance library path, so another instance cannot
+# stand in and no class name has to match.
+clients() { hyprctl clients -j | jq -r ".[] | select(.mapped != false) | \"\(.address) \(.pid) \(.workspace.name // (.workspace.id | tostring))\""; }
+workspace_of() {
+  local address=$1 address_now pid_now workspace_now
+  while read -r address_now pid_now workspace_now; do
+    if [ "$address_now" = "$address" ]; then printf "%s\n" "$workspace_now"; return 0; fi
+  done <<<"$(clients || true)"
+  return 1
+}
+
+window= opened_on=
 deadline=$((SECONDS + ${NATH_LAUNCH_TIMEOUT:-90}))
 while [ $SECONDS -lt $deadline ]; do
-  # The window belongs to the instance when its process carries the instance
-  # library path, so another instance cannot stand in.
-  candidate=$(hyprctl clients -j | jq -r ".[] | select((.class // \"\") | test(\"^(Monoplayer Gate B|Minecraft)\")) | select(.workspace.name == \"9\") | \"\(.address) \(.pid)\"" | head -1) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
-  pid=${candidate#* }
-  if [ -n "$candidate" ] && tr "\0" " " < "/proc/$pid/cmdline" | grep -qF -- "instances/$instance/natives"; then
-    window=${candidate%% *}
-    break
-  fi
-  sleep 2
+  candidates=$(clients) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
+  while read -r address pid workspace; do
+    [ -n "$address" ] || continue
+    if pid_is_instance "$pid" "$instance"; then
+      window=$address
+      opened_on=$workspace
+      break
+    fi
+  done <<<"$candidates"
+  if [ -n "$window" ]; then break; fi
+  sleep 1
 done
 if [ -z "$window" ]; then
-  echo "nath: $instance opened no window on workspace 9 within the launch budget" >&2
+  echo "nath: $instance opened no window carrying instances/$instance/natives within the launch budget" >&2
   exit 1
+fi
+
+# Move it without following, so the caller keeps the workspace it is on. eval
+# answers ok even when the dispatcher found no window, so read the placement
+# back instead of trusting the reply.
+if [ "$opened_on" != "9" ]; then
+  lua="hl.dispatch(hl.dsp.window.move({ window = \"address:$window\", workspace = 9, follow = false }))"
+  if ! move_reply=$(hyprctl eval "$lua" 2>&1); then
+    echo "nath: the compositor refused to move $window from workspace $opened_on: $move_reply" >&2
+    exit 1
+  fi
+  if ! moved_on=$(workspace_of "$window"); then
+    echo "nath: cannot read the workspace of $window after the move, so 9 is unconfirmed; it was on workspace $opened_on, and it left the compositor or hyprctl failed" >&2
+    exit 1
+  fi
+  if [ "$moved_on" != "9" ]; then
+    echo "nath: $window is on workspace $moved_on, not 9, after the move" >&2
+    exit 1
+  fi
 fi
 
 active_after=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
@@ -155,15 +197,21 @@ focused=$(hyprctl activewindow -j | jq -r "(.class // \"\")") || { echo "nath: h
 focused_window=$(hyprctl activewindow -j | jq -r ".address") || focused_window=
 printf "INSTANCE=%s\n" "$instance"
 printf "WINDOW=%s\n" "$window"
+printf "OPENED_WORKSPACE=%s\n" "$opened_on"
 printf "WORKSPACE=9\n"
-if [ "$active_after" = "$active_before" ] && [ "$focused_window" != "$window" ]; then
-  printf "SILENT=yes\n"
-else
+if [ "$active_after" != "$active_before" ]; then
   printf "SILENT=no\n"
-  echo "nath: the launch was not silent: active workspace $active_before -> $active_after" >&2
+  echo "nath: the launch switched the active workspace: $active_before -> $active_after" >&2
   echo "nath: the client is running; stop it with: tools/nath.sh kill $instance" >&2
   exit 1
 fi
+if [ "$focused_window" = "$window" ]; then
+  printf "SILENT=no\n"
+  echo "nath: the client took focus; its window is on workspace 9" >&2
+  echo "nath: the client is running; stop it with: tools/nath.sh kill $instance" >&2
+  exit 1
+fi
+printf "SILENT=yes\n"
 printf "ACTIVE_WORKSPACE=%s\n" "$active_after"
 printf "FOCUSED=%s\n" "$focused"
 ' "$instance" "$@"
@@ -187,20 +235,43 @@ driver_payload() {
   printf '%s}' "$payload"
 }
 
+# Whether the client holding the driver port is this instance. The quit op
+# stops whichever client answers, so a kill for another instance has to check
+# first: ss names the listening process, and pid_is_instance names its client.
+# No listener, or no ss, means no graceful quit.
+driver_serves_instance() {
+  remote '
+instance=$1
+port=$2
+pids=$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o "pid=[0-9]*" | cut -d= -f2 || true)
+for pid in $pids; do
+  if pid_is_instance "$pid" "$instance"; then
+    echo yes
+    exit 0
+  fi
+done
+echo no
+' "$1" "$2"
+}
+
 cmd_kill() {
   local instance=${1:-${default_instance}} quit=no stopped=
   require_instance "$instance"
 
-  # Ask nicely first: the quit op closes the world and the driver socket.
-  if reply=$(printf '%s\n' "$(driver_payload quit)" | timeout 30 "${ssh_cmd[@]}" -W "127.0.0.1:${driver_port}" 2>/dev/null) && [ -n "$reply" ]; then
-    case $reply in
-      *'"ok":true'*) quit=yes ;;
-    esac
+  # Ask nicely first: the quit op closes the world and the driver socket. Only
+  # the instance that holds the port is asked, so a kill for another instance
+  # cannot quit this one; that instance goes straight to the anchor below.
+  if [ "$(driver_serves_instance "$instance" "$driver_port")" = yes ]; then
+    if reply=$(printf '%s\n' "$(driver_payload quit)" | timeout 30 "${ssh_cmd[@]}" -W "127.0.0.1:${driver_port}" 2>/dev/null) && [ -n "$reply" ]; then
+      case $reply in
+        *'"ok":true'*) quit=yes ;;
+      esac
+    fi
   fi
 
-  # The quit op needs a live mod. A wedged client still has to die, so fall back
-  # to the JVM library path. The script arrives on stdin, so this pattern never
-  # matches the remote shell that runs it.
+  # The quit op needs a live mod on this instance. Every other client still has
+  # to die, so fall back to the JVM library path. The script arrives on stdin, so
+  # this pattern never matches the remote shell that runs it.
   stopped=$(remote '
 instance=$1
 pattern=${instance//./\\.}
