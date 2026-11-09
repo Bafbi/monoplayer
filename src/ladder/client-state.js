@@ -17,8 +17,18 @@
 //   multi_block_change  chunkCoordinates { x, y, z }, records [packed varint]
 //   entity_metadata     entityId, metadata [{ key, type, value }]
 //   entity_teleport     entityId, x, y, z, yaw, pitch
+//   spawn_entity  entityId, x, y, z, yaw, pitch (i8 angles)
+//   rel_entity_move     entityId, dX, dY, dZ (i16, 1/4096 block)
+//   entity_move_look    entityId, dX, dY, dZ, yaw, pitch (i8 angles)
+//   entity_look   entityId, yaw, pitch (i8 angles)
 //   position      x, y, z, yaw, pitch
 //   held_item_slot slot
+
+// The wire units the entity frames use. Position deltas are i16 in
+// 1/4096-block fixed point, and an i8 angle is 1/256 of a turn. The model keeps
+// degrees, like the absolute frames carry, so both sides of a comparison agree.
+const POSITION_DELTA_UNITS = 1 / 4096
+const ANGLE_DEGREES = 360 / 256
 
 const LATEST_FRAMES = new Set([
   'health',
@@ -82,6 +92,14 @@ export function applyFrame (state, frame) {
     case 'entity_position':
     case 'sync_entity_position':
       applyEntityPosition(state, data)
+      return state
+    case 'spawn_entity':
+      applyEntitySpawn(state, data)
+      return state
+    case 'rel_entity_move':
+    case 'entity_move_look':
+    case 'entity_look':
+      applyEntityDelta(state, data)
       return state
     case 'position':
       state.pose = {
@@ -217,6 +235,39 @@ function applyRemoveEntities (state, data) {
     const entity = entityFor(state, entityId)
     entity.removed = true
     entity.fields.clear()
+  }
+}
+
+// spawn_entity carries the first absolute pose for most entities, and nothing
+// else in the stream gives them a position. Its rotation is an i8 angle.
+function applyEntitySpawn (state, data) {
+  const entity = entityFor(state, data.entityId)
+  entity.removed = false
+  for (const axis of ['x', 'y', 'z']) {
+    if (data[axis] !== undefined) entity.fields.set(axis, data[axis])
+  }
+  for (const key of ['yaw', 'pitch']) {
+    if (data[key] !== undefined) entity.fields.set(key, data[key] * ANGLE_DEGREES)
+  }
+}
+
+// A relative move adjusts a position the client already has. A delta for an
+// entity with no position on record is ignored, exactly as the vanilla client
+// ignores a move for an entity it does not know. Rotation in these frames is an
+// absolute i8 angle, not a delta.
+function applyEntityDelta (state, data) {
+  const entity = state.entities.get(data.entityId)
+  if (!entity || entity.removed) return
+  if (entity.fields.has('x')) {
+    for (const [key, delta] of [['x', data.dX], ['y', data.dY], ['z', data.dZ]]) {
+      if (delta === undefined) continue
+      entity.fields.set(key, (entity.fields.get(key) ?? 0) + delta * POSITION_DELTA_UNITS)
+    }
+  }
+  for (const key of ['yaw', 'pitch']) {
+    const angle = data[key]
+    if (angle === undefined) continue
+    entity.fields.set(key, angle * ANGLE_DEGREES)
   }
 }
 

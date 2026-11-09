@@ -171,6 +171,10 @@ The runner builds:
   parity frame names equal the first K parity frames the bot decoded, in order.
   N13 on the online rung compares one side of that cut, so a misaligned cut would
   fail a correct cache.
+- `O28` the replay lands a moved entity where the backend put it. The fake
+  spawns entity 99 at x=0, moves it three blocks with delta frames, then corrects
+  it to x=10. The bot must decode x=10; a replay that puts every absolute before
+  every delta lands at 13.
 
 ### Online rung assertion contract
 
