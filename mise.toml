@@ -56,7 +56,7 @@ depends = ["check", "online"]
 
 [tasks."verify:driver"]
 description = "Verify a driver change: the gate, the Fabric driver build, then the real-client scenario (needs the SSH tunnel and the live backend)."
-depends = ["check", "gate-b:driver:build", "gate-b:scenario"]
+depends = ["check", "driver:build", "driver:scenario"]
 
 [tasks."verify:deploy"]
 description = "Verify a deploy change: the gate, then the image build (needs cluster access; it publishes to the Zot registry)."
@@ -67,24 +67,24 @@ description = "Run the standalone Gate A scenario and write a report."
 depends = ["install"]
 run = "node src/spike/run.js"
 
-[tasks."gate-b:driver:build"]
-description = "Build the Gate B Fabric client driver."
-run = "gradle -p tools/gate-b-driver --no-daemon build"
+[tasks."driver:build"]
+description = "Build the Fabric client driver."
+run = "gradle -p tools/driver --no-daemon build"
 
-[tasks."gate-b:scenario"]
-description = "Run the Gate B driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the live backend)."
+[tasks."driver:scenario"]
+description = "Run the driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the live backend)."
 depends = ["install"]
-wait_for = ["check", "gate-b:driver:build"]
-run = "node src/gate-b.js --runs 2 || node src/ladder/next-rung.js gate-b:scenario $?"
+wait_for = ["check", "driver:build"]
+run = "node src/driver/run.js --runs 2 || node src/ladder/next-rung.js driver:scenario $?"
 
-[tasks."gate-b:g0"]
-description = "Gate B G0 verdict: requires two consecutive PASSED driver reports plus a completed unmodded witness."
+[tasks."driver:g0"]
+description = "Driver-lane G0 verdict: requires two consecutive PASSED driver reports plus a completed unmodded witness."
 depends = ["install"]
-run = "node src/gate-b.js --verify-g0 || node src/ladder/next-rung.js gate-b:g0 $?"
+run = "node src/driver/run.js --verify-g0 || node src/ladder/next-rung.js driver:g0 $?"
 
-[tasks."gate-b:driver:install"]
+[tasks."driver:install"]
 description = "Install the built driver into the display host's Prism root (run on the host)."
-run = "tools/gate-b-driver/install.sh tools/gate-b-driver/build/libs/gate-b-driver-0.1.0.jar"
+run = "tools/driver/install.sh tools/driver/build/libs/monoplayer-driver-0.1.0.jar"
 
 [tasks."image:build"]
 description = "Build and push the Monoplayer image to the cluster Zot registry."

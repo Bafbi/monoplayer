@@ -1,4 +1,4 @@
-// Token-cache custody for Gate B puppet accounts.
+// Token-cache custody for puppet accounts.
 //
 // The refresh token is the password. This module owns the file custody:
 //   - one account directory (default `.secrets/accounts/<uuid>/`), mode 0700,

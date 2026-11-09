@@ -13,7 +13,7 @@ cheapest rung that can fail for the defect you are chasing.
 | 2 loopback | `mise run loopback` | about 3 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, client detach/reattach, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering, vanilla acceptance, and seamless switch until the reconfiguration path lands |
 | 3 online bot | `mise run online` | minutes | live backend, both account custodians | the same shape as rung 2 through the online front leg and a live backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
-| 4 real client | `mise run gate-b:scenario` then `mise run gate-b:g0` | tens of minutes | Fabric driver build, SSH tunnel, live Velocity/Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
+| 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, live Velocity/Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
 
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
 loopback. It is the default gate.
@@ -26,7 +26,7 @@ loopback with the older harness. Keep them green; do not extend them.
 
 Four tasks compose the gate and the check that covers their area through
 `depends`, so a rung command has one definition. Three of them add a task the
-table above does not list: `spike` sits beside the ladder, `gate-b:driver:build`
+table above does not list: `spike` sits beside the ladder, `driver:build`
 builds rung 4's driver, and `image:build` builds the deployment. Run the task
 that covers the area you changed.
 
@@ -34,14 +34,14 @@ that covers the area you changed.
 |---|---|---|
 | `mise run verify:relay` | `check`, `spike` | the relay, the legs, the join, the state cache |
 | `mise run verify:custody` | `check`, `online` (live backend, both custodians) | `src/custody/`, the custody store, `hasJoined`, offline identity |
-| `mise run verify:driver` | `check`, `gate-b:driver:build`, `gate-b:scenario` (SSH tunnel, live backend) | `tools/gate-b-driver/`, `src/gate-b/` |
+| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, live backend) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
 
 mise runs sibling `depends` concurrently, so the area task does not order them.
 The expensive rung carries `wait_for = ["check"]` instead: a red gate stops it
 before it starts, and a bare `mise run online` still runs alone, because
-`wait_for` schedules nothing. `gate-b:scenario` also waits for
-`gate-b:driver:build`.
+`wait_for` schedules nothing. `driver:scenario` also waits for
+`driver:build`.
 
 Run one verify task at a time. The online rung holds the puppet's writer lock
 for its whole run, and two runs contend for the same two accounts. Run
@@ -54,7 +54,7 @@ and CI runs it.
 ## A failed rung names the next one
 
 Each rung task prints, on failure, the next rung to run, the class that rung
-catches, and what it needs. Rung 4 has nothing above it, so `mise run gate-b:g0`
+catches, and what it needs. Rung 4 has nothing above it, so `mise run driver:g0`
 says that instead. `mise run test` failing prints:
 
 ```
@@ -94,7 +94,7 @@ node src/ladder/loopback.js --verbose
 ```
 
 Exit codes: `0` all assertions pass, `1` an assertion or timeout failed, `2`
-the setup before the run failed (fake backend, config, or leg construction). The runner writes `.gate-b/loopback-report.json`
+the setup before the run failed (fake backend, config, or leg construction). The runner writes `.reports/loopback-report.json`
 (gitignored) in `finally`, including on failure. The report holds assertion
 results and metadata only. It never holds frame bytes, `.secrets` paths, or
 token fields.

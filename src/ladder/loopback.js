@@ -24,7 +24,7 @@ import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 
 const VERSION = '26.1'
-const DEFAULT_REPORT = '.gate-b/loopback-report.json'
+const DEFAULT_REPORT = '.reports/loopback-report.json'
 
 function flag (argv, name) {
   const i = argv.indexOf(name)

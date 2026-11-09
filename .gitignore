@@ -4,10 +4,10 @@ coverage/
 .env
 .env.*
 .secrets/
-.gate-b/
+.reports/
 .cache/
-tools/gate-b-driver/.gradle/
-tools/gate-b-driver/build/
+tools/driver/.gradle/
+tools/driver/build/
 tools/mc-source/.gradle/
 tools/mc-source/build/
 *.pem

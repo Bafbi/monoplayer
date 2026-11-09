@@ -167,6 +167,6 @@ See `docs/telemetry.md` for the signals and the journal layout.
   cannot replay one. A play-state transfer is followed on the **puppet** leg:
   the puppet reconnects to the target, the front client is detached with a
   reconnect reason, and it rejoins the proxy after the target is warm. See
-  `docs/gate-b-b1.md`.
+  `docs/product-core.md`.
 - **The journal lives on the custody volume.** 128 MiB per file, one rotation,
   at most 256 MiB of the 1 GiB claim.

@@ -8,7 +8,7 @@
 //   createOfflineBackendLeg auth 'offline', fixed username, loopback only,
 //                           no custody, no lock, no .secrets read.
 //
-// This is the backendLeg adapter for the B1 core (see docs/gate-b-b1.md):
+// This is the backendLeg adapter for the B1 core (see docs/product-core.md):
 // it opens ONE session as the puppet against the backend and forwards every
 // clientbound configuration + login + play frame to the core frame handler as
 //   { state, name, buffer, data }
@@ -426,7 +426,7 @@ function createBackendLeg ({
     })
   }
 
-  // --- backendLeg interface (docs/gate-b-b1.md) ---
+  // --- backendLeg interface (docs/product-core.md) ---
   return {
     kind,
     connect,

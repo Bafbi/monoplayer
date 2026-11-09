@@ -137,7 +137,7 @@ test('a uuid that also exists on the backend whitelist raises the separation war
   const added = await store.add('bafbi')
   assert.equal(added.ok, true)
   assert.deepEqual(added.warnings, [
-    'this uuid is also on the backend whitelist; Gate B requires separate whitelists',
+    'this uuid is also on the backend whitelist; the two whitelists must stay separate',
   ])
 })
 

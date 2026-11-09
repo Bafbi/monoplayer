@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Gate B G1 auth CLI (no mise task wiring here; the orchestrator owns
+// Custody CLI for accounts, tokens, status, migration, and whitelists (no mise
 // mise.toml). Everything user-facing about codes goes to stderr; stdout
 // carries only sanitized facts (name, UUID, alias, entitlement names,
 // privilege, custody facts). Token values are never printed, logged, or
@@ -36,7 +36,7 @@ import {
 } from './accounts.js'
 import { applyMigration, planMigration } from './migrate.js'
 import { createWhitelistStore, createBackendWhitelist, createNameLookup } from './store.js'
-import { createRcon } from '../gate-b/rcon.js'
+import { createRcon } from '../driver/rcon.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SECRETS_DIR = path.join(REPO_ROOT, '.secrets')
@@ -401,7 +401,7 @@ async function main () {
         if (result.refused) lockRefusal('status --refresh refuses while the writer lock is held (proxy running?)', result.holder ?? undefined)
         emitReport(result.identityLine ?? `refresh: ${result.reason ?? 'unknown outcome'}`)
         if (result.ok && result.uuidStable === false) {
-          process.stderr.write(`WARNING: uuid changed across refresh (was ${result.previousUuid}) — investigate before any Gate B run\n`)
+          process.stderr.write(`WARNING: uuid changed across refresh (was ${result.previousUuid}) — investigate before any live run\n`)
           process.exit(1)
         }
         if (result.ok && result.uuidStable === null) {

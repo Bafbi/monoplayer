@@ -127,26 +127,26 @@ Prism is closed if the console window should be removed entirely.
 
 ## Remaining G0 work
 
-- The driver lane is now **2/2**: `node src/gate-b.js --runs 2 --tunnel` passed
+- The driver lane is now **2/2**: `node src/driver/run.js --runs 2 --tunnel` passed
   twice on 2026-11-06, 38/38 assertions each, with server-side position and
   block checks. Reports:
-  [`testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json`](../testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json)
+  [`testdata/driver-run1-2026-11-06T14-20-59-578Z.json`](../testdata/driver-run1-2026-11-06T14-20-59-578Z.json)
   and
-  [`testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json`](../testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json).
+  [`testdata/driver-run2-2026-11-06T14-20-59-578Z.json`](../testdata/driver-run2-2026-11-06T14-20-59-578Z.json).
 - The unmodded Prism client witness (no driver) was completed on 2026-11-06
   (join, render, move, break, place, screenshot, disconnect, rejoin). See
-  [`testdata/gate-b-unmodded-witness.json`](../testdata/gate-b-unmodded-witness.json)
+  [`testdata/driver-unmodded-witness.json`](../testdata/driver-unmodded-witness.json)
   and
-  [`testdata/gate-b-witness-2026-11-06.png`](../testdata/gate-b-witness-2026-11-06.png).
-  `mise run gate-b:g0` now exits 0.
+  [`testdata/witness-2026-11-06.png`](../testdata/witness-2026-11-06.png).
+  `mise run driver:g0` now exits 0.
 - Assert a survival (non-creative) break/place hold, not just the creative row.
 
-The repeatable runner for exactly this row is now in `src/gate-b/` +
-`src/gate-b.js`; see the runbook [docs/gate-b-g0.md](gate-b-g0.md). It
+The repeatable runner for exactly this row is now in `src/driver/` +
+`src/driver/run.js`; see the runbook [docs/driver-lane.md](gate-b-g0.md). It
 automates: fresh-process relaunch per run (quit + SSH/Prism, no reconnect op),
 run-scoped arena coordinates with preflight block states, paired client/RCON
 assertions (positive `execute if block` only — "Could not set" is never a
 pass), classified RCON ops (setup/assertion/probe), screenshot copy-back via
 scp, per-run reports, and the `--runs 2` / `--verify-g0` gates
-(`mise run gate-b:scenario`, `mise run gate-b:g0`). The one-off manual checks
+(`mise run driver:scenario`, `mise run driver:g0`). The one-off manual checks
 that validated this driver remain recorded above.

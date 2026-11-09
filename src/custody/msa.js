@@ -1,4 +1,4 @@
-// Microsoft auth for the Gate B puppet account via prismarine-auth 3.1.1.
+// Microsoft auth for the puppet account via prismarine-auth 3.1.1.
 //
 // Boundary (architectural, repeated here so reviewers can enforce it):
 //   - this module RETURNS identity facts only (name, uuid, entitlement
@@ -18,7 +18,7 @@ import prismarineAuth from 'prismarine-auth'
 
 import { createTokenCustody } from './cache.js'
 import { normalizeUuid } from './util.js'
-import { redactSecrets } from '../gate-b/checks.js'
+import { redactSecrets } from '../driver/checks.js'
 
 export const JAVA_AUTH_TITLE = '00000000402b5328'
 export const SWITCH_AUTH_TITLE = '00000000441cc96b'

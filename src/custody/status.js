@@ -1,4 +1,4 @@
-// Read-only auth health for the Gate B puppet account (G1 `status`).
+// Read-only auth health for the puppet account (the `status` command).
 //
 // Every operation here is read-only unless the caller explicitly asks for a
 // refresh; a refresh takes custody's writer lock and REFUSES while the proxy
@@ -11,7 +11,7 @@
 // pasted into a field, a JWT in a message) is tagged, not emitted.
 import fs from 'node:fs'
 
-import { scanSecrets, redactSecrets, REDACTION_TAG } from '../gate-b/checks.js'
+import { scanSecrets, redactSecrets, REDACTION_TAG } from '../driver/checks.js'
 import { createTokenCustody } from './cache.js'
 import { createMsaAuth, describeIdentity } from './msa.js'
 
@@ -172,7 +172,7 @@ export function createAuthStatus ({
 // `device_code`, or bare JWT shapes) must never survive.
 //
 // Two passes: our local, auth-specific assignment prepass (device/refresh/
-// access code-and-token keys, which the shared Gate B scanner does not know
+// access code-and-token keys, which the shared secret scanner does not know
 // about) first, then the repo-wide scanner for the general shapes.
 const LOCAL_ASSIGNMENT =
   /\b(device[_-]?code|refresh[_-]?token|access[_-]?token|client[_-]?secret)\s*[:=]\s*(?:"([^"]{6,})"|'([^']{6,})'|([^\s"',;]{6,}))/gi

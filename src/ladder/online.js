@@ -32,7 +32,7 @@ import { createBot } from './bot.js'
 import { parityReport } from './state-parity.js'
 
 const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
-const DEFAULT_REPORT = '.gate-b/online-report.json'
+const DEFAULT_REPORT = '.reports/online-report.json'
 const WHITELIST_FILE = '.secrets/attach-whitelist.json'
 const PUPPET_SELECTOR = 'glowsquidye'
 const ATTACH_SELECTOR = 'bafbi'

@@ -1,6 +1,6 @@
 // B1 fakes: scripted backend/front leg adapters with no sockets and no auth.
 // Used by test/monoplayer-integration.test.js. The real legs (minecraft-protocol)
-// implement the same interfaces — see docs/gate-b-b1.md — and are built in G1/M4.
+// implement the same interfaces — see docs/product-core.md — and are built in G1/M4.
 
 // Backend leg adapter (fake): implements the interface createMonoplayer wires
 // against. Frames are {state: 'configuration'|'play', name, buffer?, data?};

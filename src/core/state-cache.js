@@ -290,7 +290,7 @@ export function createStateCache (overrides = {}) {
   // Grouped snapshot for join synthesis. Ordering across warm domains is
   // chunk -> block -> entity -> inventory -> latest -> generic; within each
   // domain it is capture/recency order. Cross-domain interleaving is
-  // deliberately flattened (see docs/gate-b-b1.md limits).
+  // deliberately flattened (see docs/product-core.md limits).
   //
   // Inventory replays the newest full window frame first, then only the
   // per-slot updates captured after it. Slots from before that frame are

@@ -139,8 +139,8 @@ test('hasJoined: TTL cache serves repeats within the window and expires after it
 test('computeServerId hashes serverId string + secret + public key like the vanilla handshake', () => {
   assert.equal(computeServerId('', Buffer.alloc(0), Buffer.alloc(0)),
     'da39a3ee5e6b4b0d3255bfef95601890afd80709')
-  const a = computeServerId('gate-b', Buffer.from('secret'), Buffer.from('pub'))
-  const b = computeServerId('gate-b', Buffer.from('secret'), Buffer.from('pub'))
+  const a = computeServerId('server-id', Buffer.from('secret'), Buffer.from('pub'))
+  const b = computeServerId('server-id', Buffer.from('secret'), Buffer.from('pub'))
   const c = computeServerId('other', Buffer.from('secret'), Buffer.from('pub'))
   assert.equal(a, b, 'same material, same digest')
   assert.notEqual(a, c, 'different serverId string, different digest')

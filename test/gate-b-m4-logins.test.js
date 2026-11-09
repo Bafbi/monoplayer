@@ -4,7 +4,7 @@
 // multi-node log format).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseBackendLogins, loginsPerPhase } from '../src/gate-b/logins.js'
+import { parseBackendLogins, loginsPerPhase } from '../src/driver/logins.js'
 
 const G0_STYLE = [
   '[12:00:00 INFO]: Starting minecraft server version 26.1.2',

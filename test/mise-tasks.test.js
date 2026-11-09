@@ -39,7 +39,7 @@ test('an expensive rung waits for the gate instead of racing it', () => {
   const expensive = new Map([
     ['verify:relay', 'spike'],
     ['verify:custody', 'online'],
-    ['verify:driver', 'gate-b:scenario'],
+    ['verify:driver', 'driver:scenario'],
     ['verify:deploy', 'image:build']
   ])
 
@@ -49,8 +49,8 @@ test('an expensive rung waits for the gate instead of racing it', () => {
     assert.ok(tasks.get(rung).wait_for.includes('check'), `${rung} waits for check`)
   }
   assert.ok(
-    tasks.get('gate-b:scenario').wait_for.includes('gate-b:driver:build'),
-    'gate-b:scenario waits for the driver build'
+    tasks.get('driver:scenario').wait_for.includes('driver:build'),
+    'driver:scenario waits for the driver build'
   )
 })
 

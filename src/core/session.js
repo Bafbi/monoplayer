@@ -42,7 +42,7 @@ const inertClock = Object.freeze({
 export function createSession ({
   clock = inertClock,
   reconnectDelayMs = 1000,
-  // Production retries until the backend returns; the default keeps the Gate B
+  // Production retries until the backend returns; the default keeps the G0
   // fault contract ("one reconnect, total two backend logins") for the tests
   // and the fake rigs.
   reconnectPolicy = { attempts: 1, maxDelayMs: 60_000 },
@@ -114,7 +114,7 @@ export function createSession ({
   }
 
   // Exponential backoff, capped. The first attempt uses the base delay so the
-  // Gate B fault contract (one reconnect at 1000 ms) is unchanged.
+  // G0 fault contract (one reconnect at 1000 ms) is unchanged.
   function backoffDelay () {
     const exponent = Math.min(Math.max(0, reconnectAttempts - 1), 16)
     return Math.min(reconnectDelayMs * 2 ** exponent, maxDelayMs)
@@ -140,7 +140,7 @@ export function createSession ({
   }
 
   // A fired attempt failed. Retry while the budget lasts, otherwise fail
-  // closed. `attempts: 1` reproduces the Gate B behavior exactly.
+  // closed. `attempts: 1` reproduces the G0 behavior exactly.
   function retryOrFail (reason) {
     if (reconnectAttempts >= attempts) {
       transition('failed', STATES.FAILED, { reason, backendLogins, attempts: reconnectAttempts })
@@ -194,7 +194,7 @@ export function createSession ({
   }
 
   // The adapter's connect() threw while the attempt was in flight. Retry while
-  // the policy allows it; the Gate B default fails closed after one attempt.
+  // the policy allows it; the G0 default fails closed after one attempt.
   function fail () {
     if (state !== STATES.BOOT || backendLogins === 0) return { scheduled: false, state }
     return retryOrFail('reconnect_failed')

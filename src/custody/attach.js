@@ -15,7 +15,7 @@
 import { EventEmitter } from 'node:events'
 
 import { normalizeUuid } from './util.js'
-import { redactSecrets } from '../gate-b/checks.js'
+import { redactSecrets } from '../driver/checks.js'
 
 export const ATTACH_ALLOWED_EVENT = 'attachAllowed'
 export const ATTACH_DENIED_EVENT = 'attachDenied'

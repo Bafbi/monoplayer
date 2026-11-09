@@ -13,13 +13,13 @@ row. It is the G0 host baseline (row M2 in the plan).
 ## Prerequisites (one-time)
 
 1. **Backend:** Paper 26.1.2 b74 running in `monoplayer-gate-b` (see
-   [deploy/gate-b/README.md](../deploy/gate-b/README.md)). RCON lives behind
+   [deploy/driver/README.md](../deploy/driver/README.md)). RCON lives behind
    `kubectl -n monoplayer-gate-b exec deploy/paper -- rcon-cli`; the browser
    password is a cluster Secret and never leaves the pod.
 2. **Display host:** `nath` reachable over SSH
    (`bafbi@nath.tail41e568.ts.net`), Prism 11.0.3 with the
    `gate-b-player-fabric` 26.1.2 instance and the built driver jar installed
-   ([tools/gate-b-driver/README.md](../tools/gate-b-driver/README.md)).
+   ([tools/driver/README.md](../tools/driver/README.md)).
 3. **Cluster access:** `kubectl` context that can `exec` into the Paper pod.
 
 ## Driver tunnel (required each session)
@@ -34,7 +34,7 @@ ssh -N -L 25599:127.0.0.1:25599 bafbi@nath.tail41e568.ts.net
 …or let the runner spawn and clean it up:
 
 ```bash
-node src/gate-b.js --tunnel
+node src/driver/run.js --tunnel
 ```
 
 Unit tests never touch SSH or the network (`node --test test/gate-b-checks.test.js`
@@ -43,10 +43,10 @@ is pure).
 ## Running the scenario
 
 ```bash
-node src/gate-b.js --runs 2          # the G0 slice: two consecutive runs
-mise run gate-b:scenario             # same thing via mise
-node src/gate-b.js --runs 1 --force  # smoke / keep going after a failure
-node src/gate-b.js --help            # all flags
+node src/driver/run.js --runs 2          # the G0 slice: two consecutive runs
+mise run driver:scenario             # same thing via mise
+node src/driver/run.js --runs 1 --force  # smoke / keep going after a failure
+node src/driver/run.js --help            # all flags
 ```
 
 Each run:
@@ -73,8 +73,8 @@ Each run:
    player again). Two fresh backend logins per run are expected on the direct
    Paper lane; the `backendLogins=1` invariant belongs to the Monoplayer /
    Velocity lane, not G0.
-4. Writes `testdata/gate-b-driver-run<N>-<timestamp>.json` (plus the summary
-   `testdata/gate-b-driver-summary.json`). Every RCON op in the report is
+4. Writes `testdata/driver-run<N>-<timestamp>.json` (plus the summary
+   `testdata/driver-summary.json`). Every RCON op in the report is
    classified `setup | assertion | probe`, every assertion names its evidence
    `source: client | server | artifact`, and RCON output is scanned/redacted
    for token/password-shaped strings before writing.
@@ -84,42 +84,42 @@ run stops the loop unless `--force`.
 
 ## Result — 2026-11-06
 
-`node src/gate-b.js --runs 2 --tunnel` passed **2/2**, with 38/38 assertions
+`node src/driver/run.js --runs 2 --tunnel` passed **2/2**, with 38/38 assertions
 per run. Both runs used fresh client processes, server-verified movement,
 break/place, disconnect, and rejoin. Reports and screenshots:
 
-- `testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json`
-- `testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json`
-- `testdata/gate-b-driver-summary.json`
-- `testdata/gate-b-screenshot-mw52bqrgu38etw-gate-b-1793974882660.png`
-- `testdata/gate-b-screenshot-mw52co9wuw3sck-gate-b-1793974926080.png`
+- `testdata/driver-run1-2026-11-06T14-20-59-578Z.json`
+- `testdata/driver-run2-2026-11-06T14-20-59-578Z.json`
+- `testdata/driver-summary.json`
+- `testdata/screenshot-mw52bqrgu38etw-1793974882660.png`
+- `testdata/screenshot-mw52co9wuw3sck-1793974926080.png`
 
 **G0 passes.** The manual unmodded witness was completed on 2026-11-06
 (join, render, move, break, place, screenshot, disconnect, rejoin). Its
 checklist and evidence are
-[`testdata/gate-b-unmodded-witness.json`](../testdata/gate-b-unmodded-witness.json)
+[`testdata/driver-unmodded-witness.json`](../testdata/driver-unmodded-witness.json)
 and
-[`testdata/gate-b-witness-2026-11-06.png`](../testdata/gate-b-witness-2026-11-06.png).
-`mise run gate-b:g0` exits 0; the verdict is
-[`testdata/gate-b-g0-verdict.json`](../testdata/gate-b-g0-verdict.json).
+[`testdata/witness-2026-11-06.png`](../testdata/witness-2026-11-06.png).
+`mise run driver:g0` exits 0; the verdict is
+[`testdata/driver-g0-verdict.json`](../testdata/driver-g0-verdict.json).
 
 ## The unmodded witness lane
 
 ```bash
-node src/gate-b.js --lane unmodded   # writes a manual checklist, exits 1
+node src/driver/run.js --lane unmodded   # writes a manual checklist, exits 1
 ```
 
 The driver is a mod, so it can mask a vanilla bug (anti-masking rule). The
 witness run is done once, **by hand, on an unmodded Prism instance**, using the
 checklist the command generates. When every step is honestly recorded, save the
-completed checklist as `testdata/gate-b-unmodded-witness.json` with
+completed checklist as `testdata/driver-unmodded-witness.json` with
 `completed: true`.
 
 ## The G0 verdict
 
 ```bash
-node src/gate-b.js --verify-g0
-mise run gate-b:g0                  # same thing via mise
+node src/driver/run.js --verify-g0
+mise run driver:g0                  # same thing via mise
 ```
 
 Exits 0 **only** when there are **two consecutive passed driver-lane reports**
@@ -138,13 +138,13 @@ or carried over between runs.
 | Screenshot copy-back | Automated (`scp`) |
 | Tunnel | Operator-managed or `--tunnel` |
 | Unmodded witness | **Manual** (checklist lane) |
-| Final G0 claim | Operator runs `node src/gate-b.js --runs 2` and `--verify-g0` |
+| Final G0 claim | Operator runs `node src/driver/run.js --runs 2` and `--verify-g0` |
 
 ## Failure modes seen so far
 
 - **"Could not set the block"** style errors are *not* passes. All block
   assertions are positive `execute [unless] if block` commands whose
-  "Test passed" verdict is parsed (`src/gate-b/checks.js`); anything else is
+  "Test passed" verdict is parsed (`src/driver/checks.js`); anything else is
   `unknown` and fails the run.
 - **Driver unreachable:** the tunnel is down or the client is gone. Start the
   tunnel; the runner will relaunch a fresh client itself after preconditions
