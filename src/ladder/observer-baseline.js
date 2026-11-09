@@ -32,6 +32,34 @@ function flag (argv, name) {
   return i >= 0 ? argv[i + 1] : undefined
 }
 
+// Resolve a bot identity from token custody. Two rungs join as the same account
+// twice — the observer baseline once, the client-parity rung once directly and
+// once through the proxy — so the resolution lives here, once.
+export function resolveBotIdentity ({ accountsDir = DEFAULT_ACCOUNTS_DIR, selector = DEFAULT_SELECTOR } = {}) {
+  const resolved = resolveAccount({ accountsDir, selector })
+  if (!resolved.ok) {
+    throw new Error(`cannot resolve the account '${selector}' in ${accountsDir}: ${resolved.reason}`)
+  }
+  const picked = resolved.account
+  const custody = createTokenCustody({
+    account: picked.alias ?? picked.name ?? picked.uuid,
+    dir: path.resolve(picked.dir),
+    uuid: picked.uuid,
+    create: false,
+    legacyAccount: picked.name ?? null
+  })
+  return {
+    auth: 'microsoft',
+    // What the log calls the account: the alias or uuid, never the raw
+    // selector it was asked for.
+    account: picked.alias ?? picked.uuid,
+    username: picked.name ?? picked.alias ?? picked.uuid,
+    profilesFolder: custody.cacheFactory,
+    authTitle: picked.profile?.authTitle ?? null,
+    deviceType: picked.profile?.deviceType ?? null
+  }
+}
+
 // Join, confirm the play login arrived, leave. The observer on the server is what
 // records the view; this only has to produce one join.
 export async function runBaseline ({
@@ -46,38 +74,25 @@ export async function runBaseline ({
   if (typeof host !== 'string' || host.length === 0) throw new TypeError('host is required')
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('port must be an integer in 1..65535')
 
-  const resolved = resolveAccount({ accountsDir, selector: account })
-  if (!resolved.ok) {
-    throw new Error(`cannot resolve the baseline account '${account}' in ${accountsDir}: ${resolved.reason}`)
-  }
-  const picked = resolved.account
-  const dir = path.resolve(picked.dir)
-  const custody = createTokenCustody({
-    account: picked.alias ?? picked.name ?? picked.uuid,
-    dir,
-    uuid: picked.uuid,
-    create: false,
-    legacyAccount: picked.name ?? null
-  })
-
-  log('baselineStart', { host, port, account: picked.alias ?? picked.uuid, name: picked.name ?? null })
+  const identity = resolveBotIdentity({ accountsDir, selector: account })
+  log('baselineStart', { host, port, account: identity.account, name: identity.username })
 
   const bot = createBot({
     host,
     port,
     version,
-    username: picked.name ?? picked.alias ?? picked.uuid,
-    auth: 'microsoft',
-    profilesFolder: custody.cacheFactory,
-    authTitle: picked.profile?.authTitle ?? null,
-    deviceType: picked.profile?.deviceType ?? null,
+    username: identity.username,
+    auth: identity.auth,
+    profilesFolder: identity.profilesFolder,
+    authTitle: identity.authTitle,
+    deviceType: identity.deviceType,
     log
   })
 
   try {
     await bot.ready(timeoutMs)
     log('baselineJoined', { entityId: bot.received.login?.entityId ?? null })
-    return { joined: true, name: picked.name ?? null }
+    return { joined: true, name: identity.username }
   } finally {
     try { await bot.close?.() } catch { /* the join is what mattered */ }
   }

@@ -19,9 +19,9 @@ const FIXTURE = [
 test('parseLadder reads the doc table in ladder order', () => {
   const ladder = loadLadder()
 
-  assert.deepEqual(ladder.map(rung => rung.id), ['0', '1', '2', '2b', '3', '4'])
+  assert.deepEqual(ladder.map(rung => rung.id), ['0', '1', '2', '2a', '2b', '3', '4'])
   assert.deepEqual(ladder[0].tasks, ['lint'])
-  assert.deepEqual(ladder[5].tasks, ['driver:scenario', 'driver:g0'])
+  assert.deepEqual(ladder[6].tasks, ['driver:scenario', 'driver:g0'])
   for (const rung of ladder) {
     assert.ok(rung.label.length > 0, `rung ${rung.id} has a label`)
     assert.ok(rung.tasks.length > 0, `rung ${rung.id} names a task`)
@@ -57,8 +57,14 @@ test('failureHint names the next rung, what it catches, and what it needs', () =
   assert.ok(hint.includes(`needs: ${next.prerequisites}`), hint)
 })
 
-test('failureHint from the loopback rung points at the transfer testbed', () => {
+test('failureHint from the loopback rung points at client parity', () => {
   const hint = failureHint('loopback')
+
+  assert.match(hint, /Next rung: mise run parity:run \(rung 2a, /)
+})
+
+test('failureHint from the client parity rung points at the transfer testbed', () => {
+  const hint = failureHint('parity:run')
 
   assert.match(hint, /Next rung: mise run testbed:run \(rung 2b, /)
 })

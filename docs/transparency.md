@@ -75,8 +75,9 @@ key never reach the server; a message the server rejects arrives back as a
 rejection on GlowSquidye; and the human's client receives `player_chat` from
 another connection, so its per-sender signature chain is out of order. The
 expectation is that the message still displays with a broken-chain marker. No
-run has confirmed that, and [#13](https://github.com/Bafbi/monoplayer/issues/13)
-is where it gets confirmed.
+run has confirmed that, and [#62](https://github.com/Bafbi/monoplayer/issues/62)
+is where a real client confirms it. The protocol bot cannot: it decodes frames,
+never renders them.
 
 The proxy answers the backend's own acknowledgements and keeps its own
 last-seen window. The human's session key and acknowledgements never reach the
@@ -194,6 +195,10 @@ It does not prove:
 - **The client side against a direct connection.** The observer covers what the
   server knows. Today the clientbound comparison is one assertion: `N13` on the
   online rung compares the attach replay's frame cut against what a real client
-  decoded (`src/ladder/state-parity.js`, run with `mise run online`). The wider
-  direct-versus-proxy parity run, with the bot and the Fabric driver, is
-  [#13](https://github.com/Bafbi/monoplayer/issues/13) and is not built.
+  decoded (`src/ladder/state-parity.js`, run with `mise run online`). The
+  direct-versus-proxy comparison with the protocol bot is
+  `mise run parity:run`
+  ([#13](https://github.com/Bafbi/monoplayer/issues/13)). It lists frame and
+  decoded-state differences and separates the expected ones from the
+  unexplained. The same comparison with the Fabric driver is
+  [#62](https://github.com/Bafbi/monoplayer/issues/62) and is not built.
