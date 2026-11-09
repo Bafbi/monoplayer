@@ -1,7 +1,7 @@
 // B1 target: identity gates with an injected verifier (pure decisions).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createFrontIdentity, DENY_REASONS, ALLOW_REASONS } from '../src/monoplayer/identity.js'
+import { createFrontIdentity, DENY_REASONS, ALLOW_REASONS } from '../src/core/identity.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44' // "Bafbi" shape; placeholder
 const PUPPET = '1e135e26-fed1-4a2c-8989-5a3bb7f9d3a4' // "GlowSquidye" shape

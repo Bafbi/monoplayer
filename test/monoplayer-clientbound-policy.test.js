@@ -15,7 +15,7 @@ import {
   CONFIG_BLOCK,
   CONFIG_PER_LEG,
   NOT_REPLAYABLE
-} from '../src/monoplayer/clientbound-policy.js'
+} from '../src/core/clientbound-policy.js'
 
 const protocol = JSON.parse(fs.readFileSync(
   new URL('../vendor/minecraft-data-26.2/data/pc/26.2/protocol.json', import.meta.url)

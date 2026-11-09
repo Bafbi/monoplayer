@@ -1,7 +1,7 @@
 // The transfer handshake intent: intent 3, not the library's hardcoded 2.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { withTransferIntent } from '../src/monoplayer/live-backend.js'
+import { withTransferIntent } from '../src/legs/live-backend.js'
 
 const handshake = () => ({
   protocolVersion: 776,

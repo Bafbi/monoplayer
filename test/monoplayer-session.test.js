@@ -1,7 +1,7 @@
 // B1 target: session state machine (pure, fake clock).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createSession, STATES } from '../src/monoplayer/session.js'
+import { createSession, STATES } from '../src/core/session.js'
 
 function fakeClock () {
   let now = 0

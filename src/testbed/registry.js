@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import mc from 'minecraft-protocol'
 import { createTokenCustody } from '../custody/cache.js'
-import { withTransferIntent } from '../monoplayer/live-backend.js'
+import { withTransferIntent } from '../legs/live-backend.js'
 
 const host = process.argv[2] ?? '127.0.0.1'
 const intent = Number(process.argv[3] ?? 2)

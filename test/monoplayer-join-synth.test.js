@@ -1,7 +1,7 @@
 // B1 target: join-synth ordered attach stream (pure).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { synthAttach, synthBackendPosition, LEG_OWNED } from '../src/monoplayer/join-synth.js'
+import { synthAttach, synthBackendPosition, LEG_OWNED } from '../src/core/join-synth.js'
 
 const b = n => Buffer.from(`frame:${n}`)
 

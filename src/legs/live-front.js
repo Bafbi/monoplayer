@@ -48,7 +48,7 @@ import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
-import { clientboundPolicy } from './clientbound-policy.js'
+import { clientboundPolicy } from '../core/clientbound-policy.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 

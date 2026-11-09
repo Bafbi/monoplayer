@@ -2,7 +2,7 @@
 //
 // The Gate A spike (src/proxy.js) is frozen; this module is where the product
 // lives. Everything real-scoped is injected: the front-leg and backend-leg
-// adapters (interface below, fakes in src/monoplayer/fake-legs.js) and the
+// adapters (interface below, fakes in src/legs/fake-legs.js) and the
 // clock. With no --start flag the CLI never opens a socket and no Microsoft
 // auth is touched — B1 is the pure core plus fake integration only.
 //
@@ -27,13 +27,13 @@
 //     end(reason)                                 // kick/deny the client
 //   }
 
-import { createStateCache, WARM_MARKER } from './monoplayer/state-cache.js'
-import { createFrontIdentity } from './monoplayer/identity.js'
-import { synthAttach } from './monoplayer/join-synth.js'
-import { classifyServerbound, capturePose } from './monoplayer/relay.js'
-import { clientboundPolicy, DECISION } from './monoplayer/clientbound-policy.js'
-import { createSession, STATES } from './monoplayer/session.js'
-import { redact, SENTINEL } from './monoplayer/redact.js'
+import { createStateCache, WARM_MARKER } from '../core/state-cache.js'
+import { createFrontIdentity } from '../core/identity.js'
+import { synthAttach } from '../core/join-synth.js'
+import { classifyServerbound, capturePose } from '../core/relay.js'
+import { clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
+import { createSession, STATES } from '../core/session.js'
+import { redact, SENTINEL } from '../observability/redact.js'
 import { pathToFileURL } from 'node:url'
 
 // --- config ---
@@ -872,9 +872,9 @@ export function createMonoplayer ({
 export const USAGE = `monoplayer — one Minecraft account, one backend, many clients
 
 Usage:
-  node src/monoplayer.js --print-config     print the resolved config and exit
-  node src/monoplayer.js --config <file>    load a JSON config
-  node src/monoplayer.js --start            start the live legs (G1 + B1 lane)
+  node src/service/monoplayer.js --print-config     print the resolved config and exit
+  node src/service/monoplayer.js --config <file>    load a JSON config
+  node src/service/monoplayer.js --start            start the live legs (G1 + B1 lane)
 
 Config (JSON via --config, then env, then defaults):
   MONOPLAYER_FRONT_HOST / MONOPLAYER_FRONT_PORT       front leg bind address
@@ -921,7 +921,7 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
   if (has(argv, '--start')) {
     // Live legs live behind a dynamic import: with no --start the CLI keeps
     // the pure-core property (no sockets, no minecraft-protocol load).
-    const { startLive } = await import('./monoplayer/start-live.js')
+    const { startLive } = await import('./start-live.js')
     return startLive({ argv })
   }
   io.stdout.write(USAGE + '\n')

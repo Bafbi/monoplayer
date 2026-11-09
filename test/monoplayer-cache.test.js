@@ -1,7 +1,7 @@
 // B1 target: state-cache classification, bounds, overflow, snapshot grouping.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createStateCache, classifyPlay, classifyConfig } from '../src/monoplayer/state-cache.js'
+import { createStateCache, classifyPlay, classifyConfig } from '../src/core/state-cache.js'
 
 const buf = label => Buffer.from(`cache:${label}`)
 const frame = name => ({ name, buffer: buf(name), data: {} })

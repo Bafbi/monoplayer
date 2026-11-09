@@ -3,8 +3,8 @@
 // cached or replayed.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../src/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../src/monoplayer/fake-legs.js'
+import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../src/service/monoplayer.js'
+import { createFakeBackendLeg, createFakeFrontLeg } from '../src/legs/fake-legs.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const BUFFER = name => Buffer.from(`backend:${name}`)

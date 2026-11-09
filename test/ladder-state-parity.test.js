@@ -5,8 +5,8 @@
 // domain must fail and the others must pass.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DOMAINS, createStateCache } from '../src/monoplayer/state-cache.js'
-import { synthAttach } from '../src/monoplayer/join-synth.js'
+import { DOMAINS, createStateCache } from '../src/core/state-cache.js'
+import { synthAttach } from '../src/core/join-synth.js'
 import {
   ONLINE_ASSERTION_IDS,
   evaluateOnlineAssertions,

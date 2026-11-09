@@ -12,8 +12,8 @@
 // frames the ring kept. The tests say which case they assert.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createStateCache } from '../src/monoplayer/state-cache.js'
-import { synthAttach } from '../src/monoplayer/join-synth.js'
+import { createStateCache } from '../src/core/state-cache.js'
+import { synthAttach } from '../src/core/join-synth.js'
 import {
   createClientState,
   applyFrames,
