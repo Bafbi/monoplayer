@@ -180,11 +180,11 @@ depends = ["install"]
 run = "node src/testbed/switch.js registry"
 
 [tasks."testbed:down"]
-description = "Stop the testbed and restore the live Excalia proxy."
+description = "Stop the testbed and restore the live deployment."
 depends = ["install"]
 run = "node src/testbed/switch.js down"
 
 [tasks."testbed:run"]
-description = "Full puppet transfer: up, transfer, down, always restoring the live proxy."
+description = "Full puppet transfer: up, transfer, down, always restoring the live deployment."
 depends = ["install"]
 run = "node src/testbed/switch.js run || node src/ladder/next-rung.js testbed:run $?"
