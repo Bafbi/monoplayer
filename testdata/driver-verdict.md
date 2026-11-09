@@ -1,7 +1,7 @@
 # The driver lane passed 2 of 2 runs and the unmodded witness
 
-Verdict: **PASS** on 2026-11-06. Two runs were requested, two ran, two passed, with 38 of 38 assertions each. The manual unmodded witness recorded `COMPLETE` the same day, then passed again on 2026-11-09 when the operator repeated it.
-Date: 2026-11-06, the first run started at `2026-11-06T14:20:59.583Z` and the verdict was recorded at `2026-11-06T15:46:00.000Z`.
+Verdict: **PASS**. On 2026-11-06 two runs were requested, two ran, two passed, with 38 of 38 assertions each. On 2026-11-09 `mise run driver:g0` ran the two runs itself and passed, and the operator repeated the unmodded witness.
+Date: 2026-11-06 and 2026-11-09. The first run started at `2026-11-06T14:20:59.583Z` and that verdict was recorded at `2026-11-06T15:46:00.000Z`.
 Commands: `node src/driver/run.js --runs 2 --tunnel` ran the two runs. `mise run driver:scenario` runs the same scenario without `--tunnel`. `node src/driver/run.js --lane unmodded` wrote the witness checklist, and `node src/driver/run.js --verify-g0` (`mise run driver:g0`) reads the reports and the witness.
 Fact: each run recorded 38 assertions with a named evidence source, and 8 of its RCON ops per run were assertions checked on the server.
 
@@ -58,6 +58,25 @@ The operator repeated the row because the 2026-11-06 record left git with the re
 - Disconnect: Paper logged `Bafbi lost connection: Disconnected` and `Bafbi left the game` at 01:45:20.
 - Rejoin: Paper logged `Bafbi joined the game` at 01:45:40 as entity id 320, at `162.4492974103905,-60.0,163.9253435774501`. That is the position the player left from, so the reattach landed where the detach happened.
 - Screenshot: `testdata/witness-2026-11-09.png`, 1052x1050 and 465635 bytes, taken before the scans repaired the arena.
+
+## The gate run, 2026-11-09
+
+Verdict: **PASS**. `mise run driver:g0` exited 0: two runs requested, two executed, two passed, and the unmodded witness was in the checkout.
+Date: 2026-11-09, the runs started at `01:50:26Z` and the summary was written at `01:52:24.438Z`.
+Command: `mise run driver:g0`, which composes `check`, `driver:build`, and `driver:scenario`, then runs `node src/driver/run.js --verify-g0`. The driver tunnel ran as an operator-managed `ssh -N -L 25599:127.0.0.1:25599`.
+Fact: the task produced its own evidence and then verified it, so this verdict rests on runs in this checkout rather than on a committed report set.
+
+Source: `testdata/driver-summary.json`, `testdata/driver-run1-2026-11-09T01-50-26-521Z.json`, `testdata/driver-run2-2026-11-09T01-50-26-521Z.json`, and two screenshots. All stay in the checkout and out of git.
+
+- The summary recorded `runsRequested: 2`, `runsExecuted: 2`, `runsPassed: 2`, `allPassed: true`, `stopReason: null`.
+- Run 1 passed 36 of 36 assertions, with settle 17995 ms and rejoin settle 17813 ms. It carried two assertions fewer than run 2 because no driver client existed before it, so the `driver socket answered status` and `previous client quit before relaunch` preconditions had nothing to check.
+- Run 2 passed 38 of 38 assertions, with settle 16438 ms and rejoin settle 20661 ms.
+- Both runs moved the player 3.018 blocks and recorded 11 setup, 8 assertion, and 10 probe RCON ops.
+- The screenshots were 994997 and 996238 bytes, one per run, copied back by `scp`.
+- The verify step reported `driver reports: 2 from one 2-run invocation, both passed` and `G0 VERIFIED: 2/2 consecutive driver-lane reports passed and the unmodded witness is completed`.
+- The same invocation ran the rest of the gate: 406 unit tests and 26 of 26 loopback assertions.
+
+This is the first G0 verdict the task established for itself. Until 2026-11-09 the reports were committed, so the verify step passed whether or not anything had run. The gate now refuses evidence whose newest run finished more than 24 hours ago, which is what keeps a copied report set from reading as green.
 
 The new record states its own limits, and two are new. The screenshot is a compositor capture of a tiled window, not a fullscreen client capture, because `tools/nath.sh shot` needs the driver mod and cannot capture an unmodded instance. That wrapper defect is [issue #54](https://github.com/Bafbi/monoplayer/issues/54). The client log prints no GL renderer this run, so the renderer is not recorded. The other limits match 2026-11-06: a manual lane with no driver, creative gamemode only, the scans repaired the arena after the screenshot, and edits outside `150..170` are not counted.
 
