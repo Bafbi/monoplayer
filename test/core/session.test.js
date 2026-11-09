@@ -159,3 +159,106 @@ test('pose lifecycle across attach/detach/reattach', () => {
   s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
   assert.equal(s.currentPose.x, 2.5)
 })
+
+test('a followed transfer keeps the client and ends at the target login', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000 })
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+
+  const started = s.transferStart({ target: { host: 'sky-2.excalia.fr', port: 25565 } })
+  assert.equal(started.started, true)
+  assert.equal(s.state, STATES.TRANSFERRING)
+  assert.equal(s.transferring, true)
+  // The client holds the slot through the move: a second attach is refused,
+  // and the session is not attach-ready for a fresh one.
+  assert.equal(s.attachAttempt({ uuid: 'other', name: 'Other' }).reason, 'already_attached')
+  assert.equal(s.isAttachReady(), false)
+
+  // The backend end under the move is not a detach: one reconnect is armed
+  // and the client stays.
+  const down = s.backendDown({ reason: 'backend_transfer', retainFront: true })
+  assert.equal(down.retained, true)
+  assert.equal(down.wasAttached, true)
+  assert.equal(s.state, STATES.TRANSFERRING)
+  assert.equal(s.detachCount, 0)
+  assert.equal(clock.pending, 1)
+
+  // The dial starts and the target's play login lands on the retained client.
+  clock.tick(1000)
+  assert.equal(s.state, STATES.TRANSFERRING, 'the fired reconnect keeps a retained client')
+  s.backendConnecting({ initial: false })
+  assert.equal(s.state, STATES.TRANSFERRING)
+  const login = s.backendLogin({ entityId: 7 })
+  assert.equal(login.fromTransfer, true)
+  assert.equal(s.state, STATES.ATTACHED)
+
+  const done = s.transferComplete()
+  assert.equal(done.completed, true)
+  assert.equal(s.state, STATES.ATTACHED)
+  assert.equal(s.backendLogins, 2)
+  assert.equal(s.detachCount, 0)
+})
+
+test('a failed target restores the client and arms one reconnect to the base', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000 })
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+  s.transferStart({ target: { host: 'sky-2.excalia.fr', port: 25565 } })
+  s.backendDown({ reason: 'backend_transfer', retainFront: true })
+  clock.tick(1000)
+
+  const failed = s.transferFailed({ reason: 'target_unreachable' })
+  assert.equal(failed.failed, true)
+  assert.equal(failed.restored, true)
+  assert.equal(s.state, STATES.ATTACHED, 'the client keeps its connection')
+  assert.equal(s.detachCount, 0)
+  assert.equal(clock.pending, 1, 'one reconnect goes back to the configured backend')
+
+  // The returning backend login does not move the restored client back to warm.
+  s.backendConnecting({ initial: false })
+  const login = s.backendLogin({ entityId: 42 })
+  assert.equal(login.restored, true)
+  assert.equal(s.state, STATES.ATTACHED)
+  assert.equal(s.backendLogins, 2)
+})
+
+test('a detached session cannot transfer, so the puppet moves alone', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock })
+  s.backendLogin({}); s.warmComplete({})
+  const started = s.transferStart({ target: { host: 'sky-2.excalia.fr', port: 25565 } })
+  assert.equal(started.started, false)
+  assert.equal(s.state, STATES.WARM)
+})
+
+test('the client may still leave during a transfer', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock })
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+  s.transferStart({ target: { host: 'sky-2.excalia.fr', port: 25565 } })
+  const outcome = s.detach({ reason: 'player_quit' })
+  assert.equal(outcome.detached, true)
+  assert.equal(s.state, STATES.DETACHED)
+})
+
+test('a retained transfer never fails closed on a retry budget', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000, reconnectPolicy: { attempts: 1 } })
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+  s.transferStart({ target: { host: 'sky-2.excalia.fr', port: 25565 } })
+  s.backendDown({ reason: 'backend_transfer', retainFront: true })
+  clock.tick(1000)
+
+  // Two failed dials in a row, past the one-attempt budget: the session keeps
+  // the client and keeps retrying; the follow controller owns the give-up.
+  assert.equal(s.fail().scheduled, true)
+  assert.equal(s.state, STATES.TRANSFERRING)
+  clock.tick(1000)
+  assert.equal(s.fail().scheduled, true)
+  assert.equal(s.state, STATES.TRANSFERRING)
+  assert.equal(s.detachCount, 0)
+})

@@ -59,9 +59,15 @@ expected result is `hub.entries=4`, `sky.entries=5`, `same=false`.
 
 - The puppet follows the transfer with handshake intent 3; `paper-sky` accepts
   it, and the hub session ends.
-- The attached client is detached with
-  `This session is moving. Reconnect in a few seconds to continue.` and can
-  reattach to the target through the proxy.
+- The attached client is detached with a moving reason and rejoins the
+  proxy; that is the default `transfer.follow` path, and loopback `O21`-`O24`
+  pin it.
+- The testbed run is also the evidence for the kept connection
+  (`transfer.keepConnection: true`): Monoplayer serves the target's
+  configuration and play login on the client's own socket, so the client shows
+  the reconfiguration loading screen and lands on the target without rejoining
+  (#22). It is proven offline only, by loopback `O33`-`O35`, until this run
+  records it against a real Paper and a real client.
 - The target's configuration registries differ from the hub's.
 
 ## What it does not prove yet
