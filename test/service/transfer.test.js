@@ -48,6 +48,14 @@ function makeCore (config = {}) {
   return { clock, backendLeg, frontLeg, core, events }
 }
 
+// The kept-connection path (#22) is opt-in, so the seamless tests turn it on.
+function makeSeamless (config = {}) {
+  return makeCore({
+    ...config,
+    transfer: { ...(config.transfer ?? {}), keepConnection: true }
+  })
+}
+
 function warmBackend ({ backendLeg, core }) {
   backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
   for (const frame of [
@@ -102,7 +110,7 @@ function assertNotice (frontLeg, pattern) {
 }
 
 test('a followed transfer keeps the client and waits for the target before any loading screen', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -137,7 +145,7 @@ test('a followed transfer keeps the client and waits for the target before any l
 })
 
 test('the same connection lands on the target: configuration, finish, login, state', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const mark = rig.frontLeg.frames().length
@@ -166,7 +174,7 @@ test('the same connection lands on the target: configuration, finish, login, sta
 })
 
 test('a target that never answers restores the client without a loading screen', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const before = rig.core.cache.snapshot()
@@ -192,7 +200,7 @@ test('a target that never answers restores the client without a loading screen',
 })
 
 test('a target that dies mid-reconfiguration restores the previous configuration and state', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const mark = rig.frontLeg.frames().length
@@ -225,7 +233,7 @@ test('a target that dies mid-reconfiguration restores the previous configuration
 })
 
 test('start_configuration re-enters configuration on the same connection', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const mark = rig.frontLeg.frames().length
@@ -250,7 +258,7 @@ test('start_configuration re-enters configuration on the same connection', () =>
 })
 
 test('a followed transfer while detached still moves the puppet and sends no notice', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
 
   rig.backendLeg.deliver({ state: 'play', ...transfer() })
@@ -266,7 +274,7 @@ test('a followed transfer while detached still moves the puppet and sends no not
 })
 
 test('follow disabled keeps the session and sends the refusal notice', () => {
-  const rig = makeCore({ transfer: { follow: false } })
+  const rig = makeSeamless({ transfer: { follow: false } })
   warmBackend(rig)
   attach(rig)
 
@@ -279,7 +287,7 @@ test('follow disabled keeps the session and sends the refusal notice', () => {
 })
 
 test('an invalid target is refused without ending the session', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -290,7 +298,7 @@ test('an invalid target is refused without ending the session', () => {
 })
 
 test('a repeated target is refused as a loop after a completed move', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -307,7 +315,7 @@ test('a repeated target is refused as a loop after a completed move', () => {
 })
 
 test('the chain limit refuses the hop beyond it', () => {
-  const rig = makeCore({ transfer: { chainLimit: 1 } })
+  const rig = makeSeamless({ transfer: { chainLimit: 1 } })
   warmBackend(rig)
   attach(rig)
 
@@ -322,7 +330,7 @@ test('the chain limit refuses the hop beyond it', () => {
 })
 
 test('connection-control frames are blocked in both states', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -341,7 +349,7 @@ test('connection-control frames are blocked in both states', () => {
 })
 
 test('#16 a control dialog crosses while connection control stays contained', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const before = rig.frontLeg.frames().length
@@ -366,7 +374,7 @@ test('#16 a control dialog crosses while connection control stays contained', ()
 })
 
 test('login is cached for replay but never relayed into a live session', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -377,7 +385,7 @@ test('login is cached for replay but never relayed into a live session', () => {
 })
 
 test('ping_response is relayed live but never cached', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -389,7 +397,7 @@ test('ping_response is relayed live but never cached', () => {
 })
 
 test('configuration transfer is blocked and configuration ping is answered per-leg', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
 
   rig.backendLeg.deliver({ state: 'configuration', name: 'transfer', buffer: BUFFER('transfer'), data: { host: 'x.invalid', port: 1 } })
@@ -405,7 +413,7 @@ test('configuration transfer is blocked and configuration ping is answered per-l
 })
 
 test('a target that dies after its play login still restores the configuration round', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const mark = rig.frontLeg.frames().length
@@ -437,7 +445,7 @@ test('a target that dies after its play login still restores the configuration r
 })
 
 test('a target that dies after the client finished is restored through a new round', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -460,7 +468,7 @@ test('a target that dies after the client finished is restored through a new rou
 })
 
 test('a stalled reconfiguration is restored when its deadline passes', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -479,7 +487,7 @@ test('a stalled reconfiguration is restored when its deadline passes', () => {
 })
 
 test('a transfer during the client\'s own configuration is refused, not half-served', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   // An early attach: the puppet logs in while the client is still configuring,
   // so the session is attached but no play frame may reach the client yet.
   rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
@@ -505,7 +513,7 @@ test('the reconfiguration deadline is configurable and validated', () => {
 })
 
 test('a restore round the client never finishes detaches it at the deadline', () => {
-  const rig = makeCore()
+  const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
 
@@ -522,4 +530,45 @@ test('a restore round the client never finishes detaches it at the deadline', ()
   assert.equal(rig.core.attached, false)
   assert.equal(rig.core.session.state, 'detached')
   assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /transfer_restore_timeout/)
+})
+
+test('the default keeps the detach-and-rejoin transfer', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  assert.equal(rig.core.metrics.transfersFollowed, 1)
+  assert.equal(rig.core.metrics.transfersSeamless, 0)
+  assert.equal(rig.core.session.state, 'reconnecting')
+  assert.equal(rig.core.attached, false)
+  assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /moving/i)
+  assert.equal(rig.clock.pending, 1, 'exactly one reconnect')
+
+  rig.clock.tick(1000)
+  assert.deepEqual(rig.events[0].target, { host: 'sky-2.excalia.fr', port: 25565 })
+  assert.deepEqual(rig.frontLeg.reconfigurations(), [])
+})
+
+test('the default keeps the detach-and-reconnect reconfiguration', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', name: 'start_configuration', buffer: BUFFER('start_configuration'), data: {} })
+  assert.equal(rig.core.metrics.reconfigurationsStarted, 0)
+  assert.equal(rig.backendLeg.ended, 1, 'the puppet leg is ended on purpose')
+  assert.equal(rig.core.session.state, 'attached', 'the end handler has not fired yet')
+
+  rig.backendLeg.deliverEnd({ reason: 'backend_reconfigure' })
+  assert.equal(rig.core.cache.warm, false, 'the dead session cache is reset')
+  assert.equal(rig.core.session.state, 'reconnecting')
+  assert.equal(rig.clock.pending, 1, 'exactly one reconnect')
+  assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /reconfigured this session/i)
+})
+
+test('the kept connection is off by default and validated', () => {
+  assert.equal(loadConfig().transfer.keepConnection, false)
+  assert.equal(loadConfig({ transfer: { keepConnection: true } }).transfer.keepConnection, true)
+  assert.throws(() => loadConfig({ transfer: { keepConnection: 'yes' } }), /keepConnection/)
 })

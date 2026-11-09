@@ -5,7 +5,7 @@
   "backend": "node-fake",
   "version": "26.1",
   "passed": true,
-  "durationMs": 5711,
+  "durationMs": 8239,
   "assertions": [
     {
       "id": "R0",
@@ -15,7 +15,7 @@
         "warm": true,
         "configFrames": 29,
         "prefixFrames": 5,
-        "elapsedMs": 1000
+        "elapsedMs": 1001
       }
     },
     {
@@ -396,92 +396,40 @@
     },
     {
       "id": "O21",
-      "name": "a followed transfer never reaches the client and the client keeps its connection",
+      "name": "a followed transfer never reaches the client and detaches it with a moving reason",
       "ok": true,
       "detail": {
         "frames": [
-          "start_configuration",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data"
+          "kick_disconnect"
         ],
-        "ended": null,
-        "kick": null,
+        "kick": "{\"reason\":{\"type\":\"compound\",\"value\":{\"text\":{\"type\":\"string\",\"value\":\"This session is moving. Reconnect in a few seconds to continue.\"}}}}",
+        "ended": "socketClosed",
         "blocked": 1,
-        "followed": 1,
-        "seamless": 1,
-        "frontClientErrors": 0,
-        "reconfigurationAcks": [
-          {
-            "username": "Attach",
-            "flushedFrames": 29,
-            "droppedFrames": 0
-          }
-        ]
+        "followed": 1
       }
     },
     {
       "id": "O22",
-      "name": "the same connection goes through the target configuration and play login",
+      "name": "the puppet follows the target and re-warms there",
       "ok": true,
       "detail": {
         "loginsBeforeTransfer": 2,
         "fake2Logins": 1,
         "handshakeIntents": [
+          3,
           3
         ],
         "backendLogins": 3,
-        "configuration": [
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "registry_data",
-          "finish_configuration"
-        ],
-        "reconfigurationsCompleted": 1,
-        "frontPlayReady": true,
-        "state": "attached"
+        "warmReady": true,
+        "state": "warm"
       }
     },
     {
       "id": "O23",
-      "name": "the client that followed the move is in the target server state",
+      "name": "a fresh attach after the move replays the target server state",
       "ok": true,
       "detail": {
         "entityId": 42,
-        "attaches": 3,
         "blocks": [
           {
             "x": 9,
@@ -575,11 +523,77 @@
           }
         ]
       }
+    },
+    {
+      "id": "O33",
+      "name": "with transfer.keepConnection on, a followed transfer keeps the client's connection",
+      "ok": true,
+      "detail": {
+        "frames": [
+          "start_configuration",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data"
+        ],
+        "ended": null,
+        "kick": null,
+        "seamless": 1,
+        "frontClientErrors": 0,
+        "acks": [
+          {
+            "username": "Attach",
+            "flushedFrames": 29,
+            "droppedFrames": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "O34",
+      "name": "the kept connection carries the target configuration and its play login",
+      "ok": true,
+      "detail": {
+        "configuration": 29,
+        "names": [
+          "position",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "window_items"
+        ],
+        "reconfigurations": 1,
+        "state": "attached"
+      }
+    },
+    {
+      "id": "O35",
+      "name": "the client on the kept connection is in the target state without rejoining",
+      "ok": true,
+      "detail": {
+        "entityId": 42,
+        "attaches": 1,
+        "blocks": [
+          {
+            "x": 11,
+            "z": 11,
+            "y": 0
+          }
+        ],
+        "leftovers": 0,
+        "errors": 0
+      }
     }
   ],
   "evidence": {
-    "frontPort": 43379,
-    "backendPort": 41683,
+    "frontPort": 45611,
+    "backendPort": 35613,
     "configReplayMode": "cached_replay",
     "wire": {
       "checked": 86,
@@ -609,8 +623,8 @@
       "leftovers": 0,
       "errors": 0
     },
-    "backend2Port": 41565,
-    "handshakeProxyPort": 35081,
+    "backend2Port": 41351,
+    "handshakeProxyPort": 39919,
     "gate": {
       "sends": 1,
       "accepts": 1,
@@ -633,49 +647,22 @@
       "backendLogins": 2,
       "attaches": 3
     },
-    "transfer": {
+    "seamless": {
       "target": {
         "host": "127.0.0.1",
-        "port": 35081
+        "port": 39919
       },
-      "handshakeIntents": [
-        3
-      ],
-      "fake2Logins": 1,
-      "backendLogins": 3,
-      "stayedConnected": true,
-      "configuration": [
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "registry_data",
-        "finish_configuration"
-      ],
-      "reconfigurations": 1
+      "reconfigurations": 1,
+      "attaches": 1,
+      "configuration": 29,
+      "frontClientErrors": 0,
+      "acknowledged": [
+        {
+          "username": "Attach",
+          "flushedFrames": 29,
+          "droppedFrames": 0
+        }
+      ]
     }
   }
 }

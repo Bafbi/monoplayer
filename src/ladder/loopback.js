@@ -6,7 +6,8 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0, O32, and O1-O31 (including O11b and O24b) are the contract
+// Assertions R0, O32, O33-O35, and O1-O31 (including O11b and O24b) are the
+// contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -86,7 +87,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bot1 = null
   let bot2 = null
   let bot3 = null
+  let bot4 = null
+  let bot5 = null
   let stranger = null
+  let seamlessFront = null
+  let seamlessBackend = null
+  let seamlessCore = null
 
   const evidence = {
     frontPort: null,
@@ -123,7 +129,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // fallback: the leg accepts it and says so (O32).
     fake = await createFakeBackend({ port: 0, logStream: null, viewDistance: 6, codeOfConduct: true })
     evidence.backendPort = fake.port
-    // A second backend is the target of the followed transfer (O21-O24).
+    // A second backend is the target of the followed transfers (O21-O24, the
+    // default detach path, and O33-O35, the kept connection).
     fake2 = await createFakeBackend({ port: 0, logStream: null })
     evidence.backend2Port = fake2.port
     // The nmp fake server predates intent 3. The proxy records the real
@@ -865,128 +872,68 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
-    // --- O21-O24: a followed transfer keeps the client's connection (#22) ---
+    // --- O21-O24: follow a transfer on the puppet leg ---
     // The transfer frame never reaches the attached client (that is the
-    // 2026-11-08 bypass). Instead of a kick, the client re-enters
-    // configuration on the connection it holds, receives the target's
-    // configuration, finishes, and lands in the target's play login and state.
+    // 2026-11-08 bypass). The puppet moves to the second fake backend, warms
+    // there, and the bot is detached with a clear reason; a fresh bot then
+    // attaches and sees the new server's state.
     const transferMark = b3.names.length
-    const logMark = logs.length
     const loginsBeforeTransfer = core.session.backendLogins
     const target = { host: '127.0.0.1', port: handshakeProxy.port }
     fake.sendTransfer(target.host, target.port)
     await waitFor(() => core.metrics.transfersFollowed === 1, 'transfer follow decided')
     await waitFor(() => fake2.received.logins === 1, 'puppet login on the target')
     await waitFor(
-      () => core.metrics.reconfigurationsCompleted === 1,
-      'the same connection lands on the target',
+      () => core.session.backendLogins === loginsBeforeTransfer + 1 && core.session.warmReady === true,
+      'target warm after the move',
       15_000
     )
-    await waitFor(
-      () => core.session.backendLogins === loginsBeforeTransfer + 1 &&
-        core.session.warmReady === true &&
-        core.session.state === 'attached',
-      'target warm under the kept connection',
-      15_000
-    )
-    // The bot records frames as they arrive; the target's play login is written
-    // at the move's commit, so wait for it before reading the frame list.
-    await bot3.waitFor(
-      () => b3.names.slice(transferMark).some(frame => frame.name === 'login'),
-      'the target play login on the kept connection'
-    )
+    await withTimeout(bot3.ended, 10_000, 'bot3 end after transfer')
 
-    const afterTransfer = b3.names.slice(transferMark).map(frame => ({ state: frame.state, name: frame.name }))
-    const afterNames = afterTransfer.map(frame => frame.name)
-    const targetConfigNames = afterTransfer
-      .filter(frame => frame.state === 'configuration')
-      .map(frame => frame.name)
-    // #22: the client's play-state configuration_acknowledged must be read in
-    // the play packet table. A client error here would mean the leg flipped
-    // its state before the ack arrived and misparsed it.
-    const moveLogs = logs.slice(logMark)
-    const frontClientErrors = moveLogs.filter(entry => entry.event === 'frontClientError')
-    const reconfigurationAcks = moveLogs.filter(entry => entry.event === 'frontReconfigurationAcknowledged')
-    evidence.transfer = {
-      target,
-      handshakeIntents: [...handshakeProxy.nextStates],
-      fake2Logins: fake2.received.logins,
-      backendLogins: core.session.backendLogins,
-      stayedConnected: b3.ended === null,
-      configuration: targetConfigNames,
-      reconfigurations: core.metrics.reconfigurationsCompleted
-    }
+    const afterTransfer = b3.names.slice(transferMark).map(frame => frame.name)
+    const kickText = JSON.stringify(b3.kick ?? '')
     check(
       'O21',
-      'a followed transfer never reaches the client and the client keeps its connection',
-      !afterNames.includes('transfer') &&
+      'a followed transfer never reaches the client and detaches it with a moving reason',
+      !afterTransfer.includes('transfer') &&
         core.metrics.transfersBlocked === 1 &&
         core.metrics.transfersFollowed === 1 &&
-        core.metrics.transfersSeamless === 1 &&
-        afterNames.includes('start_configuration') &&
-        b3.ended === null && b3.kick === null &&
-        frontClientErrors.length === 0 &&
-        reconfigurationAcks.length === 1 &&
-        reconfigurationAcks[0].fields?.flushedFrames > 0,
+        /moving/i.test(kickText),
       {
-        frames: afterNames.slice(0, 12),
+        frames: afterTransfer,
+        kick: kickText,
         ended: b3.ended,
-        kick: b3.kick,
         blocked: core.metrics.transfersBlocked,
-        followed: core.metrics.transfersFollowed,
-        seamless: core.metrics.transfersSeamless,
-        frontClientErrors: frontClientErrors.length,
-        reconfigurationAcks: reconfigurationAcks.map(entry => entry.fields)
+        followed: core.metrics.transfersFollowed
       }
     )
     check(
       'O22',
-      'the same connection goes through the target configuration and play login',
+      'the puppet follows the target and re-warms there',
       fake2.received.logins === 1 &&
         handshakeProxy.nextStates.includes(3) &&
-        core.metrics.reconfigurationsCompleted === 1 &&
-        core.metrics.reconfigurationsRestored === 0 &&
-        targetConfigNames.includes('registry_data') &&
-        targetConfigNames.includes('finish_configuration') &&
-        afterNames.includes('login') &&
         core.session.backendLogins === loginsBeforeTransfer + 1 &&
-        core.session.state === 'attached',
+        core.session.warmReady === true &&
+        core.session.state === 'warm',
       {
         loginsBeforeTransfer,
         fake2Logins: fake2.received.logins,
         handshakeIntents: handshakeProxy.nextStates,
         backendLogins: core.session.backendLogins,
-        configuration: targetConfigNames,
-        reconfigurationsCompleted: core.metrics.reconfigurationsCompleted,
-        frontPlayReady: core.frontPlayReady,
+        warmReady: core.session.warmReady,
         state: core.session.state
       }
     )
 
-    // Target-specific state, relayed live to the client that never left.
+    // Target-specific state, cached before the fresh client attaches.
     const TARGET_BLOCK = { x: 9, y: 0, z: 9 }
     fake2.sendBlockChange(TARGET_BLOCK)
-    await bot3.waitFor(
-      () => b3.blockChanges.some(change =>
-        change.location?.x === TARGET_BLOCK.x &&
-        change.location?.y === TARGET_BLOCK.y &&
-        change.location?.z === TARGET_BLOCK.z),
-      'the target block on the kept connection'
-    )
-    check(
-      'O23',
-      'the client that followed the move is in the target server state',
-      b3.login?.entityId === 42 &&
-        core.metrics.attaches === 3 &&
-        b3.leftovers.length === 0 &&
-        b3.errors.length === 0,
-      {
-        entityId: b3.login?.entityId ?? null,
-        attaches: core.metrics.attaches,
-        blocks: b3.blockChanges.map(change => change.location),
-        leftovers: b3.leftovers.length,
-        errors: b3.errors.length
-      }
+    await waitFor(
+      () => core.cache.snapshot().blocks.some(entry =>
+        entry.data?.location?.x === 9 &&
+        entry.data?.location?.y === 0 &&
+        entry.data?.location?.z === 9),
+      'target block cached'
     )
 
     // Cookies on the puppet leg: store_cookie is answered on the next request.
@@ -996,6 +943,26 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       () => fake2.received.cookieResponses.some(packet =>
         packet.key === 'session' && Buffer.from(packet.value ?? []).toString() === 'abc'),
       'cookie response on the puppet leg'
+    )
+
+    await waitFor(() => front.attached === null, 'front attach slot cleared after the kick')
+    bot4 = createBot({ port: evidence.frontPort, username: 'Attach' })
+    await bot4.ready()
+    const b4 = bot4.received
+    check(
+      'O23',
+      'a fresh attach after the move replays the target server state',
+      b4.login?.entityId === 42 &&
+        b4.blockChanges.some(change =>
+          change.location?.x === 9 && change.location?.y === 0 && change.location?.z === 9) &&
+        b4.leftovers.length === 0 &&
+        b4.errors.length === 0,
+      {
+        entityId: b4.login?.entityId ?? null,
+        blocks: b4.blockChanges.map(change => change.location),
+        leftovers: b4.leftovers.length,
+        errors: b4.errors.length
+      }
     )
     check(
       'O24',
@@ -1016,13 +983,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // front leg, so this asserts what a client received.
     const noticesBefore = core.metrics.noticesSent
     fake2.sendTransfer('', 0)
-    await bot3.waitFor(() => b3.advancements.length === 2, 'the notice toast and its removal')
-    const [toast, removal] = b3.advancements
+    await waitFor(() => b4.advancements.length === 2, 'the notice toast and its removal')
+    const [toast, removal] = b4.advancements
     const noticeKey = toast?.advancementMapping?.[0]?.key ?? null
     // The client held the notice after the add, complete and asking for a toast;
     // after the removal it holds nothing of ours.
     const completed = advancementComplete(applyAdvancementFrames([toast]).get(noticeKey))
-    const held = applyAdvancementFrames(b3.advancements)
+    const held = applyAdvancementFrames(b4.advancements)
     check(
       'O24b',
       'a proxy notice reaches the client complete as a toast and leaves no advancement behind',
@@ -1035,15 +1002,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         Array.isArray(removal?.identifiers) &&
         removal.identifiers.includes(noticeKey) &&
         held.size === 0 &&
-        b3.errors.length === 0,
+        b4.errors.length === 0,
       {
         notice: noticeKey,
-        frames: b3.advancements.length,
+        frames: b4.advancements.length,
         showToast: toast?.advancementMapping?.[0]?.value?.displayData?.flags?.show_toast ?? null,
         complete: completed,
         removed: removal?.identifiers ?? null,
         held: [...held.keys()],
-        errors: b3.errors.length
+        errors: b4.errors.length
       }
     )
 
@@ -1092,17 +1059,187 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
+    // --- O33-O35: the kept connection (#22), opt-in through
+    // `transfer.keepConnection` ---
+    // A second, independent puppet and front against the same fake backends,
+    // with the key on. The client follows the move on its own connection.
+    seamlessFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      offlineWhitelist,
+      getSnapshotConfig: () => seamlessCore?.cache.snapshot().config ?? [],
+      wireCheck: payload => wire.check(payload),
+      wireMode: 'throw',
+      chat: 'full',
+      log
+    })
+    seamlessBackend = createOfflineBackendLeg({
+      host: '127.0.0.1',
+      port: fake.port,
+      version: VERSION,
+      username: 'GlowSquidye',
+      dialogAction: 'last',
+      isHumanAttached: () => seamlessCore?.attached === true,
+      onDialogAnswered: ({ state }) => seamlessCore?.notePuppetDialogAnswer({ state }),
+      log
+    })
+    seamlessCore = createMonoplayer({
+      config: loadConfig({
+        ...config,
+        transfer: { ...config.transfer, keepConnection: true }
+      }),
+      backendLeg: seamlessBackend,
+      frontLeg: seamlessFront,
+      clock: {
+        now: Date.now,
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout
+      },
+      logStream: { write: line => log('seamlessCore', { line }) }
+    })
+    seamlessFront.setCoreAttachConfiguring(({ name, uuid }) => seamlessCore.attachConfiguringPlayer({ name, uuid }))
+    seamlessFront.setConfiguringHandler(({ name }) => seamlessCore.configuringReady({ name }))
+    seamlessFront.setClientSettingsHandler(settings => seamlessCore.noteClientSettings(settings))
+    seamlessFront.setCoreAttach(({ name, uuid }) =>
+      seamlessCore.attachPlayer({ name, uuid, includeConfig: false })
+    )
+    seamlessCore.start()
+    let seamlessReconnecting = false
+    seamlessCore.on('reconnect_due', async ({ delayMs, target: dueTarget } = {}) => {
+      if (stopping || seamlessReconnecting) return
+      seamlessReconnecting = true
+      seamlessCore.session.backendConnecting({ initial: false })
+      try {
+        seamlessBackend.setTarget(dueTarget ?? { host: '127.0.0.1', port: fake.port }, {
+          keepCookies: dueTarget !== undefined && dueTarget !== null,
+          transfer: dueTarget !== undefined && dueTarget !== null
+        })
+        await seamlessBackend.connect()
+      } catch (error) {
+        seamlessCore.session.fail()
+        log('seamlessBackendReconnectFailed', { error: String(error?.message ?? error).slice(0, 300) })
+      } finally {
+        seamlessReconnecting = false
+      }
+    })
+
+    await seamlessBackend.connect()
+    const seamlessReadiness = await waitForReady({ core: seamlessCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+    if (!seamlessReadiness.warm) throw new Error('the kept-connection rig did not warm')
+    const seamlessBound = await seamlessFront.listen()
+    bot5 = createBot({ port: seamlessBound.port ?? seamlessFront.port, username: 'Attach' })
+    await bot5.ready()
+    const b5 = bot5.received
+    if (seamlessCore.metrics.attaches !== 1) {
+      throw new Error(`the kept-connection rig attached ${seamlessCore.metrics.attaches} times, expected 1`)
+    }
+
+    const seamlessMark = b5.names.length
+    const seamlessLogMark = logs.length
+    fake.sendTransfer(target.host, target.port)
+    await waitFor(
+      () => seamlessCore.metrics.reconfigurationsCompleted === 1,
+      'the kept connection lands on the target',
+      20_000
+    )
+    await bot5.waitFor(
+      () => b5.names.slice(seamlessMark).some(frame => frame.name === 'login'),
+      'the target play login on the kept connection'
+    )
+    await waitFor(
+      () => seamlessCore.session.state === 'attached' && seamlessCore.session.warmReady === true,
+      'the kept connection warm on the target',
+      15_000
+    )
+
+    const seamlessFrames = b5.names.slice(seamlessMark).map(frame => ({ state: frame.state, name: frame.name }))
+    const seamlessNames = seamlessFrames.map(frame => frame.name)
+    const seamlessConfig = seamlessFrames.filter(frame => frame.state === 'configuration').map(frame => frame.name)
+    const seamlessLogs = logs.slice(seamlessLogMark)
+    const seamlessClientErrors = seamlessLogs.filter(entry => entry.event === 'frontClientError')
+    const seamlessAcks = seamlessLogs.filter(entry => entry.event === 'frontReconfigurationAcknowledged')
+    evidence.seamless = {
+      target,
+      reconfigurations: seamlessCore.metrics.reconfigurationsCompleted,
+      attaches: seamlessCore.metrics.attaches,
+      configuration: seamlessConfig.length,
+      frontClientErrors: seamlessClientErrors.length,
+      acknowledged: seamlessAcks.map(entry => entry.fields)
+    }
+    check(
+      'O33',
+      'with transfer.keepConnection on, a followed transfer keeps the client\'s connection',
+      !seamlessNames.includes('transfer') &&
+        seamlessCore.metrics.transfersSeamless === 1 &&
+        seamlessNames.includes('start_configuration') &&
+        b5.ended === null && b5.kick === null &&
+        seamlessClientErrors.length === 0 &&
+        seamlessAcks.length === 1 &&
+        seamlessAcks[0].fields?.flushedFrames > 0,
+      {
+        frames: seamlessNames.slice(0, 10),
+        ended: b5.ended,
+        kick: b5.kick,
+        seamless: seamlessCore.metrics.transfersSeamless,
+        frontClientErrors: seamlessClientErrors.length,
+        acks: seamlessAcks.map(entry => entry.fields)
+      }
+    )
+    check(
+      'O34',
+      'the kept connection carries the target configuration and its play login',
+      seamlessConfig.includes('registry_data') &&
+        seamlessConfig.includes('finish_configuration') &&
+        seamlessNames.includes('login') &&
+        seamlessCore.metrics.reconfigurationsCompleted === 1 &&
+        seamlessCore.metrics.reconfigurationsRestored === 0 &&
+        seamlessCore.session.state === 'attached',
+      {
+        configuration: seamlessConfig.length,
+        names: seamlessNames.slice(-6),
+        reconfigurations: seamlessCore.metrics.reconfigurationsCompleted,
+        state: seamlessCore.session.state
+      }
+    )
+    const SEAMLESS_BLOCK = { x: 11, y: 0, z: 11 }
+    fake2.sendBlockChange(SEAMLESS_BLOCK)
+    await bot5.waitFor(
+      () => b5.blockChanges.some(change =>
+        change.location?.x === SEAMLESS_BLOCK.x &&
+        change.location?.y === SEAMLESS_BLOCK.y &&
+        change.location?.z === SEAMLESS_BLOCK.z),
+      'the target block on the kept connection'
+    )
+    check(
+      'O35',
+      'the client on the kept connection is in the target state without rejoining',
+      b5.login?.entityId === 42 &&
+        seamlessCore.metrics.attaches === 1 &&
+        b5.leftovers.length === 0 &&
+        b5.errors.length === 0,
+      {
+        entityId: b5.login?.entityId ?? null,
+        attaches: seamlessCore.metrics.attaches,
+        blocks: b5.blockChanges.map(change => change.location),
+        leftovers: b5.leftovers.length,
+        errors: b5.errors.length
+      }
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot3, bot2, bot1, stranger]) {
+    for (const bot of [bot5, bot4, bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }
+    try { await seamlessFront?.close?.() } catch { /* best effort */ }
     try { await backend?.close?.() } catch { /* best effort */ }
+    try { await seamlessBackend?.close?.() } catch { /* best effort */ }
     try { fake?.close?.() } catch { /* best effort */ }
     try { handshakeProxy?.close?.() } catch { /* best effort */ }
     try { fake2?.close?.() } catch { /* best effort */ }
