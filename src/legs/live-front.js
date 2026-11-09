@@ -41,6 +41,13 @@
 //   6. the client's Client Information (`settings`) is reported to the core as
 //      it arrives, in configuration or play (#18). The core owns what the
 //      backend sees: the human's fields with the backend's view distance cap.
+//   7. #22: the core may ask the attached client to re-enter configuration on
+//      the same connection (`startReconfiguration`). The leg writes the
+//      play-state `start_configuration`, flips its own client to the
+//      configuration state (the serializer and deserializer are state-scoped),
+//      relays the core's configuration frames, and reports the client's
+//      `finish_configuration` back as `reconfigured` once the client is in
+//      play again. The client is never told to reconnect.
 //
 // Identity: the attaching client is whitelisted as itself (real hasJoined
 // profile online, vanilla offline UUID offline). The replayed play stream
@@ -348,6 +355,7 @@ function createFrontLeg ({
   let detachHandler = null // core detach
   let clientSettingsHandler = null // core client-information capture (#18)
   let configuringHandler = null // core call-in: the client entered configuration (#16)
+  let reconfiguredHandler = null // core call-in: the client re-entered play (#22)
   let errorHandler = null
   let attached = null // the one client through the pipeline (check pass or attached)
 
@@ -358,7 +366,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   function actualPort () {
@@ -600,8 +608,38 @@ function createFrontLeg ({
       const same = decoded.state === meta.state && decoded.byName[meta.name] !== undefined
       const data = same ? decoded.byName[meta.name] : {}
       decoded.byName[meta.name] = undefined
+      // #22: the client's own finish_configuration ends a reconfiguration it
+      // was asked to enter. The frame is still offered to the core, which
+      // drops it like every other front handshake frame; the state flip and
+      // the play-ready call-in happen after that.
+      const finishesReconfiguration = clients.get(client)?.reconfiguring === true &&
+        meta.state === 'configuration' && meta.name === 'finish_configuration'
       serverboundHandler?.({ state: meta.state, name: meta.name, buffer, data })
+      if (finishesReconfiguration) finishReconfiguration(client)
     })
+  }
+
+  // #22: the client answered the reconfiguration's finish frame, so it is in
+  // play again on the same connection. Flip the leg's own state back and tell
+  // the core, which replays the target's play login and join state.
+  function finishReconfiguration (client) {
+    const ctx = clients.get(client)
+    if (!ctx?.reconfiguring) return { reconfigured: false }
+    ctx.reconfiguring = false
+    try {
+      client.state = 'play'
+    } catch (error) {
+      log('frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { reconfigured: false }
+    }
+    metrics.reconfigured++
+    log('frontReconfigured', { username: client.username ?? null, uuid: client.uuid ?? null })
+    try {
+      reconfiguredHandler?.({ name: client.username ?? null, uuid: client.uuid ?? null })
+    } catch (error) {
+      log('reconfiguredHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    return { reconfigured: true }
   }
 
   function wireClient (client) {
@@ -609,6 +647,16 @@ function createFrontLeg ({
     // playerJoin: a client that attaches during the puppet's configuration has
     // configuration answers to send before it ever reaches play.
     wireServerbound(client)
+    // #22: the library's keep-alive plugin starts a new interval on every
+    // 'play' state transition and holds only the newest handle, so a
+    // same-connection reconfiguration would leak one interval per move. One
+    // interval per connection is all this leg needs: it keeps running through
+    // the configuration phase (where keep_alive exists too), and the library
+    // clears it on 'end'. Drop the listener after the first play transition.
+    client.on('state', state => {
+      if (state !== 'play') return
+      client.removeAllListeners('state')
+    })
     // Detach bookkeeping from connection time: an attached client that ends
     // clears the slot and notifies the core; a pre-attach client (denied or
     // failed during configuration) just clears its claim.
@@ -644,6 +692,39 @@ function createFrontLeg ({
     })
   }
 
+  // #22: ask the attached client to re-enter configuration on the connection
+  // it already holds. The proxy writes its own start_configuration (the backend
+  // frame of the same name never crosses: it would move the human as their own
+  // account), then flips the leg's client state so the target's configuration
+  // frames serialize and parse in that state.
+  function startReconfiguration ({ reason = 'transfer' } = {}) {
+    if (!attached) return { started: false, reason: 'no_client' }
+    if (attached.state !== 'play') {
+      log('frontReconfigureRefused', { reason: 'client_not_in_play', state: attached.state })
+      return { started: false, reason: 'client_not_in_play', state: attached.state }
+    }
+    try {
+      attached.write('start_configuration', {})
+    } catch (error) {
+      log('frontReconfigureWriteFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { started: false, reason: 'write_failed' }
+    }
+    // Flip before the client's configuration_acknowledged can arrive: the
+    // packet ids are state-scoped, so an answer read in the play table is a
+    // parse error.
+    try {
+      attached.state = 'configuration'
+    } catch (error) {
+      log('frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { started: false, reason: 'state_failed' }
+    }
+    const ctx = clients.get(attached)
+    if (ctx) ctx.reconfiguring = true
+    metrics.reconfigurations++
+    log('frontReconfiguration', { reason, username: attached.username ?? null })
+    return { started: true, reason }
+  }
+
   return {
     kind,
     listen,
@@ -655,6 +736,8 @@ function createFrontLeg ({
     setErrorHandler (fn) { errorHandler = fn },
     setClientSettingsHandler (fn) { clientSettingsHandler = fn },
     setConfiguringHandler (fn) { configuringHandler = fn },
+    setReconfiguredHandler (fn) { reconfiguredHandler = fn },
+    startReconfiguration,
     setCoreAttach,
     setCoreAttachConfiguring,
     write (name, packet) {

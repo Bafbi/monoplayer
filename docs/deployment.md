@@ -168,9 +168,10 @@ See `docs/telemetry.md` for the signals and the journal layout.
 - **The front client is never told to connect elsewhere.** Clientbound
   `transfer`, `start_configuration`, cookies, dialogs, and kicks are blocked by
   `clientbound-policy.js`, and the cache never holds them, so a later attach
-  cannot replay one. A play-state transfer is followed on the **puppet** leg:
-  the puppet reconnects to the target, the front client is detached with a
-  reconnect reason, and it rejoins the proxy after the target is warm. See
-  `docs/product-core.md`.
+  cannot replay one. A play-state transfer is followed on the **puppet** leg,
+  and the front serves the move on the client's own connection: the client
+  re-enters configuration with the target's frames, finishes, and lands in the
+  target's play state without a rejoin. A failed target restores the
+  pre-transfer snapshot on that same connection. See `docs/product-core.md`.
 - **The journal lives on the custody volume.** 128 MiB per file, one rotation,
   at most 256 MiB of the 1 GiB claim.

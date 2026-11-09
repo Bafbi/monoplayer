@@ -330,6 +330,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // the client enters its own configuration phase.
   front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
   front.setConfiguringHandler(({ name }) => core.configuringReady({ name }))
+  // #22: the reconfiguration call-in is wired by the core's start(), which owns
+  // the front-leg handler set; the front leg reports the client's return to
+  // play there.
   // #18: the human's client information is the source of the fields the
   // server sees; the core merges it with the backend's view distance cap.
   front.setClientSettingsHandler(settings => core.noteClientSettings(settings))

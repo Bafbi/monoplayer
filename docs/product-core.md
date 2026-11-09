@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 532 tests (`mise run test`), and `mise run check` also runs the
-31-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 746 tests (`mise run test`), and `mise run check` also runs the
+35-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -33,7 +33,8 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 | `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
 | `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + the chat frames whose text is spoken as the puppet), pose capture (backend teleport authoritative over client movement) | pure |
 | `src/core/clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
-| `src/core/session.js` | `boot → warm → attached ⇄ detached`, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
+| `src/core/session.js` | `boot → warm → attached ⇄ detached`, `transferring` for a client that follows a move, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
+| `src/core/transfer.js` | The pre-transfer snapshot and the move's commit/rollback, on top of the session's `transferring` state and the cache's `restore` | pure |
 | `src/observability/redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
 | `src/legs/fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
 | `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
@@ -52,6 +53,10 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
   abilities/experience/held_item_slot/game_state_change/entity_event/
   advancements — newest wins), `generic` (anything else state-bearing, FIFO,
   max 512).
+- `snapshot()` carries the warm flag and the capture sequence, and `restore(snapshot)`
+  puts a snapshot back entry-for-entry (#22). A restore that lost the warm flag
+  would file every new frame into the join prefix, and one that renumbered the
+  entries would reorder the entity/generic merge join-synth builds.
 - Not cacheable (from `clientbound-policy.js`): per-leg mechanics
   (`keep_alive`, `position`, `ping`, bundle delimiters), live-only chat and
   per-request answers (`system_chat`, `profileless_chat`, `ping_response`,
@@ -138,14 +143,18 @@ attached: the front leg would drop the writes, so the call logs
 `proxyNoticeUndelivered` and returns `sent: false` rather than claiming a
 delivery nobody saw. A refusal that arrives while the client is still finishing
 its configuration is dropped and logged as `transferNoticeSkipped`, because a
-play frame cannot reach that client. Queueing a notice for the next attach
-belongs to the transfer work in #22.
+play frame cannot reach that client.
 
-`start_configuration` cannot be served to the front client on its connection.
-The core blocks it, ends the puppet leg on purpose, and lets the normal
-backend-down path reset the cache, detach the client with
-`The server reconfigured this session. Reconnect in a few seconds.`, and
-reconnect.
+The failed-target notice (#22) waits for the client instead: when the client
+followed a move into configuration, the notice goes out after the restored
+snapshot puts it back in play, so the toast lands on a client that can read it.
+
+`start_configuration` from the backend never crosses: relaying it would hand the
+client a connection-control frame it must not act on by itself. The core
+consumes it and serves the phase on the client's own connection instead (#22):
+the front leg writes its own `start_configuration`, relays the restarted
+configuration frames, relays the `finish_configuration`, and the client's
+answer returns it to play. The same path serves a followed transfer's target.
 
 ### Control dialogs (#16)
 
@@ -205,11 +214,11 @@ leg. The frame still never reaches the front. The sequence:
 1. Validate the target (`host` string, port 1-65535). Refuse with a local
    notice on an invalid target, a repeated target, or a chain deeper than
    `chainLimit` (default 8).
-2. Tear down synchronously: reset the cache, detach the front client with
-   `This session is moving. Reconnect in a few seconds to continue.`, schedule
-   one reconnect with the target, then end the old backend leg. The teardown
-   does not depend on the socket's end event; a missed event would strand the
-   front on a dead cache.
+2. Tear down synchronously: reset the cache, schedule one reconnect with the
+   target, then end the old backend leg. The teardown does not depend on the
+   socket's end event; a missed event would strand the front on a dead cache.
+   With a client attached, the client keeps its connection: the session enters
+   `transferring` and the front is not kicked.
 3. The orchestrator dials the target with the same Microsoft account. The
    handshake uses **intent 3 (TRANSFER)**, not 2 (LOGIN). minecraft-protocol
    hardcodes 2, so the backend leg wraps the handshake writer. A
@@ -221,9 +230,22 @@ leg. The frame still never reaches the front. The sequence:
    The cache resets, the new configuration and join prefix arrive, and the
    warm fallback pins it after 5 s if the backend never sends the batch
    marker.
-4. The user rejoins the proxy after warm. The replay is the new server's
-   state: position, inventory, and chat are the new server's, and chat history
-   is never replayed.
+4. The client follows on the connection it holds. The target's first
+   configuration frame starts a same-connection reconfiguration: the front leg
+   writes `start_configuration`, relays the target's configuration frames and
+   its `finish_configuration`, and the client's `finish_configuration` answer
+   returns it to play. The target's play login and join state follow on the same
+   socket, so the client sees a reconfiguration loading screen and lands in the
+   new server's state. Position, inventory, and chat are the new server's; chat
+   history is never replayed.
+5. If the target fails, the client is restored from the pre-transfer snapshot
+   instead of being detached. A target that never sent a configuration frame
+   leaves the client in the previous server's state untouched. A target that
+   died mid-reconfiguration completes the aborted round from the snapshot: the
+   previous configuration frames, the finish, then the previous join state. The
+   proxy notice `The new server could not be reached. You are still on the
+   previous server.` explains it, and one reconnect returns the puppet to the
+   configured backend.
 
 A followed target that cannot connect is retried 3 times. Then the controller
 reverts to the configured base backend and the puppet is never left offline.
@@ -243,14 +265,38 @@ The loopback proves the intent on the wire with
 3, so the proxy records the real intent and rewrites it to 2 for the fake
 target.
 
-**Seamless switch (next slice).** The attached client is still detached on a
-follow and must rejoin. The hub and sky-2 differ in `dimension_type` (4 vs 9
-entries) and `timeline` (4 vs 5), so a `respawn` alone would leave the client
-without the target's dimensions. The client needs a mid-play reconfiguration
-on the same connection: `start_configuration`, replay the target's
-configuration frames, `finish_configuration`, then the target's play login and
-join state, with the pre-transfer snapshot as the fallback if the target
-fails. That keeps the connection alive through the loading screen.
+**Seamless switch (#22).** The hub and sky-2 differ in `dimension_type`
+(4 vs 9 entries) and `timeline` (4 vs 5), so a `respawn` alone would leave the
+client without the target's dimensions. The same-connection reconfiguration
+above replaces the registries, which is why it is a full configuration phase
+and not a synthetic respawn.
+
+The reconfiguration is composed of four pieces:
+
+- `session.transferStart` / `transferComplete` / `transferFailed`: the
+  `transferring` state keeps the client attached, arms one reconnect with
+  `backendDown({ retainFront: true })`, and lands back in `attached` at the
+  target's play login or on the restored snapshot. A retained client never
+  trips the retry budget: the transfer-follow controller owns the give-up.
+- `state-cache.restore(snapshot)`: the pre-transfer state, entry order and
+  capture sequence intact.
+- `src/core/transfer.js`: the snapshot's owner. It is taken before the cache
+  reset that starts the move, committed when the target's play login lands, and
+  restored when the target fails.
+- The front leg's `startReconfiguration()`: writes the proxy's own
+  `start_configuration`, flips the leg's client to the configuration state (the
+  serializer and deserializer are state-scoped, so inbound frames parse in the
+  state the client is in), and reports the client's `finish_configuration` back
+  as `reconfigured`.
+
+Limits of this path: the client is only asked to reconfigure once the target
+has sent its first configuration frame, so a target that never answers costs
+no loading screen. A front leg without `startReconfiguration` (only a hand-built
+harness) degrades to a state replay at the target's login, which rebuilds the
+world without a configuration phase. The puppet's own connection keeps one
+keep-alive interval per connection: the front leg drops the library's state
+listener after the first play transition so a reconfiguration cannot start a
+second one.
 
 ### Chat and commands (`config.chat`)
 
@@ -300,6 +346,10 @@ never replayed.
 
 ### Session invariants (`session.js`)
 
+- A retained transfer (`transferring`) keeps `detachCount` unchanged: the
+  client is not detached for a move it can follow. `retainFront` on
+  `backendDown` arms the reconnect without leaving the state, and a failed dial
+  under a retained client retries instead of failing closed.
 - `backendLogins` increments **only** on real backend `login` frames. An
   attach/detach cycle alone leaves it untouched (tested: stays 1 across
   warm → attach → detach → reattach).

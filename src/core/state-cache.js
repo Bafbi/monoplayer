@@ -135,7 +135,8 @@ export function createStateCache (overrides = {}) {
     overflows: { prefix: 0, config: 0, chunk: 0, block: 0, entity: 0, generic: 0 },
     evictions: { inventory: 0, latest: 0 },
     warmComplete: 0,
-    warmFallback: 0
+    warmFallback: 0,
+    restores: 0
   }
 
   let warm = false
@@ -328,8 +329,15 @@ export function createStateCache (overrides = {}) {
     return frames
   }
 
+  // The whole cache as one value. `warm` and `frameSeq` travel with it so
+  // restore() can put the cache back exactly as it was: a restored cache that
+  // lost the warm flag would file every new frame into the join prefix, and a
+  // reset sequence number would reorder the entity/generic merge that
+  // join-synth builds on capture order.
   function snapshot () {
     return {
+      warm: warm,
+      frameSeq: frameSeq,
       config: [...config],
       prefix: [...prefix],
       chunks: [...chunks.values()],
@@ -374,6 +382,63 @@ export function createStateCache (overrides = {}) {
     return opts.maxChunks
   }
 
+  // The inverse of snapshot() (#22): put a captured cache back, entry order
+  // and sequence numbers intact. It clears first, so a failed snapshot cannot
+  // leave part of the previous session behind. Bounds are not re-applied: the
+  // snapshot came from this cache, so it already fits.
+  function restore (snapshot) {
+    if (snapshot === null || typeof snapshot !== 'object') {
+      throw new TypeError('restore requires a snapshot from snapshot()')
+    }
+    for (const key of ['config', 'prefix', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic']) {
+      if (!Array.isArray(snapshot[key])) throw new TypeError(`snapshot.${key} must be an array`)
+    }
+
+    reset()
+
+    let maxSeq = 0
+    const restored = []
+    function keep (entry) {
+      restored.push(entry)
+      if (Number.isFinite(entry?.seq) && entry.seq > maxSeq) maxSeq = entry.seq
+      return entry
+    }
+
+    for (const entry of snapshot.config) config.push(keep(entry))
+    for (const entry of snapshot.prefix) prefix.push(keep(entry))
+    for (const entry of snapshot.chunks) {
+      keep(entry)
+      const key = chunkKey(entry.data)
+      if (chunks.has(key)) chunks.delete(key) // refresh insertion order
+      chunks.set(key, entry)
+    }
+    for (const entry of snapshot.blocks) rings.block.push(keep(entry))
+    for (const entry of snapshot.entities) rings.entity.push(keep(entry))
+    for (const entry of snapshot.inventories) {
+      keep(entry)
+      const windowId = entry.windowId ?? entry.data?.windowId ?? 'main'
+      if (entry.name === 'window_items') {
+        inventoryBase.set(windowId, entry)
+      } else {
+        inventorySlots.set(`${windowId}:${entry.data?.slot ?? 'cursor'}`, entry)
+      }
+    }
+    for (const entry of snapshot.latest) {
+      keep(entry)
+      latest.set(entry.name, entry)
+    }
+    for (const entry of snapshot.generic) rings.generic.push(keep(entry))
+
+    // A snapshot taken before warm restores as unwarm, so the join prefix
+    // stays pinned exactly where it was.
+    warm = snapshot.warm !== false
+    frameSeq = Number.isFinite(snapshot.frameSeq) && snapshot.frameSeq > maxSeq
+      ? snapshot.frameSeq
+      : maxSeq
+    metrics.restores++
+    return { restored: true, warm, frames: restored.length }
+  }
+
   function reset () {
     prefix.length = 0
     config.length = 0
@@ -388,7 +453,7 @@ export function createStateCache (overrides = {}) {
     frameSeq = 0
   }
 
-  return { push, snapshot, stats, reset, forceWarm, raiseChunkBound, get warm () { return warm } }
+  return { push, snapshot, restore, stats, reset, forceWarm, raiseChunkBound, get warm () { return warm } }
 }
 
 // Joined convenience: warm completion + unload handling already hold through a
