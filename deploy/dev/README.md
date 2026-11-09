@@ -23,10 +23,10 @@ gets its own account rather than borrowing the live one.
 | `monoplayer-dev-custody` | the dev account only, `ReadWriteOnce`, one replica |
 | `monoplayer-dev-config` | the attach whitelist: who may control the dev proxy |
 
-Nothing here runs in the live namespace, `monoplayer`, and nothing here is in
-Argo CD. `AGENTS.md` states the rule that keeps it that way: no agent takes the
-live lane down, scales it, or patches it for a test. `docs/testing-ladder.md`
-says which lane each run belongs on.
+Nothing here runs in the live namespace, `monoplayer`. Nothing here is in Argo
+CD. `AGENTS.md` states the rule that keeps it that way: no agent takes the live
+lane down, scales it, or patches it for a test. `docs/testing-ladder.md` says
+which lane each run belongs on.
 
 ## The first run
 
@@ -54,7 +54,7 @@ the lane up.
 
    The code expires in 15 minutes. An expired code is not a failure of the lane:
    run `mise run dev:custody` again for a new one. The command exits when
-   Microsoft answers and prints `uuid`, `name`, and `alias`;
+   Microsoft answers and prints `uuid`, `name`, and `alias`.
    `.reports/dev-custody.json` holds the same three fields. The device code is
    never written to a file, so a closed terminal is a new code, not a lost one.
 
@@ -125,7 +125,7 @@ The proxy holds the claim, so the handle pod cannot. Stop the lane first, then
 bootstrap:
 
 ```bash
-mise run dev:down          # the proxy releases the claim; the account would survive
+mise run dev:down          # the proxy releases the claim. The account would survive
 mise run dev:custody:up
 mise run dev:custody
 mise run dev:custody:down
@@ -148,7 +148,7 @@ A volume that holds an account whose chain is dead is a different case.
 volume holds no refresh token, `needs_reauthentication` when Microsoft wants the
 account signed in again, and `refresh_failed` when the chain was consumed or
 revoked. Recovery is the same sequence, and it ends in a new approval. Never copy
-an account directory in from another machine; a stale copy cannot refresh, and a
+an account directory in from another machine. A stale copy cannot refresh, and a
 fresh one is a second writer.
 
 ## Run the branch under test

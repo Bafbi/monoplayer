@@ -63,10 +63,14 @@ test('AGENTS.md carries the rule, because that is what an agent reads', () => {
   assert.match(lanes, /No automated join runs against Excalia/,
     'no run joins the live servers on its own')
 
-  // The two runs that break the rule for you, and the way back.
+  // The commands that break the rule for you, and the way back.
   assert.match(lanes, /mise run testbed:up/, 'the run that scales the live deployment is named')
   assert.match(lanes, /mise run testbed:run/, 'and its one-shot form')
+  assert.match(lanes, /online-cluster\.sh --rotate/, 'and the flag that writes the live chain')
   assert.match(lanes, /mise run testbed:down/, 'restoring an interrupted testbed run is allowed')
+  // switch.js restores the Argo policy only from the run's state file.
+  assert.match(lanes, /state file/, 'the way back says what it can restore')
+  assert.match(lanes, /survives/, 'and that the Argo policy depends on the state file')
 
   // What to run instead.
   assert.match(lanes, /mise run dev:up/, 'the dev lane is the answer for a real Paper and a real proxy')
@@ -95,12 +99,23 @@ test('the ladder maps every run to the lane it belongs on', () => {
   // cluster, so it belongs beside the gate, not beside the dev lane.
   assert.match(row(lanes, 'mise run parity:run'), /this machine/, 'the parity rung runs here, against a fake backend')
 
-  // The two that still touch the live deployment, each with its cost.
+  // The rows that can change what the live lane serves, each with its cost.
   assert.match(row(lanes, 'mise run testbed:run'), /offline/,
     'the testbed row says the live front goes offline for the run')
-  assert.match(row(lanes, 'mise run online`'), /live account/,
-    'the bare online row says whose custody it holds')
-  assert.match(lanes, /no agent/i, 'the section says an agent runs neither')
+  const bare = row(lanes, 'mise run online`')
+  assert.match(bare, /token chain/, 'the bare online row says whose chain it holds')
+  assert.match(bare, /online:cluster/, 'and points at the form that leaves the deployment serving')
+  assert.match(lanes, /agent never runs/, 'the section says which runs an agent does not make')
+
+  // The observer restarts the gate Paper and runs its joins from pods in the
+  // live namespace, so one namespace in that cell would name half the run.
+  const observer = row(lanes, 'mise run observer:run')
+  assert.match(observer, /monoplayer-gate-b/, 'the observer row names the gate namespace')
+  assert.match(observer, /in `monoplayer`/, 'and the live namespace its pods run in')
+
+  // G0 joins the gate Paper directly. Velocity fronts paper-m4, a different one.
+  assert.doesNotMatch(row(lanes, 'mise run driver:scenario'), /Velocity/i,
+    'the driver row does not name a Velocity that G0 does not go through')
 })
 
 test('the dev runbook takes a reader from an empty volume to a joined bot', () => {
@@ -132,6 +147,9 @@ test('the runbook recovers a dev volume that holds no account', () => {
   assert.notEqual(handle, -1, 'the recovery creates the handle pod')
   assert.ok(handle > stop, 'the proxy is stopped first: it holds the volume dev:custody needs')
   assert.match(recovery, /dev:custody:down/, 'the handle pod hands the volume back')
+  // The proxy declares two init containers, so this is the status kubectl shows.
+  assert.match(recovery, /Init:0\/2/, 'the symptom is the status kubectl prints')
+  assert.match(recovery, /terminating/, 'a pod still terminating keeps the claim')
   // The reasons the refresh actually reports (src/custody/msa.js).
   assert.match(recovery, /needs_bootstrap/, 'the missing-token reason is named')
   assert.match(recovery, /refresh_failed/, 'the consumed-chain reason is named')

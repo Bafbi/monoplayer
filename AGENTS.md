@@ -6,18 +6,18 @@ Three cluster lanes, and two rules that outrank a test.
 
 | Lane | Namespace | What runs there | Who changes it |
 |---|---|---|---|
-| live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the GlowSquidye account, backend `play2.excalia.fr` | a human, by merging to `main` |
+| live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the puppet account GlowSquidye, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
 | gate Paper | `monoplayer-gate-b` | the Paper that the observer, the online rung, the driver lane, and the transfer testbed run against | anyone; it is disposable |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
-That covers `kubectl -n monoplayer scale`, `patch`, `delete`, `rollout restart`,
-and `set image`. It also covers the three ways it happens for you:
+That covers `kubectl -n monoplayer scale`, `patch`, `delete a workload`,
+`rollout restart`, and `set image`. Three commands break the rule for you:
 `mise run testbed:up` and `mise run testbed:run` scale the live deployment to
 zero and disable Argo auto-sync, and `scripts/online-cluster.sh --rotate` writes
 the refreshed token chain into the live custody and asks you to restart the
 deployment. An interrupted testbed run leaves the live front offline, so
-`mise run testbed:down` stays available. It restores the deployment, and it
+`mise run testbed:down` is the way back. It restores the deployment, and it
 restores the Argo sync policy only while the run's state file at
 `/tmp/opencode/monoplayer-testbed.json` survives. `node src/testbed/switch.js
 status` reports both.
@@ -26,7 +26,10 @@ status` reports both.
 `play2.excalia.fr` are the live servers, and no run in this repo joins them on
 its own. Point every run at a server this repo deploys: the dev Paper, the gate
 Paper, or the transfer testbed. `mise run online` takes its backend from
-`MONOPLAYER_BACKEND_HOST`, so name one of those there, never the live host.
+`MONOPLAYER_BACKEND_HOST`, so name one of those there, never the live host. That
+rung reads this machine's copy of the account chain, so a refresh there can
+invalidate the copy the deployment holds. `mise run online:cluster` is the form
+that leaves the deployment serving.
 
 | The test needs | Run |
 |---|---|

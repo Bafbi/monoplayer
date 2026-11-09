@@ -293,7 +293,7 @@ The validation lane in namespace `monoplayer-dev`: its own Paper, its own proxy,
 _Avoid_: staging, sandbox, dev environment
 
 **Gate Paper**:
-The disposable Paper in namespace `monoplayer-gate-b` that the observer, the online rung, the driver lane, and the transfer testbed run against.
+The disposable Papers in namespace `monoplayer-gate-b` that the observer, the online rung, the driver lane, and the transfer testbed run against.
 _Avoid_: test server, gate-b backend
 
 **Protocol spike**:
