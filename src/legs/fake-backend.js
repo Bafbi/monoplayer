@@ -237,6 +237,61 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     log('sendPosition', { pos, teleportId: teleportSeq })
   }
 
+  // Spawn an entity at an absolute pose. `entityId` must not be the player's
+  // 42. Position deltas only mean something after a frame like this one.
+  function sendSpawnEntity ({ entityId = 99, x = 0, y = 64, z = 0, yaw = 0, pitch = 0 } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('spawn_entity', {
+        entityId,
+        objectUUID: '00000000-0000-0000-0000-000000000063',
+        type: 1,
+        x,
+        y,
+        z,
+        velocity: { x: 0, y: 0, z: 0 },
+        pitch,
+        yaw,
+        headPitch: 0,
+        objectData: 0
+      })
+    }
+    log('sendSpawnEntity', { entityId, x, y, z })
+  }
+
+  // Move an entity by a relative amount. The wire carries i16 in 1/4096 block,
+  // so a whole block is 4096.
+  function sendRelEntityMove ({ entityId = 99, dx = 0, dy = 0, dz = 0 } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('rel_entity_move', {
+        entityId,
+        dX: Math.round(dx * 4096),
+        dY: Math.round(dy * 4096),
+        dZ: Math.round(dz * 4096),
+        onGround: true
+      })
+    }
+    log('sendRelEntityMove', { entityId, dx, dy, dz })
+  }
+
+  // Correct an entity to an absolute position.
+  function sendSyncEntityPosition ({ entityId = 99, x = 0, y = 64, z = 0, yaw = 0, pitch = 0 } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('sync_entity_position', {
+        entityId,
+        x,
+        y,
+        z,
+        dx: 0,
+        dy: 0,
+        dz: 0,
+        yaw,
+        pitch,
+        onGround: true
+      })
+    }
+    log('sendSyncEntityPosition', { entityId, x, y, z })
+  }
+
   // Send a full inventory window frame to every connected client. `items`
   // uses the 26.1 Slot shape (see emptySlot/itemStack).
   function sendWindowItems ({ windowId = 0, stateId = 0, items } = {}) {
@@ -320,5 +375,23 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     try { server.socketServer.close() } catch {}
   }
 
-  return { server, port: boundPort, received, join, sendBlockChange, sendPosition, sendWindowItems, sendSetSlot, sendPlayerChat, sendSystemChat, sendTransfer, sendStoreCookie, sendCookieRequest, close }
+  return {
+    server,
+    port: boundPort,
+    received,
+    join,
+    sendBlockChange,
+    sendPosition,
+    sendSpawnEntity,
+    sendRelEntityMove,
+    sendSyncEntityPosition,
+    sendWindowItems,
+    sendSetSlot,
+    sendPlayerChat,
+    sendSystemChat,
+    sendTransfer,
+    sendStoreCookie,
+    sendCookieRequest,
+    close
+  }
 }

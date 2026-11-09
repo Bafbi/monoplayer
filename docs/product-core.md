@@ -68,7 +68,17 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
    tail — with a fresh, proxy-owned teleportId (IDs are consumed only when a
    position is actually sent)
 4. warm domains in snapshot order (chunks → blocks → entities → inventories →
-   latest → generic)
+   latest → generic), except that the relative-move frames replay with
+   `entities` in capture order
+
+The merge is the one exception to the fixed order. The cache routes an entity's
+absolute position frames to `entity` and its relative-move deltas to `generic`,
+and a delta only means something after the frame that preceded it, so those
+frames replay as one stream ordered by the capture sequence every entry carries
+(`join-synth.replayFrames`). The rest of `generic` keeps its place, so a
+`close_window` still replays after the `window_items` it closes.
+`state-parity.snapshotFrames` calls the same function, so the expectation cannot
+drift from the replay.
 
 Replayed keep-alives, positions, chat frames, pings, and blocked
 connection-control frames are structurally impossible; the synth double-checks
@@ -304,10 +314,14 @@ above (real Paper, online-mode, official client) stays the acceptance record.
 - `entity` domain is an ordered ring, not per-entity latest-wins: stale high
   volume evicts real state under entity pressure. If re-attach tests show
   stale mobs, promote to per-entityId latest with a ring of entityIds.
-- The relative-move frames replay from `generic`, after every `entity` frame, so
-  a delta captured before the last absolute position applies on top of it. The
-  fix is a capture-order merge of the two rings, tracked as
-  [issue #35](https://github.com/Bafbi/monoplayer/issues/35).
+- Only the relative-move frames leave `generic`'s place in the replay. Chunks
+  and blocks still replay before it, and `latest` and `inventories` keep their
+  latest-wins and base-then-slots rules, so their `seq` is a recency stamp rather
+  than a place in the stream. Merging those by sequence would put a chunk after
+  the `block_change` frames that need it.
+- `vehicle_move` carries an absolute pose but is neither decoded by the parity
+  model nor merged into entity state, so a replayed vehicle can sit one frame
+  stale. It is absolute, so the error does not accumulate.
 - Chunk unload during the join prefix is replayed as captured (no-op then
   reload); an unload of a post-warm chunk removes the cached chunk.
 - `identity.js` session verification passes through when no verifier is injected — safe for
