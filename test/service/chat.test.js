@@ -1,6 +1,7 @@
-// B1 target: read-only chat. Clientbound chat reaches the attached client
-// live; the client's own chat never reaches the backend. History is never
-// cached or replayed.
+// B1 target: clientbound chat relay. Clientbound chat reaches the attached
+// client live and is never cached or replayed. The human's own text is spoken
+// as the puppet rather than forwarded, which test/service/chat-send.test.js
+// pins (#19).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
@@ -164,7 +165,7 @@ test('chat off drops clientbound chat as before', () => {
 })
 
 test('the chat mode is validated', () => {
-  assert.equal(loadConfig().chat, 'read-only')
+  assert.equal(loadConfig().chat, 'full')
   assert.equal(loadConfig({ chat: 'off' }).chat, 'off')
   assert.throws(() => loadConfig({ chat: 'write' }), /config\.chat/)
 })

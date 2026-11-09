@@ -42,7 +42,6 @@ test('connection-control frames are blocked, uncached, and unreplayable', () => 
     ['play', 'store_cookie'],
     ['play', 'show_dialog'],
     ['play', 'clear_dialog'],
-    ['play', 'player_chat'],
     ['play', 'hide_message'],
     ['configuration', 'transfer'],
     ['configuration', 'disconnect'],
@@ -63,11 +62,12 @@ test('connection-control frames are blocked, uncached, and unreplayable', () => 
 })
 
 test('live-only frames relay but never cache or replay', () => {
-  for (const name of ['system_chat', 'profileless_chat', 'ping_response', 'nbt_query_response']) {
+  for (const name of ['system_chat', 'profileless_chat', 'player_chat', 'ping_response', 'nbt_query_response']) {
     const policy = clientboundPolicy('play', name)
     assert.equal(policy.decision, DECISION.LIVE_ONLY, name)
     assert.equal(policy.relay, true, name)
     assert.equal(policy.cache, false, name)
+    assert.equal(mayCrossToFront('play', name), true, `${name} cross`)
     assert.equal(policy.replay, false, name)
   }
 })

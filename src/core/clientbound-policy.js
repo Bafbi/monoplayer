@@ -32,9 +32,8 @@ export const DECISION = Object.freeze({
   BLOCK: 'block'
 })
 
-// Never relayed to the front client. `player_chat` and `hide_message` carry
-// the puppet connection's message index; the read-only chat path relays only
-// system/profileless chat.
+// Never relayed to the front client. `hide_message` carries the puppet
+// connection's message index, so relaying it would hide the wrong message.
 export const PLAY_BLOCK = new Set([
   'transfer',
   'start_configuration',
@@ -43,15 +42,17 @@ export const PLAY_BLOCK = new Set([
   'store_cookie',
   'show_dialog',
   'clear_dialog',
-  'player_chat',
   'hide_message'
 ])
 
-// Relayed live, never cached: chat that carries no signature state, and
-// answers to a request the *front* client made.
+// Relayed live, never cached: chat, and answers to a request the *front*
+// client made. `player_chat` is the server's signed chat; the core relays it
+// only in the `full` chat mode (#19), because the human's client sees another
+// connection's per-sender message chain.
 export const PLAY_LIVE_ONLY = new Set([
   'system_chat',
   'profileless_chat',
+  'player_chat',
   'ping_response',
   'nbt_query_response'
 ])

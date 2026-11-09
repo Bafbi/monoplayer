@@ -31,7 +31,7 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 | `src/core/state-cache.js` | Bounded state cache: join prefix + configuration replay prefix + per-domain warm state | pure |
 | `src/core/join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
 | `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
-| `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + chat, which stays read-only), pose capture (backend teleport authoritative over client movement) | pure |
+| `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + the chat frames whose text is spoken as the puppet), pose capture (backend teleport authoritative over client movement) | pure |
 | `src/core/clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
 | `src/core/session.js` | `boot → warm → attached ⇄ detached`, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
 | `src/observability/redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
@@ -181,26 +181,42 @@ configuration frames, `finish_configuration`, then the target's play login and
 join state, with the pre-transfer snapshot as the fallback if the target
 fails. That keeps the connection alive through the loading screen.
 
-### Read-only chat (`config.chat`)
+### Chat and commands (`config.chat`)
 
-`chat: 'read-only'` (the default) relays clientbound `system_chat` and
-`profileless_chat` to the attached client while it is attached. Neither frame
-is cached, so an attach shows only chat that arrives after it; history from
-the puppet's connection is never replayed.
+Three modes. `full` is the default since #19; `read-only` and `off` keep the
+earlier behaviour.
+
+`chat: 'full'` speaks the attached client's chat and commands on the backend
+leg as the puppet. The core takes the text out of the frame and calls the
+backend leg's `chat(text)`; the leg signs it with the puppet's profile keys,
+fills the acknowledgement bitset and checksum from the puppet connection's own
+last-seen window, and picks `chat_command_signed` or `chat_command`. The
+human's signature, session key, offset, and acknowledgements never reach the
+backend: a `chat_message` signed with the human's key is rejected there, and
+its offset means nothing on the puppet's window.
+
+In every mode, clientbound `system_chat` and `profileless_chat` are relayed to
+the attached client while it is attached. Neither frame is cached, so an attach
+shows only chat that arrives after it; history from the puppet's connection is
+never replayed.
 
 - `system_chat` carries no signature state. It is what Excalia sends: 220
   frames and zero `player_chat` in a 50-minute live session (backend
   forwarder counters in the heartbeat).
-- `player_chat` stays blocked even in read-only mode: its global index and
-  previous-messages window belong to the puppet's connection, and a relayed
-  signed message would be validated against state the attaching client never
-  saw. `profileless_chat` is the unsigned player variant and is relayed.
-- Serverbound chat (`chat_message`, `chat_command`, `chat_command_signed`,
-  `chat_session_update`, `chat_ack`) and `message_acknowledgement` are still
-  dropped: the client cannot speak, and its acknowledgements describe its own
-  stream, not the puppet's.
-- `chat: 'off'` restores the old behavior (both directions blocked) without a
-  rebuild. `MONOPLAYER_CHAT` overrides the config.
+- `player_chat` is relayed live in `full` mode and blocked in the other two.
+  Its global index and previous-messages window belong to the puppet's
+  connection, not the human's, so the human's client sees a per-sender
+  signature chain that is out of order. The message still displays; the client
+  marks that sender's chain as broken, which only changes the acknowledgements
+  the human's client would have sent. Those are dropped, because they describe
+  the human's stream. `profileless_chat` is the unsigned player variant and is
+  relayed in every mode.
+- Serverbound `chat_session_update`, `chat_ack`, and
+  `message_acknowledgement` are dropped in every mode: the first two carry the
+  human's session state, and the last describes the human's stream, not the
+  puppet's.
+- `chat: 'read-only'` drops the human's text and keeps the relay.
+  `chat: 'off'` blocks both directions. `MONOPLAYER_CHAT` overrides the config.
 
 ### Session invariants (`session.js`)
 

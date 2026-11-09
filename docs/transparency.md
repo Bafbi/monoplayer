@@ -44,9 +44,15 @@ memory is a later task.
 - **The proxy's egress address is the one accepted difference.** The backend
   sees the proxy host, which reads as a client behind a VPN. IP forwarding is
   out of scope.
-- **Chat and commands are still read-only.** The human sees server chat, but
-  the puppet does not sign or send the human's messages yet
-  ([#19](https://github.com/Bafbi/monoplayer/issues/19)).
+- **Chat and commands are spoken by the puppet, not by the human.** The
+  human's text is re-signed with the puppet's profile key and its own last-seen
+  window, so the server attributes it to GlowSquidye
+  ([#19](https://github.com/Bafbi/monoplayer/issues/19)). Three consequences:
+  the human's own signature and session key never reach the server; a message
+  the server rejects arrives back as a rejection on GlowSquidye; and the human's
+  client sees the server's signed `player_chat` as a frame from another
+  connection, so its per-sender signature chain reads as broken even though the
+  message displays.
 - **Dialogs and configuration gates are still answered by the puppet.** The
   human does not own a dialog yet
   ([#20](https://github.com/Bafbi/monoplayer/issues/20),
@@ -84,7 +90,16 @@ mise run check
   locale, `96` skin parts, and off-hand main hand, with view distance `10`
   (the fake backend's advertised cap) even though that bot asked for `2`.
 - `test/core/relay.test.js` pins `settings` as a rewritten frame: the
-  human's client information never crosses the backend raw.
+  human's client information never crosses the backend raw. It also pins the
+  chat split: `chat_message`, `chat_command`, and `chat_command_signed` are
+  spoken in `full` mode and dropped in `read-only` and `off`; the session key
+  and the chat acknowledgement drop in every mode.
+- `test/service/chat-send.test.js` pins the spoken path against the fake legs:
+  the human's message and command reach the backend leg as text, the frame
+  itself never crosses, and a detached human's chat is not spoken.
+- Loopback `O29` asserts it over real sockets: the protocol bot sends a message
+  and a command, and the backend records both from the puppet's connection while
+  the core's forwarded-frame count does not move.
 
 The server's own view is measured by the observer plugin and the direct vanilla
 baseline, which do not exist yet

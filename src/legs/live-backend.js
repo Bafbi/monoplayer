@@ -437,6 +437,22 @@ function createBackendLeg ({
       if (!client) throw new Error('backend leg not connected')
       client.write(name, packet)
     },
+    // #19: speak the human's text as the puppet. The library's signed-chat
+    // path signs with the puppet's profile keys (fetched at login by the
+    // Microsoft auth flow), fills the acknowledgement bitset and checksum from
+    // the puppet connection's own last-seen window, and picks
+    // `chat_command_signed` or `chat_command`. Building that by hand would
+    // duplicate the window tracking the library already does on this
+    // connection, so the leg calls it. It is an underscore-private method of
+    // the pinned minecraft-protocol fork; a version bump must re-check it.
+    chat (text) {
+      if (!client || ended) throw new Error('backend leg not connected')
+      if (typeof text !== 'string' || text.length === 0) throw new TypeError('chat text is required')
+      if (typeof client._signedChat !== 'function') {
+        throw new Error('minecraft-protocol has no signed chat path')
+      }
+      client._signedChat(text)
+    },
     writeRaw (buffer) {
       if (!client) throw new Error('backend leg not connected')
       client.writeRaw(buffer)
