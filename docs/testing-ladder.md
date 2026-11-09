@@ -205,13 +205,15 @@ The runner builds:
 - `O19` the detached block edit is replayed and the last pose is the
   post-mutation pose.
 - `O20` a reattach replays the mutated inventory, not the join snapshot.
-- `O21` the default transfer never reaches the client and detaches it with the
-  moving reason.
-- `O22` the puppet follows the target and re-warms there (default path).
-- `O23` a fresh attach after the default move replays the target server state.
+- `O21` with `transfer.keepConnection` off, a transfer never reaches the
+  client and detaches it with the moving reason.
+- `O22` the puppet follows the target and re-warms there (kept connection
+  off).
+- `O23` a fresh attach after a move with the kept connection off replays the
+  target server state.
 - `O24` the puppet leg answers a stored cookie request.
-- `O33` with `transfer.keepConnection` on, a followed transfer never reaches the
-  client and the client keeps its connection: no kick, the proxy's own
+- `O33` with `transfer.keepConnection` on, which is the default, a followed
+  transfer never reaches the client and the client keeps its connection: no kick, the proxy's own
   `start_configuration`, one acknowledged configuration round with frames
   flushed, and no front client error.
 - `O34` the kept connection goes through the target's configuration (including
