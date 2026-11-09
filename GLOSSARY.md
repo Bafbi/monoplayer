@@ -284,6 +284,18 @@ _Avoid_: staging, sandbox, lab
 The two-server testbed that can trigger a transfer on demand, so the transfer path runs without a menu click.
 _Avoid_: twin servers, migration lab
 
+**Live lane**:
+The deployment Argo CD syncs from the `deploy` branch: namespace `monoplayer`, one replica, the puppet account, backend `play2.excalia.fr`.
+_Avoid_: production, prod, main lane
+
+**Dev lane**:
+The validation lane in namespace `monoplayer-dev`: its own Paper, its own proxy, its own account, and not in Argo CD.
+_Avoid_: staging, sandbox, dev environment
+
+**Gate Paper**:
+The disposable Papers in namespace `monoplayer-gate-b` that the observer, the online rung, the driver lane, and the transfer testbed run against.
+_Avoid_: test server, gate-b backend
+
 **Protocol spike**:
 The frozen two-leg relay that came before the core. It stays green as a regression check on the wire, and it grows no features.
 _Avoid_: legacy proxy, proof of concept
