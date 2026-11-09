@@ -1,0 +1,28 @@
+plugins {
+    id 'java'
+}
+
+version = '0.1.0'
+group = 'eu.monoplayer'
+
+base {
+    archivesName = 'monoplayer-observer'
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+dependencies {
+    compileOnly 'io.papermc.paper:paper-api:26.1.2.build.74-stable'
+    // The pinned ProtocolLib build (mise run observer:protocollib). A released
+    // ProtocolLib stops at 1.21.1, so this is a built artifact, not a coordinate.
+    compileOnly fileTree(dir: '../../.cache/protocollib', include: ['ProtocolLib-*.jar'])
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
