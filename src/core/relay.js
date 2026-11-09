@@ -1,18 +1,26 @@
 // B1 monoplayer core: pure relay decisions (serverbound drop rules, pose
 // capture).
 //
-// Three outcomes for a serverbound play frame:
+// Four outcomes for a serverbound play frame:
 //   drop     never reaches the backend
 //   rewrite  reaches the backend only in the form the proxy builds
+//   speak    the proxy sends the text on the backend leg as the puppet
 //   forward  reaches the backend as the client sent it
 //
 // Frames that must never reach the backend untouched: per-leg connection
 // mechanics (keep-alive, teleport confirm, chunk batch acks, configuration ack,
 // cookie responses), fresh-client-only answers (resource pack, ping/pong — a
-// replayed ping must not be answered with the fresh client's pong), and chat.
-// Chat is relayed read-only: the attached client sees clientbound chat, but its
-// own messages, commands, session key, and acknowledgements stay on the front
-// leg.
+// replayed ping must not be answered with the fresh client's pong), and the
+// chat frames that carry the human's own signature state.
+//
+// Chat text is spoken, not forwarded (#19). A `chat_message` or
+// `chat_command` from the human carries a signature made with the human's
+// profile key and an offset into the human's own last-seen window, so the
+// backend would reject it. The proxy takes the text and lets the backend leg
+// sign and send it as the puppet instead. The human's session key, its
+// acknowledgements, and its last-seen window stay on the front leg in every
+// mode. `read-only` drops the text too, and `off` drops clientbound chat as
+// well.
 //
 // Client information (`settings`) is rewritten, not forwarded: the human's
 // locale, skin parts, main hand, and chat settings must reach the server, but
@@ -22,10 +30,10 @@
 export const SERVERBOUND_DROPS = new Set([
   'teleport_confirm', // proxy owns teleport IDs per leg
   'keep_alive', // the front leg answers its own keep-alives
-  'chat_message', // read-only chat: never forwarded
+  'chat_message', // never forwarded: spoken as the puppet, or dropped
   'chat_command',
   'chat_command_signed',
-  'chat_session_update',
+  'chat_session_update', // the human's session key is not the puppet's
   'chat_ack',
   'message_acknowledgement', // the client acks its own chat stream, not the puppet's
   'configuration_acknowledged',
@@ -58,9 +66,35 @@ export const CHAT_SERVERBOUND = new Set([
   'chat_ack'
 ])
 
-export function classifyServerbound (name, data = null) {
+// Chat frames whose text the proxy may speak as the puppet. Their signature
+// state never crosses; only the text does, and only when a human is attached.
+export const CHAT_SPEAK = new Set([
+  'chat_message',
+  'chat_command',
+  'chat_command_signed'
+])
+
+// The text a chat frame carries, in the form the backend leg sends it: a plain
+// message, or a command with its leading slash. Null when the frame carries no
+// usable text.
+export function chatText (name, data = null) {
+  const field = name === 'chat_message' ? 'message' : 'command'
+  if (name !== 'chat_message' && !CHAT_SPEAK.has(name)) return null
+  const raw = data?.[field]
+  if (typeof raw !== 'string') return null
+  const text = name === 'chat_message' ? raw : `/${raw.replace(/^\/+/, '')}`
+  if (text.length === 0 || text === '/') return null
+  return { text, command: name !== 'chat_message' }
+}
+
+// `mode` is the configured chat mode. `full` speaks the human's chat as the
+// puppet; `read-only` and `off` drop it.
+export function classifyServerbound (name, data = null, { mode = 'full' } = {}) {
   if (name === 'custom_payload' && CLIENT_IDENTITY_CHANNELS.has(data?.channel)) {
     return { action: 'drop', chat: false, reason: 'client_identity_channel' }
+  }
+  if (mode === 'full' && CHAT_SPEAK.has(name)) {
+    return { action: 'speak', chat: true, reason: 'human_chat' }
   }
   if (SERVERBOUND_DROPS.has(name)) {
     return { action: 'drop', chat: CHAT_SERVERBOUND.has(name), reason: 'per_leg_or_blocked' }
