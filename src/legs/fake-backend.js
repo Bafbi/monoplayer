@@ -66,6 +66,9 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     cookieResponses: [],
     resourcePackResponses: [],
     pongs: [],
+    // #16: the human's dialog answers, forwarded by the proxy as the puppet's.
+    customClickActions: [], // { id, nbt }
+    codeOfConductAccepts: 0,
     // #17/#18: what the server knows about the client's own identity.
     customPayloads: [], // { channel, data, brand }
     settings: [] // Client Information frames, in arrival order
@@ -213,6 +216,14 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     client.on('cookie_response', p => { received.cookieResponses.push(p) })
     client.on('resource_pack_receive', p => { received.resourcePackResponses.push(p) })
     client.on('pong', p => { received.pongs.push(p) })
+    client.on('custom_click_action', p => {
+      received.customClickActions.push(p)
+      log('receivedCustomClickAction', { id: p.id })
+    })
+    client.on('accept_code_of_conduct', () => {
+      received.codeOfConductAccepts++
+      log('receivedAcceptCodeOfConduct', {})
+    })
   })
 
   server.on('error', err => log('serverError', { error: err.message }))
@@ -338,6 +349,40 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     log('sendPlayerChat', { message, globalIndex })
   }
 
+  // A control dialog in play (#16): the server asks the human a question with
+  // one button. The shape is the one the library writes: the dialog NBT sits
+  // inside the registry-entry holder's inline branch.
+  function sendShowDialog ({ id, label = 'Loopback', state = 'play' } = {}) {
+    const dialog = {
+      type: 'compound',
+      name: '',
+      value: {
+        type: { type: 'string', value: 'minecraft:multi_action' },
+        actions: {
+          type: 'list',
+          value: {
+            type: 'compound',
+            value: [{
+              action: { type: 'compound', value: { id: { type: 'string', value: id } } },
+              label: { type: 'string', value: label }
+            }]
+          }
+        }
+      }
+    }
+    for (const client of Object.values(server.clients)) {
+      client.write('show_dialog', { dialog: { data: dialog } })
+    }
+    log('sendShowDialog', { id, state })
+  }
+
+  function sendClearDialog () {
+    for (const client of Object.values(server.clients)) {
+      client.write('clear_dialog', {})
+    }
+    log('sendClearDialog', {})
+  }
+
   function sendSystemChat (message) {
     for (const client of Object.values(server.clients)) {
       client.write('system_chat', {
@@ -397,6 +442,8 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     sendTransfer,
     sendStoreCookie,
     sendCookieRequest,
+    sendShowDialog,
+    sendClearDialog,
     close
   }
 }

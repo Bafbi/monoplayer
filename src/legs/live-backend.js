@@ -101,6 +101,16 @@ export function chooseDialogAction (data, policy = 'last') {
   }
 }
 
+// #16: who answers a control dialog. The auto-click exists for a headless
+// puppet; while a human is attached the dialog is theirs, so the puppet must
+// not answer it too. One decision, consulted per dialog, so a client that
+// attaches mid-session changes the answer without rebuilding the leg.
+export function decideDialogAutoAnswer ({ dialogAction, humanAttached }) {
+  if (!dialogAction) return { auto: false, reason: 'no_policy' }
+  if (humanAttached) return { auto: false, reason: 'human_attached' }
+  return { auto: true, reason: null }
+}
+
 // VarInt encoder for the packet id, identifier length, and the payload length.
 function varint (value) {
   const out = []
@@ -215,6 +225,9 @@ function createBackendLeg ({
   log,
   connectTimeoutMs,
   dialogAction,
+  // Consulted per dialog, so a leg built before any client exists still
+  // answers correctly once one attaches. The orchestrator reads the core.
+  isHumanAttached = () => false,
   prepareConnection,
   releaseTokens,
   connectLogFields,
@@ -373,8 +386,12 @@ function createBackendLeg ({
       // handled; anything else is logged and left alone.
       let dialogResponses = 0
       socketClient.on('show_dialog', data => {
-        if (!dialogAction) {
-          log('dialogUnhandled', { reason: 'no_policy' })
+        const decision = decideDialogAutoAnswer({
+          dialogAction,
+          humanAttached: isHumanAttached() === true
+        })
+        if (!decision.auto) {
+          log('dialogUnhandled', { reason: decision.reason })
           return
         }
         if (dialogResponses >= 5) {
@@ -609,6 +626,7 @@ export function createLiveBackendLeg (options = {}) {
     // connect promise pending forever; the timeout releases the token lock.
     connectTimeoutMs: 60_000,
     dialogAction,
+    isHumanAttached: options.isHumanAttached ?? (() => false),
     prepareConnection: acquireTokens,
     releaseTokens,
     // Custody paths and identity labels only — no token material. cacheAccount

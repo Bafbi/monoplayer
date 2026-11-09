@@ -16,6 +16,7 @@ import {
   PLAY_CACHE_ONLY,
   CONFIG_BLOCK,
   CONFIG_PER_LEG,
+  CONTROL_FRAMES,
   NOT_REPLAYABLE
 } from '../../src/core/clientbound-policy.js'
 
@@ -42,16 +43,11 @@ test('connection-control frames are blocked, uncached, and unreplayable', () => 
     ['play', 'kick_disconnect'],
     ['play', 'cookie_request'],
     ['play', 'store_cookie'],
-    ['play', 'show_dialog'],
-    ['play', 'clear_dialog'],
     ['play', 'hide_message'],
     ['configuration', 'transfer'],
     ['configuration', 'disconnect'],
     ['configuration', 'cookie_request'],
-    ['configuration', 'store_cookie'],
-    ['configuration', 'show_dialog'],
-    ['configuration', 'clear_dialog'],
-    ['configuration', 'code_of_conduct']
+    ['configuration', 'store_cookie']
   ]
   for (const [state, name] of blocked) {
     const policy = clientboundPolicy(state, name)
@@ -61,6 +57,31 @@ test('connection-control frames are blocked, uncached, and unreplayable', () => 
     assert.equal(policy.replay, false, `${state}/${name} replay`)
     assert.equal(mayCrossToFront(state, name), false, `${state}/${name} cross`)
   }
+})
+
+test('control dialogs relay but are never cached or replayed (#16)', () => {
+  const dialogs = [
+    ['play', 'show_dialog'],
+    ['play', 'clear_dialog'],
+    ['configuration', 'show_dialog'],
+    ['configuration', 'clear_dialog'],
+    ['configuration', 'code_of_conduct']
+  ]
+  for (const [state, name] of dialogs) {
+    const policy = clientboundPolicy(state, name)
+    assert.equal(policy.decision, DECISION.CONTROL, `${state}/${name}`)
+    assert.equal(policy.relay, true, `${state}/${name} relay`)
+    assert.equal(policy.cache, false, `${state}/${name} cache`)
+    assert.equal(policy.replay, false, `${state}/${name} replay`)
+    assert.equal(policy.unknown, false, `${state}/${name} is a classified frame`)
+    assert.equal(mayCrossToFront(state, name), true, `${state}/${name} cross`)
+    // One copy lives in the pending holder, so a replay would deliver a stale
+    // dialog beside it.
+    assert.equal(NOT_REPLAYABLE.has(name), true, `${state}/${name} is never replayed`)
+    assert.equal(CONTROL_FRAMES.has(name), true, `${state}/${name} is a control frame`)
+  }
+  // Control dialogs are not chat: a chat mode has no say about them.
+  assert.equal(mayCrossToFront('play', 'show_dialog', { chat: 'off' }), true)
 })
 
 test('the chat mode decides which chat frames cross', () => {
