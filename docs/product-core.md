@@ -300,7 +300,7 @@ backendLeg = {                    // = the GlowSquidye puppet session
   setEndHandler(({ reason }) => {}), setErrorHandler(({ error }) => {})
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
-  writeRaw(buffer, meta)          // forwarded serverbound play frames
+  writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
   chat(text)                      // speak as the puppet: sign with this connection's keys (#19)
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
