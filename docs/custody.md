@@ -3,7 +3,7 @@
 This is the runbook for the **G1 auth slice**: token custody, the puppet's
 device-code bootstrap + silent refresh, real sessionserver `hasJoined`, the
 embeddable attach check, the attach whitelist, and the read-only auth health
-CLI. It is the deliverable for criterion **G1** in the plan (`docs/driver-lane-plan.html`:
+CLI. It is the deliverable for criterion **G1** in the plan (`docs/driver-lane-plan.md`:
 *"Auth readiness: device code, silent refresh, two distinct UUIDs, real
 `hasJoined`; same UUID across refresh; allow/deny before Login Success"*).
 
