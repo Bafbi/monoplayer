@@ -18,7 +18,7 @@ import {
   noticeId,
   systemChatFrame
 } from '../../src/core/notice.js'
-import { applyAdvancementFrames } from '../../src/ladder/client-state.js'
+import { advancementComplete, applyAdvancementFrames } from '../../src/ladder/client-state.js'
 
 const VERSIONS = ['26.1', '26.2']
 
@@ -41,9 +41,11 @@ function decode (version, frame) {
 
 // The client's advancement state, as the vanilla client keeps it: the map
 // model in src/ladder/client-state.js, shared with the loopback rung so the two
-// witnesses of the ghost rule cannot drift, plus the advancement screen flag.
+// witnesses of the ghost rule cannot drift, plus the advanced/completed flags the
+// frames carry.
 function createAdvancementState (seed = {}) {
-  return { advancements: new Map(Object.entries(seed)), shown: true }
+  const held = new Map(Object.entries(seed).map(([id, value]) => [id, { value, criteria: new Set() }]))
+  return { advancements: held, shown: true }
 }
 
 function applyAdvancements (state, params) {
@@ -66,12 +68,13 @@ test('the toast is one advancement that asks for a visible toast', () => {
     const entry = params.advancementMapping[0]
     assert.equal(entry.key, noticeId(1))
     assert.equal(entry.value.parentId, undefined, 'a notice has no parent to unlock')
-    assert.deepEqual(entry.value.requirements, [], 'no criteria gate the toast')
+    assert.deepEqual(entry.value.requirements, [[NOTICE_CRITERION]], 'the criterion the progress completes is named')
     assert.equal(entry.value.sendsTelemtryData, false)
 
     const display = entry.value.displayData
     assert.equal(display.flags.show_toast, 1, 'the toast is the point')
     assert.equal(display.flags.has_background_texture, 0)
+    assert.equal(params.showAdvancements, true, 'the flag gates the toast, so the notice sets it')
     assert.equal(display.frameType, 0, 'a task frame, so the client stays silent')
     assert.equal(display.title.value.text.value, NOTICE_TITLE)
     assert.equal(display.description.value.text.value, 'The transfer failed. You stay on this server.')
@@ -113,10 +116,15 @@ test('the server advancement set survives the notice', () => {
   const frames = notice()
   applyAdvancements(state, frames[0].packet)
   assert.equal(state.advancements.has(noticeId(1)), true, 'the notice advanced, so the client can toast it')
+  assert.equal(
+    advancementComplete(state.advancements.get(noticeId(1))),
+    true,
+    'a complete advancement with show_toast is what raises the toast'
+  )
 
   applyAdvancements(state, frames[1].packet)
   assert.deepEqual([...state.advancements.keys()].sort(), Object.keys(server).sort(), 'no ghost advancement is left')
-  assert.equal(state.advancements.get('minecraft:story/root').displayData, 'story')
+  assert.equal(state.advancements.get('minecraft:story/root').value.displayData, 'story')
   assert.equal(state.shown, true)
 })
 
@@ -128,20 +136,23 @@ test('two notices leave two removals and no state behind', () => {
   assert.deepEqual([...state.advancements.keys()], [], 'each notice removed its own id')
 })
 
-test('the toast carries the advancement screen flag it is given', () => {
-  for (const [given, expected] of [[false, false], [true, true], [undefined, true]]) {
-    for (const frame of noticeFrames({ text: 'notice', id: noticeId(1), showAdvancements: given })) {
-      assert.equal(frame.packet.showAdvancements, expected)
-    }
-  }
+test('a notice that names no criterion would raise no toast', () => {
+  // The strict reading of the client's completion rule: an advancement with an
+  // empty requirement list is not complete. The notice never relies on the
+  // other reading, because it names its criterion.
+  const held = applyAdvancementFrames([{
+    advancementMapping: [{ key: 'monoplayer:notice/2', value: { requirements: [], displayData: {} } }],
+    progressMapping: [{ key: 'monoplayer:notice/2', value: [{ criterionIdentifier: 'notice', criterionProgress: 0n }] }]
+  }])
+  assert.equal(advancementComplete(held.get('monoplayer:notice/2')), false)
 })
 
-test('only an explicit false hides the advancement screen', () => {
-  // An unknown caller value must not take the server's screen away, so it
-  // counts as shown.
-  for (const given of ['yes', 1, null]) {
-    assert.equal(noticeFrames({ text: 'n', id: noticeId(1), showAdvancements: given })[0].packet.showAdvancements, true)
-  }
+test('the notice is complete on the advancement the client holds', () => {
+  const [add] = notice()
+  const held = applyAdvancementFrames([add.packet])
+  const entry = held.get(noticeId(1))
+  assert.equal(entry.value.displayData.flags.show_toast, 1)
+  assert.equal(advancementComplete(entry), true, 'every requirement group has a met criterion')
 })
 
 test('a notice id stays inside the monoplayer namespace', () => {

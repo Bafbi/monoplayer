@@ -123,19 +123,23 @@ A **refused** transfer while a client is in play (follow disabled, invalid
 target, a loop, or the chain limit) sends one proxy notice per attach. The
 notice is proxy speech, not server speech, and never includes the target
 address. It rides a synthetic advancement with a visible toast
-(`src/core/notice.js`): the add queues the toast, and the removal that follows
-leaves the client's advancement map as the server left it. `showAdvancements`
-carries the backend's last advancement frame value, so the notice keeps the
-server's advancement screen state; a session that never saw that frame keeps
-the client's own default instead. A toast frame the front leg cannot write
-falls back to a local `system_chat` line, and a removal that still fails is
-logged as `proxyNoticeGhost`.
+(`src/core/notice.js`): the add completes one named criterion and asks for the
+toast, and the removal that follows leaves the client's advancement map as the
+server left it. The frames set `showAdvancements: true`, the flag the 26.x
+client reads to decide whether to raise a toast, so a backend that just muted
+its own toasts cannot silence the proxy's notice. A toast frame the front leg
+cannot write falls back to a local `system_chat` line. A removal that fails
+twice leaves that one advancement on the client until its state is rebuilt: it
+is counted in `noticeGhosts` and logged as `proxyNoticeGhost`, and the id is
+never reused.
 
 `notice(text)` on the core is the entry point. It runs with no client
 attached: the front leg would drop the writes, so the call logs
 `proxyNoticeUndelivered` and returns `sent: false` rather than claiming a
-delivery nobody saw. A caller that needs the notice shown later queues it for
-the next attach (#15).
+delivery nobody saw. A refusal that arrives while the client is still finishing
+its configuration is dropped and logged as `transferNoticeSkipped`, because a
+play frame cannot reach that client. Queueing a notice for the next attach
+belongs to the transfer work in #22.
 
 `start_configuration` cannot be served to the front client on its connection.
 The core blocks it, ends the puppet leg on purpose, and lets the normal

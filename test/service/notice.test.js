@@ -142,35 +142,38 @@ test('a toast write that fails falls back to local system chat', () => {
   assert.match(logged, /proxyNoticeFailed/)
 })
 
-test('the toast carries the advancement screen flag the backend last sent', () => {
+test('the toast still shows after the backend cleared the flag for its own frames', () => {
   const rig = makeCore()
   warmBackend(rig)
   attach(rig)
 
+  // A backend that just granted a batch of advancements clears the flag to mute
+  // the toast storm. That frame mutes its own toasts, not the proxy's notice.
   rig.backendLeg.deliver({
     state: 'play',
     name: 'advancements',
     buffer: BUFFER('advancements'),
-    data: { reset: true, advancementMapping: [], identifiers: [], progressMapping: [], showAdvancements: false }
+    data: { reset: false, advancementMapping: [], identifiers: [], progressMapping: [], showAdvancements: false }
   })
   refuseTransfer(rig)
 
   const written = noticeFramesWritten(rig.frontLeg).slice(-2)
   assert.equal(written.length, 2)
-  assert.equal(written[0].packet.showAdvancements, false)
-  assert.equal(written[1].packet.showAdvancements, false, 'the removal restores the same flag')
+  for (const frame of written) assert.equal(frame.packet.showAdvancements, true)
 })
 
-test('the toast keeps the client advancement screen flag when the backend sent none', () => {
+test('a refusal while the client is still configuring is logged, not written', () => {
   const rig = makeCore()
-  warmBackend(rig)
-  attach(rig)
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  rig.frontLeg.loginStart({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.attachConfiguringPlayer({ name: 'Bafbi', uuid: PLAYER }).attached, true)
+  assert.equal(rig.core.attached, true)
 
   refuseTransfer(rig)
 
-  const written = noticeFramesWritten(rig.frontLeg)
-  assert.equal(written.length, 2)
-  for (const frame of written) assert.equal(frame.packet.showAdvancements, true)
+  assert.equal(rig.core.metrics.transfersRefused, 1)
+  assert.equal(noticeFramesWritten(rig.frontLeg).length, 0, 'a play frame cannot reach a configuring client')
+  assert.match(rig.core.logs().join('\n'), /transferNoticeSkipped/)
 })
 
 test('a refusal sends one notice per attach', () => {

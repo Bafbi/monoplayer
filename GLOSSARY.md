@@ -197,7 +197,7 @@ The `read-only` chat mode: the attaching player sees the server's chat and canno
 _Avoid_: muted chat, one-way chat
 
 **Proxy notice**:
-A message Monoplayer writes to the attaching player in its own voice, such as a refused transfer. It rides a synthetic advancement with a visible toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
+A message Monoplayer writes to the attaching player in its own voice, such as a refused transfer. It rides a synthetic advancement built to show a toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
 _Avoid_: local chat, notice toast
 
 **Wire check**:

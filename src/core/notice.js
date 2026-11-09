@@ -17,11 +17,20 @@
 // datapack advancement. The client parses the id as a resource location, so
 // the characters stay lowercase and in `[a-z0-9/._-]`.
 //
-// `showAdvancements` is server state, not ours: the caller passes the value
-// from the backend's last advancement frame, so the notice keeps whatever the
-// server decided. When the backend never sent that frame the caller passes the
-// client's own default instead of hiding the screen. The frames are never
-// cached or replayed; the caller writes them straight to the front leg.
+// Two fields decide whether a client raises the toast at all, and neither is
+// left to a default:
+//
+//   requirements  names the criterion the progress completes. An empty list
+//                 states no criterion, so an implementation that reads an empty
+//                 requirement set as "not met" would show nothing.
+//   showAdvancements
+//                 gates the toast in the 26.x client, and the client reads it
+//                 per frame rather than keeping it. The notice sets it true, so
+//                 a backend that last sent false (a batch advancement grant)
+//                 cannot silence the proxy's own notice.
+//
+// The frames are never cached or replayed; the caller writes them straight to
+// the front leg.
 //
 // Field shapes come from the vendored 26.2 protocol data and the installed
 // 26.1 data; both carry the same layout (`node tools/protocol.mjs frame 26.2
@@ -38,8 +47,8 @@ export const NOTICE_CRITERION = 'notice'
 // prints 1 for 26.1 and 26.2). A datapack server that renumbers its items
 // changes the icon, never the toast.
 export const NOTICE_ICON_ID = 1
-// frameType 0 is `task`: a goal or a challenge plays the challenge sound, and
-// a proxy notice has no reason to beep at the player.
+// frameType 0 is `task`: the client plays the challenge sound for a challenge
+// frame only, and a proxy notice has no reason to beep at the player.
 const TASK_FRAME = 0
 
 // The wire form of a plain text component: a nameless NBT compound carrying
@@ -55,16 +64,13 @@ export function noticeId (seq) {
 // The two frames of one notice: the add that raises the toast, then the
 // removal that leaves the advancement map as it was. `id` must be unique per
 // notice so a removal can never name an earlier one.
-export function noticeFrames ({ text, id, showAdvancements = true } = {}) {
+export function noticeFrames ({ text, id } = {}) {
   if (typeof text !== 'string' || text.length === 0) {
     throw new TypeError('notice text is required')
   }
   if (typeof id !== 'string' || !id.startsWith(`${NOTICE_NAMESPACE}/`)) {
     throw new TypeError(`notice id must be in the ${NOTICE_NAMESPACE} namespace: ${id}`)
   }
-  // Only an explicit false hides the screen: an unknown caller value must not
-  // take the server's advancement screen away.
-  const show = showAdvancements !== false
   return [
     {
       name: NOTICE_FRAME,
@@ -86,23 +92,24 @@ export function noticeFrames ({ text, id, showAdvancements = true } = {}) {
                 removeComponents: []
               },
               frameType: TASK_FRAME,
-              // hidden: the advancement screen keeps it out of the tree.
-              // show_toast: the toast the notice exists for. No background
-              // texture, so the frame carries none.
-              flags: { unused: 0, hidden: 1, show_toast: 1, has_background_texture: 0 },
+              // show_toast: the toast the notice exists for. The notice is
+              // removed at once, so the tree never shows it, and no background
+              // texture means the frame carries none.
+              flags: { unused: 0, hidden: 0, show_toast: 1, has_background_texture: 0 },
               xCord: 0,
               yCord: 0
             },
-            requirements: [],
+            // One OR group naming the criterion the progress completes.
+            requirements: [[NOTICE_CRITERION]],
             // The field name is the protocol data's, typo included.
             sendsTelemtryData: false
           }
         }],
         identifiers: [],
         // A completed criterion at epoch 0. Presence is what marks it done;
-        // without it the client adds the advancement and shows no toast.
+        // without it the client holds the advancement and raises no toast.
         progressMapping: [{ key: id, value: [{ criterionIdentifier: NOTICE_CRITERION, criterionProgress: 0n }] }],
-        showAdvancements: show
+        showAdvancements: true
       }
     },
     {
@@ -112,7 +119,7 @@ export function noticeFrames ({ text, id, showAdvancements = true } = {}) {
         advancementMapping: [],
         identifiers: [id],
         progressMapping: [],
-        showAdvancements: show
+        showAdvancements: true
       }
     }
   ]

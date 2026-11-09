@@ -22,7 +22,7 @@ import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
-import { applyAdvancementFrames } from './client-state.js'
+import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 
 const VERSION = '26.1'
@@ -926,15 +926,20 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const noticesBefore = core.metrics.noticesSent
     fake2.sendTransfer('', 0)
     await waitFor(() => b4.advancements.length === 2, 'the notice toast and its removal')
-    const held = applyAdvancementFrames(b4.advancements)
     const [toast, removal] = b4.advancements
     const noticeKey = toast?.advancementMapping?.[0]?.key ?? null
+    // The client held the notice after the add, complete and asking for a toast;
+    // after the removal it holds nothing of ours.
+    const completed = advancementComplete(applyAdvancementFrames([toast]).get(noticeKey))
+    const held = applyAdvancementFrames(b4.advancements)
     check(
       'O24b',
-      'a proxy notice reaches the client as a toast and leaves no advancement behind',
+      'a proxy notice reaches the client complete as a toast and leaves no advancement behind',
       core.metrics.noticesSent === noticesBefore + 1 &&
         /^monoplayer:notice\//.test(String(noticeKey)) &&
+        toast?.showAdvancements === true &&
         toast?.advancementMapping?.[0]?.value?.displayData?.flags?.show_toast === 1 &&
+        completed === true &&
         removal?.reset === false &&
         Array.isArray(removal?.identifiers) &&
         removal.identifiers.includes(noticeKey) &&
@@ -944,6 +949,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         notice: noticeKey,
         frames: b4.advancements.length,
         showToast: toast?.advancementMapping?.[0]?.value?.displayData?.flags?.show_toast ?? null,
+        complete: completed,
         removed: removal?.identifiers ?? null,
         held: [...held.keys()],
         errors: b4.errors.length
