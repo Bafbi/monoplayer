@@ -32,9 +32,8 @@ export const DECISION = Object.freeze({
   BLOCK: 'block'
 })
 
-// Never relayed to the front client. `player_chat` and `hide_message` carry
-// the puppet connection's message index; the read-only chat path relays only
-// system/profileless chat.
+// Never relayed to the front client. `hide_message` carries the puppet
+// connection's message index, so relaying it would hide the wrong message.
 export const PLAY_BLOCK = new Set([
   'transfer',
   'start_configuration',
@@ -43,15 +42,23 @@ export const PLAY_BLOCK = new Set([
   'store_cookie',
   'show_dialog',
   'clear_dialog',
-  'player_chat',
   'hide_message'
 ])
 
-// Relayed live, never cached: chat that carries no signature state, and
-// answers to a request the *front* client made.
+// Relayed live, never cached: chat, and answers to a request the *front*
+// client made.
+//
+// `player_chat` is the server's signed chat. This table says it is a frame
+// that may cross; the chat mode decides whether the session includes it, and
+// the router applies that (#19). The split is deliberate: this table answers
+// "what is this frame", and a mode is session configuration, not frame
+// structure. The front leg's last-write gate therefore cannot see the mode, so
+// the router is the one place that enforces it, and
+// test/service/chat-send.test.js pins it there.
 export const PLAY_LIVE_ONLY = new Set([
   'system_chat',
   'profileless_chat',
+  'player_chat',
   'ping_response',
   'nbt_query_response'
 ])
@@ -196,8 +203,28 @@ export function clientboundPolicy (state, name) {
   }
 }
 
+// The three chat frames, and whether a chat mode relays each one. The chat mode
+// is session configuration rather than frame structure, so it is not a table
+// entry; this is the one function that turns a mode into a yes or no, so the
+// router and the front leg's backstop cannot disagree about it.
+export const CHAT_FRAMES = new Set(['system_chat', 'profileless_chat', 'player_chat'])
+
+export function chatRelayAllowed (name, mode) {
+  if (!CHAT_FRAMES.has(name)) return true
+  // `full` relays all three. `read-only` relays the server's chat but not the
+  // signed player chat, which only makes sense beside a human speaking as the
+  // account (#19). `off` relays none of them.
+  if (mode === 'full') return true
+  if (mode === 'off') return false
+  return name !== 'player_chat'
+}
+
 // True when a clientbound frame may be written to the front at all. Used by
-// the front leg as a last-write gate, independent of the core router.
-export function mayCrossToFront (state, name) {
-  return clientboundPolicy(state, name).decision !== DECISION.BLOCK
+// the front leg as a last-write gate, independent of the core router. Pass the
+// chat mode so that gate answers the way the router does.
+export function mayCrossToFront (state, name, { chat = null } = {}) {
+  const policy = clientboundPolicy(state, name)
+  if (policy.decision === DECISION.BLOCK) return false
+  if (chat === null || state !== 'play') return true
+  return chatRelayAllowed(name, chat)
 }

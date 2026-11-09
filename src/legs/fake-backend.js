@@ -59,6 +59,7 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     chatCommands: [],
     chatAcks: [],
     chatSessionUpdates: [],
+    messageAcknowledgements: [], // the client acks its own chat stream (#19)
     teleportConfirms: [],
     keepAlives: [],
     chunkBatchAcks: [],
@@ -192,6 +193,10 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     client.on('chat_session_update', p => {
       received.chatSessionUpdates.push(p)
       log('receivedChatSessionUpdate')
+    })
+    client.on('message_acknowledgement', p => {
+      received.messageAcknowledgements.push(p)
+      log('receivedMessageAcknowledgement', { count: p.count })
     })
     client.on('teleport_confirm', p => {
       received.teleportConfirms.push(p.teleportId)

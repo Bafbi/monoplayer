@@ -183,6 +183,11 @@ The runner builds:
   it to x=10. The bot must decode x=10; a replay that puts every absolute before
   every delta lands at 13.
 
+- `O29` the human's chat is spoken by the puppet leg, not forwarded. The bot
+  sends a chat message and a command the way a client does, with its own
+  signature state. The fake backend must record both texts from the puppet's
+  connection while the core's forwarded-frame count does not move (#19).
+
 ### Online rung assertion contract
 
 `mise run online` returns N1-N13. `evaluateOnlineAssertions` in

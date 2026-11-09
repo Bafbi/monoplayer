@@ -192,7 +192,7 @@ test('connection-control frames are blocked in both states', () => {
   attach(rig)
 
   const before = rig.frontLeg.frames().length
-  for (const name of ['kick_disconnect', 'cookie_request', 'store_cookie', 'show_dialog', 'clear_dialog', 'player_chat', 'hide_message']) {
+  for (const name of ['kick_disconnect', 'cookie_request', 'store_cookie', 'show_dialog', 'clear_dialog', 'hide_message']) {
     rig.backendLeg.deliver({ state: 'play', name, buffer: BUFFER(name), data: {} })
   }
   assert.equal(rig.frontLeg.frames().length, before)

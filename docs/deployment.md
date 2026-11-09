@@ -131,8 +131,12 @@ Common:
   carries the 26.2 data, so set `26.2` for Excalia Season 3.
 - `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye`
 - `MONOPLAYER_CHAT=read-only` (default): relay server chat to the attached
-  client, never forward the client's own chat. Set `off` to block both
-  directions.
+  client and drop the client's own text. `full` also speaks the client's chat
+  and commands on the puppet leg as the account, and relays the server's signed
+  player chat back. `off` blocks both directions. Set `full` only after a live
+  run shows `chatCapability` with `signed: true`: a leg without profile keys
+  sends an unsigned frame, and a server that enforces secure profiles answers
+  that by closing the connection.
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
   `WORKDIR`) or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`

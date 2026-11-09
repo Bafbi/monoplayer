@@ -257,6 +257,20 @@ export function createBot ({
     sendKeepAlive (keepAliveId) {
       client.write('keep_alive', { keepAliveId: BigInt(keepAliveId) })
     },
+    // The bot's own chat text, sent the way a client sends it: the library
+    // signs it when the connection has profile keys and always fills the
+    // checksum and offset from this connection's own window. An offline bot has
+    // no keys, so the frame goes out unsigned. The proxy must speak the text as
+    // the puppet rather than forward the frame (#19).
+    sendChat (text) {
+      client._signedChat(text)
+    },
+    sendCommand (command) {
+      client._signedChat(command.startsWith('/') ? command : `/${command}`)
+    },
+    sendMessageAck (count = 0) {
+      client.write('message_acknowledgement', { count })
+    },
     close
   }
 }

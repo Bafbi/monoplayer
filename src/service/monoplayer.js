@@ -15,8 +15,14 @@
 //     setErrorHandler(({ error }): void)
 //     write(name, packet)                         // serverbound, packet level
 //     writeRaw(buffer, meta)                      // serverbound, frame level
+//     chat(text): void                            // sign and send as the puppet
 //     end(reason)                                 // deliberate close
 //   }
+//
+// `chat` is optional: a leg without it drops the human's chat and counts it.
+// The leg owns the signing, because the signature needs the puppet's profile
+// keys and the puppet connection's own last-seen window, and neither belongs to
+// the core.
 //
 //   frontLeg = {                                  // one attaching client
 //     setLoginStartHandler(({ uuid, name }): decision[])   // -> whitelist review
@@ -38,8 +44,8 @@ import {
 } from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
-import { classifyServerbound, capturePose } from '../core/relay.js'
-import { clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
+import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
+import { CHAT_FRAMES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createSession, STATES } from '../core/session.js'
 import { redact, SENTINEL } from '../observability/redact.js'
 import { pathToFileURL } from 'node:url'
@@ -48,8 +54,15 @@ import { pathToFileURL } from 'node:url'
 
 export const DEFAULT_CONFIG = Object.freeze({
   version: '26.1',
-  // Read-only chat: relay clientbound chat to the attached client, never
-  // forward the client's own chat. 'off' restores the fully blocked behavior.
+  // 'read-only': relay clientbound chat to the attached client, drop the
+  // client's own text.
+  // 'full' (#19): also speak the client's chat and commands on the backend leg
+  // as the puppet, with the puppet's own profile keys and window, and relay the
+  // server's signed player chat back. Not the default: the signed path needs a
+  // live run on the deployed backend to prove it, because a leg without profile
+  // keys sends an unsigned frame that a secure-profile server rejects by
+  // closing the connection. `chatCapability` in the log answers that question.
+  // 'off': drop clientbound chat as well.
   chat: 'read-only',
   front: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   backend: Object.freeze({ host: '127.0.0.1', port: 25565 }),
@@ -93,6 +106,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   redaction: Object.freeze({ sentinel: SENTINEL })
 })
 
+const CHAT_MODES = new Set(['full', 'read-only', 'off'])
+
 export function loadConfig (doc = {}) {
   const merged = {
     ...DEFAULT_CONFIG,
@@ -107,8 +122,8 @@ export function loadConfig (doc = {}) {
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
   }
-  if (merged.chat !== 'read-only' && merged.chat !== 'off') {
-    throw new TypeError("config.chat must be 'read-only' or 'off'")
+  if (!CHAT_MODES.has(merged.chat)) {
+    throw new TypeError("config.chat must be 'full', 'read-only', or 'off'")
   }
   if (typeof merged.transfer.follow !== 'boolean') {
     throw new TypeError('config.transfer.follow must be a boolean')
@@ -190,6 +205,7 @@ export function createMonoplayer ({
     serverboundDroppedByName: {},
     chatBlocked: 0,
     chatRelayed: 0,
+    chatSent: 0,
     clientboundBlocked: 0,
     clientboundBlockedByName: {},
     clientboundUnclassified: 0,
@@ -500,6 +516,17 @@ export function createMonoplayer ({
       return
     }
     if (LOGGED_BLOCKS.has(name)) log('clientboundBlocked', { state, name })
+  }
+
+  // One accounting for every chat frame the backend never receives, whether it
+  // was dropped by policy, carried no text, or the leg could not send it. Kept
+  // in one place so the counters and the event cannot diverge.
+  function dropChat (name, reason, fields = {}) {
+    metrics.serverboundDropped++
+    bumpName(metrics.serverboundDroppedByName, name)
+    metrics.chatBlocked++
+    log('chatBlocked', { name, reason, ...fields })
+    emit('chat_blocked', { name, reason })
   }
 
   // The refusal notice is local proxy speech, not server speech. It never
@@ -884,7 +911,7 @@ export function createMonoplayer ({
       const attachedNow = isAttached()
       // Classify before recording so the frame counter carries the outcome.
       const decision = attachedNow
-        ? classifyServerbound(name, serverbound.data)
+        ? classifyServerbound(name, serverbound.data, { mode: cfg.chat })
         : { action: 'drop', chat: false }
       journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer })
       telemetry.metric('monoplayer.frames', 1, {
@@ -921,14 +948,32 @@ export function createMonoplayer ({
         })
         return
       }
+      if (decision.action === 'speak') {
+        // #19: the human's text is spoken by the puppet leg, never forwarded.
+        // The frame carried the human's signature and offset, which the backend
+        // cannot use; the leg signs the text again as the puppet.
+        const spoken = chatText(name, serverbound.data)
+        if (!spoken || typeof backendLeg.chat !== 'function') {
+          dropChat(name, spoken ? 'leg_has_no_chat' : 'no_text')
+          return
+        }
+        try {
+          backendLeg.chat(spoken.text)
+          metrics.chatSent++
+          log('chatSent', { name, command: spoken.command, chars: spoken.text.length })
+          emit('chat_sent', { name, command: spoken.command })
+        } catch (error) {
+          dropChat(name, 'send_failed', { error: String(error?.message ?? error).slice(0, 200) })
+        }
+        return
+      }
       if (decision.action === 'drop') {
+        if (decision.chat) {
+          dropChat(name, decision.reason)
+          return
+        }
         metrics.serverboundDropped++
         bumpName(metrics.serverboundDroppedByName, serverbound.name)
-        if (decision.chat) {
-          metrics.chatBlocked++
-          log('chatBlocked', { name: serverbound.name })
-          emit('chat_blocked', { name: serverbound.name })
-        }
         return
       }
       session.setPose(
@@ -1088,8 +1133,8 @@ export function createMonoplayer ({
     }
     if (policy.decision === DECISION.PER_LEG) return // handled above; defensive
     if (policy.decision === DECISION.LIVE_ONLY) {
-      const chatFrame = name === 'system_chat' || name === 'profileless_chat'
-      if (chatFrame && cfg.chat !== 'read-only') return
+      const chatFrame = CHAT_FRAMES.has(name)
+      if (chatFrame && !chatRelayAllowed(name, cfg.chat)) return
       if (chatFrame) metrics.chatRelayed++
       if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
       return
@@ -1165,7 +1210,7 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_DIALOG_ACTION                            first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
-  MONOPLAYER_CHAT                                     read-only (default) or off
+  MONOPLAYER_CHAT                                     read-only (default), full, or off
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity

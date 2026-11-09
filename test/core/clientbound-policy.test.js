@@ -5,6 +5,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
 import {
+  CHAT_FRAMES,
+  chatRelayAllowed,
   DECISION,
   clientboundPolicy,
   mayCrossToFront,
@@ -42,7 +44,6 @@ test('connection-control frames are blocked, uncached, and unreplayable', () => 
     ['play', 'store_cookie'],
     ['play', 'show_dialog'],
     ['play', 'clear_dialog'],
-    ['play', 'player_chat'],
     ['play', 'hide_message'],
     ['configuration', 'transfer'],
     ['configuration', 'disconnect'],
@@ -62,12 +63,40 @@ test('connection-control frames are blocked, uncached, and unreplayable', () => 
   }
 })
 
+test('the chat mode decides which chat frames cross', () => {
+  // Three modes, one decision function, so the router and the front-leg
+  // backstop cannot disagree (#19).
+  for (const name of CHAT_FRAMES) {
+    assert.equal(chatRelayAllowed(name, 'full'), true, `full ${name}`)
+    assert.equal(chatRelayAllowed(name, 'off'), false, `off ${name}`)
+  }
+  assert.equal(chatRelayAllowed('system_chat', 'read-only'), true)
+  assert.equal(chatRelayAllowed('profileless_chat', 'read-only'), true)
+  assert.equal(chatRelayAllowed('player_chat', 'read-only'), false)
+  // Not a chat frame: the mode has no say.
+  assert.equal(chatRelayAllowed('map_chunk', 'off'), true)
+  assert.equal(chatRelayAllowed('player_chat', 'unknown-mode'), false, 'fails closed on the signed frame')
+})
+
+test('the last-write gate applies the chat mode when it is given one', () => {
+  assert.equal(mayCrossToFront('play', 'player_chat'), true, 'structural answer without a mode')
+  assert.equal(mayCrossToFront('play', 'player_chat', { chat: 'full' }), true)
+  assert.equal(mayCrossToFront('play', 'player_chat', { chat: 'read-only' }), false)
+  assert.equal(mayCrossToFront('play', 'system_chat', { chat: 'off' }), false)
+  assert.equal(mayCrossToFront('play', 'system_chat', { chat: 'read-only' }), true)
+  // Blocked frames stay blocked whatever the mode says.
+  assert.equal(mayCrossToFront('play', 'hide_message', { chat: 'full' }), false)
+  // The mode only speaks about play state.
+  assert.equal(mayCrossToFront('configuration', 'registry_data', { chat: 'off' }), true)
+})
+
 test('live-only frames relay but never cache or replay', () => {
-  for (const name of ['system_chat', 'profileless_chat', 'ping_response', 'nbt_query_response']) {
+  for (const name of ['system_chat', 'profileless_chat', 'player_chat', 'ping_response', 'nbt_query_response']) {
     const policy = clientboundPolicy('play', name)
     assert.equal(policy.decision, DECISION.LIVE_ONLY, name)
     assert.equal(policy.relay, true, name)
     assert.equal(policy.cache, false, name)
+    assert.equal(mayCrossToFront('play', name), true, `${name} cross`)
     assert.equal(policy.replay, false, name)
   }
 })

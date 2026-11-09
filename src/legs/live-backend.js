@@ -344,6 +344,15 @@ function createBackendLeg ({
       // One backend login = the play-state Login packet (26.x protocol).
       socketClient.on('login', packet => {
         log('backendLegLogin', { entityId: packet.entityId })
+        // Once per backend connection, and before any chat: whether this
+        // session can sign what it says. The library signs only with both the
+        // profile keys and the session that registered them
+        // (`canSign = client.profileKeys && client._session`), and sends an
+        // unsigned frame otherwise rather than failing, so a live run reads
+        // this line instead of inferring it from a server-side rejection.
+        log('chatCapability', {
+          signed: Boolean(socketClient.profileKeys && socketClient._session)
+        })
       })
       socketClient.on('playerJoin', () => {
         log('backendLegJoin', { joined: true })
@@ -436,6 +445,24 @@ function createBackendLeg ({
     write (name, packet) {
       if (!client) throw new Error('backend leg not connected')
       client.write(name, packet)
+    },
+    // #19: speak the human's text as the puppet. The library's signed-chat
+    // path signs with this connection's profile keys, fills the acknowledgement
+    // bitset and checksum from this connection's last-seen window, and picks
+    // `chat_command_signed` or `chat_command`. Building that by hand would
+    // duplicate the window tracking the library already does here, so the leg
+    // calls it.
+    chat (text) {
+      if (!client || ended) throw new Error('backend leg not connected')
+      if (typeof text !== 'string' || text.length === 0) throw new TypeError('chat text is required')
+      // The public alias is assigned when the client reaches play; the private
+      // signer is the same function under its own name. Prefer the public one
+      // and fall back, so one rename in a library bump does not break chat.
+      const speak = typeof client.chat === 'function' ? client.chat : client._signedChat
+      if (typeof speak !== 'function') {
+        throw new Error('minecraft-protocol has no chat path')
+      }
+      speak.call(client, text)
     },
     writeRaw (buffer) {
       if (!client) throw new Error('backend leg not connected')

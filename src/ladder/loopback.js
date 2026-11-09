@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O25 (including O11b) are the contract
+// Assertions R0 and O1-O29 (including O11b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -140,7 +140,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       attachWhitelist: offlineWhitelist,
       front: { host: '127.0.0.1', port: 0 },
       backend: { host: '127.0.0.1', port: fake.port },
-      puppet: { username: 'GlowSquidye', uuid: null }
+      puppet: { username: 'GlowSquidye', uuid: null },
+      // O29 needs the speaking path. The default is read-only, and this rung is
+      // the only place a real client-side frame meets the relay.
+      chat: 'full'
     })
 
     backend = createOfflineBackendLeg({
@@ -160,6 +163,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       getSnapshotConfig: () => core.cache.snapshot().config,
       wireCheck: payload => wire.check(payload),
       wireMode: 'throw',
+      chat: 'full',
       log
     })
 
@@ -528,6 +532,46 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         keepAlives: keepAliveIds,
         dropped: core.metrics.serverboundDropped - droppedBefore
       }
+    )
+
+    // --- O29: the human's chat is spoken by the puppet leg (#19) ---
+    // The bot writes chat the way a client does: signed when it has profile
+    // keys, always with an offset into its own last-seen window. The backend
+    // must receive the text from the puppet's connection instead, so the
+    // message arrives as the account rather than as the human's signature.
+    const chatBefore = {
+      chats: fake.received.chats.length,
+      commands: fake.received.chatCommands.length,
+      sent: core.metrics.chatSent,
+      forwarded: core.metrics.serverboundForwarded
+    }
+    bot1.sendChat('hello from the human')
+    bot1.sendCommand('list')
+    bot1.sendMessageAck(3)
+    await bot1.waitFor(
+      () => fake.received.chats.length === chatBefore.chats + 1 &&
+        fake.received.chatCommands.length === chatBefore.commands + 1,
+      'backend chat and command as the puppet'
+    )
+    const spokenChat = fake.received.chats.at(-1)
+    const spokenCommand = fake.received.chatCommands.at(-1)
+    evidence.chat = {
+      message: spokenChat?.message ?? null,
+      command: spokenCommand?.command ?? null,
+      chatSent: core.metrics.chatSent,
+      forwarded: core.metrics.serverboundForwarded - chatBefore.forwarded,
+      messageAcks: fake.received.messageAcknowledgements.length,
+      chatSessionUpdates: fake.received.chatSessionUpdates.length
+    }
+    check(
+      'O29',
+      'the human chat and command reached the backend as the puppet, and their acks did not',
+      spokenChat?.message === 'hello from the human' &&
+        spokenCommand?.command === 'list' &&
+        core.metrics.chatSent === chatBefore.sent + 2 &&
+        core.metrics.serverboundForwarded === chatBefore.forwarded &&
+        fake.received.messageAcknowledgements.length === 0,
+      evidence.chat
     )
 
     // --- O12: detach keeps the backend session and the pose ---
