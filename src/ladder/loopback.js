@@ -154,11 +154,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       puppet: { username: 'GlowSquidye', uuid: null },
       // O29 needs the speaking path. The default is read-only, and this rung is
       // the only place a real client-side frame meets the relay.
-      chat: 'full',
-      // The default is the kept connection (#22). O21-O24 pin the detach path,
-      // which is still reachable and is what a kept connection restores to, so
-      // this rung states it rather than inheriting it.
-      transfer: { keepConnection: false }
+      chat: 'full'
     })
 
     backend = createOfflineBackendLeg({

@@ -48,8 +48,7 @@ function makeCore (config = {}) {
   return { clock, backendLeg, frontLeg, core, events }
 }
 
-// The kept connection (#22) is the default. The detach-path tests state it off,
-// because that path still exists and a kept connection restores to it.
+// The kept-connection path (#22) is opt-in, so the seamless tests turn it on.
 function makeSeamless (config = {}) {
   return makeCore({
     ...config,
@@ -533,8 +532,8 @@ test('a restore round the client never finishes detaches it at the deadline', ()
   assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /transfer_restore_timeout/)
 })
 
-test('with the kept connection off, a transfer detaches and rejoins', () => {
-  const rig = makeCore({ transfer: { keepConnection: false } })
+test('the default keeps the detach-and-rejoin transfer', () => {
+  const rig = makeCore()
   warmBackend(rig)
   attach(rig)
 
@@ -551,8 +550,8 @@ test('with the kept connection off, a transfer detaches and rejoins', () => {
   assert.deepEqual(rig.frontLeg.reconfigurations(), [])
 })
 
-test('with the kept connection off, a reconfiguration detaches and reconnects', () => {
-  const rig = makeCore({ transfer: { keepConnection: false } })
+test('the default keeps the detach-and-reconnect reconfiguration', () => {
+  const rig = makeCore()
   warmBackend(rig)
   attach(rig)
 
@@ -568,8 +567,8 @@ test('with the kept connection off, a reconfiguration detaches and reconnects', 
   assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /reconfigured this session/i)
 })
 
-test('the kept connection is on by default and validated', () => {
-  assert.equal(loadConfig().transfer.keepConnection, true)
-  assert.equal(loadConfig({ transfer: { keepConnection: false } }).transfer.keepConnection, false)
+test('the kept connection is off by default and validated', () => {
+  assert.equal(loadConfig().transfer.keepConnection, false)
+  assert.equal(loadConfig({ transfer: { keepConnection: true } }).transfer.keepConnection, true)
   assert.throws(() => loadConfig({ transfer: { keepConnection: 'yes' } }), /keepConnection/)
 })

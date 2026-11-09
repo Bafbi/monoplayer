@@ -221,9 +221,9 @@ leg. The frame still never reaches the front. The sequence:
 2. Tear down synchronously: reset the cache, schedule one reconnect with the
    target, then end the old backend leg. The teardown does not depend on the
    socket's end event; a missed event would strand the front on a dead cache.
-   With a client attached, a kept connection (`transfer.keepConnection`,
-   on by default) moves the session to `transferring` and never kicks the
-   front. With it off, the client is detached with
+   With a client attached, a kept connection (`transfer.keepConnection`, off by
+   default) moves the session to `transferring` and never kicks the front.
+   Without it, the client is detached with
    `This session is moving. Reconnect in a few seconds to continue.` and
    rejoins once the puppet is warm on the target.
 3. The orchestrator dials the target with the same Microsoft account. The
@@ -279,11 +279,11 @@ alone would leave the client without the target's dimensions. The
 same-connection reconfiguration above replaces the registries, which is why it
 is a full configuration phase and not a synthetic respawn.
 
-It is on by default (`transfer.keepConnection`). The transfer testbed measured
-it with a real client on 2026-11-09: one socket through the move, no kick,
-`transfersSeamless 1`, `frontKicks 0`, and the target's play login on the same
-connection. `MONOPLAYER_TRANSFER_KEEP_CONNECTION=0` turns it off for a lane,
-which is the detach-and-rejoin path loopback `O21`-`O24` pin. The evidence run:
+It ships behind `transfer.keepConnection` (default `false`). The default stays
+the detach-and-rejoin path, so a merge does not change what the live lane does
+on the next deploy. Flipping the default is one line, after the transfer
+testbed run in #22's slice 3 records a real Paper and a real client keeping the
+connection:
 
 ```bash
 mise run testbed:run      # takes the live front offline; the operator's run
