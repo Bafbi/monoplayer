@@ -380,9 +380,17 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // protocol bot is the only place to observe it.
     const firstCut = attachCuts[0] ?? null
     const replayedParityNames = firstCut ? parityReplayNames(firstCut.replayFrames) : []
-    const capturedParityNames = playNames
+    const capturedParityNamesSoFar = () => bot1.playNames()
       .filter(name => PARITY_FRAME_NAMES.has(name))
       .slice(0, replayedParityNames.length)
+    if (replayedParityNames.length > 0) {
+      await bot1.waitFor(
+        () => capturedParityNamesSoFar().length >= replayedParityNames.length,
+        'the replayed parity frames'
+      )
+    }
+    // Read the names after the wait: playNames() grows for the life of the bot.
+    const capturedParityNames = capturedParityNamesSoFar()
     check(
       'O27',
       'the N13 frame cut matches the replay the client decoded',
