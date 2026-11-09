@@ -198,6 +198,14 @@ fetches the log, and compares the two views field by field. The result is
 unexplained. The field table and the expected differences are in
 [testbed-transfer.md](testbed-transfer.md#the-servers-view).
 
+The gate is not among the fields this run measures. The gate Paper runs with
+`enable-code-of-conduct=false`, so the server never sends a code of conduct and
+there is no accept for the observer to witness: the report marks both
+`codeOfConduct` fields absent with that reason. The human-answer path in this
+section rests on the loopback rung and the fake backend (`O32`), not on a real
+server's view. A lane that serves the gate has to answer the screen for its own
+real clients, which the G0 driver lane cannot do.
+
 ## What the testbed does and does not prove
 
 [testbed-transfer.md](testbed-transfer.md) runs two Paper servers and the proxy
