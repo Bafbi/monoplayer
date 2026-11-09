@@ -205,7 +205,7 @@ export function redactSecrets (text) {
 // invocation that requested and executed exactly two runs; the two report
 // paths it names must be the chronological run 1 and run 2 and both must have
 // passed. This prevents two separate one-run invocations from looking like 2/2.
-export function verifyG0Evidence (summary, reports) {
+export function verifyG0Evidence (summary, reports, { now = Date.now(), maxAgeMs = Infinity } = {}) {
   if (!summary || typeof summary !== 'object') return { ok: false, reason: 'missing driver summary' }
   if (summary.runsRequested !== 2 || summary.runsExecuted !== 2 || summary.runsPassed !== 2 ||
       summary.allPassed !== true || !Array.isArray(summary.reports) || summary.reports.length !== 2) {
@@ -230,6 +230,16 @@ export function verifyG0Evidence (summary, reports) {
   const generated = Date.parse(summary.generatedAt)
   if (Number.isFinite(generated) && Date.parse(sorted[1].startedAt) > generated) {
     return { ok: false, reason: 'driver summary is stale: a newer report exists' }
+  }
+  // A committed or hand-copied report set is not evidence of anything: it passes
+  // whether or not anything ran today. Bound the age of the newest run, so the
+  // gate can only be green on evidence this checkout produced recently.
+  const finished = Date.parse(sorted[1].finishedAt ?? sorted[1].startedAt)
+  if (Number.isFinite(maxAgeMs) && Number.isFinite(finished) && now - finished > maxAgeMs) {
+    return {
+      ok: false,
+      reason: `driver evidence is stale: the newest run finished at ${new Date(finished).toISOString()}, outside the ${Math.round(maxAgeMs / 60000)}-minute window`,
+    }
   }
   return { ok: true, reason: '2/2 consecutive driver runs' }
 }

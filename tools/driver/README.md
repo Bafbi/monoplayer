@@ -103,8 +103,8 @@ Validated on `nath` against Paper 26.1.2 build 74 on 2026-11-06: status, move,
 look, break, place, screenshot, respawn, disconnect, and quit all passed, with
 server-side block and position checks. On 2026-11-07, `screen`, `pause`,
 `click`, and the unfocused pause-menu screenshot were validated live; the
-client returned to play with `click Back to Game` and the driver-owned pause
-screenshot is [testdata/driver-ui-pause.png](../../testdata/driver-ui-pause.png).
+client returned to play with `click Back to Game`. The driver-owned pause
+screenshot is quoted in [testdata/driver-verdict.md](../../testdata/driver-verdict.md).
 See [docs/driver-validation.md](../../docs/driver-validation.md).
 
 ## Safety

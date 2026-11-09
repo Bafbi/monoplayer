@@ -18,3 +18,8 @@ tools/mc-source/build/
 *_mca-cache.json
 .DS_Store
 .scratch/
+# Run evidence stays out of git. Each verdict's page in testdata/ quotes
+# what the run produced.
+testdata/*.json
+testdata/*.png
+testdata/*.log

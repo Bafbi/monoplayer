@@ -61,9 +61,10 @@ client runs (quit + host-side relaunch between runs, no reconnect op), pairs
 every client-side claim with positive RCON assertions, classifies every RCON
 op as setup/assertion/probe, screenshots via `scp`, and writes per-run reports
 plus a summary under `testdata/`. `node src/driver/run.js --lane unmodded`
-generates the manual anti-masking witness checklist, and
-`node src/driver/run.js --verify-g0` (= `mise run driver:g0`) exits 0 only for a
-real 2/2 plus a completed witness. The runbook with commands, evidence rules,
+generates the manual anti-masking witness checklist. `mise run driver:g0` runs
+the two runs and then verifies them, so it exits 0 only for a fresh 2/2 plus a
+completed witness, and it refuses evidence older than 24 hours
+(`--max-age-hours`). The runbook with commands, evidence rules,
 and failure modes is [docs/driver-lane.md](docs/driver-lane.md).
 
 The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run), and
@@ -87,11 +88,15 @@ with `node src/custody/cli.js accounts` and `node src/custody/cli.js status --ac
 glowsquidye`; the runbook is [docs/custody.md](docs/custody.md).
 
 **Paper behind Velocity** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
-forwarding; the authenticated puppet joined through the proxy. Evidence:
-[testdata/custody-verdict.json](testdata/custody-verdict.json),
-[testdata/m4-verdict.json](testdata/m4-verdict.json). The official
+forwarding; the authenticated puppet joined through the proxy. The official
 26.1.2 client has since attached through the full Velocity + Paper path,
-rendered, moved, and edited blocks: [testdata/m4-driver-verdict.json](testdata/m4-driver-verdict.json). B1 live is
-green; next are B2-B6.
+rendered, moved, and edited blocks. B1 live is green; next are B2-B6.
+
+Each verdict is one page in `testdata/`: [the protocol spike](testdata/spike-verdict.md),
+[the driver lane](testdata/driver-verdict.md), [custody](testdata/custody-verdict.md),
+[M4](testdata/m4-verdict.md), [the live attach](testdata/live-attach-verdict.md),
+[the online rung](testdata/online-verdict.md), and [the deployed service](testdata/service-verdict.md).
+Each page quotes the verdict, the date where the record carries one, and the fact
+the run establishes, plus the command where the record names one. The records themselves stay in git history.
 
 Created in [T3 Code](https://t3.codes).

@@ -86,7 +86,7 @@ Prism client has joined it directly.
 > break, place, disconnect, and rejoin checks. The mandatory unmodded Prism
 > witness also passed join, render, move, break, place, screenshot,
 > disconnect, and rejoin. Runbook and evidence: `docs/driver-lane.md`,
-> `testdata/driver-g0-verdict.json`.
+> `testdata/driver-verdict.md`.
 
 > **G1 + M4 · 7 November 2026**
 >
@@ -96,7 +96,7 @@ Prism client has joined it directly.
 > allowed the player and denied it before play after removal. Velocity 4.3.1
 > b45 is in front of Paper 26.1.2 b74 with modern forwarding; the
 > authenticated puppet joined through the proxy. Evidence:
-> `testdata/custody-verdict.json`, `testdata/m4-verdict.json`.
+> `testdata/custody-verdict.md`, `testdata/m4-verdict.md`.
 
 Backend launcher: [deploy/driver/README.md](../deploy/driver/README.md).
 Client instance: `gate-b-player` under Prism's instance directory.
@@ -127,7 +127,7 @@ client; that is fine, because it no longer has to.
 > broke, placed, disconnected, and rejoined; the Paper log shows the
 > disconnect/rejoin pair. Renderer: AMD Radeon Graphics (radeonsi, Rembrandt),
 > OpenGL 4.6 Mesa 26.2.2. Route: Tailscale direct. Verdict:
-> `testdata/driver-g0-verdict.json`.
+> `testdata/driver-verdict.md`.
 
 > **Correction: 26.1.2 is OpenGL**
 >
