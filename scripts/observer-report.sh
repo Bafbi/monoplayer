@@ -54,8 +54,9 @@ VIEWS=${MONOPLAYER_OBSERVER_VIEWS:-.reports/observer-views.jsonl}
 JAR=${MONOPLAYER_OBSERVER_JAR:-}
 PROTOCOLLIB=${MONOPLAYER_PROTOCOLLIB_JAR:-}
 # The gate Paper's restart is a start wait, not a join wait. Measured on the
-# 26.2 gate Paper: 240 to 310 seconds from `kill 1` to the plugin's own "wire
-# listeners registered" line, so the old 300 was already too tight.
+# 26.2 gate Paper: 240 s to 310 s from `kill 1` to the plugin's own "wire
+# listeners registered" line on a server that had been up, so the old 300 was
+# already too tight. A freshly created pod came back in 40 s.
 START_TIMEOUT=${MONOPLAYER_OBSERVER_START_TIMEOUT:-${MONOPLAYER_OBSERVER_TIMEOUT:-600}}
 WAIT_INTERVAL=5
 PLUGINS_DIR=/data/plugins

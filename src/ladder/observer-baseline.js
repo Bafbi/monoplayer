@@ -64,13 +64,39 @@ export function resolveBotIdentity ({ accountsDir = DEFAULT_ACCOUNTS_DIR, select
   }
 }
 
+// Which of the two failures it was. #79 asked the report to tell a start that did
+// not happen from a join that was refused, and the rung's exit status is how the
+// script tells: 2 for a setup this rung refused before it opened a socket, 1 for
+// anything the server did. An untagged error is the second kind, because by then
+// the socket exists.
+const SETUP = 'setup'
+
+function setupFailure (error) {
+  if (error && typeof error === 'object') error.phase = SETUP
+  return error
+}
+
+function createBotSafely (options) {
+  try {
+    return createBot(options)
+  } catch (error) {
+    throw setupFailure(error)
+  }
+}
+
+// The phase of a failure, for a reader and for the caller's exit status.
+export function phaseOf (error) {
+  return error?.phase === SETUP ? SETUP : 'join'
+}
+
 // #78: the baseline client stands in for the human's Fabric client, which is the
 // client #17 decided the server sees, so it announces the brand the proxy
 // announces. Without it the report's brand row compares what the puppet says
 // against nothing, and a bot that says nothing is a tell a real server can see.
-// The frame goes out once per connection, on the server's `select_known_packs`,
-// which is the first configuration frame this client sees. The proxy writes its
-// own brand on the first configuration frame for the same reason.
+// The frame goes out once per connection. The trigger is the server's
+// `select_known_packs`: the proxy announces on its first configuration frame
+// instead, and this client's first frames are the server's own brand and its
+// feature list, which it does not need to answer.
 export function announceBrand (client, { brand = FABRIC_BRAND, log = () => {} } = {}) {
   if (typeof client?.once !== 'function' || typeof client?.write !== 'function') {
     throw new TypeError('client must be a minecraft-protocol client')
@@ -98,13 +124,20 @@ export async function runBaseline ({
   timeoutMs = JOIN_TIMEOUT_MS,
   log = () => {}
 } = {}) {
-  if (typeof host !== 'string' || host.length === 0) throw new TypeError('host is required')
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('port must be an integer in 1..65535')
+  if (typeof host !== 'string' || host.length === 0) throw setupFailure(new TypeError('host is required'))
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw setupFailure(new TypeError('port must be an integer in 1..65535'))
+  }
 
-  const identity = resolveBotIdentity({ accountsDir, selector: account })
+  let identity
+  try {
+    identity = resolveBotIdentity({ accountsDir, selector: account })
+  } catch (error) {
+    throw setupFailure(error)
+  }
   log('baselineStart', { host, port, account: identity.account, name: identity.username })
 
-  const bot = createBot({
+  const bot = createBotSafely({
     host,
     port,
     version,
@@ -136,8 +169,9 @@ async function main (argv = process.argv.slice(2)) {
     const result = await runBaseline({ host, port, accountsDir, account, log })
     return result.joined ? 0 : 1
   } catch (error) {
-    process.stderr.write(`observer-baseline: ${String(error?.message ?? error)}\n`)
-    return 2
+    const phase = phaseOf(error)
+    process.stderr.write(`observer-baseline: ${phase}: ${String(error?.message ?? error)}\n`)
+    return phase === SETUP ? 2 : 1
   }
 }
 
