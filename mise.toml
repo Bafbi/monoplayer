@@ -112,6 +112,10 @@ run = "scripts/build-protocollib.sh"
 description = "Bring up the dev validation lane: its own Paper, Monoplayer, custody volume, and account (#42)."
 run = "scripts/dev-lane.sh up"
 
+[tasks."dev:image"]
+description = "Run a branch image on the dev lane: mise run dev:image <sha-tag> (#43)."
+run = "scripts/dev-lane.sh set-image"
+
 [tasks."dev:down"]
 description = "Delete the dev validation lane. Never touches the live lane."
 run = "scripts/dev-lane.sh down"

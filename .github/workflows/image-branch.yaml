@@ -1,0 +1,93 @@
+# Build an image from a branch, for the dev lane (#43).
+#
+# The deploy lane builds main and publishes the bot-owned deploy branch.
+# This one builds any other ref and publishes nothing but an image tagged with
+# that commit, so the dev lane can run the code under review.
+#
+# Why a separate workflow instead of a flag on image.yaml: the deploy path is the
+# gate everything else is judged by, and a guard is weaker than a permission.
+# This workflow holds `contents: read`, so its token cannot push any branch, and
+# it never writes a manifest. A branch dispatch cannot reach the deploy branch or
+# the live lane even if the steps below are changed.
+#
+# It refuses main on purpose: main has the image.yaml path, which also rebuilds
+# the deploy branch. Two producers for one tag is how a stale image reaches the
+# cluster.
+
+name: image-branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: What this branch is being built for (recorded in the run log only).
+        required: false
+
+# contents: read is the guarantee, not a convention: no branch can be pushed.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-branch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The branch has to pass the same gate main does, or the dev lane tests a tree
+  # that would not be merged.
+  check:
+    uses: ./.github/workflows/ci.yaml
+
+  build:
+    needs: check
+    # main belongs to image.yaml, which also publishes the deploy branch.
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # No credentials persisted: nothing here may push.
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve names
+        id: names
+        run: |
+          echo "image=ghcr.io/$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/monoplayer" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One tag, the commit. No `:main`, so a branch build can never become what
+      # the live lane pulls.
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.names.outputs.image }}:${{ steps.names.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: How to run it on the dev lane
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+          REF: ${{ github.ref_name }}
+        run: |
+          {
+            echo "### $REF -> $TAG"
+            echo
+            echo "Point the dev lane at it:"
+            echo
+            echo '```'
+            echo "kubectl -n monoplayer-dev set image deploy/monoplayer monoplayer=ghcr.io/$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/monoplayer:$TAG"
+            echo "kubectl -n monoplayer-dev rollout status deploy/monoplayer"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

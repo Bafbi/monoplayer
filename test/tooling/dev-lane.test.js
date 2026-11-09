@@ -157,6 +157,24 @@ test('status reports the live replica count without changing it', () => {
   assert.equal(calls.some(line => line.includes(LIVE_NAMESPACE + ' delete')), false)
 })
 
+test('set-image puts the branch image on the dev proxy only', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, ['set-image', 'sha-abc1234'])
+  assert.equal(status, 0, output)
+  const set = calls.filter(line => line.includes('set image'))
+  assert.equal(set.length, 1, 'one set image: ' + calls.join(' / '))
+  assert.match(set[0], /^-n monoplayer-dev set image deploy\/monoplayer monoplayer=ghcr\.io\/bafbi\/monoplayer:sha-abc1234$/)
+  assert.ok(calls.some(line => line.includes('rollout status deploy/monoplayer')), 'it waits for the rollout')
+})
+
+test('set-image without a tag is refused', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, ['set-image'])
+  assert.equal(status, 2)
+  assert.match(output, /needs a tag/)
+  assert.deepEqual(calls, [], 'nothing was changed')
+})
+
 test('the live namespace is refused as a dev namespace', () => {
   const space = workspace()
   for (const args of [['up'], ['down']]) {
