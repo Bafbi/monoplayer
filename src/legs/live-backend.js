@@ -344,6 +344,11 @@ function createBackendLeg ({
       // One backend login = the play-state Login packet (26.x protocol).
       socketClient.on('login', packet => {
         log('backendLegLogin', { entityId: packet.entityId })
+        // Once per backend connection, and before any chat: whether this
+        // session can sign what it says. The library sends an unsigned frame
+        // without profile keys rather than failing, so a live run reads this
+        // line instead of inferring it from a server-side rejection.
+        log('chatCapability', { signed: Boolean(socketClient.profileKeys) })
       })
       socketClient.on('playerJoin', () => {
         log('backendLegJoin', { joined: true })
@@ -454,13 +459,6 @@ function createBackendLeg ({
         throw new Error('minecraft-protocol has no chat path')
       }
       speak.call(client, text)
-    },
-    // True when this connection holds the profile keys a signed message needs.
-    // The library sends an unsigned frame when it has none, and does not
-    // throw, so this is the only way a live run can tell the two apart before
-    // a server rejects one.
-    chatCapable () {
-      return Boolean(client && !ended && client.profileKeys)
     },
     writeRaw (buffer) {
       if (!client) throw new Error('backend leg not connected')

@@ -198,9 +198,9 @@ its offset means nothing on the puppet's window.
 
 A leg without profile keys sends the message unsigned instead of failing, and a
 server that enforces secure profiles answers an unsigned message by closing the
-connection. The core logs `chatCapability` once per session, from
-`backendLeg.chatCapable()`, so a live run answers that question before anyone
-flips the default.
+connection. The backend leg logs `chatCapability` once per backend connection,
+before any chat, so a live run answers that question before anyone flips the
+default.
 
 In every mode, clientbound `system_chat` and `profileless_chat` are relayed to
 the attached client while it is attached. Neither frame is cached, so an attach

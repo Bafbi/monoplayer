@@ -279,7 +279,6 @@ export function createMonoplayer ({
   let earlyAttach = null
   let pendingEarlyReplay = null
   let frontPlayReady = false
-  let chatCapabilityLogged = false
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
   // #18: the last human's client information. It survives a detach, like a
@@ -953,14 +952,6 @@ export function createMonoplayer ({
         try {
           backendLeg.chat(spoken.text)
           metrics.chatSent++
-          // Once per session: whether the account can sign is the one fact a
-          // live run needs from here, and the library sends an unsigned frame
-          // rather than throwing when it cannot.
-          if (!chatCapabilityLogged) {
-            chatCapabilityLogged = true
-            const signed = typeof backendLeg.chatCapable === 'function' ? backendLeg.chatCapable() : null
-            log('chatCapability', { signed })
-          }
           log('chatSent', { name, command: spoken.command, chars: spoken.text.length })
           emit('chat_sent', { name, command: spoken.command })
         } catch (error) {
