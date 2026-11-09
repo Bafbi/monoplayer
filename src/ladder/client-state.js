@@ -44,20 +44,43 @@ const LATEST_FRAMES = new Set([
 
 // The client's advancement map after a run of `advancements` frames, applied
 // the way the vanilla client applies them: reset clears the map, identifiers
-// remove one advancement each, the mapping adds or replaces, and progress
-// attaches to an advancement the client holds. A notice that adds and then
-// removes one id leaves this map as the server left it.
+// remove one advancement each, the mapping adds or replaces a definition, and
+// progress marks a criterion of an advancement the client holds. A notice that
+// adds and then removes one id leaves this map as the server left it.
+//
+// Each entry keeps the advancement's definition and the set of criteria the
+// client saw complete, which is what advancementComplete reads.
 export function applyAdvancementFrames (frames = [], held = new Map()) {
   for (const frame of frames) {
     if (frame.reset) held.clear()
     for (const id of frame.identifiers ?? []) held.delete(id)
-    for (const entry of frame.advancementMapping ?? []) held.set(entry.key, entry.value)
+    for (const entry of frame.advancementMapping ?? []) {
+      held.set(entry.key, { value: entry.value, criteria: new Set() })
+    }
     for (const entry of frame.progressMapping ?? []) {
       const current = held.get(entry.key)
-      if (current !== undefined) held.set(entry.key, { ...current, progress: entry.value })
+      if (current === undefined) continue // progress for an advancement the client does not hold
+      for (const criterion of entry.value ?? []) {
+        // A criterion entry exists only when it is complete; the value is when,
+        // and the client only cares that the criterion is met.
+        if (criterion.criterionProgress !== undefined) current.criteria.add(criterion.criterionIdentifier)
+      }
     }
   }
   return held
+}
+
+// The client's completion rule for a held advancement: every OR group in its
+// requirements has one met criterion.
+//
+// An empty requirement list is treated as not complete. Which way a given
+// client reads that empty list is not settled here, so the model takes the
+// strict reading and a frame has to name the criterion it completes instead of
+// relying on a default.
+export function advancementComplete (entry) {
+  if (!entry) return false
+  const groups = entry.value?.requirements ?? []
+  return groups.length > 0 && groups.every(group => Array.isArray(group) && group.some(id => entry.criteria.has(id)))
 }
 
 export function createClientState () {
