@@ -5,9 +5,10 @@
 // Backend leg adapter (fake): implements the interface createMonoplayer wires
 // against. Frames are {state: 'configuration'|'play', name, buffer?, data?};
 // `buffer` is opaque to the core. Records everything written back to the
-// backend, counts logins.
+// backend, counts logins, and records the text the proxy spoke as the puppet
+// (#19). The real leg signs that text; the fake only records it.
 export function createFakeBackendLeg () {
-  const written = { raw: [], packets: [] }
+  const written = { raw: [], packets: [], spoken: [] }
   let frameHandler = null
   let endHandler = null
   let errorHandler = null
@@ -27,6 +28,10 @@ export function createFakeBackendLeg () {
     setErrorHandler (fn) { errorHandler = fn },
     writeRaw (buffer, meta) { written.raw.push({ buffer, meta }) },
     write (name, packet, meta) { written.packets.push({ name, packet, meta }) },
+    chat (text) {
+      if (typeof text !== 'string' || text.length === 0) throw new TypeError('chat text is required')
+      written.spoken.push({ text, command: text.startsWith('/') })
+    },
     end (reason) { ended++; connected = false },
 
     // Test helpers (not part of the real-leg contract):
@@ -35,6 +40,7 @@ export function createFakeBackendLeg () {
     get written () { return written },
     rawWrites: () => [...written.raw],
     packetWrites: () => [...written.packets],
+    spoken: () => [...written.spoken],
 
     // Scripted delivery: pretend the backend sent this frame.
     deliver ({ state = 'play', name, buffer, data = {} }) {

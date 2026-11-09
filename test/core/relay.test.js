@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   classifyServerbound,
   capturePose,
+  chatText,
   CHAT_SERVERBOUND,
   CLIENT_IDENTITY_CHANNELS,
   SERVERBOUND_DROPS,
@@ -17,13 +18,44 @@ test('per-leg connection mechanics drop serverbound', () => {
   }
 })
 
-test('chat is blocked and counted as chat', () => {
-  for (const name of ['chat_message', 'chat_command', 'chat_command_signed', 'chat_session_update', 'chat_ack']) {
+test('the human chat text is spoken as the puppet in full mode', () => {
+  for (const name of ['chat_message', 'chat_command', 'chat_command_signed']) {
     assert.equal(CHAT_SERVERBOUND.has(name), true, name)
-    const d = classifyServerbound(name)
-    assert.equal(d.action, 'drop')
+    const d = classifyServerbound(name, null, { mode: 'full' })
+    assert.equal(d.action, 'speak', name)
     assert.equal(d.chat, true, name)
+    assert.equal(d.reason, 'human_chat')
   }
+})
+
+test('the read-only and off modes drop the chat text and count it as chat', () => {
+  for (const mode of ['read-only', 'off']) {
+    for (const name of ['chat_message', 'chat_command', 'chat_command_signed', 'chat_session_update', 'chat_ack']) {
+      const d = classifyServerbound(name, null, { mode })
+      assert.equal(d.action, 'drop', `${mode} ${name}`)
+      assert.equal(d.chat, true, `${mode} ${name}`)
+    }
+  }
+})
+
+test('the session key and the chat ack drop in every mode', () => {
+  for (const mode of ['full', 'read-only', 'off']) {
+    for (const name of ['chat_session_update', 'chat_ack']) {
+      const d = classifyServerbound(name, null, { mode })
+      assert.equal(d.action, 'drop', `${mode} ${name}`)
+      assert.equal(d.chat, true, `${mode} ${name}`)
+    }
+  }
+})
+
+test('chatText returns the message, or the command with its slash', () => {
+  assert.deepEqual(chatText('chat_message', { message: 'hi there' }), { text: 'hi there', command: false })
+  assert.deepEqual(chatText('chat_command', { command: 'msg Bafbi gg' }), { text: '/msg Bafbi gg', command: true })
+  assert.deepEqual(chatText('chat_command_signed', { command: '/tp 0 70 0' }), { text: '/tp 0 70 0', command: true })
+  assert.equal(chatText('chat_message', { message: '' }), null)
+  assert.equal(chatText('chat_message', {}), null)
+  assert.equal(chatText('chat_command', { command: '/' }), null)
+  assert.equal(chatText('keep_alive', { message: 'hi' }), null)
 })
 
 test('client information is rewritten, never forwarded or dropped', () => {
