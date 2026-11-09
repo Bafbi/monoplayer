@@ -286,3 +286,56 @@ test('verify g0: a stale summary cannot outvote a newer report', () => {
   ]
   assert.equal(verifyG0Evidence(summary, reports).ok, false)
 })
+
+// A report set sitting in the checkout is not evidence that anything ran today:
+// the gate must be green only on runs this checkout produced inside the window.
+const finishedReports = (latestFinishedAt) => [
+  { lane: 'driver', run: 1, passed: true, startedAt: '2026-11-06T14:00:00.000Z', finishedAt: '2026-11-06T14:01:00.000Z' },
+  { lane: 'driver', run: 2, passed: true, startedAt: '2026-11-06T14:20:00.000Z', finishedAt: latestFinishedAt },
+]
+
+const cleanSummary = {
+  runsRequested: 2, runsExecuted: 2, runsPassed: 2, allPassed: true,
+  generatedAt: '2026-11-06T14:30:00.000Z',
+  reports: ['a.json', 'b.json'],
+}
+
+test('verify g0: a run inside the age window passes', () => {
+  const now = Date.parse('2026-11-06T15:00:00.000Z')
+  const verdict = verifyG0Evidence(cleanSummary, finishedReports('2026-11-06T14:25:00.000Z'), {
+    now, maxAgeMs: 24 * 60 * 60 * 1000,
+  })
+
+  assert.equal(verdict.ok, true)
+  assert.equal(verdict.reason, '2/2 consecutive driver runs')
+})
+
+test('verify g0: a run older than the window fails however clean it reads', () => {
+  const now = Date.parse('2026-11-08T15:00:00.000Z')
+  const verdict = verifyG0Evidence(cleanSummary, finishedReports('2026-11-06T14:25:00.000Z'), {
+    now, maxAgeMs: 24 * 60 * 60 * 1000,
+  })
+
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /stale/)
+  assert.match(verdict.reason, /1440-minute window/)
+})
+
+test('verify g0: without a window, the age of the evidence is not checked', () => {
+  const verdict = verifyG0Evidence(cleanSummary, finishedReports('2026-11-06T14:25:00.000Z'))
+
+  assert.equal(verdict.ok, true)
+})
+
+test('verify g0: a report with no finishedAt falls back to its start time', () => {
+  const now = Date.parse('2026-11-09T15:00:00.000Z')
+  const reports = [
+    driverReport(1, '2026-11-06T14:00:00.000Z'),
+    driverReport(2, '2026-11-06T14:20:00.000Z'),
+  ]
+  const verdict = verifyG0Evidence(cleanSummary, reports, { now, maxAgeMs: 24 * 60 * 60 * 1000 })
+
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /stale/)
+})
+

@@ -78,8 +78,8 @@ wait_for = ["check", "driver:build"]
 run = "node src/driver/run.js --runs 2 || node src/ladder/next-rung.js driver:scenario $?"
 
 [tasks."driver:g0"]
-description = "Driver-lane G0 verdict: requires two consecutive PASSED driver reports plus a completed unmodded witness."
-depends = ["install"]
+description = "Driver-lane G0 verdict: run the two-run scenario, then verify both fresh reports plus the completed unmodded witness."
+depends = ["check", "driver:build", "driver:scenario"]
 run = "node src/driver/run.js --verify-g0 || node src/ladder/next-rung.js driver:g0 $?"
 
 [tasks."driver:install"]

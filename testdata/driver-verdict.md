@@ -46,6 +46,6 @@ Two screenshots backed the host wrapper and the driver's UI operations:
 - `testdata/driver-ui-pause.png` (2026-11-07, 1916x1050, 1109427 bytes): the driver captured the pause menu of an unfocused window, and `click Back to Game` returned the client to play. `tools/driver/README.md` cites it.
 - `testdata/nath-wrapper-2026-11-08.png` (2026-11-08, 1916x1050, 1393103 bytes): `tools/nath.sh launch` reported `SILENT=yes` without touching the active workspace, `shot` returned this PNG, and `kill` reported `QUIT=ok` and closed the driver port. `docs/driver-validation.md` cites it.
 
-## What this costs now that the files are gone
+## Where the evidence lives now
 
-`mise run driver:g0` reads these records. The checkout no longer carries them, so the task reports `NOT 2/2` until a fresh 2-run invocation writes new reports and an operator records a new witness. `mise run check` never read any of them, and `docs/driver-lane.md` gives the commands.
+The two runs are no longer committed. `mise run driver:g0` runs the scenario and then verifies what it wrote, accepts only evidence whose newest run finished within 24 hours, and needs a completed unmodded witness in the checkout. `mise run check` never read any of these files, and `docs/driver-lane.md` gives the commands.
