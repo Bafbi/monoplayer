@@ -517,7 +517,7 @@ build on `enforce-secure-profile=true` alone.
 > soak, per-leg keep-alive/teleport/chunk-ack ownership, exactly one backend
 > login, and chat blocked in both directions. See
 > [docs/protocol-spike.md](protocol-spike.md) and
-> `testdata/spike-report.json`. This is **not** the official-client gate:
+> [`testdata/spike-verdict.md`](../testdata/spike-verdict.md). This is **not** the official-client gate:
 > encryption, vanilla rendering, online-mode `hasJoined`, Microsoft auth,
 > secure-chat re-signing, config-phase replay, and the full 5-minute detach
 > window remain unproven. The research, council, and audit trail lives in
