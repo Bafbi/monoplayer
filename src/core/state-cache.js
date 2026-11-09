@@ -330,8 +330,14 @@ export function createStateCache (overrides = {}) {
   }
 
   function stats () {
+    // The memory the chunk ring actually holds. Sizes drive the raise decision;
+    // this is the measurement #18 records (optimization is deferred).
+    let chunkBytes = 0
+    for (const entry of chunks.values()) chunkBytes += entry.buffer?.length ?? 0
     return {
       warm,
+      chunkBound: opts.maxChunks,
+      chunkBytes,
       sizes: {
         prefix: prefix.length,
         config: config.length,
@@ -344,6 +350,16 @@ export function createStateCache (overrides = {}) {
       },
       metrics
     }
+  }
+
+  // #18: the backend advertises its view distance in the play login, and the
+  // ring must hold the whole view. Raise only: lowering would evict chunks a
+  // later attach still needs, and the value is sticky across reset() because
+  // the next connection to the same backend needs the same room.
+  function raiseChunkBound (bound) {
+    if (!Number.isInteger(bound) || bound < 1) return opts.maxChunks
+    if (bound > opts.maxChunks) opts.maxChunks = bound
+    return opts.maxChunks
   }
 
   function reset () {
@@ -360,7 +376,7 @@ export function createStateCache (overrides = {}) {
     frameSeq = 0
   }
 
-  return { push, snapshot, stats, reset, forceWarm, get warm () { return warm } }
+  return { push, snapshot, stats, reset, forceWarm, raiseChunkBound, get warm () { return warm } }
 }
 
 // Joined convenience: warm completion + unload handling already hold through a
