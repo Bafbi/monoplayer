@@ -198,7 +198,7 @@ _Avoid_: muted chat, one-way chat
 
 **Proxy notice**:
 A message Monoplayer writes to the attaching player in its own voice, such as a refused transfer. It rides a synthetic advancement with a visible toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
-_Avoid_: local chat, toast
+_Avoid_: local chat, notice toast
 
 **Wire check**:
 A strict parse of one clientbound frame that fails on leftover bytes or on a frame name that does not match its state.

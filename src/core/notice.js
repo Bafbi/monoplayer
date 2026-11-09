@@ -18,9 +18,10 @@
 // the characters stay lowercase and in `[a-z0-9/._-]`.
 //
 // `showAdvancements` is server state, not ours: the caller passes the value
-// from the backend's last advancement frame, so a notice does not open or hide
-// the client's advancement screen. The frames are never cached or replayed;
-// the caller writes them straight to the front leg.
+// from the backend's last advancement frame, so the notice keeps whatever the
+// server decided. When the backend never sent that frame the caller passes the
+// client's own default instead of hiding the screen. The frames are never
+// cached or replayed; the caller writes them straight to the front leg.
 //
 // Field shapes come from the vendored 26.2 protocol data and the installed
 // 26.1 data; both carry the same layout (`node tools/protocol.mjs frame 26.2
@@ -31,9 +32,11 @@ export const NOTICE_NAMESPACE = 'monoplayer:notice'
 export const NOTICE_TITLE = 'Monoplayer'
 export const NOTICE_CRITERION = 'notice'
 // The icon is an item id in the registry the client received from its server,
-// and the config frame is not decoded here, so only the shape is known: id 1,
-// which is `minecraft:stone` in a vanilla registry. A datapack server that
-// renumbers its items changes the icon, never the toast.
+// and the configuration frames are not decoded here, so only the shape is
+// known: id 1, which is `minecraft:stone` in the vanilla registry ordering
+// (`node -e "const md=require('minecraft-data'); console.log(md('26.2').itemsByName.stone.id)"`
+// prints 1 for 26.1 and 26.2). A datapack server that renumbers its items
+// changes the icon, never the toast.
 export const NOTICE_ICON_ID = 1
 // frameType 0 is `task`: a goal or a challenge plays the challenge sound, and
 // a proxy notice has no reason to beep at the player.
@@ -61,7 +64,7 @@ export function noticeFrames ({ text, id, showAdvancements = true } = {}) {
   }
   // Only an explicit false hides the screen: an unknown caller value must not
   // take the server's advancement screen away.
-  const show = showAdvancements === false ? false : true
+  const show = showAdvancements !== false
   return [
     {
       name: NOTICE_FRAME,

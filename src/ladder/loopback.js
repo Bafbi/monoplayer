@@ -22,6 +22,7 @@ import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
+import { applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 
 const VERSION = '26.1'
@@ -55,19 +56,6 @@ function waitFor (pred, label, ms = 10_000) {
     }
     tick()
   })
-}
-
-// The client's advancement state after a run of advancements frames, applied
-// the way the vanilla client applies them: reset clears, identifiers remove,
-// the mapping adds. A frame that leaves nothing behind is a clean notice.
-function applyAdvancements (frames) {
-  const held = new Map()
-  for (const frame of frames) {
-    if (frame.reset) held.clear()
-    for (const id of frame.identifiers ?? []) held.delete(id)
-    for (const entry of frame.advancementMapping ?? []) held.set(entry.key, entry)
-  }
-  return held
 }
 
 function detail (value) {
@@ -938,7 +926,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const noticesBefore = core.metrics.noticesSent
     fake2.sendTransfer('', 0)
     await waitFor(() => b4.advancements.length === 2, 'the notice toast and its removal')
-    const held = applyAdvancements(b4.advancements)
+    const held = applyAdvancementFrames(b4.advancements)
     const [toast, removal] = b4.advancements
     const noticeKey = toast?.advancementMapping?.[0]?.key ?? null
     check(

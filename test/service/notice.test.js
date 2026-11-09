@@ -105,18 +105,20 @@ test('a refused transfer reaches the client as a toast and then removes it', () 
   assert.equal(rig.frontLeg.namesOf().includes('system_chat'), false)
 })
 
-test('the notice path runs with no client attached and throws nothing', () => {
+test('the notice path runs with no client attached and reports what it delivered', () => {
   const rig = makeCore()
   warmBackend(rig)
   assert.equal(rig.core.attached, false)
 
+  // The front leg drops a write while nothing is attached, so the call says so
+  // instead of claiming a delivery nobody saw. A caller decides whether to queue
+  // the notice for the next attach.
   const result = rig.core.notice('A proxy action failed.')
 
-  assert.deepEqual(result, { sent: true, kind: 'toast', id: noticeId(1) })
-  assert.equal(rig.core.metrics.noticesSent, 1)
-  const written = noticeFramesWritten(rig.frontLeg)
-  assert.equal(written.length, 2)
-  assert.equal(written[1].packet.identifiers[0], written[0].packet.advancementMapping[0].key)
+  assert.deepEqual(result, { sent: false, kind: null, id: noticeId(1) })
+  assert.equal(rig.core.metrics.noticesSent, 0)
+  assert.equal(noticeFramesWritten(rig.frontLeg).length, 0)
+  assert.match(rig.core.logs().join('\n'), /proxyNoticeUndelivered/)
 })
 
 test('a toast write that fails falls back to local system chat', () => {
@@ -159,7 +161,7 @@ test('the toast carries the advancement screen flag the backend last sent', () =
   assert.equal(written[1].packet.showAdvancements, false, 'the removal restores the same flag')
 })
 
-test('the toast opens the advancement screen by default when the backend sent no frame', () => {
+test('the toast keeps the client advancement screen flag when the backend sent none', () => {
   const rig = makeCore()
   warmBackend(rig)
   attach(rig)
