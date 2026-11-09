@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "test:spike": "node --test test/spikes/*.test.js",
+    "test": "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling}/*.test.js'",
+    "test:spike": "node --test test/spike/*.test.js",
     "spike:report": "node src/spike/run.js",
     "postinstall": "node scripts/patch-minecraft-data-26.2.mjs"
   },

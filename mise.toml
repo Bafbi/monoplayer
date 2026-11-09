@@ -16,13 +16,13 @@ run = "(find src test -name '*.js' -print0 | xargs -0 -n1 node --check && bash -
 [tasks.test]
 description = "Run the pure unit/fake tests (no sockets, no auth)."
 depends = ["install"]
-run = "node --test test/*.test.js || node src/ladder/next-rung.js test $?"
+run = "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling}/*.test.js' || node src/ladder/next-rung.js test $?"
 
 [tasks.spike]
 description = "Run the frozen Gate A spike test (real sockets, offline protocol)."
 depends = ["install"]
 wait_for = ["check"]
-run = "node --test test/spikes/*.test.js"
+run = "node --test test/spike/*.test.js"
 
 [tasks.loopback]
 description = "Run the product offline loopback rung (real legs, fake backend, protocol bot; no auth)."
