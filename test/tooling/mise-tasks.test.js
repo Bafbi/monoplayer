@@ -43,6 +43,13 @@ test('the unit rung runs every test directory except the spike', () => {
   )
 })
 
+test('the lint rung syntax-checks the tools as well as src and test', () => {
+  const lint = tasks.get('lint')
+
+  assert.match(lint.body, /find src test tools/, 'lint walks the tools directory')
+  assert.match(lint.body, /-name '\*\.mjs'/, 'lint checks the .mjs tools')
+})
+
 test('check runs the three cheap rungs and nothing else', () => {
   const check = tasks.get('check')
 
