@@ -94,7 +94,7 @@ paper_pod() {
 }
 
 # Wire the observer in, then restart the server so Paper loads it. A container
-# restart keeps the pod and its volume; a new pod would lose the copied jars.
+# restart keeps the pod and its volume. A new pod would lose the copied jars.
 install_observer() {
   local pod
   pod=$(paper_pod)

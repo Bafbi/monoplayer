@@ -11,6 +11,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerResourcePackStatusEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -155,12 +156,15 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
         return new String(data, index, length, StandardCharsets.UTF_8);
     }
 
+    // The resource-pack status is the one field that always arrives after the
+    // join, so a join alone cannot carry it. The view stays in the map and is
+    // written again when that status lands: one record per observation of one
+    // connection, and the report merges the records that share an address.
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         String key = String.valueOf(player.getAddress());
-        View view = views.remove(key);
-        if (view == null) view = new View();
+        View view = views.computeIfAbsent(key, ignored -> new View());
         view.player = player.getName();
         view.uuid = player.getUniqueId().toString();
         view.address = key;
@@ -175,8 +179,19 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onResourcePack(PlayerResourcePackStatusEvent event) {
         String key = String.valueOf(event.getPlayer().getAddress());
-        View view = views.computeIfAbsent(key, ignored -> new View());
+        View view = views.get(key);
+        // No view means the join was not recorded for this connection, so there is
+        // nothing to add a field to.
+        if (view == null) return;
         view.resourcePack = event.getStatus().name().toLowerCase();
+        write(view);
+    }
+
+    // A reconnect from the same source address must not inherit the last session's
+    // observations, so the view leaves with the player.
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onQuit(PlayerQuitEvent event) {
+        views.remove(String.valueOf(event.getPlayer().getAddress()));
     }
 
     private synchronized void write(View view) {

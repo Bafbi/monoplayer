@@ -88,11 +88,12 @@ const SHIM = [
   '  *" get secret "*) exit 1 ;;',
   '  *" create namespace "*) printf \'{"kind":"Namespace"}\\n\'; exit 0 ;;',
   '  *" create secret "*) printf \'{"kind":"Secret"}\\n\'; exit 0 ;;',
+  '  *" apply -k "*) touch "$KUBECTL_MARKER"; cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" rollout status "*) exit 0 ;;',
   '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
   '  *" get configmap "*) printf \'{"version":1,"players":[]}\\n\'; exit 0 ;;',
-  '  *" get deploy "*) printf \'1\\n\'; exit 0 ;;',
+  '  *" get deploy "*) if [ -f "$KUBECTL_MARKER" ]; then printf \'%s\\n\' "$KUBECTL_REPLICAS_AFTER"; else printf \'%s\\n\' "$KUBECTL_REPLICAS_BEFORE"; fi; exit 0 ;;',
   '  *) exit 0 ;;',
   'esac',
   ''
@@ -103,14 +104,22 @@ function workspace () {
   const bin = path.join(dir, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
-  return { dir, bin, log: path.join(dir, 'kubectl.log') }
+  return { dir, bin, log: path.join(dir, 'kubectl.log'), marker: path.join(dir, 'applied') }
 }
 
 function run (space, args, env = {}) {
   const result = spawnSync('bash', [SCRIPT, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, PATH: space.bin + ':' + process.env.PATH, KUBECTL_LOG: space.log, ...env }
+    env: {
+      ...process.env,
+      PATH: space.bin + ':' + process.env.PATH,
+      KUBECTL_LOG: space.log,
+      KUBECTL_MARKER: space.marker,
+      KUBECTL_REPLICAS_BEFORE: '1',
+      KUBECTL_REPLICAS_AFTER: '1',
+      ...env
+    }
   })
   const calls = fs.existsSync(space.log)
     ? fs.readFileSync(space.log, 'utf8').trim().split('\n').filter(Boolean)
@@ -155,6 +164,22 @@ test('status reports the live replica count without changing it', () => {
   assert.equal(status, 0, output)
   assert.match(output, /live monoplayer\/monoplayer available replicas: 1/)
   assert.equal(calls.some(line => line.includes(LIVE_NAMESPACE + ' delete')), false)
+})
+
+test('up records the live replica count and fails when it changes', () => {
+  const space = workspace()
+  const changed = run(space, ['up'], { KUBECTL_REPLICAS_AFTER: '0' })
+  assert.equal(changed.status, 1, changed.output)
+  assert.match(changed.output, /changed its replica count \(1 -> 0\)/)
+  const report = JSON.parse(fs.readFileSync(path.join(ROOT, '.reports', 'dev-lane.json'), 'utf8'))
+  assert.deepEqual(report.live, { before: '1', after: '0' })
+})
+
+test('up with a steady live lane reports the same count twice', () => {
+  const space = workspace()
+  const { status, output } = run(space, ['up'], { MONOPLAYER_DEV_REPORT: path.join(space.dir, 'dev-lane.json') })
+  assert.equal(status, 0, output)
+  assert.match(output, /live replicas before monoplayer-dev came up: 1, after: 1/)
 })
 
 test('set-image puts the branch image on the dev proxy only', () => {

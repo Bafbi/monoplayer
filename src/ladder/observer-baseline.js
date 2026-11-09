@@ -7,7 +7,7 @@
 // knows about a client that joined it directly. This is that direct client: the
 // puppet account itself, connecting to the backend with no proxy in between, so
 // the proxy is the only variable between the two joins. Using the same account is
-// the point — a different account would put `player` and `uuid` in the report as
+// the point. A different account would put `player` and `uuid` in the report as
 // differences and hide the ones being measured.
 //
 // It runs where the custody is, in a throwaway pod that holds a copy of it

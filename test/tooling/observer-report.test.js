@@ -34,7 +34,9 @@ const SHIM = [
   '  *" logs "*) printf \'[Server] MonoplayerObserver wire listeners registered\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*) exit 0 ;;',
-  '  *views.jsonl*) mkdir -p "$(dirname "$last")"; printf \'%s\\n\' "$KUBECTL_BASELINE_VIEW" "$KUBECTL_PUPPET_VIEW" > "$last"; exit 0 ;;',
+  // Two records per connection, as the plugin writes them: the join, then the
+  // resource-pack status. The report has to merge each pair.
+  '  *views.jsonl*) mkdir -p "$(dirname "$last")"; { printf \'%s\\n\' "$KUBECTL_BASELINE_VIEW"; printf \'%s\\n\' "$KUBECTL_BASELINE_LATE"; printf \'%s\\n\' "$KUBECTL_PUPPET_VIEW"; printf \'%s\\n\' "$KUBECTL_PUPPET_LATE"; } > "$last"; exit 0 ;;',
   '  *) exit 0 ;;',
   'esac',
   ''
@@ -86,8 +88,10 @@ function run (space, env = {}, args = []) {
       KUBECTL_PUPPET: PUPPET,
       KUBECTL_ATTACH: ATTACH,
       KUBECTL_POD: POD,
-      KUBECTL_BASELINE_VIEW: view({ address: '203.0.113.7:52001' }),
-      KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000' }),
+      KUBECTL_BASELINE_VIEW: view({ address: '203.0.113.7:52001', resourcePack: null }),
+      KUBECTL_BASELINE_LATE: view({ address: '203.0.113.7:52001', resourcePack: 'accepted' }),
+      KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000', resourcePack: null }),
+      KUBECTL_PUPPET_LATE: view({ address: '198.51.100.9:40000', resourcePack: 'accepted' }),
       MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
       MONOPLAYER_OBSERVER_JAR: space.jar,
       MONOPLAYER_PROTOCOLLIB_JAR: space.protocollib,
@@ -148,7 +152,10 @@ test('measuring the live lane is refused before anything runs', () => {
 
 test('an unexplained difference fails the run', () => {
   const space = workspace()
-  const { status, output } = run(space, { KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000', brand: 'vanilla' }) })
+  const { status, output } = run(space, {
+    KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000', brand: 'vanilla', resourcePack: null }),
+    KUBECTL_PUPPET_LATE: view({ address: '198.51.100.9:40000', brand: 'vanilla', resourcePack: 'accepted' })
+  })
   assert.equal(status, 1, output)
   assert.match(output, /FAIL 1 unexplained: brand/)
 })

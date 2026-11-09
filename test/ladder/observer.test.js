@@ -15,6 +15,7 @@ import {
   compareViews,
   lastView,
   main,
+  records,
   VIEW_FIELDS,
   KNOWN_DIFFERENCES,
   views
@@ -98,6 +99,28 @@ test('the log splits into a first view and a last view', () => {
   assert.equal(lastView(text).address, '198.51.100.9:40001', 'a puppet reconnect keeps the last view')
   assert.deepEqual(views(log()), [])
   assert.equal(lastView(log()), null)
+})
+
+test('two records for one connection merge into one view', () => {
+  // The plugin writes the join first and the resource-pack status after it,
+  // because that status always arrives late. The report must compare the same
+  // two connections, not the join of one against the pack status of the other.
+  const text = log(
+    base({ address: '203.0.113.7:52001', resourcePack: null }),
+    base({ address: '203.0.113.7:52001', resourcePack: 'accepted' }),
+    base({ address: '198.51.100.9:40000', resourcePack: null }),
+    base({ address: '198.51.100.9:40000', resourcePack: 'accepted' })
+  )
+  assert.equal(records(text).length, 4)
+  const merged = views(text)
+  assert.equal(merged.length, 2, 'one view per connection')
+  assert.equal(merged[0].address, '203.0.113.7:52001')
+  assert.equal(merged[1].address, '198.51.100.9:40000')
+  assert.equal(merged[1].resourcePack, 'accepted', 'the later record fills the field the join could not see')
+
+  const report = compareViews(merged[0], merged[1])
+  assert.equal(report.ok, true, 'the resource-pack field is compared, not absent')
+  assert.equal(report.fields.find(entry => entry.field === 'resourcePack').verdict, 'same')
 })
 
 test('--single reads one log and compares its first and last view', () => {

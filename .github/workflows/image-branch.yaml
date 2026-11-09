@@ -87,7 +87,6 @@ jobs:
             echo "Point the dev lane at it:"
             echo
             echo '```'
-            echo "kubectl -n monoplayer-dev set image deploy/monoplayer monoplayer=ghcr.io/$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/monoplayer:$TAG"
-            echo "kubectl -n monoplayer-dev rollout status deploy/monoplayer"
+            echo "mise run dev:image $TAG"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
