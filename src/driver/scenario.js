@@ -30,7 +30,7 @@ import { DriverError } from './client-driver.js'
 const SETTLE_POLL_MS = 1000
 const OP_PAUSE_MS = 300
 
-const DEFAULT_PINS = {
+export const DEFAULT_PINS = {
   gate: 'B',
   row: 'G0 — host readiness, direct Paper',
   clientLane: 'driver',

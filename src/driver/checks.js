@@ -131,6 +131,23 @@ export function describeStatus (status) {
 }
 
 // ---------------------------------------------------------------------------
+// Version agreement
+// ---------------------------------------------------------------------------
+
+// The driver jar declares the one Minecraft version it is built for
+// (tools/driver/src/main/resources/fabric.mod.json), and a lane's target declares
+// its own. A mismatch cannot join: the client stops at an "Incompatible client"
+// screen after a relaunch, so the runner refuses before the first launch instead
+// of spending two client cycles on a screen that already said no.
+export function versionRefusal ({ driverVersion, targetVersion } = {}) {
+  if (!driverVersion || !targetVersion) return null
+  if (String(driverVersion) === String(targetVersion)) return null
+  return 'the driver is built for Minecraft ' + driverVersion + ' and the target serves ' + targetVersion +
+    ': the client would reach an incompatible-client screen. Rebuild the driver for the target, or point ' +
+    'the lane at a target that serves the driver version (issue #62).'
+}
+
+// ---------------------------------------------------------------------------
 // Secret scanning / redaction
 // ---------------------------------------------------------------------------
 

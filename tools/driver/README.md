@@ -1,6 +1,9 @@
 # Monoplayer client driver
 
-A client-only Fabric mod for the official 26.1.2 client. It exposes a
+A client-only Fabric mod for the official 26.2 client, the version the deployed
+proxy, the dev lane, and the transfer testbed serve. The pin in
+`build.gradle` follows the deployed proxy, and `test/driver/pin.test.js` fails
+when the two drift apart. It exposes a
 newline-delimited JSON control socket on `127.0.0.1:25599` so the scenario
 controller can read client state and invoke vanilla interaction paths without
 touching the compositor or the network stack.
@@ -11,7 +14,9 @@ touching the compositor or the network stack.
 mise run driver:build
 ```
 
-The jar is `tools/driver/build/libs/monoplayer-driver-0.1.0.jar`.
+The jar is `tools/driver/build/libs/monoplayer-driver-0.1.0.jar`. It declares the
+one Minecraft version it is built for in `fabric.mod.json`, and Fabric refuses to
+load it on any other version.
 
 ## Install on the display host
 
@@ -20,14 +25,23 @@ The jar is `tools/driver/build/libs/monoplayer-driver-0.1.0.jar`.
 tools/driver/install.sh /path/to/monoplayer-driver-0.1.0.jar
 ```
 
-The installer copies the existing `gate-b-player` 26.1.2 instance to
-`gate-b-player-fabric`, adds Fabric Loader 0.20.1, and puts the driver in its
-`minecraft/mods/` directory. It refuses to overwrite an existing instance.
-
-Launch:
+The installer clones a base Prism instance, reads its Minecraft version from
+`mmc-pack.json` (so the version is not written down twice), adds Fabric Loader
+0.20.1, and puts the driver in `minecraft/mods/`. It refuses to overwrite an
+existing instance.
 
 ```bash
-tools/nath.sh launch gate-b-player-fabric \
+BASE=gate-b-player-262 INSTANCE=gate-b-player-262-fabric \
+  tools/driver/install.sh monoplayer-driver-0.1.0.jar
+```
+
+The instance names are frozen (see
+[deploy/driver/README.md](../../deploy/driver/README.md)): `gate-b-player` and
+`gate-b-player-fabric` are the 26.1.2 pair, kept as the record of the G0 run on
+that version. Launch:
+
+```bash
+tools/nath.sh launch gate-b-player-262-fabric \
   -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi
 ```
 

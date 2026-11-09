@@ -132,7 +132,7 @@ public final class DriverServer {
             }
             case "pause":
                 return ok(mc.submit(() -> {
-                    mc.setScreen(new PauseScreen(true));
+                    mc.gui.setScreen(new PauseScreen(true));
                     return screenInfo();
                 }).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             case "move": {
@@ -197,14 +197,19 @@ public final class DriverServer {
 
     private JsonObject status() {
         JsonObject out = new JsonObject();
-        out.addProperty("screen", mc.screen == null ? "none" : mc.screen.getClass().getName());
-        out.addProperty("screenTitle", mc.screen == null ? null : mc.screen.getTitle().getString());
-        out.addProperty("screenNarration", mc.screen == null ? null : mc.screen.getNarrationMessage().getString());
+        Screen current = mc.gui.screen();
+        out.addProperty("screen", current == null ? "none" : current.getClass().getName());
+        out.addProperty("screenTitle", current == null ? null : current.getTitle().getString());
+        out.addProperty("screenNarration", current == null ? null : current.getNarrationMessage().getString());
         out.addProperty("level", mc.level != null);
         out.addProperty("player", mc.player != null);
         out.addProperty("connected",
             mc.getConnection() != null && mc.getConnection().getConnection() != null
                 && mc.getConnection().getConnection().isConnected());
+        // Which server this client actually joined. A lane that asks for one
+        // endpoint and measures another is measuring nothing, so the parity
+        // runner refuses a run whose client reports a different address.
+        out.addProperty("server", remoteAddress());
         out.addProperty("fps", mc.getFps());
 
         if (mc.player != null) {
@@ -226,10 +231,19 @@ public final class DriverServer {
             out.addProperty("loadedChunks", mc.level.getChunkSource().getLoadedChunksCount());
         }
         if (mc.levelRenderer != null) {
-            out.addProperty("renderedSections", mc.levelRenderer.countRenderedSections());
-            out.addProperty("totalSections", mc.levelRenderer.getTotalSections());
+            out.addProperty("renderedSections", mc.levelRenderer.visibleSections().size());
         }
         return out;
+    }
+
+    private String remoteAddress() {
+        if (mc.getConnection() == null || mc.getConnection().getConnection() == null) {
+            return null;
+        }
+        java.net.SocketAddress address = mc.getConnection().getConnection().getRemoteAddress();
+        return address instanceof java.net.InetSocketAddress inet
+            ? inet.getAddress().getHostAddress() + ":" + inet.getPort()
+            : (address == null ? null : address.toString());
     }
 
     /**
@@ -240,7 +254,7 @@ public final class DriverServer {
      */
     private JsonObject screenInfo() {
         JsonObject out = new JsonObject();
-        Screen screen = mc.screen;
+        Screen screen = mc.gui.screen();
         String className;
         Component title;
         Component narration;
@@ -299,7 +313,7 @@ public final class DriverServer {
         JsonObject out = new JsonObject();
         JsonArray labels = new JsonArray();
         List<AbstractButton> buttons = new ArrayList<>();
-        Screen screen = mc.screen;
+        Screen screen = mc.gui.screen();
         if (screen != null) {
             for (GuiEventListener child : screen.children()) {
                 if (child instanceof AbstractButton button && button.visible) {
@@ -335,7 +349,7 @@ public final class DriverServer {
         target.onPress(new MouseButtonEvent(centerX, centerY, new MouseButtonInfo(0, 0)));
         out.addProperty("clicked", true);
         out.addProperty("label", targetLabel.getString());
-        out.addProperty("screen", mc.screen == null ? "none" : mc.screen.getClass().getName());
+        out.addProperty("screen", mc.gui.screen() == null ? "none" : mc.gui.screen().getClass().getName());
         return out;
     }
 
@@ -443,7 +457,7 @@ public final class DriverServer {
         mc.execute(() -> {
             String name = "driver-" + System.currentTimeMillis() + ".png";
             File file = new File(new File(mc.gameDirectory, "screenshots"), name);
-            RenderTarget target = mc.getMainRenderTarget();
+            RenderTarget target = mc.gameRenderer.mainRenderTarget();
             Screenshot.grab(mc.gameDirectory, name, target, 1, component -> future.complete(file.getAbsolutePath()));
         });
         JsonObject out = new JsonObject();
