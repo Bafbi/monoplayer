@@ -1,4 +1,4 @@
-// Gate A scenario, shared by the CLI runner (src/gate-a.js) and the test
+// Gate A scenario, shared by the CLI runner (src/spike/run.js) and the test
 // wrapper (test/spikes/gate-a.test.js). Proves, on loopback:
 //
 //  1. the proxy relays login/config/play from backend to an attaching client
@@ -8,7 +8,7 @@
 //  5. a reattach after detached-state mutations sees current state
 //  6. the backend never sees a second login
 //  7. (stretch) chat from the attaching client is blocked at the proxy
-import { createFakeBackend } from './legs/fake-backend.js'
+import { createFakeBackend } from '../legs/fake-backend.js'
 import { createProxy, PUPPET_PROFILE } from './proxy.js'
 import { createFakeClient } from './fake-client.js'
 import { createRequire } from 'node:module'
@@ -42,7 +42,7 @@ const waitUntil = (pred, label, ms = 10000) => new Promise((resolve, reject) => 
   tick()
 })
 
-export async function runGateAScenario ({ logStream = process.stdout, soakMs = Number(process.env.GATE_A_SOAK_MS ?? 5000) } = {}) {
+export async function runSpikeScenario ({ logStream = process.stdout, soakMs = Number(process.env.SPIKE_SOAK_MS ?? 5000) } = {}) {
   const started = new Date().toISOString()
   const assertions = []
   const check = (name, ok, detail = {}) => {

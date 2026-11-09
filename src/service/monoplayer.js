@@ -1,6 +1,6 @@
 // B1 monoplayer core: product-shaped composition root.
 //
-// The Gate A spike (src/proxy.js) is frozen; this module is where the product
+// The Gate A spike (src/spike/proxy.js) is frozen; this module is where the product
 // lives. Everything real-scoped is injected: the front-leg and backend-leg
 // adapters (interface below, fakes in src/legs/fake-legs.js) and the
 // clock. With no --start flag the CLI never opens a socket and no Microsoft

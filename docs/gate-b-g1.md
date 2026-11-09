@@ -250,7 +250,7 @@ node src/custody/cli.js whitelist backend remove <puppet-name>
   Adding a UUID present on the other role's whitelist prints a warning to
   stderr.
 - The researched file shape and reload-without-restart behavior are already
-  what `src/proxy.js` will consume (`store.has(uuid)`), so B1/B4 wiring is
+  what `src/spike/proxy.js` will consume (`store.has(uuid)`), so B1/B4 wiring is
   additive.
 
 ## Embedding the check in Monoplayer's front leg
@@ -340,5 +340,5 @@ Everything except step 2 is unattended.
   `whitelist:add`) is left to the orchestrator — the `node src/custody/cli.js`
   invocations above are the underlying commands.
 - The frontend fixture (`src/custody/fixture.js`) is intentionally NOT wired
-  into `src/proxy.js`; that is the M0/monoplayer workstream's integration
+  into `src/spike/proxy.js`; that is the M0/monoplayer workstream's integration
   point, together with `verifyFromHasJoined`.

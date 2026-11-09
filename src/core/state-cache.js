@@ -1,7 +1,7 @@
 // B1 monoplayer core: pure, bounded state cache.
 //
 // Product-shaped replacement for the Gate A spike's raw frame ring
-// (src/proxy.js cacheFrame). The cache partitions every clientbound frame
+// (src/spike/proxy.js cacheFrame). The cache partitions every clientbound frame
 // into bounded domains so a reattach can be rebuilt from state, not from an
 // unbounded stream replay.
 //

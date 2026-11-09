@@ -4,7 +4,7 @@ Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
 159/159 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
 socket-free unit suite runs 350 tests, and `mise run check` also runs the
-26-assertion offline loopback. The Gate A spike (`src/proxy.js`) is frozen
+26-assertion offline loopback. The Gate A spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
