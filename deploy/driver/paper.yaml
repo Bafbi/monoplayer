@@ -29,9 +29,9 @@ spec:
             - name: TYPE
               value: PAPER
             - name: VERSION
-              value: "26.1.2"
+              value: "26.2"
             - name: PAPER_BUILD
-              value: "74"
+              value: "135"
             - name: MEMORY
               value: 2G
             - name: ONLINE_MODE

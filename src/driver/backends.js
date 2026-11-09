@@ -102,8 +102,8 @@ export const BACKENDS = Object.freeze([
     port: 25565,
     status: 'running', // G0 baseline (deploy/driver/paper.yaml); do not touch
     pins: {
-      version: '26.1.2',
-      paperBuild: 74,
+      version: '26.2',
+      paperBuild: 135,
       image: 'itzg/minecraft-server:2026.10.1-java25',
     },
     notes: [

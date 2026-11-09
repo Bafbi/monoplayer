@@ -33,6 +33,7 @@
 #   MONOPLAYER_BACKEND_PORT          the Paper port            (default 25565)
 #   MONOPLAYER_OBSERVER_JAR          the built observer jar    (default tools/observer/build/libs)
 #   MONOPLAYER_PROTOCOLLIB_JAR       the ProtocolLib plugin    (default .cache/protocollib)
+#   MONOPLAYER_VERSION               game version both joins speak (default: the gate Paper's VERSION)
 #
 # Exit codes: 0 every field explained, 1 an unexplained difference or a failed
 # join, 2 setup refused or incomplete.
@@ -53,6 +54,18 @@ PLUGINS_DIR=/data/plugins
 
 die() { printf 'observer-report: %s\n' "$1" >&2; exit "${2:-2}"; }
 say() { printf 'observer-report: %s\n' "$1"; }
+
+# Both joins, and the front the puppet join runs in its pod, speak the version the
+# gate Paper serves. The manifest that deploys that server holds the value, so a
+# version move is one edit and this rung cannot be left a version behind.
+GATE_PAPER_MANIFEST=$ROOT/deploy/driver/paper.yaml
+gate_paper_version() {
+  local value
+  value=$(sed -n '/- name: VERSION$/,+1p' "$GATE_PAPER_MANIFEST" \
+    | sed -n 's/^[[:space:]]*value: "\(.*\)"$/\1/p' | head -1)
+  [ -n "$value" ] || die "cannot read VERSION from $GATE_PAPER_MANIFEST" 2
+  printf '%s' "$value"
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -85,12 +98,26 @@ fi
 [ -n "$PROTOCOLLIB" ] && [ -f "$PROTOCOLLIB" ] || die 'no ProtocolLib plugin jar; run mise run observer:protocollib'
 say "observer $(basename "$JAR"), protocollib $(basename "$PROTOCOLLIB")"
 
+MONOPLAYER_VERSION=${MONOPLAYER_VERSION:-$(gate_paper_version)}
+export MONOPLAYER_VERSION
+say "gate Paper version: $MONOPLAYER_VERSION"
+
 mkdir -p "$(dirname "$VIEWS")" "$(dirname "$REPORT")"
 
+# The deployment's own selector decides which pods are its Paper. The label value
+# is not the deployment name: every gate workload is labelled
+# app.kubernetes.io/name=monoplayer-gate-b-<thing>, so reading the selector keeps
+# this step right for whichever workload name it is pointed at.
 paper_pod() {
-  kubectl -n "$GATE_NAMESPACE" get pods \
-    -l app.kubernetes.io/name="$PAPER_DEPLOYMENT" \
-    -o jsonpath='{.items[0].metadata.name}'
+  local label pod
+  label=$(kubectl -n "$GATE_NAMESPACE" get deploy "$PAPER_DEPLOYMENT" \
+    -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}') \
+    || die "cannot read deploy/$PAPER_DEPLOYMENT in $GATE_NAMESPACE" 2
+  [ -n "$label" ] || die "cannot read the app.kubernetes.io/name selector of deploy/$PAPER_DEPLOYMENT in $GATE_NAMESPACE" 2
+  pod=$(kubectl -n "$GATE_NAMESPACE" get pods \
+    -l "app.kubernetes.io/name=$label" \
+    -o jsonpath='{.items[0].metadata.name}')
+  printf '%s' "$pod"
 }
 
 # Wire the observer in, then restart the server so Paper loads it. A container

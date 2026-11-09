@@ -316,7 +316,7 @@ async function writeUnmoddedChecklist ({ laneReportPath }) {
     completed: false,
     status: 'NOT COMPLETE — exits nonzero until the operator records the manual run',
     how: [
-      'Launch the UNMODDED Prism 26.1.2 instance (no monoplayer-driver mod installed) where you normally play Minecraft.',
+      'Launch the UNMODDED Prism 26.2 instance (no monoplayer-driver mod installed) where you normally play Minecraft.',
       'Join the G0 Paper backend directly (monoplayer-gate-b-paper.tail41e568.ts.net:25565).',
       'For each step below, do the action by hand, capture a grim screenshot, and record ok/pending.',
     ],

@@ -18,6 +18,7 @@ const SCRIPT = path.join(
 const PUPPET = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const POD = 'paper-abc123'
+const PAPER_LABEL = 'monoplayer-gate-b-paper'
 
 // The shim answers the calls both scripts make, records every argv, and lets a
 // case choose what the observer recorded.
@@ -26,11 +27,15 @@ const SHIM = [
   'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
   'ATTACH="$KUBECTL_ATTACH"',
   'PUPPET="$KUBECTL_PUPPET"',
+  'PAPER_LABEL="$KUBECTL_PAPER_LABEL"',
   'POD="$KUBECTL_POD"',
   'last="${@: -1}"',
   'case " $* " in',
   '  *" get pods "*) printf \'%s\' "$POD"; exit 0 ;;',
-  '  *" get deploy "*) printf \'{"spec":{"template":{"spec":{"containers":[{"image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PUPPET"; exit 0 ;;',
+  // Two shapes of get deploy: the deployment's own selector label (matched first,
+  // because a real kubectl resolves the jsonpath), and the puppet's env.
+  '  *"matchLabels"*) printf \'%s\' "$PAPER_LABEL"; exit 0 ;;',
+  '  *" get deploy "*) printf \'{"spec":{"selector":{"matchLabels":{"app.kubernetes.io/name":"%s"}},"template":{"spec":{"containers":[{"image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PAPER_LABEL" "$PUPPET"; exit 0 ;;',
   '  *" logs "*) printf \'[Server] MonoplayerObserver wire listeners registered\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*) exit 0 ;;',
@@ -88,6 +93,7 @@ function run (space, env = {}, args = []) {
       KUBECTL_PUPPET: PUPPET,
       KUBECTL_ATTACH: ATTACH,
       KUBECTL_POD: POD,
+      KUBECTL_PAPER_LABEL: PAPER_LABEL,
       KUBECTL_BASELINE_VIEW: view({ address: '203.0.113.7:52001', resourcePack: null }),
       KUBECTL_BASELINE_LATE: view({ address: '203.0.113.7:52001', resourcePack: 'accepted' }),
       KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000', resourcePack: null }),
@@ -116,6 +122,34 @@ test('one command installs the observer, runs both joins, and compares them', ()
   const report = JSON.parse(fs.readFileSync(path.join(space.root, '.reports', 'observer-report.json'), 'utf8'))
   assert.equal(report.passed, true)
   assert.equal(report.fields.find(entry => entry.field === 'address').verdict, 'expected')
+})
+
+test('both joins speak the version the gate Paper serves', () => {
+  const space = workspace()
+  // An empty value forces the script's own default, which is the gate Paper's.
+  const { status, output, calls } = run(space, { MONOPLAYER_VERSION: '' })
+  assert.equal(status, 0, output)
+  const manifest = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'driver', 'paper.yaml'),
+    'utf8'
+  )
+  const version = manifest.match(/- name: VERSION\n\s+value: "?([^"\n]+)"?/)[1]
+  const joins = calls.filter(line => line.includes(' /work && node '))
+  assert.equal(joins.length, 2, 'both joins run: ' + calls.join(' / '))
+  for (const join of joins) {
+    assert.ok(join.includes('MONOPLAYER_VERSION=' + version),
+      'the join speaks ' + version + ', the version the gate Paper serves: ' + join)
+  }
+})
+
+test('the install finds the gate Paper by the label its deployment carries', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+  const podLookup = calls.find(line => line.includes('get pods'))
+  assert.ok(podLookup, 'the script looks the Paper pod up: ' + calls.join(' / '))
+  assert.ok(podLookup.includes('app.kubernetes.io/name=' + PAPER_LABEL),
+    'the pod lookup uses the selector the deployment carries: ' + podLookup)
 })
 
 test('the run never changes the live deployment', () => {
