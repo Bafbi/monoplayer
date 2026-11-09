@@ -47,6 +47,11 @@ an order.
    mise run dev:status  # pods, the whitelist, and the live replica count
    ```
 
+After this, `mise run dev:down` stops the lane and **keeps the account**: the
+claim, the namespace, and the Secrets stay, so coming back is `mise run dev:up`.
+`mise run dev:down -- --purge` deletes the namespace and the account with it,
+and the next run needs another device-code approval.
+
 `dev:custody` and the dev proxy cannot both hold the volume. The claim is
 `ReadWriteOnce` on a two-node cluster and one account has one writer, so the
 script refuses while the proxy is running and says how to clear it.
