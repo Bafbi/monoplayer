@@ -59,19 +59,50 @@ export function compareViews (baseline = {}, puppet = {}) {
   }
 }
 
-// The last view record in a JSONL file. The plugin also logs lifecycle lines;
-// anything that is not JSON, or not a client_view record, is skipped.
-export function lastView (text) {
-  let found = null
+// The raw client_view records in a JSONL file, in order. The plugin also logs
+// lifecycle lines; anything that is not JSON, or not a client_view record, is
+// skipped.
+export function records (text) {
+  const found = []
   for (const line of String(text).split('\n')) {
     const trimmed = line.trim()
     if (trimmed.length === 0) continue
     let record
     try { record = JSON.parse(trimmed) } catch { continue }
-    if (record && record.event === 'client_view') found = record
+    if (record && record.event === 'client_view') found.push(record)
   }
   return found
 }
+
+// The observed fields of one record, with the unobserved ones dropped, so a later
+// record can fill an earlier one without erasing what it already knew.
+const observed = record => Object.fromEntries(
+  Object.entries(record).filter(([, value]) => value !== null && value !== undefined)
+)
+
+// One view per connection. A connection is written more than once: the join
+// record, then the resource-pack status, which always arrives afterwards. Two
+// records that share an address describe the same connection, so the later one
+// fills in the fields the earlier one could not see. A reconnect gets a new
+// source port, so it starts a new view.
+export function views (text) {
+  const merged = []
+  for (const record of records(text)) {
+    const previous = merged.at(-1)
+    if (previous && previous.address && previous.address === record.address) {
+      Object.assign(previous, observed(record))
+      continue
+    }
+    merged.push({ ...record })
+  }
+  return merged
+}
+
+// The last view record in a JSONL file.
+export function lastView (text) {
+  return views(text).at(-1) ?? null
+}
+
 
 export function readView (file) {
   const text = fs.readFileSync(file, 'utf8')
@@ -100,13 +131,26 @@ const flag = (argv, name) => {
 export function main (argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   const baselinePath = flag(argv, '--baseline')
   const puppetPath = flag(argv, '--puppet')
-  if (!baselinePath || !puppetPath) {
-    io.stderr.write('usage: node src/ladder/observer.js --baseline <views.jsonl> --puppet <views.jsonl> [--report <file>]\n')
+  const singlePath = flag(argv, '--single')
+  if (!singlePath && (!baselinePath || !puppetPath)) {
+    io.stderr.write('usage: node src/ladder/observer.js --baseline <views.jsonl> --puppet <views.jsonl> [--report <file>]\n' +
+      '       node src/ladder/observer.js --single <views.jsonl> [--report <file>]\n')
     return 2
   }
   let report
   try {
-    report = compareViews(readView(baselinePath), readView(puppetPath))
+    if (singlePath) {
+      // One log from one server, two joins: the direct baseline first, the
+      // puppet last. A reconnect during the puppet run only adds puppet views,
+      // so the last one is still the puppet's.
+      const all = views(fs.readFileSync(singlePath, 'utf8'))
+      if (all.length < 2) {
+        throw new Error(`${singlePath} holds ${all.length} client_view records; a baseline and a puppet join need at least two`)
+      }
+      report = compareViews(all[0], all.at(-1))
+    } else {
+      report = compareViews(readView(baselinePath), readView(puppetPath))
+    }
   } catch (error) {
     io.stderr.write(`observer: ${String(error?.message ?? error)}\n`)
     return 2
