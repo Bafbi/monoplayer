@@ -50,8 +50,8 @@ depends = ["lint", "test", "loopback"]
 description = "Verify a relay change: the gate, then the frozen Gate A spike."
 depends = ["check", "spike"]
 
-[tasks."verify:auth"]
-description = "Verify an auth change: the gate, then the online bot rung (needs the live backend and both custodians)."
+[tasks."verify:custody"]
+description = "Verify a custody change: the gate, then the online bot rung (needs the live backend and both custodians)."
 depends = ["check", "online"]
 
 [tasks."verify:driver"]

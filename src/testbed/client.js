@@ -8,7 +8,7 @@
 // is the seamless-switch success signal; an end plus a successful reattach is
 // the current kick behavior.
 import fs from 'node:fs'
-import { createTokenCustody } from '../auth/cache.js'
+import { createTokenCustody } from '../custody/cache.js'
 import { createBot } from '../ladder/bot.js'
 
 const host = process.argv[2] ?? process.env.TESTBED_FRONT_HOST ?? 'monoplayer-testbed.tail41e568.ts.net'

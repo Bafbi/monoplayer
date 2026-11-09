@@ -80,7 +80,7 @@ The GlowSquidye account was migrated in place on 2026-11-07: every token file is
 `profile.json` keeps the alias `glowsquidye`, and the failed `puppet-java-403`
 attempt is quarantined under `.secrets/retired/`. The dated evidence above was
 recorded against the older `.secrets/puppet/` layout. Check the current tree
-with `node src/auth/cli.js accounts` and `node src/auth/cli.js status --account
+with `node src/custody/cli.js accounts` and `node src/custody/cli.js status --account
 glowsquidye`; the runbook is [docs/gate-b-g1.md](docs/gate-b-g1.md).
 
 **M4** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern

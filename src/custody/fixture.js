@@ -1,6 +1,6 @@
 // Optional minimal online-mode server fixture that embeds the G1 attach
-// gate. NOT run by unit tests (no live login), and NOT the product front
-// leg: it is the smallest server a real client can join so the gate can be
+// check. NOT run by unit tests (no live login), and NOT the product front
+// leg: it is the smallest server a real client can join so the check can be
 // exercised against a genuine login before Monoplayer integration lands.
 //
 //   const fixture = createAttachFixture({ store, verify })
@@ -26,27 +26,27 @@ export function verifyFromHasJoined ({ hasJoined = null } = {}) {
   }
 }
 
-// Embeddable: createServer + beforeLogin wiring only; the gate (./attach.js)
+// Embeddable: createServer + beforeLogin wiring only; the check (./attach.js)
 // owns all decisions.
-export function createAttachFixture ({ host = '127.0.0.1', port = 0, version = '26.1', store, verify, gate, onlineMode = false } = {}) {
-  if (!gate || typeof gate.gate !== 'function') {
-    throw new Error('createAttachFixture needs the gate from createAttachGate()')
+export function createAttachFixture ({ host = '127.0.0.1', port = 0, version = '26.1', store, verify, check, onlineMode = false } = {}) {
+  if (!check || typeof check.check !== 'function') {
+    throw new Error('createAttachFixture needs the check from createAttachCheck()')
   }
   const server = mc.createServer({
     host,
     port,
     version,
     'online-mode': onlineMode,
-    // Deny before Login Success: the gate decides inside beforeLogin and the
+    // Deny before Login Success: the check decides inside beforeLogin and the
     // client is dropped with a login-stage disconnect reason. minecraft-protocol
     // calls this hook synchronously and has already completed online-mode
-    // hasJoined, so use the synchronous verified-identity gate.
+    // hasJoined, so use the synchronous verified-identity check.
     beforeLogin: (client) => {
-      const result = typeof gate.gateVerified === 'function'
-        ? gate.gateVerified({ client, store })
-        : gate.gate({ client, store, verify })
+      const result = typeof check.checkVerified === 'function'
+        ? check.checkVerified({ client, store })
+        : check.check({ client, store, verify })
       if (result && result.then) {
-        throw new Error('fixture gate must be synchronous (use gateVerified or online-mode hasJoined)')
+        throw new Error('fixture check must be synchronous (use checkVerified or online-mode hasJoined)')
       }
       if (!result.ok) {
         // minecraft-protocol writes Login Success immediately after
@@ -69,6 +69,6 @@ export function createAttachFixture ({ host = '127.0.0.1', port = 0, version = '
       return client
     },
   })
-  server.on('error', error => { gate.events.emit('fixtureError', error) })
-  return { server, gate, port: () => server.socketServer?.address()?.port ?? null }
+  server.on('error', error => { check.events.emit('fixtureError', error) })
+  return { server, check, port: () => server.socketServer?.address()?.port ?? null }
 }

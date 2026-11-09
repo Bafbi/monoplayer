@@ -1,11 +1,11 @@
-// G1 attach-gate unit tests: allow/deny decisions, events, denial ordering
-// (all denials carry stage:'login' — the gate runs before Login Success),
+// G1 attach-check unit tests: allow/deny decisions, events, denial ordering
+// (all denials carry stage:'login' — the check runs before Login Success),
 // sanitized payloads and redacted denial details. No network.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-import { createAttachGate, DENY_REASONS } from '../src/auth/attach.js'
+import { createAttachCheck, DENY_REASONS } from '../src/custody/attach.js'
 
 const PLAYER_UUID = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
 const PUPPET_UUID = 'dead0000-0000-0000-0000-000000000001'
@@ -25,8 +25,8 @@ function collectors ({ events } = {}) {
 test('allow: verified identity on the attach whitelist is admitted with a login-stage ok', async () => {
   const events = new EventEmitter()
   const seen = collectors({ events })
-  const { gate } = createAttachGate({ events, log: noop })
-  const result = await gate({
+  const { check } = createAttachCheck({ events, log: noop })
+  const result = await check({
     client: { username: 'Bafbi' },
     store: { has: uuid => uuid === PLAYER_UUID },
     verify: allowedVerification,
@@ -42,8 +42,8 @@ test('allow: verified identity on the attach whitelist is admitted with a login-
 test('deny: sessionserver says not joined → not_joined, stage login, attachDenied emitted', async () => {
   const events = new EventEmitter()
   const seen = collectors({ events })
-  const { gate } = createAttachGate({ events, log: noop })
-  const result = await gate({
+  const { check } = createAttachCheck({ events, log: noop })
+  const result = await check({
     client: { username: 'Ghost' },
     store: { has: () => true },
     verify: () => ({ ok: true, allowed: false, reason: 'sessionserver_status_204' }),
@@ -58,8 +58,8 @@ test('deny: sessionserver says not joined → not_joined, stage login, attachDen
 test('deny: verify transport failure is hasjoined_failed (ok=false verdicts are not allow)', async () => {
   const events = new EventEmitter()
   const seen = collectors({ events })
-  const { gate } = createAttachGate({ events, log: noop })
-  const result = await gate({
+  const { check } = createAttachCheck({ events, log: noop })
+  const result = await check({
     client: { username: 'Bafbi' },
     store: { has: () => true },
     verify: () => ({ ok: false, allowed: false, reason: 'sessionserver_unreachable: ENOTFOUND' }),
@@ -70,8 +70,8 @@ test('deny: verify transport failure is hasjoined_failed (ok=false verdicts are 
 test('deny: uuid not on the whitelist is not_whitelisted and says which uuid', async () => {
   const events = new EventEmitter()
   const seen = collectors({ events })
-  const { gate } = createAttachGate({ events, log: noop })
-  const result = await gate({
+  const { check } = createAttachCheck({ events, log: noop })
+  const result = await check({
     client: { username: 'Bafbi' },
     store: { has: uuid => uuid === PUPPET_UUID },
     verify: allowedVerification,
@@ -82,8 +82,8 @@ test('deny: uuid not on the whitelist is not_whitelisted and says which uuid', a
 })
 
 test('deny: verified profile name must cross-check the requested username', async () => {
-  const { gate } = createAttachGate({ log: noop })
-  const result = await gate({
+  const { check } = createAttachCheck({ log: noop })
+  const result = await check({
     client: { username: 'Imposter' },
     store: { has: () => true },
     verify: () => ({ ok: true, allowed: true, profile: { id: PLAYER_UUID, name: 'Bafbi' } }),
@@ -92,18 +92,18 @@ test('deny: verified profile name must cross-check the requested username', asyn
 })
 
 test('deny without a username, without verify, or without a store', async () => {
-  const { gate } = createAttachGate({ log: noop })
-  assert.equal((await gate({ client: {}, store: { has: () => true }, verify: allowedVerification })).reason,
+  const { check } = createAttachCheck({ log: noop })
+  assert.equal((await check({ client: {}, store: { has: () => true }, verify: allowedVerification })).reason,
     DENY_REASONS.MISSING_USERNAME)
-  assert.equal((await gate({ client: { username: 'Bafbi' }, store: { has: () => true } })).reason,
+  assert.equal((await check({ client: { username: 'Bafbi' }, store: { has: () => true } })).reason,
     DENY_REASONS.VERIFY_UNAVAILABLE)
-  assert.equal((await gate({ client: { username: 'Bafbi' }, verify: allowedVerification })).reason,
+  assert.equal((await check({ client: { username: 'Bafbi' }, verify: allowedVerification })).reason,
     DENY_REASONS.WHITELIST_UNAVAILABLE)
 })
 
 test('deny: a verify stub that throws produces verify_error', async () => {
-  const { gate } = createAttachGate({ log: noop })
-  const result = await gate({
+  const { check } = createAttachCheck({ log: noop })
+  const result = await check({
     client: { username: 'Bafbi' },
     store: { has: () => true },
     verify: () => { throw new Error('stub explode') },
@@ -116,18 +116,18 @@ test('both normalized and raw sessionserver profiles are accepted', async () => 
   const store = { has: () => true }
   const rawShape = () => ({ ok: true, allowed: true, profile: { id: PLAYER_UUID.replaceAll('-', ''), name: 'Bafbi' } })
   const prenormalized = () => ({ ok: true, allowed: true, profile: { uuid: PLAYER_UUID, name: 'Bafbi' } })
-  assert.equal((await createAttachGate({ log: noop }).gate({ client: { username: 'Bafbi' }, store, verify: rawShape })).ok, true)
-  assert.equal((await createAttachGate({ log: noop }).gate({ client: { username: 'Bafbi' }, store, verify: prenormalized })).ok, true)
+  assert.equal((await createAttachCheck({ log: noop }).check({ client: { username: 'Bafbi' }, store, verify: rawShape })).ok, true)
+  assert.equal((await createAttachCheck({ log: noop }).check({ client: { username: 'Bafbi' }, store, verify: prenormalized })).ok, true)
 })
 
 test('denial details are redacted: a token-shaped error never reaches the event', async () => {
   const seen = { denied: [] }
-  const { gate } = createAttachGate({
+  const { check } = createAttachCheck({
     log: noop,
     events: { emit: (name, payload) => { if (name === 'attachDenied') seen.denied.push(payload) } },
   })
   const leaked = 'Bearer eyJhbGciOiJIUzI1NiJ9.payLoadPartHere.sigPartHere'
-  await gate({
+  await check({
     client: { username: 'Bafbi' },
     store: { has: () => true },
     verify: () => { throw new Error(`upstream said ${leaked}`) },

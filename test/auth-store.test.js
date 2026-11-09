@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createWhitelistStore, createNameLookup, WHITELIST_VERSION } from '../src/auth/store.js'
+import { createWhitelistStore, createNameLookup, WHITELIST_VERSION } from '../src/custody/store.js'
 
 const PLAYER = { dashed: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af', undashed: '7FAD1E81B0E94A3C8CCB9E41F3A4B3AF', name: 'Bafbi' }
 

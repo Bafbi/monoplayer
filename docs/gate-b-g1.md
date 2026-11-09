@@ -1,8 +1,8 @@
-# Gate B G1 runbook — auth / identity readiness
+# Check B G1 runbook — auth / identity readiness
 
 This is the runbook for the **G1 auth slice**: token custody, the puppet's
 device-code bootstrap + silent refresh, real sessionserver `hasJoined`, the
-embeddable attach gate, the attach whitelist, and the read-only auth health
+embeddable attach check, the attach whitelist, and the read-only auth health
 CLI. It is the deliverable for criterion **G1** in the plan (`docs/gate-b-plan.html`:
 *"Auth readiness: device code, silent refresh, two distinct UUIDs, real
 `hasJoined`; same UUID across refresh; allow/deny before Login Success"*).
@@ -11,20 +11,20 @@ G0 is already green (`docs/gate-b-g0.md`). G1's code and its offline tests are
 complete; the **live** steps still need the one user device-code approval and
 are listed in [The G1 live sequence](#the-g1-live-sequence).
 
-## What exists (src/auth/)
+## What exists (src/custody/)
 
 | File | Role |
 |---|---|
-| `src/auth/cache.js` | Atomic token-cache custody for one account directory: 0700 dir, 0600 files, temp-write + fsync + rename, readable `<family>-cache.json` names (the cache factory owns the path), `profile.json`, one-writer lock, path-only API. A legacy hashed file in the same directory is adopted on first touch. |
-| `src/auth/accounts.js` | The account tree: `listAccounts`, `resolveAccount` (UUID, then alias, then name), `accountDir`, `createStagingDir`, `finalizeStaging`, `detectLegacyLayout`. Pure filesystem logic; no token values. |
-| `src/auth/migrate.js` | One-shot plan/apply for the old single-account layout: rename the directory, rename hashed caches, write `profile.json`, quarantine the failed bootstrap. Dry-run by default. |
-| `src/auth/msa.js` | prismarine-auth `Authflow` (flow `live`, per-title device type) wrapper: device-code bootstrap with **authTitle `00000000441cc96b` (MinecraftNintendoSwitch) + `Nintendo` first** and the Java title `00000000402b5328` + `Win32` as fallback; silent refresh that never waits for a user; returns **identity only** (name, UUID, entitlement names, multiplayer privilege) — never tokens. Refuses a login whose UUID differs from the account directory. |
-| `src/auth/status.js` | Read-only cache/lock health (`collect`), guarded `--refresh` (refuses with `writer_lock_held`), redaction-enforced report helpers (`redactForReport`, `scanForLeaks`). `collect()` never creates a directory. |
-| `src/auth/hasjoined.js` | Real `GET sessionserver.mojang.com/session/minecraft/hasJoined?username=&serverId=` with injectable fetch, username/profile + optional expected-UUID cross-checks, UUID normalization, short TTL cache, fail-closed on any transport failure. `computeServerId` = vanilla handshake sha1. |
-| `src/auth/attach.js` | The one embeddable gate: `async ({ client, store, verify }) => { ok, reason, stage }`, run inside `beforeLogin` so a denial happens **before Login Success**; emits `attachAllowed` / `attachDenied` with sanitized payloads. |
-| `src/auth/store.js` | Attach whitelist file `{ version: 1, players: [{ uuid, name, addedAt }] }` in `.secrets/attach-whitelist.json`: add/remove with name→UUID resolution at add time (injectable lookup: minecraftservices, then legacy api.mojang.com), UUID-keyed `has/find`, atomic 0600 writes. `createBackendWhitelist` drives the **existing** `src/gate-b/rcon.js` adapter for the puppet-only backend whitelist. |
-| `src/auth/cli.js` | `accounts` / `device-code` / `status [--refresh]` / `migrate [--apply]` / `whitelist attach|backend add|remove`. |
-| `src/auth/fixture.js` | Minimal `mc.createServer` fixture embedding the gate (optional; not run in tests, no live login). |
+| `src/custody/cache.js` | Atomic token-cache custody for one account directory: 0700 dir, 0600 files, temp-write + fsync + rename, readable `<family>-cache.json` names (the cache factory owns the path), `profile.json`, one-writer lock, path-only API. A legacy hashed file in the same directory is adopted on first touch. |
+| `src/custody/accounts.js` | The account tree: `listAccounts`, `resolveAccount` (UUID, then alias, then name), `accountDir`, `createStagingDir`, `finalizeStaging`, `detectLegacyLayout`. Pure filesystem logic; no token values. |
+| `src/custody/migrate.js` | One-shot plan/apply for the old single-account layout: rename the directory, rename hashed caches, write `profile.json`, quarantine the failed bootstrap. Dry-run by default. |
+| `src/custody/msa.js` | prismarine-auth `Authflow` (flow `live`, per-title device type) wrapper: device-code bootstrap with **authTitle `00000000441cc96b` (MinecraftNintendoSwitch) + `Nintendo` first** and the Java title `00000000402b5328` + `Win32` as fallback; silent refresh that never waits for a user; returns **identity only** (name, UUID, entitlement names, multiplayer privilege) — never tokens. Refuses a login whose UUID differs from the account directory. |
+| `src/custody/status.js` | Read-only cache/lock health (`collect`), guarded `--refresh` (refuses with `writer_lock_held`), redaction-enforced report helpers (`redactForReport`, `scanForLeaks`). `collect()` never creates a directory. |
+| `src/custody/hasjoined.js` | Real `GET sessionserver.mojang.com/session/minecraft/hasJoined?username=&serverId=` with injectable fetch, username/profile + optional expected-UUID cross-checks, UUID normalization, short TTL cache, fail-closed on any transport failure. `computeServerId` = vanilla handshake sha1. |
+| `src/custody/attach.js` | The one embeddable check: `async ({ client, store, verify }) => { ok, reason, stage }`, run inside `beforeLogin` so a denial happens **before Login Success**; emits `attachAllowed` / `attachDenied` with sanitized payloads. |
+| `src/custody/store.js` | Attach whitelist file `{ version: 1, players: [{ uuid, name, addedAt }] }` in `.secrets/attach-whitelist.json`: add/remove with name→UUID resolution at add time (injectable lookup: minecraftservices, then legacy api.mojang.com), UUID-keyed `has/find`, atomic 0600 writes. `createBackendWhitelist` drives the **existing** `src/gate-b/rcon.js` adapter for the puppet-only backend whitelist. |
+| `src/custody/cli.js` | `accounts` / `device-code` / `status [--refresh]` / `migrate [--apply]` / `whitelist attach|backend add|remove`. |
+| `src/custody/fixture.js` | Minimal `mc.createServer` fixture embedding the check (optional; not run in tests, no live login). |
 
 Unit tests: `node --test test/auth-*.test.js` (no network, no real account):
 cache atomicity + modes, legacy file adoption, stale/contended writer lock,
@@ -33,7 +33,7 @@ identity-mismatch guard, silent-refresh guard, hasJoined
 allow/deny/cross-check, attach allow/deny, whitelist semantics, and the
 **redaction sentinel** (synthetic token strings never survive a report).
 
-## Custody layout (enforced by src/auth/cache.js + src/auth/accounts.js)
+## Custody layout (enforced by src/custody/cache.js + src/custody/accounts.js)
 
 One directory per Minecraft UUID:
 
@@ -58,7 +58,7 @@ One directory per Minecraft UUID:
 paths. Today the same token files live under
 `.secrets/accounts/<uuid>/` with readable `<family>-cache.json` names, and the
 profile is `profile.json`. Do not point commands at `.secrets/puppet/`; run
-`node src/auth/cli.js accounts` to see whether a legacy directory is still
+`node src/custody/cli.js accounts` to see whether a legacy directory is still
 waiting for migration.
 
 ### Selector rules
@@ -110,11 +110,11 @@ not exist never creates an account by accident.
 ### Commands
 
 ```bash
-node src/auth/cli.js accounts                      # list usable, broken, pending, legacy
-node src/auth/cli.js accounts --json               # machine-readable
-node src/auth/cli.js migrate --dry-run             # plan the old-layout move
-node src/auth/cli.js migrate --apply               # perform it (quarantines puppet-java-403)
-node src/auth/cli.js migrate --apply --no-quarantine
+node src/custody/cli.js accounts                      # list usable, broken, pending, legacy
+node src/custody/cli.js accounts --json               # machine-readable
+node src/custody/cli.js migrate --dry-run             # plan the old-layout move
+node src/custody/cli.js migrate --apply               # perform it (quarantines puppet-java-403)
+node src/custody/cli.js migrate --apply --no-quarantine
 ```
 
 `accounts` is read-only: it never creates an account directory. `migrate`
@@ -162,17 +162,17 @@ lowercase name that matches `^[a-z0-9][a-z0-9._-]{0,31}$` becomes the alias
 when you omit it.
 
 ```bash
-node src/auth/cli.js device-code                  # new account, alias from the name
-node src/auth/cli.js device-code --alias glowsquidye   # new account, explicit alias
+node src/custody/cli.js device-code                  # new account, alias from the name
+node src/custody/cli.js device-code --alias glowsquidye   # new account, explicit alias
 ```
 
 Re-authenticate an **existing** account (UUID guard: a different login UUID is
 refused):
 
 ```bash
-node src/auth/cli.js device-code --account glowsquidye
-node src/auth/cli.js device-code --account <uuid>
-node src/auth/cli.js device-code --dir .secrets/accounts/<uuid>
+node src/custody/cli.js device-code --account glowsquidye
+node src/custody/cli.js device-code --account <uuid>
+node src/custody/cli.js device-code --dir .secrets/accounts/<uuid>
 ```
 
 An unknown UUID bootstraps that UUID as a new account; an unknown alias or
@@ -208,11 +208,11 @@ profile / child account (fix the account, not the code).
 ## status (read-only) and silent refresh
 
 ```bash
-node src/auth/cli.js status                     # one account, if only one exists
-node src/auth/cli.js status --account glowsquidye    # selector: uuid, alias, or name
-node src/auth/cli.js status --dir .secrets/accounts/<uuid>
-node src/auth/cli.js status --json              # machine-readable
-node src/auth/cli.js status --refresh           # silent refresh, guarded
+node src/custody/cli.js status                     # one account, if only one exists
+node src/custody/cli.js status --account glowsquidye    # selector: uuid, alias, or name
+node src/custody/cli.js status --dir .secrets/accounts/<uuid>
+node src/custody/cli.js status --json              # machine-readable
+node src/custody/cli.js status --refresh           # silent refresh, guarded
 ```
 
 - Read-only status shows: `uuid`, `name`, `alias`, the account directory and
@@ -233,12 +233,12 @@ node src/auth/cli.js status --refresh           # silent refresh, guarded
 
 ```bash
 # attach whitelist (player only; Monoplayer front leg, after hasJoined):
-node src/auth/cli.js whitelist attach add <player-name-or-uuid>
-node src/auth/cli.js whitelist attach remove <name-or-uuid>
+node src/custody/cli.js whitelist attach add <player-name-or-uuid>
+node src/custody/cli.js whitelist attach remove <name-or-uuid>
 
 # backend whitelist (puppet only; through the existing gate-b rcon adapter):
-node src/auth/cli.js whitelist backend add <puppet-name>          # add + reload
-node src/auth/cli.js whitelist backend remove <puppet-name>
+node src/custody/cli.js whitelist backend add <puppet-name>          # add + reload
+node src/custody/cli.js whitelist backend remove <puppet-name>
 ```
 
 - Names are resolved to UUIDs **at add time** (`minecraftservices.com`
@@ -253,22 +253,22 @@ node src/auth/cli.js whitelist backend remove <puppet-name>
   what `src/proxy.js` will consume (`store.has(uuid)`), so B1/B4 wiring is
   additive.
 
-## Embedding the gate in Monoplayer's front leg
+## Embedding the check in Monoplayer's front leg
 
 ```js
-import { createAttachGate } from './src/auth/attach.js'
-import { createHasJoined } from './src/auth/hasjoined.js'
-import { createWhitelistStore } from './src/auth/store.js'
+import { createAttachCheck } from './src/custody/attach.js'
+import { createHasJoined } from './src/custody/hasjoined.js'
+import { createWhitelistStore } from './src/custody/store.js'
 
 const store = createWhitelistStore({ file: '.secrets/attach-whitelist.json' })
-const gate = createAttachGate({ log: line => proxyLog(line) })
+const check = createAttachCheck({ log: line => proxyLog(line) })
 
 // minecraft-protocol's beforeLogin is synchronous and, in online-mode, has
 // ALREADY completed the real sessionserver hasJoined and set client.uuid /
-// client.profile. Use the synchronous gateVerified check.
+// client.profile. Use the synchronous checkVerified check.
 // inside mc.createServer({ 'online-mode': true, ...
 beforeLogin: client => {
-  const result = gate.gateVerified({ client, store })
+  const result = check.checkVerified({ client, store })
   if (!result.ok) {
     // minecraft-protocol still tries to write compress + Login Success after
     // beforeLogin. Drop those packets so a denied client never receives Login
@@ -284,8 +284,8 @@ beforeLogin: client => {
 ```
 
 If a custom front leg can await async work before Login Success, use
-`gate.gate({ client, store, verify })` instead; the synchronous CLI fixture in
-`src/auth/fixture-cli.js` is the reference for the online-mode path.
+`check.check({ client, store, verify })` instead; the synchronous CLI fixture in
+`src/custody/fixture-cli.js` is the reference for the online-mode path.
 
 Denial reasons B4 will assert on: `missing_username`, `verify_unavailable`,
 `verify_error`, `hasjoined_failed`, `not_joined`, `profile_invalid`,
@@ -305,7 +305,7 @@ Everything except step 2 is unattended.
    setting `InsufficientPrivilegesException` story, fixed at account level.
 2. **User approves the device code once.**
 3. **Silent refresh twin** — with the proxy not running:
-   `node src/auth/cli.js status --refresh` twice in a row. Pass = both print
+   `node src/custody/cli.js status --refresh` twice in a row. Pass = both print
    the **same UUID** as the bootstrap line (`uuidStable: true`), and the live
    cache file rotated (lock acquired/released; `mca` expiry advanced).
 4. **Two distinct UUIDs** — bootstrap provides the puppet UUID; the player's
@@ -315,7 +315,7 @@ Everything except step 2 is unattended.
    Backend whitelist (`whitelist backend add <puppet>`) then holds exactly
    the puppet; the attach whitelist exactly the player.
 5. **Attach allow (live fixture)** — run the Monoplayer front leg (or the
-   minimal `src/auth/fixture.js` fixture) with the attach whitelist as
+   minimal `src/custody/fixture.js` fixture) with the attach whitelist as
    configured; log into `127.0.0.1:25565` from Prism as the player. Pass =
    `attachAllowed` event with the **player** UUID, then normal login; the
    backend log shows only the puppet session.
@@ -335,10 +335,10 @@ Everything except step 2 is unattended.
 - The multiplayer privilege check is best-effort (`player/attributes`); if
   Microsoft rate-limits it, reports `multiplayer=unknown` rather than lying.
 - The writer lock is a local custody lock for one host; the cluster Secret
-  write-back (post-Gate B) needs its own locking story.
+  write-back (post-Check B) needs its own locking story.
 - `mise.toml` task wiring (`auth:device-code`, `auth:status`,
-  `whitelist:add`) is left to the orchestrator — the `node src/auth/cli.js`
+  `whitelist:add`) is left to the orchestrator — the `node src/custody/cli.js`
   invocations above are the underlying commands.
-- The frontend fixture (`src/auth/fixture.js`) is intentionally NOT wired
+- The frontend fixture (`src/custody/fixture.js`) is intentionally NOT wired
   into `src/proxy.js`; that is the M0/monoplayer workstream's integration
   point, together with `verifyFromHasJoined`.

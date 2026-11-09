@@ -20,10 +20,10 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { createMonoplayer, loadConfig } from '../monoplayer.js'
-import { createTokenCustody } from '../auth/cache.js'
-import { DEFAULT_ACCOUNTS_DIR, listAccounts, resolveAccount } from '../auth/accounts.js'
-import { createWhitelistStore } from '../auth/store.js'
-import { sameName, sameUuid } from '../auth/util.js'
+import { createTokenCustody } from '../custody/cache.js'
+import { DEFAULT_ACCOUNTS_DIR, listAccounts, resolveAccount } from '../custody/accounts.js'
+import { createWhitelistStore } from '../custody/store.js'
+import { sameName, sameUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../monoplayer/live-backend.js'
 import { createLiveFrontLeg } from '../monoplayer/live-front.js'
 import { waitForReady } from '../monoplayer/live-readiness.js'
@@ -435,8 +435,8 @@ export async function runOnline (argv = process.argv.slice(2)) {
       throw new Error([
         `the online rung needs both custodians in ${accountsDir}`,
         ...lines,
-        '  bootstrap: node src/auth/cli.js device-code',
-        '  list: node src/auth/cli.js accounts'
+        '  bootstrap: node src/custody/cli.js device-code',
+        '  list: node src/custody/cli.js accounts'
       ].join('\n'))
     }
     puppet = accounts.puppet

@@ -27,7 +27,7 @@
 //
 // Token custody (live only): the Microsoft auth MUST reuse the G1 custody
 // caches in the account's directory (`.secrets/accounts/<uuid>/`), never mint
-// new refresh tokens. G1's public API (src/auth/cache.js createTokenCustody)
+// new refresh tokens. G1's public API (src/custody/cache.js createTokenCustody)
 // provides the atomic prismarine-compatible cache factory; the factory owns
 // the file paths (`<family>-cache.json`). The custody writer lock is held for
 // the process life so `auth status --refresh` refuses while the proxy runs
@@ -39,7 +39,7 @@ import mc from 'minecraft-protocol'
 
 import nbt from 'prismarine-nbt'
 
-import { createTokenCustody } from '../auth/cache.js'
+import { createTokenCustody } from '../custody/cache.js'
 import { isLoopbackHost } from './offline-identity.js'
 
 // Frames consumed by the library keep-alive plugin, never delivered to the

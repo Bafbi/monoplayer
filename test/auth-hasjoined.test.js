@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { normalizeUuid, sameUuid, sameName } from '../src/auth/util.js'
-import { createHasJoined, computeServerId, normalizeProfile } from '../src/auth/hasjoined.js'
+import { normalizeUuid, sameUuid, sameName } from '../src/custody/util.js'
+import { createHasJoined, computeServerId, normalizeProfile } from '../src/custody/hasjoined.js'
 
 const PLAYER = {
   undashedUpper: '7FAD1E81B0E94A3C8CCB9E41F3A4B3AF',

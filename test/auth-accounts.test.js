@@ -18,8 +18,8 @@ import {
   finalizeStaging,
   detectLegacyLayout,
   withAccountsLock,
-} from '../src/auth/accounts.js'
-import { createTokenCustody, writeProfile, readProfile } from '../src/auth/cache.js'
+} from '../src/custody/accounts.js'
+import { createTokenCustody, writeProfile, readProfile } from '../src/custody/cache.js'
 
 const A = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
 const B = '11111111-2222-4333-8444-555555555555'

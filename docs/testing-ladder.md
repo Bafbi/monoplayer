@@ -33,7 +33,7 @@ that covers the area you changed.
 | Task | Composes | Run it after touching |
 |---|---|---|
 | `mise run verify:relay` | `check`, `spike` | the relay, the legs, the join, the state cache |
-| `mise run verify:auth` | `check`, `online` (live backend, both custodians) | `src/auth/`, the custody store, `hasJoined`, offline identity |
+| `mise run verify:custody` | `check`, `online` (live backend, both custodians) | `src/custody/`, the custody store, `hasJoined`, offline identity |
 | `mise run verify:driver` | `check`, `gate-b:driver:build`, `gate-b:scenario` (SSH tunnel, live backend) | `tools/gate-b-driver/`, `src/gate-b/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
 

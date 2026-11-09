@@ -1,4 +1,4 @@
-// Pure shared helpers for the Gate B auth/identity slice (src/auth/).
+// Pure shared helpers for the Gate B auth/identity slice (src/custody/).
 // No I/O, no env, no network — safe to unit test directly.
 
 // Normalize a Mojang UUID to the canonical lowercase hyphenated form.

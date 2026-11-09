@@ -8,8 +8,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createAuthStatus, stringifyForReport, redactForReport, scanForLeaks } from '../src/auth/status.js'
-import { atomicWriteFile } from '../src/auth/cache.js'
+import { createAuthStatus, stringifyForReport, redactForReport, scanForLeaks } from '../src/custody/status.js'
+import { atomicWriteFile } from '../src/custody/cache.js'
 
 const dir = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'auth-status-')), 'puppet')
 const PLAYER = { dashed: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af', name: 'Bafbi' }

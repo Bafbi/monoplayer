@@ -13,7 +13,7 @@ import {
   createWriterLock, createTokenCustody, readProfile, writeProfile,
   readIdentityMeta, writeIdentityMeta,
   PROFILE_FILE, LEGACY_PROFILE_FILE, CACHE_FILE_MODE,
-} from '../src/auth/cache.js'
+} from '../src/custody/cache.js'
 
 function tmpDir (label) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `auth-${label}-`))

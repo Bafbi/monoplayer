@@ -16,8 +16,8 @@ import { synthAttach, LEG_OWNED } from '../src/monoplayer/join-synth.js'
 import { createMonoplayer, DEFAULT_CONFIG } from '../src/monoplayer.js'
 import { createStateCache } from '../src/monoplayer/state-cache.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../src/monoplayer/fake-legs.js'
-import { createAttachGate } from '../src/auth/attach.js'
-import { createWhitelistStore } from '../src/auth/store.js'
+import { createAttachCheck } from '../src/custody/attach.js'
+import { createWhitelistStore } from '../src/custody/store.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 
@@ -270,7 +270,7 @@ test('config interceptor: play-state writes pass through untouched', () => {
   assert.equal(interceptor.resolved, false)
 })
 
-test('attach gate + whitelist store (public APIs embedded by the live front leg)', () => {
+test('attach check + whitelist store (public APIs embedded by the live front leg)', () => {
   const file = '/tmp/opencode/attach-whitelist-test.json'
   fs.mkdirSync('/tmp/opencode', { recursive: true })
   fs.writeFileSync(file, JSON.stringify({
@@ -278,15 +278,15 @@ test('attach gate + whitelist store (public APIs embedded by the live front leg)
     players: [{ uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', name: 'Bafbi' }]
   }))
   const store = createWhitelistStore({ file })
-  const gate = createAttachGate()
+  const check = createAttachCheck()
 
-  const allowed = gate.gateVerified({
+  const allowed = check.checkVerified({
     client: { username: 'Bafbi', uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', profile: { id: '6eb73524ff884a62a8d0c63905e7afba', name: 'Bafbi' } },
     store
   })
   assert.equal(allowed.ok, true)
 
-  const denied = gate.gateVerified({
+  const denied = check.checkVerified({
     client: { username: 'Stranger', uuid: '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed' },
     store
   })

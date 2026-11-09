@@ -37,9 +37,9 @@ import fs from 'node:fs'
 
 import { createMonoplayer, loadConfig } from '../monoplayer.js'
 import { redact } from './redact.js'
-import { createWhitelistStore } from '../auth/store.js'
-import { resolveAccount } from '../auth/accounts.js'
-import { normalizeUuid } from '../auth/util.js'
+import { createWhitelistStore } from '../custody/store.js'
+import { resolveAccount } from '../custody/accounts.js'
+import { normalizeUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from './live-backend.js'
 import { createLiveFrontLeg } from './live-front.js'
 import { waitForReady } from './live-readiness.js'
@@ -104,9 +104,9 @@ function candidateLines (candidates = []) {
 
 function accountHint () {
   return [
-    '  bootstrap a new account: node src/auth/cli.js device-code',
-    '  migrate the single-account layout: node src/auth/cli.js migrate --apply',
-    '  list accounts: node src/auth/cli.js accounts'
+    '  bootstrap a new account: node src/custody/cli.js device-code',
+    '  migrate the single-account layout: node src/custody/cli.js migrate --apply',
+    '  list accounts: node src/custody/cli.js accounts'
   ].join('\n')
 }
 

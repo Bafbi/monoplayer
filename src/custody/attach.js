@@ -1,12 +1,12 @@
-// The single embeddable attach gate for Monoplayer's front leg (G1).
+// The single embeddable attach check for Monoplayer's front leg (G1).
 //
-//   gate: async ({ client, store, verify }) => { ok, reason, stage }
+//   check: async ({ client, store, verify }) => { ok, reason, stage }
 //
 // It is meant to run inside a `beforeLogin` handler, so a denial happens
 // BEFORE Login Success: the connecting player never reaches play state, the
 // puppet's backend session is untouched, and nothing about the denial needs
 // to be replayed. Every decision emits `attachAllowed` / `attachDenied` on
-// the gate's own event emitter with sanitized payloads (username/uuid/reason
+// the check's own event emitter with sanitized payloads (username/uuid/reason
 // only — never credentials).
 //
 // `verify` is the identity step (real hasJoined via ./hasjoined.js, or a stub
@@ -33,10 +33,10 @@ export const DENY_REASONS = Object.freeze({
   WHITELIST_UNAVAILABLE: 'whitelist_unavailable',
 })
 
-export function createAttachGate ({
+export function createAttachCheck ({
   events: externalEvents = null,
   log = () => {},
-  // Optional default store so callers embedding the gate do not re-wire it
+  // Optional default store so callers embedding the check do not re-wire it
   // per connection; the per-call `store` argument still wins.
   store: defaultStore = null,
   // Optional default identity step; per-call `verify` still wins.
@@ -56,10 +56,10 @@ export function createAttachGate ({
     return { ok: true, reason: null, stage: 'login', username, uuid, name }
   }
 
-  // Synchronous gate for servers (minecraft-protocol) that have already
+  // Synchronous check for servers (minecraft-protocol) that have already
   // completed the real online-mode hasJoined and hand us client.uuid/client.profile
-  // before beforeLogin. The async gate above is for custom front legs.
-  function gateVerified ({ client, store = defaultStore } = {}) {
+  // before beforeLogin. The async check above is for custom front legs.
+  function checkVerified ({ client, store = defaultStore } = {}) {
     const username = typeof client?.username === 'string' ? client.username : null
     if (!username) return deny({ reason: DENY_REASONS.MISSING_USERNAME, username: null })
     const uuid = normalizeUuid(client?.uuid ?? client?.profile?.id)
@@ -71,7 +71,7 @@ export function createAttachGate ({
     return allow({ username, uuid, name: client.profile?.name ?? username })
   }
 
-  async function gate ({ client, store = defaultStore, verify = defaultVerify } = {}) {
+  async function check ({ client, store = defaultStore, verify = defaultVerify } = {}) {
     const username = typeof client?.username === 'string' ? client.username : null
     if (!username) {
       return deny({ reason: DENY_REASONS.MISSING_USERNAME, username: null })
@@ -121,5 +121,5 @@ export function createAttachGate ({
     return allow({ username, uuid, name: profile.name })
   }
 
-  return { gate, gateVerified, events, denyReasons: DENY_REASONS }
+  return { check, checkVerified, events, denyReasons: DENY_REASONS }
 }

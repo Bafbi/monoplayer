@@ -28,7 +28,7 @@
     "backendWhitelist": "puppet only (GlowSquidye)"
   },
   "liveAttach": {
-    "fixture": "src/auth/fixture-cli.js, online-mode=true, real sessionserver hasJoined, synchronous UUID gate in beforeLogin",
+    "fixture": "src/custody/fixture-cli.js, online-mode=true, real sessionserver hasJoined, synchronous UUID gate in beforeLogin",
     "route": "official Fabric driver client on nath -> reverse SSH 127.0.0.1:25565 -> fixture in workspace",
     "allow": {
       "event": "attachAllowed",
@@ -49,11 +49,11 @@
     }
   },
   "commands": [
-    "node src/auth/cli.js device-code --account puppet --dir .secrets/puppet",
-    "node src/auth/cli.js status --refresh --account puppet --dir .secrets/puppet (twice)",
-    "node src/auth/cli.js whitelist attach add Bafbi --file .secrets/attach-whitelist.json",
-    "node src/auth/cli.js whitelist backend add GlowSquidye",
-    "node src/auth/fixture-cli.js --port 25565 --file .secrets/attach-whitelist.json"
+    "node src/custody/cli.js device-code --account puppet --dir .secrets/puppet",
+    "node src/custody/cli.js status --refresh --account puppet --dir .secrets/puppet (twice)",
+    "node src/custody/cli.js whitelist attach add Bafbi --file .secrets/attach-whitelist.json",
+    "node src/custody/cli.js whitelist backend add GlowSquidye",
+    "node src/custody/fixture-cli.js --port 25565 --file .secrets/attach-whitelist.json"
   ],
   "limitations": [
     "The G1 fixture is login/identity-only; it does not serve configuration/play, so the client disconnects on the fake registry after an allowed login. Render/movement evidence belongs to G0/B1.",
