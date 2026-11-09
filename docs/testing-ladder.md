@@ -243,6 +243,14 @@ The runner builds:
 - `O31` the client's answer reaches the backend as the puppet's dialog click:
   one `custom_click_action` with the dialog's id on the fake backend,
   `controlDialogsAnswered` 1, and nothing left pending.
+- `O32` a configuration gate is answered by the puppet while nobody is attached,
+  and never becomes the next client's question (#21). The first fake backend runs
+  with the code of conduct enabled, so it sends `code_of_conduct` in the
+  configuration phase and withholds `finish_configuration` until the accept
+  arrives. It counts one gate and one accept, the leg logs
+  `codeOfConductAccepted` and not `codeOfConductHeld`, nothing is held, the
+  router counts one puppet answer, and the one resend `O30` sees is the play
+  dialog.
 
 ## The client parity rung
 

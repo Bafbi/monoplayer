@@ -141,9 +141,10 @@ export const PLAY_ORDINARY = new Set([
   'entity_position'
 ])
 
-// Configuration-phase frames. Cookies, dialogs, the code of conduct, a
-// disconnect, and a transfer are connection control: the puppet took the
-// action, the front client must not.
+// Configuration-phase frames. Cookies, a disconnect, and a transfer are
+// connection control: the puppet took the action, the front client must not. A
+// configuration dialog and the code of conduct are `control` instead (see
+// CONTROL_FRAMES): the human answers those.
 export const CONFIG_BLOCK = new Set([
   'cookie_request',
   'disconnect',
