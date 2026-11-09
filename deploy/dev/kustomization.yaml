@@ -1,0 +1,11 @@
+# The dev validation lane (#42). Not registered in Argo CD: nothing here can
+# reach the live lane. `scripts/dev-lane.sh up` applies it; `down` deletes it.
+#
+# `dev-lane.sh up` creates the `dev-rcon` Secret first, because the Paper pod
+# cannot start without it, and the Secret is never committed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - paper.yaml
+  - monoplayer.yaml

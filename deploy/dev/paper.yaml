@@ -1,0 +1,113 @@
+# The dev Paper server. Disposable: emptyDir, no world persistence.
+#
+# Online mode and secure profile are on, like the live backend region, so the
+# lane exercises the same sign-in and chat-signing path. The whitelist is on and
+# empty in the manifest: the puppet account has to be added by the operator, or
+# the backend rejects the join.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: paper
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: paper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: paper
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: paper
+          image: itzg/minecraft-server:2026.10.1-java25
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: EULA
+              value: "TRUE"
+            - name: TYPE
+              value: PAPER
+            - name: VERSION
+              value: "26.2"
+            - name: PAPER_BUILD
+              value: "135"
+            - name: MEMORY
+              value: 1536M
+            - name: ONLINE_MODE
+              value: "TRUE"
+            - name: ENFORCE_SECURE_PROFILE
+              value: "TRUE"
+            # Off on purpose. Online mode already decides who may join, this
+            # server is reachable only inside the cluster, and a whitelist here
+            # would mean committing an account name to a manifest. It is
+            # disposable, so a second gate buys nothing.
+            - name: ENFORCE_WHITELIST
+              value: "FALSE"
+            - name: LEVEL_TYPE
+              value: "minecraft:flat"
+            - name: GENERATE_STRUCTURES
+              value: "false"
+            - name: LEVEL_SEED
+              value: "dev"
+            - name: VIEW_DISTANCE
+              value: "6"
+            - name: SIMULATION_DISTANCE
+              value: "6"
+            - name: SPAWN_PROTECTION
+              value: "0"
+            - name: DIFFICULTY
+              value: peaceful
+            - name: MODE
+              value: survival
+            - name: MAX_PLAYERS
+              value: "8"
+            - name: ENABLE_RCON
+              value: "TRUE"
+            - name: RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dev-rcon
+                  key: password
+            - name: MOTD
+              value: monoplayer dev
+          ports:
+            - name: minecraft
+              containerPort: 25565
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 120
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: paper
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: paper
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
+      protocol: TCP

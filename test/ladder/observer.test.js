@@ -7,7 +7,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { compareViews, VIEW_FIELDS, KNOWN_DIFFERENCES } from '../../src/ladder/observer.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import {
+  compareViews,
+  lastView,
+  main,
+  records,
+  VIEW_FIELDS,
+  KNOWN_DIFFERENCES,
+  views
+} from '../../src/ladder/observer.js'
 
 const base = (overrides = {}) => ({
   player: 'GlowSquidye',
@@ -66,4 +78,78 @@ test('a field neither side reports is absent, not a pass', () => {
 test('every compared field is declared', () => {
   const report = compareViews(base(), base())
   assert.deepEqual(report.fields.map(entry => entry.field), VIEW_FIELDS)
+})
+
+// One command runs both joins against one server, so both views land in one
+// log and the report splits it by position: baseline first, puppet last.
+const log = (...records) => records
+  .map(record => (typeof record === 'string' ? record : JSON.stringify({ event: 'client_view', ...record })))
+  .join('\n') + '\n'
+
+test('the log splits into a first view and a last view', () => {
+  const text = log(
+    '[11:00:00] MonoplayerObserver enabled',
+    base({ address: '203.0.113.7:52001' }),
+    'not json at all',
+    base({ address: '198.51.100.9:40000' }),
+    base({ address: '198.51.100.9:40001' })
+  )
+  assert.equal(views(text).length, 3)
+  assert.equal(views(text)[0].address, '203.0.113.7:52001')
+  assert.equal(lastView(text).address, '198.51.100.9:40001', 'a puppet reconnect keeps the last view')
+  assert.deepEqual(views(log()), [])
+  assert.equal(lastView(log()), null)
+})
+
+test('two records for one connection merge into one view', () => {
+  // The plugin writes the join first and the resource-pack status after it,
+  // because that status always arrives late. The report must compare the same
+  // two connections, not the join of one against the pack status of the other.
+  const text = log(
+    base({ address: '203.0.113.7:52001', resourcePack: null }),
+    base({ address: '203.0.113.7:52001', resourcePack: 'accepted' }),
+    base({ address: '198.51.100.9:40000', resourcePack: null }),
+    base({ address: '198.51.100.9:40000', resourcePack: 'accepted' })
+  )
+  assert.equal(records(text).length, 4)
+  const merged = views(text)
+  assert.equal(merged.length, 2, 'one view per connection')
+  assert.equal(merged[0].address, '203.0.113.7:52001')
+  assert.equal(merged[1].address, '198.51.100.9:40000')
+  assert.equal(merged[1].resourcePack, 'accepted', 'the later record fills the field the join could not see')
+
+  const report = compareViews(merged[0], merged[1])
+  assert.equal(report.ok, true, 'the resource-pack field is compared, not absent')
+  assert.equal(report.fields.find(entry => entry.field === 'resourcePack').verdict, 'same')
+})
+
+test('--single reads one log and compares its first and last view', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const file = path.join(dir, 'views.jsonl')
+  const reportPath = path.join(dir, 'report.json')
+  fs.writeFileSync(file, log(base(), base({ address: '198.51.100.9:40000' })))
+
+  const out = []
+  const code = main(['--single', file, '--report', reportPath], {
+    stdout: { write: text => out.push(text) },
+    stderr: { write: text => out.push(text) }
+  })
+  assert.equal(code, 0, out.join(''))
+  assert.match(out.join(''), /PASS 11 fields/)
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  assert.equal(report.passed, true)
+  assert.equal(report.fields.find(entry => entry.field === 'address').verdict, 'expected')
+})
+
+test('--single refuses a log that holds one view', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const file = path.join(dir, 'views.jsonl')
+  fs.writeFileSync(file, log(base()))
+  const out = []
+  const code = main(['--single', file, '--report', path.join(dir, 'report.json')], {
+    stdout: { write: text => out.push(text) },
+    stderr: { write: text => out.push(text) }
+  })
+  assert.equal(code, 2)
+  assert.match(out.join(''), /need at least two/)
 })
