@@ -94,6 +94,7 @@ export function createBot ({
     health: [], // decoded clientbound update_health frames
     systemChat: [], // decoded clientbound system_chat frames
     dialogs: [], // decoded clientbound show_dialog frames (#16)
+    advancements: [], // decoded clientbound advancements frames (a proxy notice toast, #15)
     kick: null, // decoded clientbound kick_disconnect, if one arrived
     ended: null,
     errors: []
@@ -152,6 +153,7 @@ export function createBot ({
   client.on('update_health', packet => received.health.push(packet))
   client.on('system_chat', packet => received.systemChat.push(packet))
   client.on('show_dialog', packet => received.dialogs.push(packet))
+  client.on('advancements', packet => received.advancements.push(packet))
   client.on('kick_disconnect', packet => { received.kick = packet })
 
   client.on('error', error => {

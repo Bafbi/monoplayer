@@ -70,6 +70,20 @@ function transfer (host = 'sky-2.excalia.fr', port = 25565) {
   return { name: 'transfer', buffer: BUFFER('transfer'), data: { host, port } }
 }
 
+// The refusal notice reaches the client as an advancement toast (#15): the add
+// carries the text, and the removal names the id it added. The toast's own
+// shape is proved in test/core/notice.test.js.
+function assertRefusalNotice (frontLeg) {
+  const frames = frontLeg.frames()
+  const add = frames.at(-2)
+  const remove = frames.at(-1)
+  assert.equal(add.name, 'advancements')
+  assert.equal(remove.name, 'advancements')
+  const display = add.packet.advancementMapping[0].value.displayData
+  assert.match(display.description.value.text.value, /could not follow/i)
+  assert.deepEqual(remove.packet.identifiers, [add.packet.advancementMapping[0].key])
+}
+
 test('a followed transfer never reaches the client and dials the target next', () => {
   const rig = makeCore()
   warmBackend(rig)
@@ -116,9 +130,7 @@ test('follow disabled keeps the session and sends the refusal notice', () => {
   assert.equal(rig.core.metrics.transfersRefused, 1)
   assert.equal(rig.backendLeg.ended, 0)
   assert.equal(rig.core.session.state, 'attached')
-  const notice = rig.frontLeg.frames().at(-1)
-  assert.equal(notice.name, 'system_chat')
-  assert.match(notice.packet.content.value.text.value, /could not follow/i)
+  assertRefusalNotice(rig.frontLeg)
 })
 
 test('an invalid target is refused without ending the session', () => {
@@ -129,7 +141,7 @@ test('an invalid target is refused without ending the session', () => {
   rig.backendLeg.deliver({ state: 'play', name: 'transfer', buffer: BUFFER('transfer'), data: { host: '', port: 0 } })
   assert.equal(rig.core.metrics.transfersRefused, 1)
   assert.equal(rig.backendLeg.ended, 0)
-  assert.equal(rig.frontLeg.frames().at(-1).name, 'system_chat')
+  assertRefusalNotice(rig.frontLeg)
 })
 
 test('a repeated target is refused as a loop after a re-warm', () => {
@@ -149,7 +161,7 @@ test('a repeated target is refused as a loop after a re-warm', () => {
   assert.equal(rig.core.metrics.transfersFollowed, 1)
   assert.equal(rig.core.metrics.transfersRefused, 1)
   assert.equal(rig.backendLeg.ended, 1, 'the refused transfer does not end the leg again')
-  assert.equal(rig.frontLeg.frames().at(-1).name, 'system_chat')
+  assertRefusalNotice(rig.frontLeg)
 })
 
 test('the chain limit refuses the hop beyond it', () => {
@@ -165,7 +177,7 @@ test('the chain limit refuses the hop beyond it', () => {
   rig.backendLeg.deliver({ state: 'play', ...transfer('b.excalia.fr', 25565) })
   assert.equal(rig.core.metrics.transfersFollowed, 1)
   assert.equal(rig.core.metrics.transfersRefused, 1)
-  assert.equal(rig.frontLeg.frames().at(-1).name, 'system_chat')
+  assertRefusalNotice(rig.frontLeg)
 })
 
 test('start_configuration ends the backend leg and the client with a reconnect reason', () => {
