@@ -36,7 +36,7 @@ verify_supports () {
   return 1
 }
 
-if [ -f "$JAR" ]; then
+if [ -f "$JAR" ] && [ -f "${JAR%.jar}-plugin.jar" ]; then
   say "up to date: $JAR"
   exit 0
 fi
@@ -69,4 +69,15 @@ built=$(find "$SRC/build/libs" -maxdepth 1 -name 'ProtocolLib-[0-9]*.jar' ! -nam
 [ -n "$built" ] || die 'the build produced no jar'
 cp "$built" "$JAR"
 verify_supports "$JAR" || die "the pinned build does not support 26.1: $JAR"
-say "built $JAR"
+
+# Two artifacts, and they are not interchangeable. The plain jar carries the
+# unrelocated classes the observer compiles against; the shaded ProtocolLib.jar
+# carries the plugin descriptor a server loads. Shipping the plain jar to a
+# server fails with "does not contain a paper-plugin.yml or plugin.yml".
+PLUGIN_JAR=${JAR%.jar}-plugin.jar
+if [ ! -f "$PLUGIN_JAR" ]; then
+  cp "$SRC/build/libs/ProtocolLib.jar" "$PLUGIN_JAR"
+fi
+"${JAR_TOOL:-jar}" tf "$PLUGIN_JAR" | grep -q 'paper-plugin.yml' \
+  || die "the deployable jar has no plugin descriptor: $PLUGIN_JAR"
+say "built $JAR (compile) and $PLUGIN_JAR (deploy)"

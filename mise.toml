@@ -99,6 +99,11 @@ description = "Build and push the Monoplayer image to the cluster Zot registry."
 wait_for = ["check"]
 run = "scripts/build-image.sh"
 
+[tasks."observer:build"]
+description = "Build the server transparency observer plugin (needs the pinned ProtocolLib)."
+depends = ["observer:protocollib"]
+run = "gradle -p tools/observer --no-daemon build"
+
 [tasks."observer:protocollib"]
 description = "Build the pinned ProtocolLib jar the observer plugin links against (no release supports 26.x)."
 run = "scripts/build-protocollib.sh"
