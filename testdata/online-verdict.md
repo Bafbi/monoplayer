@@ -26,4 +26,4 @@ The record set `mode: online`, `auth: microsoft`, and `version: 26.1`, and it to
 
 ## What it does not prove
 
-The rung still uses a `minecraft-protocol` bot, so it proves wire shape and relay behavior, never rendering or vanilla acceptance. Those belong to [the live attach](live-attach-verdict.md) and [the M4 row](m4-verdict.md).
+The rung still uses a protocol bot on `minecraft-protocol`, so it proves wire shape and relay behavior, never rendering or vanilla acceptance. Those belong to [the live attach](live-attach-verdict.md) and [the M4 row](m4-verdict.md).

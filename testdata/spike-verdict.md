@@ -23,11 +23,11 @@ The report pinned these versions: Minecraft 26.1, protocol 775, Node v26.7.0, `m
 
 ## What it does not prove
 
-The report's own notes say it:
+The report's own notes state four limits:
 
 - It uses a protocol bot, not the official vanilla client.
 - It runs both legs offline, so neither encryption nor `hasJoined` is exercised.
 - It lets the front leg configure itself through the library, so configuration replay is not exercised.
 - It soaks the attach and detach for 5000 ms, not the five minutes the architecture asks for.
 
-The later rows answer those gaps: [the live attach](live-attach-verdict.md), [M4 behind Velocity](m4-verdict.md), [the online rung](online-verdict.md), and [the deployed front](deployed-front-verdict.md).
+The later rows answer those gaps: [the live attach](live-attach-verdict.md), [M4 behind Velocity](m4-verdict.md), [the online rung](online-verdict.md), and [the deployed service](service-verdict.md).
