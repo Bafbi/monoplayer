@@ -31,7 +31,11 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 
-const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
+// Every backend this repo deploys serves 26.2, so that is the default. `||` not
+// `??`: an empty value means "unset" here, and minecraft-protocol would answer an
+// empty version with its own defaultVersion, a version choice this rung must make
+// itself.
+const VERSION = process.env.MONOPLAYER_VERSION || '26.2'
 const DEFAULT_REPORT = '.reports/online-report.json'
 const WHITELIST_FILE = '.secrets/attach-whitelist.json'
 const PUPPET_SELECTOR = 'glowsquidye'
@@ -48,6 +52,22 @@ const PARITY_REPLAY_TIMEOUT_MS = 30_000
 export const ONLINE_ASSERTION_IDS = Object.freeze([
   'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N13'
 ])
+
+// The bot's client options, built here so the version is the rung's own. A bot
+// left on bot.js's 26.1 default decodes a 26.2 front's login frames one field
+// short and records leftover bytes instead of a clean join (#71, N8).
+export function buildOnlineBotOptions ({ frontPort, attach, attachCustody, version = VERSION }) {
+  return {
+    host: '127.0.0.1',
+    port: frontPort,
+    username: attach.uuid,
+    auth: 'microsoft',
+    version,
+    profilesFolder: attachCustody.cacheFactory, // a function, never a path
+    authTitle: attach.profile?.authTitle ?? null,
+    deviceType: attach.profile?.deviceType ?? null
+  }
+}
 
 function flag (argv, name) {
   const i = argv.indexOf(name)
@@ -610,15 +630,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
       dir: attach.dir,
       create: false
     })
-    const botOptions = () => ({
-      host: '127.0.0.1',
-      port: frontPort,
-      username: attach.uuid,
-      auth: 'microsoft',
-      profilesFolder: attachCustody.cacheFactory, // a function, never a path
-      authTitle: attach.profile?.authTitle ?? null,
-      deviceType: attach.profile?.deviceType ?? null
-    })
+    const botOptions = () => buildOnlineBotOptions({ frontPort, attach, attachCustody })
 
     bot = createBot(botOptions())
     // Capture the decoded frames before ready(): the cache replay happens at

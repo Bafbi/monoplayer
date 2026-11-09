@@ -34,13 +34,13 @@ export const DEFAULT_PINS = {
   gate: 'B',
   row: 'G0 — host readiness, direct Paper',
   clientLane: 'driver',
-  minecraftVersion: '26.1.2',
-  protocolVersion: 775,
-  paperBuild: '26.1.2 build 74',
+  minecraftVersion: '26.2',
+  protocolVersion: 776,
+  paperBuild: '26.2 build 135',
   fabricLoader: '0.20.1',
   javaRuntime: '25.0.1 (epsilon)',
   launcher: 'Prism 11.0.3',
-  backend: 'direct Paper 26.1.2 (M2 row); Monoplayer and Velocity are not involved in G0',
+  backend: 'direct Paper 26.2 (M2 row); Monoplayer and Velocity are not involved in G0',
 }
 
 const LIMITATIONS = [
@@ -618,7 +618,7 @@ export async function runDriverLane ({
     assertions,
     rconOps, driverOps, artifacts,
     metrics, limitations,
-    pins: { ...DEFAULT_PINS, displayHost: clientHost, backendRow: 'M2 — Paper 26.1.2 direct (G0)' },
+    pins: { ...DEFAULT_PINS, displayHost: clientHost, backendRow: 'M2 — Paper 26.2 direct (G0)' },
     plan: {
       runIndex: plan.runIndex,
       center: plan.center,

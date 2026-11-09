@@ -6,6 +6,7 @@ import {
   NAMESPACE, BACKENDS, PROXY_PLAN, FAULT_PLAN, M5_FAULT_ROW,
   getBackend, activeBackends, rconTarget,
 } from '../../src/driver/backends.js'
+import { DEFAULT_PINS } from '../../src/driver/scenario.js'
 
 test('each backend row has a unique id, deployment and lane', () => {
   const ids = new Set(BACKENDS.map(b => b.id))
@@ -32,6 +33,14 @@ test('only G0 paper is marked running; planned rows are honest about it', () => 
   assert.deepEqual(activeBackends().map(b => b.id), ['paper'])
   assert.equal(getBackend('paper-m4').status, 'planned',
     'M4 is manifest plumbing in this slice; the running claim flips when the pods are live')
+})
+
+test('the G0 paper row describes the lane rung 4 drives', () => {
+  // The row says "do not touch" because it describes the server that exists. When
+  // that server moves, this row moves with it, or it describes a lane that is gone.
+  const paper = getBackend('paper')
+  assert.equal(paper.pins.version, DEFAULT_PINS.minecraftVersion)
+  assert.equal(String(paper.pins.paperBuild), String(DEFAULT_PINS.paperBuild).match(/(\d+)$/)[1])
 })
 
 test('M4 pins carry the plan pins: Paper b74, Velocity 4.3.1 b45 with sha256, modern forwarding', () => {

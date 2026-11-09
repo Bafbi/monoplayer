@@ -7,10 +7,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 import { buildClientOptions } from '../../src/ladder/bot.js'
 import {
   ONLINE_ASSERTION_IDS,
+  buildOnlineBotOptions,
   evaluateOnlineAssertions,
   resolveOnlineAccounts,
   summarizeAssertions
@@ -98,6 +101,72 @@ function allPassEvidence () {
     custody: { puppetLockReleased: true }
   }
 }
+
+// #71: the puppet join failed N8 on a 26.2 front because the bots were built
+// without a version and fell back to bot.js's 26.1 default, so a 26.2 login
+// success decoded one field short (sessionId, 16 bytes). The options builder is
+// exported so this can be proved without sockets.
+const buildRungBotOptions = () => buildOnlineBotOptions({
+  frontPort: 25566,
+  attach: { uuid: ATTACH_UUID, profile: { authTitle: null, deviceType: null } },
+  attachCustody: { cacheFactory: () => ({}) }
+})
+
+test('the rung builds its bots at the version it runs at', () => {
+  const output = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { buildOnlineBotOptions } from './src/ladder/online.js'
+    console.log(buildOnlineBotOptions({
+      frontPort: 25566,
+      attach: { uuid: '${ATTACH_UUID}', profile: {} },
+      attachCustody: { cacheFactory: () => ({}) }
+    }).version)
+  `], {
+    cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'),
+    encoding: 'utf8',
+    env: { ...process.env, MONOPLAYER_VERSION: '26.2' }
+  })
+  assert.equal(output.status, 0, output.stderr)
+  assert.equal(output.stdout.trim(), '26.2', 'the bot must speak the version the front and backend run at')
+})
+
+// The rung's module-level VERSION is read at import, so a child process is the
+// only honest way to prove what an environment yields.
+function rungBotVersion (env) {
+  const childEnv = { ...process.env }
+  delete childEnv.MONOPLAYER_VERSION
+  const output = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { buildOnlineBotOptions } from './src/ladder/online.js'
+    console.log(buildOnlineBotOptions({
+      frontPort: 25566,
+      attach: { uuid: '${ATTACH_UUID}', profile: {} },
+      attachCustody: { cacheFactory: () => ({}) }
+    }).version)
+  `], {
+    cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'),
+    encoding: 'utf8',
+    env: { ...childEnv, ...env }
+  })
+  assert.equal(output.status, 0, output.stderr)
+  return output.stdout.trim()
+}
+
+test('an empty MONOPLAYER_VERSION is unset, never a version of its own', () => {
+  // minecraft-protocol treats an empty version as "use my defaultVersion", which
+  // is a version choice this rung must make itself: online-cluster.sh forwards
+  // an empty MONOPLAYER_VERSION when the operator names none.
+  assert.equal(rungBotVersion({ MONOPLAYER_VERSION: '' }), '26.2')
+  assert.equal(rungBotVersion({}), '26.2')
+  assert.equal(rungBotVersion({ MONOPLAYER_VERSION: '26.1' }), '26.1')
+})
+
+test('a bot option set carries the version it was given', () => {
+  assert.equal(buildOnlineBotOptions({
+    frontPort: 25566,
+    attach: { uuid: ATTACH_UUID, profile: {} },
+    attachCustody: { cacheFactory: () => ({}) },
+    version: '26.2'
+  }).version, '26.2')
+})
 
 test('buildClientOptions defaults to offline and adds no auth material', () => {
   const options = buildClientOptions({ port: 25565, username: 'Attach' })

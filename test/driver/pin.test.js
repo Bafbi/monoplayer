@@ -66,12 +66,42 @@ test('the installer reads the version from the base instance instead of naming o
 })
 
 test('rung 4 pins describe the backend rung 4 actually drives', () => {
-  // The G0 lane is a different deployment from the proxy, and it is still on the
-  // older version: #71 moves it. Until then these two files must agree, so the
-  // runbook's pins cannot describe a server that is not there.
+  // The G0 lane is a different deployment from the proxy, so it has its own
+  // manifest to agree with: the runbook's pins must not describe a server that
+  // is not there.
   assert.equal(DEFAULT_PINS.minecraftVersion, envValue('deploy/driver/paper.yaml', 'VERSION'))
   assert.equal(String(DEFAULT_PINS.paperBuild).match(/(\d+)$/)?.[1],
     envValue('deploy/driver/paper.yaml', 'PAPER_BUILD'))
+})
+
+test('the gate Paper serves the version the driver builds for', () => {
+  // #71: the gate Paper sat a version behind the driver build, and only a client
+  // relaunch found out. The rung-4 manifest and the build pin are checked here so
+  // rung 1 fails first instead.
+  assert.equal(envValue('deploy/driver/paper.yaml', 'VERSION'), buildPin(),
+    'deploy/driver/paper.yaml must serve the version tools/driver/build.gradle targets')
+})
+
+test('the observer rung speaks the version the gate Paper serves', () => {
+  // The observer's baseline bot joins the gate Paper directly (#12), so its
+  // default version has to be the version that server accepts.
+  const match = read('src/ladder/observer-baseline.js').match(/MONOPLAYER_VERSION (?:\?\?|\|\|) '([^']+)'/)
+  assert.ok(match, 'src/ladder/observer-baseline.js defaults MONOPLAYER_VERSION')
+  assert.equal(match[1], envValue('deploy/driver/paper.yaml', 'VERSION'),
+    'the baseline bot joins the gate Paper with the version it serves')
+})
+
+test('the observer plugin compiles against the gate Paper build', () => {
+  // docs/adr/pin-protocollib-for-the-observer.md: the plugin compiles against the
+  // same Paper build the gate server runs, so the jar loads on the server it
+  // measures.
+  const gradle = read('tools/observer/build.gradle')
+  const match = gradle.match(/io\.papermc\.paper:paper-api:([0-9][^'"]+)-stable/)
+  assert.ok(match, 'tools/observer/build.gradle pins a paper-api version')
+  const version = envValue('deploy/driver/paper.yaml', 'VERSION')
+  const build = envValue('deploy/driver/paper.yaml', 'PAPER_BUILD')
+  assert.equal(match[1], version + '.build.' + build,
+    'tools/observer/build.gradle must target the Paper build the gate runs')
 })
 
 test('the installer and rung 4 agree on the Fabric Loader version', () => {

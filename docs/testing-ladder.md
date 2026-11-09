@@ -76,7 +76,7 @@ that covers the area you changed.
 |---|---|---|
 | `mise run verify:relay` | `check`, `spike`, `parity:run` | the relay, the legs, the join, the state cache, `src/core/clientbound-policy.js` |
 | `mise run verify:custody` | `check`, `online` (a repo-deployed backend, both custodians, this machine's copy of the chain) | `src/custody/`, the custody store, `hasJoined`, offline identity |
-| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper; it refuses until [#71](https://github.com/Bafbi/monoplayer/issues/71) moves that Paper to 26.2) | `tools/driver/`, `src/driver/` |
+| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
 
 `verify:driver` does not compose `driver:parity`. The parity lane needs a target
@@ -129,7 +129,7 @@ deployment is `monoplayer`. The two checks are:
 - the unmodded vanilla client.
 
 G0 is the exception below it: `mise run driver:g0` joins the gate Paper directly,
-because the scenario pins its backend as "direct Paper 26.1.2 (M2 row);
+because the scenario pins its backend as "direct Paper 26.2 (M2 row);
 Monoplayer and Velocity are not involved in G0" (`src/driver/scenario.js`).
 
 Everything else — reconnect, the F1-F6 faults, identity separation, denial,
@@ -329,9 +329,12 @@ before a socket opens, so a mistyped endpoint cannot measure a server this repo
 does not own.
 
 The version is the target's, not the rung's. The fake lane serves 26.1 and
-refuses anything else. The dev lane and the testbed serve 26.2, so pass
-`--version 26.2`, or `MONOPLAYER_VERSION=26.2`, which
-`scripts/online-cluster.sh` forwards into the pod.
+refuses anything else. The dev lane, the testbed, and the gate Paper serve 26.2,
+which is the rung's default, so the usual run needs no flag. Point it at a 26.1
+target with `--version 26.1`, or `MONOPLAYER_VERSION=26.1`, which
+`scripts/online-cluster.sh` forwards into the pod. `mise run observer:run`
+needs no flag either: it reads the gate Paper's version from
+`deploy/driver/paper.yaml` and passes it to both of its joins.
 
 Three pairs this repo deploys, and where each stands:
 
