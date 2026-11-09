@@ -162,3 +162,28 @@ One review delegate (opencode-go/claude-haiku-5-5, run through the code-review s
 | src/gate-b.js still builds the triple | Recorded as a follow-up, not this ticket: the runner is the validated G0 path and changing it needs its own live 2/2 re-run. |
 | The signature test matches a shape, not the historical value | Dismissed: the historical value lives only in untracked .scratch, so a test that names it would fail in CI. |
 | Token not escaped in the JSON payload; shot leaves a non-PNG behind; pgrep pattern dots | Fixed: token escaped, the copy lands in .part and is moved only after the PNG check, instance dots escaped. |
+
+## Second review pass (after the fixes)
+
+Same reviewer, over the fixed diff. Confirmed: the quoting fix holds (a mutation that removes the
+printf %q makes the test fail), the SILENT exit code matches the header, the launch path runs for real
+in tests, exit 255 is mapped, the eval failure is reported, the docs lost the inline triple, the token is
+escaped, and the .part copy works.
+
+New findings and their disposition:
+
+| Finding | Disposition |
+|---|---|
+| "Every call derives the signature" was false: shot and the driver quit need no session | Fixed in the header and the validation record. |
+| Docs showed an o.window config rule while launch uses inline exec rules | Fixed: the validation record now says which mechanism covers which launch. |
+| SILENT=no cannot tell a client focus steal from the user switching workspace, and a retry then hits "already running" | Split: the check now also requires the focused window not to be the client's, and a failed launch prints the kill hint. |
+| A failed scp left the .part file behind | Fixed. |
+| The window match could accept another instance's Minecraft window | Fixed: the window's process must carry the instance library path. |
+| hyprctl failures inside command substitutions exited silently | Fixed: each read reports its own failure. |
+| "launch derives all three" in the G0 runbook | Fixed: launch inherits them, env derives them. |
+| hyprctl eval exit status unproven for a bad Lua | Verified on the host: a bad Lua exits 7 with the error on stderr. |
+| The quoting test used only ";", not "$(...)" | Fixed: a second case asserts a command substitution stays text. |
+
+Re-proved live after those fixes, with the same scrubbed environment: launch -> SILENT=yes, workspace 2 and
+T3 Code focus untouched; shot -> 1916x1050 PNG; kill -> QUIT=ok, STOPPED=17015, driver port closed, no
+client window left. 26 tests, mise run check green.
