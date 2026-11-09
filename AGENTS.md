@@ -1,5 +1,42 @@
 # Monoplayer agent instructions
 
+## Lanes
+
+Three cluster lanes. One rule outranks every test.
+
+| Lane | Namespace | What runs there | Who changes it |
+|---|---|---|---|
+| live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the GlowSquidye account, backend `play2.excalia.fr` | a human, deliberately |
+| dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
+| gate Paper | `monoplayer-gate-b` | the disposable Paper behind the observer, the online rung, the driver lane, and the transfer testbed | anyone; it is disposable |
+
+**Never take the live lane down, scale it, patch it, or restart it for a test.**
+That covers `kubectl -n monoplayer scale`, `patch`, `delete`, `rollout restart`,
+and `set image`. It also covers the two runs that do it for you:
+`mise run testbed:up` and `mise run testbed:run` scale the live deployment to
+zero and disable Argo auto-sync. An interrupted testbed run leaves the live front
+offline, so `mise run testbed:down` stays available: it restores the deployment
+and the sync policy.
+
+**No automated join runs against Excalia.** `play.excalia.fr` and
+`play2.excalia.fr` are the live servers, and no run in this repo joins them on
+its own. Point every run at a server this repo deploys: the dev Paper, the gate
+Paper, or the transfer testbed. `mise run online` takes its backend from
+`MONOPLAYER_BACKEND_HOST`, so name one of those there, never the live host.
+
+| The test needs | Run |
+|---|---|
+| the gate, offline, seconds | `mise run check` |
+| a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join` |
+| the online rung, with the deployment still serving | `mise run online:cluster` |
+| a clientbound comparison, direct against proxied | `mise run parity:run` |
+| the server's view of a join | `mise run observer:run` |
+| the real client | `mise run driver:scenario`, against the gate Paper |
+| the transfer path | nothing: it takes the live front offline, so ask a human |
+
+`docs/testing-ladder.md` gives each run its cost and its blast radius.
+`deploy/dev/README.md` is the dev lane runbook.
+
 ## Tools
 
 Two CLIs answer the protocol and journal questions that recur. Use them instead

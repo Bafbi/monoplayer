@@ -40,7 +40,7 @@ wait_for = ["check"]
 run = "node src/ladder/client-parity.js || node src/ladder/next-rung.js parity:run $?"
 
 [tasks.online]
-description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and the live backend)."
+description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and a backend this repo deploys, named in MONOPLAYER_BACKEND_HOST)."
 depends = ["install"]
 wait_for = ["check"]
 run = "node src/ladder/online.js || node src/ladder/next-rung.js online $?"
@@ -65,11 +65,11 @@ description = "Verify a relay change: the gate, the frozen protocol spike, then 
 depends = ["check", "spike", "parity:run"]
 
 [tasks."verify:custody"]
-description = "Verify a custody change: the gate, then the online bot rung (needs the live backend and both custodians)."
+description = "Verify a custody change: the gate, then the online bot rung (needs a repo-deployed backend and both custodians)."
 depends = ["check", "online"]
 
 [tasks."verify:driver"]
-description = "Verify a driver change: the gate, the Fabric driver build, then the real-client scenario (needs the SSH tunnel and the live backend)."
+description = "Verify a driver change: the gate, the Fabric driver build, then the real-client scenario (needs the SSH tunnel and the gate Paper)."
 depends = ["check", "driver:build", "driver:scenario"]
 
 [tasks."verify:deploy"]
@@ -86,7 +86,7 @@ description = "Build the Fabric client driver."
 run = "gradle -p tools/driver --no-daemon build"
 
 [tasks."driver:scenario"]
-description = "Run the driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the live backend)."
+description = "Run the driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the gate Paper)."
 depends = ["install"]
 wait_for = ["check", "driver:build"]
 run = "node src/driver/run.js --runs 2 || node src/ladder/next-rung.js driver:scenario $?"

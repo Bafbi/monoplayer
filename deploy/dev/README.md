@@ -1,8 +1,8 @@
 # The dev validation lane
 
 A parallel lane for validating a change without taking the live front down.
-Issue [#42](https://github.com/Bafbi/monoplayer/issues/42), with its own account
-from [#44](https://github.com/Bafbi/monoplayer/issues/44) and branch images from
+Issue [#42](https://github.com/Bafbi/monoplayer/issues/42), its own account from
+[#44](https://github.com/Bafbi/monoplayer/issues/44), and branch images from
 [#43](https://github.com/Bafbi/monoplayer/issues/43).
 
 ## Why it exists
@@ -23,13 +23,18 @@ gets its own account rather than borrowing the live one.
 | `monoplayer-dev-custody` | the dev account only, `ReadWriteOnce`, one replica |
 | `monoplayer-dev-config` | the attach whitelist: who may control the dev proxy |
 
+Nothing here runs in the live namespace, `monoplayer`, and nothing here is in
+Argo CD. `AGENTS.md` states the rule that keeps it that way: no agent takes the
+live lane down, scales it, or patches it for a test. `docs/testing-ladder.md`
+says which lane each run belongs on.
+
 ## The first run
 
 The dev account does not exist until someone signs in as it, so the first run has
-an order.
+an order: bootstrap the account, approve it, bring the lane up, join.
 
-1. **Bootstrap the account.** One device-code approval, then the account is
-   headless until its refresh chain is revoked.
+1. **Bootstrap the account.** The volume starts empty, and the proxy waits for an
+   account before it starts.
 
    ```bash
    mise run dev:custody:up   # a handle pod on the dev custody volume
@@ -40,12 +45,27 @@ an order.
    The account lands in `/data/accounts/<uuid>/` with the alias `devpuppet`,
    which is the alias `deploy/dev/monoplayer.yaml` selects.
 
-2. **Bring the lane up.**
+2. **Approve the code as the dev account.** `mise run dev:custody` prints a URL
+   and a short code to the terminal, then waits. Open the URL in any browser,
+   sign in as the dev account, and approve. Sign in as the dev account and
+   nothing else: the approval is what binds that account to this volume, and it
+   is the only time the lane needs a person.
+
+   The code expires in 15 minutes. An expired code is not a failure of the lane:
+   run `mise run dev:custody` again for a new one. The command exits when
+   Microsoft answers and prints `uuid`, `name`, and `alias`;
+   `.reports/dev-custody.json` holds the same three fields. The device code is
+   never written to a file, so a closed terminal is a new code, not a lost one.
+
+3. **Bring the lane up.**
 
    ```bash
    mise run dev:up      # Paper, and a proxy that waits for that account
    mise run dev:status  # pods, the whitelist, and the live replica count
    ```
+
+   A lane with an account and an attach whitelist is up. `mise run dev:join`
+   proves the account reached the dev Paper ([Join it](#join-it)).
 
 After this, `mise run dev:down` stops the lane and **keeps the account**: the
 claim, the namespace, and the Secrets stay, so coming back is `mise run dev:up`.
@@ -59,18 +79,60 @@ script refuses while the proxy is running and says how to clear it.
 ## The dev account
 
 The dev account is a second Microsoft account, not GlowSquidye and not the
-attaching player. `docs/custody.md` explains why two directories cannot hold one
-account: the refresh token is rolling and single-use, so the copy that refreshed
-last is live and the other is dead.
+attaching player. Its alias is `devpuppet`.
+
+**One account, one writer, one replica.** The refresh token is rolling and
+single-use, so two writers race it and two copies of one account cannot both stay
+usable: the copy that refreshed last is live, and the other is dead
+([custody](../../docs/custody.md#sessions-copies-and-refresh)). The lane honors the
+limit three ways. The claim is `ReadWriteOnce` on a two-node cluster. The
+Deployment is `replicas: 1` with the `Recreate` strategy, so two proxy pods
+never overlap. And the only other pod that mounts the claim is the bootstrap
+handle pod, which `mise run dev:custody:up` refuses to create while the proxy
+runs.
 
 Its custody is on `monoplayer-dev-custody` and nowhere else. The image carries no
 tokens, the manifests carry no UUID, and no pod in this namespace mounts the live
 claim. `test/tooling/dev-custody.test.js` asserts that.
 
+Both commands below read the volume through the handle pod, so run them between
+`mise run dev:custody:up` and `mise run dev:custody:down`:
+
 ```bash
 mise run dev:custody:status            # uuid, alias, files, lock state
 mise run dev:custody:status -- --refresh   # the silent refresh, guarded
 ```
+
+## When the volume is empty
+
+The proxy waits for an account before it starts: its `wait-custody` init
+container loops on `ls /data/accounts/*/profile.json` and logs
+`waiting-for-dev-custody` while the volume holds none. A proxy pod at
+`Init:0/1` with that line is this case, not a crash.
+
+The proxy holds the claim, so the handle pod cannot. Stop the lane first, then
+bootstrap:
+
+```bash
+mise run dev:down          # the proxy releases the claim; the account would survive
+mise run dev:custody:up
+mise run dev:custody
+mise run dev:custody:down
+mise run dev:up
+mise run dev:join          # the account is on the dev Paper again
+```
+
+`mise run dev:up` prints "if the dev custody volume is empty, run: mise run
+dev:custody" when it applies the proxy. That hint is half the sequence:
+`dev:custody` needs the handle pod, and `mise run dev:custody:up` refuses while
+the proxy holds the claim. Run `mise run dev:down` first, as above.
+
+A volume that holds an account whose chain is dead is a different case.
+`mise run dev:custody:status -- --refresh` reports `needs_bootstrap` when the
+volume holds no refresh token, and `invalid_grant` when the chain was consumed or
+revoked. Recovery is the same sequence, and it ends in a new approval. Never copy
+an account directory in from another machine; a stale copy cannot refresh, and a
+fresh one is a second writer.
 
 ## Run the branch under test
 
@@ -101,8 +163,7 @@ The dev account exists to stop that.
 
 ## Proving the live account is untouched
 
-[#44](https://github.com/Bafbi/monoplayer/issues/44)'s fourth criterion: the live
-account's token files are byte-identical after a dev run. Measure it.
+The live account's token files are byte-identical after a dev run. Measure it.
 
 ```bash
 mise run dev:prove-live -- mise run dev:up
