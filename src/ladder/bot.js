@@ -90,6 +90,7 @@ export function createBot ({
     blockChanges: [],
     windowItems: [], // decoded clientbound window_items frames
     setSlots: [], // decoded clientbound set_slot frames
+    equipment: [], // decoded clientbound entity_equipment frames (#82)
     heldItemSlots: [], // decoded clientbound held_item_slot frames
     health: [], // decoded clientbound update_health frames
     systemChat: [], // decoded clientbound system_chat frames
@@ -149,6 +150,9 @@ export function createBot ({
   client.on('block_change', packet => received.blockChanges.push(packet))
   client.on('window_items', packet => received.windowItems.push(packet))
   client.on('set_slot', packet => received.setSlots.push(packet))
+  // #82: a relay that rewrites the frame's terminator flags arrives here as one
+  // entry plus a leftover, so the decoded entry count is the direct signal.
+  client.on('entity_equipment', packet => received.equipment.push(packet))
   client.on('held_item_slot', packet => received.heldItemSlots.push(packet))
   client.on('update_health', packet => received.health.push(packet))
   client.on('system_chat', packet => received.systemChat.push(packet))

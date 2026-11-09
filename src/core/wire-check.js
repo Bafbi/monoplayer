@@ -23,7 +23,10 @@ const SUPPORTED_STATES = new Set(['configuration', 'play'])
 
 // One deserializer per state (and version, so two checkers built with
 // different versions cannot collide) for the process lifetime. parsePacketBuffer
-// does not mutate the parser, so the cache is safe to share across calls.
+// does not mutate the parser, so the cache is safe to share across calls. It
+// does mutate the BUFFER: the reader for `topBitSetTerminatedArray` clears each
+// slot byte's flag bit in place, so a check must parse a copy or it corrupts
+// the frame it just approved (#82), and the front writes that same buffer next.
 const DESERIALIZERS = new Map()
 
 function deserializerFor (version, state) {
@@ -73,7 +76,7 @@ export function createWireChecker ({ version = '26.1', maxFrameBytes = 2 * 1024 
 
     let packet
     try {
-      packet = deserializerFor(version, state).parsePacketBuffer(buffer)
+      packet = deserializerFor(version, state).parsePacketBuffer(Buffer.from(buffer))
     } catch (err) {
       stats.parseErrors++
       result.error = String(err && err.message ? err.message : err).slice(0, 200)

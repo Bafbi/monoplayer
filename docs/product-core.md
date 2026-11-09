@@ -402,7 +402,10 @@ executable spec.
 ```js
 backendLeg = {                    // = the GlowSquidye puppet session
   connect()                       // prismarine-auth + minecraft-protocol client (G1 kid)
-  setFrameHandler(({ state, name, buffer, data }) => {})   // configuration + play frames
+  setFrameHandler(({ state, name, buffer, data }) => {})   // configuration + play frames:
+                                  // `buffer` is the frame exactly as the backend sent it,
+                                  // and stays re-frameable with writeRaw: the core relays and
+                                  // caches those bytes, so no decoder may rewrite them (#82)
   setEndHandler(({ reason }) => {}), setErrorHandler(({ error }) => {})
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
