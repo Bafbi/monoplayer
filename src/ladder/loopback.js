@@ -114,7 +114,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
   try {
     // --- setup: fake backend, config, real legs, core ---
-    fake = await createFakeBackend({ port: 0, logStream: null })
+    // A cap the protocol library never sends by default (10), so O26 proves the
+    // puppet replaced its own value instead of matching it by accident.
+    fake = await createFakeBackend({ port: 0, logStream: null, viewDistance: 6 })
     evidence.backendPort = fake.port
     // A second backend is the target of the followed transfer (O21-O24).
     fake2 = await createFakeBackend({ port: 0, logStream: null })
@@ -172,6 +174,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       logStream: { write: line => log('core', { line }) }
     })
     front.setCoreAttach(({ name, uuid }) => core.attachPlayer({ name, uuid, includeConfig: false }))
+    front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
+    front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
     core.start()
 
     // One backend.connect() per reconnect_due. The guard makes a loop
@@ -245,7 +249,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }, 'late-attach inventory, slots, and block in the cache')
 
     // --- O1-O9: first attach and replay ---
-    bot1 = createBot({ port: evidence.frontPort, username: 'Attach' })
+    // A human whose client information differs from the vanilla defaults: the
+    // server's view must show these fields, and must not take the client's
+    // own render distance for the chunk send (#18).
+    bot1 = createBot({
+      port: evidence.frontPort,
+      username: 'Attach',
+      clientSettings: {
+        locale: 'fr_fr',
+        viewDistance: 2,
+        chatFlags: 0,
+        chatColors: true,
+        skinParts: 96,
+        mainHand: 0
+      }
+    })
     await bot1.ready()
     const b1 = bot1.received
     // The replay streams the warm domains after the join prefix; wait for the
@@ -701,6 +719,51 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         }))
       }
     )
+    // --- O25-O26: the server's view of the puppet's client identity (#17/#18) ---
+    const brandFrames = backend =>
+      backend.received.customPayloads.filter(entry => entry.channel === 'minecraft:brand')
+    const hubBrands = brandFrames(fake)
+    const targetBrands = brandFrames(fake2)
+    check(
+      'O25',
+      'the puppet announced the Fabric brand once per backend connection',
+      hubBrands.length === fake.received.logins &&
+        targetBrands.length === fake2.received.logins &&
+        [...hubBrands, ...targetBrands].every(entry => entry.brand === 'fabric'),
+      {
+        hubBrands: hubBrands.length,
+        hubLogins: fake.received.logins,
+        targetBrands: targetBrands.length,
+        targetLogins: fake2.received.logins,
+        brands: [...new Set([...hubBrands, ...targetBrands].map(entry => entry.brand))]
+      }
+    )
+    // The play-state writes are the proxy's: the backend's cap, not the
+    // library's pre-login default and not the human's render distance. The
+    // configuration-phase write is the protocol library's own and still carries
+    // its default 10, which the play login then supersedes (documented limit).
+    const settings = fake.received.settings
+    const playSettings = settings.filter(entry => entry.state === 'play')
+    const configSettings = settings.filter(entry => entry.state !== 'play')
+    const humanSettings = playSettings.find(entry => entry.locale === 'fr_fr')
+    check(
+      'O26',
+      'the server sees the human client information with the backend view distance',
+      fake.join.viewDistance !== 10 &&
+        Boolean(humanSettings) &&
+        humanSettings.viewDistance === fake.join.viewDistance &&
+        humanSettings.mainHand === 0 &&
+        humanSettings.skinParts === 96 &&
+        playSettings.length >= 2 &&
+        playSettings.every(entry => entry.viewDistance === fake.join.viewDistance) &&
+        configSettings.every(entry => entry.viewDistance === 10),
+      {
+        cap: fake.join.viewDistance,
+        play: playSettings.map(entry => ({ locale: entry.locale, viewDistance: entry.viewDistance })),
+        config: configSettings.map(entry => ({ locale: entry.locale, viewDistance: entry.viewDistance }))
+      }
+    )
+
     evidence.transfer = {
       target,
       handshakeIntents: [...handshakeProxy.nextStates],

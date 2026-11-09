@@ -4,6 +4,10 @@
 // States:
 //   boot          - backend leg not connected / connecting, nothing yet
 //   warm          - backend logged in, cache warming or warmed; attach ready
+//   configuring   - one player client attached while the puppet is still in
+//                   the backend's configuration phase (pre-warm early attach);
+//                   it becomes `attached` at the backend play login, with no
+//                   replay because it has followed the live stream
 //   attached      - one player client attached and driving the puppet
 //   detached      - player gone; puppet session alive on the backend
 //   reconnecting  - backend fault; one reconnect armed at a time, with an
@@ -25,6 +29,7 @@
 export const STATES = Object.freeze({
   BOOT: 'boot',
   WARM: 'warm',
+  CONFIGURING: 'configuring',
   ATTACHED: 'attached',
   DETACHED: 'detached',
   RECONNECTING: 'reconnecting',
@@ -103,8 +108,16 @@ export function createSession ({
     backendLogins++ // counts real backend login events ONLY
     reconnectAttempts = 0
     pendingReconnect = false
-    transition('backend_login', STATES.WARM, { backendLogins, entityId: packet.entityId })
-    return { backendLogins }
+    // A client that attached during the puppet's configuration is already
+    // playing: it followed the live stream into play, so the login moves it to
+    // `attached` without a replay.
+    const wasConfiguring = state === STATES.CONFIGURING
+    transition('backend_login', wasConfiguring ? STATES.ATTACHED : STATES.WARM, {
+      backendLogins,
+      entityId: packet.entityId,
+      fromConfiguring: wasConfiguring
+    })
+    return { backendLogins, wasConfiguring }
   }
 
   function warmComplete (info = {}) {
@@ -170,7 +183,7 @@ export function createSession ({
       transition('initial_connect_failed', STATES.FAILED, { reason })
       return { scheduled: false, state, failed: true }
     }
-    const wasAttached = state === STATES.ATTACHED
+    const wasAttached = state === STATES.ATTACHED || state === STATES.CONFIGURING
     if (wasAttached) {
       transition('backend_down', STATES.RECONNECTING, { reason, frontEnded: true })
       detachCount++
@@ -202,18 +215,32 @@ export function createSession ({
 
   // --- front-leg lifecycle ---
 
-  function attachAttempt ({ uuid, name } = {}) {
+  function attachAttempt ({ uuid, name, configuring = false } = {}) {
     if (state === STATES.RECONNECTING) {
       emit('attach_rejected', { uuid, name, reason: 'backend_down' })
       return { accepted: false, reason: 'backend_down' }
     }
+    if (state === STATES.ATTACHED || state === STATES.CONFIGURING) {
+      emit('attach_rejected', { uuid, name, reason: 'already_attached' })
+      return { accepted: false, reason: 'already_attached' }
+    }
+    // Pre-warm early attach (#16): the backend has a connection in its
+    // configuration phase, so there is no warm state to replay yet, but the
+    // client can follow the puppet's configuration stream and land in play.
+    // Only a booting session can be configuring; the core decides whether the
+    // backend is actually in configuration and asks for this path.
+    if (configuring) {
+      if (state !== STATES.BOOT) {
+        emit('attach_rejected', { uuid, name, reason: 'not_ready' })
+        return { accepted: false, reason: 'not_ready' }
+      }
+      attachCount++
+      transition('attach_configuring', STATES.CONFIGURING, { uuid, name })
+      return { accepted: true, configuring: true }
+    }
     if (state === STATES.BOOT || !warmReady) {
       emit('attach_rejected', { uuid, name, reason: 'not_ready' })
       return { accepted: false, reason: 'not_ready' }
-    }
-    if (state === STATES.ATTACHED) {
-      emit('attach_rejected', { uuid, name, reason: 'already_attached' })
-      return { accepted: false, reason: 'already_attached' }
     }
     attachCount++
     transition('attach', STATES.ATTACHED, { uuid, name })
@@ -221,7 +248,7 @@ export function createSession ({
   }
 
   function detach ({ reason = 'client_disconnect' } = {}) {
-    if (state !== STATES.ATTACHED) {
+    if (state !== STATES.ATTACHED && state !== STATES.CONFIGURING) {
       emit('detach_ignored', { reason })
       return { detached: false, state }
     }
@@ -241,6 +268,7 @@ export function createSession ({
 
   return {
     get state () { return state },
+    get configuring () { return state === STATES.CONFIGURING },
     get warmReady () { return warmReady },
     get backendLogins () { return backendLogins },
     get attachCount () { return attachCount },

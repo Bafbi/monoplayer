@@ -232,3 +232,88 @@ export function createJournal ({
     }
   }
 }
+
+// --- reader ---
+//
+// The tools and the tests read a journal through here, so the file names, the
+// order of the files, and the line format are known in one place. A second
+// reader could disagree with the writer above.
+//
+// Rotation order: <base>.ndjson, then <base>-2.ndjson, -3, ... A segment that
+// rotated keeps its own archive at <same>.ndjson.1, holding that segment's
+// records up to the rotation, so a segment's archive comes before the segment.
+
+// The stamp is the writer's, at second and millisecond precision. Anything else
+// in the directory, such as session-backup.ndjson, is not a journal file.
+const FILE_NAME = /^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)-(\d+)(?:-(\d+))?\.ndjson(\.1)?$/
+
+// Rotation order for a directory listing: session, then process, then segment,
+// then archive before live. Names that are not journal files are ignored.
+export function journalFileOrder (names) {
+  const parsed = []
+  for (const name of names) {
+    const match = FILE_NAME.exec(name)
+    if (!match) continue
+    parsed.push({
+      name,
+      stamp: match[1],
+      pid: Number(match[2] ?? 0),
+      segment: Number(match[3] ?? 1),
+      archive: match[4] ? 0 : 1
+    })
+  }
+  // The stamp is ISO-8601, so plain string order is chronological order.
+  parsed.sort((left, right) =>
+    (left.stamp < right.stamp ? -1 : left.stamp > right.stamp ? 1 : 0) ||
+    left.pid - right.pid ||
+    left.segment - right.segment ||
+    left.archive - right.archive
+  )
+  return parsed.map(entry => entry.name)
+}
+
+export function journalFiles (dir) {
+  return journalFileOrder(nodeFs.readdirSync(dir)).map(name => path.join(dir, name))
+}
+
+// One NDJSON file, record by record, with the file and line each came from.
+// The lines stream, so a full 256 MiB journal never sits in memory at once.
+//
+// A blank line is skipped. A terminated line that is not JSON fails with path
+// and line, so a torn record is visible instead of counted. A last line with no
+// newline is a record the service is still writing: it is skipped, because the
+// next read sees the whole line. The writer terminates every record it writes.
+export async function * readNdjson (file) {
+  const stream = nodeFs.createReadStream(file, { encoding: 'utf8' })
+  let carry = ''
+  let number = 0
+  for await (const chunk of stream) {
+    carry += chunk
+    const lines = carry.split('\n')
+    // The last piece has no newline yet, so it stays in the carry.
+    carry = lines.pop()
+    for (const line of lines) {
+      number++
+      if (line.trim() === '') continue
+      try {
+        yield { record: JSON.parse(line), file, line: number }
+      } catch (error) {
+        throw new Error(`${file}:${number}: ${error.message}`)
+      }
+    }
+  }
+}
+
+// Every journal file in the directory, in rotation order. A directory holds a
+// bounded number of files, so the generator walks them one at a time.
+export async function * readJournal (dir) {
+  for (const file of journalFiles(dir)) {
+    try {
+      yield * readNdjson(file)
+    } catch (error) {
+      // A rotation renames a file out from under the listing. Its records are
+      // already in the archive or the next segment; the next read sees them.
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+}

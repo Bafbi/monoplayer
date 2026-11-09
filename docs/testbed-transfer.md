@@ -72,9 +72,13 @@ The two acceptance criteria are wider than the transfer itself:
   a direct connection, except that the identity is GlowSquidye. Today the
   client cannot chat or run commands, transfer detaches it, and dialogs are
   answered by the puppet.
-- **Server side:** the server must see a normal GlowSquidye client. Today the
-  puppet's own client brand, client information, and chat session differ from
-  a vanilla client; the proxy also answers some connection mechanics itself.
+- **Server side:** the server must see a normal GlowSquidye client. The
+  proxy now writes the Fabric Loader brand in configuration and the human's
+  client information with the backend's view distance cap (loopback `O25` and
+  `O26`, [docs/transparency.md](transparency.md)). Still different: the chat
+  session (the human's chat is read-only), the puppet answering dialogs, and
+  the proxy answering some connection mechanics itself. No observer has
+  measured a live Paper server's view of these fields yet.
 
 The next validation layers, on this same testbed:
 

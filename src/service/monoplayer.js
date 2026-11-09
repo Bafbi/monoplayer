@@ -28,6 +28,14 @@
 //   }
 
 import { createStateCache, WARM_MARKER } from '../core/state-cache.js'
+import {
+  FABRIC_BRAND,
+  brandFrame,
+  capFromLogin,
+  chunkBoundFor,
+  mergeClientSettings,
+  normalizeClientSettings
+} from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { classifyServerbound, capturePose } from '../core/relay.js'
@@ -192,6 +200,12 @@ export function createMonoplayer ({
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
     resourcePackAckFailures: 0,
+    brandAnnounced: 0,
+    attachesConfiguring: 0,
+    configFramesRelayed: 0,
+    clientSettingsSent: 0,
+    clientSettingsRewritten: 0,
+    clientSettingsFailed: 0,
     attaches: 0,
     denials: 0,
     frontKicks: 0
@@ -239,7 +253,22 @@ export function createMonoplayer ({
   const listeners = new Map() // type -> Set<fn>
   const unclassifiedLogged = new Set()
   let started = false
-  let attached = false // mirrors session state === ATTACHED
+  let attached = false // a client holds the attach slot (configuring or attached)
+  // #16: the pre-warm early attach. `backendConfiguring` is true from the
+  // backend's first configuration frame until its play login. `earlyAttach`
+  // holds the client that attached during that window; `pendingEarlyReplay`
+  // holds the replay it still needs. `frontPlayReady` says the attached
+  // client itself finished its configuration and can take play frames.
+  let backendConfiguring = false
+  let earlyAttach = null
+  let pendingEarlyReplay = null
+  let frontPlayReady = false
+  let brandAnnounced = false // #17: one brand per backend connection
+  let backendViewDistance = null // #18: the backend's advertised cap, this connection
+  // #18: the last human's client information. It survives a detach, like a
+  // real client's options survive a reconnect; only a fresh process starts from
+  // the defaults.
+  let humanClientSettings = null
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
   let transferNoticeSent = false // one refusal notice per attach
   let reconfigureRequested = false // this backend end is a server reconfiguration
@@ -267,7 +296,14 @@ export function createMonoplayer ({
   }
 
   function isAttached () {
-    return attached && session.state === STATES.ATTACHED
+    return attached && (session.state === STATES.ATTACHED || session.state === STATES.CONFIGURING)
+  }
+
+  // Live play frames only go to a front client that is in play. A pre-warm
+  // early attach is still finishing its configuration; a play frame sent
+  // before that would be parsed as a configuration frame by the client.
+  function canRelayPlay () {
+    return attached && session.state === STATES.ATTACHED && frontPlayReady
   }
 
   // --- front-leg login pipeline (pure decisions; adapter owns kick/close IO) ---
@@ -289,7 +325,11 @@ export function createMonoplayer ({
     // Warm/WARM-or-DETACHED is the attach-ready set. A second login while
     // already attached still passes here so attachPlayer can answer
     // 'already_attached' with the reason the caller expects.
-    if (!session.isAttachReady() && session.state !== STATES.ATTACHED) {
+    // #16: a client may also attach while the backend connection is still in
+    // its configuration phase. It follows the puppet's configuration stream
+    // and lands in play when the backend logs in.
+    const canAttachConfiguring = backendConfiguring && session.state === STATES.BOOT
+    if (!session.isAttachReady() && session.state !== STATES.ATTACHED && !canAttachConfiguring) {
       const denied = {
         allowed: false,
         reason: 'backend_not_ready',
@@ -303,7 +343,7 @@ export function createMonoplayer ({
       emit('attach_denied', denied)
       return denied
     }
-    return decision
+    return canAttachConfiguring ? { ...decision, phase: 'configuring' } : decision
   }
 
   // Session verification (only when a verifier was injected): hasJoined.
@@ -351,6 +391,98 @@ export function createMonoplayer ({
     }
   }
 
+  // #17: servers record the client brand in the configuration phase, and a
+  // missing brand is one of the tells that the connection is not a normal
+  // client. Announce Fabric Loader on the first configuration frame of every
+  // backend connection. The human's brand never replaces it: the front client's
+  // brand belongs to a different connection and never crosses.
+  function announceBrand () {
+    if (brandAnnounced) return { announced: false, reason: 'already_announced' }
+    brandAnnounced = true
+    const frame = brandFrame()
+    try {
+      backendLeg.write(frame.name, frame.packet)
+      metrics.brandAnnounced++
+      log('brandAnnounced', { channel: frame.packet.channel, brand: FABRIC_BRAND })
+      return { announced: true }
+    } catch (error) {
+      // A dead leg during teardown must not consume this connection's one
+      // announcement: retry on the next configuration frame.
+      brandAnnounced = false
+      log('brandAnnounceFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { announced: false, reason: 'write_failed' }
+    }
+  }
+
+  // #18: write the client's information with the backend's view distance. The
+  // human's locale, skin parts, main hand, and chat settings pass through; the
+  // view distance is always the cap, so the server never shrinks the chunk send
+  // to the human's local render distance.
+  function sendClientSettings (reason) {
+    if (backendViewDistance === null) return { sent: false, reason: 'no_backend_view_distance' }
+    const packet = mergeClientSettings(humanClientSettings, backendViewDistance)
+    try {
+      backendLeg.write('settings', packet)
+      metrics.clientSettingsSent++
+      log('clientSettingsSent', {
+        reason,
+        attached: isAttached(),
+        viewDistance: packet.viewDistance,
+        locale: packet.locale,
+        skinParts: packet.skinParts,
+        mainHand: packet.mainHand
+      })
+      return { sent: true, packet }
+    } catch (error) {
+      metrics.clientSettingsFailed++
+      log('clientSettingsFailed', { reason, error: String(error?.message ?? error).slice(0, 200) })
+      return { sent: false, reason: 'write_failed' }
+    }
+  }
+
+  // The backend's play login carries the view distance it will use. Raise the
+  // cache to hold that view, then ask for it: a client that requests less makes
+  // the server send less, so the human's local render distance must never be
+  // the value the server sees.
+  function applyBackendViewDistance (loginPacket) {
+    const cap = capFromLogin(loginPacket)
+    backendViewDistance = cap
+    if (cap === null) {
+      log('backendViewDistanceMissing', {})
+      return null
+    }
+    const chunkBound = cache.raiseChunkBound(chunkBoundFor(cap))
+    log('backendViewDistance', {
+      viewDistance: cap,
+      chunkBound,
+      chunkBytes: cache.stats().chunkBytes
+    })
+    sendClientSettings('backend_login')
+    return cap
+  }
+
+  // The front leg reports the human client's Client Information as it arrives
+  // (configuration for a joining client, play for a later change). Record it,
+  // and while a human is attached send it to the backend with the cap. Before
+  // an attach it is only recorded; attachPlayer sends it once the human plays.
+  function noteClientSettings (data = {}) {
+    const normalized = normalizeClientSettings(data)
+    if (normalized === null) {
+      log('clientInformationIgnored', { reason: 'no_usable_fields' })
+      return { noted: false, reason: 'no_usable_fields' }
+    }
+    humanClientSettings = normalized
+    log('clientInformation', {
+      attached: isAttached(),
+      locale: normalized.locale,
+      requestedViewDistance: normalized.viewDistance,
+      skinParts: normalized.skinParts,
+      mainHand: normalized.mainHand
+    })
+    if (!isAttached()) return { noted: true, sent: false, reason: 'not_attached' }
+    return { noted: true, ...sendClientSettings('client_information') }
+  }
+
   // Every clientbound frame that must not cross to the front goes through
   // here: count, log the rare ones. A transfer is handled separately because
   // it has a follow decision (and a refused transfer gets the local notice).
@@ -392,6 +524,14 @@ export function createMonoplayer ({
   // this synchronously before ending the leg, because a socket end event can
   // be skipped when the next connect replaces the client first.
   function teardownBackend ({ reason, kickReason = 'backend_disconnected', reconfiguring = false } = {}) {
+    // Per-connection client identity (#17/#18): the next connection announces
+    // its own brand and learns its own view distance. The human's client
+    // information survives, because the human is still the one playing.
+    brandAnnounced = false
+    backendViewDistance = null
+    backendConfiguring = false
+    earlyAttach = null
+    pendingEarlyReplay = null
     if (session.state === STATES.RECONNECTING) {
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
@@ -507,18 +647,49 @@ export function createMonoplayer ({
   // `includeConfig: false` omits the cached configuration replay prefix —
   // the live front leg owns the configuration phase and has already replayed
   // it (see docs/product-core.md); fakes keep the default (config included).
-  function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
-    const attempt = session.attachAttempt({ uuid, name })
+  // #16: the client attached while the backend connection was still in its
+  // configuration phase. The front streams the puppet's configuration frames
+  // to it; at the play login the session becomes attached; this is the
+  // front's report that the client itself is in play and wants its replay.
+  function attachConfiguringPlayer ({ name, uuid } = {}) {
+    if (!backendConfiguring) {
+      log('attachFailed', { reason: 'not_ready', uuid, name, configuring: true })
+      emit('attach_failed', { username: name, reason: 'not_ready', phase: 'configuring' })
+      return { attached: false, reason: 'not_ready' }
+    }
+    const attempt = session.attachAttempt({ uuid, name, configuring: true })
     if (!attempt.accepted) {
-      log('attachFailed', { reason: attempt.reason, uuid, name })
+      log('attachFailed', { reason: attempt.reason, uuid, name, configuring: true })
       emit('attach_failed', attempt)
       return { attached: false, reason: attempt.reason }
     }
     attached = true
+    frontPlayReady = false
+    earlyAttach = { name, uuid }
     transferNoticeSent = false
     metrics.attaches++
-    telemetry.metric('monoplayer.attaches', 1, { player: name })
+    metrics.attachesConfiguring++
+    telemetry.metric('monoplayer.attaches', 1, { player: name, phase: 'configuring' })
+    log('attachConfiguring', { name, backendLogins: session.backendLogins })
+    emit('attach_configuring', { name })
+    // The client arrived in the middle of the puppet's configuration: frames
+    // the backend already sent (the registry, the known packs) are only in the
+    // cache, so replay them first and let the live stream carry the rest. The
+    // finish frame stays with the core: it is the front's signal that the
+    // client may leave configuration.
+    for (const frame of cache.snapshot().config) {
+      if (frame.name === 'finish_configuration') continue
+      if (!clientboundPolicy('configuration', frame.name).relay) continue
+      frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
+      metrics.configFramesRelayed++
+    }
+    return { attached: true, configuring: true, replayed: metrics.configFramesRelayed }
+  }
 
+  // The replay half of an attach: the join prefix and the warm state as they
+  // stand now. Shared by the warm attach and the early attach, which has
+  // already followed the live stream into play.
+  function replaySnapshot ({ name, includeConfig = true, reason = 'attach' } = {}) {
     const snapshot = cache.snapshot()
     const synthesized = synthAttach({
       snapshot,
@@ -536,8 +707,13 @@ export function createMonoplayer ({
     metrics.positionsSynthesized += synthesized.counts.synthesized
     telemetry.metric('monoplayer.replay.frames', synthesized.counts.replayed, { player: name })
 
+    // #18: the human is now the one playing, so their client information goes
+    // to the server with the backend cap this session already learned.
+    sendClientSettings(reason === 'attach' ? 'attach' : 'early_attach')
+
     log('attach', {
       name,
+      reason,
       replayed: synthesized.counts.replayed,
       synthesizedPositions: synthesized.counts.synthesized,
       skippedLegOwned: synthesized.counts.skipped,
@@ -547,6 +723,39 @@ export function createMonoplayer ({
     })
     emit('attach', { name, replayed: synthesized.counts.replayed })
     return { attached: true, replayed: synthesized.counts.replayed, frames: synthesized.frames }
+  }
+
+  function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
+    // #16: the front reports play-ready for a client that attached during the
+    // puppet's configuration. It is already attached, so it must not go
+    // through the warm attach gate again.
+    if (earlyAttach !== null) {
+      earlyAttach = null
+      if (session.warmReady) {
+        frontPlayReady = true
+        return replaySnapshot({ name, includeConfig, reason: 'early_attach' })
+      }
+      // The backend has not finished its own warm yet: hold the replay until
+      // the join prefix is complete, so the client gets one coherent world.
+      // Live play frames stay withheld until then, or the replay would arrive
+      // after state the client already has.
+      frontPlayReady = false
+      pendingEarlyReplay = { name, includeConfig }
+      log('earlyAttachWaitingWarm', { name, backendLogins: session.backendLogins })
+      return { attached: true, pending: true, replayed: 0 }
+    }
+    const attempt = session.attachAttempt({ uuid, name })
+    if (!attempt.accepted) {
+      log('attachFailed', { reason: attempt.reason, uuid, name })
+      emit('attach_failed', attempt)
+      return { attached: false, reason: attempt.reason }
+    }
+    attached = true
+    frontPlayReady = true
+    transferNoticeSent = false
+    metrics.attaches++
+    telemetry.metric('monoplayer.attaches', 1, { player: name })
+    return replaySnapshot({ name, includeConfig, reason: 'attach' })
   }
 
   function detachPlayer ({ reason = 'client_disconnect' } = {}) {
@@ -560,6 +769,9 @@ export function createMonoplayer ({
 
   function detachedHandoff () {
     attached = false
+    frontPlayReady = false
+    earlyAttach = null
+    pendingEarlyReplay = null
   }
 
   // --- wiring ---
@@ -609,6 +821,7 @@ export function createMonoplayer ({
       })
       if (state === 'configuration') {
         metrics.configFrames++
+        announceBrand()
         const policy = clientboundPolicy('configuration', name)
         if (name === 'add_resource_pack') answerResourcePack(data)
         if (name === 'ping') {
@@ -633,8 +846,18 @@ export function createMonoplayer ({
           blockClientbound('configuration', name, policy, data)
           return
         }
+        // #16: the backend is in its configuration phase. Record that, so a
+        // client may attach now and follow this stream live.
+        if (!backendConfiguring) {
+          backendConfiguring = true
+          log('backendConfiguring', { state: session.state })
+        }
         if (!policy.cache) return
-        cache.push('configuration', name, buffer, data)
+        const pushed = cache.push('configuration', name, buffer, data)
+        if (pushed.cached && policy.relay && session.state === STATES.CONFIGURING) {
+          frontLeg.writeRaw(buffer, { state: 'configuration', name })
+          metrics.configFramesRelayed++
+        }
         return
       }
       if (state !== 'play') {
@@ -660,7 +883,9 @@ export function createMonoplayer ({
       const state = serverbound.state ?? 'play'
       const attachedNow = isAttached()
       // Classify before recording so the frame counter carries the outcome.
-      const decision = attachedNow ? classifyServerbound(name) : { action: 'drop', chat: false }
+      const decision = attachedNow
+        ? classifyServerbound(name, serverbound.data)
+        : { action: 'drop', chat: false }
       journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer })
       telemetry.metric('monoplayer.frames', 1, {
         direction: 'c2s',
@@ -671,6 +896,29 @@ export function createMonoplayer ({
       if (!attachedNow) {
         metrics.serverboundNotAttached++
         log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
+        return
+      }
+      if (decision.action === 'rewrite') {
+        // #18: the human's client information reaches the backend only in the
+        // form the proxy owns. noteClientSettings records it and writes the
+        // merged packet, so the client's own view distance never crosses.
+        const outcome = noteClientSettings(serverbound.data ?? {})
+        if (outcome.sent) {
+          metrics.clientSettingsRewritten++
+          metrics.serverboundForwarded++
+          bumpName(metrics.serverboundByName, serverbound.name)
+        } else {
+          // No usable fields, no learned cap, or a failed write: the frame did
+          // not reach the backend, so the ledger says dropped, not forwarded.
+          metrics.serverboundDropped++
+          bumpName(metrics.serverboundDroppedByName, serverbound.name)
+        }
+        log('serverboundRewrite', {
+          name: serverbound.name,
+          noted: outcome.noted === true,
+          sent: outcome.sent === true,
+          reason: outcome.reason ?? null
+        })
         return
       }
       if (decision.action === 'drop') {
@@ -704,8 +952,23 @@ export function createMonoplayer ({
 
   // Backend play frame routing (per-leg keep-alive/pong answering, pose
   // teleports, cache, live forwarding).
+  // The replay a pre-warm client still owes: sent once, when the join prefix
+  // is warm, whether the warm came from the marker or the readiness fallback.
+  function replayPendingEarly () {
+    if (pendingEarlyReplay === null || !cache.warm) return null
+    const pending = pendingEarlyReplay
+    pendingEarlyReplay = null
+    frontPlayReady = true
+    return replaySnapshot({ name: pending.name, includeConfig: pending.includeConfig, reason: 'early_attach' })
+  }
+
   function backendPlayFrame ({ name, buffer, data }) {
     metrics.backendFrames++
+
+    // #16: an early-attach client gets its replay as soon as the join prefix is
+    // warm. The live path warms on the readiness fallback as well as on the
+    // marker, so this is checked per frame as well as at the marker below.
+    replayPendingEarly()
 
     if (name === 'bundle_delimiter') {
       // Bundle delimiters are a transport grouping, not state. Replaying them
@@ -720,10 +983,18 @@ export function createMonoplayer ({
       // The real backend login event backendLogins counts. Attach/detach never
       // touches this. Only counted when the leg is (re)booting — a doubled
       // replayed login frame during an already-warm session is not a login.
-      if (session.state === STATES.BOOT) {
-        session.backendLogin({ entityId: data.entityId })
+      // A pre-warm configuring attach is attached but not warm; its backend
+      // login is still the play login that ends the configuration phase.
+      if (session.state === STATES.BOOT || session.state === STATES.CONFIGURING) {
+        const login = session.backendLogin({ entityId: data.entityId })
+        backendConfiguring = false
         scheduleTransferChainReset()
-        log('backendLogin', { entityId: data.entityId, backendLogins: session.backendLogins })
+        applyBackendViewDistance(data)
+        log('backendLogin', {
+          entityId: data.entityId,
+          backendLogins: session.backendLogins,
+          fromConfiguring: login.wasConfiguring === true
+        })
         emit('backend_login', { entityId: data.entityId })
       }
       const pushed = cache.push('play', name, buffer, data)
@@ -753,7 +1024,8 @@ export function createMonoplayer ({
       backendLeg.write('chunk_batch_received', { chunksPerTick: 32 })
       if (!wasWarm) {
         session.warmComplete({ marker: name })
-      } else if (isAttached()) {
+        replayPendingEarly()
+      } else if (canRelayPlay()) {
         frontLeg.writeRaw(buffer, { state: 'play', name })
       }
       return
@@ -766,7 +1038,7 @@ export function createMonoplayer ({
       // Never cached, never replayed.
       session.setPose(capturePose(session.currentPose, 'position', data, { backend: true }))
       backendLeg.write('teleport_confirm', { teleportId: data.teleportId })
-      if (isAttached()) {
+      if (canRelayPlay()) {
         frontTeleportSeq++
         frontLeg.write('position', {
           teleportId: frontTeleportSeq,
@@ -819,7 +1091,7 @@ export function createMonoplayer ({
       const chatFrame = name === 'system_chat' || name === 'profileless_chat'
       if (chatFrame && cfg.chat !== 'read-only') return
       if (chatFrame) metrics.chatRelayed++
-      if (isAttached()) frontLeg.writeRaw(buffer, { state: 'play', name })
+      if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
       return
     }
     if (policy.decision === DECISION.CACHE_ONLY) {
@@ -830,7 +1102,7 @@ export function createMonoplayer ({
 
     const pushed = cache.push('play', name, buffer, data)
     if (pushed.cached) metrics.framesCached++
-    if (isAttached()) frontLeg.writeRaw(buffer, { state: 'play', name })
+    if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
   }
 
   async function stop ({ reason = 'stopped' } = {}) {
@@ -851,6 +1123,8 @@ export function createMonoplayer ({
     logs: () => [...logs],
     // front pipeline call-ins (real front-leg adapter drives these):
     processLoginStart,
+    attachConfiguringPlayer,
+    noteClientSettings,
     processVerifySession,
     attachPlayer,
     detachPlayer,
@@ -860,6 +1134,9 @@ export function createMonoplayer ({
     stop,
     get started () { return started },
     get attached () { return isAttached() },
+    get backendViewDistance () { return backendViewDistance },
+    get backendConfiguring () { return backendConfiguring },
+    get frontPlayReady () { return frontPlayReady },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }
   }
