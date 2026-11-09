@@ -403,3 +403,95 @@ test('configuration transfer is blocked and configuration ping is answered per-l
   assert.ok(pong, 'the puppet leg answers its own configuration ping')
   assert.equal(rig.core.cache.snapshot().config.some(f => f.name === 'ping'), false)
 })
+
+test('a target that dies after its play login still restores the configuration round', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+  const mark = rig.frontLeg.frames().length
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  // The target's play login lands while the client is still finishing the
+  // configuration round, so the move is not committed yet; the target dies in
+  // that window.
+  rig.backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 7 } })
+  assert.equal(rig.core.session.state, 'attached')
+  assert.equal(rig.core.moveKind, 'transfer', 'the move is not committed yet')
+  assert.equal(rig.core.clientReconfiguring, true)
+  rig.backendLeg.deliverEnd({ reason: 'target_lost_after_login' })
+
+  assert.equal(rig.core.metrics.reconfigurationsRestored, 1)
+  assert.equal(rig.core.attached, true, 'the client keeps its connection')
+  assert.equal(rig.core.session.detachCount, 0)
+  // The round is still open on the client, so the restore finishes it from the
+  // snapshot instead of opening a second one.
+  assert.equal(rig.frontLeg.reconfigurations().length, 1)
+  assert.equal(rig.core.restoring, true)
+  const names = rig.frontLeg.frames().slice(mark).map(frame => frame.name)
+  assert.equal(names.at(-1), 'finish_configuration')
+  rig.frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.restoring, false)
+  assertNotice(rig.frontLeg, /could not be reached/i)
+})
+
+test('a target that dies after the client finished is restored through a new round', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  rig.backendLeg.deliver({ state: 'configuration', name: 'finish_configuration', data: {} })
+  rig.frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.clientReconfiguring, false)
+
+  rig.backendLeg.deliverEnd({ reason: 'target_lost' })
+  assert.equal(rig.core.metrics.reconfigurationsRestored, 1)
+  assert.equal(rig.core.attached, true)
+  assert.equal(rig.frontLeg.reconfigurations().length, 2, 'one more configuration round')
+  assert.equal(rig.core.restoring, true)
+  rig.frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.restoring, false)
+  assert.equal(rig.core.session.state, 'attached')
+  assertNotice(rig.frontLeg, /could not be reached/i)
+})
+
+test('a stalled reconfiguration is restored when its deadline passes', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  // The target sends its first configuration frame and then nothing.
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  assert.equal(rig.core.clientReconfiguring, true)
+  assert.equal(rig.clock.pending, 1, 'the configuration round has a deadline')
+
+  rig.clock.tick(30_000)
+  assert.equal(rig.core.metrics.reconfigurationsRestored, 1)
+  assert.equal(rig.core.session.state, 'attached')
+  assert.equal(rig.core.attached, true)
+  assert.equal(rig.core.restoring, true, 'the aborted round is served from the snapshot')
+})
+
+test('a transfer during the client\'s own configuration is refused, not half-served', () => {
+  const rig = makeCore()
+  // An early attach: the puppet logs in while the client is still configuring,
+  // so the session is attached but no play frame may reach the client yet.
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  rig.frontLeg.loginStart({ name: 'Bafbi', uuid: PLAYER })
+  const attached = rig.core.attachConfiguringPlayer({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(attached.attached, true)
+  rig.backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 42 } })
+  assert.equal(rig.core.frontPlayReady, false)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  assert.equal(rig.core.metrics.transfersRefused, 1)
+  assert.equal(rig.core.metrics.transfersSeamless, 0)
+  assert.equal(rig.core.session.state, 'attached')
+  assert.equal(rig.core.moveKind, null)
+})

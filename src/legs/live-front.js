@@ -43,11 +43,13 @@
 //      backend sees: the human's fields with the backend's view distance cap.
 //   7. #22: the core may ask the attached client to re-enter configuration on
 //      the same connection (`startReconfiguration`). The leg writes the
-//      play-state `start_configuration`, flips its own client to the
-//      configuration state (the serializer and deserializer are state-scoped),
-//      relays the core's configuration frames, and reports the client's
-//      `finish_configuration` back as `reconfigured` once the client is in
-//      play again. The client is never told to reconnect.
+//      play-state `start_configuration` and holds the core's configuration
+//      frames until the client answers with the play-state
+//      `configuration_acknowledged` (the packet id exists in play only). It
+//      then flips its own client to the configuration state, flushes the held
+//      frames, and reports the client's `finish_configuration` back as
+//      `reconfigured` once the client is in play again. The client is never
+//      told to reconnect.
 //
 // Identity: the attaching client is whitelisted as itself (real hasJoined
 // profile online, vanilla offline UUID offline). The replayed play stream
@@ -61,6 +63,10 @@ import { isLoopbackHost } from './offline-identity.js'
 import { clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
+// The configuration prefix the cache holds is bounded at 1024 frames, so a
+// reconfiguration cannot need more. The bound exists only so a client that
+// never acknowledges cannot grow the leg's memory without limit.
+const MAX_PENDING_RECONFIGURATION_FRAMES = 1024
 const CHAT_MODES = new Set(['full', 'read-only', 'off'])
 
 // Pure configuration-phase interceptor (unit-testable without sockets):
@@ -366,7 +372,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   function actualPort () {
@@ -612,9 +618,15 @@ function createFrontLeg ({
       // was asked to enter. The frame is still offered to the core, which
       // drops it like every other front handshake frame; the state flip and
       // the play-ready call-in happen after that.
+      // #22: the client answered the play-state start_configuration; only now
+      // can its connection parse configuration frames.
+      const acknowledgesReconfiguration = meta.state === 'play' && meta.name === 'configuration_acknowledged' &&
+        clients.get(client)?.pendingReconfiguration !== undefined &&
+        clients.get(client)?.pendingReconfiguration !== null
       const finishesReconfiguration = clients.get(client)?.reconfiguring === true &&
         meta.state === 'configuration' && meta.name === 'finish_configuration'
       serverboundHandler?.({ state: meta.state, name: meta.name, buffer, data })
+      if (acknowledgesReconfiguration) acknowledgeReconfiguration(client)
       if (finishesReconfiguration) finishReconfiguration(client)
     })
   }
@@ -661,6 +673,11 @@ function createFrontLeg ({
     // clears the slot and notifies the core; a pre-attach client (denied or
     // failed during configuration) just clears its claim.
     client.on('end', reason => {
+      const ctx = clients.get(client)
+      if (ctx) {
+        ctx.pendingReconfiguration = null
+        ctx.reconfiguring = false
+      }
       if (attached === client) {
         attached = null
         log('frontDetach', { reason: String(reason).slice(0, 160), attached: true })
@@ -695,10 +712,21 @@ function createFrontLeg ({
   // #22: ask the attached client to re-enter configuration on the connection
   // it already holds. The proxy writes its own start_configuration (the backend
   // frame of the same name never crosses: it would move the human as their own
-  // account), then flips the leg's client state so the target's configuration
-  // frames serialize and parse in that state.
+  // account).
+  //
+  // The client answers with `configuration_acknowledged`, which exists in the
+  // play packet table only (26.1 play toServer 0x10). The leg therefore holds
+  // the configuration frames it is given until that answer arrives, then flips
+  // its client to the configuration state and flushes them in order. Flipping
+  // first would read the answer through the configuration table as an unknown
+  // packet.
   function startReconfiguration ({ reason = 'transfer' } = {}) {
     if (!attached) return { started: false, reason: 'no_client' }
+    const ctx = clients.get(attached)
+    if (ctx?.pendingReconfiguration) {
+      log('frontReconfigureRefused', { reason: 'already_reconfiguring' })
+      return { started: false, reason: 'already_reconfiguring' }
+    }
     if (attached.state !== 'play') {
       log('frontReconfigureRefused', { reason: 'client_not_in_play', state: attached.state })
       return { started: false, reason: 'client_not_in_play', state: attached.state }
@@ -709,20 +737,39 @@ function createFrontLeg ({
       log('frontReconfigureWriteFailed', { error: String(error?.message ?? error).slice(0, 200) })
       return { started: false, reason: 'write_failed' }
     }
-    // Flip before the client's configuration_acknowledged can arrive: the
-    // packet ids are state-scoped, so an answer read in the play table is a
-    // parse error.
-    try {
-      attached.state = 'configuration'
-    } catch (error) {
-      log('frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
-      return { started: false, reason: 'state_failed' }
+    if (ctx) {
+      ctx.pendingReconfiguration = { frames: [], dropped: 0 }
+      ctx.reconfiguring = false
     }
-    const ctx = clients.get(attached)
-    if (ctx) ctx.reconfiguring = true
     metrics.reconfigurations++
     log('frontReconfiguration', { reason, username: attached.username ?? null })
     return { started: true, reason }
+  }
+
+  // The client acknowledged the play-state start_configuration, so the
+  // configuration table is the one its connection now speaks.
+  function acknowledgeReconfiguration (client) {
+    const ctx = clients.get(client)
+    if (!ctx?.pendingReconfiguration) return { acknowledged: false }
+    const pending = ctx.pendingReconfiguration
+    ctx.pendingReconfiguration = null
+    try {
+      client.state = 'configuration'
+    } catch (error) {
+      log('frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { acknowledged: false }
+    }
+    ctx.reconfiguring = true
+    for (const frame of pending.frames) {
+      emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log })
+    }
+    metrics.reconfigurationFramesFlushed += pending.frames.length
+    log('frontReconfigurationAcknowledged', {
+      username: client.username ?? null,
+      flushedFrames: pending.frames.length,
+      droppedFrames: pending.dropped
+    })
+    return { acknowledged: true, flushed: pending.frames.length }
   }
 
   return {
@@ -763,6 +810,23 @@ function createFrontLeg ({
           })
           return false
         }
+      }
+      // #22: the reconfiguration is waiting for the client's play-state
+      // configuration_acknowledged. The client cannot parse a configuration
+      // frame before that, so hold them in order and flush them on the ack.
+      const pending = clients.get(attached)?.pendingReconfiguration
+      if (pending && attached.state === 'play' && meta?.state === 'configuration') {
+        pending.frames.push({ buffer, meta })
+        while (pending.frames.length > MAX_PENDING_RECONFIGURATION_FRAMES) {
+          pending.frames.shift()
+          pending.dropped++
+          metrics.reconfigurationFramesDropped++
+        }
+        if (pending.dropped > 0 && !pending.overflowLogged) {
+          pending.overflowLogged = true
+          log('frontReconfigurationOverflow', { dropped: pending.dropped })
+        }
+        return true
       }
       // #16: a relayed frame must reach the client in a state it can parse. A
       // configuration frame written while the client is still in login is read

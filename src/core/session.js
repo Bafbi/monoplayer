@@ -53,6 +53,11 @@ const inertClock = Object.freeze({
   clearTimeout: () => {}
 })
 
+// A state that keeps the front connection through a backend move (#22): the
+// move itself, or a client playing the restored snapshot while the puppet
+// comes back. These are the only states where a backend end is not a detach.
+const KEEPS_FRONT = new Set([STATES.TRANSFERRING, STATES.ATTACHED])
+
 export function createSession ({
   clock = inertClock,
   reconnectDelayMs = 1000,
@@ -113,7 +118,7 @@ export function createSession ({
       // #22: a client that is following a move (or playing a restored
       // snapshot) keeps the session where it is; the dial only changes which
       // backend the puppet talks to.
-      if (state === STATES.TRANSFERRING || state === STATES.ATTACHED) {
+      if (KEEPS_FRONT.has(state)) {
         emit('transfer_connecting', { state })
         return
       }
@@ -175,9 +180,7 @@ export function createSession ({
       // #22: a retained client keeps its state through the dial. A session
       // only reaches here in `attached` because a failed transfer restored it
       // and armed the next attempt itself.
-      const fired = state === STATES.TRANSFERRING || state === STATES.ATTACHED
-        ? state
-        : STATES.BOOT
+      const fired = KEEPS_FRONT.has(state) ? state : STATES.BOOT
       transition('reconnect_fired', fired, { delayMs, attempt: reconnectAttempts })
       // Exactly one call per scheduled reconnect. A fault that arrives while
       // RECONNECTING returns before scheduling, so it never lands here.
@@ -193,7 +196,7 @@ export function createSession ({
     // #22: under a retained client the session never fails closed. The
     // transfer-follow controller owns the give-up, and it reverts to the
     // configured backend instead of ending the connection.
-    if (state === STATES.TRANSFERRING || state === STATES.ATTACHED) {
+    if (KEEPS_FRONT.has(state)) {
       transition('transfer_retry', state, { reason, attempt: reconnectAttempts })
       return scheduleReconnect(reason)
     }
@@ -215,7 +218,7 @@ export function createSession ({
     // backend end under a transfer is not a detach. One reconnect is armed and
     // the session stays put; the front learns about the move from the transfer
     // state, never from a kick.
-    if (retainFront && (state === STATES.TRANSFERRING || state === STATES.ATTACHED)) {
+    if (retainFront && KEEPS_FRONT.has(state)) {
       transition('backend_down_retained', state, { reason, frontEnded: false })
       return { ...scheduleReconnect(reason), wasAttached: true, retained: true }
     }
@@ -260,7 +263,7 @@ export function createSession ({
   // the policy allows it; the G0 default fails closed after one attempt. A
   // retained client (#22) never fails closed: retryOrFail keeps the session.
   function fail () {
-    if (state === STATES.TRANSFERRING || state === STATES.ATTACHED) return retryOrFail('reconnect_failed')
+    if (KEEPS_FRONT.has(state)) return retryOrFail('reconnect_failed')
     if (state !== STATES.BOOT || backendLogins === 0) return { scheduled: false, state }
     return retryOrFail('reconnect_failed')
   }
@@ -347,10 +350,17 @@ export function createSession ({
   // the pre-transfer snapshot, so the session returns to `attached` and one
   // reconnect goes back to the configured backend.
   function transferFailed ({ reason = 'transfer_failed' } = {}) {
-    if (state !== STATES.TRANSFERRING) return { failed: false, state }
+    // A target can also fail after its play login landed and before the move
+    // is marked done. The client is still the one that has to be restored.
+    const landed = state === STATES.ATTACHED && transferLanded
+    if (state !== STATES.TRANSFERRING && !landed) return { failed: false, state }
     transferLanded = false
     warmReady = false
-    transition('transfer_fail', STATES.ATTACHED, { reason, restored: true })
+    if (landed) {
+      emit('transfer_fail', { reason, restored: true, landed: true })
+    } else {
+      transition('transfer_fail', STATES.ATTACHED, { reason, restored: true })
+    }
     return { failed: true, restored: true, ...scheduleReconnect(reason) }
   }
 

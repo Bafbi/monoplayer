@@ -114,15 +114,18 @@ describes is #16.
 
 ## A followed transfer
 
-The proxy follows the transfer on the puppet leg with handshake intent 3 and
-detaches the human with a moving notice, so the server sees a normal accepting
-client and the human rejoins the proxy once the puppet is warm on the target.
-Keeping the human's connection and re-entering configuration on it, so the move
-reads as a dimension change, is [#22](https://github.com/Bafbi/monoplayer/issues/22).
-A failed target restores the previous session on the next reconnect. The notice
-is the proxy's own: a synthetic advancement with a visible toast, removed in the
-same call so the client keeps no ghost advancement, with a local `system_chat`
-line as the fallback ([#15](https://github.com/Bafbi/monoplayer/issues/15)).
+The proxy follows the transfer on the puppet leg with handshake intent 3, so the
+server sees a normal accepting client. The human keeps the connection: once the
+target sends its first configuration frame, the proxy writes `start_configuration`
+on the human's own connection, relays the target's configuration frames and its
+`finish_configuration`, and then the target's play login and join state. The
+client shows the reconfiguration loading screen and lands on the new server
+without rejoining ([#22](https://github.com/Bafbi/monoplayer/issues/22)).
+A failed target restores the pre-transfer state on that same connection. The
+notice is the proxy's own: a synthetic advancement with a visible toast, removed
+in the same call so the client keeps no ghost advancement, with a local
+`system_chat` line as the fallback
+([#15](https://github.com/Bafbi/monoplayer/issues/15)).
 
 ## Known limits
 
