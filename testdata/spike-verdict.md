@@ -13,7 +13,7 @@ It recorded `passed: true`, `assertionCount: 37`, and `failedAssertions: []`.
 
 The scenario ran a fake backend, the proxy, and two protocol bots in turn. The 37 assertions fall into five groups.
 
-- **Cache and join order.** The cache held the join sequence (`login`, `game_state_change`, `chunk_batch_start`, `map_chunk`, `chunk_batch_finished`). Client 1 received them in that exact order with a synthesized `position`, and it saw the puppet's profile.
+- **Cache and join order.** The cache held six frames (`size: 6`): `login`, `game_state_change`, `chunk_batch_start`, `map_chunk`, `chunk_batch_finished`, and `block_change`. Client 1 received the first five in that exact order with a synthesized `position`, and it saw the profile the fake backend serves for the puppet, `{"username":"Puppet","uuid":"00000000-0000-0000-0000-000000000001"}`. That is the spike's placeholder identity, not a real account.
 - **Serverbound relay.** The backend received exactly one `block_dig` and exactly one `block_place`. The attach replayed the cached frames plus the synthesized position.
 - **Per-leg frames.** The teleport-confirm, chunk-batch ack, and keep-alive sentinels never reached the backend. The proxy answered them, and the backend saw the proxy-owned teleport confirms and chunk-batch ack.
 - **Detach and reattach.** The soak ran 5000 ms and the detach was recorded. The backend leg stayed in play with one login while detached. Client 2 landed on client 1's pose, not the stale backend teleport, and the backend logins were still exactly 1 after the reattach.

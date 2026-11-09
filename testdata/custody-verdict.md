@@ -31,7 +31,7 @@ attachAllowed user=Bafbi uuid=6eb73524-ff88-4a62-a8d0-c63905e7afba
 {"event":"end","username":"Bafbi","reason":"socketClosed"}
 ```
 
-`testdata/custody-deny.log` ran three lines, again from the fixture's listen line. It refused the same Bafbi UUID, against a whitelist that did not name it:
+`testdata/custody-deny.log` ran three lines, again from the fixture's listen line. It refused the same Bafbi UUID as `not_whitelisted`:
 
 ```text
 fixture listening on 127.0.0.1:25565 version=26.1 whitelist=.secrets/attach-whitelist.json

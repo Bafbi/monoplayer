@@ -3,7 +3,7 @@
 Verdict: **PASS** on 2026-11-07T14:26:00.000Z for row `B1 — Monoplayer live attach (direct Paper G0)`.
 Date: 2026-11-07.
 Command: the record names no command line. It records its topology and the result of `mise run check`, which ran 185 of 185 tests, with 59 of 59 on the targeted `node --test test/monoplayer-*.test.js` run.
-Fact: one backend login served the join, the detach, and the reattach, and the front leg rebuilt each attach from the cache.
+Fact: the client detached and reattached onto the same running session, 1536 frames came back from the cache, and the world returned with the same 117 chunks and 38 rendered sections.
 
 Source: `testdata/b1-verdict.json` and `testdata/b1-join.png`, both removed from git. Every quote below comes from them.
 
