@@ -228,6 +228,9 @@ function createBackendLeg ({
   // Consulted per dialog, so a leg built before any client exists still
   // answers correctly once one attaches. The orchestrator reads the core.
   isHumanAttached = () => false,
+  // Reported after the leg answers a dialog itself, so the core's pending
+  // holder does not offer an answered question to the next client (#16).
+  onDialogAnswered = null,
   prepareConnection,
   releaseTokens,
   connectLogFields,
@@ -422,6 +425,9 @@ function createBackendLeg ({
             label: choice.label,
             bytes: body.length
           })
+          // This frame answers the dialog before the core sees it, so the core
+          // must not hold it as the human's question.
+          onDialogAnswered?.({ state: socketClient.state, name: 'show_dialog' })
         } catch (error) {
           log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
         }
@@ -627,6 +633,7 @@ export function createLiveBackendLeg (options = {}) {
     connectTimeoutMs: 60_000,
     dialogAction,
     isHumanAttached: options.isHumanAttached ?? (() => false),
+    onDialogAnswered: options.onDialogAnswered ?? null,
     prepareConnection: acquireTokens,
     releaseTokens,
     // Custody paths and identity labels only — no token material. cacheAccount

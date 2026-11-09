@@ -44,10 +44,10 @@ test('#16 the human answer releases the dialog it answers', () => {
   const pending = createPendingDialog()
   pending.show(SHOW)
   assert.equal(CONTROL_ANSWERS.has('custom_click_action'), true)
-  assert.deepEqual(pending.answer({ name: 'position' }), { answered: false }, 'an ordinary frame answers nothing')
+  assert.deepEqual(pending.answer({ state: 'play', name: 'position' }), { answered: false }, 'an ordinary frame answers nothing')
   assert.equal(pending.held, true)
 
-  const outcome = pending.answer({ name: 'custom_click_action' })
+  const outcome = pending.answer({ state: 'play', name: 'custom_click_action' })
   assert.equal(outcome.answered, true)
   assert.equal(outcome.state, 'play')
   assert.equal(pending.held, false)
@@ -55,7 +55,20 @@ test('#16 the human answer releases the dialog it answers', () => {
 
 test('#16 an answer with nothing held is recorded, not invented', () => {
   const pending = createPendingDialog()
-  assert.deepEqual(pending.answer({ name: 'accept_code_of_conduct' }), { answered: false })
+  assert.deepEqual(pending.answer({ state: 'configuration', name: 'accept_code_of_conduct' }), { answered: false })
+})
+
+test('#16 an answer in the wrong state leaves the dialog held', () => {
+  const pending = createPendingDialog()
+  pending.show(GATE)
+  // A play click is not an answer to a configuration gate: the human never saw
+  // that gate on a play connection.
+  assert.deepEqual(pending.answer({ state: 'play', name: 'custom_click_action' }), {
+    answered: false,
+    reason: 'state_mismatch'
+  })
+  assert.equal(pending.held, true)
+  assert.equal(pending.answer({ state: 'configuration', name: 'accept_code_of_conduct' }).answered, true)
 })
 
 test('#16 a held dialog is re-sent only into its own state, and is not consumed', () => {
