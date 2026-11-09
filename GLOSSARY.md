@@ -192,7 +192,11 @@ _Avoid_: packet log, trace
 
 **Telemetry**:
 The OTLP logs and metrics Monoplayer exports. Lifecycle events become log records; frame counts become metrics.
-_Avoid_: observability, metrics
+_Avoid_: metrics, tracing
+
+**Observability**:
+What the service says about itself: the journal, the telemetry, and the redaction every line passes through. It owns no game state.
+_Avoid_: monitoring, instrumentation
 
 **Redaction**:
 The rewrite of secret-shaped strings to the sentinel before anything leaves the process. Logs, journal lines, reports, and telemetry all pass through it.

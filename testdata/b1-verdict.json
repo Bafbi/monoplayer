@@ -1,0 +1,62 @@
+{
+  "gate": "B",
+  "row": "B1 — Monoplayer live attach (direct Paper G0)",
+  "verifiedAt": "2026-11-07T14:26:00.000Z",
+  "result": "PASS (join, render, move, break, place, detach/reattach)",
+  "topology": {
+    "front": "Monoplayer live front, 127.0.0.1:25565 (online-mode, hasJoined)",
+    "backend": "monoplayer-gate-b-paper.tail41e568.ts.net:25565 (Paper 26.1.2 b74, G0)",
+    "puppet": "GlowSquidye, Microsoft auth via .secrets/puppet (G1 custody)",
+    "attacher": "Bafbi 6eb73524-ff88-4a62-a8d0-c63905e7afba, .secrets/attach-whitelist.json",
+    "client": "gate-b-player-fabric on nath (official 26.1.2 + gate-b-driver)"
+  },
+  "join": {
+    "attachAllowed": true,
+    "configResolved": "cached_replay, 32 config frames, 28 registry_data suppressed",
+    "replayedFrames": 811,
+    "backendLogins": 1,
+    "warm": true,
+    "nonPlayFramesIgnored": 3,
+    "paper": [
+      "UUID of player GlowSquidye is 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed",
+      "GlowSquidye joined the game",
+      "GlowSquidye[/10.244.1.245:...] logged in with entity id 241"
+    ]
+  },
+  "render": {
+    "driverConnected": true,
+    "level": true,
+    "player": true,
+    "fps": 120,
+    "loadedChunks": 117,
+    "renderedSections": 38,
+    "screenshot": "testdata/b1-join.png"
+  },
+  "interaction": {
+    "move": "z 8.5 -> 12.77 (driver move 1500 ms), then -> 14.97",
+    "give": "rcon give GlowSquidye minecraft:stone 64 -> held minecraft:stone",
+    "break": "driver break 6 -60 12: before stone, after air",
+    "place": "driver place on dirt support 6 -61 12: targetBefore air, targetBlock stone, placed true"
+  },
+  "reattach": {
+    "detach": "socketClosed (client killed)",
+    "reattachReplayedFrames": 1536,
+    "connectedAfter": true,
+    "loadedChunks": 117,
+    "renderedSections": 38
+  },
+  "fix": {
+    "cause": "The core cached backend login-phase frames (encryption_begin, compress, success) as part of the play join prefix. Replayed in play state, encryption_begin (packet id 0x01) decoded as add_entity and the client rejected the frame with 114 extra bytes.",
+    "change": "monoplayer.js ignores frame states other than configuration and play (nonPlayFramesIgnored); bundle delimiters are dropped while their enclosed frames are relayed individually, so chunks and entities replay without the bundle wrapper."
+  },
+  "checks": {
+    "command": "mise run check",
+    "tests": "185/185 pass",
+    "targeted": "node --test test/monoplayer-*.test.js -> 59/59"
+  },
+  "limitations": [
+    "This is direct Paper G0, not the M4 Velocity topology.",
+    "The client profile is Bafbi; the replayed play stream is the GlowSquidye puppet session (identity separation is B4).",
+    "Screenshot is captured by the driver mod, not the compositor."
+  ]
+}

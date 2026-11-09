@@ -13,18 +13,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { createFakeBackend, emptySlot, itemStack } from '../fake-backend.js'
-import { createMonoplayer, loadConfig } from '../monoplayer.js'
-import { createOfflineBackendLeg } from '../monoplayer/live-backend.js'
-import { createOfflineFrontLeg } from '../monoplayer/live-front.js'
-import { waitForReady } from '../monoplayer/live-readiness.js'
-import { offlineUuid } from '../monoplayer/offline-identity.js'
-import { createWireChecker } from '../monoplayer/wire-check.js'
+import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js'
+import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
+import { createOfflineBackendLeg } from '../legs/live-backend.js'
+import { createOfflineFrontLeg } from '../legs/live-front.js'
+import { waitForReady } from '../service/readiness.js'
+import { offlineUuid } from '../legs/offline-identity.js'
+import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 
 const VERSION = '26.1'
-const DEFAULT_REPORT = '.gate-b/loopback-report.json'
+const DEFAULT_REPORT = '.reports/loopback-report.json'
 
 function flag (argv, name) {
   const i = argv.indexOf(name)
@@ -275,7 +275,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O1',
       'first attach allowed, no denials, offline front leg',
       front.metrics.allowed === 1 && front.metrics.denied === 0 &&
-        front.kind === 'offline-front-leg' && front.gateStoreFile === null,
+        front.kind === 'offline-front-leg' && front.checkStoreFile === null,
       { allowed: front.metrics.allowed, denied: front.metrics.denied, kind: front.kind }
     )
     check(

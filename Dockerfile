@@ -18,4 +18,4 @@ USER node
 
 EXPOSE 25565
 
-CMD ["node", "src/monoplayer.js", "--start"]
+CMD ["node", "src/service/monoplayer.js", "--start"]

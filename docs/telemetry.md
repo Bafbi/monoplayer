@@ -26,7 +26,7 @@ Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch a
 
 `MONOPLAYER_ACCOUNT_ALIAS` is set internally from the resolved puppet alias; it becomes the resource attribute `monoplayer.account.alias`.
 
-The collector accepts OTLP gRPC on `:4317` and OTLP HTTP on `:4318`. Monoplayer uses only the HTTP port. No OpenTelemetry package is installed; the payloads are written by `src/monoplayer/telemetry.js` with the global `fetch`.
+The collector accepts OTLP gRPC on `:4317` and OTLP HTTP on `:4318`. Monoplayer uses only the HTTP port. No OpenTelemetry package is installed; the payloads are written by `src/observability/telemetry.js` with the global `fetch`.
 
 ## Resource attributes
 
@@ -103,7 +103,7 @@ A lifecycle event record:
 {"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","accountUuid":"...","warm":true}
 ```
 
-The core writes `startLive`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/monoplayer/start-live.js`.
+The core writes `startLive`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/service/start-live.js`.
 
 ### Reconstruction
 
