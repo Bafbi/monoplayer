@@ -202,6 +202,45 @@ test('#16 a held configuration gate never reaches a client that arrives in play'
   assert.equal(withheld.length, 1, 'and the withholding is logged, not silent')
 })
 
+test('#16 an answer in the wrong state leaves the gate pending', () => {
+  const rig = makeCore()
+  attachConfiguring(rig)
+  rig.backendLeg.deliver({ state: 'configuration', name: 'code_of_conduct', buffer: Buffer.from('conduct') })
+
+  // A play click is not an answer to a configuration gate: the human never saw
+  // that gate on a play connection, so the gate must still wait.
+  rig.frontLeg.serverbound({ name: 'custom_click_action', state: 'play', buffer: Buffer.from('click') })
+  assert.equal(rig.core.pendingDialog.held, true)
+  assert.equal(rig.core.metrics.controlDialogsAnswered, 0)
+
+  rig.frontLeg.serverbound({ name: 'accept_code_of_conduct', state: 'configuration', buffer: Buffer.from('ok') })
+  assert.equal(rig.core.pendingDialog.held, false)
+  assert.equal(rig.core.metrics.controlDialogsAnswered, 1)
+})
+
+test('#16 a dialog the puppet answered itself is not offered to the next client', () => {
+  const rig = warmBackend()
+  // The backend leg answered it with MONOPLAYER_DIALOG_ACTION before the core
+  // saw the frame, so there is no question left for the human.
+  rig.core.notePuppetDialogAnswer({ state: 'play' })
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('answered') })
+
+  assert.equal(rig.core.pendingDialog.held, false, 'an answered dialog is never held')
+  assert.equal(rig.core.metrics.controlDialogsPuppetAnswered, 1)
+  attach(rig)
+  assert.equal(relayedNames(rig, 'show_dialog').length, 0, 'and never re-sent on attach')
+})
+
+test('#16 the puppet-answered marker belongs to one show, in its own state', () => {
+  const rig = warmBackend()
+  rig.core.notePuppetDialogAnswer({ state: 'configuration' })
+  // The marker is consumed by the first show, in any state, so a later play
+  // dialog is held normally.
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('for-the-human') })
+  assert.equal(rig.core.pendingDialog.held, true)
+  assert.equal(rig.core.metrics.controlDialogsPuppetAnswered, 0)
+})
+
 test('#16 a backend teardown drops the held dialog', () => {
   const rig = warmBackend()
   rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('play-dialog') })

@@ -267,6 +267,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
       // #16: the human answers a control dialog while attached, so the puppet's
       // auto-click stands down for exactly that window.
       isHumanAttached: () => core.attached === true,
+      // #16: an auto-answered dialog is not the next client's question.
+      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
       log
     })
     : createLiveBackendLeg({

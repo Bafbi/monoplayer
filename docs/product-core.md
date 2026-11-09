@@ -154,16 +154,18 @@ the last unanswered dialog in `src/core/pending-dialog.js`.
   would be read as a login packet.
 - The puppet's own auto-click (`MONOPLAYER_DIALOG_ACTION`) stands down while a
   player is attached: `decideDialogAutoAnswer` returns `human_attached` and
-  nothing is clicked. Which dialog is the player's to answer is #20 (play) and
-  #21 (configuration gates, including the protocol library's own code-of-conduct
+  nothing is clicked. When it does click, the leg reports the answer
+  (`onDialogAnswered` → `core.notePuppetDialogAnswer`) before the core sees the
+  frame, so the holder never offers an already-answered question to the next
+  client. Which dialog is the player's to answer is #20 (play) and #21
+  (configuration gates, including the protocol library's own code-of-conduct
   accept, which happens on the backend leg before the core sees the frame).
 
-Serverbound frames carry their state (#16). A configuration answer reaches a
-puppet that is still in configuration, where a play-state write would be a
-different packet id, and a configuration answer that arrives after the puppet
-left configuration is dropped (`puppet_left_configuration`) instead of ending
-the backend session. The frames the front client's own connection answers stay
-per-leg: `CONFIG_SERVERBOUND_DROPS` in `src/core/relay.js` holds
+Serverbound frames carry their state (#16). The packet id is state-scoped, so
+the frame must be written into the state the puppet is in: a configuration
+answer after the play login, or a play frame while the puppet is still
+configuring, drops with `puppet_state_mismatch` instead of ending the backend
+session. The frames the front client's own connection answers stay per-leg: `CONFIG_SERVERBOUND_DROPS` in `src/core/relay.js` holds
 `finish_configuration`, `select_known_packs`, and `settings`, and the core's
 name-based drops cover keep-alive, pong, cookies, and resource-pack replies.
 

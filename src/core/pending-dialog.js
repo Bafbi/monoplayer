@@ -54,9 +54,12 @@ export function createPendingDialog () {
     return { dropped }
   }
 
-  // The human answered with `name`. Only a control answer releases a dialog.
-  function answer ({ name } = {}) {
+  // The human answered with `name`, in `state`. Only a control answer for the
+  // dialog's own state releases it: a play click must never release a
+  // configuration gate the human has not seen.
+  function answer ({ state, name } = {}) {
     if (held === null || !CONTROL_ANSWERS.has(name)) return { answered: false }
+    if (held.state !== state) return { answered: false, reason: 'state_mismatch' }
     const answered = held
     held = null
     return { answered: true, name: answered.name, state: answered.state }

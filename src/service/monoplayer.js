@@ -226,6 +226,7 @@ export function createMonoplayer ({
     controlDialogsHeld: 0,
     controlDialogsResent: 0,
     controlDialogsAnswered: 0,
+    controlDialogsPuppetAnswered: 0,
     clientSettingsSent: 0,
     clientSettingsRewritten: 0,
     clientSettingsFailed: 0,
@@ -297,6 +298,11 @@ export function createMonoplayer ({
   // detach and is re-sent on attach. A control dialog is neither cached nor
   // replayed, so this is the one copy and a replay cannot deliver a stale one.
   const pendingDialog = createPendingDialog()
+  // #16: the state of a dialog the puppet answered itself (the headless
+  // auto-click) on this connection. The leg answers the frame before the core
+  // sees it, so the core consumes this marker instead of holding a question
+  // that is already closed.
+  let puppetAnsweredDialog = null
   const transferChain = { visited: new Set(), depth: 0, resetTimer: null }
 
   function log (event, fields = {}) {
@@ -536,12 +542,32 @@ export function createMonoplayer ({
     return false
   }
 
+  // #16: the backend leg answered a dialog itself with the configured action,
+  // before the frame reached the core. The next show in that state is not a
+  // question for the human.
+  function notePuppetDialogAnswer ({ state = null } = {}) {
+    if (state !== 'play' && state !== 'configuration') return { noted: false }
+    puppetAnsweredDialog = state
+    log('puppetDialogAnswer', { state })
+    return { noted: true, state }
+  }
+
   // One path for every control dialog, in play and in configuration: hold the
   // last unanswered one, relay it to the human who can answer it, and let the
   // serverbound forwarder carry the answer back as the puppet's own frame. No
   // timeout and no auto-click here: a dialog with no client waits, and which
   // dialog is the human's to answer is #20's and #21's decision.
   function handleControlDialog ({ state, name, buffer, data = {} }) {
+    // The puppet answered this one itself before the core heard about it, so
+    // there is nothing to hold and no human to ask. The marker is spent here
+    // either way: it belongs to exactly one show.
+    const answeredByPuppet = name !== 'clear_dialog' && puppetAnsweredDialog === state
+    puppetAnsweredDialog = null
+    if (answeredByPuppet) {
+      metrics.controlDialogsPuppetAnswered++
+      log('controlDialogPuppetAnswered', { state, name })
+      return { relayed: false }
+    }
     if (name === 'clear_dialog') {
       // The server withdrew its question. The client showing it must see that
       // too, or the screen stays open on a dead dialog.
@@ -648,6 +674,7 @@ export function createMonoplayer ({
     // A dialog belongs to the backend session that asked it; the next session
     // asks its own.
     pendingDialog.clear()
+    puppetAnsweredDialog = null
     if (session.state === STATES.RECONNECTING) {
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
@@ -796,8 +823,11 @@ export function createMonoplayer ({
     for (const frame of cache.snapshot().config) {
       if (frame.name === 'finish_configuration') continue
       if (!clientboundPolicy('configuration', frame.name).relay) continue
-      frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
-      metrics.configFramesRelayed++
+      // Count only what actually reached the client: the front refuses a frame
+      // whose state is not the client's own.
+      if (frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) {
+        metrics.configFramesRelayed++
+      }
     }
     // #16: a held configuration gate is not sent here. This call-in runs during
     // the client's login phase, before the library writes Login Success, so a
@@ -989,8 +1019,9 @@ export function createMonoplayer ({
         if (!policy.cache) return
         const pushed = cache.push('configuration', name, buffer, data)
         if (pushed.cached && policy.relay && session.state === STATES.CONFIGURING) {
-          frontLeg.writeRaw(buffer, { state: 'configuration', name })
-          metrics.configFramesRelayed++
+          if (frontLeg.writeRaw(buffer, { state: 'configuration', name }) !== false) {
+            metrics.configFramesRelayed++
+          }
         }
         return
       }
@@ -1083,13 +1114,14 @@ export function createMonoplayer ({
         bumpName(metrics.serverboundDroppedByName, serverbound.name)
         return
       }
-      if (state === 'configuration' && !backendConfiguring) {
-        // #16: the frame id is state-scoped, so a configuration answer that
-        // arrives after the puppet left configuration would be read as a play
-        // packet and end the backend session. Drop it and say so.
+      // #16: the packet id is state-scoped, so the frame must be written into
+      // the state it was sent in. A configuration answer that arrives after the
+      // play login, or a play frame while the puppet is still configuring, is
+      // the wrong packet id and would end the backend session.
+      if ((state === 'configuration') !== backendConfiguring) {
         metrics.serverboundDropped++
         bumpName(metrics.serverboundDroppedByName, name)
-        log('serverboundDropped', { name, state, reason: 'puppet_left_configuration' })
+        log('serverboundDropped', { name, state, reason: 'puppet_state_mismatch' })
         return
       }
       if (state === 'play') {
@@ -1103,7 +1135,7 @@ export function createMonoplayer ({
       backendLeg.writeRaw(serverbound.buffer, { state, name: serverbound.name })
       // The human answered a control dialog: the held copy is no longer
       // pending, so a later attach is not shown a question already answered.
-      const answered = pendingDialog.answer({ name: serverbound.name })
+      const answered = pendingDialog.answer({ state, name: serverbound.name })
       if (answered.answered) {
         metrics.controlDialogsAnswered++
         log('controlDialogAnswered', { name: serverbound.name, state: answered.state, dialog: answered.name })
@@ -1321,6 +1353,7 @@ export function createMonoplayer ({
     processLoginStart,
     attachConfiguringPlayer,
     configuringReady,
+    notePuppetDialogAnswer,
     noteClientSettings,
     processVerifySession,
     attachPlayer,
