@@ -271,6 +271,49 @@ export function buildCustomClickAction ({ state, id, additions }) {
   ])
 }
 
+// The library's reader for the `topBitSetTerminatedArray` protocol type clears
+// the high bit of every slot byte in the frame it decodes, in place
+// (minecraft-protocol datatypes/compiler-minecraft.js:
+// `buffer[cursor] = buffer[cursor] & 127`; the interpreter reader does the same).
+// That bit is the array's terminator flag, so decoding a multi-entry
+// `entity_equipment` frame rewrites the bytes the leg is about to relay: the
+// client reads one entry and disconnects on the rest as trailing bytes (#82).
+//
+// Parse a throwaway copy and report the caller's own bytes, so `buffer` stays
+// the frame the backend sent. The library builds a fresh deserializer on every
+// state change (`set state` calls `setSerializer`), so the guard covers the
+// current one and every later one.
+export function keepWireBytes (client) {
+  if (!client || typeof client !== 'object') throw new TypeError('client is required')
+
+  function guard (deserializer) {
+    if (!deserializer || typeof deserializer.parsePacketBuffer !== 'function') return deserializer
+    if (deserializer.keepsWireBytes) return deserializer
+    const parse = deserializer.parsePacketBuffer.bind(deserializer)
+    deserializer.parsePacketBuffer = (buffer, offset = 0) => {
+      const parsed = parse(Buffer.from(buffer), offset)
+      // The parse ran on the copy; report the frame the caller handed us.
+      parsed.buffer = buffer.subarray(offset, offset + parsed.metadata.size)
+      parsed.fullBuffer = buffer
+      return parsed
+    }
+    deserializer.keepsWireBytes = true
+    return deserializer
+  }
+
+  guard(client.deserializer)
+  // The library keeps the deserializer it builds for each state. Guarding the
+  // builder covers login, configuration, and play.
+  if (typeof client.setSerializer === 'function') {
+    const setSerializer = client.setSerializer.bind(client)
+    client.setSerializer = (...args) => {
+      setSerializer(...args)
+      guard(client.deserializer)
+    }
+  }
+  return client
+}
+
 // Decoded data capture: minecraft-protocol emits, synchronously and in order,
 // `packet` (decoded) then the named event then `raw` (frame buffer) for every
 // parsed clientbound frame. This forwarder pairs them up: each raw frame is
@@ -434,7 +477,7 @@ function createBackendLeg ({
         if (connection.profilesFolder !== undefined) {
           options.profilesFolder = connection.profilesFolder // a function => Authflow uses it as its cache factory
         }
-        socketClient = mc.createClient(options)
+        socketClient = keepWireBytes(mc.createClient(options))
         client = socketClient
         let write = socketClient.write.bind(socketClient)
         if (nextTransferIntent) write = withTransferIntent(write, true)

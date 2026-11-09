@@ -9,10 +9,10 @@
 //   chunk_batch_start -> map_chunk (0,0) -> chunk_batch_finished
 // It records serverbound position, block_dig, block_place, chat, dialog, and
 // code-of-conduct packets, and exposes sendBlockChange, sendPosition,
-// sendWindowItems, sendSetSlot, sendShowDialog, and a `codeOfConduct` option for
-// scenario mutations. With `codeOfConduct` on, the gate goes out in the
-// configuration phase and `finish_configuration` waits for the accept, the way a
-// server with `enable-code-of-conduct` behaves (#21).
+// sendWindowItems, sendSetSlot, sendEquipmentBundle, sendShowDialog, and a
+// `codeOfConduct` option for scenario mutations. With `codeOfConduct` on, the
+// gate goes out in the configuration phase and `finish_configuration` waits for
+// the accept, the way a server with `enable-code-of-conduct` behaves (#21).
 import mc from 'minecraft-protocol'
 import prismarineChunk from 'prismarine-chunk'
 import minecraftData from 'minecraft-data'
@@ -369,6 +369,28 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     log('sendSetSlot', { windowId, stateId, slot, itemId: item?.itemId ?? null })
   }
 
+  // One bundle of entity_equipment frames, the way Paper batches equipment
+  // updates to a joining player: a delimiter, one frame per update, and a
+  // closing delimiter. Every update carries two or more entries, because the
+  // frame's terminator flag rides the high bit of each slot byte and only a
+  // multi-entry frame depends on it (#82). The array type is
+  // `topBitSetTerminatedArray`: every entry but the last sets the high bit.
+  function sendEquipmentBundle ({
+    updates = [{ entityId: 101, slots: [0, 1] }, { entityId: 102, slots: [0, 1, 2] }]
+  } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('bundle_delimiter', {})
+      for (const update of updates) {
+        client.write('entity_equipment', {
+          entityId: update.entityId,
+          equipments: update.slots.map(slot => ({ slot, item: emptySlot() }))
+        })
+      }
+      client.write('bundle_delimiter', {})
+    }
+    log('sendEquipmentBundle', { updates })
+  }
+
   // Clientbound chat while detached: the proxy must not replay it to a later
   // client. It carries per-connection indexes and signature state.
   function sendPlayerChat (message, globalIndex = 1) {
@@ -480,6 +502,7 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     sendSyncEntityPosition,
     sendWindowItems,
     sendSetSlot,
+    sendEquipmentBundle,
     sendPlayerChat,
     sendSystemChat,
     sendTransfer,

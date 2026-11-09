@@ -196,7 +196,16 @@ The runner builds:
   `backendLogins` at 1, lands the first synthesized position at the last pose
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
 - `O14` the second bot recorded no leftover bytes and the front wire checker
-  still rejected nothing.- `O15` one backend fault produces one reconnect: two backend logins and no
+  still rejected nothing.
+- `O36` a bundle of two `entity_equipment` frames — two and three entries —
+  reaches an attached client with every entry decoded and no leftover bytes. The
+  frame's array type carries its terminator flag in the high bit of each slot
+  byte, so this is where a relay that writes bytes a decoder has rewritten shows
+  up (#82).
+- `O37` a bundle cached while nobody is attached replays the same way: both
+  frames decode with every entry, no leftover bytes, and the front wire checker
+  rejected nothing.
+- `O15` one backend fault produces one reconnect: two backend logins and no
   loop.
 - `O16` the attach after the reconnect replays the join prefix and a chunk.
 - `O17` the replay sends the window 0 base before every later `set_slot`.

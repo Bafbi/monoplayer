@@ -10,6 +10,10 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { createWireChecker, WIRE_CODES } from '../../src/core/wire-check.js'
 
+// entity_equipment for entity 501 with two entries. 0x80 on slot 0 is the
+// non-terminal flag the array type reads from the high bit (#82).
+const TWO_ENTRIES = '66f50380000100'
+
 const FIXTURE_URL = new URL('../../testdata/wire/cases-26.1.json', import.meta.url)
 const RESULT_FIELDS = ['ok', 'code', 'parsedName', 'consumed', 'total', 'leftover']
 
@@ -97,4 +101,23 @@ test('stats count each outcome and a second checker has independent state', asyn
   assert.equal(other.stats.failures, 0)
   assert.equal(checker.stats.checked, 6)
   assert.equal(checker.stats.failures, 5)
+})
+
+test('the check leaves the frame it approved byte for byte', () => {
+  // #82: the library's reader for \`topBitSetTerminatedArray\` clears the high bit
+  // of every slot byte in the buffer it decodes. A check that parsed the
+  // caller's buffer would corrupt the frame it just approved, and the front leg
+  // writes that same buffer next (live-front.js emitCheckedRaw).
+  const buffer = Buffer.from(TWO_ENTRIES, 'hex')
+  const checker = createWireChecker({ version: '26.1' })
+  const first = checker.check({ state: 'play', name: 'entity_equipment', buffer })
+  assert.equal(first.ok, true, first.code)
+  assert.equal(first.leftover, 0)
+  assert.equal(first.consumed, buffer.length)
+  assert.equal(buffer.toString('hex'), TWO_ENTRIES, 'the checker rewrote the frame it approved')
+
+  // The same frame, checked again, is still the same verdict.
+  const second = checker.check({ state: 'play', name: 'entity_equipment', buffer })
+  assert.equal(second.ok, true, second.code)
+  assert.equal(second.leftover, 0)
 })
