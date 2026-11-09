@@ -45,8 +45,12 @@ spec:
               value: "TRUE"
             - name: ENFORCE_SECURE_PROFILE
               value: "TRUE"
+            # Off on purpose. Online mode already decides who may join, this
+            # server is reachable only inside the cluster, and a whitelist here
+            # would mean committing an account name to a manifest. It is
+            # disposable, so a second gate buys nothing.
             - name: ENFORCE_WHITELIST
-              value: "TRUE"
+              value: "FALSE"
             - name: LEVEL_TYPE
               value: "minecraft:flat"
             - name: GENERATE_STRUCTURES
