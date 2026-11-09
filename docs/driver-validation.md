@@ -39,8 +39,10 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   So `launch` also finds the window by the instance library path on any
   workspace, then moves it to 9 without following. It reads the placement back,
   because `hyprctl eval` answers `ok` even when the dispatcher found no window.
-  It prints `OPENED_WORKSPACE=`, `WORKSPACE=9`, and `SILENT=`. Anything after
-  the instance name goes to `prismlauncher`.
+  It prints `OPENED_WORKSPACE=`, `WORKSPACE=9`, and `SILENT=`. A `SILENT=no`
+  with exit 1 reports a launch that switched the workspace or took focus, and
+  stderr names which. Anything after the instance name goes to
+  `prismlauncher`.
 - `shot` asks the driver for its render target and copies the PNG back with
   `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
   This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),

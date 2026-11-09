@@ -183,7 +183,7 @@ if [ "$opened_on" != "9" ]; then
     exit 1
   fi
   if ! moved_on=$(workspace_of "$window"); then
-    echo "nath: cannot read the workspace of $window after the move; it left the compositor, or hyprctl failed" >&2
+    echo "nath: cannot read the workspace of $window after the move, so 9 is unconfirmed; it was on workspace $opened_on, and it left the compositor or hyprctl failed" >&2
     exit 1
   fi
   if [ "$moved_on" != "9" ]; then
@@ -199,14 +199,19 @@ printf "INSTANCE=%s\n" "$instance"
 printf "WINDOW=%s\n" "$window"
 printf "OPENED_WORKSPACE=%s\n" "$opened_on"
 printf "WORKSPACE=9\n"
-if [ "$active_after" = "$active_before" ] && [ "$focused_window" != "$window" ]; then
-  printf "SILENT=yes\n"
-else
+if [ "$active_after" != "$active_before" ]; then
   printf "SILENT=no\n"
-  echo "nath: the launch was not silent: active workspace $active_before -> $active_after" >&2
+  echo "nath: the launch switched the active workspace: $active_before -> $active_after" >&2
   echo "nath: the client is running; stop it with: tools/nath.sh kill $instance" >&2
   exit 1
 fi
+if [ "$focused_window" = "$window" ]; then
+  printf "SILENT=no\n"
+  echo "nath: the client took focus; its window is on workspace 9" >&2
+  echo "nath: the client is running; stop it with: tools/nath.sh kill $instance" >&2
+  exit 1
+fi
+printf "SILENT=yes\n"
 printf "ACTIVE_WORKSPACE=%s\n" "$active_after"
 printf "FOCUSED=%s\n" "$focused"
 ' "$instance" "$@"

@@ -531,8 +531,17 @@ test('launch fails when the launch moved the active workspace', (t) => {
   const run = h.run(['launch', 'gate-b-player-fabric'])
   assert.equal(run.status, 1)
   assert.match(run.stdout, /^SILENT=no$/m)
-  assert.match(run.stderr, /the launch was not silent: active workspace 2 -> 9/)
+  assert.match(run.stderr, /the launch switched the active workspace: 2 -> 9/)
   assert.match(run.stderr, /stop it with: tools\/nath\.sh kill gate-b-player-fabric/)
+})
+
+test('launch reports a client that took focus, and says where it is', (t) => {
+  const h = harness({ sshBody: EXEC_SSH, host: { activeWindow: JSON.stringify({ class: 'Minecraft 26.1.2', address: '0xabc' }) } })
+  t.after(h.stop)
+  const run = h.run(['launch', 'gate-b-player-fabric'])
+  assert.equal(run.status, 1)
+  assert.match(run.stdout, /^SILENT=no$/m)
+  assert.match(run.stderr, /the client took focus; its window is on workspace 9/)
 })
 
 test('launch fails when the compositor refuses the Lua', (t) => {
