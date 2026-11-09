@@ -164,6 +164,11 @@ The runner builds:
 - `O22` the puppet follows the target and re-warms there.
 - `O23` a fresh attach after the move replays the target server state.
 - `O24` the puppet leg answers a stored cookie request.
+- `O24b` a proxy notice reaches the client as an advancement toast and leaves
+  no advancement behind: an invalid-target refusal sends two `advancements`
+  frames, the bot decodes both, the first carries a `monoplayer:notice/` id with
+  `show_toast` set, the second removes that id, and the bot's advancement state
+  is empty afterwards (#15).
 - `O25` the puppet announced `minecraft:brand` = `fabric` once per backend
   connection: the count of brand frames equals the fake backend's login count,
   on the hub and on the transfer target.
