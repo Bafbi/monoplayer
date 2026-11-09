@@ -2,12 +2,12 @@
 // Run via `mise run spike`. The default `mise run test` is socket-free.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runGateAScenario } from '../../src/scenario.js'
-import { PUPPET_PROFILE } from '../../src/proxy.js'
+import { runSpikeScenario } from '../../src/spike/scenario.js'
+import { PUPPET_PROFILE } from '../../src/spike/proxy.js'
 
 test('Gate A: relay, synthesized join, detach survival, reattach current state', async () => {
   // silence proxy/backend/fake-client JSON logs during the test run
-  const report = await runGateAScenario({ logStream: null })
+  const report = await runSpikeScenario({ logStream: null })
 
   // No scenario assertion may fail.
   assert.deepEqual(

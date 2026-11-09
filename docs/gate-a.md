@@ -7,18 +7,18 @@ relay control packets without ever reconnecting the backend. Pinned to
 version). Plain Node ESM JavaScript, no TypeScript. No external services, no
 Mojang calls, no Microsoft accounts; loopback only.
 
-**Result (2026-11-05):** `mise run check` passes, `mise run gate-a` passes
-37/37 assertions. Report: `testdata/gate-a-report.json`.
+**Result (2026-11-05):** `mise run check` passes, `mise run spike:report` passes
+37/37 assertions. Report: `testdata/spike-report.json`.
 
 Files:
 
 | File | Role |
 |---|---|
-| `src/proxy.js` | Two-leg proxy: backend client leg ("Puppet"), front server leg, bounded frame cache, relay rules, metrics, JSON logs. |
+| `src/spike/proxy.js` | Two-leg proxy: backend client leg ("Puppet"), front server leg, bounded frame cache, relay rules, metrics, JSON logs. |
 | `src/legs/fake-backend.js` | Scripted backend: minimal flat-world join (login, game_state_change 13, position, one chunk batch), records serverbound packets, `sendBlockChange`/`sendPosition`. |
-| `src/fake-client.js` | Attaching protocol client: records clientbound frames and parsed data, sends position/dig/place/chat. |
-| `src/scenario.js` | The scenario + assertions, shared by the CLI and the test. |
-| `src/gate-a.js` | CLI runner: prints PASS/FAIL, writes `testdata/gate-a-report.json`, exits non-zero on failure. |
+| `src/spike/fake-client.js` | Attaching protocol client: records clientbound frames and parsed data, sends position/dig/place/chat. |
+| `src/spike/scenario.js` | The scenario + assertions, shared by the CLI and the test. |
+| `src/spike/run.js` | CLI runner: prints PASS/FAIL, writes `testdata/spike-report.json`, exits non-zero on failure. |
 | `test/spikes/gate-a.test.js` | The same scenario under `node:test`. |
 
 ## What this proves
@@ -93,11 +93,11 @@ Files:
 
 ```bash
 mise run check    # install (frozen) + lint (node --check) + node:test suite
-mise run gate-a   # full scenario, writes testdata/gate-a-report.json, PASS/FAIL summary
+mise run spike:report   # full scenario, writes testdata/spike-report.json, PASS/FAIL summary
 ```
 
-`mise run gate-a` exits non-zero if any scenario assertion fails.
-`testdata/gate-a-report.json` holds the timestamp, assertions with details,
+`mise run spike:report` exits non-zero if any scenario assertion fails.
+`testdata/spike-report.json` holds the timestamp, assertions with details,
 proxy metrics, backend records, client packet logs, and dependency versions.
 
 ## Design notes and spike workarounds
@@ -172,14 +172,14 @@ implemented but not flood-tested.
 
 ## A later real-client Gate A
 
-The proxy (`src/proxy.js`) is already shaped for it:
+The proxy (`src/spike/proxy.js`) is already shaped for it:
 
 1. Point the backend leg at a real 26.1 backend and log in as the puppet with
    real credentials (`auth: 'microsoft'` or an injected session) instead of
    `auth: 'offline'`.
 2. Turn the front leg online: `'online-mode': true` plus a `hasJoined` stub or
    a whitelist check in `beforeLogin`; the forged puppet profile stays.
-3. Replace `src/fake-client.js` with the official 26.1 vanilla client pointed
+3. Replace `src/spike/fake-client.js` with the official 26.1 vanilla client pointed
    at `proxy.frontPort`, and replace `src/legs/fake-backend.js` with the real
    backend. Cache warm, attach replay, pose synthesis, relay rules, and detach
    survival are the same code path. **Config-phase replay is not**: the front

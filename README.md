@@ -27,7 +27,7 @@ mise run check             # lint + node:test + offline loopback
 mise run test              # unit tests only (no sockets, no auth)
 mise run loopback          # product offline loopback rung (real legs, fake backend)
 mise run spike             # frozen Gate A spike (real sockets, offline protocol)
-mise run gate-a            # full Gate A scenario, writes testdata/gate-a-report.json
+mise run spike:report            # full Gate A scenario, writes testdata/spike-report.json
 mise run gate-b:scenario   # driver-lane G0 scenario (live testbed)
 ```
 

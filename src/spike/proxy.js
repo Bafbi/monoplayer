@@ -1,4 +1,4 @@
-// Gate A spike: minimal two-leg proxy (minecraft-protocol, protocol 775 / 26.1).
+// Protocol spike: minimal two-leg proxy (minecraft-protocol, protocol 775 / 26.1).
 //
 // Throwaway code, not product code:
 //   - a bounded ordered frame cache stands in for the product state cache

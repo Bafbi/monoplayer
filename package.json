@@ -5,7 +5,7 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:spike": "node --test test/spikes/*.test.js",
-    "gate-a": "node src/gate-a.js",
+    "spike:report": "node src/spike/run.js",
     "postinstall": "node scripts/patch-minecraft-data-26.2.mjs"
   },
   "dependencies": {

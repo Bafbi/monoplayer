@@ -62,10 +62,10 @@ depends = ["check", "gate-b:driver:build", "gate-b:scenario"]
 description = "Verify a deploy change: the gate, then the image build (needs cluster access; it publishes to the Zot registry)."
 depends = ["check", "image:build"]
 
-[tasks."gate-a"]
+[tasks."spike:report"]
 description = "Run the standalone Gate A scenario and write a report."
 depends = ["install"]
-run = "node src/gate-a.js"
+run = "node src/spike/run.js"
 
 [tasks."gate-b:driver:build"]
 description = "Build the Gate B Fabric client driver."

@@ -1,4 +1,4 @@
-// Gate A spike: scripted attaching client (26.1) that records what it receives.
+// Protocol spike: scripted attaching client (26.1) that records what it receives.
 //
 // It waits for the synthesized play join (login, position, map_chunk), records
 // clientbound play packet names and selected parsed data, and can send

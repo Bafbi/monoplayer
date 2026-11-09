@@ -19,7 +19,7 @@ cheapest rung that can fail for the defect you are chasing.
 loopback. It is the default gate.
 
 The frozen Gate A spike (`mise run spike`) and the Gate A scenario
-(`mise run gate-a`) sit beside the ladder. They prove the two-leg relay on
+(`mise run spike:report`) sit beside the ladder. They prove the two-leg relay on
 loopback with the older harness. Keep them green; do not extend them.
 
 ## Pick the task for the area you touched
