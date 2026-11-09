@@ -174,6 +174,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       logStream: { write: line => log('core', { line }) }
     })
     front.setCoreAttach(({ name, uuid }) => core.attachPlayer({ name, uuid, includeConfig: false }))
+    front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
     front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
     core.start()
 

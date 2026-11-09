@@ -313,6 +313,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
   front.setCoreAttach(({ name, uuid }) =>
     core.attachPlayer({ name, uuid, includeConfig: false })
   )
+  // #16: a client may attach while the puppet is still configuring.
+  front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
   // #18: the human's client information is the source of the fields the
   // server sees; the core merges it with the backend's view distance cap.
   front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
