@@ -16,25 +16,29 @@
 // Secrets: RCON lives inside the pod (rcon-cli), the driver token comes from
 // GATEB_DRIVER_TOKEN, and every report body is scanned with
 // checks.redactSecrets before it is written.
+import { readFileSync } from 'node:fs'
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDriverClient, DriverError } from './client-driver.js'
+import { formatParityReport, parseParityEndpoint, runParity } from './parity.js'
 import { createRcon } from './rcon.js'
-import { runDriverLane } from './scenario.js'
-import { redactSecrets, verifyG0Evidence } from './checks.js'
+import { DEFAULT_PINS, runDriverLane } from './scenario.js'
+import { redactSecrets, verifyG0Evidence, versionRefusal } from './checks.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const TESTDATA = path.join(root, 'testdata')
+const MOD_METADATA = path.join(root, 'tools', 'driver', 'src', 'main', 'resources', 'fabric.mod.json')
 
 const HELP = `
 Driver-lane G0 runner
 
 Usage:
-  node src/driver/run.js [--runs N] [--force] [--lane driver|unmodded] [--tunnel]
+  node src/driver/run.js [--runs N] [--force] [--lane driver|unmodded|parity] [--tunnel]
                      [--host <user@display-host>] [--instance <prism instance>]
                      [--server <join address>] [--account <name>]
+                     [--direct <host:port>] [--proxied <host:port>] [--report <path>]
                      [--driver-host h] [--driver-port p]
                      [--rcon-namespace ns] [--rcon-deployment deploy]
 
@@ -44,6 +48,17 @@ Options:
   --lane <lane>      driver (default): automated G0 driver-lane runs.
                      unmodded: write a manual witness checklist; exits 1
                      until the operator completes the witness.
+                     parity: join the backend directly, then the same backend
+                     through the proxy, and compare the two clients' state
+                     (#62). One command, two runs, no RCON.
+  --direct HOST:PORT     The backend the first parity run joins, as the client
+                     reaches it (default 127.0.0.1:25565, the dev-lane tunnel).
+  --proxied HOST:PORT    The proxy front the second parity run joins, as the
+                     client reaches it (default 127.0.0.1:25566). Both parity
+                     endpoints are refused when they name the live Excalia fleet
+                     or the live deployment in front of it.
+  --report PATH     Where the parity report goes
+                     (default .reports/driver-parity-report.json).
   --tunnel           Spawn 'ssh -N -L <driver-port>:127.0.0.1:25599 <host>'
                      for the driver socket and clean it up on exit. Unit tests
                      never need this; the default is an operator-managed tunnel.
@@ -54,7 +69,7 @@ Options:
                      N hours ago, so a copied report set cannot pass (default 24).
   --host             Display host for relaunch/screenshot/tunnel
                      (default: bafbi@nath.tail41e568.ts.net).
-  --instance         Prism instance to launch (default: gate-b-player-fabric).
+  --instance         Prism instance to launch (default: gate-b-player-262-fabric).
   --server           Join address (default: monoplayer-gate-b-paper.tail41e568.ts.net:25565).
   --account          Account name (default: Bafbi).
   --driver-host h    Override GATEB_DRIVER_HOST (default 127.0.0.1).
@@ -77,12 +92,20 @@ const DEFAULTS = {
   force: false,
   lane: 'driver',
   host: 'bafbi@nath.tail41e568.ts.net',
-  instance: 'gate-b-player-fabric',
+  // The Fabric instance built from the 26.2 vanilla instance. The older
+  // gate-b-player-fabric pair stays on disk as the 26.1.2 record (#71).
+  instance: 'gate-b-player-262-fabric',
   server: 'monoplayer-gate-b-paper.tail41e568.ts.net:25565',
   account: 'Bafbi',
   rconNamespace: process.env.GATEB_RCON_NAMESPACE || 'monoplayer-gate-b',
   rconDeployment: process.env.GATEB_RCON_DEPLOYMENT || 'paper',
   maxAgeHours: 24,
+  // The dev lane as the display host reaches it: two loopback ports the operator
+  // forwards (docs/driver-lane.md, "Reaching the dev lane"). They are not cluster
+  // addresses on purpose; the client runs on the display host, not in the cluster.
+  direct: '127.0.0.1:25565',
+  proxied: '127.0.0.1:25566',
+  parityReport: '.reports/driver-parity-report.json',
 }
 
 // Module-level tunnel handle so any exit path (success, error, unhandled)
@@ -90,6 +113,90 @@ const DEFAULTS = {
 let tunnel = null
 function cleanupTunnel () {
   if (tunnel) { try { tunnel.kill('SIGKILL') } catch {} ; tunnel = null }
+}
+
+function installSignalHandlers () {
+  process.on('SIGINT', () => { cleanupTunnel(); process.exit(130) })
+  process.on('SIGTERM', () => { cleanupTunnel(); process.exit(143) })
+}
+
+// --tunnel spawns the driver socket forward and cleans it up on exit. Both lanes
+// need it, and unit tests never do: the default is an operator-managed tunnel.
+function startTunnel (opts) {
+  if (!opts.tunnel) return null
+  const localPort = opts.driverPort || Number(process.env.GATEB_DRIVER_PORT || 25599)
+  tunnel = spawn('ssh', ['-N', '-L', `${localPort}:127.0.0.1:25599`, opts.host], { stdio: 'ignore' })
+  tunnel.on('error', error => { console.error(`tunnel spawn failed: ${error.message}`); tunnel = null })
+  return tunnel
+}
+
+function createDriverFromOptions (opts) {
+  return createDriverClient({
+    host: opts.driverHost || process.env.GATEB_DRIVER_HOST || '127.0.0.1',
+    port: opts.driverPort || Number(process.env.GATEB_DRIVER_PORT || 25599),
+    token: process.env.GATEB_DRIVER_TOKEN || '',
+  })
+}
+
+// The Minecraft version the built driver declares. The mod metadata is the same
+// file the jar carries, so this reads the build that will be loaded.
+function driverMinecraftVersion () {
+  try {
+    return JSON.parse(readFileSync(MOD_METADATA, 'utf8'))?.depends?.minecraft ?? null
+  } catch {
+    return null
+  }
+}
+
+// #62's lane: the real client joins the backend directly, then the same client
+// joins the same backend through the proxy, and the report separates the state
+// differences the proxy explains from the ones it does not. One command, two
+// runs, no RCON: the driver state is the evidence on both sides.
+async function runParityLane (opts) {
+  let direct
+  let proxied
+  try {
+    direct = parseParityEndpoint(opts.direct, '--direct')
+    proxied = parseParityEndpoint(opts.proxied, '--proxied')
+  } catch (error) {
+    console.error('driver parity: ' + String(error?.message ?? error))
+    return 2
+  }
+
+  installSignalHandlers()
+  startTunnel(opts)
+
+  const driver = createDriverFromOptions(opts)
+  const relaunch = createSshRelaunch({
+    host: opts.host, instance: opts.instance, server: direct.endpoint, account: opts.account,
+  })
+  const verbose = Boolean(opts.verbose)
+  const log = verbose ? (event, fields = {}) => console.error('[driver-parity] ' + event + ' ' + JSON.stringify(fields)) : () => {}
+
+  const report = await runParity({
+    driver, relaunch, direct, proxied,
+    version: driverMinecraftVersion(),
+    log
+  })
+  console.log(formatParityReport(report))
+  console.log('driver parity: ' + (report.sides.direct.endpoint) + ' direct, ' + report.sides.proxied.endpoint + ' proxied')
+
+  try {
+    await mkdir(path.dirname(path.resolve(root, opts.parityReport)), { recursive: true })
+    const { text, findings } = writeJsonRedacted(report)
+    if (findings.length > 0) {
+      console.error(`warning: ${findings.length} secret-shaped string(s) redacted from the parity report`)
+    }
+    await writeFile(path.resolve(root, opts.parityReport), text)
+    console.log('driver parity: report written to ' + opts.parityReport)
+  } catch (error) {
+    console.error('driver parity: could not write ' + opts.parityReport + ': ' + String(error?.message ?? error))
+    return 2
+  }
+
+  cleanupTunnel()
+  if (report.passed) return 0
+  return report.setupFailed ? 2 : 1
 }
 
 function parseArgs (argv) {
@@ -101,6 +208,7 @@ function parseArgs (argv) {
       case '--force': opts.force = true; break
       case '--lane': opts.lane = argv[++i]; break
       case '--tunnel': opts.tunnel = true; break
+      case '--verbose': opts.verbose = true; break
       case '--verify-g0': opts.verifyG0 = true; break
       case '--max-age-hours': opts.maxAgeHours = Number(argv[++i]); break
       case '--host': opts.host = argv[++i]; break
@@ -108,6 +216,9 @@ function parseArgs (argv) {
       case '--server': opts.server = argv[++i]; break
       case '--account': opts.account = argv[++i]; break
       case '--driver-host': opts.driverHost = argv[++i]; break
+      case '--direct': opts.direct = argv[++i]; break
+      case '--proxied': opts.proxied = argv[++i]; break
+      case '--report': opts.parityReport = argv[++i]; break
       case '--driver-port': opts.driverPort = Number(argv[++i]); break
       case '--rcon-namespace': opts.rconNamespace = argv[++i]; break
       case '--rcon-deployment': opts.rconDeployment = argv[++i]; break
@@ -118,8 +229,8 @@ function parseArgs (argv) {
   if (!Number.isInteger(opts.runs) || opts.runs < 1) {
     throw new Error(`--runs must be a positive integer (got ${opts.runs})`)
   }
-  if (opts.lane !== 'driver' && opts.lane !== 'unmodded') {
-    throw new Error(`--lane must be 'driver' or 'unmodded' (got ${opts.lane})`)
+  if (!['driver', 'unmodded', 'parity'].includes(opts.lane)) {
+    throw new Error(`--lane must be 'driver', 'unmodded', or 'parity' (got ${opts.lane})`)
   }
   if (!(opts.maxAgeHours > 0)) {
     throw new Error(`--max-age-hours must be a positive number (got ${opts.maxAgeHours})`)
@@ -149,7 +260,7 @@ function execCommand (command, args, timeoutMs) {
 // instance (nohup, detached). The caller must have quit the previous client —
 // council correction #1: no driver reconnect op, only quit + relaunch.
 function createSshRelaunch ({ host, instance, server, account }) {
-  return async () => {
+  return async (endpoint = server) => {
     // Minecraft's GLFW still needs the XWayland display even on a Wayland
     // session. Without DISPLAY the client crashes during init and Prism opens
     // its error console, which is exactly the pop-up the gate must not create.
@@ -159,7 +270,7 @@ function createSshRelaunch ({ host, instance, server, account }) {
     const remote =
       `DISPLAY=${display} XDG_RUNTIME_DIR=${runtime} WAYLAND_DISPLAY=${wayland} ` +
       `XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Hyprland ` +
-      `setsid nohup prismlauncher -l ${instance} -s ${server} -a ${account} ` +
+      `setsid nohup prismlauncher -l ${instance} -s ${endpoint} -a ${account} ` +
       `</dev/null >/dev/null 2>&1 &`
     try {
       const { stderr } = await execCommand('ssh', ['-o', 'BatchMode=yes', host, remote], 30000)
@@ -292,26 +403,43 @@ async function main () {
     return
   }
 
-  // Driver lane.
-  const driver = createDriverClient({
-    host: opts.driverHost || process.env.GATEB_DRIVER_HOST || '127.0.0.1',
-    port: opts.driverPort || Number(process.env.GATEB_DRIVER_PORT || 25599),
-    token: process.env.GATEB_DRIVER_TOKEN || '',
+  if (opts.lane === 'parity') {
+    process.exitCode = await runParityLane(opts)
+    return
+  }
+
+  // The live fleet and the live deployment in front of it are refused for the
+  // G0 join too, not only for the parity lanes.
+  try {
+    parseParityEndpoint(opts.server, '--server')
+  } catch (error) {
+    console.error('driver: ' + String(error?.message ?? error))
+    process.exitCode = 2
+    return
+  }
+
+  // The driver jar speaks one Minecraft version and the G0 target serves
+  // another, so the run would spend two client launches to reach an
+  // "Incompatible client" screen. Refuse before the first one.
+  const refusal = versionRefusal({
+    driverVersion: driverMinecraftVersion(), targetVersion: DEFAULT_PINS.minecraftVersion,
   })
+  if (refusal !== null) {
+    console.error('driver: ' + refusal)
+    process.exitCode = 2
+    return
+  }
+
+  // Driver lane.
+  const driver = createDriverFromOptions(opts)
   const rcon = createRcon({ namespace: opts.rconNamespace, deployment: opts.rconDeployment })
   const relaunch = createSshRelaunch({
     host: opts.host, instance: opts.instance, server: opts.server, account: opts.account,
   })
   const screenshotFetch = createScpFetch({ host: opts.host })
 
-  process.on('SIGINT', () => { cleanupTunnel(); process.exit(130) })
-  process.on('SIGTERM', () => { cleanupTunnel(); process.exit(143) })
-
-  if (opts.tunnel) {
-    const localPort = opts.driverPort || Number(process.env.GATEB_DRIVER_PORT || 25599)
-    tunnel = spawn('ssh', ['-N', '-L', `${localPort}:127.0.0.1:25599`, opts.host], { stdio: 'ignore' })
-    tunnel.on('error', error => { console.error(`tunnel spawn failed: ${error.message}`); tunnel = null })
-  }
+  installSignalHandlers()
+  startTunnel(opts)
 
   const reports = []
   for (let runIndex = 1; runIndex <= opts.runs; runIndex++) {

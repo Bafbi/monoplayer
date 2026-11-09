@@ -21,7 +21,7 @@ test('parseLadder reads the doc table in ladder order', () => {
 
   assert.deepEqual(ladder.map(rung => rung.id), ['0', '1', '2', '2a', '2b', '3', '4'])
   assert.deepEqual(ladder[0].tasks, ['lint'])
-  assert.deepEqual(ladder[6].tasks, ['driver:scenario', 'driver:g0'])
+  assert.deepEqual(ladder[6].tasks, ['driver:parity', 'driver:scenario', 'driver:g0'])
   for (const rung of ladder) {
     assert.ok(rung.label.length > 0, `rung ${rung.id} has a label`)
     assert.ok(rung.tasks.length > 0, `rung ${rung.id} names a task`)
@@ -69,10 +69,17 @@ test('failureHint from the client parity rung points at the transfer testbed', (
   assert.match(hint, /Next rung: mise run testbed:run \(rung 2b, /)
 })
 
-test('failureHint names every command of a rung that takes two', () => {
+test('failureHint names every command of a rung that takes three', () => {
   const hint = failureHint('online')
 
-  assert.match(hint, /Next rung: mise run driver:scenario then mise run driver:g0 \(rung 4, real client\)/)
+  assert.match(hint, /Next rung: mise run driver:parity then mise run driver:scenario then mise run driver:g0 \(rung 4, real client\)/)
+})
+
+test('the parity lane sits on the top rung, so its failure names no rung above', () => {
+  const hint = failureHint('driver:parity')
+
+  assert.equal(hint.split('\n')[0], 'mise run driver:parity failed (rung 4, real client).')
+  assert.match(hint, /top of the ladder/)
 })
 
 test('failureHint from the top rung says there is no rung above it', () => {
