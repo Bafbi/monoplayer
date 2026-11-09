@@ -1,7 +1,7 @@
 # The driver lane passed 2 of 2 runs and the unmodded witness
 
 Verdict: **PASS** on 2026-11-06. Two runs were requested, two ran, two passed, with 38 of 38 assertions each. The manual unmodded witness recorded `COMPLETE` the same day.
-Date: 2026-11-06, the runs started at `14:20:59Z` and the verdict was recorded at `15:46:00Z`.
+Date: 2026-11-06, the first run started at `2026-11-06T14:20:59.583Z` and the verdict was recorded at `2026-11-06T15:46:00.000Z`.
 Commands: `node src/driver/run.js --runs 2 --tunnel` ran the two runs. `mise run driver:scenario` runs the same scenario without `--tunnel`. `node src/driver/run.js --lane unmodded` wrote the witness checklist, and `node src/driver/run.js --verify-g0` (`mise run driver:g0`) reads the reports and the witness.
 Fact: each run recorded 38 assertions with a named evidence source, and 8 of its RCON ops per run were assertions checked on the server.
 
