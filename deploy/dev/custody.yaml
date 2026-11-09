@@ -8,6 +8,12 @@
 # This file is separate from monoplayer.yaml so a custody bootstrap can create the
 # volume without also creating a proxy that races it for the claim
 # (scripts/dev-custody.sh up). `kubectl apply -k deploy/dev` creates both.
+#
+# It outlives a teardown. `mise run dev:down` stops the workload and leaves this
+# claim and the account on it, because the account took one human device-code
+# approval and losing it would mean asking for another. The live claim carries
+# the same rule (deploy/manifests/pvc.yaml). `dev:down -- --purge` is the
+# destructive path.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

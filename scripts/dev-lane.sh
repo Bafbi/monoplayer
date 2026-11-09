@@ -3,7 +3,9 @@
 # a branch image on it (#43).
 #
 #   scripts/dev-lane.sh up        apply the dev lane and wait for the backends
-#   scripts/dev-lane.sh down      delete the dev lane
+#   scripts/dev-lane.sh down [--purge]
+#                                 stop the dev lane, keeping the dev account;
+#                                 --purge removes the account too
 #   scripts/dev-lane.sh status    what is running, and what the live lane runs
 #   scripts/dev-lane.sh image TAG the image reference the dev lane should run
 #   scripts/dev-lane.sh set-image TAG
@@ -177,13 +179,26 @@ up() {
   status
 }
 
+# Stop the lane, keep the account. The dev puppet is not disposable: it took one
+# human device-code approval, so its claim outlives the workload, for the same
+# reason the live claim is never pruned (deploy/manifests/pvc.yaml). Pods go by
+# name or label, so the claim, the Secrets, and the namespace stay.
+#
+# --purge removes the namespace too, and with it the dev account.
 down() {
   guard
-  kubectl delete -k "$ROOT/deploy/dev" --ignore-not-found >/dev/null 2>&1 || true
-  # The namespace carries the PVC, and -k does not own a namespace it did not
-  # create in this call, so remove it explicitly.
-  kubectl delete namespace "$DEV_NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
-  say "deleted $DEV_NAMESPACE"
+  local purge=0
+  if [ "${1:-}" = --purge ]; then purge=1; fi
+  kubectl -n "$DEV_NAMESPACE" delete deployment,service,configmap \
+    -l app.kubernetes.io/part-of=monoplayer --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$DEV_NAMESPACE" delete pod \
+    -l app.kubernetes.io/name=monoplayer-dev-custody --ignore-not-found >/dev/null 2>&1 || true
+  if [ "$purge" = 1 ]; then
+    kubectl delete namespace "$DEV_NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+    say "deleted $DEV_NAMESPACE, and with it the dev custody volume and the dev account"
+  else
+    say "stopped $DEV_NAMESPACE; its custody volume and the dev account stay (--purge removes them)"
+  fi
   status
 }
 
@@ -278,7 +293,7 @@ fs.writeFileSync(process.env.REPORT, JSON.stringify({
 
 case "${1:-}" in
   up) up ;;
-  down) down ;;
+  down) shift; down "$@" ;;
   status) status ;;
   set-image) shift; set_image "$@" ;;
   join) join ;;

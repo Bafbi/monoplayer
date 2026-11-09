@@ -141,7 +141,7 @@ description = "Run a command and prove the live account's token files are byte-i
 run = "scripts/dev-custody.sh prove-live"
 
 [tasks."dev:down"]
-description = "Delete the dev validation lane. Never touches the live lane."
+description = "Stop the dev validation lane, keeping the dev account: mise run dev:down -- --purge removes the account too."
 run = "scripts/dev-lane.sh down"
 
 [tasks."dev:status"]

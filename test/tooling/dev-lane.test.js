@@ -180,7 +180,7 @@ test('up creates the RCON Secret before it applies the lane', () => {
 
 test('no dev command changes the live deployment', () => {
   const space = workspace()
-  for (const args of [['up'], ['status'], ['down'], ['join']]) {
+  for (const args of [['up'], ['status'], ['down'], ['down', '--purge'], ['join']]) {
     const { status, output, calls } = run(space, args)
     assert.equal(status, 0, args.join(' ') + ': ' + output)
     for (const verb of ['scale', 'patch', 'rollout restart', 'set image deploy/monoplayer -n monoplayer']) {
@@ -193,18 +193,40 @@ test('status survives a namespace that has no ConfigMap', () => {
   // After `down` the namespace is gone, so the whitelist read fails. Reporting
   // that is not an error: `mise run dev:down` must exit 0 on a clean lane.
   const space = workspace()
-  const { status, output } = run(space, ['down'], { KUBECTL_CONFIGMAP_MISSING: '1' })
+  const { status, output } = run(space, ['down', '--purge'], { KUBECTL_CONFIGMAP_MISSING: '1' })
   assert.equal(status, 0, output)
   assert.match(output, /deleted monoplayer-dev/)
 })
 
-test('down deletes the dev lane and nothing else', () => {
+test('down stops the workload and keeps the dev account', () => {
+  // The dev puppet took a human device-code approval, so its claim outlives the
+  // workload: the same rule the live claim carries (deploy/manifests/pvc.yaml).
   const space = workspace()
   const { status, output, calls } = run(space, ['down'])
   assert.equal(status, 0, output)
   const deletions = calls.filter(line => line.includes('delete'))
-  assert.ok(deletions.length >= 2, 'the lane and its namespace are deleted')
-  assert.equal(deletions.every(line => line.includes('deploy/dev') || line.includes(DEV_NAMESPACE)), true, deletions.join(' / '))
+  assert.ok(deletions.length >= 2, 'the workload and the handle pod are deleted')
+  assert.equal(deletions.every(line => line.includes(DEV_NAMESPACE)), true, deletions.join(' / '))
+  assert.equal(deletions.some(line => line.includes('namespace')), false, 'the namespace stays')
+  assert.equal(deletions.some(line => line.includes('persistentvolumeclaim')), false, 'the claim stays')
+  assert.match(output, /the dev account stay/)
+})
+
+test('down --purge removes the account as well', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, ['down', '--purge'])
+  assert.equal(status, 0, output)
+  assert.ok(calls.some(line => line === 'delete namespace monoplayer-dev --ignore-not-found'), 'the namespace goes')
+  assert.match(output, /and with it the dev custody volume and the dev account/)
+})
+
+test('down never deletes anything outside the dev namespace', () => {
+  const space = workspace()
+  const { status, calls } = run(space, ['down', '--purge'])
+  assert.equal(status, 0)
+  for (const line of calls.filter(entry => entry.includes('delete'))) {
+    assert.match(line, /^\s*-n monoplayer-dev |^delete namespace monoplayer-dev/, line + ' names a namespace it may not delete')
+  }
 })
 
 test('status reports the live replica count without changing it', () => {
