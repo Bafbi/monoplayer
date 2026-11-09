@@ -21,7 +21,7 @@ test('per-leg connection mechanics drop serverbound', () => {
 test('the human chat text is spoken as the puppet in full mode', () => {
   for (const name of ['chat_message', 'chat_command', 'chat_command_signed']) {
     assert.equal(CHAT_SERVERBOUND.has(name), true, name)
-    const d = classifyServerbound(name)
+    const d = classifyServerbound(name, null, { mode: 'full' })
     assert.equal(d.action, 'speak', name)
     assert.equal(d.chat, true, name)
     assert.equal(d.reason, 'human_chat')

@@ -54,12 +54,16 @@ import { pathToFileURL } from 'node:url'
 
 export const DEFAULT_CONFIG = Object.freeze({
   version: '26.1',
-  // 'full' (#19): the attached client's chat and commands are spoken on the
-  // backend leg as the puppet, with the puppet's own profile keys and window,
-  // and the server's signed chat is relayed back to the client.
-  // 'read-only': relay clientbound chat, drop the client's own text.
-  // 'off': drop clientbound chat too.
-  chat: 'full',
+  // 'read-only': relay clientbound chat to the attached client, drop the
+  // client's own text.
+  // 'full' (#19): also speak the client's chat and commands on the backend leg
+  // as the puppet, with the puppet's own profile keys and window, and relay the
+  // server's signed player chat back. Not the default: the signed path needs a
+  // live run on the deployed backend to prove it, because a leg without profile
+  // keys sends an unsigned frame that a secure-profile server rejects by
+  // closing the connection. `chatCapability` in the log answers that question.
+  // 'off': drop clientbound chat as well.
+  chat: 'read-only',
   front: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   backend: Object.freeze({ host: '127.0.0.1', port: 25565 }),
   puppet: Object.freeze({
@@ -275,6 +279,7 @@ export function createMonoplayer ({
   let earlyAttach = null
   let pendingEarlyReplay = null
   let frontPlayReady = false
+  let chatCapabilityLogged = false
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
   // #18: the last human's client information. It survives a detach, like a
@@ -948,11 +953,20 @@ export function createMonoplayer ({
         try {
           backendLeg.chat(spoken.text)
           metrics.chatSent++
+          // Once per session: whether the account can sign is the one fact a
+          // live run needs from here, and the library sends an unsigned frame
+          // rather than throwing when it cannot.
+          if (!chatCapabilityLogged) {
+            chatCapabilityLogged = true
+            const signed = typeof backendLeg.chatCapable === 'function' ? backendLeg.chatCapable() : null
+            log('chatCapability', { signed })
+          }
           log('chatSent', { name, command: spoken.command, chars: spoken.text.length })
           emit('chat_sent', { name, command: spoken.command })
         } catch (error) {
           metrics.serverboundDropped++
           bumpName(metrics.serverboundDroppedByName, serverbound.name)
+          metrics.chatBlocked++
           log('chatSendFailed', { name, error: String(error?.message ?? error).slice(0, 200) })
         }
         return
@@ -1206,7 +1220,7 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_DIALOG_ACTION                            first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
-  MONOPLAYER_CHAT                                     full (default), read-only, or off
+  MONOPLAYER_CHAT                                     read-only (default), full, or off
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity

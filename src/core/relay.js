@@ -87,9 +87,10 @@ export function chatText (name, data = null) {
   return { text, command: name !== 'chat_message' }
 }
 
-// `mode` is the configured chat mode. `full` speaks the human's chat as the
-// puppet; `read-only` and `off` drop it.
-export function classifyServerbound (name, data = null, { mode = 'full' } = {}) {
+// `mode` is the configured chat mode, and it defaults to the mode the config
+// defaults to. `full` speaks the human's chat as the puppet; `read-only` and
+// `off` drop it.
+export function classifyServerbound (name, data = null, { mode = 'read-only' } = {}) {
   if (name === 'custom_payload' && CLIENT_IDENTITY_CHANNELS.has(data?.channel)) {
     return { action: 'drop', chat: false, reason: 'client_identity_channel' }
   }
