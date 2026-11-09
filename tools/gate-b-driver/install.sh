@@ -105,9 +105,9 @@ p.write_text(s)
 PY
 
 echo "installed $instance"
-echo "launch:"
-echo "  XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \\"
-echo "    prismlauncher -l $instance -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi"
+echo "launch, from the workspace:"
+echo "  tools/nath.sh launch $instance \\"
+echo "    -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi"
 echo
 echo "driver: 127.0.0.1:25599"
 echo "screenshots: $instance_dir/minecraft/screenshots/"
