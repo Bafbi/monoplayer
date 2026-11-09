@@ -51,9 +51,10 @@ import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
-import { clientboundPolicy } from '../core/clientbound-policy.js'
+import { clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
+const CHAT_MODES = new Set(['full', 'read-only', 'off'])
 
 // Pure configuration-phase interceptor (unit-testable without sockets):
 // wraps a client write so the library's generated configuration resolves to
@@ -310,9 +311,14 @@ function createFrontLeg ({
   log,
   wireCheck,
   wireMode,
+  chat = 'read-only',
   dumpRaw,
   dumpFramed
 }) {
+  const chatMode = chat
+  if (!CHAT_MODES.has(chatMode)) {
+    throw new TypeError(`chat must be one of ${[...CHAT_MODES].join(', ')}, got ${JSON.stringify(chatMode)}`)
+  }
   if (!WIRE_MODES.has(wireMode)) {
     throw new TypeError(`wireMode must be one of ${[...WIRE_MODES].join(', ')}, got ${JSON.stringify(wireMode)}`)
   }
@@ -630,10 +636,11 @@ function createFrontLeg ({
       if (!attached) return false
       // Last-write check: even if the core router regresses, a frame the
       // clientbound policy blocks never reaches the client. The cache and
-      // router already drop these; this is the independent backstop.
+      // router already drop these; this is the independent backstop. It takes
+      // the chat mode so it refuses what the router refuses (#19).
       if (meta && (meta.state === 'play' || meta.state === 'configuration')) {
-        const policy = clientboundPolicy(meta.state, meta.name)
-        if (policy.decision === 'block') {
+        if (!mayCrossToFront(meta.state, meta.name, { chat: chatMode })) {
+          const policy = clientboundPolicy(meta.state, meta.name)
           metrics.policyRefused++
           log('clientboundRefused', {
             state: meta.state,
@@ -707,6 +714,7 @@ export function createLiveFrontLeg (options = {}) {
     log = () => {},
     wireCheck = null,
     wireMode = 'off',
+    chat = 'read-only',
     dumpRaw = null,
     dumpFramed = null
   } = options
@@ -730,6 +738,7 @@ export function createLiveFrontLeg (options = {}) {
     log,
     wireCheck,
     wireMode,
+    chat,
     dumpRaw,
     dumpFramed
   })
@@ -745,6 +754,7 @@ export function createOfflineFrontLeg (options = {}) {
     log = () => {},
     wireCheck = null,
     wireMode = 'throw',
+    chat = 'read-only',
     dumpRaw = null,
     dumpFramed = null
   } = options

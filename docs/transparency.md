@@ -51,15 +51,17 @@ memory is a later task.
   default stays `read-only` because the signed path has been proven offline
   only. Three consequences once it is on: the human's own signature and session
   key never reach the server; a message the server rejects arrives back as a
-  rejection on GlowSquidye; and the human's client sees the server's signed
-  `player_chat` as a frame from another connection, so its per-sender
-  signature chain reads as broken even though the message displays.
+  rejection on GlowSquidye; and the human's client receives the server's signed
+  `player_chat` from another connection, so its per-sender signature chain is
+  out of order. The expectation is that the message still displays with a broken
+  chain marker; no run has confirmed that yet, and #13 is where it gets
+  confirmed.
 - **A service with no profile keys sends unsigned chat.** The pinned
   minecraft-protocol sends an unsigned frame rather than failing, and a server
   with `enforce-secure-profile` answers that by closing the connection. The
-  proxy logs `chatCapability` once per session with `signed: true` or
-  `signed: false` from the backend leg, so a live run answers the question
-  before the default is flipped.
+  backend leg logs `chatCapability` once per backend connection with
+  `signed: true` or `signed: false`, so a live run answers the question before
+  the default is flipped.
 - **Dialogs and configuration gates are still answered by the puppet.** The
   human does not own a dialog yet
   ([#20](https://github.com/Bafbi/monoplayer/issues/20),

@@ -185,7 +185,7 @@ The `config.chat` setting. `read-only` (the default) relays the server's chat an
 _Avoid_: mute, disable chat
 
 **Read-only chat**:
-The `read-only` chat mode: the attaching player sees the server's chat and cannot speak, because clientbound chat is relayed and serverbound chat is dropped.
+The `read-only` chat mode: the attaching player sees the server's chat and cannot speak. `system_chat` and `profileless_chat` are relayed; the player's own chat text and the server's signed `player_chat` stay off.
 _Avoid_: muted chat, one-way chat
 
 **Wire check**:

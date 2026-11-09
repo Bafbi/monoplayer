@@ -268,7 +268,7 @@ export function createBot ({
     sendCommand (command) {
       client._signedChat(command.startsWith('/') ? command : `/${command}`)
     },
-    sendChatAck (count = 0) {
+    sendMessageAck (count = 0) {
       client.write('message_acknowledgement', { count })
     },
     close

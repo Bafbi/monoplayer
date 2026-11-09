@@ -286,6 +286,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     getSnapshotConfig: () => core.cache.snapshot().config,
     wireCheck: payload => wire.check(payload),
     wireMode: 'warn',
+    chat: cfg.chat,
     log,
     dumpRaw,
     dumpFramed
