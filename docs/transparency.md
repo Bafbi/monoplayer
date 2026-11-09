@@ -119,8 +119,8 @@ server sees a normal accepting client. The default still detaches the human with
 a moving notice, and the human rejoins the proxy once the puppet is warm on the
 target.
 
-The kept connection is built and **off** (`transfer.keepConnection`). With it
-on, the human keeps the socket: once the target sends its first configuration
+The kept connection is on (`transfer.keepConnection`, default `true`). The
+human keeps the socket: once the target sends its first configuration
 frame, the proxy writes `start_configuration` on the human's own connection,
 relays the target's configuration frames and its `finish_configuration`, and
 then the target's play login and join state. The client shows the
