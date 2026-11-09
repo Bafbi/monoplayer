@@ -25,7 +25,7 @@ tools/nath.sh env
 tools/nath.sh launch gate-b-player-fabric \
   -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi
 tools/nath.sh kill gate-b-player-fabric
-tools/nath.sh shot testdata/gate-b-witness-2026-11-06.png
+tools/nath.sh shot testdata/witness-2026-11-06.png
 ```
 
 - `env` prints `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and the

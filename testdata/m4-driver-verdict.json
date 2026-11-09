@@ -28,7 +28,7 @@
       "rejected": 0,
       "byState": { "configuration": 32, "play": 1920 }
     },
-    "screenshot": "testdata/gate-b-m4-driver-join.png"
+    "screenshot": "testdata/m4-driver-join.png"
   },
   "limits": [
     "The attaching client profile is Bafbi; the replayed play stream is the GlowSquidye puppet session. B4 identity separation is later.",

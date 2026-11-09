@@ -169,7 +169,7 @@ export function createWhitelistStore ({
     return { ok: true, record: dropped }
   }
 
-  // Store-side adapter for the attach gate: has(uuid) only, UUID-keyed.
+  // Store-side adapter for the attach whitelist: has(uuid) only, UUID-keyed.
   const store = {
     file,
     role,

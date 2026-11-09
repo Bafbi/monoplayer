@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive the Gate B display host from the workspace.
+# Drive the driver display host from the workspace.
 #
 #   tools/nath.sh env                        session environment, as KEY=value
 #   tools/nath.sh launch <instance> [args...] start a Prism client on workspace 9, silent

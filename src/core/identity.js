@@ -37,7 +37,7 @@ export function createFrontIdentity ({
 } = {}) {
   const whitelist = new Set(attachWhitelist.map(u => u.toLowerCase()))
 
-  // Gate 1 — Login Start review. Synchronous, deny-before-anything-else.
+  // Whitelist review — Login Start. Synchronous, deny-before-anything-else.
   // deny phase is 'login_start': this must fire before Login Success by
   // construction of the front leg's handshake order (Login Start always
   // precedes Login Success).
@@ -52,7 +52,7 @@ export function createFrontIdentity ({
     return { allowed: true, reason: ALLOW_REASONS.WHITELISTED, phase: 'login_start', uuid, name: who }
   }
 
-  // Gate 2 — session verification. `serverId` is the digest the online-mode
+  // Session verification. `serverId` is the digest the online-mode
   // handshake produces; the verifier's contract is:
   //   async ({ uuid, name, serverId }) -> { id, name } on success, null/throws on miss
   async function verifySession ({ uuid, name, serverId } = {}) {

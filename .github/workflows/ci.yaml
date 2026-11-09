@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # java 25.0.2, gradle 9.8.2 and buildkit serve the Gate B driver and the image.
+      # java 25.0.2, gradle 9.8.2 and buildkit serve the client driver and the image.
       # `mise run check` touches none of them, so install node and pnpm only.
       - uses: jdx/mise-action@v2
         with:

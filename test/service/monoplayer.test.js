@@ -12,7 +12,7 @@ const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const OTHER = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
 const BLANK = name => Buffer.from(`backend:${name}`)
 
-// fakeClock mirrors test/monoplayer-session.test.js; reused for F4 shape.
+// fakeClock mirrors test/core/session.test.js; reused for F4 shape.
 function fakeClock () {
   let now = 0
   let timers = []

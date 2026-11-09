@@ -13,6 +13,7 @@
 
 - `GLOSSARY.md` governs names: a concept lands there before it earns a home.
 - The word "gate" leaves file names, directory names, and exported symbols. The identity check is now the attach check, with a whitelist review and a session verification.
+- Names that live outside the repository stay put until they move in their own step: cluster objects, hostnames, account instances, environment variables, and the window title. `deploy/driver/README.md` lists them.
 - Recorded evidence keeps its content and its dates. Only its name moves.
 
 ## Where the names go
@@ -23,15 +24,15 @@ The exact directory names are the rename's call. The constraint is that each one
 |---|---|
 | Core | State cache, clientbound policy, attach stream synthesis, session state, identity, relay decisions |
 | Legs | Front leg and backend leg adapters, live and offline, plus the fakes |
-| Custody | Accounts, token caches, writer lock, attach whitelist, session verification |
-| Service | Config, composition root, CLI, live start |
+| Custody | Accounts, token caches, the writer lock, the attach whitelist, session verification, and the custody CLI |
+| Service | Config, composition root, live start, readiness |
 | Ladder | Rungs, protocol bots, loopback, online |
 | Testbed | Cluster switch, transfer testbed, registry compare |
 | Driver | Client driver lane: scenario, RCON, checks, plan |
 | Spike | The frozen protocol spike and its scenario |
 | Observability | Journal, telemetry, redaction |
 
-Validation work does not get a top-level home of its own. It lives where it runs: a rung under the ladder, a lane under the driver, a scenario under the testbed.
+Validation work does not get a top-level home of its own. It lives where it runs: a rung under the ladder, a lane under the driver, a scenario under the testbed. The one exception is the frozen protocol spike: it is product code kept as a regression check, and it grows no features.
 
 ## The tree as it stands
 
@@ -46,6 +47,6 @@ Validation work does not get a top-level home of its own. It lives where it runs
 | `src/driver/` | Driver lane: one-run scenario, plan, RCON, Toxiproxy, backend matrix, logins, evidence checks, the NDJSON client driver, the run controller |
 | `src/spike/` | The frozen protocol spike: proxy, scenario, fake client, the runner |
 | `src/testbed/` | Cluster switch, transfer testbed, registry compare |
-| `test/` | One directory per `src/` directory, plus `tooling/` for the gate's own checks and `spike/` for the socket test |
+| `test/` | One directory per tested `src/` directory, plus `tooling/` for the gate's own checks and `spike/` for the socket test |
 | `tools/driver/` | The Fabric client driver |
 | `deploy/driver/` | The driver-lane cluster environment |

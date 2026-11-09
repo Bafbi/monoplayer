@@ -19,7 +19,7 @@ Files:
 | `src/spike/fake-client.js` | Attaching protocol client: records clientbound frames and parsed data, sends position/dig/place/chat. |
 | `src/spike/scenario.js` | The scenario + assertions, shared by the CLI and the test. |
 | `src/spike/run.js` | CLI runner: prints PASS/FAIL, writes `testdata/spike-report.json`, exits non-zero on failure. |
-| `test/spikes/gate-a.test.js` | The same scenario under `node:test`. |
+| `test/spike/scenario.test.js` | The same scenario under `node:test`. |
 
 ## What this proves
 

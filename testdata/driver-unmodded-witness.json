@@ -9,7 +9,7 @@
   "status": "COMPLETE — operator-confirmed manual run; driver lane 2/2 recorded separately",
   "input": "manual (operator)",
   "operatorConfirmation": "I confirm every step",
-  "screenshot": "testdata/gate-b-witness-2026-11-06.png",
+  "screenshot": "testdata/witness-2026-11-06.png",
   "environment": {
     "host": "nath",
     "client": "Prism 11.0.3, Minecraft 26.1.2, unmodded gate-b-player instance",
@@ -30,7 +30,7 @@
     {
       "name": "render: chunks visible (not stuck on Loading terrain)",
       "state": "passed",
-      "evidence": "Operator confirmed chunks rendered; screenshot testdata/gate-b-witness-2026-11-06.png shows the arena, terrain, sky, hotbar, and crosshair."
+      "evidence": "Operator confirmed chunks rendered; screenshot testdata/witness-2026-11-06.png shows the arena, terrain, sky, hotbar, and crosshair."
     },
     {
       "name": "move: walk a few blocks; server-side position changed (RCON data get entity Pos)",
@@ -50,7 +50,7 @@
     {
       "name": "screenshot: at least one artifact preserved alongside this checklist",
       "state": "passed",
-      "evidence": "testdata/gate-b-witness-2026-11-06.png (operator-provided, 1916x1050 PNG)."
+      "evidence": "testdata/witness-2026-11-06.png (operator-provided, 1916x1050 PNG)."
     },
     {
       "name": "disconnect: leave the world; RCON list no longer shows the player",
