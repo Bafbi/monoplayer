@@ -79,6 +79,12 @@ WAYLAND_DISPLAY=$(jq -r '.[0].wl_socket' <<<"$instance_json")
 XDG_RUNTIME_DIR=/run/user/$(id -u)
 export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_RUNTIME_DIR
 
+# A process belongs to an instance when its command line carries the instance
+# library path. Two callers ask, so the rule lives here.
+pid_is_instance() {
+  tr "\0" " " < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "instances/$2/natives"
+}
+
 REMOTE
 cmd_env() {
   remote '
@@ -153,7 +159,7 @@ while [ $SECONDS -lt $deadline ]; do
   candidates=$(clients) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
   while read -r address pid workspace; do
     [ -n "$address" ] || continue
-    if tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "instances/$instance/natives"; then
+    if pid_is_instance "$pid" "$instance"; then
       window=$address
       opened_on=$workspace
       break
@@ -226,15 +232,15 @@ driver_payload() {
 
 # Whether the client holding the driver port is this instance. The quit op
 # stops whichever client answers, so a kill for another instance has to check
-# first: ss names the listening process, and the instance library path in that
-# process names its client. No listener, or no ss, means no graceful quit.
-driver_holds_instance() {
+# first: ss names the listening process, and pid_is_instance names its client.
+# No listener, or no ss, means no graceful quit.
+driver_serves_instance() {
   remote '
 instance=$1
 port=$2
 pids=$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o "pid=[0-9]*" | cut -d= -f2 || true)
 for pid in $pids; do
-  if tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "instances/$instance/natives"; then
+  if pid_is_instance "$pid" "$instance"; then
     echo yes
     exit 0
   fi
@@ -250,7 +256,7 @@ cmd_kill() {
   # Ask nicely first: the quit op closes the world and the driver socket. Only
   # the instance that holds the port is asked, so a kill for another instance
   # cannot quit this one; that instance goes straight to the anchor below.
-  if [ "$(driver_holds_instance "$instance" "$driver_port")" = yes ]; then
+  if [ "$(driver_serves_instance "$instance" "$driver_port")" = yes ]; then
     if reply=$(printf '%s\n' "$(driver_payload quit)" | timeout 30 "${ssh_cmd[@]}" -W "127.0.0.1:${driver_port}" 2>/dev/null) && [ -n "$reply" ]; then
       case $reply in
         *'"ok":true'*) quit=yes ;;
