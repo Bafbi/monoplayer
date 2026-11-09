@@ -16,9 +16,9 @@ display host. This is the driver leg of G0, not the unmodded witness.
 ## Driving the host from the workspace
 
 `tools/nath.sh` wraps the host commands this document used to spell out by
-hand. `env`, `launch`, and `kill` derive the session on the host with
+hand. `env`, `launch`, `kill`, and the compositor capture derive the session on
 `hyprctl instances -j` and store nothing, so no caller pastes a session triple.
-`shot` and the driver `quit` need no session at all.
+The driver `quit` needs no session at all.
 
 ```bash
 tools/nath.sh env
@@ -43,10 +43,21 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   with exit 1 reports a launch that switched the workspace or took focus, and
   stderr names which. Anything after the instance name goes to
   `prismlauncher`.
-- `shot` asks the driver for its render target and copies the PNG back with
-  `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
-  This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
-  which already rejects screen-reading automation on the official client.
+- `shot <path> [instance]` asks the driver of `instance` for its render target
+  and copies the PNG back with `scp`. The driver port has to be held by that
+  instance, so another client's frame cannot come back as this one's.
+- Without that driver, `shot` captures the window with `grim`. The client sits
+  on workspace 9, which the compositor does not draw, so the view moves there for
+  the capture and comes back to the window that had focus. The window itself
+  never moves, so the caller's tiling is untouched. `hyprctl notify` warns
+  `NATH_SHOT_NOTICE` seconds ahead (default 3, `0` for no wait).
+- `shot` prints `SOURCE=driver` or `SOURCE=compositor` beside `PATH=`,
+  `REMOTE_PATH=`, and `BYTES=`. Both sources write under the instance's
+  `minecraft/screenshots/`, so `REMOTE_PATH=` names a file that is still there.
+- The driver path follows
+  [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md), which rejects
+  screen-reading automation on the official client. `grim` is not that: it
+  captures pixels of the window the caller names, as evidence.
 - `kill` asks the driver for `quit` only when `ss` shows the driver port held
   by the requested instance. The quit op stops whichever client answers, so
   another instance goes straight to the fallback. The fallback is the client

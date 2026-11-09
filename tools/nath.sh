@@ -4,13 +4,14 @@
 #   tools/nath.sh env                        session environment, as KEY=value
 #   tools/nath.sh launch <instance> [args...] start a Prism client on workspace 9, silent
 #   tools/nath.sh kill [instance]            stop the client of <instance>
-#   tools/nath.sh shot <path>                capture the client render to <path>
+#   tools/nath.sh shot <path> [instance]     capture the client render to <path>; the view moves
+#                                            to it when the driver cannot capture
 #
-# env, launch, and kill read the session on the host, deriving the
-# Hyprland signature from "hyprctl instances -j" and storing nothing. No caller
-# supplies DISPLAY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, or
-# HYPRLAND_INSTANCE_SIGNATURE: launch inherits them from the compositor, and
-# shot and the driver quit need no session at all.
+# env, launch, kill, and the compositor capture read the session on the host,
+# deriving the Hyprland signature from "hyprctl instances -j" and storing
+# nothing. No caller supplies DISPLAY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, or
+# HYPRLAND_INSTANCE_SIGNATURE: launch inherits them from the compositor, and the
+# driver quit needs no session at all.
 #
 # Environment:
 #   NATH_HOST            SSH target       (default bafbi@nath.tail41e568.ts.net)
@@ -19,6 +20,7 @@
 #   NATH_SSH             SSH command      (default ssh -o BatchMode=yes -o ConnectTimeout=10 HOST)
 #   NATH_SCP             SCP command      (default scp -q)
 #   NATH_LAUNCH_TIMEOUT  window budget    (default 90 seconds)
+#   NATH_SHOT_NOTICE     capture warning  (default 3 seconds; 0 moves the view at once)
 #   GATEB_DRIVER_TOKEN   driver token, when the mod runs with one
 #
 # Exit codes: 0 the command did what it says, 1 the host or the driver refused,
@@ -34,7 +36,7 @@ read -r -a ssh_cmd <<<"${NATH_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 ${h
 read -r -a scp_cmd <<<"${NATH_SCP:-scp -q}"
 
 die() { printf 'nath: %s\n' "$1" >&2; exit "${2:-1}"; }
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '/^# Drive the driver display host/,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 # Values that reach a remote shell are whitelisted, never escaped.
 require_instance() {
@@ -83,6 +85,13 @@ export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY XDG_RUNTIME_DIR
 # library path. Two callers ask, so the rule lives here.
 pid_is_instance() {
   tr "\0" " " < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "instances/$2/natives"
+}
+
+# The compositor's mapped windows, one line each: address, pid, workspace id,
+# workspace name, and the geometry a compositor capture needs. launch and shot
+# both read this list.
+windows() {
+  hyprctl clients -j | jq -r '.[] | select(.mapped != false) | "\(.address) \(.pid) \(.workspace.id) \(.workspace.name) \(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"'
 }
 
 REMOTE
@@ -141,27 +150,26 @@ if ! eval_reply=$(hyprctl eval "$lua" 2>&1); then
   exit 1
 fi
 
-# Every mapped window, on every workspace. The instance owns a window when the
-# window process carries the instance library path, so another instance cannot
-# stand in and no class name has to match.
-clients() { hyprctl clients -j | jq -r ".[] | select(.mapped != false) | \"\(.address) \(.pid) \(.workspace.name // (.workspace.id | tostring))\""; }
+# The instance owns a window when its process carries the instance library path,
+# so another instance cannot stand in and no class name has to match. The list
+# covers every workspace: a client that lands off workspace 9 is still found.
 workspace_of() {
-  local address=$1 address_now pid_now workspace_now
-  while read -r address_now pid_now workspace_now; do
-    if [ "$address_now" = "$address" ]; then printf "%s\n" "$workspace_now"; return 0; fi
-  done <<<"$(clients || true)"
+  local address=$1 address_now pid_now ws_id_now ws_name_now rest
+  while read -r address_now pid_now ws_id_now ws_name_now rest; do
+    if [ "$address_now" = "$address" ]; then printf "%s\n" "$ws_name_now"; return 0; fi
+  done <<<"$(windows || true)"
   return 1
 }
 
 window= opened_on=
 deadline=$((SECONDS + ${NATH_LAUNCH_TIMEOUT:-90}))
 while [ $SECONDS -lt $deadline ]; do
-  candidates=$(clients) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
-  while read -r address pid workspace; do
+  candidates=$(windows) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
+  while read -r address pid ws_id ws_name rest; do
     [ -n "$address" ] || continue
     if pid_is_instance "$pid" "$instance"; then
       window=$address
-      opened_on=$workspace
+      opened_on=$ws_name
       break
     fi
   done <<<"$candidates"
@@ -299,17 +307,95 @@ printf "%s\n" "$pids"
     fi
   fi
 }
-cmd_shot() {
-  local target=${1:-} reply path magic
-  [ -n "$target" ] || die "shot needs a destination path" 2
+# The compositor captures the client window, which needs the window on the
+# visible workspace. The view moves there for the capture and comes back, so the
+# caller's layout keeps its windows: moving the client here would re-tile it.
+compositor_capture() {
+  remote '
+instance=$1
+notice=$2
+active=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
+window= ws_id= geometry=
+while read -r address pid id name x y w h; do
+  if pid_is_instance "$pid" "$instance"; then
+    window=$address
+    ws_id=$id
+    geometry="$x,$y ${w}x${h}"
+    break
+  fi
+done <<<"$(windows || true)"
+if [ -z "$window" ]; then
+  echo "nath: $instance has no mapped window, so there is nothing to capture" >&2
+  exit 1
+fi
 
-  reply=$(driver_reply "$(driver_payload screenshot)")
-  case $reply in
-    *'"ok":true'*) ;;
-    *) die "the driver refused the screenshot: $(sed -n 's/.*"error":"\([^"]*\)".*/\1/p' <<<"$reply")" ;;
+focused_before=$(hyprctl activewindow -j | jq -r ".address // \"\"") || focused_before=
+view_moved=no
+restore() {
+  if [ "$view_moved" = yes ]; then
+    if [ -n "$focused_before" ] && hyprctl eval "hl.dispatch(hl.dsp.focus({ window = \"address:$focused_before\" }))" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "nath: the view is still on workspace $ws_id; focus a window to leave it" >&2
+  fi
+}
+trap restore EXIT
+
+if [ "$ws_id" != "$active" ]; then
+  if [ "$notice" -gt 0 ]; then
+    hyprctl notify -1 "$((notice * 1000 + 2000))" "rgb(3b82f6)" "nath.sh: capturing $instance, the view moves to its workspace in ${notice}s" >/dev/null 2>&1 || true
+    sleep "$notice"
+  else
+    hyprctl notify -1 2000 "rgb(3b82f6)" "nath.sh: capturing $instance, the view moves to its workspace now" >/dev/null 2>&1 || true
+  fi
+  if ! hyprctl eval "hl.dispatch(hl.dsp.focus({ window = \"address:$window\" }))" >/dev/null; then
+    echo "nath: the compositor refused to focus $window; it is on workspace $ws_id" >&2
+    exit 1
+  fi
+  view_moved=yes
+  focused_now=$(hyprctl activeworkspace -j | jq -r ".id") || focused_now=
+  if [ "$focused_now" != "$ws_id" ]; then
+    echo "nath: the view did not move to workspace $ws_id, so the capture would show the wrong screen" >&2
+    exit 1
+  fi
+fi
+
+# A file beside the driver screenshots keeps the same contract for both sources.
+path="$HOME/.local/share/PrismLauncher/instances/$instance/minecraft/screenshots/nath-$(date +%s%3N).png"
+mkdir -p "$(dirname "$path")"
+if ! reply=$(grim -g "$geometry" -t png "$path" 2>&1); then
+  echo "nath: grim refused the capture of $window: ${reply:-no output}" >&2
+  exit 1
+fi
+[ -s "$path" ] || { echo "nath: grim wrote no image for $window" >&2; exit 1; }
+printf "%s\n" "$path"
+' "$1" "$2"
+}
+
+cmd_shot() {
+  local target=${1:-} instance=${2:-$default_instance} notice=${NATH_SHOT_NOTICE:-3} origin path magic reply
+  [ -n "$target" ] || die "shot needs a destination path" 2
+  require_instance "$instance"
+  case $notice in
+    ''|*[!0-9]*) die "NATH_SHOT_NOTICE must be a whole number of seconds: $notice" 2 ;;
   esac
-  path=$(sed -n 's/.*"path":"\([^"]*\)".*/\1/p' <<<"$reply")
-  [ -n "$path" ] || die "the driver answered without a screenshot path: $reply"
+
+  # The driver captures its own client, and another instance's client answers on
+  # the same port, so the frame means something only when the port owner is this
+  # instance. Without that driver, the compositor captures the window instead.
+  if [ "$(driver_serves_instance "$instance" "$driver_port")" = yes ]; then
+    reply=$(driver_reply "$(driver_payload screenshot)")
+    case $reply in
+      *'"ok":true'*) ;;
+      *) die "the driver refused the screenshot: $(sed -n 's/.*"error":"\([^"]*\)".*/\1/p' <<<"$reply")" ;;
+    esac
+    path=$(sed -n 's/.*"path":"\([^"]*\)".*/\1/p' <<<"$reply")
+    [ -n "$path" ] || die "the driver answered without a screenshot path: $reply"
+    origin=driver
+  else
+    path=$(compositor_capture "$instance" "$notice")
+    origin=compositor
+  fi
 
   mkdir -p "$(dirname "$target")"
   # Copy beside the target and move only after the PNG check, so a failed
@@ -328,6 +414,7 @@ cmd_shot() {
   printf 'PATH=%s\n' "$target"
   printf 'REMOTE_PATH=%s\n' "$path"
   printf 'BYTES=%s\n' "$(wc -c <"$target" | tr -d ' ')"
+  printf 'SOURCE=%s\n' "$origin"
 }
 
 case ${1:-} in
