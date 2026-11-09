@@ -555,8 +555,10 @@ export function createMonoplayer ({
     }
 
     if (!canReceiveControl(state)) {
-      metrics.controlDialogsHeld++
-      log('controlDialogHeld', { state, name, attached: isAttached() })
+      // Nothing to relay to. A shown dialog waits for a client that can answer
+      // it; a withdrawal has nothing to withdraw on a client that is not there.
+      if (name !== 'clear_dialog') metrics.controlDialogsHeld++
+      log('controlDialogNotRelayed', { state, name, attached: isAttached() })
       return { relayed: false }
     }
     frontLeg.writeRaw(buffer, { state, name })
@@ -967,6 +969,13 @@ export function createMonoplayer ({
           })
           return
         }
+        // #16: the backend is in its configuration phase, whatever this frame
+        // turns out to be. Record it first, so a client may attach now and
+        // follow this stream live — a gate can be the first frame of the phase.
+        if (!backendConfiguring) {
+          backendConfiguring = true
+          log('backendConfiguring', { state: session.state })
+        }
         if (policy.decision === DECISION.CONTROL) {
           // #16: a configuration gate is the human's to answer. The holder keeps
           // it while no client follows this stream.
@@ -976,12 +985,6 @@ export function createMonoplayer ({
         if (policy.decision === DECISION.BLOCK) {
           blockClientbound('configuration', name, policy, data)
           return
-        }
-        // #16: the backend is in its configuration phase. Record that, so a
-        // client may attach now and follow this stream live.
-        if (!backendConfiguring) {
-          backendConfiguring = true
-          log('backendConfiguring', { state: session.state })
         }
         if (!policy.cache) return
         const pushed = cache.push('configuration', name, buffer, data)
