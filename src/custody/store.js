@@ -1,5 +1,5 @@
 // Attach whitelist (Monoplayer front leg, player only) and the backend
-// whitelist adapter built on the existing Gate B RCON adapter (puppet only).
+// whitelist adapter built on the existing driver RCON adapter (puppet only).
 //
 // File shape (research 03 §4, not a secret, but kept out of git because it
 // contains account identifiers):
@@ -9,9 +9,8 @@
 //   - normalized lowercase hyphenated UUID keys, never names,
 //   - name→UUID resolution at add time through the injectable lookup,
 //   - atomic writes (via ./cache.js atomicWriteFile, 0600),
-//   - puppet UUID must never appear in the attach whitelist during Gate B
-//     (guarded with a labelled warning; the one-account fallback is not a
-//     Gate B pass).
+//   - puppet UUID must never appear in the attach whitelist (guarded with a
+//     labelled warning; the single-account fallback is not a pass).
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -150,7 +149,7 @@ export function createWhitelistStore ({
     if (role === 'attach') {
       for (const other of knownOtherRoleUuids()) {
         if (sameUuid(other, uuid)) {
-          warnings.push('this uuid is also on the backend whitelist; Gate B requires separate whitelists')
+          warnings.push('this uuid is also on the backend whitelist; the two whitelists must stay separate')
         }
       }
     }
@@ -184,12 +183,12 @@ export function createWhitelistStore ({
   return store
 }
 
-// Backend whitelist driven through the existing gate-b RCON adapter
-// (`src/gate-b/rcon.js`): the server resolves names itself and writes its own
+// Backend whitelist driven through the existing driver RCON adapter
+// (`src/driver/rcon.js`): the server resolves names itself and writes its own
 // whitelist.json, which keeps us out of the server's file custody entirely.
 export function createBackendWhitelist ({ rcon }) {
   if (!rcon || typeof rcon.run !== 'function') {
-    throw new Error('createBackendWhitelist needs the gate-b rcon adapter')
+    throw new Error('createBackendWhitelist needs the driver rcon adapter')
   }
   return {
     role: 'backend',

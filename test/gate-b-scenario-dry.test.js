@@ -1,12 +1,12 @@
-// Gate B scenario dry-run: exercise runDriverLane fully in-memory with fake
+// Driver-lane scenario dry-run: exercise runDriverLane fully in-memory with fake
 // adapter implementations (no network, no child processes, no fs beyond
 // nothing). Proves the orchestration, the setup/assertion/probe
 // classification, paired client+server evidence, and that a negative RCON
 // error string can never count as a pass.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runDriverLane } from '../src/gate-b/scenario.js'
-import { DriverError } from '../src/gate-b/driver.js'
+import { runDriverLane } from '../src/driver/scenario.js'
+import { DriverError } from '../src/driver/client-driver.js'
 
 function createFakeRcon ({ state, brokenBlockCommands = false }) {
   const key = block => `${block.x},${block.y},${block.z}`
@@ -124,7 +124,7 @@ function createFakeDriver ({ state }) {
         return { ok: true, data: { baseX: params.x, baseY: params.y, baseZ: params.z, baseSource: 'explicit', placed: true, held: state.held } }
       }
       case 'screenshot':
-        return { ok: true, data: { path: '/fake/host/screenshots/gate-b-1.png' } }
+        return { ok: true, data: { path: '/fake/host/screenshots/driver-1.png' } }
       case 'disconnect':
         state.disconnected = true
         state.players = state.players.filter(name => name !== 'Bafbi')

@@ -8,15 +8,15 @@ the rig for row **M5** (faults). Monoplayer itself is out of scope here.
 
 Scope split, so nothing is doubled by another workstream:
 
-- This slice ships manifests (`deploy/gate-b/velocity.yaml`,
+- This slice ships manifests (`deploy/driver/velocity.yaml`,
   `paper-m4.yaml`, `toxiproxy.yaml`), the pure adapters
-  (`src/gate-b/backends.js`, `toxiproxy.js`, `logins.js`), their unit tests,
+  (`src/driver/backends.js`, `toxiproxy.js`, `logins.js`), their unit tests,
   and this runbook. It **never applies** anything to the cluster and **never
   commits a secret** — the apply steps below are operator steps.
 - **Still owned elsewhere:** the Monoplayer deployment itself; the M1
   (Vanilla) and M3 (Fabric) backend manifests; the B-lane runner that turns
-  `src/gate-b/backends.js` + `logins.js` into `backendLogins=1` verdicts
-  (docs/gate-b-plan.html, criteria B1–B6).
+  `src/driver/backends.js` + `logins.js` into `backendLogins=1` verdicts
+  (docs/driver-lane-plan.html, criteria B1–B6).
 
 ## Pins
 
@@ -71,15 +71,15 @@ evidence that lives in the run transcript.
 Validate offline first (no cluster writes):
 
 ```bash
-kubectl kustomize deploy/gate-b > /tmp/gate-b.yaml
-kubectl apply -k deploy/gate-b --dry-run=client
-kubectl apply -k deploy/gate-b --dry-run=client --validate=false   # schema-free pass
+kubectl kustomize deploy/driver > /tmp/driver.yaml
+kubectl apply -k deploy/driver --dry-run=client
+kubectl apply -k deploy/driver --dry-run=client --validate=false   # schema-free pass
 ```
 
 Operator applies and waits:
 
 ```bash
-kubectl apply -k deploy/gate-b
+kubectl apply -k deploy/driver
 kubectl -n monoplayer-gate-b rollout status deploy/paper-m4 --timeout=10m
 kubectl -n monoplayer-gate-b rollout status deploy/velocity  --timeout=10m
 kubectl -n monoplayer-gate-b rollout status deploy/toxiproxy --timeout=5m
@@ -145,7 +145,7 @@ account (Bafbi) must stay **off** this whitelist.
 Vanilla 26.1.2 direct row (parity backend). Its manifests and its
 `vanilla:25565` Service belong to the M1 workstream; this namespace and the
 whitelist/world pins (flat, seed 775, RD/SD 4, offline for the
-Monoplayer lane) are already the contract in `src/gate-b/backends.js`
+Monoplayer lane) are already the contract in `src/driver/backends.js`
 (`vanilla`, status `planned`). After it deploys, enable the toxiproxy route
 (Stage 4) and run the same SLP + login smoke against `vanilla:25565` via the
 listener `puppet-vanilla` on `toxiproxy:25571`.
@@ -186,11 +186,11 @@ fabric, and paper-m4 listeners. After a reset, re-disable the listeners that
 are not part of the current row (the B-lane runner should call
 `setProxyEnabled`/`assertProxyEnabled`) before continuing.
 
-The B-lane runner uses `src/gate-b/toxiproxy.js` for the same three verbs plus
+The B-lane runner uses `src/driver/toxiproxy.js` for the same three verbs plus
 toxic add/remove with injected fetch; runbook curls are the human fallback.
 
-Fault **shapes** for M5 live in `src/gate-b/toxiproxy.js`
-(`GATE_B_FAULT_SHAPES`), not as pre-applied toxics:
+Fault **shapes** for M5 live in `src/driver/toxiproxy.js`
+(`FAULT_SHAPES`), not as pre-applied toxics:
 
 - **F2 attach latency** — `latency` toxic, `stream=both`, latency 100 / jitter 30 ms.
 - **F3 five-second freeze** — `timeout` toxic (`timeout=0`), held 5 s, then removed.
@@ -215,7 +215,7 @@ runbook only guarantees the instruments are live and shape-correct.
 ## Unit tests (no cluster, no network)
 
 ```bash
-node --check src/gate-b/backends.js src/gate-b/toxiproxy.js src/gate-b/logins.js
+node --check src/driver/backends.js src/driver/toxiproxy.js src/driver/logins.js
 node --test test/gate-b-m4-backends.test.js \
            test/gate-b-m4-toxiproxy.test.js \
            test/gate-b-m4-logins.test.js   # 27 tests, pure
@@ -230,7 +230,7 @@ node --test test/gate-b-m4-backends.test.js \
   meaningful with Monoplayer; before that, Velocity proxies every join as a
   fresh backend login, so multiple logins across separate manual joins are
   normal in M4 bring-up. The B1 runner (`backendLogins` counter, fed by
-  `src/gate-b/logins.js` over `kubectl logs`) enforces the real one.
+  `src/driver/logins.js` over `kubectl logs`) enforces the real one.
 - The **attach whitelist** (player-only, before Login Success) is a
   Monoplayer lane feature; the backend whitelist here is puppet-only.
 - Velocity stays **behind** Monoplayer (pun intended): once Monoplayer is in,
@@ -254,8 +254,8 @@ GlowSquidye joined the game
 GlowSquidye logged in with entity id 23 at 0.5, -60.0, -2.5
 ```
 
-Evidence: [`testdata/gate-b-m4-verdict.json`](../testdata/gate-b-m4-verdict.json)
-and [`testdata/gate-b-m4-puppet-smoke.log`](../testdata/gate-b-m4-puppet-smoke.log).
+Evidence: [`testdata/m4-verdict.json`](../testdata/m4-verdict.json)
+and [`testdata/m4-puppet-smoke.log`](../testdata/m4-puppet-smoke.log).
 Toxiproxy is deployed but the F1–F6 fault rows are still pending. This smoke is
 `twoAccount=false`: it proves the proxy/forwarding path, not the player attach
 path.
@@ -269,14 +269,14 @@ commands moved the player, broke a seeded stone block, and placed stone on a
 dirt support; the backend position followed and the backend saw exactly one
 login. The live wire check inspected 1952 frames with zero rejects.
 
-Evidence: [`testdata/gate-b-m4-driver-verdict.json`](../testdata/gate-b-m4-driver-verdict.json)
-and [`testdata/gate-b-m4-driver-join.png`](../testdata/gate-b-m4-driver-join.png).
+Evidence: [`testdata/m4-driver-verdict.json`](../testdata/m4-driver-verdict.json)
+and [`testdata/m4-driver-join.png`](../testdata/m4-driver-join.png).
 
 The unmodded 26.1.2 client attached through the same front: 1786 replayed
 frames, two attaches, one backend login, and the client log reached
 `Loaded 20 advancements`. Manual move, disconnect, and reattach are the
 operator's visual pass. Evidence:
-[`testdata/gate-b-m4-vanilla-verdict.json`](../testdata/gate-b-m4-vanilla-verdict.json).
+[`testdata/m4-vanilla-verdict.json`](../testdata/m4-vanilla-verdict.json).
 
 The F1-F6 fault rows remain pending; that is the B3 lane.
 
@@ -285,11 +285,11 @@ The F1-F6 fault rows remain pending; that is the B3 lane.
 ```bash
 kubectl -n monoplayer-gate-b get svc velocity-m4        # capture hostname first
 # delete exactly the M4 files' objects; G0's paper.yaml objects stay.
-# (kubectl delete -k deploy/gate-b would ALSO delete the G0 paper pod —
+# (kubectl delete -k deploy/driver would ALSO delete the G0 paper pod —
 #  do NOT use -k for teardown while paper.yaml is in the same kustomization.)
-kubectl delete -f deploy/gate-b/velocity.yaml \
-                -f deploy/gate-b/paper-m4.yaml \
-                -f deploy/gate-b/toxiproxy.yaml
+kubectl delete -f deploy/driver/velocity.yaml \
+                -f deploy/driver/paper-m4.yaml \
+                -f deploy/driver/toxiproxy.yaml
 kubectl -n monoplayer-gate-b delete secret gate-b-velocity
 ```
 

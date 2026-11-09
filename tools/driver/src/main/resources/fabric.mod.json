@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "monoplayer-driver",
+  "version": "0.1.0",
+  "name": "Monoplayer Driver",
+  "description": "Loopback test driver for the Monoplayer official client.",
+  "environment": "client",
+  "mixins": [
+    "monoplayer-driver.mixins.json"
+  ],
+  "entrypoints": {
+    "client": [
+      "eu.monoplayer.driver.DriverMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.20.1",
+    "minecraft": "26.1.2",
+    "java": ">=25"
+  }
+}

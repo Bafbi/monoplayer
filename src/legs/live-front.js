@@ -31,7 +31,7 @@
 //      the library-authored finish_configuration through. With no cached
 //      configuration frames (backend not warm when the client arrives), the
 //      stashed library registry_data is re-emitted instead (fallback path —
-//      recorded limitation, see docs/gate-b-b1.md).
+//      recorded limitation, see docs/product-core.md).
 //   4. server event 'playerJoin' (client finished configuration): call the
 //      core attachPlayer({ name, uuid, includeConfig:false }) — the core
 //      replays the play join prefix + warm state; the configuration phase
@@ -530,7 +530,7 @@ function createFrontLeg ({
     kind,
     listen,
 
-    // --- frontLeg interface (docs/gate-b-b1.md) ---
+    // --- frontLeg interface (docs/product-core.md) ---
     setLoginStartHandler (fn) { loginStartHandler = fn },
     setServerboundHandler (fn) { serverboundHandler = fn },
     setDetachHandler (fn) { detachHandler = fn },

@@ -213,7 +213,7 @@
       with 38/38 assertions each, including server-side movement, break, place, disconnect,
       and rejoin checks. The mandatory unmodded Prism witness also passed join, render, move,
       break, place, screenshot, disconnect, and rejoin. Runbook and evidence:
-      <code>docs/gate-b-g0.md</code>, <code>testdata/gate-b-g0-verdict.json</code>.
+      <code>docs/driver-lane.md</code>, <code>testdata/driver-g0-verdict.json</code>.
     </p>
   </div>
 
@@ -225,13 +225,13 @@
       UUID across silent refreshes. The real online-mode hasJoined + attach whitelist
       allowed the player and denied it before play after removal. Velocity 4.3.1 b45
       is in front of Paper 26.1.2 b74 with modern forwarding; the authenticated puppet
-      joined through the proxy. Evidence: <code>testdata/gate-b-g1-verdict.json</code>,
-      <code>testdata/gate-b-m4-verdict.json</code>.
+      joined through the proxy. Evidence: <code>testdata/custody-verdict.json</code>,
+      <code>testdata/m4-verdict.json</code>.
     </p>
   </div>
 
   <p class="small">
-    Backend launcher: <a href="../deploy/gate-b/README.md">deploy/gate-b/README.md</a>.
+    Backend launcher: <a href="../deploy/driver/README.md">deploy/driver/README.md</a>.
     Client instance: <code>gate-b-player</code> under Prism's instance directory.
   </p>
 </section>
@@ -266,7 +266,7 @@
       rendered, moved, broke, placed, disconnected, and rejoined; the Paper log shows the
       disconnect/rejoin pair. Renderer: AMD Radeon Graphics (radeonsi, Rembrandt), OpenGL 4.6
       Mesa 26.2.2. Route: Tailscale direct. Verdict:
-      <code>testdata/gate-b-g0-verdict.json</code>.
+      <code>testdata/driver-g0-verdict.json</code>.
     </p>
   </div>
 
@@ -706,7 +706,7 @@
   </div>
 
   <p class="small"><strong>Implementation note:</strong> the current <code>.gitignore</code> does
-  not ignore <code>.secrets/</code>, <code>.gate-b/</code>, or <code>.cache/</code>, and its
+  not ignore <code>.secrets/</code>, <code>.reports/</code>, or <code>.cache/</code>, and its
   <code>*.token-cache.json</code> rule does not match prismarine-auth's
   <code>_live-cache.json</code>/<code>_xbl-cache.json</code>/<code>_mca-cache.json</code> names.
   Fix that before the first token or decompile task lands.</p>
@@ -802,7 +802,7 @@
   <div class="callout info">
     <span class="label">First implementation change</span>
     <p class="mb0">
-      Before any token or decompile task: add <code>.secrets/</code>, <code>.gate-b/</code>, and
+      Before any token or decompile task: add <code>.secrets/</code>, <code>.reports/</code>, and
       <code>.cache/</code> to <code>.gitignore</code>, and replace the token-cache glob with rules
       that actually match prismarine-auth's cache files. This is a stop-the-line hygiene item.
     </p>
@@ -811,12 +811,12 @@
   <div class="card">
     <h3 class="mt0">Repo changes this plan implies</h3>
     <ul class="mb0">
-      <li><strong><code>.gitignore</code>:</strong> <code>.secrets/</code>, <code>.gate-b/</code>, <code>.cache/</code>, and the <code>_live-cache.json</code>/<code>_xbl-cache.json</code>/<code>_mca-cache.json</code> names. Done now; keep it that way.</li>
+      <li><strong><code>.gitignore</code>:</strong> <code>.secrets/</code>, <code>.reports/</code>, <code>.cache/</code>, and the <code>_live-cache.json</code>/<code>_xbl-cache.json</code>/<code>_mca-cache.json</code> names. Done now; keep it that way.</li>
       <li><strong><code>mise.toml</code>:</strong> pin <code>java 25.0.2</code> and <code>gradle 9.8.2</code>; add <code>mc-source</code>, <code>gate-b:backend</code>, <code>gate-b:driver</code>, <code>gate-b:run</code>, <code>gate-b:down</code>, <code>auth:device-code</code>, <code>auth:status</code>, and <code>whitelist:add</code>. The host already has Java 25; the workspace still needs the pins.</li>
       <li><strong><code>tools/mc-source/</code>:</strong> the Loom recipe; output only in <code>.cache/</code>, never tracked.</li>
-      <li><strong><code>tools/gate-b-driver/</code>:</strong> the client-only Fabric driver; original code, no network-stack mixins.</li>
-      <li><strong><code>src/gate-b/</code>:</strong> scenario controller, backend lifecycle, Toxiproxy/RCON clients, report writer, redaction.</li>
-      <li><strong><code>deploy/gate-b/</code>:</strong> created and applied. The namespace <code>monoplayer-gate-b</code> now runs Paper 26.1.2 with a Tailscale Service; it is never <code>monoplayer-dev</code>.</li>
+      <li><strong><code>tools/driver/</code>:</strong> the client-only Fabric driver; original code, no network-stack mixins.</li>
+      <li><strong><code>src/driver/</code>:</strong> scenario controller, backend lifecycle, Toxiproxy/RCON clients, report writer, redaction.</li>
+      <li><strong><code>deploy/driver/</code>:</strong> created and applied. The namespace <code>monoplayer-gate-b</code> now runs Paper 26.1.2 with a Tailscale Service; it is never <code>monoplayer-dev</code>.</li>
     </ul>
   </div>
 </section>
@@ -926,7 +926,7 @@
         <li><a href="../.scratch/minecraft-gate-b/council/testbed-architect.md">Council — testbed architect</a></li>
         <li><a href="../.scratch/minecraft-gate-b/council/auth-security-architect.md">Council — auth/security architect</a></li>
         <li><a href="../.scratch/minecraft-gate-b/council/delivery-gate-owner.md">Council — delivery/gate owner</a></li>
-        <li><a href="../tools/gate-b-driver/README.md">Gate B Fabric driver</a></li>
+        <li><a href="../tools/driver/README.md">Gate B Fabric driver</a></li>
         <li><a href="gate-a.md">Gate A runbook</a> · <a href="architecture.html">Architecture proposal</a></li>
       </ul>
     </div>

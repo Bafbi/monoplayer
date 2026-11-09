@@ -3,11 +3,11 @@
 This is the runbook for the **G1 auth slice**: token custody, the puppet's
 device-code bootstrap + silent refresh, real sessionserver `hasJoined`, the
 embeddable attach check, the attach whitelist, and the read-only auth health
-CLI. It is the deliverable for criterion **G1** in the plan (`docs/gate-b-plan.html`:
+CLI. It is the deliverable for criterion **G1** in the plan (`docs/driver-lane-plan.html`:
 *"Auth readiness: device code, silent refresh, two distinct UUIDs, real
 `hasJoined`; same UUID across refresh; allow/deny before Login Success"*).
 
-G0 is already green (`docs/gate-b-g0.md`). G1's code and its offline tests are
+G0 is already green (`docs/driver-lane.md`). G1's code and its offline tests are
 complete; the **live** steps still need the one user device-code approval and
 are listed in [The G1 live sequence](#the-g1-live-sequence).
 
@@ -22,7 +22,7 @@ are listed in [The G1 live sequence](#the-g1-live-sequence).
 | `src/custody/status.js` | Read-only cache/lock health (`collect`), guarded `--refresh` (refuses with `writer_lock_held`), redaction-enforced report helpers (`redactForReport`, `scanForLeaks`). `collect()` never creates a directory. |
 | `src/custody/hasjoined.js` | Real `GET sessionserver.mojang.com/session/minecraft/hasJoined?username=&serverId=` with injectable fetch, username/profile + optional expected-UUID cross-checks, UUID normalization, short TTL cache, fail-closed on any transport failure. `computeServerId` = vanilla handshake sha1. |
 | `src/custody/attach.js` | The one embeddable check: `async ({ client, store, verify }) => { ok, reason, stage }`, run inside `beforeLogin` so a denial happens **before Login Success**; emits `attachAllowed` / `attachDenied` with sanitized payloads. |
-| `src/custody/store.js` | Attach whitelist file `{ version: 1, players: [{ uuid, name, addedAt }] }` in `.secrets/attach-whitelist.json`: add/remove with name→UUID resolution at add time (injectable lookup: minecraftservices, then legacy api.mojang.com), UUID-keyed `has/find`, atomic 0600 writes. `createBackendWhitelist` drives the **existing** `src/gate-b/rcon.js` adapter for the puppet-only backend whitelist. |
+| `src/custody/store.js` | Attach whitelist file `{ version: 1, players: [{ uuid, name, addedAt }] }` in `.secrets/attach-whitelist.json`: add/remove with name→UUID resolution at add time (injectable lookup: minecraftservices, then legacy api.mojang.com), UUID-keyed `has/find`, atomic 0600 writes. `createBackendWhitelist` drives the **existing** `src/driver/rcon.js` adapter for the puppet-only backend whitelist. |
 | `src/custody/cli.js` | `accounts` / `device-code` / `status [--refresh]` / `migrate [--apply]` / `whitelist attach|backend add|remove`. |
 | `src/custody/fixture.js` | Minimal `mc.createServer` fixture embedding the check (optional; not run in tests, no live login). |
 

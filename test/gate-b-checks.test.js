@@ -1,4 +1,4 @@
-// Gate B pure unit tests: checks (RCON parsing, tolerances, predicates,
+// Pure unit tests for the driver lane: checks (RCON parsing, tolerances, predicates,
 // block-test parsing, redaction) and plan (run-scoped coordinates, safety,
 // run isolation). No network, no env, no child processes.
 import { test } from 'node:test'
@@ -8,8 +8,8 @@ import {
   parsePlayerList, distance3D, positionsWithin, wrapAngle, angleDelta,
   anglesWithin, rotationsWithin, isSettled, isDisconnected, scanSecrets,
   redactSecrets, verifyG0Evidence,
-} from '../src/gate-b/checks.js'
-import { buildRunPlan, runCenter, planSafetyIssues, ARENA } from '../src/gate-b/plan.js'
+} from '../src/driver/checks.js'
+import { buildRunPlan, runCenter, planSafetyIssues, ARENA } from '../src/driver/plan.js'
 
 // ---------------------------------------------------------------------------
 // RCON output parsing

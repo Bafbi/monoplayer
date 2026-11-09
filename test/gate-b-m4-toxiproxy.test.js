@@ -2,9 +2,9 @@
 // injected fake fetch — no network, no sockets, no timers.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createToxiproxy, GATE_B_FAULT_SHAPES } from '../src/gate-b/toxiproxy.js'
+import { createToxiproxy, FAULT_SHAPES } from '../src/driver/toxiproxy.js'
 
-import { PROXY_PLAN } from '../src/gate-b/backends.js'
+import { PROXY_PLAN } from '../src/driver/backends.js'
 
 function fakeFetch (responder) {
   const calls = []
@@ -88,7 +88,7 @@ test('reset clears toxics and re-enables proxies via POST /reset', async () => {
 test('F2 latency toxic posts the plan shape onto the puppet leg', async () => {
   const fetchImpl = fakeFetch(() => ({ body: {} }))
   const toxiproxy = createToxiproxy({ fetchImpl })
-  const result = await toxiproxy.addToxic('puppet-velocity', GATE_B_FAULT_SHAPES.F2.toxic)
+  const result = await toxiproxy.addToxic('puppet-velocity', FAULT_SHAPES.F2.toxic)
   assert.equal(result.ok, true)
   assert.equal(result.kind, 'setup')
   assert.equal(result.label, 'add-toxic')
@@ -103,17 +103,17 @@ test('F2 latency toxic posts the plan shape onto the puppet leg', async () => {
 })
 
 test("F3 freeze and F6 down are the same held timeout toxic; timing is the lane's", async () => {
-  assert.equal(GATE_B_FAULT_SHAPES.F3.toxic.type, 'timeout')
-  assert.equal(GATE_B_FAULT_SHAPES.F3.toxic.attributes.timeout, 0)
-  assert.equal(GATE_B_FAULT_SHAPES.F6.toxic.type, 'timeout')
-  assert.equal(GATE_B_FAULT_SHAPES.F6.toxic.attributes.timeout, 0)
-  assert.match(GATE_B_FAULT_SHAPES.F6.duration, /60s/)
-  assert.ok(!('F4' in GATE_B_FAULT_SHAPES), 'F4 is a deployment restart, not a toxic')
-  assert.ok(!('F5' in GATE_B_FAULT_SHAPES), 'F5 is an RCON kick, not a toxic')
+  assert.equal(FAULT_SHAPES.F3.toxic.type, 'timeout')
+  assert.equal(FAULT_SHAPES.F3.toxic.attributes.timeout, 0)
+  assert.equal(FAULT_SHAPES.F6.toxic.type, 'timeout')
+  assert.equal(FAULT_SHAPES.F6.toxic.attributes.timeout, 0)
+  assert.match(FAULT_SHAPES.F6.duration, /60s/)
+  assert.ok(!('F4' in FAULT_SHAPES), 'F4 is a deployment restart, not a toxic')
+  assert.ok(!('F5' in FAULT_SHAPES), 'F5 is an RCON kick, not a toxic')
 
   const fetchImpl = fakeFetch(call => call.method === 'DELETE' ? { body: {} } : { body: { f6: { name: 'f6', type: 'timeout', toxicType: 'timeout', toxicities: null } } })
   const toxiproxy = createToxiproxy({ fetchImpl })
-  const removed = await toxiproxy.removeToxic('puppet-velocity', GATE_B_FAULT_SHAPES.F6.toxic.name)
+  const removed = await toxiproxy.removeToxic('puppet-velocity', FAULT_SHAPES.F6.toxic.name)
   assert.equal(removed.ok, true)
   assert.equal(removed.kind, 'setup')
   assert.equal(fetchImpl.calls[0].method, 'DELETE')

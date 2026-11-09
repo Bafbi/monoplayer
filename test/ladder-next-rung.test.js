@@ -13,7 +13,7 @@ const FIXTURE = [
   '|---|---|---|---|---|---|',
   '| 0 static | `mise run lint` | under a second | `pnpm install` | every file parses | runtime behavior |',
   '| 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core | socket framing |',
-  '| 4 real client | `mise run gate-b:scenario` then `mise run gate-b:g0` | tens of minutes | a display host | vanilla acceptance | nothing |'
+  '| 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | a display host | vanilla acceptance | nothing |'
 ].join('\n')
 
 test('parseLadder reads the doc table in ladder order', () => {
@@ -21,7 +21,7 @@ test('parseLadder reads the doc table in ladder order', () => {
 
   assert.deepEqual(ladder.map(rung => rung.id), ['0', '1', '2', '2b', '3', '4'])
   assert.deepEqual(ladder[0].tasks, ['lint'])
-  assert.deepEqual(ladder[5].tasks, ['gate-b:scenario', 'gate-b:g0'])
+  assert.deepEqual(ladder[5].tasks, ['driver:scenario', 'driver:g0'])
   for (const rung of ladder) {
     assert.ok(rung.label.length > 0, `rung ${rung.id} has a label`)
     assert.ok(rung.tasks.length > 0, `rung ${rung.id} names a task`)
@@ -42,7 +42,7 @@ test('parseLadder skips the header, the separator, and the area table', () => {
   const ladder = parseLadder(`${FIXTURE}\n${areaTable}\n`)
 
   assert.deepEqual(ladder.map(rung => rung.id), ['0', '1', '4'])
-  assert.deepEqual(ladder[2].tasks, ['gate-b:scenario', 'gate-b:g0'])
+  assert.deepEqual(ladder[2].tasks, ['driver:scenario', 'driver:g0'])
   assert.equal(ladder[0].catches, 'every file parses')
 })
 
@@ -66,13 +66,13 @@ test('failureHint from the loopback rung points at the transfer testbed', () => 
 test('failureHint names every command of a rung that takes two', () => {
   const hint = failureHint('online')
 
-  assert.match(hint, /Next rung: mise run gate-b:scenario then mise run gate-b:g0 \(rung 4, real client\)/)
+  assert.match(hint, /Next rung: mise run driver:scenario then mise run driver:g0 \(rung 4, real client\)/)
 })
 
 test('failureHint from the top rung says there is no rung above it', () => {
-  const hint = failureHint('gate-b:g0')
+  const hint = failureHint('driver:g0')
 
-  assert.equal(hint.split('\n')[0], 'mise run gate-b:g0 failed (rung 4, real client).')
+  assert.equal(hint.split('\n')[0], 'mise run driver:g0 failed (rung 4, real client).')
   assert.doesNotMatch(hint, /Next rung:/)
   assert.match(hint, /top of the ladder/)
 })
@@ -94,7 +94,7 @@ test('main passes a setup failure through without a ladder hint', () => {
   const io = { stdout: { write: text => written.push(text) }, stderr: { write: text => written.push(text) } }
 
   assert.equal(main(['loopback', '2'], io), 2)
-  assert.equal(main(['gate-b:scenario', '130'], io), 130)
+  assert.equal(main(['driver:scenario', '130'], io), 130)
   assert.deepEqual(written, [])
 })
 

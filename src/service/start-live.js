@@ -124,7 +124,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     stderr.write(
       'monoplayer --start: refusing the default config. Set MONOPLAYER_BACKEND_HOST ' +
       '(and friends) or pass a --config JSON file describing the live legs. ' +
-      'See docs/gate-b-b1.md.\n'
+      'See docs/product-core.md.\n'
     )
     return 2
   }

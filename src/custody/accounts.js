@@ -1,4 +1,4 @@
-// Multi-account directory model for Gate B puppet tokens.
+// Multi-account directory model for puppet tokens.
 //
 // Layout (all under `.secrets/`):
 //   accounts/<canonical-uuid>/   one custody directory per Minecraft UUID

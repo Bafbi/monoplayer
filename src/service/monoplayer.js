@@ -506,7 +506,7 @@ export function createMonoplayer ({
   // (forged puppet profile) has been sent. Replay via join-synth.
   // `includeConfig: false` omits the cached configuration replay prefix —
   // the live front leg owns the configuration phase and has already replayed
-  // it (see docs/gate-b-b1.md); fakes keep the default (config included).
+  // it (see docs/product-core.md); fakes keep the default (config included).
   function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
     const attempt = session.attachAttempt({ uuid, name })
     if (!attempt.accepted) {
@@ -867,7 +867,7 @@ export function createMonoplayer ({
   return handle
 }
 
-// --- CLI (no sockets; see docs/gate-b-b1.md for the --start plan) ---
+// --- CLI (no sockets; see docs/product-core.md for the --start plan) ---
 
 export const USAGE = `monoplayer — one Minecraft account, one backend, many clients
 
@@ -899,7 +899,7 @@ Config (JSON via --config, then env, then defaults):
 custody in .secrets/accounts/<uuid>/), waits until the state cache holds the
 backend configuration frames + join prefix (warm marker preferred), then
 starts the front leg for whitelisted attaching players. See
-docs/gate-b-b1.md and docs/gate-b-g1.md.`
+docs/product-core.md and docs/custody.md.`
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)

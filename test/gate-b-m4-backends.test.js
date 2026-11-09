@@ -1,11 +1,11 @@
 // M4 slice: the backend row registry must agree with the manifests in
-// deploy/gate-b/ and the plan pins, without any cluster or env access.
+// deploy/driver/ and the plan pins, without any cluster or env access.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   NAMESPACE, BACKENDS, PROXY_PLAN, FAULT_PLAN, M5_FAULT_ROW,
   getBackend, activeBackends, rconTarget,
-} from '../src/gate-b/backends.js'
+} from '../src/driver/backends.js'
 
 test('each backend row has a unique id, deployment and lane', () => {
   const ids = new Set(BACKENDS.map(b => b.id))
@@ -24,7 +24,7 @@ test('rows namespace to monoplayer-gate-b and rcon targets match the registry', 
     assert.equal(backend.endpoints.clusterService, `${backend.deployment}:${backend.endpoints.port}`)
   }
   assert.equal(rconTarget('paper').deployment, 'paper',
-    'the M2 row must keep working through the existing src/gate-b/rcon.js default')
+    'the M2 row must keep working through the existing src/driver/rcon.js default')
   assert.equal(rconTarget('nonexistent'), null)
 })
 

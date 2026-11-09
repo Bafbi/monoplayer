@@ -1,7 +1,7 @@
 # Gate B B1 — Monoplayer product core (pure, fake-integrated)
 
 Status: **live-verified** for attach, render, move, break, place, and
-detach/reattach against Paper G0 (see `testdata/gate-b-b1-verdict.json`).
+detach/reattach against Paper G0 (see `testdata/b1-verdict.json`).
 159/159 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
 socket-free unit suite runs 350 tests, and `mise run check` also runs the
 26-assertion offline loopback. The Gate A spike (`src/spike/proxy.js`) is frozen
