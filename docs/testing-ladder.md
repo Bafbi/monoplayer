@@ -150,8 +150,7 @@ The runner builds:
   `backendLogins` at 1, lands the first synthesized position at the last pose
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
 - `O14` the second bot recorded no leftover bytes and the front wire checker
-  still rejected nothing.
-- `O15` one backend fault produces one reconnect: two backend logins and no
+  still rejected nothing.- `O15` one backend fault produces one reconnect: two backend logins and no
   loop.
 - `O16` the attach after the reconnect replays the join prefix and a chunk.
 - `O17` the replay sends the window 0 base before every later `set_slot`.
@@ -187,13 +186,18 @@ The runner builds:
   sends a chat message and a command the way a client does, with its own
   signature state. The fake backend must record both texts from the puppet's
   connection while the core's forwarded-frame count does not move (#19).
+- `O30` a dialog sent while nobody is attached is held (`controlDialogsHeld`
+  1) and re-sent to the reattaching client (`controlDialogsResent` 1, one
+  `show_dialog` decoded by the second bot, a `controlDialogResent` log line).
+- `O31` the client's answer reaches the backend as the puppet's dialog click:
+  one `custom_click_action` with the dialog's id on the fake backend,
+  `controlDialogsAnswered` 1, and nothing left pending.
 
 ### Online rung assertion contract
 
 `mise run online` returns N1-N13. `evaluateOnlineAssertions` in
 `src/ladder/online.js` is the source; the id list and the claim behind each id
 live there.
-
 - `N13` the state the attaching client decoded matches the state the attach
   replay claimed. The expectation is the cache snapshot taken when the replay was
   built, compared with the first K frames the client decoded, where K is the

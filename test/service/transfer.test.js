@@ -192,17 +192,42 @@ test('connection-control frames are blocked in both states', () => {
   attach(rig)
 
   const before = rig.frontLeg.frames().length
-  for (const name of ['kick_disconnect', 'cookie_request', 'store_cookie', 'show_dialog', 'clear_dialog', 'hide_message']) {
+  for (const name of ['kick_disconnect', 'cookie_request', 'store_cookie', 'hide_message']) {
     rig.backendLeg.deliver({ state: 'play', name, buffer: BUFFER(name), data: {} })
   }
   assert.equal(rig.frontLeg.frames().length, before)
 
-  for (const name of ['disconnect', 'cookie_request', 'store_cookie', 'show_dialog', 'clear_dialog', 'code_of_conduct']) {
+  for (const name of ['disconnect', 'cookie_request', 'store_cookie']) {
     rig.backendLeg.deliver({ state: 'configuration', name, buffer: BUFFER(name), data: {} })
   }
   assert.equal(rig.frontLeg.frames().length, before)
   assert.equal(rig.core.cache.snapshot().config.length, 1, 'only registry_data was cacheable')
   assert.equal(rig.core.cache.snapshot().generic.some(f => ['show_dialog', 'store_cookie'].includes(f.name)), false)
+})
+
+test('#16 a control dialog crosses while connection control stays contained', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+  const before = rig.frontLeg.frames().length
+
+  // Play dialogs reach the human (#16). A configuration gate does not: this
+  // client is in play, so the gate waits for a client in configuration.
+  for (const name of ['show_dialog', 'clear_dialog']) {
+    rig.backendLeg.deliver({ state: 'play', name, buffer: BUFFER(name), data: {} })
+  }
+  rig.backendLeg.deliver({ state: 'configuration', name: 'code_of_conduct', buffer: BUFFER('coc'), data: {} })
+
+  const crossed = rig.frontLeg.frames().slice(before).map(frame => frame.name)
+  assert.deepEqual(crossed, ['show_dialog', 'clear_dialog'])
+  // A dialog is neither ordinary state nor an attach replay: the pending
+  // holder keeps the one copy, so a replay can never deliver a stale one.
+  const snapshot = rig.core.cache.snapshot()
+  const cachedNames = [
+    ...snapshot.config, ...snapshot.generic, ...snapshot.latest
+  ].map(frame => frame.name)
+  assert.equal(cachedNames.some(name => ['show_dialog', 'clear_dialog', 'code_of_conduct'].includes(name)), false)
+  assert.equal(rig.core.pendingDialog.peek().name, 'code_of_conduct', 'the withheld gate is still pending')
 })
 
 test('login is cached for replay but never relayed into a live session', () => {

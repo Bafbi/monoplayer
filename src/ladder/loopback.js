@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O29 (including O11b) are the contract
+// Assertions R0 and O1-O31 (including O11b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -179,6 +179,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       logStream: { write: line => log('core', { line }) }
     })
     front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
+    front.setConfiguringHandler(({ name }) => core.configuringReady({ name }))
     front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
     // Every successful attach records the cache as it stood when its replay was
     // built, so O27 below can check the N13 frame cut against the real client's
@@ -621,6 +622,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     fake.sendBlockChange({ x: 3, y: 0, z: 3 })
     await waitFor(() => core.cache.snapshot().blocks.length >= 1, 'cached block change')
 
+    // --- O30-O31: a control dialog waits for a client and is answered through it ---
+    // Nobody is attached: the pending holder keeps the last dialog, the
+    // reattaching client receives it, and its answer reaches the backend as the
+    // puppet's own frame (#16).
+    const DIALOG_ID = 'monoplayer:loopback_dialog'
+    fake.sendShowDialog({ id: DIALOG_ID })
+    await waitFor(() => core.pendingDialog.held === true, 'the dialog held while detached')
+
     // --- O13-O14: reattach replays the new pose + cached block ---
     bot2 = createBot({ port: evidence.frontPort, username: 'Second' })
     await bot2.ready()
@@ -653,6 +662,37 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'second bot saw no leftover bytes and the wire stayed clean',
       b2.leftovers.length === 0 && front.wireStats.rejected === 0,
       { leftovers: b2.leftovers.length, rejected: front.wireStats.rejected }
+    )
+
+    // --- O30-O31: the held dialog reaches the client, and its answer reaches the backend ---
+    await bot2.waitFor(() => b2.dialogs.length > 0, 'the held dialog re-sent on attach')
+    check(
+      'O30',
+      'a dialog sent with no client attached is delivered to the reattaching client',
+      b2.dialogs.length === 1 && core.metrics.controlDialogsHeld === 1 &&
+        core.metrics.controlDialogsResent === 1 &&
+        core.logs().some(line => line.includes('"event":"controlDialogResent"')),
+      {
+        dialogs: b2.dialogs.length,
+        held: core.metrics.controlDialogsHeld,
+        resent: core.metrics.controlDialogsResent
+      }
+    )
+
+    bot2.answerDialog(DIALOG_ID)
+    await waitFor(() => fake.received.customClickActions.length > 0, 'the dialog answer on the backend leg')
+    check(
+      'O31',
+      'the client answer reaches the backend as the puppet dialog click',
+      fake.received.customClickActions.length === 1 &&
+        fake.received.customClickActions[0].id === DIALOG_ID &&
+        core.metrics.controlDialogsAnswered === 1 &&
+        core.pendingDialog.held === false,
+      {
+        clicks: fake.received.customClickActions.map(click => click.id),
+        answered: core.metrics.controlDialogsAnswered,
+        pending: core.pendingDialog.held
+      }
     )
 
     // --- O15-O16: one backend fault, one reconnect, one fresh login ---
