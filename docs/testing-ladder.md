@@ -14,7 +14,7 @@ cheapest rung that can fail for the defect you are chasing.
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, client detach/reattach, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering, vanilla acceptance, and seamless switch until the reconfiguration path lands |
 | 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
-| 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, the gate Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
+| 4 real client | `mise run driver:parity`, `mise run driver:scenario`, then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, the gate Paper, the dev lane for parity, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window, and what the client shows joined directly against joined through the proxy. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
 
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
 loopback. It is the default gate.
@@ -43,6 +43,7 @@ may change. The rung decides what it proves.
 | online rung, from a pod | `mise run online:cluster` | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart |
 | online rung, bare | `mise run online` | this machine's copy of the account chain, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session. `mise run online:cluster` is the form that leaves the deployment serving |
 | driver lane, rung 4 | `mise run driver:scenario` | the gate Paper, on its Tailscale host, and the display host | tens of minutes | the gate Paper's world and a real client. The deployment keeps serving |
+| driver parity, rung 4 | `mise run driver:parity` | the dev lane, through the operator's port-forwards and reverse tunnel, and the display host | minutes | a join and a client launch as the attach account: it moves that account's player in the dev world, and nothing in `monoplayer`. It refuses the live fleet and the live front in front of it |
 | transfer testbed, rung 2b | `mise run testbed:run` | the live custody claim and the gate Paper | about 3 minutes | **the live front goes offline for the run**: it scales `monoplayer/monoplayer` to 0 and disables Argo auto-sync. `mise run testbed:down` restores the deployment, and the sync policy while the run's state file at `/tmp/opencode/monoplayer-testbed.json` survives |
 | dev lane | `mise run dev:up`, then `mise run dev:image`, then `mise run dev:join` | `monoplayer-dev` | minutes | its own Paper, proxy, and account; nothing in `monoplayer` |
 
@@ -75,8 +76,13 @@ that covers the area you changed.
 |---|---|---|
 | `mise run verify:relay` | `check`, `spike`, `parity:run` | the relay, the legs, the join, the state cache, `src/core/clientbound-policy.js` |
 | `mise run verify:custody` | `check`, `online` (a repo-deployed backend, both custodians, this machine's copy of the chain) | `src/custody/`, the custody store, `hasJoined`, offline identity |
-| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper) | `tools/driver/`, `src/driver/` |
+| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper; it refuses until [#71](https://github.com/Bafbi/monoplayer/issues/71) moves that Paper to 26.2) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
+
+`verify:driver` does not compose `driver:parity`. The parity lane needs a target
+the operator stands up first, the dev lane through two port-forwards and a
+reverse SSH tunnel, and two more client launches. Run it by name; the driver
+parity section below covers what it answers.
 
 mise runs sibling `depends` concurrently, so the area task does not order them.
 The expensive rung carries `wait_for = ["check"]` instead: a red gate stops it
@@ -359,6 +365,46 @@ live there.
   both sides. N13 fails when those K frames never arrive (30 s bound), when the
   decoded names differ from the replay's names in order, or when any compared
   domain differs. The loopback's O27 checks the same cut on a real protocol bot.
+
+## The driver parity lane
+
+`mise run driver:parity` answers the client half of rung 2a's question: not which
+frames reached a bot, but what the real client ended up showing. It joins the
+backend directly with the Fabric driver client, quits, relaunches joined through
+the proxy, and compares the two clients' state field by field.
+
+The two runs are sequential because a server kicks the first session when one
+account opens two, and the driver has no reconnect op. Every lane is a quit plus
+a host-side relaunch, the same rule the G0 scenario follows.
+
+The report is `.reports/driver-parity-report.json`. Every field is `same`,
+`expected`, or `unexplained`, and only `unexplained` fails the run. The field
+policy lives in `src/driver/parity.js` and a unit test pins it to the observed
+fields, so a new status field cannot pass unclassified.
+
+| Field | Verdict when the two clients differ | Why |
+|---|---|---|
+| `connected`, `level`, `player`, `name`, `health`, `dimension`, `screen` | `unexplained` | the proxy does not reshape them |
+| `pos` | `expected` | the attach replay lands the client at the puppeted session's pose |
+| `held`, `selectedSlot` | `expected` | the replay serves the puppeted session's inventory |
+| `loadedChunks`, `renderedSections` | `expected` | chunk and render counts follow the client's own timing |
+
+A dialog or transfer screen only the proxied client showed is `unexplained`, not
+"absent": for the human's client that screen is the symptom #20 and #22 describe,
+so the lane reports it red until those tickets land.
+
+Exit codes match rung 2a: 0 every difference explained, 1 an unexplained
+difference, 2 a setup that never joined. The report is written on 0 and 1,
+because a red report is the finding.
+
+No packet observer is used. `tools/driver/README.md` bans mixins into
+`Connection`, login and play handlers, codecs, and Netty, and #62 allows an
+observer only if a run with it off produces the same verdict. Frame rows stay
+rung 2a's job, and the report records `observer: "none"` so the choice is a fact
+in the artifact.
+
+[The driver-lane runbook](driver-lane.md) has the reachability recipe for the dev
+lane and the transfer testbed.
 
 ## Why the rungs exist: the B1 lesson
 

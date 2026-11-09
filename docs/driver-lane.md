@@ -16,6 +16,11 @@ row. It is the G0 host baseline (row M2 in the plan).
    [deploy/driver/README.md](../deploy/driver/README.md)). RCON lives behind
    `kubectl -n monoplayer-gate-b exec deploy/paper -- rcon-cli`; the browser
    password is a cluster Secret and never leaves the pod.
+   **The driver client is built for 26.2 since #62, and this backend still serves
+   26.1.2**, so the G0 scenario refuses before its first launch
+   (`versionRefusal` in `src/driver/checks.js`). [#71](https://github.com/Bafbi/monoplayer/issues/71)
+   moves the lane. The client parity lane below runs today against the dev lane,
+   which serves 26.2.
 2. **Display host:** `nath` reachable over SSH
    (`bafbi@nath.tail41e568.ts.net`), Prism 11.0.3 with the
    `gate-b-player-fabric` 26.1.2 instance and the built driver jar installed
@@ -131,6 +136,85 @@ every assertion in their reports, and nothing is averaged or carried over.
 The age window exists because a report set sitting on disk proves nothing on its
 own: before 2026-11-09 the reports were committed, so the check passed without
 anything having run. Move the window with `--max-age-hours N`.
+
+## Client parity lane (#62)
+
+Rung 4's other half: does the real client end up in the same state when it joins
+a backend directly and when it joins that backend through the proxy.
+
+```bash
+node src/driver/run.js --lane parity --tunnel \
+  --direct 127.0.0.1:25565 --proxied 127.0.0.1:25566
+mise run driver:parity          # the same, with the driver tunnel and the gate
+```
+
+One command, two runs. The lane quits whatever client holds the driver socket,
+relaunches it joined to `--direct`, waits for it to settle, reads `status` and
+`screen`, quits, then does the same for `--proxied`. Two runs of one account
+cannot overlap: a server kicks the first session, and the driver has no
+reconnect op.
+
+Reads `.reports/driver-parity-report.json`. Exit 0 every difference explained,
+1 an unexplained difference, 2 a lane that never settled or a refused endpoint.
+The report is metadata only, scanned for token-shaped strings before it is
+written.
+
+Both endpoints are refused when they name the live Excalia fleet or the live
+deployment in front of it (`deploy/manifests/service.yaml`), so a mistyped flag
+cannot measure a server this repo does not own.
+
+### Reaching the dev lane
+
+The dev lane's services are ClusterIP, and the client runs on `nath`, not in the
+cluster. Two port-forwards and one reverse tunnel put both endpoints on the
+display host's loopback, which is what the default flags expect:
+
+```bash
+kubectl -n monoplayer-dev port-forward svc/paper 25565:25565 &
+kubectl -n monoplayer-dev port-forward svc/monoplayer 25566:25565 &
+ssh -N -R 25565:127.0.0.1:25565 -R 25566:127.0.0.1:25566 \
+  bafbi@nath.tail41e568.ts.net &
+mise run driver:parity
+```
+
+The dev proxy's attach whitelist must name the account the client joins with
+(`docs/testing-ladder.md`, the client parity rung), and the dev lane must be up
+(`mise run dev:up`). Stop the three background processes when the run ends.
+
+### The transfer testbed
+
+The testbed front is a Tailscale load balancer, so only its backend needs a
+forward:
+
+```bash
+kubectl -n monoplayer-gate-b port-forward svc/paper-hub 25565:25565 &
+ssh -N -R 25565:127.0.0.1:25565 bafbi@nath.tail41e568.ts.net &
+node src/driver/run.js --lane parity --tunnel \
+  --direct 127.0.0.1:25565 \
+  --proxied monoplayer-testbed.tail41e568.ts.net:25565
+```
+
+`mise run testbed:up` takes the live front down for the length of the run, so
+clear it with the operator first.
+
+## Result — 2026-11-09 (parity lane, dev lane)
+
+`mise run driver:parity` passed on the dev lane with the driver on Minecraft 26.2:
+12 fields, 9 same, 3 expected, 0 unexplained, in 46 s.
+
+| Side | Endpoint | Settled | Client reported |
+|---|---|---|---|
+| direct | `127.0.0.1:25565` → dev Paper 26.2 | 18 s | `127.0.0.1:25565` |
+| proxied | `127.0.0.1:25566` → dev Monoplayer 26.2 | 28 s | `127.0.0.1:25566` |
+
+The three expected rows were the two the policy predicts plus a chunk count:
+pose `5.5/-60/-3.5` direct against `8.5/-60/-4.5` proxied, loaded chunks 40 against
+213, rendered sections 18 against 36. Health, dimension, name, connection, level,
+player, screen, held item, and selected slot all matched exactly.
+
+The two endpoints were reached through the port-forwards and reverse tunnel in
+"Reaching the dev lane", so the client joined the dev lane's own Paper and its own
+Monoplayer, never the live deployment.
 
 ## What is automated vs manual
 
