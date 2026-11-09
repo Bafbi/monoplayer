@@ -300,7 +300,7 @@ async function runFakeLane ({ views = laneViews(), settled = true, reportServer 
     return { detail: 'fake relaunch' }
   }
   const report = await runParity({
-    driver, relaunch, view: undefined,
+    driver, relaunch,
     direct: { endpoint: '127.0.0.1:25565' },
     proxied: { endpoint: '127.0.0.1:25566' },
     version: '26.2',
@@ -364,6 +364,24 @@ test('a lane that never settles is a setup failure, not a comparison', async () 
   assert.equal(report.setupFailed, true)
   assert.match(report.sides.direct.error, /did not settle/)
   assert.deepEqual(report.fields, [])
+})
+
+test('a lane that never settled carries the screen that explains it', async () => {
+  // A version refusal or a kick is a disconnect screen, and the lane must say so
+  // rather than reporting a bare timeout.
+  const views = laneViews()
+  views['127.0.0.1:25565'] = {
+    status: { connected: false, level: false, player: false, screen: 'net.minecraft.client.gui.screens.DisconnectedScreen', renderedSections: 0 },
+    screenPayload: screen({
+      screen: 'net.minecraft.client.gui.screens.DisconnectedScreen',
+      title: 'Connection Lost',
+      narration: 'Incompatible client! Please use 26.2',
+      reason: 'Incompatible client! Please use 26.2'
+    })
+  }
+  const { report } = await runFakeLane({ views, settled: false })
+  assert.match(report.sides.direct.error, /screen net\.minecraft\.client\.gui\.screens\.DisconnectedScreen "Connection Lost"/)
+  assert.match(report.sides.direct.error, /Incompatible client/)
 })
 
 test('the run requires a driver and a relaunch adapter', async () => {

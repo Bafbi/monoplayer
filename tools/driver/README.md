@@ -59,7 +59,7 @@ node tools/driver/driver-client.mjs status
 
 | Command | What it does |
 |---|---|
-| `status` | screen (class/title/narration), level/player, connected, position, dimension, loaded chunks, rendered sections, FPS, held item |
+| `status` | screen (class/title/narration), level/player, connected, the server address the client joined, position, dimension, loaded chunks, rendered sections, FPS, held item |
 | `screen` | current screen class, title, narration, and widget list (label/active/visible/x/y/width/height); disconnect screens also report `reason` |
 | `click <label>` | press the first visible button whose label contains `<label>` (case-insensitive); `{"label":".."}` or `{"index":n}` in raw JSON also work by exact label or position |
 | `pause` | open the vanilla pause menu (Escape screen) |

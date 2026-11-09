@@ -32,7 +32,8 @@ const TESTDATA = path.join(root, 'testdata')
 const MOD_METADATA = path.join(root, 'tools', 'driver', 'src', 'main', 'resources', 'fabric.mod.json')
 
 const HELP = `
-Driver-lane G0 runner
+Driver lane: the G0 scenario, the unmodded witness checklist, and the client
+parity lane (#62).
 
 Usage:
   node src/driver/run.js [--runs N] [--force] [--lane driver|unmodded|parity] [--tunnel]
@@ -51,14 +52,15 @@ Options:
                      parity: join the backend directly, then the same backend
                      through the proxy, and compare the two clients' state
                      (#62). One command, two runs, no RCON.
-  --direct HOST:PORT     The backend the first parity run joins, as the client
+  --direct HOST:PORT The backend the first parity run joins, as the client
                      reaches it (default 127.0.0.1:25565, the dev-lane tunnel).
-  --proxied HOST:PORT    The proxy front the second parity run joins, as the
-                     client reaches it (default 127.0.0.1:25566). Both parity
-                     endpoints are refused when they name the live Excalia fleet
-                     or the live deployment in front of it.
-  --report PATH     Where the parity report goes
+  --proxied HOST:PORT The proxy front the second parity run joins, as the client
+                     reaches it (default 127.0.0.1:25566). Both parity endpoints
+                     are refused when they name the live Excalia fleet or the live
+                     deployment in front of it.
+  --report PATH      Where the parity report goes
                      (default .reports/driver-parity-report.json).
+  --verbose          Log every lane event to stderr.
   --tunnel           Spawn 'ssh -N -L <driver-port>:127.0.0.1:25599 <host>'
                      for the driver socket and clean it up on exit. Unit tests
                      never need this; the default is an operator-managed tunnel.
@@ -138,8 +140,9 @@ function createDriverFromOptions (opts) {
   })
 }
 
-// The Minecraft version the built driver declares. The mod metadata is the same
-// file the jar carries, so this reads the build that will be loaded.
+// The Minecraft version the driver source declares. It reads the resource file
+// rather than the installed jar: a jar older than the source is caught by the
+// lane refusing to settle on the wrong client, and this refusal is the cheap case.
 function driverMinecraftVersion () {
   try {
     return JSON.parse(readFileSync(MOD_METADATA, 'utf8'))?.depends?.minecraft ?? null
