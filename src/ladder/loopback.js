@@ -889,6 +889,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'target warm under the kept connection',
       15_000
     )
+    // The bot records frames as they arrive; the target's play login is written
+    // at the move's commit, so wait for it before reading the frame list.
+    await bot3.waitFor(
+      () => b3.names.slice(transferMark).some(frame => frame.name === 'login'),
+      'the target play login on the kept connection'
+    )
 
     const afterTransfer = b3.names.slice(transferMark).map(frame => ({ state: frame.state, name: frame.name }))
     const afterNames = afterTransfer.map(frame => frame.name)

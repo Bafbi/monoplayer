@@ -1034,6 +1034,15 @@ export function createMonoplayer ({
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof clock?.setTimeout !== 'function') return
     reconfigurationTimer = clock.setTimeout(() => {
       reconfigurationTimer = null
+      if (restoreReplayPending) {
+        // The restore round never completed. The client is unrecoverable on
+        // this connection, so it is detached rather than left frozen.
+        log('reconfigurationRestoreTimeout', { timeoutMs })
+        restoreReplayPending = false
+        try { frontLeg.end('transfer_restore_timeout') } catch { /* already gone */ }
+        detachPlayer({ reason: 'transfer_restore_timeout' })
+        return
+      }
       log('reconfigurationTimeout', { kind: moveKind, timeoutMs })
       failTransfer({ reason: 'reconfigure_timeout' })
     }, timeoutMs)
@@ -1063,6 +1072,9 @@ export function createMonoplayer ({
     }
     metrics.configFramesReconfigured += replayed
     restoreReplayPending = true
+    // The restore round is a configuration round too. If the client never
+    // answers its finish, the deadline ends it.
+    armReconfigurationTimer()
     try {
       if (finish && Buffer.isBuffer(finish.buffer)) {
         frontLeg.writeRaw(finish.buffer, { state: 'configuration', name: 'finish_configuration' })
@@ -1141,7 +1153,8 @@ export function createMonoplayer ({
       return { reconfigured: false }
     }
     clientReconfiguring = false
-    clearReconfigurationTimer()
+    // The deadline stays armed: it now covers the wait for the target's play
+    // login, which is what a client parked in play cannot end by itself.
     const outcome = maybeCompleteReconfiguration()
     return {
       reconfigured: true,
