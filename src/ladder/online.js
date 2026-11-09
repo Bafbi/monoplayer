@@ -493,6 +493,10 @@ export async function runOnline (argv = process.argv.slice(2)) {
       uuid: puppet.uuid,
       authTitle: puppet.profile?.authTitle ?? null,
       deviceType: puppet.profile?.deviceType ?? null,
+      // #16/#21: while the rung's bot is attached it owns a control gate, and
+      // an answer the puppet gives itself is not the next client's question.
+      isHumanAttached: () => core.attached === true,
+      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
       log
     })
     evidence.backend = {

@@ -179,6 +179,15 @@ the last unanswered dialog in `src/core/pending-dialog.js`.
   frame, so the holder never offers an already-answered question to the next
   client. Which configuration gate the player answers, including the protocol
   library's own code-of-conduct accept, is #21.
+- The code of conduct arrives already answered unless the leg stops the library:
+  the library's own configuration handler writes `accept_code_of_conduct`
+  before the router sees the gate. `withCodeOfConductGate` in
+  `src/legs/live-backend.js` wraps the backend connection's writer, so that
+  write is the leg's decision. A player is attached: the frame is dropped and the
+  player answers the gate by the path above, in configuration state. No player:
+  the accept goes out, the leg logs `codeOfConductAccepted`, and it reports the
+  answer to the core, so nothing waits for a client that is not there. Neither
+  branch has a timeout.
 
 Serverbound frames carry their state (#16). The packet id is state-scoped, so
 the frame must be written into the state the puppet is in: a configuration

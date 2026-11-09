@@ -7,9 +7,12 @@
 // On playerJoin it sends a minimal but valid join sequence:
 //   login (entityId 42) -> game_state_change 13 -> position 0.5/1.62/0.5 ->
 //   chunk_batch_start -> map_chunk (0,0) -> chunk_batch_finished
-// It records serverbound position, block_dig, block_place and chat packets,
-// and exposes sendBlockChange, sendPosition, sendWindowItems and sendSetSlot
-// for scenario mutations.
+// It records serverbound position, block_dig, block_place, chat, dialog, and
+// code-of-conduct packets, and exposes sendBlockChange, sendPosition,
+// sendWindowItems, sendSetSlot, sendShowDialog, and a `codeOfConduct` option for
+// scenario mutations. With `codeOfConduct` on, the gate goes out in the
+// configuration phase and `finish_configuration` waits for the accept, the way a
+// server with `enable-code-of-conduct` behaves (#21).
 import mc from 'minecraft-protocol'
 import prismarineChunk from 'prismarine-chunk'
 import minecraftData from 'minecraft-data'
@@ -17,6 +20,10 @@ import nbt from 'prismarine-nbt'
 import { decodeBrand } from '../core/client-settings.js'
 
 const VERSION = '26.1'
+
+// The gate text a server with `enable-code-of-conduct` sends. The frame's body
+// is one string; the client shows it and answers with an empty packet.
+const CODE_OF_CONDUCT_TEXT = 'monoplayer loopback code of conduct'
 
 // Vanilla player-inventory window (window id 0): 5 crafting/armor slots, 27
 // main slots, 9 hotbar slots, 4 armor slots, and the offhand. The join frame
@@ -44,7 +51,13 @@ export function itemStack (itemId, itemCount = 1) {
 // `viewDistance` overrides the cap the fake backend advertises in its play
 // login. The loopback picks a value the protocol library never sends by
 // default, so a puppet that kept the library's own value fails the check.
-export async function createFakeBackend ({ port = 0, logStream = process.stdout, viewDistance = null } = {}) {
+//
+// `codeOfConduct` makes this server behave like one with
+// `enable-code-of-conduct`: it sends the gate in the configuration phase and
+// withholds `finish_configuration` until the puppet answers it (#21). Off by
+// default, so the spike and the other rungs keep the configuration sequence the
+// library writes.
+export async function createFakeBackend ({ port = 0, logStream = process.stdout, viewDistance = null, codeOfConduct = false } = {}) {
   const mcData = minecraftData(VERSION)
   const Chunk = prismarineChunk(VERSION)
   const grassState = mcData.blocksByName.grass_block.defaultState
@@ -68,7 +81,10 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     pongs: [],
     // #16: the human's dialog answers, forwarded by the proxy as the puppet's.
     customClickActions: [], // { id, nbt }
+    // #21: gate answers. A configuration-phase frame, so the listener lives on
+    // the connection, not on playerJoin.
     codeOfConductAccepts: 0,
+    codeOfConductSends: 0,
     // #17/#18: what the server knows about the client's own identity.
     customPayloads: [], // { channel, data, brand }
     settings: [] // Client Information frames, in arrival order
@@ -116,6 +132,37 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
   // Configuration-phase frames arrive before playerJoin, so the listeners are
   // attached as soon as the server accepts the login.
   server.on('login', client => {
+    // #21: the code of conduct. The library's login handler writes
+    // `finish_configuration` as soon as the client acknowledges login, so a
+    // gate sent after playerJoin would arrive in play and be parsed as the
+    // wrong packet. Wrap this connection's writer: the gate goes out where the
+    // finish would have, and the finish waits for the answer.
+    const write = client.write.bind(client)
+    let finishHeld = false
+    let finishParams = null
+    if (codeOfConduct) {
+      client.write = (name, params, ...rest) => {
+        if (name !== 'finish_configuration') return write(name, params, ...rest)
+        finishHeld = true
+        finishParams = params
+        received.codeOfConductSends++
+        write('code_of_conduct', { contents: CODE_OF_CONDUCT_TEXT })
+        log('sendCodeOfConduct', { contents: CODE_OF_CONDUCT_TEXT })
+        return false
+      }
+    }
+    // Always recorded, even when this fake sends no gate: an accept with no
+    // gate in front of it is exactly the leak #21 is about.
+    client.on('accept_code_of_conduct', () => {
+      received.codeOfConductAccepts++
+      log('receivedAcceptCodeOfConduct', { held: finishHeld })
+      if (!finishHeld) return
+      // The gate is answered: finish configuration and drop the wrapper, so a
+      // later finish write on this connection is the library's own again.
+      finishHeld = false
+      client.write = write
+      write('finish_configuration', finishParams ?? {})
+    })
     client.on('custom_payload', packet => {
       const brand = packet.channel === 'minecraft:brand' ? decodeBrand(packet.data) : null
       received.customPayloads.push({ channel: packet.channel, data: packet.data, brand })
@@ -219,10 +266,6 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     client.on('custom_click_action', p => {
       received.customClickActions.push(p)
       log('receivedCustomClickAction', { id: p.id })
-    })
-    client.on('accept_code_of_conduct', () => {
-      received.codeOfConductAccepts++
-      log('receivedAcceptCodeOfConduct', {})
     })
   })
 

@@ -32,6 +32,8 @@ const base = (overrides = {}) => ({
   skinParts: 127,
   chatSession: true,
   transferred: false,
+  codeOfConduct: true,
+  codeOfConductAccepted: true,
   resourcePack: 'accepted',
   ...overrides
 })
@@ -135,7 +137,7 @@ test('--single reads one log and compares its first and last view', () => {
     stderr: { write: text => out.push(text) }
   })
   assert.equal(code, 0, out.join(''))
-  assert.match(out.join(''), /PASS 11 fields/)
+  assert.match(out.join(''), /PASS 13 fields/)
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
   assert.equal(report.passed, true)
   assert.equal(report.fields.find(entry => entry.field === 'address').verdict, 'expected')
