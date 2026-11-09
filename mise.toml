@@ -19,7 +19,7 @@ depends = ["install"]
 run = "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling}/*.test.js' || node src/ladder/next-rung.js test $?"
 
 [tasks.spike]
-description = "Run the frozen Gate A spike test (real sockets, offline protocol)."
+description = "Run the frozen protocol spike test (real sockets, offline protocol)."
 depends = ["install"]
 wait_for = ["check"]
 run = "node --test test/spike/*.test.js"
@@ -47,7 +47,7 @@ depends = ["lint", "test", "loopback"]
 # schedules nothing, so a bare `mise run online` is unchanged.
 
 [tasks."verify:relay"]
-description = "Verify a relay change: the gate, then the frozen Gate A spike."
+description = "Verify a relay change: the gate, then the frozen protocol spike."
 depends = ["check", "spike"]
 
 [tasks."verify:custody"]
@@ -63,7 +63,7 @@ description = "Verify a deploy change: the gate, then the image build (needs clu
 depends = ["check", "image:build"]
 
 [tasks."spike:report"]
-description = "Run the standalone Gate A scenario and write a report."
+description = "Run the standalone spike scenario and write a report."
 depends = ["install"]
 run = "node src/spike/run.js"
 

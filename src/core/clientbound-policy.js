@@ -105,7 +105,7 @@ export const PLAY_ORDINARY = new Set([
   'world_border_center', 'world_border_lerp_size', 'world_border_size',
   'world_border_warning_delay', 'world_border_warning_reach', 'world_event',
   'world_particles',
-  // Legacy spellings still used by the Gate A fakes and older gate fixtures.
+  // Legacy spellings still used by the spike fakes and older fixtures.
   // The wire protocol for 26.1/26.2 uses update_health, spawn_entity,
   // entity_destroy, entity_teleport, block_change, and boss_bar; these are the
   // same state under their pre-rename names.

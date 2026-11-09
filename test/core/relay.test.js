@@ -52,8 +52,8 @@ test('pose capture: garbage data tolerated, pose unchanged', () => {
   assert.deepEqual(capturePose(pose, 'position', null), pose)
 })
 
-test('drop set matches the Gate A spike rules that stay (superset source of truth)', () => {
-  // Gate A dropped exactly these serverbound frames; B1 keeps them all.
+test('drop set matches the spike rules that stay (superset source of truth)', () => {
+  // The spike dropped exactly these serverbound frames; B1 keeps them all.
   assert.equal(SERVERBOUND_DROPS.has('teleport_confirm'), true)
   assert.equal(SERVERBOUND_DROPS.size >= 12, true)
 })

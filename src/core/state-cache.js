@@ -1,6 +1,6 @@
 // B1 monoplayer core: pure, bounded state cache.
 //
-// Product-shaped replacement for the Gate A spike's raw frame ring
+// Product-shaped replacement for the protocol spike's raw frame ring
 // (src/spike/proxy.js cacheFrame). The cache partitions every clientbound frame
 // into bounded domains so a reattach can be rebuilt from state, not from an
 // unbounded stream replay.
@@ -66,7 +66,7 @@ const LATEST_FRAMES = new Set([
   'held_item_slot',
   'game_state_change',
   'entity_event',
-  'advancements' // full-state replace frame; latest wins like Gate A behavior would otherwise drop
+  'advancements' // full-state replace frame; latest wins, which a raw replay would drop
 ])
 
 export const DOMAINS = ['prefix', 'config', 'chunk', 'block', 'entity', 'inventory', 'latest', 'generic']
@@ -264,7 +264,7 @@ export function createStateCache (overrides = {}) {
     }
 
     // Warm completes at chunk_batch_finished: the join sequence is pinned
-    // through the first full chunk batch (same marker as the Gate A spike).
+    // through the first full chunk batch (same marker as the protocol spike).
     if (!warm && classification.domain !== 'config' && name === 'chunk_batch_finished') {
       warm = true
       metrics.warmComplete++

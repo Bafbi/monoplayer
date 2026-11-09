@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Gate A scenario runner: runs the full relay scenario, writes
+// Protocol spike runner: runs the full relay scenario, writes
 // testdata/spike-report.json and prints a PASS/FAIL summary.
 // Exits 0 on pass, 1 on failure.
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -15,7 +15,7 @@ await mkdir(path.join(root, 'testdata'), { recursive: true })
 await writeFile(path.join(root, 'testdata', 'spike-report.json'), JSON.stringify(report, null, 2) + '\n')
 
 console.log('')
-console.log('Gate A - protocol relay spike (minecraft 26.1 / protocol 775)')
+console.log('Protocol relay spike (minecraft 26.1 / protocol 775)')
 console.log('')
 for (const a of report.assertions) {
   console.log(`  [${a.ok ? 'PASS' : 'FAIL'}] ${a.name}`)

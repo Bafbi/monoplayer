@@ -5,7 +5,7 @@
 //      by the cache; join-synth strips them again defensively)
 //   2. the join prefix verbatim (login/game_state/chunks)
 //   3. ONE synthesized position at the current pose, injected before the first
-//      chunk-batch start (Gate A semantics); a fresh teleportId is issued
+//      chunk-batch start (spike semantics); a fresh teleportId is issued
 //      per attach and is owned by the proxy, never replayed from the prefix
 //   4. warm-state domains in snapshot order (chunks, blocks, entities,
 //      inventories, latest, generic)

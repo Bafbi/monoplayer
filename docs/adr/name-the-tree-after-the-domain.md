@@ -32,3 +32,20 @@ The exact directory names are the rename's call. The constraint is that each one
 | Observability | Journal, telemetry, redaction |
 
 Validation work does not get a top-level home of its own. It lives where it runs: a rung under the ladder, a lane under the driver, a scenario under the testbed.
+
+## The tree as it stands
+
+| Directory | Holds |
+|---|---|
+| `src/core/` | State cache, clientbound policy, attach stream synthesis, session state, identity, relay decisions, transfer follow, the strict wire check |
+| `src/legs/` | Front leg and backend leg, live and offline, the leg fakes, the shared fake backend, offline identity |
+| `src/custody/` | Account directories, token caches, the writer lock, the attach whitelist, session verification, the attach check |
+| `src/service/` | Config, composition root, CLI, live start, readiness |
+| `src/observability/` | Journal, telemetry, redaction |
+| `src/ladder/` | Rungs, protocol bot, loopback, online, state parity, the next-rung hint |
+| `src/driver/` | Driver lane: one-run scenario, plan, RCON, Toxiproxy, backend matrix, logins, evidence checks, the NDJSON client driver, the run controller |
+| `src/spike/` | The frozen protocol spike: proxy, scenario, fake client, the runner |
+| `src/testbed/` | Cluster switch, transfer testbed, registry compare |
+| `test/` | One directory per `src/` directory, plus `tooling/` for the gate's own checks and `spike/` for the socket test |
+| `tools/driver/` | The Fabric client driver |
+| `deploy/driver/` | The driver-lane cluster environment |
