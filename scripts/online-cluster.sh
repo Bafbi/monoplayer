@@ -36,6 +36,8 @@
 #   MONOPLAYER_DEPLOYMENT          deployment to read    (default monoplayer)
 #   MONOPLAYER_BACKEND_HOST        backend host         (default the gate Paper)
 #   MONOPLAYER_BACKEND_PORT        backend port         (default 25565)
+#   MONOPLAYER_FRONT_HOST          proxy front host     (passed to the rung, empty by default)
+#   MONOPLAYER_FRONT_PORT          proxy front port     (passed to the rung, empty by default)
 #   MONOPLAYER_SECRETS_SOURCE      local secrets        (default ./.secrets)
 #
 # Exit codes: 0 the rung passed or was honestly not_observed, 1 it failed,
@@ -220,6 +222,7 @@ say "running $RUNG: backend $BACKEND_HOST:$BACKEND_PORT"
 set +e
 kubectl -n "$NAMESPACE" exec "$pod" -- env \
   MONOPLAYER_BACKEND_HOST="$BACKEND_HOST" MONOPLAYER_BACKEND_PORT="$BACKEND_PORT" \
+  MONOPLAYER_FRONT_HOST="${MONOPLAYER_FRONT_HOST:-}" MONOPLAYER_FRONT_PORT="${MONOPLAYER_FRONT_PORT:-}" \
   sh -c "cd /work && node $RUNG $rung_args"
 run_status=$?
 set -e

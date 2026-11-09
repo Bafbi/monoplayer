@@ -11,6 +11,7 @@ cheapest rung that can fail for the defect you are chasing.
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers; no sockets, no auth | socket framing, leg wiring, real timers, backend behavior |
 | 2 loopback | `mise run loopback` | about 3 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, client detach/reattach, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering, vanilla acceptance, and seamless switch until the reconfiguration path lands |
 | 3 online bot | `mise run online` | minutes | live backend, both account custodians | the same shape as rung 2 through the online front leg and a live backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
 | 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, live Velocity/Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
@@ -39,7 +40,7 @@ that covers the area you changed.
 
 | Task | Composes | Run it after touching |
 |---|---|---|
-| `mise run verify:relay` | `check`, `spike` | the relay, the legs, the join, the state cache |
+| `mise run verify:relay` | `check`, `spike`, `parity:run` | the relay, the legs, the join, the state cache, `src/core/clientbound-policy.js` |
 | `mise run verify:custody` | `check`, `online` (live backend, both custodians) | `src/custody/`, the custody store, `hasJoined`, offline identity |
 | `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, live backend) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
@@ -187,6 +188,76 @@ The runner builds:
   sends a chat message and a command the way a client does, with its own
   signature state. The fake backend must record both texts from the puppet's
   connection while the core's forwarded-frame count does not move (#19).
+
+## The client parity rung
+
+`mise run parity:run` answers one question: what does a client that joined a
+server directly see, that a client behind the proxy does not.
+
+It runs two protocol bots, records every clientbound `{state, name}` on each,
+decodes both play streams through `src/ladder/client-state.js`, and writes
+`.reports/client-parity-report.json`. The six decoded domains are compared by
+`compareSnapshots` in `src/ladder/state-parity.js`, the same comparator the
+attach replay check uses.
+
+Every frame kind either side saw becomes one row, with four verdicts:
+
+- `same`: both clients saw it, or neither did. A count difference stays in the
+  row as evidence and does not change the verdict.
+- `expected`: the difference follows from a decision the proxy already makes, so
+  the row carries the reason. `clientboundPolicy` in
+  `src/core/clientbound-policy.js` supplies it: a `per_leg` frame belongs to one
+  connection, a `block` frame is the proxy's own action, `cache_only` is the
+  cached login, and a `live_only` frame is traffic the two runs did not share.
+  Two decoded domains are expected to differ for the same reason: `pose`, which
+  the attach replay takes from the puppeted session, and `entities`, whose ids
+  belong to a connection.
+- `absent`: a capability that #19, #20, #21, or #22 owns has not landed yet. The
+  row names the issue and never fails the run. Today `play:player_chat` records
+  the #19 gap with evidence: the direct client gets the signed chat and the
+  proxied client does not, because the shipping chat mode is `read-only`.
+- `unexplained`: ordinary state reached the client that joined directly and never
+  reached the client behind the proxy. This is the only verdict that fails the
+  run, and it exits 1. The other direction is `expected`: state only the proxied
+  client saw came out of the attach replay, which carries the cache of a session
+  that started before the direct join.
+
+### The two lanes
+
+Without arguments the task runs the offline lane: the repo's own fake backend
+(`src/legs/fake-backend.js`) plus an in-process Monoplayer with the offline legs.
+Both clients attach at once, then one churn round sends a block change, a full
+window, one slot, an entity spawn and a move, server chat, and signed player
+chat. Every churn frame reaches each client by its own path, so the report
+measures the relay rather than the cache. No auth, no cluster, no `.secrets`.
+
+With `--backend HOST:PORT` and `--front HOST:PORT` it runs the endpoint lane: the
+two joins and nothing else, against a server and a proxy an operator stood up.
+Both endpoints are required. The harness never builds a proxy with live legs, so
+it holds no custody and cannot disturb a deployment. The two joins run one after
+the other, because a server kicks the first session when one account opens two.
+
+The harness never joins the live Excalia fleet. Any `*.excalia.fr` host exits 2
+before a socket opens, so a mistyped endpoint cannot measure a server this repo
+does not own.
+
+The dev lane is the pair to point it at, with both endpoints in the cluster:
+
+```bash
+MONOPLAYER_FRONT_HOST=monoplayer.monoplayer-dev.svc.cluster.local \
+MONOPLAYER_FRONT_PORT=25565 \
+  mise run dev:join -- --rung src/ladder/client-parity.js
+```
+
+`dev:join` runs the rung from a throwaway pod that copies the attach account's
+custody into its own directory, and it sets the backend to the dev Paper. The
+front leg is the dev lane's own Monoplayer, so the proxy under test is the branch
+image. A local run works the same way through two port-forwards
+(`kubectl -n monoplayer-dev port-forward svc/paper 25565:25565` and the same for
+`svc/monoplayer`), and it needs the attach account's live custody, so prefer the
+pod.
+
+The report is metadata only: no frame bytes, no `.secrets` paths, no tokens.
 
 ### Online rung assertion contract
 
