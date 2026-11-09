@@ -71,6 +71,7 @@ export function createFakeFrontLeg () {
   let serverboundHandler = null
   let detachHandler = null
   let clientSettingsHandler = null
+  let configuringHandler = null
 
   const client = {
     username: 'Bafbi',
@@ -85,6 +86,7 @@ export function createFakeFrontLeg () {
     setServerboundHandler (fn) { serverboundHandler = fn },
     setDetachHandler (fn) { detachHandler = fn },
     setClientSettingsHandler (fn) { clientSettingsHandler = fn },
+    setConfiguringHandler (fn) { configuringHandler = fn },
     writeRaw (buffer, meta) { sent.push({ kind: 'raw', name: meta?.name, buffer, meta }) },
     write (name, packet, { synth = false, meta } = {}) {
       sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta })
@@ -112,10 +114,16 @@ export function createFakeFrontLeg () {
       if (!decision.allowed) leg.end(`denied:${decision.reason}`)
       return decision
     },
-    // Simulate a serverbound play frame from the attached client.
-    serverbound ({ name, buffer, data = {} }) {
+    // Simulate a serverbound frame from the attached client, in the phase it
+    // was sent in: a configuration answer is not a play frame (#16).
+    serverbound ({ state = 'play', name, buffer, data = {} }) {
       if (!serverboundHandler) throw new Error('no serverbound handler')
-      serverboundHandler({ name, buffer: buffer ?? Buffer.from(`client:${name}`), data })
+      serverboundHandler({ state, name, buffer: buffer ?? Buffer.from(`client:${name}`), data })
+    },
+    // Simulate the client entering its own configuration phase (#16).
+    clientConfiguring ({ name = 'Bafbi', uuid = client.uuid } = {}) {
+      if (!configuringHandler) throw new Error('no configuring handler')
+      configuringHandler({ name, uuid })
     },
     // Simulate the client's Client Information frame (configuration or play).
     clientSettings ({ data = {} } = {}) {

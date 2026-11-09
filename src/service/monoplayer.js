@@ -44,8 +44,10 @@ import {
 } from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
+import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
+import { createPendingDialog } from '../core/pending-dialog.js'
 import { createSession, STATES } from '../core/session.js'
 import { redact, SENTINEL } from '../observability/redact.js'
 import { pathToFileURL } from 'node:url'
@@ -212,6 +214,9 @@ export function createMonoplayer ({
     transfersBlocked: 0,
     transfersFollowed: 0,
     transfersRefused: 0,
+    noticesSent: 0,
+    noticeFallbacks: 0,
+    noticeGhosts: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
@@ -219,6 +224,13 @@ export function createMonoplayer ({
     brandAnnounced: 0,
     attachesConfiguring: 0,
     configFramesRelayed: 0,
+    controlDialogsShown: 0,
+    controlDialogsCleared: 0,
+    controlDialogsRelayed: 0,
+    controlDialogsHeld: 0,
+    controlDialogsResent: 0,
+    controlDialogsAnswered: 0,
+    controlDialogsPuppetAnswered: 0,
     clientSettingsSent: 0,
     clientSettingsRewritten: 0,
     clientSettingsFailed: 0,
@@ -252,10 +264,7 @@ export function createMonoplayer ({
     'kick_disconnect',
     'cookie_request',
     'store_cookie',
-    'show_dialog',
-    'clear_dialog',
-    'disconnect',
-    'code_of_conduct'
+    'disconnect'
   ])
   const TRANSFER_REFUSED_NOTICE =
     '[Monoplayer] The server asked to move this session elsewhere. ' +
@@ -287,8 +296,18 @@ export function createMonoplayer ({
   let humanClientSettings = null
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
   let transferNoticeSent = false // one refusal notice per attach
+  let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let reconfigureRequested = false // this backend end is a server reconfiguration
   let pendingTransfer = null // target for the next reconnect_due
+  // #16: the last control dialog the human has not answered. It survives a
+  // detach and is re-sent on attach. A control dialog is neither cached nor
+  // replayed, so this is the one copy and a replay cannot deliver a stale one.
+  const pendingDialog = createPendingDialog()
+  // #16: the state of a dialog the puppet answered itself (the headless
+  // auto-click) on this connection. The leg answers the frame before the core
+  // sees it, so the core consumes this marker instead of holding a question
+  // that is already closed.
+  let puppetAnsweredDialog = null
   const transferChain = { visited: new Set(), depth: 0, resetTimer: null }
 
   function log (event, fields = {}) {
@@ -518,6 +537,104 @@ export function createMonoplayer ({
     if (LOGGED_BLOCKS.has(name)) log('clientboundBlocked', { state, name })
   }
 
+  // #16: the client that can take a control dialog of `state` right now. A play
+  // dialog needs a client in play; a configuration gate needs the client that
+  // is still following the puppet's configuration. Sent into the wrong phase,
+  // the client parses the frame as the wrong packet.
+  function canReceiveControl (state) {
+    if (state === 'play') return canRelayPlay()
+    if (state === 'configuration') return attached && session.state === STATES.CONFIGURING
+    return false
+  }
+
+  // #16: the backend leg answered a dialog itself with the configured action,
+  // before the frame reached the core. The next show in that state is not a
+  // question for the human.
+  function notePuppetDialogAnswer ({ state = null } = {}) {
+    if (state !== 'play' && state !== 'configuration') return { noted: false }
+    puppetAnsweredDialog = state
+    log('puppetDialogAnswer', { state })
+    return { noted: true, state }
+  }
+
+  // One path for every control dialog, in play and in configuration: hold the
+  // last unanswered one, relay it to the human who can answer it, and let the
+  // serverbound forwarder carry the answer back as the puppet's own frame. No
+  // timeout and no auto-click here: a dialog with no client waits, and which
+  // dialog is the human's to answer is #20's and #21's decision.
+  function handleControlDialog ({ state, name, buffer, data = {} }) {
+    // The puppet answered this one itself before the core heard about it, so
+    // there is nothing to hold and no human to ask. The marker is spent here
+    // either way: it belongs to exactly one show.
+    const answeredByPuppet = name !== 'clear_dialog' && puppetAnsweredDialog === state
+    puppetAnsweredDialog = null
+    if (answeredByPuppet) {
+      metrics.controlDialogsPuppetAnswered++
+      log('controlDialogPuppetAnswered', { state, name })
+      return { relayed: false }
+    }
+    if (name === 'clear_dialog') {
+      // The server withdrew its question. The client showing it must see that
+      // too, or the screen stays open on a dead dialog.
+      const outcome = pendingDialog.clear()
+      metrics.controlDialogsCleared++
+      log('controlDialogCleared', { state, hadPending: outcome.dropped })
+    } else {
+      const outcome = pendingDialog.show({ state, name, buffer, data })
+      metrics.controlDialogsShown++
+      log('controlDialogShown', { state, name, attached: isAttached(), replaced: outcome.replaced })
+    }
+
+    if (!canReceiveControl(state)) {
+      // Nothing to relay to. A shown dialog waits for a client that can answer
+      // it; a withdrawal has nothing to withdraw on a client that is not there.
+      if (name !== 'clear_dialog') metrics.controlDialogsHeld++
+      log('controlDialogNotRelayed', { state, name, attached: isAttached() })
+      return { relayed: false }
+    }
+    frontLeg.writeRaw(buffer, { state, name })
+    metrics.controlDialogsRelayed++
+    log('controlDialogRelayed', { state, name })
+    emit('control_dialog', { state, name })
+    return { relayed: true }
+  }
+
+  // #16: a client that just arrived in `state` receives the dialog it was not
+  // there to answer. Nothing else re-delivers it, because a control dialog is
+  // never cached and never replayed.
+  function resendPendingDialog (state) {
+    const frame = pendingDialog.forAttach(state)
+    if (frame === null) {
+      if (pendingDialog.held) {
+        // A configuration gate and a play attach are not a delivery: the client
+        // would parse the frame in its play phase. The dialog keeps waiting.
+        log('controlDialogWithheld', { wanted: state, held: pendingDialog.peek()?.state ?? null })
+      }
+      return { sent: false }
+    }
+    if (!canReceiveControl(state)) {
+      // The client is in the dialog's state but the puppet is not: a gate the
+      // backend asked before it moved on is answered by the backend's own
+      // session, not by the human (#21 owns that answer).
+      log('controlDialogWithheld', {
+        wanted: state,
+        held: frame.state,
+        reason: 'puppet_state',
+        backendConfiguring
+      })
+      return { sent: false }
+    }
+    try {
+      frontLeg.writeRaw(frame.buffer, { state: frame.state, name: frame.name })
+    } catch (error) {
+      log('controlDialogResendFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { sent: false }
+    }
+    metrics.controlDialogsResent++
+    log('controlDialogResent', { state: frame.state, name: frame.name })
+    return { sent: true }
+  }
+
   // One accounting for every chat frame the backend never receives, whether it
   // was dropped by policy, carried no text, or the leg could not send it. Kept
   // in one place so the counters and the event cannot diverge.
@@ -529,21 +646,75 @@ export function createMonoplayer ({
     emit('chat_blocked', { name, reason })
   }
 
+  // A proxy notice is local proxy speech, not server speech: it never carries
+  // the target address, and it is never cached, so no later attach replays it.
+  //
+  // The notice rides one synthetic advancement toast (#15), added and removed in
+  // the same call: the add queues the toast, and the removal leaves the client's
+  // advancement map as the server left it. A toast the front leg cannot write
+  // falls back to a local system chat line, so a client in play always gets the
+  // notice.
+  //
+  // The path runs in either state. With no client in play the front leg drops
+  // the writes, so the call reports that it wrote nothing rather than claiming a
+  // delivery nobody saw, and a caller (#22) can queue the notice for the next
+  // attach.
+  function sendProxyNotice (text, { reason = 'notice' } = {}) {
+    // A notice with no text is a caller bug. Say so in the log instead of
+    // throwing into a frame handler.
+    if (typeof text !== 'string' || text.length === 0) {
+      log('proxyNoticeRejected', { reason, error: 'text_required' })
+      return { sent: false, kind: null, id: null }
+    }
+    const id = noticeId(++noticeSeq)
+    if (!canRelayPlay()) {
+      log('proxyNoticeUndelivered', { reason, id, error: 'no_client_in_play' })
+      return { sent: false, kind: null, id }
+    }
+    const [add, removal] = noticeFrames({ text, id })
+    let failed = null
+    try {
+      frontLeg.write(add.name, add.packet, { synth: true })
+      frontLeg.write(removal.name, removal.packet, { synth: true })
+    } catch (error) {
+      failed = error
+      metrics.noticeFallbacks++
+      log('proxyNoticeFailed', { reason, id, error: String(error?.message ?? error) })
+      // The add may have landed before the removal failed. A removal is
+      // idempotent, because it deletes an id the client may never have held, so
+      // a retry is the only way back to a clean advancement state.
+      try {
+        frontLeg.write(removal.name, removal.packet, { synth: true })
+      } catch (cleanupError) {
+        // Both writes failed after the add landed, so the client keeps this one
+        // advancement until its state is rebuilt. The id is never reused, so no
+        // later notice names it.
+        metrics.noticeGhosts++
+        log('proxyNoticeGhost', { reason, id, error: String(cleanupError?.message ?? cleanupError) })
+      }
+    }
+    if (failed === null) {
+      metrics.noticesSent++
+      log('proxyNotice', { reason, kind: 'toast', id })
+      return { sent: true, kind: 'toast', id }
+    }
+    try {
+      const fallback = systemChatFrame(text)
+      frontLeg.write(fallback.name, fallback.packet, { synth: true })
+      metrics.noticesSent++
+      log('proxyNotice', { reason, kind: 'chat', id })
+      return { sent: true, kind: 'chat', id }
+    } catch (error) {
+      log('proxyNoticeLost', { reason, id, error: String(error?.message ?? error) })
+      return { sent: false, kind: null, id }
+    }
+  }
+
   // The refusal notice is local proxy speech, not server speech. It never
   // carries the target address.
   function sendTransferNotice () {
     transferNoticeSent = true
-    try {
-      frontLeg.write('system_chat', {
-        content: {
-          type: 'compound',
-          value: { text: { type: 'string', value: TRANSFER_REFUSED_NOTICE } }
-        },
-        isActionBar: false
-      })
-    } catch (error) {
-      log('transferNoticeFailed', { error: String(error?.message ?? error) })
-    }
+    return sendProxyNotice(TRANSFER_REFUSED_NOTICE, { reason: 'transfer_refused' })
   }
 
   // Shared teardown for a session that cannot continue: a backend fault, a
@@ -559,6 +730,10 @@ export function createMonoplayer ({
     backendConfiguring = false
     earlyAttach = null
     pendingEarlyReplay = null
+    // A dialog belongs to the backend session that asked it; the next session
+    // asks its own.
+    pendingDialog.clear()
+    puppetAnsweredDialog = null
     if (session.state === STATES.RECONNECTING) {
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
@@ -617,7 +792,14 @@ export function createMonoplayer ({
       port: valid ? port : null,
       depth: transferChain.depth
     })
-    if (isAttached() && !transferNoticeSent) sendTransferNotice()
+    // Only a client in play can display a notice: a configuring client would
+    // parse a play frame as configuration, and writing one would hand it a
+    // frame it cannot read. A refusal in that window is dropped rather than
+    // queued, because the queue belongs to the pending-notice work in #22.
+    if (canRelayPlay() && !transferNoticeSent) sendTransferNotice()
+    else if (isAttached() && !transferNoticeSent) {
+      log('transferNoticeSkipped', { reason: 'client_not_in_play' })
+    }
   }
 
   // A backend transfer. The frame never crosses to the front; the decision is
@@ -707,9 +889,17 @@ export function createMonoplayer ({
     for (const frame of cache.snapshot().config) {
       if (frame.name === 'finish_configuration') continue
       if (!clientboundPolicy('configuration', frame.name).relay) continue
-      frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
-      metrics.configFramesRelayed++
+      // Count only what actually reached the client: the front refuses a frame
+      // whose state is not the client's own.
+      if (frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) {
+        metrics.configFramesRelayed++
+      }
     }
+    // #16: a held configuration gate is not sent here. This call-in runs during
+    // the client's login phase, before the library writes Login Success, so a
+    // configuration frame written now is read as a login packet. The front
+    // reports the configuration phase through configuringReady, and the gate
+    // goes out there.
     return { attached: true, configuring: true, replayed: metrics.configFramesRelayed }
   }
 
@@ -737,6 +927,10 @@ export function createMonoplayer ({
     // #18: the human is now the one playing, so their client information goes
     // to the server with the backend cap this session already learned.
     sendClientSettings(reason === 'attach' ? 'attach' : 'early_attach')
+
+    // #16: a dialog that was waiting for a client goes after the replay, so the
+    // client is in play when the screen opens.
+    resendPendingDialog('play')
 
     log('attach', {
       name,
@@ -844,7 +1038,9 @@ export function createMonoplayer ({
         name,
         result: !metricPolicy
           ? 'ignored'
-          : metricPolicy.decision === DECISION.BLOCK ? 'blocked' : 'forwarded'
+          : metricPolicy.decision === DECISION.BLOCK
+            ? 'blocked'
+            : metricPolicy.decision === DECISION.CONTROL ? 'control' : 'forwarded'
       })
       if (state === 'configuration') {
         metrics.configFrames++
@@ -869,21 +1065,29 @@ export function createMonoplayer ({
           })
           return
         }
-        if (policy.decision === DECISION.BLOCK) {
-          blockClientbound('configuration', name, policy, data)
-          return
-        }
-        // #16: the backend is in its configuration phase. Record that, so a
-        // client may attach now and follow this stream live.
+        // #16: the backend is in its configuration phase, whatever this frame
+        // turns out to be. Record it first, so a client may attach now and
+        // follow this stream live — a gate can be the first frame of the phase.
         if (!backendConfiguring) {
           backendConfiguring = true
           log('backendConfiguring', { state: session.state })
         }
+        if (policy.decision === DECISION.CONTROL) {
+          // #16: a configuration gate is the human's to answer. The holder keeps
+          // it while no client follows this stream.
+          handleControlDialog({ state: 'configuration', name, buffer, data })
+          return
+        }
+        if (policy.decision === DECISION.BLOCK) {
+          blockClientbound('configuration', name, policy, data)
+          return
+        }
         if (!policy.cache) return
         const pushed = cache.push('configuration', name, buffer, data)
         if (pushed.cached && policy.relay && session.state === STATES.CONFIGURING) {
-          frontLeg.writeRaw(buffer, { state: 'configuration', name })
-          metrics.configFramesRelayed++
+          if (frontLeg.writeRaw(buffer, { state: 'configuration', name }) !== false) {
+            metrics.configFramesRelayed++
+          }
         }
         return
       }
@@ -911,7 +1115,7 @@ export function createMonoplayer ({
       const attachedNow = isAttached()
       // Classify before recording so the frame counter carries the outcome.
       const decision = attachedNow
-        ? classifyServerbound(name, serverbound.data, { mode: cfg.chat })
+        ? classifyServerbound(name, serverbound.data, { mode: cfg.chat, state })
         : { action: 'drop', chat: false }
       journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer })
       telemetry.metric('monoplayer.frames', 1, {
@@ -976,10 +1180,32 @@ export function createMonoplayer ({
         bumpName(metrics.serverboundDroppedByName, serverbound.name)
         return
       }
-      session.setPose(
-        capturePose(session.currentPose, serverbound.name, serverbound.data)
-      )
-      backendLeg.writeRaw(serverbound.buffer, { state: 'play', name: serverbound.name })
+      // #16: the packet id is state-scoped, so the frame must be written into
+      // the state it was sent in. A configuration answer that arrives after the
+      // play login, or a play frame while the puppet is still configuring, is
+      // the wrong packet id and would end the backend session.
+      if ((state === 'configuration') !== backendConfiguring) {
+        metrics.serverboundDropped++
+        bumpName(metrics.serverboundDroppedByName, name)
+        log('serverboundDropped', { name, state, reason: 'puppet_state_mismatch' })
+        return
+      }
+      if (state === 'play') {
+        session.setPose(
+          capturePose(session.currentPose, serverbound.name, serverbound.data)
+        )
+      }
+      // #16: the frame carries its own state. A configuration answer reaches a
+      // puppet that is still in configuration, where a play-state write would
+      // be a different packet id.
+      backendLeg.writeRaw(serverbound.buffer, { state, name: serverbound.name })
+      // The human answered a control dialog: the held copy is no longer
+      // pending, so a later attach is not shown a question already answered.
+      const answered = pendingDialog.answer({ state, name: serverbound.name })
+      if (answered.answered) {
+        metrics.controlDialogsAnswered++
+        log('controlDialogAnswered', { name: serverbound.name, state: answered.state, dialog: answered.name })
+      }
       metrics.serverboundForwarded++
       bumpName(metrics.serverboundByName, serverbound.name)
       if (ACTION_SERVERBOUND.has(serverbound.name)) {
@@ -991,12 +1217,31 @@ export function createMonoplayer ({
       detachPlayer({ reason })
     })
 
+    // #16: the client entered its own configuration phase; a gate the backend
+    // asked before the client arrived is delivered there.
+    frontLeg.setConfiguringHandler(({ name } = {}) => {
+      configuringReady({ name })
+    })
+
     log('start', { whitelist: identity.whoAmI().whitelist, puppet: cfg.puppet, started: true })
     emit('start')
   }
 
   // Backend play frame routing (per-leg keep-alive/pong answering, pose
   // teleports, cache, live forwarding).
+  // #16: the front reports that the attached client entered its own
+  // configuration phase. This is the first moment a configuration frame reaches
+  // it in a state it parses, so a held configuration gate goes out here.
+  function configuringReady ({ name = null } = {}) {
+    if (!attached || session.state !== STATES.CONFIGURING) {
+      log('configuringReadyIgnored', { reason: 'not_configuring', state: session.state })
+      return { attached: false, sent: false }
+    }
+    const outcome = resendPendingDialog('configuration')
+    log('configuringReady', { name, sent: outcome.sent === true })
+    return { attached: true, sent: outcome.sent === true }
+  }
+
   // The replay a pre-warm client still owes: sent once, when the join prefix
   // is warm, whether the warm came from the marker or the readiness fallback.
   function replayPendingEarly () {
@@ -1127,6 +1372,10 @@ export function createMonoplayer ({
     }
 
     const policy = clientboundPolicy('play', name)
+    if (policy.decision === DECISION.CONTROL) {
+      handleControlDialog({ state: 'play', name, buffer, data })
+      return
+    }
     if (policy.decision === DECISION.BLOCK) {
       blockClientbound('play', name, policy, data)
       return
@@ -1169,11 +1418,14 @@ export function createMonoplayer ({
     // front pipeline call-ins (real front-leg adapter drives these):
     processLoginStart,
     attachConfiguringPlayer,
+    configuringReady,
+    notePuppetDialogAnswer,
     noteClientSettings,
     processVerifySession,
     attachPlayer,
     detachPlayer,
     abortTransfer,
+    notice: sendProxyNotice,
     // lifecycle:
     start,
     stop,
@@ -1181,6 +1433,7 @@ export function createMonoplayer ({
     get attached () { return isAttached() },
     get backendViewDistance () { return backendViewDistance },
     get backendConfiguring () { return backendConfiguring },
+    get pendingDialog () { return pendingDialog },
     get frontPlayReady () { return frontPlayReady },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }

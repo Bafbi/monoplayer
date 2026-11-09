@@ -11,6 +11,7 @@ cheapest rung that can fail for the defect you are chasing.
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers; no sockets, no auth | socket framing, leg wiring, real timers, backend behavior |
 | 2 loopback | `mise run loopback` | about 3 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, client detach/reattach, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering, vanilla acceptance, and seamless switch until the reconfiguration path lands |
 | 3 online bot | `mise run online` | minutes | live backend, both account custodians | the same shape as rung 2 through the online front leg and a live backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
 | 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, live Velocity/Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
@@ -39,7 +40,7 @@ that covers the area you changed.
 
 | Task | Composes | Run it after touching |
 |---|---|---|
-| `mise run verify:relay` | `check`, `spike` | the relay, the legs, the join, the state cache |
+| `mise run verify:relay` | `check`, `spike`, `parity:run` | the relay, the legs, the join, the state cache, `src/core/clientbound-policy.js` |
 | `mise run verify:custody` | `check`, `online` (live backend, both custodians) | `src/custody/`, the custody store, `hasJoined`, offline identity |
 | `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, live backend) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
@@ -150,8 +151,7 @@ The runner builds:
   `backendLogins` at 1, lands the first synthesized position at the last pose
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
 - `O14` the second bot recorded no leftover bytes and the front wire checker
-  still rejected nothing.
-- `O15` one backend fault produces one reconnect: two backend logins and no
+  still rejected nothing.- `O15` one backend fault produces one reconnect: two backend logins and no
   loop.
 - `O16` the attach after the reconnect replays the join prefix and a chunk.
 - `O17` the replay sends the window 0 base before every later `set_slot`.
@@ -165,6 +165,13 @@ The runner builds:
 - `O22` the puppet follows the target and re-warms there.
 - `O23` a fresh attach after the move replays the target server state.
 - `O24` the puppet leg answers a stored cookie request.
+- `O24b` a proxy notice reaches the client complete as a toast and leaves no
+  advancement behind: an invalid-target refusal sends two `advancements`
+  frames, the bot decodes both, the first carries a `monoplayer:notice/` id with
+  `show_toast` set, `showAdvancements` true, and every requirement group met by
+  its completed criterion, the second removes that id with `reset` false, and
+  the bot's advancement state is empty afterwards (#15). Emptying the frame's
+  `requirements` fails the check.
 - `O25` the puppet announced `minecraft:brand` = `fabric` once per backend
   connection: the count of brand frames equals the fake backend's login count,
   on the hub and on the transfer target.
@@ -187,13 +194,128 @@ The runner builds:
   sends a chat message and a command the way a client does, with its own
   signature state. The fake backend must record both texts from the puppet's
   connection while the core's forwarded-frame count does not move (#19).
+- `O30` a dialog sent while nobody is attached is held (`controlDialogsHeld`
+  1) and re-sent to the reattaching client (`controlDialogsResent` 1, one
+  `show_dialog` decoded by the second bot, a `controlDialogResent` log line).
+- `O31` the client's answer reaches the backend as the puppet's dialog click:
+  one `custom_click_action` with the dialog's id on the fake backend,
+  `controlDialogsAnswered` 1, and nothing left pending.
+
+## The client parity rung
+
+`mise run parity:run` answers one question: what does a client that joined a
+server directly see, that a client behind the proxy does not.
+
+It runs two protocol bots, records every clientbound `{state, name}` on each,
+decodes both play streams through `src/ladder/client-state.js`, and writes
+`.reports/client-parity-report.json`. The six decoded domains are compared by
+`compareSnapshots` in `src/ladder/state-parity.js`, the same comparator the
+attach replay check uses.
+
+Every frame kind either side saw becomes one row, with four verdicts. The
+policy table is the code under test, so it never decides a verdict on its own.
+It says which clients should see a frame, and the two clients say which ones did.
+A row that contradicts its prediction is a finding, in either direction.
+
+| Decision | Predicted sides | A row that contradicts it |
+|---|---|---|
+| `state` | both, and the proxied side is a superset because the cache can hold earlier state | the direct client saw it and the proxied one did not: the relay lost it |
+| `cache_only` | both, one live and one replayed | either client without a login |
+| `per_leg` | both, each from its own leg | either client without one |
+| `live_only` | both, when the traffic happened in both runs | either client without it, on a deterministic lane |
+| `block` | the direct client only | the proxied client saw it, which is a frame that crossed when it must not |
+| `kick_disconnect` | both | the proxied client never received the kick as a frame |
+
+The four verdicts:
+
+- `same`: the observation matches the prediction on both sides, and the counts
+  agree where they have to. On a lane that is not deterministic a count
+  difference is timing, and the row says so without changing the verdict.
+- `expected`: an observation the prediction allows. A `block` frame only the
+  direct client saw, state the attach replay inserted, live-only traffic one run
+  missed. The row names what was predicted and what was seen.
+- `absent`: a capability that #19, #20, #21, or #22 owns has not landed yet. The
+  row names the issue and never fails the run. Today `play:player_chat` records
+  the #19 gap with evidence: the direct client gets the signed chat and the
+  proxied client does not, because the shipping chat mode is `read-only`.
+- `unexplained`: the observation contradicts the prediction. This is the only
+  verdict that fails the run, and it exits 1.
+
+Two decoded domains are predicted to differ between two connections: `pose`,
+which the attach replay takes from the puppeted session, and `entities`, whose
+ids belong to a connection. The other four must match, and they fail the run
+when they do not.
+
+A count is a finding only where it can be. The offline lane is deterministic, so
+a count difference there is a frame lost or repeated. A real server's counts
+drift with time, so a count there stays evidence. The report's first line names
+the lane and which rule applied.
+
+### The two lanes
+
+Without arguments the task runs the offline lane: the repo's own fake backend
+(`src/legs/fake-backend.js`) plus an in-process Monoplayer with the offline legs.
+Both clients attach at once, then one churn round sends a block change, a full
+window, one slot, an entity spawn and a move, server chat, and signed player
+chat. Every churn frame reaches each client by its own path, so the report
+measures the relay rather than the cache. No auth, no cluster, no `.secrets`.
+
+With `--backend HOST:PORT` and `--front HOST:PORT` it runs the endpoint lane: the
+two joins and nothing else, against a server and a proxy an operator stood up.
+Both endpoints are required. The harness never builds a proxy with live legs, so
+it never holds the puppet's custody and cannot disturb the live deployment. The
+two joins run one after the other, because a server kicks the first session when
+one account opens two.
+
+The harness never joins the live Excalia fleet. Any `*.excalia.fr` host exits 2
+before a socket opens, so a mistyped endpoint cannot measure a server this repo
+does not own.
+
+The version is the target's, not the rung's. The fake lane serves 26.1 and
+refuses anything else. The dev lane and the testbed serve 26.2, so pass
+`--version 26.2`, or `MONOPLAYER_VERSION=26.2`, which
+`scripts/online-cluster.sh` forwards into the pod.
+
+Three pairs this repo deploys, and where each stands:
+
+| Target | `--backend` | `--front` | Version | Stands? |
+|---|---|---|---|---|
+| the offline lane | the fake backend | the rung's own Monoplayer | 26.1 | yes, `mise run parity:run` |
+| the dev lane | `paper.monoplayer-dev.svc.cluster.local:25565` | `monoplayer.monoplayer-dev.svc.cluster.local:25565` | 26.2 | wired, needs `dev:up`, its whitelist, and #44's account |
+| the transfer testbed | `paper-hub.monoplayer-gate-b.svc.cluster.local:25565` | `monoplayer-testbed.monoplayer.svc.cluster.local:25565` | 26.2 | wired, needs `testbed:up` |
+| the gate Paper | `paper.monoplayer-gate-b.svc.cluster.local:25565` | nothing is deployed | 26.2 | **unmet**: no proxy serves in front of it |
+
+The dev lane is the pair to run first. It needs no port-forward, because both
+endpoints are in the cluster:
+
+```bash
+MONOPLAYER_FRONT_HOST=monoplayer.monoplayer-dev.svc.cluster.local \
+MONOPLAYER_FRONT_PORT=25565 MONOPLAYER_VERSION=26.2 \
+  mise run dev:join -- --rung src/ladder/client-parity.js
+```
+
+`dev:join` runs the rung from a throwaway pod that copies the attach account's
+custody into its own directory, and it sets the backend to the dev Paper. The
+front leg is the dev lane's own Monoplayer, so the proxy under test is the branch
+image. Two things must already be true: the dev lane is up (`mise run dev:up`),
+and its attach whitelist names that account. The lane's own account lands with
+[#44](https://github.com/Bafbi/monoplayer/issues/44). A local run works the same
+way through two port-forwards (`kubectl -n monoplayer-dev port-forward svc/paper
+25565:25565` and the same for `svc/monoplayer`), and it needs the attach
+account's custody, so prefer the pod.
+
+The gate Paper has no row it can meet. A proxy in front of it needs the puppet's
+custody, and the harness will not build one, because that is the live custody the
+deployment owns. The dev lane is the deployed proxy that exists, and the endpoint
+lane's refusal tests cover the rest.
+
+The report is metadata only: no frame bytes, no `.secrets` paths, no tokens.
 
 ### Online rung assertion contract
 
 `mise run online` returns N1-N13. `evaluateOnlineAssertions` in
 `src/ladder/online.js` is the source; the id list and the claim behind each id
 live there.
-
 - `N13` the state the attaching client decoded matches the state the attach
   replay claimed. The expectation is the cache snapshot taken when the replay was
   built, compared with the first K frames the client decoded, where K is the

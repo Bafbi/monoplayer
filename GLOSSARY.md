@@ -141,8 +141,16 @@ The one table that decides, for each clientbound frame, whether Monoplayer cache
 _Avoid_: rules, filters, packet list
 
 **Clientbound decision**:
-One of five outcomes the clientbound policy returns for a frame. State caches, relays, and replays it; cache only caches and replays; live only relays while attached; per leg leaves it to the connection that received it; block never crosses.
+One of six outcomes the clientbound policy returns for a frame. State caches, relays, and replays it; cache only caches and replays; live only relays while attached; control relays it to the answering player and never caches or replays it; per leg leaves it to the connection that received it; block never crosses.
 _Avoid_: action, verdict
+
+**Control dialog**:
+A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the player who answers it, and their answer goes back to the server as the puppet's own frame.
+_Avoid_: prompt, popup, form, UI
+
+**Pending dialog**:
+The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog` or on the player's answer, and re-sends it when a player attaches in its phase.
+_Avoid_: dialog queue, dialog cache
 
 **Per-leg frame**:
 A frame that belongs to the connection that received it, such as a keep-alive, a position, a ping, or a bundle delimiter. Each leg answers or ignores its own.
@@ -187,6 +195,10 @@ _Avoid_: mute, disable chat
 **Read-only chat**:
 The `read-only` chat mode: the attaching player sees the server's chat and cannot speak. `system_chat` and `profileless_chat` are relayed; the player's own chat text and the server's signed `player_chat` stay off.
 _Avoid_: muted chat, one-way chat
+
+**Proxy notice**:
+A message Monoplayer writes to the attaching player in its own voice, such as a refused transfer. It rides a synthetic advancement built to show a toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
+_Avoid_: local chat, notice toast
 
 **Wire check**:
 A strict parse of one clientbound frame that fails on leftover bytes or on a frame name that does not match its state.
