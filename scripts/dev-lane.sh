@@ -201,8 +201,9 @@ status() {
   replicas=$(live_replicas)
   say "live $LIVE_NAMESPACE/$LIVE_DEPLOYMENT available replicas: ${replicas:-unknown}"
   local players
+  # The namespace is gone after `down`, and this read must not fail the report.
   players=$(kubectl -n "$DEV_NAMESPACE" get configmap monoplayer-dev-config \
-    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n')
+    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n') || true
   case "$players" in
     *\"players\":\[\]*) say 'attach whitelist is empty: nobody can attach yet' ;;
     "") : ;;
