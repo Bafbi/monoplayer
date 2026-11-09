@@ -95,7 +95,7 @@ change what the server or the client does.
 |---|---|---|
 | `player`, `uuid` | the login profile | none: the same account joins both ways |
 | `address` | the socket | **the one accepted difference**: the proxy's egress address reads as a client behind a VPN |
-| `brand` | `minecraft:brand` in configuration | none: the puppet announces `fabric` |
+| `brand` | `minecraft:brand` in configuration | none: the puppet announces `fabric`, and the baseline announces the same brand because it stands in for the human's Fabric client |
 | `locale`, `viewDistance`, `mainHand`, `skinParts` | `settings` | none once a human has attached; the view distance is the backend's cap, not the human's render distance |
 | `chatSession` | the session key registration | none: both joins register the account's own key, so the field matches. The human's key never crosses |
 | `resourcePack` | the resource-pack status | none: the puppet answers its own pack |
@@ -103,6 +103,28 @@ change what the server or the client does.
 
 Anything not in that table is a finding, and the comparison fails the run for
 it.
+
+**The packet fields are members of one value object.** On 26.x, ProtocolLib
+exposes the settings packet and the custom payload as a single object, not as a
+row of fields: `settings fields 1: 0=ClientInformation[language=en_us,
+viewDistance=10, ..., modelCustomisation=127, mainHand=RIGHT, ...]` and
+`DiscardedPayload[id=minecraft:brand, data=[B@...]`. The plugin reads those
+members by name (`language`, `viewDistance`, `modelCustomisation`,
+`mainHand`, `id`, `data`), which is what `skinParts` and `brand` come
+from. An index read is kept as the fallback for a packet shape that still carries
+flat fields, and a member that is not there leaves its field absent rather than
+guessed.
+
+**Three fields the gate Paper cannot show.** `codeOfConduct` and
+`codeOfConductAccepted` are absent because the gate Paper runs with
+`enable-code-of-conduct=false` in its `server.properties`: the server never
+sends the gate, so no accept can arrive, on any client version. `resourcePack`
+is absent because the gate Paper serves no resource pack, so no status event
+fires. The report marks each one absent and prints the reason, in
+`ABSENT_REASONS` in `src/ladder/observer.js`. Observing the gate needs a Paper
+that serves it, which the G0 driver lane cannot: a real client sitting at a
+code-of-conduct screen cannot finish joining, and that lane is a human-witnessed
+run.
 
 **Not recorded yet:** dialog interactions. The plugin has no dialog field, so a
 dialog and its click are invisible to this report. The human-answer path is

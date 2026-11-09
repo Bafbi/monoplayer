@@ -18,6 +18,7 @@
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { brandFrame, FABRIC_BRAND } from '../core/client-settings.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { resolveAccount } from '../custody/accounts.js'
 import { createBot } from './bot.js'
@@ -63,6 +64,28 @@ export function resolveBotIdentity ({ accountsDir = DEFAULT_ACCOUNTS_DIR, select
   }
 }
 
+// #78: the baseline client stands in for the human's Fabric client, which is the
+// client #17 decided the server sees, so it announces the brand the proxy
+// announces. Without it the report's brand row compares what the puppet says
+// against nothing, and a bot that says nothing is a tell a real server can see.
+// The frame goes out once per connection, on the first frame the server sends in
+// configuration, which is where the proxy writes its own.
+export function announceBrand (client, { brand = FABRIC_BRAND, log = () => {} } = {}) {
+  if (typeof client?.once !== 'function' || typeof client?.write !== 'function') {
+    throw new TypeError('client must be a minecraft-protocol client')
+  }
+  client.once('select_known_packs', () => {
+    const frame = brandFrame(brand)
+    try {
+      client.write(frame.name, frame.packet)
+      log('baselineBrand', { channel: frame.packet.channel, brand })
+    } catch (error) {
+      log('baselineBrandFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+  })
+  return client
+}
+
 // Join, confirm the play login arrived, leave. The observer on the server is what
 // records the view; this only has to produce one join.
 export async function runBaseline ({
@@ -91,6 +114,7 @@ export async function runBaseline ({
     deviceType: identity.deviceType,
     log
   })
+  announceBrand(bot.client, { log })
 
   try {
     await bot.ready(timeoutMs)

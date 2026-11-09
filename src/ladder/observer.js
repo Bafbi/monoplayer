@@ -36,6 +36,20 @@ export const KNOWN_DIFFERENCES = Object.freeze({
   address: 'the proxy egress address is the one accepted difference, and reads as a client behind a VPN'
 })
 
+// Why a field can be absent on both joins, for the fields this lane cannot
+// observe at all. Measured on the 26.2 gate Paper, and they are facts about the
+// server, not about the proxy: the gate Paper runs with
+// enable-code-of-conduct=false, and it serves no resource pack, so neither the
+// gate nor a pack status ever reaches a client. A field that is absent with no
+// line here is named as unexplained by formatReport instead of excused: the
+// brand, the skin parts and the chat session read a value on this lane, so their
+// silence would be a regression.
+export const ABSENT_REASONS = Object.freeze({
+  codeOfConduct: 'the gate Paper runs with enable-code-of-conduct=false, so the server never sends the gate',
+  codeOfConductAccepted: 'the gate Paper runs with enable-code-of-conduct=false, so there is no gate to accept',
+  resourcePack: 'the gate Paper serves no resource pack, so no status event ever fires'
+})
+
 const absent = value => value === undefined || value === null
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -49,7 +63,12 @@ export function compareViews (baseline = {}, puppet = {}) {
     else if (same(left, right)) verdict = 'same'
     else if (KNOWN_DIFFERENCES[field]) verdict = 'expected'
     else verdict = 'unexplained'
-    return { field, baseline: left ?? null, puppet: right ?? null, verdict }
+    const entry = { field, baseline: left ?? null, puppet: right ?? null, verdict }
+    // A reason explains an absence; it never stands in for a value. The moment a
+    // join reports the field, the verdict is no longer 'absent' and the reason is
+    // gone with it.
+    if (verdict === 'absent') entry.reason = ABSENT_REASONS[field] ?? null
+    return entry
   })
   const unexplained = fields.filter(entry => entry.verdict === 'unexplained')
   return {
@@ -116,11 +135,15 @@ export function readView (file) {
 export function formatReport (report) {
   const lines = report.fields.map(entry => {
     const mark = entry.verdict === 'unexplained' ? 'FAIL' : entry.verdict.toUpperCase()
-    return `${mark.padEnd(12)} ${entry.field}: baseline=${JSON.stringify(entry.baseline)} puppet=${JSON.stringify(entry.puppet)}`
+    const line = `${mark.padEnd(12)} ${entry.field}: baseline=${JSON.stringify(entry.baseline)} puppet=${JSON.stringify(entry.puppet)}`
+    if (entry.verdict !== 'absent') return line
+    return `${line} -- ${entry.reason ?? 'no reason recorded'}`
   })
+  const bare = report.absent.filter(entry => entry.reason === null || entry.reason === undefined)
   lines.push('')
   lines.push(report.ok
-    ? `observer: PASS ${report.fields.length} fields, ${report.expected.length} expected, ${report.absent.length} absent`
+    ? `observer: PASS ${report.fields.length} fields, ${report.expected.length} expected, ${report.absent.length} absent` +
+      ` (${report.absent.length - bare.length} with a reason${bare.length > 0 ? `, ${bare.length} without: ${bare.map(entry => entry.field).join(', ')}` : ''})`
     : `observer: FAIL ${report.unexplained.length} unexplained: ${report.unexplained.map(entry => entry.field).join(', ')}`)
   return lines.join('\n')
 }

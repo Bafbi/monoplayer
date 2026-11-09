@@ -12,7 +12,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  ABSENT_REASONS,
   compareViews,
+  formatReport,
   lastView,
   main,
   records,
@@ -75,6 +77,42 @@ test('a field neither side reports is absent, not a pass', () => {
   const report = compareViews(without, other)
   assert.equal(report.ok, true)
   assert.equal(report.fields.find(entry => entry.field === 'resourcePack').verdict, 'absent')
+})
+
+// #78: three fields cannot be observed on the gate Paper at all. Absent is the
+// honest verdict, and a reason is what makes it a measurement rather than a hole.
+test('an absent field carries the reason the report can give', () => {
+  const without = base()
+  for (const field of ['codeOfConduct', 'codeOfConductAccepted', 'resourcePack']) delete without[field]
+  const other = { ...without }
+  const report = compareViews(without, other)
+  assert.equal(report.ok, true)
+  for (const entry of report.absent) {
+    assert.equal(typeof entry.reason, 'string', entry.field + ' carries a reason')
+    assert.equal(entry.reason, ABSENT_REASONS[entry.field])
+  }
+  assert.match(report.absent.find(entry => entry.field === 'codeOfConduct').reason, /enable-code-of-conduct/)
+  assert.match(report.absent.find(entry => entry.field === 'resourcePack').reason, /resource pack/)
+})
+
+test('an absence with no declared reason is named as unexplained, not excused', () => {
+  const without = base()
+  delete without.mainHand
+  const other = { ...without }
+  const report = compareViews(without, other)
+  const entry = report.fields.find(field => field.field === 'mainHand')
+  assert.equal(entry.verdict, 'absent')
+  assert.equal(entry.reason, null)
+  assert.match(formatReport(report), /mainHand: .* -- no reason recorded/)
+  assert.match(formatReport(report), /0 with a reason, 1 without: mainHand/)
+})
+
+test('a reason never stands in for a value', () => {
+  const report = compareViews(base(), base())
+  for (const entry of report.fields) {
+    assert.equal('reason' in entry, false, entry.field + ' carries a value, so it carries no reason')
+  }
+  assert.match(formatReport(report), /\nobserver: PASS 13 fields/)
 })
 
 test('every compared field is declared', () => {
