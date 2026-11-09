@@ -33,6 +33,12 @@ description = "Run the product offline loopback rung (real legs, fake backend, p
 depends = ["install"]
 run = "node src/ladder/loopback.js || node src/ladder/next-rung.js loopback $?"
 
+[tasks."parity:run"]
+description = "Run the client parity report: two protocol bots join a server, one directly and one through the proxy, compared (#13)."
+depends = ["install"]
+wait_for = ["check"]
+run = "node src/ladder/client-parity.js || node src/ladder/next-rung.js parity:run $?"
+
 [tasks.online]
 description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and the live backend)."
 depends = ["install"]
@@ -55,8 +61,8 @@ depends = ["lint", "test", "loopback"]
 # schedules nothing, so a bare `mise run online` is unchanged.
 
 [tasks."verify:relay"]
-description = "Verify a relay change: the gate, then the frozen protocol spike."
-depends = ["check", "spike"]
+description = "Verify a relay change: the gate, the frozen protocol spike, then the client parity report."
+depends = ["check", "spike", "parity:run"]
 
 [tasks."verify:custody"]
 description = "Verify a custody change: the gate, then the online bot rung (needs the live backend and both custodians)."

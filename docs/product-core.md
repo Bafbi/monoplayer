@@ -260,7 +260,7 @@ never replayed.
   still displays and the client marks that sender's chain as broken, which only
   changes the acknowledgements the human's client would have sent. Those are
   dropped, because they describe the human's stream. No run has confirmed the
-  display behaviour yet; #13 is where it gets confirmed.
+  display behaviour yet. #62 is where a real client confirms it.
   `profileless_chat` is the unsigned player variant and is relayed in every
   mode.
 - Serverbound `chat_session_update`, `chat_ack`, and

@@ -38,13 +38,13 @@ test('the port has to be a port', async () => {
 test('an account that does not resolve fails before any socket opens', async () => {
   await assert.rejects(
     () => runBaseline({ host: '127.0.0.1', port: 25565, accountsDir: accountsDir(), account: 'nosuchpuppet' }),
-    /cannot resolve the baseline account/
+    /cannot resolve the account/
   )
 })
 
 test('an empty accounts directory is reported, not guessed at', async () => {
   await assert.rejects(
     () => runBaseline({ host: '127.0.0.1', port: 25565, accountsDir: accountsDir(null) }),
-    /cannot resolve the baseline account/
+    /cannot resolve the account/
   )
 })
