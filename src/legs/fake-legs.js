@@ -64,6 +64,7 @@ export function createFakeFrontLeg () {
   let loginStartHandler = null
   let serverboundHandler = null
   let detachHandler = null
+  let clientSettingsHandler = null
 
   const client = {
     username: 'Bafbi',
@@ -77,6 +78,7 @@ export function createFakeFrontLeg () {
     setLoginStartHandler (fn) { loginStartHandler = fn },
     setServerboundHandler (fn) { serverboundHandler = fn },
     setDetachHandler (fn) { detachHandler = fn },
+    setClientSettingsHandler (fn) { clientSettingsHandler = fn },
     writeRaw (buffer, meta) { sent.push({ kind: 'raw', name: meta?.name, buffer, meta }) },
     write (name, packet, { synth = false, meta } = {}) {
       sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta })
@@ -108,6 +110,11 @@ export function createFakeFrontLeg () {
     serverbound ({ name, buffer, data = {} }) {
       if (!serverboundHandler) throw new Error('no serverbound handler')
       serverboundHandler({ name, buffer: buffer ?? Buffer.from(`client:${name}`), data })
+    },
+    // Simulate the client's Client Information frame (configuration or play).
+    clientSettings ({ data = {} } = {}) {
+      if (!clientSettingsHandler) throw new Error('no client settings handler')
+      clientSettingsHandler(data)
     },
     // Simulate the client going away.
     clientDisconnect ({ reason = 'player_quit' } = {}) {

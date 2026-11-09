@@ -38,6 +38,9 @@
 //      belongs to the front leg (omitted via the join-synth option).
 //   5. serverbound play frames (raw buffer + decoded data) go to the core's
 //      setServerboundHandler pipeline; client end/error go to the core detach.
+//   6. the client's Client Information (`settings`) is reported to the core as
+//      it arrives, in configuration or play (#18). The core owns what the
+//      backend sees: the human's fields with the backend's view distance cap.
 //
 // Identity: the attaching client is whitelisted as itself (real hasJoined
 // profile online, vanilla offline UUID offline). The replayed play stream
@@ -185,6 +188,17 @@ export function shouldDenySecondAttach (attached, client) {
   return Boolean(attached && attached !== client)
 }
 
+// Which client information frames the core hears about. Two rules:
+//   - only the client that holds the attach slot, so a racing or denied
+//     connection can never overwrite the playing human's fields;
+//   - only outside play, because a play-state change travels the normal
+//     serverbound pipeline, where the core rewrites it with the view distance
+//     cap. Reporting it here too would write the packet to the backend twice.
+export function shouldReportClientSettings ({ attached, client, state = null }) {
+  if (!attached || attached !== client) return false
+  return state !== 'play'
+}
+
 // Core loginStart decisions fail closed: an exception, a missing decision from
 // a handler that ran, or any decision that is not allowed === true denies.
 function evaluateCoreDecision (coreDecision) {
@@ -288,6 +302,7 @@ function createFrontLeg ({
   let loginStartHandler = null // core check 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
   let detachHandler = null // core detach
+  let clientSettingsHandler = null // core client-information capture (#18)
   let errorHandler = null
   let attached = null // the one client through the pipeline (check pass or attached)
 
@@ -524,6 +539,23 @@ function createFrontLeg ({
       log('frontClientError', { error: String(err.message).slice(0, 200) })
       errorHandler?.({ error: err })
     })
+    // #18: the human's Client Information, as it arrives. A joining client
+    // sends it in the configuration phase; a later settings change sends it in
+    // play. This is a read-only observation: the configuration handshake, the
+    // replay interceptor, and the raw serverbound filter are untouched. The
+    // core decides what the backend sees.
+    client.on('settings', (data, meta) => {
+      const state = meta?.state ?? client.state ?? null
+      if (!shouldReportClientSettings({ attached, client, state })) {
+        log('clientInformationNotReported', { username: client.username ?? null, state })
+        return
+      }
+      try {
+        clientSettingsHandler?.({ ...data })
+      } catch (error) {
+        log('clientSettingsHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+      }
+    })
   }
 
   return {
@@ -535,6 +567,7 @@ function createFrontLeg ({
     setServerboundHandler (fn) { serverboundHandler = fn },
     setDetachHandler (fn) { detachHandler = fn },
     setErrorHandler (fn) { errorHandler = fn },
+    setClientSettingsHandler (fn) { clientSettingsHandler = fn },
     setCoreAttach,
     write (name, packet) {
       // Library-serialized packet (the synthesized position). The wire checker

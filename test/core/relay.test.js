@@ -1,7 +1,14 @@
 // B1 target: relay drop rules and pose capture (pure decisions).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { classifyServerbound, capturePose, CHAT_SERVERBOUND, SERVERBOUND_DROPS } from '../../src/core/relay.js'
+import {
+  classifyServerbound,
+  capturePose,
+  CHAT_SERVERBOUND,
+  CLIENT_IDENTITY_CHANNELS,
+  SERVERBOUND_DROPS,
+  SERVERBOUND_REWRITE
+} from '../../src/core/relay.js'
 
 test('per-leg connection mechanics drop serverbound', () => {
   for (const name of ['teleport_confirm', 'keep_alive', 'configuration_acknowledged', 'chunk_batch_received', 'cookie_response', 'resource_pack_receive', 'pong', 'message_acknowledgement']) {
@@ -17,6 +24,23 @@ test('chat is blocked and counted as chat', () => {
     assert.equal(d.action, 'drop')
     assert.equal(d.chat, true, name)
   }
+})
+
+test('client information is rewritten, never forwarded or dropped', () => {
+  assert.equal(SERVERBOUND_REWRITE.has('settings'), true)
+  const decision = classifyServerbound('settings')
+  assert.equal(decision.action, 'rewrite')
+  assert.equal(decision.reason, 'client_identity')
+  assert.equal(decision.chat, false)
+})
+
+test('a plugin channel that names the client is dropped, other channels forward', () => {
+  assert.equal(CLIENT_IDENTITY_CHANNELS.has('minecraft:brand'), true)
+  const brand = classifyServerbound('custom_payload', { channel: 'minecraft:brand', data: Buffer.from('vanilla') })
+  assert.equal(brand.action, 'drop')
+  assert.equal(brand.reason, 'client_identity_channel')
+  const modChannel = classifyServerbound('custom_payload', { channel: 'example:mod_channel', data: Buffer.from('x') })
+  assert.equal(modChannel.action, 'forward')
 })
 
 test('input and state frames forward to the backend', () => {

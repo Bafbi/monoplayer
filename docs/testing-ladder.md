@@ -144,6 +144,28 @@ The runner builds:
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
 - `O14` the second bot recorded no leftover bytes and the front wire checker
   still rejected nothing.
+- `O15` one backend fault produces one reconnect: two backend logins and no
+  loop.
+- `O16` the attach after the reconnect replays the join prefix and a chunk.
+- `O17` the replay sends the window 0 base before every later `set_slot`.
+- `O18` the first bot applied both slot updates and no stale slot from the
+  join frame.
+- `O19` the detached block edit is replayed and the last pose is the
+  post-mutation pose.
+- `O20` a reattach replays the mutated inventory, not the join snapshot.
+- `O21` a followed transfer never reaches the client and detaches it with the
+  moving reason.
+- `O22` the puppet follows the target and re-warms there.
+- `O23` a fresh attach after the move replays the target server state.
+- `O24` the puppet leg answers a stored cookie request.
+- `O25` the puppet announced `minecraft:brand` = `fabric` once per backend
+  connection: the count of brand frames equals the fake backend's login count,
+  on the hub and on the transfer target.
+- `O26` the fake backend recorded the human's Client Information with the
+  backend's view distance: `locale fr_fr`, `skinParts 96`, `mainHand 0`, and
+  `viewDistance` equal to the login's advertised cap, even though that bot
+  asked for `2`. Every Client Information frame on that backend carries the
+  cap.
 
 ## Why the rungs exist: the B1 lesson
 

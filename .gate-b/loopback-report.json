@@ -1,0 +1,465 @@
+{
+  "rung": "loopback",
+  "mode": "offline",
+  "auth": "none",
+  "backend": "node-fake",
+  "version": "26.1",
+  "passed": true,
+  "durationMs": 6526,
+  "assertions": [
+    {
+      "id": "R0",
+      "name": "readiness warm from chunk_batch_finished",
+      "ok": true,
+      "detail": {
+        "warm": true,
+        "configFrames": 29,
+        "prefixFrames": 5,
+        "elapsedMs": 1000
+      }
+    },
+    {
+      "id": "O1",
+      "name": "first attach allowed, no denials, offline front leg",
+      "ok": true,
+      "detail": {
+        "allowed": 1,
+        "denied": 0,
+        "kind": "offline-front-leg"
+      }
+    },
+    {
+      "id": "O2",
+      "name": "one backend login",
+      "ok": true,
+      "detail": {
+        "fakeLogins": 1,
+        "backendLogins": 1
+      }
+    },
+    {
+      "id": "O3",
+      "name": "no login-state frames replayed into play; core ignored them",
+      "ok": true,
+      "detail": {
+        "leaks": [],
+        "nonPlayFramesIgnored": 2
+      }
+    },
+    {
+      "id": "O4",
+      "name": "configuration replay came from the cache",
+      "ok": true,
+      "detail": {
+        "lastConfigMode": "cached_replay"
+      }
+    },
+    {
+      "id": "O5",
+      "name": "first six play frames are the join sequence",
+      "ok": true,
+      "detail": {
+        "firstSix": [
+          "login",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished"
+        ]
+      }
+    },
+    {
+      "id": "O6",
+      "name": "login entityId 42, pose 0.5/1.62/0.5, chunk 0,0",
+      "ok": true,
+      "detail": {
+        "entityId": 42,
+        "firstPosition": {
+          "x": 0.5,
+          "y": 1.62,
+          "z": 0.5
+        },
+        "firstChunk": {
+          "x": 0,
+          "z": 0
+        }
+      }
+    },
+    {
+      "id": "O7",
+      "name": "no spawn_entity in the replay",
+      "ok": true,
+      "detail": {
+        "spawnEntity": 0
+      }
+    },
+    {
+      "id": "O8",
+      "name": "wire checker accepted both configuration and play frames",
+      "ok": true,
+      "detail": {
+        "checked": 37,
+        "rejected": 0,
+        "byState": {
+          "configuration": 28,
+          "play": 9
+        }
+      }
+    },
+    {
+      "id": "O9",
+      "name": "first bot saw no leftover bytes and no errors",
+      "ok": true,
+      "detail": {
+        "leftovers": 0,
+        "errors": 0
+      }
+    },
+    {
+      "id": "O10",
+      "name": "exactly one position, dig, and place reached the backend",
+      "ok": true,
+      "detail": {
+        "positions": 1,
+        "digs": 1,
+        "places": 1,
+        "forwarded": 3
+      }
+    },
+    {
+      "id": "O11",
+      "name": "sentinel teleport/chunk-ack/keep-alive frames were dropped by the core",
+      "ok": true,
+      "detail": {
+        "teleportConfirms": [
+          "1",
+          "2"
+        ],
+        "chunkBatchAcks": [
+          32
+        ],
+        "keepAlives": [],
+        "dropped": 3
+      }
+    },
+    {
+      "id": "O12",
+      "name": "detach keeps one backend login, no fault, pose retained",
+      "ok": true,
+      "detail": {
+        "attached": false,
+        "state": "detached",
+        "backendLogins": 1,
+        "pose": {
+          "x": 2.5,
+          "y": 1.62,
+          "z": 2.5,
+          "yaw": 0,
+          "pitch": 0
+        }
+      }
+    },
+    {
+      "id": "O11b",
+      "name": "non-whitelisted attach denied before play",
+      "ok": true,
+      "detail": {
+        "success": false,
+        "playFrames": 0,
+        "errors": 0,
+        "denied": 1,
+        "deniedLog": true
+      }
+    },
+    {
+      "id": "O13",
+      "name": "reattach lands at the last pose and replays the detached block edit",
+      "ok": true,
+      "detail": {
+        "attaches": 2,
+        "backendLogins": 1,
+        "firstPosition": {
+          "x": 2.5,
+          "z": 2.5
+        },
+        "blockReplayed": true
+      }
+    },
+    {
+      "id": "O14",
+      "name": "second bot saw no leftover bytes and the wire stayed clean",
+      "ok": true,
+      "detail": {
+        "leftovers": 0,
+        "rejected": 0
+      }
+    },
+    {
+      "id": "O15",
+      "name": "one reconnect: two backend logins, no loop",
+      "ok": true,
+      "detail": {
+        "loginsBeforeFault": 1,
+        "fakeLogins": 2,
+        "backendLogins": 2,
+        "attaches": 3
+      }
+    },
+    {
+      "id": "O16",
+      "name": "post-reconnect attach replays the join prefix and a chunk",
+      "ok": true,
+      "detail": {
+        "attaches": 3,
+        "prefix": [
+          "login",
+          "game_state_change",
+          "position",
+          "chunk_batch_start",
+          "map_chunk",
+          "chunk_batch_finished"
+        ],
+        "entityId": 42,
+        "chunks": 1,
+        "leftovers": 0,
+        "errors": 0
+      }
+    },
+    {
+      "id": "O17",
+      "name": "late-attach replay sends the window 0 base before every later set_slot",
+      "ok": true,
+      "detail": {
+        "baseIndex": 7,
+        "slotIndexes": [
+          8,
+          9
+        ],
+        "windowItems": 1,
+        "setSlots": 2
+      }
+    },
+    {
+      "id": "O18",
+      "name": "first bot applied both items and no stale slot from the join frame",
+      "ok": true,
+      "detail": {
+        "slot36": 1,
+        "filledSlots": [
+          36
+        ],
+        "setSlots": [
+          {
+            "slot": 40,
+            "itemId": 2
+          },
+          {
+            "slot": 41,
+            "itemId": 5
+          }
+        ]
+      }
+    },
+    {
+      "id": "O19",
+      "name": "late block edit is replayed and the last pose is the post-mutation pose",
+      "ok": true,
+      "detail": {
+        "blockReplayed": true,
+        "lastPosition": {
+          "x": 4.5,
+          "y": 1.62,
+          "z": 4.5
+        }
+      }
+    },
+    {
+      "id": "O20",
+      "name": "reattach replays the mutated inventory, not the join snapshot",
+      "ok": true,
+      "detail": {
+        "slot36": 1,
+        "filledSlots": [
+          36
+        ],
+        "setSlots": [
+          {
+            "slot": 40,
+            "itemId": 2
+          },
+          {
+            "slot": 41,
+            "itemId": 5
+          }
+        ]
+      }
+    },
+    {
+      "id": "O21",
+      "name": "a followed transfer never reaches the client and detaches it with a moving reason",
+      "ok": true,
+      "detail": {
+        "frames": [
+          "kick_disconnect"
+        ],
+        "kick": "{\"reason\":{\"type\":\"compound\",\"value\":{\"text\":{\"type\":\"string\",\"value\":\"This session is moving. Reconnect in a few seconds to continue.\"}}}}",
+        "ended": "socketClosed",
+        "blocked": 1,
+        "followed": 1
+      }
+    },
+    {
+      "id": "O22",
+      "name": "the puppet follows the target and re-warms there",
+      "ok": true,
+      "detail": {
+        "loginsBeforeTransfer": 2,
+        "fake2Logins": 1,
+        "handshakeIntents": [
+          3
+        ],
+        "backendLogins": 3,
+        "warmReady": true,
+        "state": "warm"
+      }
+    },
+    {
+      "id": "O23",
+      "name": "a fresh attach after the move replays the target server state",
+      "ok": true,
+      "detail": {
+        "entityId": 42,
+        "blocks": [
+          {
+            "x": 9,
+            "z": 9,
+            "y": 0
+          }
+        ],
+        "leftovers": 0,
+        "errors": 0
+      }
+    },
+    {
+      "id": "O24",
+      "name": "the puppet leg answers a stored cookie request",
+      "ok": true,
+      "detail": {
+        "responses": [
+          {
+            "key": "session",
+            "value": "abc"
+          }
+        ]
+      }
+    },
+    {
+      "id": "O25",
+      "name": "the puppet announced the Fabric brand once per backend connection",
+      "ok": true,
+      "detail": {
+        "hubBrands": 2,
+        "hubLogins": 2,
+        "targetBrands": 1,
+        "targetLogins": 1,
+        "brands": [
+          "fabric"
+        ]
+      }
+    },
+    {
+      "id": "O26",
+      "name": "the server sees the human client information with the backend view distance",
+      "ok": true,
+      "detail": {
+        "cap": 6,
+        "play": [
+          {
+            "locale": "en_us",
+            "viewDistance": 6
+          },
+          {
+            "locale": "fr_fr",
+            "viewDistance": 6
+          },
+          {
+            "locale": "en_us",
+            "viewDistance": 6
+          },
+          {
+            "locale": "en_us",
+            "viewDistance": 6
+          },
+          {
+            "locale": "en_us",
+            "viewDistance": 6
+          }
+        ],
+        "config": [
+          {
+            "locale": "en_us",
+            "viewDistance": 10
+          },
+          {
+            "locale": "en_us",
+            "viewDistance": 10
+          }
+        ]
+      }
+    }
+  ],
+  "evidence": {
+    "frontPort": 38333,
+    "backendPort": 37039,
+    "configReplayMode": "cached_replay",
+    "wire": {
+      "checked": 75,
+      "rejected": 0,
+      "byState": {
+        "configuration": 56,
+        "play": 19
+      }
+    },
+    "backendLogins": 1,
+    "attaches": 2,
+    "denials": 1,
+    "serverbound": {
+      "positions": 1,
+      "digs": 1,
+      "places": 1
+    },
+    "bot": {
+      "playPrefix": [
+        "login",
+        "game_state_change",
+        "position",
+        "chunk_batch_start",
+        "map_chunk",
+        "chunk_batch_finished"
+      ],
+      "leftovers": 0,
+      "errors": 0
+    },
+    "backend2Port": 42007,
+    "handshakeProxyPort": 38287,
+    "reconnect": {
+      "loginsBeforeFault": 1,
+      "fakeLogins": 2,
+      "backendLogins": 2,
+      "attaches": 3
+    },
+    "transfer": {
+      "target": {
+        "host": "127.0.0.1",
+        "port": 38287
+      },
+      "handshakeIntents": [
+        3
+      ],
+      "fake2Logins": 1,
+      "backendLogins": 3,
+      "botEnded": "socketClosed"
+    }
+  }
+}

@@ -28,6 +28,14 @@
 //   }
 
 import { createStateCache, WARM_MARKER } from '../core/state-cache.js'
+import {
+  FABRIC_BRAND,
+  brandFrame,
+  capFromLogin,
+  chunkBoundFor,
+  mergeClientSettings,
+  normalizeClientSettings
+} from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { classifyServerbound, capturePose } from '../core/relay.js'
@@ -192,6 +200,10 @@ export function createMonoplayer ({
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
     resourcePackAckFailures: 0,
+    brandAnnounced: 0,
+    clientSettingsSent: 0,
+    clientSettingsRewritten: 0,
+    clientSettingsFailed: 0,
     attaches: 0,
     denials: 0,
     frontKicks: 0
@@ -240,6 +252,12 @@ export function createMonoplayer ({
   const unclassifiedLogged = new Set()
   let started = false
   let attached = false // mirrors session state === ATTACHED
+  let brandAnnounced = false // #17: one brand per backend connection
+  let backendViewDistance = null // #18: the backend's advertised cap, this connection
+  // #18: the last human's client information. It survives a detach, like a
+  // real client's options survive a reconnect; only a fresh process starts from
+  // the defaults.
+  let humanClientSettings = null
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
   let transferNoticeSent = false // one refusal notice per attach
   let reconfigureRequested = false // this backend end is a server reconfiguration
@@ -351,6 +369,98 @@ export function createMonoplayer ({
     }
   }
 
+  // #17: servers record the client brand in the configuration phase, and a
+  // missing brand is one of the tells that the connection is not a normal
+  // client. Announce Fabric Loader on the first configuration frame of every
+  // backend connection. The human's brand never replaces it: the front client's
+  // brand belongs to a different connection and never crosses.
+  function announceBrand () {
+    if (brandAnnounced) return { announced: false, reason: 'already_announced' }
+    brandAnnounced = true
+    const frame = brandFrame()
+    try {
+      backendLeg.write(frame.name, frame.packet)
+      metrics.brandAnnounced++
+      log('brandAnnounced', { channel: frame.packet.channel, brand: FABRIC_BRAND })
+      return { announced: true }
+    } catch (error) {
+      // A dead leg during teardown must not consume this connection's one
+      // announcement: retry on the next configuration frame.
+      brandAnnounced = false
+      log('brandAnnounceFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return { announced: false, reason: 'write_failed' }
+    }
+  }
+
+  // #18: write the client's information with the backend's view distance. The
+  // human's locale, skin parts, main hand, and chat settings pass through; the
+  // view distance is always the cap, so the server never shrinks the chunk send
+  // to the human's local render distance.
+  function sendClientSettings (reason) {
+    if (backendViewDistance === null) return { sent: false, reason: 'no_backend_view_distance' }
+    const packet = mergeClientSettings(humanClientSettings, backendViewDistance)
+    try {
+      backendLeg.write('settings', packet)
+      metrics.clientSettingsSent++
+      log('clientSettingsSent', {
+        reason,
+        attached: isAttached(),
+        viewDistance: packet.viewDistance,
+        locale: packet.locale,
+        skinParts: packet.skinParts,
+        mainHand: packet.mainHand
+      })
+      return { sent: true, packet }
+    } catch (error) {
+      metrics.clientSettingsFailed++
+      log('clientSettingsFailed', { reason, error: String(error?.message ?? error).slice(0, 200) })
+      return { sent: false, reason: 'write_failed' }
+    }
+  }
+
+  // The backend's play login carries the view distance it will use. Raise the
+  // cache to hold that view, then ask for it: a client that requests less makes
+  // the server send less, so the human's local render distance must never be
+  // the value the server sees.
+  function applyBackendViewDistance (loginPacket) {
+    const cap = capFromLogin(loginPacket)
+    backendViewDistance = cap
+    if (cap === null) {
+      log('backendViewDistanceMissing', {})
+      return null
+    }
+    const chunkBound = cache.raiseChunkBound(chunkBoundFor(cap))
+    log('backendViewDistance', {
+      viewDistance: cap,
+      chunkBound,
+      chunkBytes: cache.stats().chunkBytes
+    })
+    sendClientSettings('backend_login')
+    return cap
+  }
+
+  // The front leg reports the human client's Client Information as it arrives
+  // (configuration for a joining client, play for a later change). Record it,
+  // and while a human is attached send it to the backend with the cap. Before
+  // an attach it is only recorded; attachPlayer sends it once the human plays.
+  function noteClientSettings (data = {}) {
+    const normalized = normalizeClientSettings(data)
+    if (normalized === null) {
+      log('clientInformationIgnored', { reason: 'no_usable_fields' })
+      return { noted: false, reason: 'no_usable_fields' }
+    }
+    humanClientSettings = normalized
+    log('clientInformation', {
+      attached: isAttached(),
+      locale: normalized.locale,
+      requestedViewDistance: normalized.viewDistance,
+      skinParts: normalized.skinParts,
+      mainHand: normalized.mainHand
+    })
+    if (!isAttached()) return { noted: true, sent: false, reason: 'not_attached' }
+    return { noted: true, ...sendClientSettings('client_information') }
+  }
+
   // Every clientbound frame that must not cross to the front goes through
   // here: count, log the rare ones. A transfer is handled separately because
   // it has a follow decision (and a refused transfer gets the local notice).
@@ -392,6 +502,11 @@ export function createMonoplayer ({
   // this synchronously before ending the leg, because a socket end event can
   // be skipped when the next connect replaces the client first.
   function teardownBackend ({ reason, kickReason = 'backend_disconnected', reconfiguring = false } = {}) {
+    // Per-connection client identity (#17/#18): the next connection announces
+    // its own brand and learns its own view distance. The human's client
+    // information survives, because the human is still the one playing.
+    brandAnnounced = false
+    backendViewDistance = null
     if (session.state === STATES.RECONNECTING) {
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
@@ -536,6 +651,10 @@ export function createMonoplayer ({
     metrics.positionsSynthesized += synthesized.counts.synthesized
     telemetry.metric('monoplayer.replay.frames', synthesized.counts.replayed, { player: name })
 
+    // #18: the human is now the one playing, so their client information goes
+    // to the server with the backend cap this session already learned.
+    sendClientSettings('attach')
+
     log('attach', {
       name,
       replayed: synthesized.counts.replayed,
@@ -609,6 +728,7 @@ export function createMonoplayer ({
       })
       if (state === 'configuration') {
         metrics.configFrames++
+        announceBrand()
         const policy = clientboundPolicy('configuration', name)
         if (name === 'add_resource_pack') answerResourcePack(data)
         if (name === 'ping') {
@@ -660,7 +780,9 @@ export function createMonoplayer ({
       const state = serverbound.state ?? 'play'
       const attachedNow = isAttached()
       // Classify before recording so the frame counter carries the outcome.
-      const decision = attachedNow ? classifyServerbound(name) : { action: 'drop', chat: false }
+      const decision = attachedNow
+        ? classifyServerbound(name, serverbound.data)
+        : { action: 'drop', chat: false }
       journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer })
       telemetry.metric('monoplayer.frames', 1, {
         direction: 'c2s',
@@ -671,6 +793,29 @@ export function createMonoplayer ({
       if (!attachedNow) {
         metrics.serverboundNotAttached++
         log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
+        return
+      }
+      if (decision.action === 'rewrite') {
+        // #18: the human's client information reaches the backend only in the
+        // form the proxy owns. noteClientSettings records it and writes the
+        // merged packet, so the client's own view distance never crosses.
+        const outcome = noteClientSettings(serverbound.data ?? {})
+        if (outcome.sent) {
+          metrics.clientSettingsRewritten++
+          metrics.serverboundForwarded++
+          bumpName(metrics.serverboundByName, serverbound.name)
+        } else {
+          // No usable fields, no learned cap, or a failed write: the frame did
+          // not reach the backend, so the ledger says dropped, not forwarded.
+          metrics.serverboundDropped++
+          bumpName(metrics.serverboundDroppedByName, serverbound.name)
+        }
+        log('serverboundRewrite', {
+          name: serverbound.name,
+          noted: outcome.noted === true,
+          sent: outcome.sent === true,
+          reason: outcome.reason ?? null
+        })
         return
       }
       if (decision.action === 'drop') {
@@ -723,6 +868,7 @@ export function createMonoplayer ({
       if (session.state === STATES.BOOT) {
         session.backendLogin({ entityId: data.entityId })
         scheduleTransferChainReset()
+        applyBackendViewDistance(data)
         log('backendLogin', { entityId: data.entityId, backendLogins: session.backendLogins })
         emit('backend_login', { entityId: data.entityId })
       }
@@ -851,6 +997,7 @@ export function createMonoplayer ({
     logs: () => [...logs],
     // front pipeline call-ins (real front-leg adapter drives these):
     processLoginStart,
+    noteClientSettings,
     processVerifySession,
     attachPlayer,
     detachPlayer,
@@ -860,6 +1007,7 @@ export function createMonoplayer ({
     stop,
     get started () { return started },
     get attached () { return isAttached() },
+    get backendViewDistance () { return backendViewDistance },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }
   }

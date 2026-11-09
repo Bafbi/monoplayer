@@ -1,13 +1,23 @@
 // B1 monoplayer core: pure relay decisions (serverbound drop rules, pose
 // capture).
 //
-// Serverbound play frames that must never reach the backend untouched:
-// per-leg connection mechanics (keep-alive, teleport confirm, chunk batch
-// acks, configuration ack, cookie responses), fresh-client-only answers
-// (resource pack, ping/pong — a replayed ping must not be answered with the
-// fresh client's pong), and chat. Chat is relayed read-only: the attached
-// client sees clientbound chat, but its own messages, commands, session key,
-// and acknowledgements stay on the front leg.
+// Three outcomes for a serverbound play frame:
+//   drop     never reaches the backend
+//   rewrite  reaches the backend only in the form the proxy builds
+//   forward  reaches the backend as the client sent it
+//
+// Frames that must never reach the backend untouched: per-leg connection
+// mechanics (keep-alive, teleport confirm, chunk batch acks, configuration ack,
+// cookie responses), fresh-client-only answers (resource pack, ping/pong — a
+// replayed ping must not be answered with the fresh client's pong), and chat.
+// Chat is relayed read-only: the attached client sees clientbound chat, but its
+// own messages, commands, session key, and acknowledgements stay on the front
+// leg.
+//
+// Client information (`settings`) is rewritten, not forwarded: the human's
+// locale, skin parts, main hand, and chat settings must reach the server, but
+// their render distance must not lower the server's chunk send below the
+// backend cap (#18).
 
 export const SERVERBOUND_DROPS = new Set([
   'teleport_confirm', // proxy owns teleport IDs per leg
@@ -25,6 +35,21 @@ export const SERVERBOUND_DROPS = new Set([
   'pong' // never answer a replayed ping with the fresh client's pong
 ])
 
+// Rewritten by the proxy before they reach the backend. `settings` is the
+// 26.x Client Information packet: the human's fields pass through, the view
+// distance is replaced with the backend's advertised cap.
+export const SERVERBOUND_REWRITE = new Set([
+  'settings'
+])
+
+// Plugin-message channels that carry a client's own identity. The proxy
+// announces the puppet's brand itself, so a brand from the human's connection
+// must never reach the backend: it would name the client the human actually
+// runs. Other plugin channels are ordinary mod traffic and stay forwarded.
+export const CLIENT_IDENTITY_CHANNELS = new Set([
+  'minecraft:brand'
+])
+
 export const CHAT_SERVERBOUND = new Set([
   'chat_message',
   'chat_command',
@@ -33,9 +58,15 @@ export const CHAT_SERVERBOUND = new Set([
   'chat_ack'
 ])
 
-export function classifyServerbound (name) {
+export function classifyServerbound (name, data = null) {
+  if (name === 'custom_payload' && CLIENT_IDENTITY_CHANNELS.has(data?.channel)) {
+    return { action: 'drop', chat: false, reason: 'client_identity_channel' }
+  }
   if (SERVERBOUND_DROPS.has(name)) {
     return { action: 'drop', chat: CHAT_SERVERBOUND.has(name), reason: 'per_leg_or_blocked' }
+  }
+  if (SERVERBOUND_REWRITE.has(name)) {
+    return { action: 'rewrite', chat: false, reason: 'client_identity' }
   }
   return { action: 'forward', chat: false, reason: 'state_or_input' }
 }

@@ -221,6 +221,7 @@ backendLeg = {                    // = the GlowSquidye puppet session
   setFrameHandler(({ state, name, buffer, data }) => {})   // configuration + play frames
   setEndHandler(({ reason }) => {}), setErrorHandler(({ error }) => {})
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
+                                  // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
   writeRaw(buffer, meta)          // forwarded serverbound play frames
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
@@ -230,6 +231,8 @@ frontLeg = {                      // one attaching client (Bafbi)
                                               //    denied => end(uuid-deny) BEFORE Login Success
   setServerboundHandler(({ state, name, buffer, data }) => {})
   setDetachHandler(({ reason }) => {})
+  setClientSettingsHandler(settings => {})    // -> createMonoplayer().noteClientSettings
+                                              //    the human's Client Information, read-only
   write(name, packet, { synth }), writeRaw(buffer, meta)
   end(reason)                     // deny/kick/close
 }
