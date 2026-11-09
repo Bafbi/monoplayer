@@ -126,14 +126,16 @@ process.stdin.on("end", () => {
 # from the live ConfigMap. An operator's entries are never overwritten.
 seed_attach_whitelist() {
   local current live
+  # Whitespace stripped first: the ConfigMap in the manifest is pretty-printed,
+  # and `"players": []` is not `"players":[]`.
   current=$(kubectl -n "$DEV_NAMESPACE" get configmap monoplayer-dev-config \
-    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null || true)
+    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n' || true)
   case "$current" in
     *'"players":[]'*|'') : ;;
     *) say 'the dev attach whitelist has entries'; return 0 ;;
   esac
   live=$(kubectl -n "$LIVE_NAMESPACE" get configmap monoplayer-config \
-    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null || true)
+    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n' || true)
   case "$live" in
     *'"players":[]'*|'')
       say 'the dev attach whitelist is empty and the live one names nobody: add a controller before a client can attach'

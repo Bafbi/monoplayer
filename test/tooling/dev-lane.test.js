@@ -92,8 +92,9 @@ test('mise offers one command up and one down', () => {
   assert.match(toml, /\[tasks\."dev:down"\]/, 'dev:down')
 })
 
-// An empty whitelist, which is what the dev ConfigMap ships.
-const EMPTY_WHITELIST = '{"version":1,"players":[]}'
+// An empty whitelist in the shape the dev ConfigMap ships: pretty-printed, so a
+// compact-only match would miss it.
+const EMPTY_WHITELIST = '{\n  "version": 1,\n  "players": []\n}'
 // The live ConfigMap: the human who may control the proxy.
 const LIVE_WHITELIST = '{"version":1,"players":[{"uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi"}]}'
 // The pull Secret the private GHCR package needs, as the live namespace stores it.
