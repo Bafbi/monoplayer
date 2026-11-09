@@ -117,7 +117,7 @@ const SHIM = [
   '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" rollout status "*) exit 0 ;;',
   '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
-  '  *" -n monoplayer-dev get configmap "*) cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
+  '  *" -n monoplayer-dev get configmap "*) if [ "@@{KUBECTL_CONFIGMAP_MISSING:-0}" = 1 ]; then exit 1; fi; cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
   '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json"; exit 0 ;;',
   '  *" get configmap "*) cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
   // The dev proxy's account, read from its volume, and the dev Paper's player
@@ -187,6 +187,15 @@ test('no dev command changes the live deployment', () => {
       assert.equal(calls.some(line => line.includes(verb)), false, args.join(' ') + ' ran ' + verb)
     }
   }
+})
+
+test('status survives a namespace that has no ConfigMap', () => {
+  // After `down` the namespace is gone, so the whitelist read fails. Reporting
+  // that is not an error: `mise run dev:down` must exit 0 on a clean lane.
+  const space = workspace()
+  const { status, output } = run(space, ['down'], { KUBECTL_CONFIGMAP_MISSING: '1' })
+  assert.equal(status, 0, output)
+  assert.match(output, /deleted monoplayer-dev/)
 })
 
 test('down deletes the dev lane and nothing else', () => {
