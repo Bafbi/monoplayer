@@ -129,3 +129,48 @@ The journal and telemetry never record secrets or chat content.
 - Journal event fields and telemetry attributes whose key matches `/token|secret|password|authorization|cookie|credential|device_code|user_code/i` are dropped.
 - String values pass through the JSONL log redaction rules, with bearer values masked before redaction.
 - Account UUIDs, profile names, and aliases are recorded. Tokens, passwords, and message bodies are not.
+
+## One command per question
+
+Two CLIs answer the questions this file describes. Neither needs a shell
+pipeline: a `grep` of a pretty-printed line is not a JSON document.
+
+`tools/journal.mjs` reads a journal directory, one journal file, or the JSONL
+log. The path defaults to `MONOPLAYER_JOURNAL_DIR`, and to `MONOPLAYER_LOG` for
+`heartbeat`.
+
+```bash
+node tools/journal.mjs tail 20 --path /data/journal
+node tools/journal.mjs heartbeat --path monoplayer.jsonl
+node tools/journal.mjs names map_chunk --path /data/journal
+node tools/journal.mjs tail 1 --name map_chunk --path /data/journal
+node tools/journal.mjs window 60 --dir s2c --path /data/journal
+```
+
+- `tail [n]` prints the last n records, one JSON per line. The default is 10.
+- `heartbeat` prints the last `heartbeat` record of the JSONL log.
+- `names [pattern]` prints one line per frame name, direction, and state, with
+  `count`, `bytes`, `first`, and `last`. The pattern is a substring of the name.
+- `window <seconds>` prints the same rows over the seconds before the newest
+  frame in the journal.
+- `--name`, `--dir`, and `--state` narrow every command. `names <pattern>` is
+  `--name` for the summary.
+
+Every record the service writes ends with a newline. A terminated line that is
+not JSON fails with `path:line`, so a torn record is visible instead of counted.
+An unterminated last line is skipped: the service may still be writing it.
+
+`tools/protocol.mjs` answers protocol questions from the installed data: 26.1
+from the npm package, 26.2 from `vendor/minecraft-data-26.2`.
+
+```bash
+node tools/protocol.mjs packets 26.2 play toClient
+node tools/protocol.mjs frame 26.2 play toClient map_chunk
+node tools/protocol.mjs diff 26.1 26.2 play toClient
+```
+
+`packets` prints one `<hex id> <name>` line per frame. `frame` prints the id,
+the param type, and one line per top-level field. `diff` prints the frames
+added, removed, and changed, following each named type to its definition. When
+the change sits in an unnamed container entry, `diff` names the branch with
+`at <path>`.

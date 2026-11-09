@@ -1,5 +1,18 @@
 # Monoplayer agent instructions
 
+## Tools
+
+Two CLIs answer the protocol and journal questions that recur. Use them instead
+of a `grep | tail -1 | python3 -c` pipeline.
+
+- `node tools/protocol.mjs packets|frame|diff <version> <state> <dir> ...` lists,
+  describes, or diffs protocol frames from the installed data, for 26.1 and the
+  vendored 26.2 tree.
+- `node tools/journal.mjs tail|heartbeat|names|window ...` reads the packet
+  journal and the JSONL log.
+
+[docs/telemetry.md](docs/telemetry.md) holds the commands and the record shapes.
+
 ## Agent skills
 
 ### Issue tracker
