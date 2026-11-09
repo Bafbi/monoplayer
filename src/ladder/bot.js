@@ -32,7 +32,10 @@ export function buildClientOptions ({
   authTitle = null,
   deviceType = null,
   flow = null,
-  keepAlive = true
+  keepAlive = true,
+  // The bot's own Client Information, sent in the configuration phase. Used to
+  // prove what the server sees when a human's fields differ from a default.
+  clientSettings = null
 } = {}) {
   if (!port) throw new TypeError('port is required')
   if (typeof username !== 'string' || username.length === 0) {
@@ -48,6 +51,10 @@ export function buildClientOptions ({
       throw new TypeError('profilesFolder must be a token-custody cache factory, never a path')
     }
     options.profilesFolder = profilesFolder
+  }
+  if (clientSettings !== null && clientSettings !== undefined) {
+    if (typeof clientSettings !== 'object') throw new TypeError('clientSettings must be an object')
+    options.clientSettings = clientSettings
   }
   if (authTitle !== null && authTitle !== undefined) options.authTitle = authTitle
   if (deviceType !== null && deviceType !== undefined) options.deviceType = deviceType
@@ -67,6 +74,7 @@ export function createBot ({
   authTitle = null,
   deviceType = null,
   flow = null,
+  clientSettings = null,
   logStream = null
 } = {}) {
   const received = {
@@ -102,7 +110,8 @@ export function createBot ({
     profilesFolder,
     authTitle,
     deviceType,
-    flow
+    flow,
+    clientSettings
   })
 
   const client = mc.createClient(options)
