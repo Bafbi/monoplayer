@@ -39,6 +39,22 @@ test('classification: configuration keep-alives drop, unknown config frames cach
   assert.equal(classifyConfig('registry_data').domain, 'config')
 })
 
+test('classification: 26.2 entity names share the entity ring, relative moves stay generic', () => {
+  // GitHub issue #23: the entity ring held the pre-rename spellings while the
+  // live 26.2 names fell through to `generic`, which join-synth replays after
+  // `entity`, so wire order between the two rings was lost.
+  for (const name of ['sync_entity_position', 'entity_destroy']) {
+    assert.equal(classifyPlay(name).domain, 'entity', name)
+  }
+  // Relative moves and rotations keep falling to `generic`: they are per-tick
+  // deltas, and promoting them to the entity ring would let move traffic evict
+  // spawn_entity and entity_metadata from its 2048-entry bound. The follow-up is
+  // a wire-order merge of the two rings, not a bigger ring.
+  for (const name of ['rel_entity_move', 'entity_move_look', 'entity_look']) {
+    assert.equal(classifyPlay(name).domain, 'generic', name)
+  }
+})
+
 test('join prefix is pinned in order and completes at chunk_batch_finished', () => {
   const cache = createStateCache()
   // Backend position is per-leg owned and dropped at capture; join-synth owns

@@ -45,7 +45,9 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 - `config` (configuration-phase replay prefix, max 1024). Per-leg config
   keep-alives/pings are dropped at capture.
 - Warm domains: `chunk` (latest per `cx,cz`, `unload_chunk` deletes the key,
-  max 1024), `block` (FIFO ring, max 2048), `entity` (FIFO ring, max 2048),
+  max 1024), `block` (FIFO ring, max 2048), `entity` (FIFO ring, max 2048; every
+  entity frame the policy accepts, except the relative-move frames, so their
+  capture order survives the replay),
   `inventory` (newest per windowId, max 32 windows), `latest` (health/food/
   abilities/experience/held_item_slot/game_state_change/entity_event/
   advancements — newest wins), `generic` (anything else state-bearing, FIFO,
@@ -302,6 +304,10 @@ above (real Paper, online-mode, official client) stays the acceptance record.
 - `entity` domain is an ordered ring, not per-entity latest-wins: stale high
   volume evicts real state under entity pressure. If re-attach tests show
   stale mobs, promote to per-entityId latest with a ring of entityIds.
+- The relative-move frames replay from `generic`, after every `entity` frame, so
+  a delta captured before the last absolute position applies on top of it. The
+  fix is a capture-order merge of the two rings, tracked as
+  [issue #35](https://github.com/Bafbi/monoplayer/issues/35).
 - Chunk unload during the join prefix is replayed as captured (no-op then
   reload); an unload of a post-warm chunk removes the cached chunk.
 - `identity.js` session verification passes through when no verifier is injected — safe for

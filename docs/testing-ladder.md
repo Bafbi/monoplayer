@@ -167,6 +167,25 @@ The runner builds:
   asked for `2`. Every Client Information frame on that backend carries the
   cap.
 
+- `O27` the N13 frame cut is aligned on a real client: the first-attach replay's
+  parity frame names equal the first K parity frames the bot decoded, in order.
+  N13 on the online rung compares one side of that cut, so a misaligned cut would
+  fail a correct cache.
+
+### Online rung assertion contract
+
+`mise run online` returns N1-N13. `evaluateOnlineAssertions` in
+`src/ladder/online.js` is the source; the id list and the claim behind each id
+live there.
+
+- `N13` the state the attaching client decoded matches the state the attach
+  replay claimed. The expectation is the cache snapshot taken when the replay was
+  built, compared with the first K frames the client decoded, where K is the
+  number of parity frames that replay sent. Live frames after them are ignored on
+  both sides. N13 fails when those K frames never arrive (30 s bound), when the
+  decoded names differ from the replay's names in order, or when any compared
+  domain differs. The loopback's O27 checks the same cut on a real protocol bot.
+
 ## Why the rungs exist: the B1 lesson
 
 The first live B1 attach failed because login-phase frames
