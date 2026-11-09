@@ -24,3 +24,5 @@ tools/mc-source/build/
 testdata/*.json
 testdata/*.png
 testdata/*.log
+tools/observer/.gradle/
+tools/observer/build/
