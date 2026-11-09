@@ -115,11 +115,11 @@ Re-establishing the backend session after a fault, with at most one attempt pend
 _Avoid_: retry, reconnect loop
 
 **Reconfiguration**:
-The client's own configuration phase restarting on the connection it holds, served by Monoplayer with the target's or the same server's configuration frames. The player sees a loading screen and keeps the connection.
+The client's own configuration phase restarting on the connection it holds, served by Monoplayer with the target's or the same server's configuration frames. The player sees a loading screen and keeps the connection. Opt-in through `transfer.keepConnection`, which is off until the transfer testbed run proves it.
 _Avoid_: config reload, rejoin, reconnect
 
 **Seamless transfer**:
-A followed transfer that keeps the attaching client's connection and lands it in the target's play state through a reconfiguration.
+A followed transfer that keeps the attaching client's connection and lands it in the target's play state through a reconfiguration. Built and off (`transfer.keepConnection: false`) until the transfer testbed run proves it.
 _Avoid_: hot swap, live migration
 
 **Transfer**:

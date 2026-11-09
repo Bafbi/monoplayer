@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 752 tests (`mise run test`), and `mise run check` also runs the
-35-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 764 tests (`mise run test`), and `mise run check` also runs the
+38-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -150,11 +150,15 @@ followed a move into configuration, the notice goes out after the restored
 snapshot puts it back in play, so the toast lands on a client that can read it.
 
 `start_configuration` from the backend never crosses: relaying it would hand the
-client a connection-control frame it must not act on by itself. The core
-consumes it and serves the phase on the client's own connection instead (#22):
-the front leg writes its own `start_configuration`, relays the restarted
-configuration frames, relays the `finish_configuration`, and the client's
-answer returns it to play. The same path serves a followed transfer's target.
+client a connection-control frame it must not act on by itself. The default
+answer is the one that shipped: end the puppet leg and let the normal
+backend-down path kick the client with
+`The server reconfigured this session. Reconnect in a few seconds.`. With
+`transfer.keepConnection` on, the core serves the phase on the client's own
+connection instead (#22): the front leg writes its own `start_configuration`,
+relays the restarted configuration frames, relays the `finish_configuration`,
+and the client's answer returns it to play. The same path serves a followed
+transfer's target.
 
 ### Control dialogs (#16)
 
@@ -217,8 +221,11 @@ leg. The frame still never reaches the front. The sequence:
 2. Tear down synchronously: reset the cache, schedule one reconnect with the
    target, then end the old backend leg. The teardown does not depend on the
    socket's end event; a missed event would strand the front on a dead cache.
-   With a client attached, the client keeps its connection: the session enters
-   `transferring` and the front is not kicked.
+   With a client attached, a kept connection (`transfer.keepConnection`, off by
+   default) moves the session to `transferring` and never kicks the front.
+   Without it, the client is detached with
+   `This session is moving. Reconnect in a few seconds to continue.` and
+   rejoins once the puppet is warm on the target.
 3. The orchestrator dials the target with the same Microsoft account. The
    handshake uses **intent 3 (TRANSFER)**, not 2 (LOGIN). minecraft-protocol
    hardcodes 2, so the backend leg wraps the handshake writer. A
@@ -230,22 +237,23 @@ leg. The frame still never reaches the front. The sequence:
    The cache resets, the new configuration and join prefix arrive, and the
    warm fallback pins it after 5 s if the backend never sends the batch
    marker.
-4. The client follows on the connection it holds. The target's first
-   configuration frame starts a same-connection reconfiguration: the front leg
-   writes `start_configuration`, relays the target's configuration frames and
-   its `finish_configuration`, and the client's `finish_configuration` answer
-   returns it to play. The target's play login and join state follow on the same
-   socket, so the client sees a reconfiguration loading screen and lands in the
-   new server's state. Position, inventory, and chat are the new server's; chat
-   history is never replayed.
-5. If the target fails, the client is restored from the pre-transfer snapshot
-   instead of being detached. A target that never sent a configuration frame
-   leaves the client in the previous server's state untouched. A target that
-   died mid-reconfiguration completes the aborted round from the snapshot: the
-   previous configuration frames, the finish, then the previous join state. The
-   proxy notice `The new server could not be reached. You are still on the
+4. With a kept connection, the client follows on the connection it holds. The
+   target's first configuration frame starts a same-connection reconfiguration:
+   the front leg writes `start_configuration`, relays the target's
+   configuration frames and its `finish_configuration`, and the client's
+   `finish_configuration` answer returns it to play. The target's play login and
+   join state follow on the same socket, so the client sees a reconfiguration
+   loading screen and lands in the new server's state. Position, inventory, and
+   chat are the new server's; chat history is never replayed.
+5. If the target fails, a kept client is restored from the pre-transfer
+   snapshot instead of being detached. A target that never sent a configuration
+   frame leaves the client in the previous server's state untouched. A target
+   that died mid-reconfiguration completes the aborted round from the snapshot:
+   the previous configuration frames, the finish, then the previous join state.
+   The proxy notice `The new server could not be reached. You are still on the
    previous server.` explains it, and one reconnect returns the puppet to the
-   configured backend.
+   configured backend. Without a kept connection the client is detached with
+   the moving reason and rejoins the puppet on the base backend.
 
 A followed target that cannot connect is retried 3 times. Then the controller
 reverts to the configured base backend and the puppet is never left offline.
@@ -265,11 +273,23 @@ The loopback proves the intent on the wire with
 3, so the proxy records the real intent and rewrites it to 2 for the fake
 target.
 
-**Seamless switch (#22).** The hub and sky-2 differ in `dimension_type`
-(4 vs 9 entries) and `timeline` (4 vs 5), so a `respawn` alone would leave the
-client without the target's dimensions. The same-connection reconfiguration
-above replaces the registries, which is why it is a full configuration phase
-and not a synthetic respawn.
+**Seamless switch (#22), built and off.** The hub and sky-2 differ in
+`dimension_type` (4 vs 9 entries) and `timeline` (4 vs 5), so a `respawn`
+alone would leave the client without the target's dimensions. The
+same-connection reconfiguration above replaces the registries, which is why it
+is a full configuration phase and not a synthetic respawn.
+
+It ships behind `transfer.keepConnection` (default `false`). The default stays
+the detach-and-rejoin path, so a merge does not change what the live lane does
+on the next deploy. Flipping the default is one line, after the transfer
+testbed run in #22's slice 3 records a real Paper and a real client keeping the
+connection:
+
+```bash
+mise run testbed:run      # takes the live front offline; the operator's run
+mise run driver:scenario  # the real client's loading screen, against the gate Paper
+mise run observer:run     # the server's view of the transfer intent and login
+```
 
 The reconfiguration is composed of four pieces:
 
@@ -284,10 +304,11 @@ The reconfiguration is composed of four pieces:
   reset that starts the move, committed when the target's play login lands, and
   restored when the target fails.
 - The front leg's `startReconfiguration()`: writes the proxy's own
-  `start_configuration`, flips the leg's client to the configuration state (the
-  serializer and deserializer are state-scoped, so inbound frames parse in the
-  state the client is in), and reports the client's `finish_configuration` back
-  as `reconfigured`.
+  `start_configuration`, holds the core's configuration frames until the
+  client's play-state `configuration_acknowledged` arrives (the ack exists in
+  the play packet table only), flips the leg's client to the configuration
+  state, and reports the client's `finish_configuration` back as
+  `reconfigured`.
 
 Limits of this path: the client is only asked to reconfigure once the target
 has sent its first configuration frame, so a target that never answers costs
@@ -296,7 +317,12 @@ harness) degrades to a state replay at the target's login, which rebuilds the
 world without a configuration phase. The puppet's own connection keeps one
 keep-alive interval per connection: the front leg drops the library's state
 listener after the first play transition so a reconfiguration cannot start a
-second one.
+second one. A kept client's configuration round has a deadline
+(`transfer.reconfigureTimeoutMs`, default 30 s); a restore round that never
+completes detaches the client with a reason.
+
+The loopback runs both paths: O21-O24 assert the default detach-and-rejoin, and
+O33-O35 assert the kept connection with the key on.
 
 ### Chat and commands (`config.chat`)
 

@@ -108,9 +108,17 @@ export const DEFAULT_CONFIG = Object.freeze({
     // After this long on one server, the chain history resets, so a later
     // transfer to a previously visited server is allowed again.
     chainResetMs: 120_000,
-    // A client's configuration round has a deadline: a target that restarts
-    // the phase and then sends nothing must not freeze the human's connection
-    // on a loading screen. On expiry the move is restored. 0 disables it.
+    // Keep the attached client's connection through a followed transfer (or a
+    // server reconfiguration): the client re-enters configuration on its own
+    // socket and lands in the target's play state (#22). Off by default: the
+    // client is detached, the puppet moves, and the client rejoins. The
+    // testbed run that proves the kept connection is the evidence gate for
+    // flipping this default.
+    keepConnection: false,
+    // A kept client's configuration round has a deadline: a target that
+    // restarts the phase and then sends nothing must not freeze the human's
+    // connection on a loading screen. On expiry the move is restored. 0
+    // disables it. Only read while `keepConnection` is on.
     reconfigureTimeoutMs: 30_000
   }),
   redaction: Object.freeze({ sentinel: SENTINEL })
@@ -143,6 +151,9 @@ export function loadConfig (doc = {}) {
   }
   if (!Number.isFinite(merged.transfer.chainResetMs) || merged.transfer.chainResetMs < 0) {
     throw new TypeError('config.transfer.chainResetMs must be a non-negative number')
+  }
+  if (typeof merged.transfer.keepConnection !== 'boolean') {
+    throw new TypeError('config.transfer.keepConnection must be a boolean')
   }
   if (!Number.isFinite(merged.transfer.reconfigureTimeoutMs) || merged.transfer.reconfigureTimeoutMs < 0) {
     throw new TypeError('config.transfer.reconfigureTimeoutMs must be a non-negative number')
@@ -306,6 +317,8 @@ export function createMonoplayer ({
   const TRANSFER_RESTORED_NOTICE =
     '[Monoplayer] The new server could not be reached. ' +
     'You are still on the previous server.'
+  const RECONFIGURE_REASON =
+    'The server reconfigured this session. Reconnect in a few seconds.'
 
   const logs = [] // redacted JSON lines, bounded
   const listeners = new Map() // type -> Set<fn>
@@ -331,6 +344,9 @@ export function createMonoplayer ({
   let transferNoticeSent = false // one refusal notice per attach
   let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let pendingTransfer = null // target for the next reconnect_due
+  // The default path: a backend start_configuration ends the leg, and the end
+  // handler turns that into a kick with the reconfiguration reason.
+  let reconfigureRequested = false
   // #22: the same-connection reconfiguration. `move` owns the pre-transfer
   // snapshot and the session transitions; `moveKind` names the move while it
   // is in flight. `clientReconfiguring` says the client is in its own
@@ -926,7 +942,9 @@ export function createMonoplayer ({
     // A client that is still finishing its own configuration cannot start a
     // second one, and the move would write play frames into it. The puppet
     // stays where it is instead.
-    if (isAttached() && !frontPlayReady) return refuseTransfer('client_not_in_play', host, port, true)
+    if (cfg.transfer.keepConnection && isAttached() && !frontPlayReady) {
+      return refuseTransfer('client_not_in_play', host, port, true)
+    }
     const key = `${host}:${port}`
     if (transferChain.visited.has(key)) return refuseTransfer('loop', host, port, true)
     if (transferChain.depth >= cfg.transfer.chainLimit) return refuseTransfer('chain_limit', host, port, true)
@@ -941,10 +959,11 @@ export function createMonoplayer ({
     metrics.transfersFollowed++
     log('transferFollow', { host, port, depth: transferChain.depth })
 
-    // #22: the client keeps its connection. The move holds the pre-transfer
-    // state so a target that never answers can be rolled back onto the same
-    // socket.
-    const begun = isAttached()
+    // #22: with `transfer.keepConnection` on, the client keeps its connection
+    // and the move holds the pre-transfer state so a target that never answers
+    // can be rolled back onto the same socket. Off (the default), the client is
+    // detached and rejoins once the puppet is warm on the target.
+    const begun = cfg.transfer.keepConnection && isAttached()
       ? move.begin({ target: { host, port }, kind: TRANSFER_KINDS.TRANSFER, reason: 'backend_transfer' })
       : { began: false }
     if (begun.began) {
@@ -1414,6 +1433,8 @@ export function createMonoplayer ({
         failTransfer({ reason: `target_lost:${reason}` })
         return
       }
+      const reconfigured = reconfigureRequested
+      reconfigureRequested = false
       // A transfer already tore the session down synchronously; the late
       // socket end is recorded, not replayed.
       if (session.state === STATES.RECONNECTING) {
@@ -1423,7 +1444,10 @@ export function createMonoplayer ({
       }
       // A normal fault resets the redirect chain; a followed transfer keeps it.
       if (pendingTransfer === null) clearTransferChain('backend_end')
-      teardownBackend({ reason, kickReason: 'backend_disconnected' })
+      teardownBackend({
+        reason,
+        kickReason: reconfigured ? RECONFIGURE_REASON : 'backend_disconnected'
+      })
     })
 
     backendLeg.setErrorHandler(({ error } = {}) => {
@@ -1813,12 +1837,24 @@ export function createMonoplayer ({
         log('backendReconfigureIgnored', { reason: 'move_in_flight', kind: moveKind })
         return
       }
-      // #22: the server restarts this connection's configuration phase. The
-      // puppet follows it on its own backend connection (the protocol library
-      // answers the finish and re-enters configuration), and an attached
-      // client follows it on the connection it holds. Neither is detached and
-      // no leg is ended.
       blockClientbound('play', name, clientboundPolicy('play', name), data)
+      // Default path: the front cannot serve a restarted configuration phase
+      // on the client's own connection, so the puppet leg is ended on purpose
+      // and the normal backend-down path kicks the client with a clear reason.
+      if (!cfg.transfer.keepConnection) {
+        log('backendReconfigure', { name, keepConnection: false })
+        reconfigureRequested = true
+        try {
+          backendLeg.end('backend_reconfigure')
+        } catch (error) {
+          log('backendReconfigureFailed', { error: String(error?.message ?? error) })
+        }
+        return
+      }
+      // Kept connection: the puppet follows the restarted phase on its own
+      // backend connection (the protocol library answers the finish and
+      // re-enters configuration), and an attached client follows it on the
+      // connection it holds. Neither is detached and no leg is ended.
       const begun = isAttached()
         ? move.begin({ kind: TRANSFER_KINDS.RECONFIGURE, reason: 'backend_reconfigure' })
         : { began: false }
@@ -1836,6 +1872,7 @@ export function createMonoplayer ({
       awaitingBackendLogin = true
       backendConfiguring = false
       log('backendReconfigure', {
+        keepConnection: true,
         followed: begun.began,
         state: session.state,
         cacheReset: true
