@@ -57,6 +57,18 @@ test('the dev lane never mounts the live custody volume', () => {
   assert.match(monoplayer, /strategy:\s*\n\s*type: Recreate/, 'Recreate, so two pods never overlap')
 })
 
+test('the dev claim is its own object, outside the deployment manifest', () => {
+  // A custody bootstrap has to create the volume without a proxy holding it, so
+  // the claim cannot be welded to the Deployment (#44).
+  const monoplayer = fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8')
+  const custody = fs.readFileSync(path.join(DEV, 'custody.yaml'), 'utf8')
+
+  assert.doesNotMatch(monoplayer, /^kind: PersistentVolumeClaim$/m, 'monoplayer.yaml declares no claim')
+  assert.match(custody, /^kind: PersistentVolumeClaim$/m, 'custody.yaml declares the claim')
+  assert.match(custody, /^  name: monoplayer-dev-custody$/m, 'the claim is the dev claim')
+  assert.match(custody, /ReadWriteOnce/, 'one node, one writer')
+})
+
 test('the kustomization lists every manifest in the directory', () => {
   const kustomization = fs.readFileSync(path.join(DEV, 'kustomization.yaml'), 'utf8')
   for (const { name } of manifests()) {
@@ -80,11 +92,23 @@ test('mise offers one command up and one down', () => {
   assert.match(toml, /\[tasks\."dev:down"\]/, 'dev:down')
 })
 
+// An empty whitelist, which is what the dev ConfigMap ships.
+const EMPTY_WHITELIST = '{"version":1,"players":[]}'
+// The live ConfigMap: the human who may control the proxy.
+const LIVE_WHITELIST = '{"version":1,"players":[{"uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi"}]}'
+// The pull Secret the private GHCR package needs, as the live namespace stores it.
+const LIVE_SECRET = '{"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"e30="}}'
+const PLAYER_LIST = 'There are 1 of a max of 8 players online: DevPuppet'
+
+// The shim answers from fixture files, so a JSON answer never has to survive a
+// shell quoting layer.
 const SHIM = [
   '#!/usr/bin/env bash',
   'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
-  'last="${@: -1}"',
+  'fixtures="$KUBECTL_FIXTURES"',
   'case " $* " in',
+  // No pull Secret in the dev namespace yet; the live one exists to copy.
+  '  *" get secret "*"-o json"*) cat "$fixtures/live-secret.json"; exit 0 ;;',
   '  *" get secret "*) exit 1 ;;',
   '  *" create namespace "*) printf \'{"kind":"Namespace"}\\n\'; exit 0 ;;',
   '  *" create secret "*) printf \'{"kind":"Secret"}\\n\'; exit 0 ;;',
@@ -92,7 +116,13 @@ const SHIM = [
   '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" rollout status "*) exit 0 ;;',
   '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
-  '  *" get configmap "*) printf \'{"version":1,"players":[]}\\n\'; exit 0 ;;',
+  '  *" -n monoplayer-dev get configmap "*) cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
+  '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json"; exit 0 ;;',
+  '  *" get configmap "*) cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
+  // The dev proxy's account, read from its volume, and the dev Paper's player
+  // list, read over RCON.
+  '  *" exec "*"node -e"*) printf \'%s\' "$KUBECTL_ACCOUNT_NAME"; exit 0 ;;',
+  '  *" rcon-cli list"*) printf \'%s\\n\' "$KUBECTL_RCON"; exit 0 ;;',
   '  *" get deploy "*) if [ -f "$KUBECTL_MARKER" ]; then printf \'%s\\n\' "$KUBECTL_REPLICAS_AFTER"; else printf \'%s\\n\' "$KUBECTL_REPLICAS_BEFORE"; fi; exit 0 ;;',
   '  *) exit 0 ;;',
   'esac',
@@ -102,9 +132,14 @@ const SHIM = [
 function workspace () {
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-dev-lane-'))
   const bin = path.join(dir, 'bin')
+  const fixtures = path.join(dir, 'fixtures')
   fs.mkdirSync(bin, { recursive: true })
+  fs.mkdirSync(fixtures, { recursive: true })
   fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
-  return { dir, bin, log: path.join(dir, 'kubectl.log'), marker: path.join(dir, 'applied') }
+  fs.writeFileSync(path.join(fixtures, 'live-secret.json'), LIVE_SECRET + '\n')
+  fs.writeFileSync(path.join(fixtures, 'dev-whitelist.json'), EMPTY_WHITELIST + '\n')
+  fs.writeFileSync(path.join(fixtures, 'live-whitelist.json'), EMPTY_WHITELIST + '\n')
+  return { dir, bin, fixtures, log: path.join(dir, 'kubectl.log'), marker: path.join(dir, 'applied') }
 }
 
 function run (space, args, env = {}) {
@@ -118,6 +153,10 @@ function run (space, args, env = {}) {
       KUBECTL_MARKER: space.marker,
       KUBECTL_REPLICAS_BEFORE: '1',
       KUBECTL_REPLICAS_AFTER: '1',
+      KUBECTL_FIXTURES: space.fixtures,
+      KUBECTL_ACCOUNT_NAME: 'DevPuppet',
+      KUBECTL_RCON: PLAYER_LIST,
+      MONOPLAYER_DEV_JOIN_REPORT: path.join(space.dir, 'dev-join.json'),
       ...env
     }
   })
@@ -140,7 +179,7 @@ test('up creates the RCON Secret before it applies the lane', () => {
 
 test('no dev command changes the live deployment', () => {
   const space = workspace()
-  for (const args of [['up'], ['status'], ['down']]) {
+  for (const args of [['up'], ['status'], ['down'], ['join']]) {
     const { status, output, calls } = run(space, args)
     assert.equal(status, 0, args.join(' ') + ': ' + output)
     for (const verb of ['scale', 'patch', 'rollout restart', 'set image deploy/monoplayer -n monoplayer']) {
@@ -182,21 +221,39 @@ test('up with a steady live lane reports the same count twice', () => {
   assert.match(output, /live replicas before monoplayer-dev came up: 1, after: 1/)
 })
 
-test('join points a throwaway proxy at the dev Paper, never at a live backend', () => {
-  // Borrowing the live account for one supervised run is safe while the pod never
-  // refreshes (docs/custody.md, "Sessions, copies, and refresh"): sessions are not
-  // exclusive, refreshes are. The pod path is what enforces it, so the join has to
-  // go through it rather than through a standing deployment.
-  const script = fs.readFileSync(SCRIPT, 'utf8')
-  const join = script.slice(script.indexOf('join() {'))
-  const body = join.slice(0, join.indexOf('\n}'))
-  assert.match(body, /scripts\/online-cluster\.sh/, 'the join reuses the throwaway pod')
-  assert.match(body, /--backend-host "paper\.\$\{DEV_NAMESPACE\}\.svc\.cluster\.local"/, 'the backend is the dev Paper')
-  assert.doesNotMatch(body, /excalia|play2\./i, 'never the live backend')
-  assert.match(script, /^  join\) shift; join "\$@" ;;$/m, 'join is a subcommand')
+test('up copies the pull Secret the private package needs, before it applies', () => {
+  // The GHCR package is private (docs/deployment.md), so without this Secret the
+  // dev proxy cannot pull. That is half of why #43 was reopened.
+  const space = workspace()
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const copy = calls.findIndex(line => line.startsWith('-n monoplayer get secret ghcr-pull -o json'))
+  const apply = calls.findIndex(line => line.includes('apply -k'))
+  assert.ok(copy >= 0, 'the live pull Secret is read')
+  assert.ok(apply > copy, 'the dev copy exists before the lane is applied')
+})
 
-  const toml = fs.readFileSync(path.join(ROOT, 'mise.toml'), 'utf8')
-  assert.match(toml, /\[tasks\."dev:join"\]/, 'mise run dev:join')
+test('up fills the empty dev attach whitelist from the live one', () => {
+  // --start refuses an empty whitelist, so the shipped empty ConfigMap can never
+  // serve: the lane needs a controller before a bot joins on it (#43 AC3).
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const seed = calls.findIndex(line => line.includes('create configmap monoplayer-dev-config'))
+  const apply = calls.findIndex(line => line.includes('apply -k'))
+  assert.ok(seed >= 0, 'the dev whitelist is written')
+  assert.ok(seed > apply, 'it happens after the ConfigMap exists')
+  assert.match(output, /filled the dev attach whitelist from monoplayer/)
+})
+
+test('up leaves an operator whitelist alone', () => {
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), LIVE_WHITELIST + '\n')
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.equal(calls.some(line => line.includes('create configmap')), false, 'no overwrite')
+  assert.match(output, /the dev attach whitelist has entries/)
 })
 
 test('set-image puts the branch image on the dev proxy only', () => {
@@ -217,9 +274,50 @@ test('set-image without a tag is refused', () => {
   assert.deepEqual(calls, [], 'nothing was changed')
 })
 
+test('join reports the dev proxy own account on the dev Paper', () => {
+  // AC3 of #43: the join is the standing deployment's own session, not a
+  // throwaway pod that borrowed the live account.
+  const space = workspace()
+  const { status, output, calls } = run(space, ['join'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.ok(calls.some(line => line.includes('rollout status deploy/monoplayer')), 'it waits for the dev proxy')
+  assert.ok(calls.some(line => line.includes('exec deploy/monoplayer -c monoplayer')), 'it reads the dev account from the proxy volume')
+  assert.ok(calls.some(line => line.includes('exec deploy/paper -c paper -- rcon-cli list')), 'the backend is the dev Paper')
+  assert.equal(calls.some(line => /excalia|play2\./i.test(line)), false, 'never the live backend')
+  const report = JSON.parse(fs.readFileSync(path.join(space.dir, 'dev-join.json'), 'utf8'))
+  assert.deepEqual(report, {
+    namespace: DEV_NAMESPACE,
+    account: 'DevPuppet',
+    players: ['DevPuppet'],
+    evidence: 'There are 1 of a max of 8 players online: DevPuppet',
+    joined: true
+  })
+})
+
+test('join fails when the dev Paper does not list the account', () => {
+  const space = workspace()
+  const { status, output } = run(space, ['join'], {
+    KUBECTL_RCON: 'There are 0 of a max of 8 players online:',
+    MONOPLAYER_DEV_JOIN_TIMEOUT: '0'
+  })
+  assert.equal(status, 1, output)
+  assert.match(output, /DevPuppet is not on the dev Paper/)
+})
+
+test('the join no longer borrows the live account', () => {
+  const script = fs.readFileSync(SCRIPT, 'utf8')
+  assert.doesNotMatch(script, /online-cluster\.sh/, 'no throwaway pod against the dev Paper')
+  assert.doesNotMatch(script, /monoplayer-custody/, 'no reference to the live claim')
+  assert.match(script, /rcon-cli list/, 'the backend evidence is the Paper player list')
+  assert.match(script, /exec deploy\/paper -c paper/, 'it reads the dev Paper, not the gate Paper')
+
+  const toml = fs.readFileSync(path.join(ROOT, 'mise.toml'), 'utf8')
+  assert.match(toml, /\[tasks\."dev:join"\]/, 'mise run dev:join')
+})
+
 test('the live namespace is refused as a dev namespace', () => {
   const space = workspace()
-  for (const args of [['up'], ['down']]) {
+  for (const args of [['up'], ['down'], ['join'], ['pull-secret']]) {
     const { status, output, calls } = run(space, args, { MONOPLAYER_DEV_NAMESPACE: LIVE_NAMESPACE })
     assert.equal(status, 2, args.join(' '))
     assert.match(output, /live namespace/)

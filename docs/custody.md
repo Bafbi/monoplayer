@@ -154,6 +154,12 @@ Two UUID directories exist:
 | GlowSquidye | `73e0e19b-d4e4-4cc1-a553-a3952f0c1aed` | `glowsquidye` | puppet backend session |
 | Bafbi | `6eb73524-ff88-4a62-a8d0-c63905e7afba` | `bafbi` | attaching player, on the attach whitelist |
 
+A third account is the dev lane's puppet (#44). It is deliberately **not** in this
+tree: its custody lives on the cluster's `monoplayer-dev-custody` volume, in the
+`monoplayer-dev` namespace, bootstrapped once by `scripts/dev-custody.sh`. One
+account, one writer, one volume. See
+[deploy/dev/README.md](../deploy/dev/README.md#the-dev-account).
+
 With more than one account there is no default: `--start` must pin the puppet
 with `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye` (or the UUID/name). The CLI
 resolves `--account` by UUID, then alias, then name. A text selector that does
