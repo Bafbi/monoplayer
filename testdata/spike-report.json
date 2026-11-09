@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-11-09T00:28:53.831Z",
-  "started": "2026-11-09T00:28:42.776Z",
+  "timestamp": "2026-11-05T21:54:37.163Z",
+  "started": "2026-11-05T21:54:26.116Z",
   "passed": true,
   "assertionCount": 37,
   "failedAssertions": [],
@@ -14,8 +14,7 @@
           "game_state_change",
           "chunk_batch_start",
           "map_chunk",
-          "chunk_batch_finished",
-          "window_items"
+          "chunk_batch_finished"
         ]
       }
     },
@@ -99,7 +98,7 @@
       "name": "attach replayed cached frames plus a synthesized position",
       "ok": true,
       "detail": {
-        "framesReplayed": 6,
+        "framesReplayed": 5,
         "positionsSynthesized": 1
       }
     },
@@ -214,7 +213,6 @@
           "chunk_batch_start",
           "map_chunk",
           "chunk_batch_finished",
-          "window_items",
           "keep_alive"
         ]
       }
@@ -342,7 +340,6 @@
           "chunk_batch_start",
           "map_chunk",
           "chunk_batch_finished",
-          "window_items",
           "block_change",
           "position"
         ],
@@ -352,7 +349,6 @@
           "chunk_batch_start",
           "map_chunk",
           "chunk_batch_finished",
-          "window_items",
           "block_change"
         ]
       }
@@ -448,7 +444,6 @@
           "chunk_batch_start",
           "map_chunk",
           "chunk_batch_finished",
-          "window_items",
           "block_change",
           "position"
         ]
@@ -462,26 +457,25 @@
     "frontRejected": 0,
     "backendDisconnects": 0,
     "cacheOverflow": 0,
-    "framesCached": 7,
-    "framesReplayed": 13,
+    "framesCached": 6,
+    "framesReplayed": 11,
     "serverboundForwarded": 3,
     "chatBlocked": 1,
     "positionsSynthesized": 3
   },
   "cache": {
-    "size": 7,
+    "size": 6,
     "names": [
       "login",
       "game_state_change",
       "chunk_batch_start",
       "map_chunk",
       "chunk_batch_finished",
-      "window_items",
       "block_change"
     ]
   },
   "backend": {
-    "port": 35029,
+    "port": 45753,
     "logins": 1,
     "positions": 1,
     "digs": 1,
@@ -514,7 +508,6 @@
       "chunk_batch_start",
       "map_chunk",
       "chunk_batch_finished",
-      "window_items",
       "keep_alive"
     ],
     "positions": [
@@ -557,7 +550,6 @@
       "chunk_batch_start",
       "map_chunk",
       "chunk_batch_finished",
-      "window_items",
       "block_change",
       "position"
     ],
