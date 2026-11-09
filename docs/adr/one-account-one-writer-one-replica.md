@@ -13,3 +13,8 @@ The refresh token is the password, and Microsoft rotates the chain on every refr
 ## Consequences
 
 The live deployment and the transfer testbed share one custody volume, so they must never run at the same time.
+
+One writer means one *refresher*, not one session. Several clients may play the
+account at once with one shared token; what may not happen twice is a refresh
+from two copies, or two logins to the same server. See
+`docs/custody.md#sessions-copies-and-refresh`.
