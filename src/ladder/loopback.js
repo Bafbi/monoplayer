@@ -163,6 +163,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       getSnapshotConfig: () => core.cache.snapshot().config,
       wireCheck: payload => wire.check(payload),
       wireMode: 'throw',
+      chat: 'full',
       log
     })
 
@@ -546,7 +547,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }
     bot1.sendChat('hello from the human')
     bot1.sendCommand('list')
-    bot1.sendChatAck(3)
+    bot1.sendMessageAck(3)
     await bot1.waitFor(
       () => fake.received.chats.length === chatBefore.chats + 1 &&
         fake.received.chatCommands.length === chatBefore.commands + 1,
@@ -559,15 +560,17 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       command: spokenCommand?.command ?? null,
       chatSent: core.metrics.chatSent,
       forwarded: core.metrics.serverboundForwarded - chatBefore.forwarded,
-      chatAcks: fake.received.chatAcks.length
+      messageAcks: fake.received.messageAcknowledgements.length,
+      chatSessionUpdates: fake.received.chatSessionUpdates.length
     }
     check(
       'O29',
-      'the human chat and command reached the backend as the puppet, not forwarded',
+      'the human chat and command reached the backend as the puppet, and their acks did not',
       spokenChat?.message === 'hello from the human' &&
         spokenCommand?.command === 'list' &&
         core.metrics.chatSent === chatBefore.sent + 2 &&
-        core.metrics.serverboundForwarded === chatBefore.forwarded,
+        core.metrics.serverboundForwarded === chatBefore.forwarded &&
+        fake.received.messageAcknowledgements.length === 0,
       evidence.chat
     )
 

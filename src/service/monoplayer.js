@@ -45,7 +45,7 @@ import {
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
-import { clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
+import { CHAT_FRAMES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createSession, STATES } from '../core/session.js'
 import { redact, SENTINEL } from '../observability/redact.js'
 import { pathToFileURL } from 'node:url'
@@ -518,6 +518,17 @@ export function createMonoplayer ({
     if (LOGGED_BLOCKS.has(name)) log('clientboundBlocked', { state, name })
   }
 
+  // One accounting for every chat frame the backend never receives, whether it
+  // was dropped by policy, carried no text, or the leg could not send it. Kept
+  // in one place so the counters and the event cannot diverge.
+  function dropChat (name, reason, fields = {}) {
+    metrics.serverboundDropped++
+    bumpName(metrics.serverboundDroppedByName, name)
+    metrics.chatBlocked++
+    log('chatBlocked', { name, reason, ...fields })
+    emit('chat_blocked', { name, reason })
+  }
+
   // The refusal notice is local proxy speech, not server speech. It never
   // carries the target address.
   function sendTransferNotice () {
@@ -943,10 +954,7 @@ export function createMonoplayer ({
         // cannot use; the leg signs the text again as the puppet.
         const spoken = chatText(name, serverbound.data)
         if (!spoken || typeof backendLeg.chat !== 'function') {
-          metrics.serverboundDropped++
-          bumpName(metrics.serverboundDroppedByName, serverbound.name)
-          metrics.chatBlocked++
-          log('chatUnsendable', { name, reason: spoken ? 'leg_has_no_chat' : 'no_text' })
+          dropChat(name, spoken ? 'leg_has_no_chat' : 'no_text')
           return
         }
         try {
@@ -955,21 +963,17 @@ export function createMonoplayer ({
           log('chatSent', { name, command: spoken.command, chars: spoken.text.length })
           emit('chat_sent', { name, command: spoken.command })
         } catch (error) {
-          metrics.serverboundDropped++
-          bumpName(metrics.serverboundDroppedByName, serverbound.name)
-          metrics.chatBlocked++
-          log('chatSendFailed', { name, error: String(error?.message ?? error).slice(0, 200) })
+          dropChat(name, 'send_failed', { error: String(error?.message ?? error).slice(0, 200) })
         }
         return
       }
       if (decision.action === 'drop') {
+        if (decision.chat) {
+          dropChat(name, decision.reason)
+          return
+        }
         metrics.serverboundDropped++
         bumpName(metrics.serverboundDroppedByName, serverbound.name)
-        if (decision.chat) {
-          metrics.chatBlocked++
-          log('chatBlocked', { name: serverbound.name })
-          emit('chat_blocked', { name: serverbound.name })
-        }
         return
       }
       session.setPose(
@@ -1129,13 +1133,8 @@ export function createMonoplayer ({
     }
     if (policy.decision === DECISION.PER_LEG) return // handled above; defensive
     if (policy.decision === DECISION.LIVE_ONLY) {
-      // Chat modes, applied at the one place a live frame reaches the client.
-      // 'off' blocks every chat frame. 'read-only' keeps the server's chat but
-      // not its signed player chat, which only makes sense to relay when the
-      // human is speaking as the account (#19).
-      const signedChat = name === 'player_chat'
-      const chatFrame = signedChat || name === 'system_chat' || name === 'profileless_chat'
-      if (chatFrame && (cfg.chat === 'off' || (signedChat && cfg.chat !== 'full'))) return
+      const chatFrame = CHAT_FRAMES.has(name)
+      if (chatFrame && !chatRelayAllowed(name, cfg.chat)) return
       if (chatFrame) metrics.chatRelayed++
       if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
       return

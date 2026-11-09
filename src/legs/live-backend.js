@@ -345,10 +345,14 @@ function createBackendLeg ({
       socketClient.on('login', packet => {
         log('backendLegLogin', { entityId: packet.entityId })
         // Once per backend connection, and before any chat: whether this
-        // session can sign what it says. The library sends an unsigned frame
-        // without profile keys rather than failing, so a live run reads this
-        // line instead of inferring it from a server-side rejection.
-        log('chatCapability', { signed: Boolean(socketClient.profileKeys) })
+        // session can sign what it says. The library signs only with both the
+        // profile keys and the session that registered them
+        // (`canSign = client.profileKeys && client._session`), and sends an
+        // unsigned frame otherwise rather than failing, so a live run reads
+        // this line instead of inferring it from a server-side rejection.
+        log('chatCapability', {
+          signed: Boolean(socketClient.profileKeys && socketClient._session)
+        })
       })
       socketClient.on('playerJoin', () => {
         log('backendLegJoin', { joined: true })

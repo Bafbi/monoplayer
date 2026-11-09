@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 402 tests (`mise run test`), and `mise run check` also runs the
-26-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 532 tests (`mise run test`), and `mise run check` also runs the
+31-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -212,12 +212,14 @@ never replayed.
   forwarder counters in the heartbeat).
 - `player_chat` is relayed live in `full` mode and blocked in the other two.
   Its global index and previous-messages window belong to the puppet's
-  connection, not the human's, so the human's client sees a per-sender
-  signature chain that is out of order. The message still displays; the client
-  marks that sender's chain as broken, which only changes the acknowledgements
-  the human's client would have sent. Those are dropped, because they describe
-  the human's stream. `profileless_chat` is the unsigned player variant and is
-  relayed in every mode.
+  connection, not the human's, so the human's client will see a per-sender
+  signature chain that is out of order. The expectation is that the message
+  still displays and the client marks that sender's chain as broken, which only
+  changes the acknowledgements the human's client would have sent. Those are
+  dropped, because they describe the human's stream. No run has confirmed the
+  display behaviour yet; #13 is where it gets confirmed.
+  `profileless_chat` is the unsigned player variant and is relayed in every
+  mode.
 - Serverbound `chat_session_update`, `chat_ack`, and
   `message_acknowledgement` are dropped in every mode: the first two carry the
   human's session state, and the last describes the human's stream, not the
@@ -258,6 +260,7 @@ backendLeg = {                    // = the GlowSquidye puppet session
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
   writeRaw(buffer, meta)          // forwarded serverbound play frames
+  chat(text)                      // speak as the puppet: sign with this connection's keys (#19)
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
 
