@@ -1,0 +1,9 @@
+name: MonoplayerObserver
+version: 0.1.0
+main: eu.monoplayer.observer.ObserverPlugin
+description: Records what the server knows about a joining client, for the transparency report.
+author: Monoplayer
+api-version: "1.13"
+# Soft, not hard: without the packet hook the plugin still records what Bukkit
+# exposes, and says which fields it could not observe.
+softdepend: [ProtocolLib]
