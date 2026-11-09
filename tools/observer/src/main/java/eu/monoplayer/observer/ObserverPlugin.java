@@ -29,8 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * The server transparency observer (#12).
  *
  * <p>Records what the server knows about a joining client: identity, address,
- * brand, client information, chat session presence, transfer intent, and
- * resource pack status. One JSONL record per join, in
+ * brand, client information, chat session presence, transfer intent, the
+ * configuration gate, and resource pack status. One JSONL record per join, in
  * {@code plugins/MonoplayerObserver/views.jsonl}.
  *
  * <p>Read-only by construction: listeners run at MONITOR priority and never
@@ -57,7 +57,7 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
         }
         getServer().getPluginManager().registerEvents(this, this);
         if (getServer().getPluginManager().getPlugin("ProtocolLib") == null) {
-            getLogger().warning("ProtocolLib is absent: brand, skin parts, chat session and transfer intent are unobserved");
+            getLogger().warning("ProtocolLib is absent: brand, skin parts, chat session, transfer intent and the configuration gate are unobserved");
             return;
         }
         registerPacketListeners();
@@ -112,6 +112,24 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
                         if (BRAND_CHANNEL.equals(channel) && data instanceof byte[] bytes) {
                             viewFor(event).brand = decodeBrand(bytes);
                         }
+                    }
+                });
+        // #21: the configuration gate. The gate itself is clientbound (the
+        // server asked) and the acceptance is serverbound (the client
+        // answered). Both are configuration-phase frames, so both carry the
+        // connection's view, not the joined player's.
+        ProtocolLibrary.getProtocolManager().addPacketListener(
+                new PacketAdapter(this, ListenerPriority.MONITOR, PacketType.Configuration.Server.CODE_OF_CONDUCT) {
+                    @Override
+                    public void onPacketSending(PacketEvent event) {
+                        viewFor(event).codeOfConduct = true;
+                    }
+                });
+        ProtocolLibrary.getProtocolManager().addPacketListener(
+                new PacketAdapter(this, ListenerPriority.MONITOR, PacketType.Configuration.Client.ACCEPT_CODE_OF_CONDUCT) {
+                    @Override
+                    public void onPacketReceiving(PacketEvent event) {
+                        viewFor(event).codeOfConductAccepted = true;
                     }
                 });
         ProtocolLibrary.getProtocolManager().addPacketListener(
@@ -218,6 +236,8 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
         Integer skinParts;
         Boolean chatSession;
         Boolean transferred;
+        Boolean codeOfConduct;
+        Boolean codeOfConductAccepted;
         String resourcePack;
 
         String toJson() {
@@ -233,6 +253,8 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
             append(json, "skinParts", skinParts);
             append(json, "chatSession", chatSession);
             append(json, "transferred", transferred);
+            append(json, "codeOfConduct", codeOfConduct);
+            append(json, "codeOfConductAccepted", codeOfConductAccepted);
             append(json, "resourcePack", resourcePack);
             json.append('}');
             return json.toString();

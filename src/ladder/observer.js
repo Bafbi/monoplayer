@@ -25,6 +25,8 @@ export const VIEW_FIELDS = Object.freeze([
   'skinParts',
   'chatSession',
   'transferred',
+  'codeOfConduct',
+  'codeOfConductAccepted',
   'resourcePack'
 ])
 

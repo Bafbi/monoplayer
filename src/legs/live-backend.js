@@ -24,6 +24,9 @@
 //     path stays covered by the fake-leg tests.
 //   - teleport_confirm / chunk_batch_received / pong answering stays in the
 //     core router (backendLeg.write).
+//   - the library's own code-of-conduct accept is a leg decision, not a library
+//     one: `withCodeOfConductGate` holds it while a client is attached and sends
+//     it with a log line when none is (#21).
 //
 // Token custody (live only): the Microsoft auth MUST reuse the G1 custody
 // caches in the account's directory (`.secrets/accounts/<uuid>/`), never mint
@@ -184,6 +187,50 @@ export function answerBackendDialog ({
   } catch (error) {
     log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
     return { answered: false, reason: 'write_failed', responses: next }
+  }
+}
+
+// #21: who answers a configuration gate. The protocol library answers the code
+// of conduct itself, inside its own configuration handler, before any frame
+// reaches the core (docs/transparency.md). Wrap the connection's writer so that
+// accept becomes this leg's decision:
+//   - a client is attached: the library's frame is swallowed and the gate stays
+//     open. The human receives it through the core's control path (#16) and
+//     their answer travels back as the puppet's own frame. No timeout: an
+//     attached client keeps the gate as long as it takes.
+//   - no client is attached: the frame goes out and is logged, so a headless
+//     session is not left at a gate.
+// The accept leaves before the core sees the gate frame, so the leg reports it
+// through `onDialogAnswered` and the holder never offers a closed gate to the
+// next client. A configuration click (#20) and this accept are the two frame
+// writes the leg makes on its own, and both report the answer the same way.
+//
+// Every other frame passes through untouched. The wrapper is installed on every
+// connection, so a reconnect cannot slip past it.
+export function withCodeOfConductGate (originalWrite, {
+  isHumanAttached = () => false,
+  onDialogAnswered = null,
+  log = () => {}
+} = {}) {
+  if (typeof originalWrite !== 'function') throw new TypeError('write is required')
+  if (typeof isHumanAttached !== 'function') throw new TypeError('isHumanAttached must be a function')
+
+  return (name, params, ...rest) => {
+    if (name !== 'accept_code_of_conduct') return originalWrite(name, params, ...rest)
+    if (isHumanAttached() === true) {
+      log('codeOfConductHeld', { reason: 'human_attached' })
+      return false
+    }
+    try {
+      originalWrite(name, params, ...rest)
+    } catch (error) {
+      // A failed accept is not an answer: leave the gate for a human.
+      log('codeOfConductAcceptFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      return false
+    }
+    log('codeOfConductAccepted', { reason: 'no_client' })
+    onDialogAnswered?.({ state: 'configuration', name: 'code_of_conduct' })
+    return true
   }
 }
 
@@ -389,7 +436,12 @@ function createBackendLeg ({
         }
         socketClient = mc.createClient(options)
         client = socketClient
-        if (nextTransferIntent) socketClient.write = withTransferIntent(socketClient.write.bind(socketClient), true)
+        let write = socketClient.write.bind(socketClient)
+        if (nextTransferIntent) write = withTransferIntent(write, true)
+        // #21: the library's own code-of-conduct accept passes through this one
+        // choke point, on every connection. Only `write` is wrapped: the human's
+        // answer travels through `writeRaw` below, so the gate never holds it.
+        socketClient.write = withCodeOfConductGate(write, { isHumanAttached, onDialogAnswered, log })
       } catch (error) {
         releaseTokens()
         log('backendConnectFailed', { error: error.message })
@@ -705,7 +757,11 @@ export function createOfflineBackendLeg (options = {}) {
     connectTimeoutMs = 15000,
     // The configuration-gate policy, so a rung can run one and prove it does
     // not reach play (#20). Off by default: an offline leg answers nothing.
-    dialogAction = null
+    dialogAction = null,
+    // #21: the offline rung answers a code-of-conduct gate the same way the
+    // live leg does, so the loopback can prove the fallback end to end.
+    isHumanAttached = () => false,
+    onDialogAnswered = null
   } = options
 
   if (options.cacheDir !== undefined) {
@@ -743,6 +799,8 @@ export function createOfflineBackendLeg (options = {}) {
     log,
     connectTimeoutMs,
     dialogAction,
+    isHumanAttached,
+    onDialogAnswered,
     prepareConnection: () => ({ username, auth: 'offline' }),
     releaseTokens: () => {},
     connectLogFields: (connection, currentTarget) => ({

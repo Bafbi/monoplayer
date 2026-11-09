@@ -278,6 +278,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
       version: cfg.version,
       cacheDir: cfg.puppet.cacheDir,
       cacheAccount: cfg.puppet.cacheAccount,
+      // #16/#21: the same answerer split as the account branch. Without these,
+      // this branch fails open: the puppet would answer a gate a human is
+      // looking at, and the core would hold a gate the server already closed.
+      isHumanAttached: () => core.attached === true,
+      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
       log
     })
   // Strict frame check on every client-facing raw replay/relay. The live path

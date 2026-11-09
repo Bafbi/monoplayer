@@ -160,6 +160,10 @@ _Avoid_: play gate, in-game dialog
 A control dialog the backend asks in the configuration phase, including the code of conduct. A headless puppet may answer one with `MONOPLAYER_DIALOG_ACTION`; an attached player always gets it instead.
 _Avoid_: config dialog, join gate
 
+**Gate fallback**:
+The puppet's own answer to a configuration gate while no player is attached: it accepts the gate and logs `codeOfConductAccepted`. A gate the protocol library answers itself, the code of conduct, always takes this path when no player holds the slot; a gate with buttons is `MONOPLAYER_DIALOG_ACTION`'s. While a player is attached the gate is theirs and there is no timeout, so the fallback never fires under a human.
+_Avoid_: auto-accept, gate timeout
+
 **Per-leg frame**:
 A frame that belongs to the connection that received it, such as a keep-alive, a position, a ping, or a bundle delimiter. Each leg answers or ignores its own.
 _Avoid_: connection frame, local frame
