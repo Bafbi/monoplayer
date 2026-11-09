@@ -86,22 +86,16 @@ run stops the loop unless `--force`.
 
 `node src/driver/run.js --runs 2 --tunnel` passed **2/2**, with 38/38 assertions
 per run. Both runs used fresh client processes, server-verified movement,
-break/place, disconnect, and rejoin. Reports and screenshots:
-
-- `testdata/driver-run1-2026-11-06T14-20-59-578Z.json`
-- `testdata/driver-run2-2026-11-06T14-20-59-578Z.json`
-- `testdata/driver-summary.json`
-- `testdata/screenshot-mw52bqrgu38etw-1793974882660.png`
-- `testdata/screenshot-mw52co9wuw3sck-1793974926080.png`
+break/place, disconnect, and rejoin.
 
 **G0 passes.** The manual unmodded witness was completed on 2026-11-06
-(join, render, move, break, place, screenshot, disconnect, rejoin). Its
-checklist and evidence are
-[`testdata/driver-unmodded-witness.json`](../testdata/driver-unmodded-witness.json)
-and
-[`testdata/witness-2026-11-06.png`](../testdata/witness-2026-11-06.png).
-`mise run driver:g0` exits 0; the verdict is
-[`testdata/driver-g0-verdict.json`](../testdata/driver-g0-verdict.json).
+(join, render, move, break, place, screenshot, disconnect, rejoin).
+[`testdata/gate-b-driver.md`](../testdata/gate-b-driver.md) holds the verdict,
+the per-run numbers, the witness record, and quotes the reports and screenshots
+git no longer carries.
+
+The checkout no longer carries those reports, so `mise run driver:g0` needs a
+fresh `--runs 2` and a re-recorded witness before it exits 0 again.
 
 ## The unmodded witness lane
 

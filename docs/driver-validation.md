@@ -45,10 +45,9 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
 
 Verified on `nath` on 2026-11-08 with no session variables exported:
 `launch` reported `SILENT=yes` and left the active workspace and the focused
-window untouched, `shot` returned
-[`testdata/nath-wrapper-2026-11-08.png`](../testdata/nath-wrapper-2026-11-08.png)
-(1916x1050), and `kill` reported `QUIT=ok`, stopped the client JVM, and closed
-the driver port. The host reported a Hyprland instance signature the earlier
+window untouched, `shot` returned a 1916x1050 PNG, and `kill` reported `QUIT=ok`, stopped the client JVM, and closed
+the driver port. [The driver verdict page](../testdata/gate-b-driver.md) quotes
+that run. The host reported a Hyprland instance signature the earlier
 sessions never saw, which is why the wrapper derives it on every call instead of
 copying one.
 
@@ -130,16 +129,13 @@ Prism is closed if the console window should be removed entirely.
 
 - The driver lane is now **2/2**: `node src/driver/run.js --runs 2 --tunnel` passed
   twice on 2026-11-06, 38/38 assertions each, with server-side position and
-  block checks. Reports:
-  [`testdata/driver-run1-2026-11-06T14-20-59-578Z.json`](../testdata/driver-run1-2026-11-06T14-20-59-578Z.json)
-  and
-  [`testdata/driver-run2-2026-11-06T14-20-59-578Z.json`](../testdata/driver-run2-2026-11-06T14-20-59-578Z.json).
+  block checks. Verdict and per-run numbers:
+  [`testdata/gate-b-driver.md`](../testdata/gate-b-driver.md).
 - The unmodded Prism client witness (no driver) was completed on 2026-11-06
-  (join, render, move, break, place, screenshot, disconnect, rejoin). See
-  [`testdata/driver-unmodded-witness.json`](../testdata/driver-unmodded-witness.json)
-  and
-  [`testdata/witness-2026-11-06.png`](../testdata/witness-2026-11-06.png).
-  `mise run driver:g0` now exits 0.
+  (join, render, move, break, place, screenshot, disconnect, rejoin). The same
+  page quotes the witness record. That run predates the reports leaving git, so
+  `mise run driver:g0` exits 0 again only after a fresh `--runs 2` and a
+  re-recorded witness.
 - Assert a survival (non-creative) break/place hold, not just the creative row.
 
 The repeatable runner for exactly this row is now in `src/driver/` +
