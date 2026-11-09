@@ -13,8 +13,8 @@ cheapest rung that can fail for the defect you are chasing.
 | 2 loopback | `mise run loopback` | about 3 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, client detach/reattach, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering, vanilla acceptance, and seamless switch until the reconfiguration path lands |
-| 3 online bot | `mise run online` | minutes | live backend, both account custodians | the same shape as rung 2 through the online front leg and a live backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
-| 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, live Velocity/Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
+| 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
+| 4 real client | `mise run driver:scenario` then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, the gate Paper, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
 
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
 loopback. It is the default gate.
@@ -30,6 +30,39 @@ The frozen protocol spike (`mise run spike`) and the spike scenario
 (`mise run spike:report`) sit beside the ladder. They prove the two-leg relay on
 loopback with the older harness. Keep them green; do not extend them.
 
+## Which lane a run uses
+
+Every run has a lane, a cost, and a blast radius. The lane decides what a run
+may change. The rung decides what it proves.
+
+| Run | Command | Lane | Cost | What it may change |
+|---|---|---|---|---|
+| rungs 0-2 | `mise run check` | none: this machine | seconds | nothing outside the working copy |
+| client-parity rung, 2a | `mise run parity:run` | none: this machine, two bots and a fake backend | about 5 seconds | nothing outside the working copy |
+| observer, the server's view | `mise run observer:run` | the gate Paper, `monoplayer-gate-b`, plus throwaway pods in `monoplayer` that mount the live claim read-only | minutes | installs the plugin into the gate Paper and restarts it, and runs two joins from pods in the live namespace. It refuses to measure the live lane itself |
+| online rung, from a pod | `mise run online:cluster` | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart |
+| online rung, bare | `mise run online` | this machine's copy of the account chain, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session. `mise run online:cluster` is the form that leaves the deployment serving |
+| driver lane, rung 4 | `mise run driver:scenario` | the gate Paper, on its Tailscale host, and the display host | tens of minutes | the gate Paper's world and a real client. The deployment keeps serving |
+| transfer testbed, rung 2b | `mise run testbed:run` | the live custody claim and the gate Paper | about 3 minutes | **the live front goes offline for the run**: it scales `monoplayer/monoplayer` to 0 and disables Argo auto-sync. `mise run testbed:down` restores the deployment, and the sync policy while the run's state file at `/tmp/opencode/monoplayer-testbed.json` survives |
+| dev lane | `mise run dev:up`, then `mise run dev:image`, then `mise run dev:join` | `monoplayer-dev` | minutes | its own Paper, proxy, and account; nothing in `monoplayer` |
+
+Two rows above can change what the live lane serves without a flag: the transfer
+testbed takes the live front offline, and a bare `mise run online` can refresh the
+chain the deployment holds. A third, `mise run online:cluster --rotate`, writes
+that chain and needs a restart. An agent never runs `testbed:up` or `testbed:run`,
+and never passes `--rotate`. `mise run online:cluster` is the form to prefer, and
+the bare rung stays available because `verify:custody` composes it. `AGENTS.md`
+states the rule. `deploy/dev/README.md` is the dev lane runbook.
+
+The table covers the runs that leave this machine. `driver:g0` composes rung 4's
+two commands, the `testbed:*` tasks run inside the testbed's lane, `image:build`
+publishes to the Zot registry that the manifests do not reference, and
+`dev:prove-live` wraps whichever command you give it.
+
+The lane is a second table on purpose. `src/ladder/next-rung.js` reads the rungs
+table above as exactly six cells, so a seventh column would leave every failing
+rung without a hint.
+
 ## Pick the task for the area you touched
 
 Four tasks compose the gate and the check that covers their area through
@@ -41,8 +74,8 @@ that covers the area you changed.
 | Task | Composes | Run it after touching |
 |---|---|---|
 | `mise run verify:relay` | `check`, `spike`, `parity:run` | the relay, the legs, the join, the state cache, `src/core/clientbound-policy.js` |
-| `mise run verify:custody` | `check`, `online` (live backend, both custodians) | `src/custody/`, the custody store, `hasJoined`, offline identity |
-| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, live backend) | `tools/driver/`, `src/driver/` |
+| `mise run verify:custody` | `check`, `online` (a repo-deployed backend, both custodians, this machine's copy of the chain) | `src/custody/`, the custody store, `hasJoined`, offline identity |
+| `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
 
 mise runs sibling `depends` concurrently, so the area task does not order them.
@@ -82,10 +115,16 @@ prints no hint. A rung above cannot catch a missing prerequisite.
 ## Production topology rule
 
 Only two checks run on the production topology, Velocity + Paper (ultimately
-`play.excalia.fr`):
+`play.excalia.fr`). The gate namespace reproduces that topology, and the live
+deployment is `monoplayer`. The two checks are:
 
-- the Fabric driver lane, and
+- the Fabric driver lane, in its M4 row, which goes through the Velocity in front
+  of the gate Paper, and
 - the unmodded vanilla client.
+
+G0 is the exception below it: `mise run driver:g0` joins the gate Paper directly,
+because the scenario pins its backend as "direct Paper 26.1.2 (M2 row);
+Monoplayer and Velocity are not involved in G0" (`src/driver/scenario.js`).
 
 Everything else — reconnect, the F1-F6 faults, identity separation, denial,
 and replay — is validated first offline (loopback, fake backend, Toxiproxy) and
@@ -285,24 +324,17 @@ Three pairs this repo deploys, and where each stands:
 | the transfer testbed | `paper-hub.monoplayer-gate-b.svc.cluster.local:25565` | `monoplayer-testbed.monoplayer.svc.cluster.local:25565` | 26.2 | wired, needs `testbed:up` |
 | the gate Paper | `paper.monoplayer-gate-b.svc.cluster.local:25565` | nothing is deployed | 26.2 | **unmet**: no proxy serves in front of it |
 
-The dev lane is the pair to run first. It needs no port-forward, because both
-endpoints are in the cluster:
+The dev lane is the pair to run first. `mise run dev:join` is not the command
+that runs this rung: it reports the dev proxy's own account on the dev Paper and
+takes no arguments. Running the harness against the dev lane needs the attach
+account's custody and a route to both services, and that recipe is still open in
+[#13](https://github.com/Bafbi/monoplayer/issues/13).
 
-```bash
-MONOPLAYER_FRONT_HOST=monoplayer.monoplayer-dev.svc.cluster.local \
-MONOPLAYER_FRONT_PORT=25565 MONOPLAYER_VERSION=26.2 \
-  mise run dev:join -- --rung src/ladder/client-parity.js
-```
-
-`dev:join` runs the rung from a throwaway pod that copies the attach account's
-custody into its own directory, and it sets the backend to the dev Paper. The
-front leg is the dev lane's own Monoplayer, so the proxy under test is the branch
-image. Two things must already be true: the dev lane is up (`mise run dev:up`),
-and its attach whitelist names that account. The lane's own account lands with
-[#44](https://github.com/Bafbi/monoplayer/issues/44). A local run works the same
-way through two port-forwards (`kubectl -n monoplayer-dev port-forward svc/paper
-25565:25565` and the same for `svc/monoplayer`), and it needs the attach
-account's custody, so prefer the pod.
+The front leg is the dev lane's own Monoplayer, so the proxy under test is the
+branch image. Two things must already be true: the dev lane is up (`mise run
+dev:up`), and its attach whitelist names the attach account. The lane's own
+account is `devpuppet`, bootstrapped by `mise run dev:custody`
+([the runbook](../deploy/dev/README.md#the-first-run)).
 
 The gate Paper has no row it can meet. A proxy in front of it needs the puppet's
 custody, and the harness will not build one, because that is the live custody the
