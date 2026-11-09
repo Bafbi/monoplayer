@@ -1,10 +1,10 @@
-# Gate B B1 — Monoplayer product core (pure, fake-integrated)
+# Product core — pure, fake-integrated
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/b1-verdict.json`).
 159/159 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
 socket-free unit suite runs 350 tests, and `mise run check` also runs the
-26-assertion offline loopback. The Gate A spike (`src/spike/proxy.js`) is frozen
+26-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -248,7 +248,7 @@ routing, chat blocking, pose, keep-alive answering, warm marker) is inside
 ## AC1–AC5 direct-Paper sequence (what B1 proves vs what needs M2)
 
 Acceptance codes per the delivery-gate-owner council memo
-(`.scratch/minecraft-gate-b/council/delivery-gate-owner.md`).
+(a local council memo under `.scratch/`).
 
 | AC | Real sequence (M2 direct Paper) | B1 proof standing in |
 |---|---|---|

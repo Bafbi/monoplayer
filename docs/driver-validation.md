@@ -1,4 +1,4 @@
-# Gate B driver validation — 2026-11-06
+# Client driver validation — 2026-11-06
 
 Validated the Fabric client driver against the real Paper backend on the `nath`
 display host. This is the driver leg of G0, not the unmodded witness.
@@ -101,8 +101,9 @@ copying one.
 
 ## Window name and desktop placement
 
-The driver mixin overrides `Minecraft.createTitle()` so the Gate B window is
-named `Monoplayer Gate B` (override with `-Dgateb.window.title=...`). On
+The driver mixin overrides `Minecraft.createTitle()` so the driver window is
+named `Monoplayer Gate B` (override with `-Dgateb.window.title=...`). The title
+is frozen because the operator's Hyprland rule matches it. On
 Wayland that is also the app_id/class, so a Hyprland rule can target only this
 client:
 
@@ -142,7 +143,7 @@ Prism is closed if the console window should be removed entirely.
 - Assert a survival (non-creative) break/place hold, not just the creative row.
 
 The repeatable runner for exactly this row is now in `src/driver/` +
-`src/driver/run.js`; see the runbook [docs/driver-lane.md](gate-b-g0.md). It
+`src/driver/run.js`; see the runbook [docs/driver-lane.md](driver-lane.md). It
 automates: fresh-process relaunch per run (quit + SSH/Prism, no reconnect op),
 run-scoped arena coordinates with preflight block states, paired client/RCON
 assertions (positive `execute if block` only — "Could not set" is never a

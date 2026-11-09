@@ -1,4 +1,4 @@
-# Gate A runbook — protocol-level relay spike
+# Protocol spike runbook — relay at the protocol level
 
 Throwaway spike proving that a two-leg Node proxy can terminate a Minecraft
 session per leg, synthesize a fresh play join from a bounded frame cache, and
@@ -139,13 +139,13 @@ proxy metrics, backend records, client packet logs, and dependency versions.
   `map_chunk` parser on the other leg.
 - **Known gap:** a second chunk batch from the backend would be cached as
   ordinary frames but replayed with stale chunk contents after later block
-  updates. Out of scope for Gate A; the product cache coalesces block changes
+  updates. Out of scope for the spike; the product cache coalesces block changes
   into chunk bytes.
 
 ## Post-verification fixes
 
 The independent verifier
-([memo](../.scratch/minecraft-puppet-proxy/audit/gate-a-verifier.md)) found
+(a local audit memo under `.scratch/`) found
 that the first version passed while hiding stale client pose, post-join kicks,
 and replayed clientbound chat. The current harness addresses those:
 
@@ -170,7 +170,7 @@ Microsoft auth, secure-chat re-signing, the 5-minute detach window, concurrent
 attach, backend drop, and a real prefix-flood test. The prefix cap is
 implemented but not flood-tested.
 
-## A later real-client Gate A
+## A later real-client spike
 
 The proxy (`src/spike/proxy.js`) is already shaped for it:
 

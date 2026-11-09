@@ -18,7 +18,7 @@ cheapest rung that can fail for the defect you are chasing.
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
 loopback. It is the default gate.
 
-The frozen Gate A spike (`mise run spike`) and the Gate A scenario
+The frozen protocol spike (`mise run spike`) and the spike scenario
 (`mise run spike:report`) sit beside the ladder. They prove the two-leg relay on
 loopback with the older harness. Keep them green; do not extend them.
 

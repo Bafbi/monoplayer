@@ -938,13 +938,13 @@
           A loopback harness now passes 37/37 assertions: two-leg relay, synthesized play
           join, current-pose reconstruction, a 5-second attach/detach liveness soak,
           per-leg keep-alive/teleport/chunk-ack ownership, exactly one backend login, and
-          chat blocked in both directions. See <a href="gate-a.md">docs/protocol-spike.md</a> and
+          chat blocked in both directions. See <a href="protocol-spike.md">docs/protocol-spike.md</a> and
           <code>testdata/spike-report.json</code>. This is <strong>not</strong> the official-client
           gate: encryption, vanilla rendering, online-mode <code>hasJoined</code>, Microsoft
           auth, secure-chat re-signing, config-phase replay, and the full 5-minute detach
-          window remain unproven. The independent verifier's memo is
-          <a href="../.scratch/minecraft-puppet-proxy/audit/gate-a-verifier.md">here</a>.
-          The next gate's testbed plan is <a href="gate-b-plan.html">docs/driver-lane-plan.html</a>.
+          window remain unproven. The research, council, and audit trail lives in
+          <code>.scratch/</code>, local only and never in git. The driver-lane plan is
+          <a href="driver-lane-plan.html">docs/driver-lane-plan.html</a>.
         </p>
       </div>
 
@@ -1329,19 +1329,6 @@ mise run down           # rotate/revoke, then delete the namespace</code></pre>
         <div class="card tight">
           <h3 class="mt0">Internal</h3>
           <ul class="mb0">
-            <li><a href="../.scratch/minecraft-puppet-proxy/map.md">Wayfinder map</a> — destination, notes, decisions, open fog.</li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/research/01-protocol-auth-prior-art.md">Research 01 — protocol, auth, prior art</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/research/02-late-attach.md">Research 02 — late attach and state</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/research/03-runtime-validation.md">Research 03 — runtime and validation</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/research/04-security-legal-ops.md">Research 04 — security, legal, ops</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/issues/05-grilling-mvp-scope.md">Ticket 05 — MVP scope (open, HITL)</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/council/protocol-architect.md">Council — protocol architect</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/council/reliability-security-architect.md">Council — reliability/security architect</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/council/delivery-product-architect.md">Council — delivery/product architect</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/audit/protocol-correctness-auditor.md">Audit — protocol correctness</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/audit/ops-security-auditor.md">Audit — ops and security</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/audit/document-product-auditor.md">Audit — document and product</a></li>
-            <li><a href="../.scratch/minecraft-puppet-proxy/audit/gate-a-verifier.md">Audit — Gate A verifier</a></li>
           </ul>
         </div>
         <div class="card tight">
@@ -1373,7 +1360,6 @@ mise run down           # rotate/revoke, then delete the namespace</code></pre>
           split, the Secret encryption-at-rest caveat, the token write-back gate, the external
           pod-count alert, and the corrected lifecycle diagram. It is a proposal for decision,
           not a final spec. The open HITL ticket
-          <a href="../.scratch/minecraft-puppet-proxy/issues/05-grilling-mvp-scope.md">“MVP scope and non-goals”</a>
           is the next step once the six questions above are answered.
         </p>
       </div>
@@ -1384,7 +1370,7 @@ mise run down           # rotate/revoke, then delete the namespace</code></pre>
 <footer class="footer">
   <div class="footer-inner">
     Monoplayer architecture proposal · 5 November 2026 · Draft for decision.
-    Built from research notes and council memos in <code>.scratch/minecraft-puppet-proxy/</code>.
+    Built from research notes and council memos that live in <code>.scratch/</code>, local only.
   </div>
 </footer>
 

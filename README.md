@@ -11,14 +11,14 @@ The proposed architecture is in [docs/architecture.html](docs/architecture.html)
 It covers the protocol approach, session lifecycle, auth and security, the
 `mise` + BuildKit + Kubernetes validation loop, risks, and the first MVP slice.
 
-The working research, decision council, and audit trail live under
-[.scratch/minecraft-puppet-proxy/](.scratch/minecraft-puppet-proxy/).
+The research, council, and audit trail lives under `.scratch/`, local only and
+never in git.
 
-## Gate A
+## The protocol spike
 
-The protocol-level Gate A harness is in `src/` and `test/`. It proves the
+The frozen protocol spike is in `src/spike/` and `test/spike/`. It proves the
 two-leg relay, synthesized play join, detach survival, reattach state, and
-single backend login on loopback.
+single backend login on loopback, and it grows no features.
 
 The default gate runs the bottom three rungs of the testing ladder:
 
@@ -26,8 +26,8 @@ The default gate runs the bottom three rungs of the testing ladder:
 mise run check             # lint + node:test + offline loopback
 mise run test              # unit tests only (no sockets, no auth)
 mise run loopback          # product offline loopback rung (real legs, fake backend)
-mise run spike             # frozen Gate A spike (real sockets, offline protocol)
-mise run spike:report            # full Gate A scenario, writes testdata/spike-report.json
+mise run spike             # frozen protocol spike (real sockets, offline protocol)
+mise run spike:report      # full spike scenario, writes testdata/spike-report.json
 mise run driver:scenario   # driver-lane G0 scenario (live testbed)
 ```
 
@@ -37,14 +37,11 @@ to run after touching relay, auth, driver, or deploy:
 
 What it does and does not prove: [docs/protocol-spike.md](docs/protocol-spike.md).
 
-## Gate B
+## The driver lane, custody, and the live stack
 
 The real-client testbed plan — Prism + Fabric driver, Vanilla/Paper backends,
 Toxiproxy, two accounts, and the decompiled-source recipe — is in
 [docs/driver-lane-plan.html](docs/driver-lane-plan.html).
-
-The research and council trail lives under
-[.scratch/minecraft-gate-b/](.scratch/minecraft-gate-b/).
 
 The client driver is in [tools/driver/](tools/driver/); build it with
 `mise run driver:build`. The host `nath` is driven with
@@ -67,7 +64,7 @@ The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run), and
 the manual unmodded witness passed the full join/render/move/break/place/
 disconnect/rejoin row. **G0 is green.**
 
-**G1 auth** has live evidence from 2026-11-07: `GlowSquidye` was bootstrapped
+**Custody and the attach check** have live evidence from 2026-11-07: `GlowSquidye` was bootstrapped
 headlessly (Switch/Nintendo title), stable across silent refreshes,
 Java-owned, multiplayer-allowed, with the player allowed and denied before
 play by the real online-mode `hasJoined`/attach whitelist.
@@ -83,7 +80,7 @@ recorded against the older `.secrets/puppet/` layout. Check the current tree
 with `node src/custody/cli.js accounts` and `node src/custody/cli.js status --account
 glowsquidye`; the runbook is [docs/custody.md](docs/custody.md).
 
-**M4** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
+**Paper behind Velocity** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
 forwarding; the authenticated puppet joined through the proxy. Evidence:
 [testdata/custody-verdict.json](testdata/custody-verdict.json),
 [testdata/m4-verdict.json](testdata/m4-verdict.json). The official
