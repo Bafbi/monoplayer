@@ -13,7 +13,7 @@
 
 - `GLOSSARY.md` governs names: a concept lands there before it earns a home.
 - The word "gate" leaves file names, directory names, and exported symbols. The identity check is now the attach check, with a whitelist review and a session verification.
-- Names that live outside the repository stay put until they move in their own step: cluster objects, hostnames, account instances, environment variables, and the window title. `deploy/driver/README.md` lists them.
+- Names that live outside the repository stay put until the next change touches their owner. That is a decision of its own: [external-names-migrate-with-their-owner.md](external-names-migrate-with-their-owner.md) lists each name, what reads it, and what must move with it.
 - Recorded evidence keeps its content and its dates. Only its name moves.
 
 ## Where the names go

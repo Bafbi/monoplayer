@@ -15,8 +15,11 @@ product namespace; do not point the product at it.
 ## Names this tree does not rename
 
 Renaming these would recreate live cluster objects or break the display host,
-so the tree moved to `deploy/driver/` and left them alone. Each needs its own
-migration step:
+so the tree moved to `deploy/driver/` and left them alone. Each migrates when
+the next change touches the area that reads it; the decision and the full list
+are in
+[external-names-migrate-with-their-owner.md](../../docs/adr/external-names-migrate-with-their-owner.md).
+Each needs its own migration step:
 
 | Name | Where it lives | Migration |
 |---|---|---|
