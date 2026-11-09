@@ -42,6 +42,24 @@ const LATEST_FRAMES = new Set([
   'advancements'
 ])
 
+// The client's advancement map after a run of `advancements` frames, applied
+// the way the vanilla client applies them: reset clears the map, identifiers
+// remove one advancement each, the mapping adds or replaces, and progress
+// attaches to an advancement the client holds. A notice that adds and then
+// removes one id leaves this map as the server left it.
+export function applyAdvancementFrames (frames = [], held = new Map()) {
+  for (const frame of frames) {
+    if (frame.reset) held.clear()
+    for (const id of frame.identifiers ?? []) held.delete(id)
+    for (const entry of frame.advancementMapping ?? []) held.set(entry.key, entry.value)
+    for (const entry of frame.progressMapping ?? []) {
+      const current = held.get(entry.key)
+      if (current !== undefined) held.set(entry.key, { ...current, progress: entry.value })
+    }
+  }
+  return held
+}
+
 export function createClientState () {
   return {
     windows: new Map(), // windowId -> { stateId, slots: Map<slot, item> }

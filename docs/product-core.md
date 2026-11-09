@@ -119,18 +119,23 @@ The front leg's `writeRaw` keeps a counted last-write gate, so a router
 regression cannot leak a blocked frame. A coverage test walks the vendored
 26.2 protocol and fails when a name is not classified.
 
-A **refused** transfer while attached (follow disabled, invalid target, a
-loop, or the chain limit) sends one proxy notice per attach. The notice is
-proxy speech, not server speech, and never includes the target address. It rides
-a synthetic advancement with a visible toast (`src/core/notice.js`): the add
-queues the toast, and the removal that follows leaves the client's advancement
-map as the server left it. `showAdvancements` is echoed from the backend's last
-advancement frame, so a notice never opens or hides the client's advancement
-screen. A toast frame the front leg cannot write falls back to a local
-`system_chat` line, and a removal that still fails is logged as
-`proxyNoticeGhost`. `notice(text)` on the core is the entry point, so the
-notice path needs no attached client; the caller decides whether anyone is
-there to see it (#15).
+A **refused** transfer while a client is in play (follow disabled, invalid
+target, a loop, or the chain limit) sends one proxy notice per attach. The
+notice is proxy speech, not server speech, and never includes the target
+address. It rides a synthetic advancement with a visible toast
+(`src/core/notice.js`): the add queues the toast, and the removal that follows
+leaves the client's advancement map as the server left it. `showAdvancements`
+carries the backend's last advancement frame value, so the notice keeps the
+server's advancement screen state; a session that never saw that frame keeps
+the client's own default instead. A toast frame the front leg cannot write
+falls back to a local `system_chat` line, and a removal that still fails is
+logged as `proxyNoticeGhost`.
+
+`notice(text)` on the core is the entry point. It runs with no client
+attached: the front leg would drop the writes, so the call logs
+`proxyNoticeUndelivered` and returns `sent: false` rather than claiming a
+delivery nobody saw. A caller that needs the notice shown later queues it for
+the next attach (#15).
 
 `start_configuration` cannot be served to the front client on its connection.
 The core blocks it, ends the puppet leg on purpose, and lets the normal

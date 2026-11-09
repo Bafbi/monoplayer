@@ -22,7 +22,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The human answers every play dialog | **not built** | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | **not built** | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
 | A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
-| Proxy notices reach the human as a toast | done | [#15](https://github.com/Bafbi/monoplayer/issues/15) |
+| Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
 | The proxy's egress address is accepted as different | **accepted limit** | [#11](https://github.com/Bafbi/monoplayer/issues/11) |
 
 ## Client identity

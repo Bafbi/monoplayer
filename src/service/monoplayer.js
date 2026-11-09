@@ -663,8 +663,10 @@ export function createMonoplayer ({
   // advancement map as the server left it. A toast the front leg cannot write
   // falls back to a local system chat line, so a notice is never lost.
   //
-  // No attached client is needed: the front leg drops a write while nothing is
-  // attached, and #22's failed-transfer notice arrives on this path.
+  // The path runs in either state. With no client in play the front leg drops
+  // the writes, so the call reports that nothing was delivered rather than
+  // claiming it was, and a caller (#22) can queue the notice for the next
+  // attach.
   function sendProxyNotice (text, { reason = 'notice' } = {}) {
     // A notice with no text is a caller bug. Say so in the log instead of
     // throwing into a frame handler.
@@ -673,6 +675,10 @@ export function createMonoplayer ({
       return { sent: false, kind: null, id: null }
     }
     const id = noticeId(++noticeSeq)
+    if (!canRelayPlay()) {
+      log('proxyNoticeUndelivered', { reason, id, error: 'no_client_in_play' })
+      return { sent: false, kind: null, id }
+    }
     const [add, removal] = noticeFrames({ text, id, showAdvancements: backendShowAdvancements() })
     let failed = null
     try {
@@ -698,7 +704,7 @@ export function createMonoplayer ({
     }
     try {
       const fallback = systemChatFrame(text)
-      frontLeg.write(fallback.name, fallback.packet)
+      frontLeg.write(fallback.name, fallback.packet, { synth: true })
       metrics.noticesSent++
       log('proxyNotice', { reason, kind: 'chat', id })
       return { sent: true, kind: 'chat', id }

@@ -18,6 +18,7 @@ import {
   noticeId,
   systemChatFrame
 } from '../../src/core/notice.js'
+import { applyAdvancementFrames } from '../../src/ladder/client-state.js'
 
 const VERSIONS = ['26.1', '26.2']
 
@@ -38,21 +39,15 @@ function decode (version, frame) {
   return parsed.data.params
 }
 
-// The client's advancement state, as the vanilla client keeps it: a map of id
-// to progress or definition, replaced wholesale on reset, pruned by
-// identifiers, extended by the mapping.
+// The client's advancement state, as the vanilla client keeps it: the map
+// model in src/ladder/client-state.js, shared with the loopback rung so the two
+// witnesses of the ghost rule cannot drift, plus the advancement screen flag.
 function createAdvancementState (seed = {}) {
   return { advancements: new Map(Object.entries(seed)), shown: true }
 }
 
 function applyAdvancements (state, params) {
-  if (params.reset) state.advancements.clear()
-  for (const id of params.identifiers ?? []) state.advancements.delete(id)
-  for (const entry of params.advancementMapping ?? []) state.advancements.set(entry.key, entry.value)
-  for (const entry of params.progressMapping ?? []) {
-    const held = state.advancements.get(entry.key)
-    if (held !== undefined) state.advancements.set(entry.key, { ...held, progress: entry.value })
-  }
+  applyAdvancementFrames([params], state.advancements)
   state.shown = params.showAdvancements
   return state
 }
