@@ -22,7 +22,7 @@ import { createTokenCustody } from '../custody/cache.js'
 import { resolveAccount } from '../custody/accounts.js'
 import { createBot } from './bot.js'
 
-const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
+const VERSION = process.env.MONOPLAYER_VERSION ?? '26.2'
 const DEFAULT_ACCOUNTS_DIR = '.secrets/accounts'
 const DEFAULT_SELECTOR = 'glowsquidye'
 const JOIN_TIMEOUT_MS = Number(process.env.MONOPLAYER_BASELINE_TIMEOUT_MS ?? 120_000)

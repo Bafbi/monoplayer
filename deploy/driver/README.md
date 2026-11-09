@@ -1,6 +1,10 @@
 # Driver lane cluster environment
 
-**Status (2026-11-07):** G0 and G1 pass. Paper 26.1.2 build 74 is running
+**Status (2026-11-09):** the G0 backend runs Paper 26.2 build 135, the version
+the driver client and the dev lane already serve (#71). M4 stays on Paper 26.1.2
+build 74 behind Velocity 4.3.1 build 45 until its own move: no rung drives it.
+
+**Status (2026-11-07):** G0 and G1 pass. Paper 26.1.2 build 74 ran
 directly for G0, and Velocity 4.3.1 build 45 is now in front of Paper 26.1.2
 build 74 for M4; the authenticated puppet joined through the proxy as
 `GlowSquidye`. Toxiproxy is running; fault rows are pending. The Fabric driver
@@ -33,7 +37,7 @@ Each needs its own migration step:
 
 ## Paper G0 backend
 
-This is the first row: a plain Paper 26.1.2 server the official client can
+This is the first row: a plain Paper 26.2 server the official client can
 join directly. It is deliberately ephemeral (`emptyDir`), online-mode, and
 secure-profile. The RCON password is a cluster Secret, never a manifest value.
 
@@ -51,7 +55,7 @@ kubectl -n monoplayer-gate-b create secret generic gate-b-rcon \
 # 2. Apply the backend.
 kubectl apply -k deploy/driver
 
-# 3. Watch it download Paper 26.1.2 and boot.
+# 3. Watch it download Paper 26.2 and boot.
 kubectl -n monoplayer-gate-b rollout status deploy/paper --timeout=10m
 kubectl -n monoplayer-gate-b logs deploy/paper --tail=100
 
@@ -61,7 +65,7 @@ kubectl -n monoplayer-gate-b get svc paper-g0 -w
 
 The Tailscale service should publish a hostname like
 `monoplayer-gate-b-paper.tail41e568.ts.net:25565`. Join that address from the
-26.1.2 Prism instance for G0.
+26.2 Prism instance for G0.
 
 ## Notes
 
@@ -76,7 +80,9 @@ The Tailscale service should publish a hostname like
 
 ## M4 lane — Paper behind Velocity 4.3.1 (+ toxiproxy)
 
-Second backend row per [docs/paper-behind-velocity.md](../../docs/paper-behind-velocity.md):
+Second backend row per [docs/paper-behind-velocity.md](../../docs/paper-behind-velocity.md).
+It keeps Paper 26.1.2 build 74: moving it needs Velocity to accept protocol 776,
+which is its own run.
 `velocity.yaml` (Velocity 4.3.1 b45, online-mode, modern forwarding),
 `paper-m4.yaml` (Paper 26.1.2 b74, offline, puppet-only whitelist),
 `toxiproxy.yaml` (puppet-leg faults). Full bring-up, smoke and teardown

@@ -15,7 +15,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'io.papermc.paper:paper-api:26.1.2.build.74-stable'
+    compileOnly 'io.papermc.paper:paper-api:26.2.build.135-stable'
     // The pinned ProtocolLib build (mise run observer:protocollib). A released
     // ProtocolLib stops at 1.21.1, so this is a built artifact, not a coordinate.
     compileOnly fileTree(dir: '../../.cache/protocollib', include: ['ProtocolLib-*.jar'])
