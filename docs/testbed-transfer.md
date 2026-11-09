@@ -70,25 +70,67 @@ The two acceptance criteria are wider than the transfer itself:
 
 - **Client side:** playing through the proxy should be indistinguishable from
   a direct connection, except that the identity is GlowSquidye. Today the
-  client cannot chat or run commands, transfer detaches it, and dialogs are
-  answered by the puppet.
-- **Server side:** the server must see a normal GlowSquidye client. The
-  proxy now writes the Fabric Loader brand in configuration and the human's
-  client information with the backend's view distance cap (loopback `O25` and
-  `O26`, [docs/transparency.md](transparency.md)). Still different: the chat
-  session (the human's chat is read-only), the puppet answering dialogs, and
-  the proxy answering some connection mechanics itself. No observer has
-  measured a live Paper server's view of these fields yet.
+  human's chat is spoken as the account only in `MONOPLAYER_CHAT=full` (off by
+  default), transfer detaches the client, and dialogs are answered by the
+  puppet.
+- **Server side:** the observer measures it. The proxy writes the Fabric Loader
+  brand in configuration and the human's client information with the backend's
+  view distance cap (loopback `O25` and `O26`,
+  [docs/transparency.md](transparency.md)). The fields the server can still see
+  as different are listed under [The server's view](#the-servers-view) below.
 
-The next validation layers, on this same testbed:
+## The server's view
 
-1. a Paper observer plugin that logs the server's view of a joining client:
-   brand, locale, view distance, main hand, skin parts, chat session presence,
-   resource-pack status;
-2. a direct vanilla baseline on `paper-hub` for the same account or a control
-   account, compared field by field with the puppet;
-3. a clientbound parity run (direct bot vs proxy bot, plus the Fabric driver)
-   for the client-side criterion.
+`tools/observer` is a Paper plugin plain Paper loads. It records what the
+server knows about a joining client, one JSONL record per join, into
+`plugins/MonoplayerObserver/views.jsonl`. It only reads: every listener runs at
+`MONITOR` priority and never cancels or edits a packet, so the observer cannot
+change what the server or the client does.
+
+| Field | Recorded from | Expected difference |
+|---|---|---|
+| `player`, `uuid` | the login profile | none: the same account joins both ways |
+| `address` | the socket | **the one accepted difference**: the proxy's egress address reads as a client behind a VPN |
+| `brand` | `minecraft:brand` in configuration | none: the puppet announces `fabric` |
+| `locale`, `viewDistance`, `mainHand`, `skinParts` | `settings` | none once a human has attached; the view distance is the backend's cap, not the human's render distance |
+| `chatSession` | the session key registration | **expected**: the puppet registers its own key, so the server sees a session, but the human's key never crosses |
+| `resourcePack` | the resource-pack status | none: the puppet answers its own pack |
+| `transferred` | the transfer intent | none |
+
+Anything not in that table is a finding, and the comparison fails the run for
+it. `node src/ladder/observer.js` is the comparison: it takes two logs, or one
+log holding both joins, and prints a verdict per field.
+
+## Running the server-view report
+
+`mise run observer:run` produces the whole thing: it installs the plugin and
+the ProtocolLib it needs into the gate Paper, restarts the server so Paper
+loads them, runs the direct baseline join, runs the puppet join through
+Monoplayer, fetches the log, and compares the two views. Both joins use the
+throwaway-pod path in `scripts/online-cluster.sh`, so the custody is copied,
+never shared, and an expired token stops the run instead of rotating the live
+chain.
+
+It refuses to run against the live namespace: measuring the live lane is not
+this command, and neither is installing a plugin into it. The gate Paper is
+disposable, which is why a plugin install and a restart are allowed there.
+
+The result is `.reports/observer-report.json`, with one entry per field and the
+verdict `same`, `expected`, `absent`, or `unexplained`. The exit status is 1
+when any field is unexplained.
+
+The direct baseline is the same account, not a control account. A different
+account would put `player` and `uuid` in the report as differences and hide
+the ones being measured.
+
+## Not built yet
+
+- A clientbound parity run: the direct bot and the proxy bot, plus the Fabric
+  driver, compared frame by frame ([#13](https://github.com/Bafbi/monoplayer/issues/13)).
+  `src/ladder/state-parity.js` is the comparison it will use; the orchestration
+  is not written.
+- A vanilla client in either role. The protocol bot proves the wire, not
+  rendering or vanilla acceptance.
 
 The real client remains the last rung: the protocol bot cannot prove rendering,
 UI, or vanilla acceptance.
