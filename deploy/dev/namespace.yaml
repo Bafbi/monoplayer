@@ -1,0 +1,13 @@
+# The dev validation lane (#42).
+#
+# A parallel lane an agent can drive without touching the live deployment. It
+# holds its own Paper, its own Monoplayer, its own custody volume, and its own
+# account. Nothing here is managed by Argo CD, so nothing an agent does in this
+# namespace can roll out to the live lane.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monoplayer-dev
+  labels:
+    app.kubernetes.io/part-of: monoplayer
+    monoplayer.eu/environment: dev

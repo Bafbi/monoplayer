@@ -1,0 +1,165 @@
+# The dev Monoplayer (#42): one replica, its own custody volume, its own account.
+#
+# The live custody volume holds one writer and one replica, and a test pod must
+# never mount it. This deployment owns `monoplayer-dev-custody` instead, and
+# the account in it is the dev account (#44), never GlowSquidye.
+#
+# The image is `:main` in the manifest so `kubectl kustomize` works with no
+# extra step. The lane under test sets it to the branch image (#43):
+#   kubectl -n monoplayer-dev set image deploy/monoplayer \
+#     monoplayer=$(node scripts/dev-lane.sh image <sha7>)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monoplayer
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  # One writer: the account token chain is a rolling file, so two pods must
+  # never run. Recreate plus ReadWriteOnce enforces it.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: monoplayer
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: MONOPLAYER_VERSION
+              value: "26.2"
+            - name: MONOPLAYER_BACKEND_HOST
+              value: paper.monoplayer-dev.svc.cluster.local
+            - name: MONOPLAYER_BACKEND_PORT
+              value: "25565"
+            - name: MONOPLAYER_FRONT_HOST
+              value: 0.0.0.0
+            - name: MONOPLAYER_FRONT_PORT
+              value: "25565"
+            - name: MONOPLAYER_PUPPET_ACCOUNTS_DIR
+              value: /data/accounts
+            # The dev account, bootstrapped by #44. Never GlowSquidye: borrowing
+            # the live account would rebuild the one-writer problem the lane
+            # exists to avoid.
+            - name: MONOPLAYER_PUPPET_ACCOUNT
+              value: devpuppet
+            - name: MONOPLAYER_ATTACH_WHITELIST
+              value: /config/attach-whitelist.json
+            - name: MONOPLAYER_CHAT
+              value: read-only
+            - name: MONOPLAYER_HOME
+              value: /tmp
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: minecraft
+              containerPort: 25565
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: custody
+          persistentVolumeClaim:
+            claimName: monoplayer-dev-custody
+        - name: config
+          configMap:
+            name: monoplayer-dev-config
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: monoplayer-dev-custody
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+  annotations:
+    # Deleting the lane deletes this claim. The dev account is re-bootstrapped
+    # (#44), and the live custody volume is a different object.
+    argocd.argoproj.io/sync-options: Delete=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monoplayer-dev-config
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/part-of: monoplayer
+data:
+  # Empty: the operator adds the attach account before a bot can join. The shape
+  # is the live one, { version, players }, and no secret belongs in it.
+  attach-whitelist.json: |
+    {
+      "version": 1,
+      "players": []
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monoplayer
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
+      protocol: TCP

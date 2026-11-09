@@ -108,6 +108,18 @@ run = "gradle -p tools/observer --no-daemon build"
 description = "Build the pinned ProtocolLib jar the observer plugin links against (no release supports 26.x)."
 run = "scripts/build-protocollib.sh"
 
+[tasks."dev:up"]
+description = "Bring up the dev validation lane: its own Paper, Monoplayer, custody volume, and account (#42)."
+run = "scripts/dev-lane.sh up"
+
+[tasks."dev:down"]
+description = "Delete the dev validation lane. Never touches the live lane."
+run = "scripts/dev-lane.sh down"
+
+[tasks."dev:status"]
+description = "Report what the dev lane runs and how many replicas the live lane serves."
+run = "scripts/dev-lane.sh status"
+
 [tasks."observer:run"]
 description = "Run the server-view report: the direct baseline join and the puppet join on the gate Paper, compared (#12)."
 depends = ["install", "observer:build"]
