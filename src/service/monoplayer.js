@@ -201,6 +201,8 @@ export function createMonoplayer ({
     resourcePackAcks: 0,
     resourcePackAckFailures: 0,
     brandAnnounced: 0,
+    attachesConfiguring: 0,
+    configFramesRelayed: 0,
     clientSettingsSent: 0,
     clientSettingsRewritten: 0,
     clientSettingsFailed: 0,
@@ -251,7 +253,16 @@ export function createMonoplayer ({
   const listeners = new Map() // type -> Set<fn>
   const unclassifiedLogged = new Set()
   let started = false
-  let attached = false // mirrors session state === ATTACHED
+  let attached = false // a client holds the attach slot (configuring or attached)
+  // #16: the pre-warm early attach. `backendConfiguring` is true from the
+  // backend's first configuration frame until its play login. `earlyAttach`
+  // holds the client that attached during that window; `pendingEarlyReplay`
+  // holds the replay it still needs. `frontPlayReady` says the attached
+  // client itself finished its configuration and can take play frames.
+  let backendConfiguring = false
+  let earlyAttach = null
+  let pendingEarlyReplay = null
+  let frontPlayReady = false
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
   // #18: the last human's client information. It survives a detach, like a
@@ -285,7 +296,14 @@ export function createMonoplayer ({
   }
 
   function isAttached () {
-    return attached && session.state === STATES.ATTACHED
+    return attached && (session.state === STATES.ATTACHED || session.state === STATES.CONFIGURING)
+  }
+
+  // Live play frames only go to a front client that is in play. A pre-warm
+  // early attach is still finishing its configuration; a play frame sent
+  // before that would be parsed as a configuration frame by the client.
+  function canRelayPlay () {
+    return attached && session.state === STATES.ATTACHED && frontPlayReady
   }
 
   // --- front-leg login pipeline (pure decisions; adapter owns kick/close IO) ---
@@ -307,7 +325,11 @@ export function createMonoplayer ({
     // Warm/WARM-or-DETACHED is the attach-ready set. A second login while
     // already attached still passes here so attachPlayer can answer
     // 'already_attached' with the reason the caller expects.
-    if (!session.isAttachReady() && session.state !== STATES.ATTACHED) {
+    // #16: a client may also attach while the backend connection is still in
+    // its configuration phase. It follows the puppet's configuration stream
+    // and lands in play when the backend logs in.
+    const canAttachConfiguring = backendConfiguring && session.state === STATES.BOOT
+    if (!session.isAttachReady() && session.state !== STATES.ATTACHED && !canAttachConfiguring) {
       const denied = {
         allowed: false,
         reason: 'backend_not_ready',
@@ -321,7 +343,7 @@ export function createMonoplayer ({
       emit('attach_denied', denied)
       return denied
     }
-    return decision
+    return canAttachConfiguring ? { ...decision, phase: 'configuring' } : decision
   }
 
   // Session verification (only when a verifier was injected): hasJoined.
@@ -507,6 +529,9 @@ export function createMonoplayer ({
     // information survives, because the human is still the one playing.
     brandAnnounced = false
     backendViewDistance = null
+    backendConfiguring = false
+    earlyAttach = null
+    pendingEarlyReplay = null
     if (session.state === STATES.RECONNECTING) {
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
@@ -622,18 +647,49 @@ export function createMonoplayer ({
   // `includeConfig: false` omits the cached configuration replay prefix —
   // the live front leg owns the configuration phase and has already replayed
   // it (see docs/product-core.md); fakes keep the default (config included).
-  function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
-    const attempt = session.attachAttempt({ uuid, name })
+  // #16: the client attached while the backend connection was still in its
+  // configuration phase. The front streams the puppet's configuration frames
+  // to it; at the play login the session becomes attached; this is the
+  // front's report that the client itself is in play and wants its replay.
+  function attachConfiguringPlayer ({ name, uuid } = {}) {
+    if (!backendConfiguring) {
+      log('attachFailed', { reason: 'not_ready', uuid, name, configuring: true })
+      emit('attach_failed', { username: name, reason: 'not_ready', phase: 'configuring' })
+      return { attached: false, reason: 'not_ready' }
+    }
+    const attempt = session.attachAttempt({ uuid, name, configuring: true })
     if (!attempt.accepted) {
-      log('attachFailed', { reason: attempt.reason, uuid, name })
+      log('attachFailed', { reason: attempt.reason, uuid, name, configuring: true })
       emit('attach_failed', attempt)
       return { attached: false, reason: attempt.reason }
     }
     attached = true
+    frontPlayReady = false
+    earlyAttach = { name, uuid }
     transferNoticeSent = false
     metrics.attaches++
-    telemetry.metric('monoplayer.attaches', 1, { player: name })
+    metrics.attachesConfiguring++
+    telemetry.metric('monoplayer.attaches', 1, { player: name, phase: 'configuring' })
+    log('attachConfiguring', { name, backendLogins: session.backendLogins })
+    emit('attach_configuring', { name })
+    // The client arrived in the middle of the puppet's configuration: frames
+    // the backend already sent (the registry, the known packs) are only in the
+    // cache, so replay them first and let the live stream carry the rest. The
+    // finish frame stays with the core: it is the front's signal that the
+    // client may leave configuration.
+    for (const frame of cache.snapshot().config) {
+      if (frame.name === 'finish_configuration') continue
+      if (!clientboundPolicy('configuration', frame.name).relay) continue
+      frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
+      metrics.configFramesRelayed++
+    }
+    return { attached: true, configuring: true, replayed: metrics.configFramesRelayed }
+  }
 
+  // The replay half of an attach: the join prefix and the warm state as they
+  // stand now. Shared by the warm attach and the early attach, which has
+  // already followed the live stream into play.
+  function replaySnapshot ({ name, includeConfig = true, reason = 'attach' } = {}) {
     const snapshot = cache.snapshot()
     const synthesized = synthAttach({
       snapshot,
@@ -653,10 +709,11 @@ export function createMonoplayer ({
 
     // #18: the human is now the one playing, so their client information goes
     // to the server with the backend cap this session already learned.
-    sendClientSettings('attach')
+    sendClientSettings(reason === 'attach' ? 'attach' : 'early_attach')
 
     log('attach', {
       name,
+      reason,
       replayed: synthesized.counts.replayed,
       synthesizedPositions: synthesized.counts.synthesized,
       skippedLegOwned: synthesized.counts.skipped,
@@ -666,6 +723,39 @@ export function createMonoplayer ({
     })
     emit('attach', { name, replayed: synthesized.counts.replayed })
     return { attached: true, replayed: synthesized.counts.replayed, frames: synthesized.frames }
+  }
+
+  function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
+    // #16: the front reports play-ready for a client that attached during the
+    // puppet's configuration. It is already attached, so it must not go
+    // through the warm attach gate again.
+    if (earlyAttach !== null) {
+      earlyAttach = null
+      if (session.warmReady) {
+        frontPlayReady = true
+        return replaySnapshot({ name, includeConfig, reason: 'early_attach' })
+      }
+      // The backend has not finished its own warm yet: hold the replay until
+      // the join prefix is complete, so the client gets one coherent world.
+      // Live play frames stay withheld until then, or the replay would arrive
+      // after state the client already has.
+      frontPlayReady = false
+      pendingEarlyReplay = { name, includeConfig }
+      log('earlyAttachWaitingWarm', { name, backendLogins: session.backendLogins })
+      return { attached: true, pending: true, replayed: 0 }
+    }
+    const attempt = session.attachAttempt({ uuid, name })
+    if (!attempt.accepted) {
+      log('attachFailed', { reason: attempt.reason, uuid, name })
+      emit('attach_failed', attempt)
+      return { attached: false, reason: attempt.reason }
+    }
+    attached = true
+    frontPlayReady = true
+    transferNoticeSent = false
+    metrics.attaches++
+    telemetry.metric('monoplayer.attaches', 1, { player: name })
+    return replaySnapshot({ name, includeConfig, reason: 'attach' })
   }
 
   function detachPlayer ({ reason = 'client_disconnect' } = {}) {
@@ -679,6 +769,9 @@ export function createMonoplayer ({
 
   function detachedHandoff () {
     attached = false
+    frontPlayReady = false
+    earlyAttach = null
+    pendingEarlyReplay = null
   }
 
   // --- wiring ---
@@ -753,8 +846,18 @@ export function createMonoplayer ({
           blockClientbound('configuration', name, policy, data)
           return
         }
+        // #16: the backend is in its configuration phase. Record that, so a
+        // client may attach now and follow this stream live.
+        if (!backendConfiguring) {
+          backendConfiguring = true
+          log('backendConfiguring', { state: session.state })
+        }
         if (!policy.cache) return
-        cache.push('configuration', name, buffer, data)
+        const pushed = cache.push('configuration', name, buffer, data)
+        if (pushed.cached && policy.relay && session.state === STATES.CONFIGURING) {
+          frontLeg.writeRaw(buffer, { state: 'configuration', name })
+          metrics.configFramesRelayed++
+        }
         return
       }
       if (state !== 'play') {
@@ -849,8 +952,23 @@ export function createMonoplayer ({
 
   // Backend play frame routing (per-leg keep-alive/pong answering, pose
   // teleports, cache, live forwarding).
+  // The replay a pre-warm client still owes: sent once, when the join prefix
+  // is warm, whether the warm came from the marker or the readiness fallback.
+  function replayPendingEarly () {
+    if (pendingEarlyReplay === null || !cache.warm) return null
+    const pending = pendingEarlyReplay
+    pendingEarlyReplay = null
+    frontPlayReady = true
+    return replaySnapshot({ name: pending.name, includeConfig: pending.includeConfig, reason: 'early_attach' })
+  }
+
   function backendPlayFrame ({ name, buffer, data }) {
     metrics.backendFrames++
+
+    // #16: an early-attach client gets its replay as soon as the join prefix is
+    // warm. The live path warms on the readiness fallback as well as on the
+    // marker, so this is checked per frame as well as at the marker below.
+    replayPendingEarly()
 
     if (name === 'bundle_delimiter') {
       // Bundle delimiters are a transport grouping, not state. Replaying them
@@ -865,11 +983,18 @@ export function createMonoplayer ({
       // The real backend login event backendLogins counts. Attach/detach never
       // touches this. Only counted when the leg is (re)booting — a doubled
       // replayed login frame during an already-warm session is not a login.
-      if (session.state === STATES.BOOT) {
-        session.backendLogin({ entityId: data.entityId })
+      // A pre-warm configuring attach is attached but not warm; its backend
+      // login is still the play login that ends the configuration phase.
+      if (session.state === STATES.BOOT || session.state === STATES.CONFIGURING) {
+        const login = session.backendLogin({ entityId: data.entityId })
+        backendConfiguring = false
         scheduleTransferChainReset()
         applyBackendViewDistance(data)
-        log('backendLogin', { entityId: data.entityId, backendLogins: session.backendLogins })
+        log('backendLogin', {
+          entityId: data.entityId,
+          backendLogins: session.backendLogins,
+          fromConfiguring: login.wasConfiguring === true
+        })
         emit('backend_login', { entityId: data.entityId })
       }
       const pushed = cache.push('play', name, buffer, data)
@@ -899,7 +1024,8 @@ export function createMonoplayer ({
       backendLeg.write('chunk_batch_received', { chunksPerTick: 32 })
       if (!wasWarm) {
         session.warmComplete({ marker: name })
-      } else if (isAttached()) {
+        replayPendingEarly()
+      } else if (canRelayPlay()) {
         frontLeg.writeRaw(buffer, { state: 'play', name })
       }
       return
@@ -912,7 +1038,7 @@ export function createMonoplayer ({
       // Never cached, never replayed.
       session.setPose(capturePose(session.currentPose, 'position', data, { backend: true }))
       backendLeg.write('teleport_confirm', { teleportId: data.teleportId })
-      if (isAttached()) {
+      if (canRelayPlay()) {
         frontTeleportSeq++
         frontLeg.write('position', {
           teleportId: frontTeleportSeq,
@@ -965,7 +1091,7 @@ export function createMonoplayer ({
       const chatFrame = name === 'system_chat' || name === 'profileless_chat'
       if (chatFrame && cfg.chat !== 'read-only') return
       if (chatFrame) metrics.chatRelayed++
-      if (isAttached()) frontLeg.writeRaw(buffer, { state: 'play', name })
+      if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
       return
     }
     if (policy.decision === DECISION.CACHE_ONLY) {
@@ -976,7 +1102,7 @@ export function createMonoplayer ({
 
     const pushed = cache.push('play', name, buffer, data)
     if (pushed.cached) metrics.framesCached++
-    if (isAttached()) frontLeg.writeRaw(buffer, { state: 'play', name })
+    if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
   }
 
   async function stop ({ reason = 'stopped' } = {}) {
@@ -997,6 +1123,7 @@ export function createMonoplayer ({
     logs: () => [...logs],
     // front pipeline call-ins (real front-leg adapter drives these):
     processLoginStart,
+    attachConfiguringPlayer,
     noteClientSettings,
     processVerifySession,
     attachPlayer,
@@ -1008,6 +1135,8 @@ export function createMonoplayer ({
     get started () { return started },
     get attached () { return isAttached() },
     get backendViewDistance () { return backendViewDistance },
+    get backendConfiguring () { return backendConfiguring },
+    get frontPlayReady () { return frontPlayReady },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }
   }
