@@ -3,7 +3,8 @@ dist/
 coverage/
 .env
 .env.*
-.secrets/
+# Matches the directory and the worktree symlink that points at it.
+.secrets
 .reports/
 .cache/
 tools/driver/.gradle/
