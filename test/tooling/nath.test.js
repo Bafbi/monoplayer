@@ -17,7 +17,7 @@ const SIGNATURE = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef_1700000000_100000000
 const SCREENSHOT_PATH = '/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/driver-1.png'
 
 // One canned client window for the keeper process, on the given workspace.
-const clientOn = (workspace, pid) => JSON.stringify([{ class: 'Minecraft 26.1.2', address: '0xdef', pid, mapped: true, workspace: { id: Number(workspace), name: String(workspace) } }])
+const clientOn = (workspace, pid) => JSON.stringify([{ class: 'Minecraft 26.1.2', address: '0xdef', pid, mapped: true, workspace: { id: Number(workspace), name: String(workspace) }, at: [2, 28], size: [1052, 1050] }])
 
 const RECORD_SSH = `#!/usr/bin/env bash
 {
@@ -100,12 +100,14 @@ else if (program === '.[0].instance') out(process.env.FAKE_SIGNATURE)
 else if (program === '.[0].wl_socket') out(process.env.FAKE_WL_SOCKET)
 else if (program === '.id') out(data.id)
 else if (program === '.address') out(data.address)
+else if (program === '.address // ""') out(data.address ?? '')
 else if (program === '(.class // "")') out(data.class ?? '')
 else if (program.startsWith('.[] | select(.mapped')) {
-  // The window list the launch reads: address, pid, workspace, mapped only.
+  // The window list launch and shot read: address, pid, workspace id and name,
+  // then the geometry grim needs.
   for (const client of data) {
     if (client.mapped === false) continue
-    out(client.address + ' ' + client.pid + ' ' + client.workspace.name)
+    out([client.address, client.pid, client.workspace.id, client.workspace.name, client.at?.[0] ?? 0, client.at?.[1] ?? 0, client.size?.[0] ?? 0, client.size?.[1] ?? 0].join(' '))
   }
 } else {
   console.error('fake jq: unsupported program: ' + program)
@@ -137,6 +139,10 @@ case "$1" in
     printf '{"id":%s}\\n' "$(sed -n "$n"p "$FAKE_AW_SEQUENCE")"
     ;;
   activewindow) cat "$FAKE_ACTIVEWINDOW" ;;
+  notify)
+    printf 'NOTIFY\\t%s\\n' "$*" >> "$FAKE_HYPRCTL_EVAL_LOG"
+    echo ok
+    ;;
   clients)
     n=$(cat "$FAKE_CLIENTS_COUNT" 2>/dev/null || echo 0)
     n=$((n + 1))
@@ -155,6 +161,19 @@ const SS = `#!/usr/bin/env bash
 exit 0
 `
 
+// The compositor capture. It writes the file the wrapper names, the way grim
+// does, so the copy and the PNG check have something real to work on.
+const GRIM = `#!/usr/bin/env bash
+{
+  printf 'ARGV'
+  for arg in "$@"; do printf '\\t%s' "$arg"; done
+  printf '\\nSTDIN\\n\\nENDUSTIN\\n'
+} >> "$NATH_TEST_LOG"
+[ "$FAKE_GRIM_MODE" = fail ] && { echo 'grim: cannot capture' >&2; exit 1; }
+for last in "$@"; do :; done
+printf '\\x89PNG\\r\\n\\x1a\\n0000' > "$last"
+`
+
 // One temp dir per test: the shims, the call log, and the canned replies.
 function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   let stop = () => {}
@@ -169,6 +188,10 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   const exitFile = path.join(dir, 'exit')
   const env = {
     ...process.env,
+    // The remote script keeps its captures under $HOME, so a test HOME keeps
+    // them inside the temp dir instead of the developer's Prism tree.
+    HOME: dir,
+    NATH_SHOT_NOTICE: '0',
     NATH_TEST_LOG: log,
     NATH_TEST_REPLY: reply,
     NATH_TEST_SCRIPT_REPLY: scriptReply,
@@ -180,6 +203,7 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
     writeScript(bin, 'jq', JQ)
     writeScript(bin, 'hyprctl', HYPRCTL)
     writeScript(bin, 'ss', SS)
+    writeScript(bin, 'grim', GRIM)
     const activeWindow = path.join(dir, 'activewindow.json')
     const workspaceSequence = path.join(dir, 'workspaces.txt')
     const clientsSequence = path.join(dir, 'clients-sequence.txt')
@@ -195,7 +219,7 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
     // placement it just asked for.
     const listed = typeof host.clients === 'function' ? host.clients(keeper.pid) : host.clients
     const lists = listed === undefined
-      ? [JSON.stringify([{ class: 'Monoplayer Gate B', address: '0xabc', pid: keeper.pid, mapped: true, workspace: { id: 9, name: '9' } }])]
+      ? [JSON.stringify([{ class: 'Monoplayer Gate B', address: '0xabc', pid: keeper.pid, mapped: true, workspace: { id: 9, name: '9' }, at: [-1918, 28], size: [1916, 1050] }])]
       : [listed].flat()
     const clientFiles = lists.map((json, index) => {
       const file = path.join(dir, `clients-${index + 1}.json`)
@@ -205,6 +229,10 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
     // Who holds the driver port: the keeper by default, so a kill for the
     // instance it carries can use the quit op. A test can say nobody does.
     const ssReply = path.join(dir, 'ss.txt')
+    // The eval log exists even when a command never asks the compositor to do
+    // anything, so a test can always read it.
+    const evalLog = path.join(dir, 'eval.log')
+    writeFileSync(evalLog, '')
     writeFileSync(ssReply, host.driverHolder === 'none' ? '' : 'LISTEN 0 50 [::ffff:127.0.0.1]:25599 *:* users:(("java",pid=' + keeper.pid + ',fd=93))\n')
     writeFileSync(clientsSequence, clientFiles.join('\n') + '\n')
     writeFileSync(activeWindow, host.activeWindow ?? JSON.stringify({ class: 'com.t3tools.T3Code' }))
@@ -216,13 +244,14 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
       FAKE_WL_SOCKET: host.socket ?? 'wayland-1',
       FAKE_HYPRCTL_EXIT: String(host.hyprctlExit ?? 0),
       FAKE_HYPRCTL_EVAL_MODE: host.evalMode ?? 'ok',
-      FAKE_HYPRCTL_EVAL_LOG: path.join(dir, 'eval.log'),
+      FAKE_HYPRCTL_EVAL_LOG: evalLog,
       FAKE_AW_COUNT: path.join(dir, 'aw-count'),
       FAKE_AW_SEQUENCE: workspaceSequence,
       FAKE_CLIENTS_SEQUENCE: clientsSequence,
       FAKE_CLIENTS_COUNT: path.join(dir, 'clients-count'),
       FAKE_ACTIVEWINDOW: activeWindow,
       FAKE_SS_REPLY: ssReply,
+      FAKE_GRIM_MODE: host.grimMode ?? 'ok',
     })
     env.PATH = bin + ':' + env.PATH
   }
@@ -441,8 +470,9 @@ test('kill refuses an instance name that is not a bare name', () => {
 // shot
 // ---------------------------------------------------------------------------
 
-test('shot asks the driver, copies the PNG back, and checks it is a PNG', () => {
-  const h = harness()
+test('shot asks the driver, copies the PNG back, and checks it is a PNG', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer(JSON.stringify({ ok: true, data: { path: SCREENSHOT_PATH } }))
   const target = path.join(h.dir, 'shots', 'client.png')
   const run = h.run(['shot', target])
@@ -451,32 +481,115 @@ test('shot asks the driver, copies the PNG back, and checks it is a PNG', () => 
   assert.match(run.stdout, new RegExp('^PATH=' + target + '$', 'm'))
   assert.match(run.stdout, new RegExp('^REMOTE_PATH=' + SCREENSHOT_PATH + '$', 'm'))
   assert.match(run.stdout, /^BYTES=12$/m)
+  assert.match(run.stdout, /^SOURCE=driver$/m)
 
-  const [request, copy] = h.calls()
+  // The port owner is asked first, then the capture, then the copy.
+  const [owner, request, copy] = h.calls()
+  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric 25599')
   assert.deepEqual(request.argv, ['-W', '127.0.0.1:25599'])
   assert.match(request.stdin, /"op":"screenshot"/)
   assert.deepEqual(copy.argv, ['bafbi@nath.tail41e568.ts.net:' + SCREENSHOT_PATH, target + '.part'])
   assert.equal(readFileSync(target, 'latin1'), '\x89PNG\r\n\x1a\n0000')
 })
 
-test('shot surfaces the driver refusal and copies nothing', () => {
-  const h = harness()
+test('shot surfaces the driver refusal and copies nothing', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer('{"ok":false,"error":"not in a world"}')
   const run = h.run(['shot', path.join(h.dir, 'client.png')])
   assert.equal(run.status, 1)
   assert.match(run.stderr, /not in a world/)
-  assert.equal(h.calls().length, 1)
+  assert.equal(h.calls().length, 2)
 })
 
-test('shot fails honestly when the driver is not listening', () => {
-  const h = harness()
+test('shot never returns another instance frame', (t) => {
+  // The Fabric client holds the port and would answer with its own window, so a
+  // capture for the unmodded instance must not ask it.
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  h.answer(JSON.stringify({ ok: true, data: { path: SCREENSHOT_PATH } }))
+  const run = h.run(['shot', path.join(h.dir, 'client.png'), 'gate-b-player'])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /gate-b-player has no mapped window/)
+  assert.equal(h.calls().some(call => call.argv.includes('-W')), false, 'the driver is not asked')
+})
+
+test('shot captures with the compositor when no driver serves the instance', (t) => {
+  const h = harness({
+    sshBody: EXEC_SSH,
+    host: { driverHolder: 'none', workspaces: ['2', '9'], activeWindow: JSON.stringify({ class: 'com.t3tools.T3Code', address: '0xfeed' }) },
+  })
+  t.after(h.stop)
+  const target = path.join(h.dir, 'client.png')
+  const run = h.run(['shot', target])
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(run.stdout, /^SOURCE=compositor$/m)
+  assert.match(run.stdout, /^BYTES=12$/m)
+  assert.match(run.stdout, new RegExp('^REMOTE_PATH=.*instances/gate-b-player-fabric/minecraft/screenshots/nath-[0-9]+\\.png$', 'm'))
+
+  // The warning goes out, the view moves to the client, then it comes back.
+  const log = readFileSync(path.join(h.dir, 'eval.log'), 'utf8')
+  assert.match(log, /NOTIFY\tnotify -1 2000 rgb\(3b82f6\) nath\.sh: capturing gate-b-player-fabric, the view moves to its workspace now/)
+  assert.match(log, /hl\.dsp\.focus\(\{ window = "address:0xabc" \}\)/)
+  assert.match(log, /hl\.dsp\.focus\(\{ window = "address:0xfeed" \}\)/)
+  assert.equal(readFileSync(target, 'latin1').startsWith('\x89PNG'), true)
+
+  // grim was asked for the client window's own geometry.
+  const grim = h.calls().find(call => call.argv.some(arg => arg === '-g'))
+  assert.match(grim.argv.join(' '), /-g -1918,28 1916x1050/)
+})
+
+test('shot captures without moving the view when the window is already visible', (t) => {
+  const h = harness({ sshBody: EXEC_SSH, host: { driverHolder: 'none', workspaces: ['2'], clients: (pid) => clientOn(2, pid) } })
+  t.after(h.stop)
+  const run = h.run(['shot', path.join(h.dir, 'client.png')])
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(run.stdout, /^SOURCE=compositor$/m)
+  const log = readFileSync(path.join(h.dir, 'eval.log'), 'utf8')
+  assert.doesNotMatch(log, /hl\.dsp\.focus/)
+  assert.doesNotMatch(log, /NOTIFY/)
+})
+
+test('shot puts the view back when the capture fails', (t) => {
+  const h = harness({
+    sshBody: EXEC_SSH,
+    host: { driverHolder: 'none', workspaces: ['2', '9'], grimMode: 'fail', activeWindow: JSON.stringify({ class: 'com.t3tools.T3Code', address: '0xfeed' }) },
+  })
+  t.after(h.stop)
+  const run = h.run(['shot', path.join(h.dir, 'client.png')])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /grim refused the capture of 0xabc: grim: cannot capture/)
+  const log = readFileSync(path.join(h.dir, 'eval.log'), 'utf8')
+  assert.match(log, /hl\.dsp\.focus\(\{ window = "address:0xfeed" \}\)/, 'the view goes back')
+})
+
+test('shot says so when the instance has no window to capture', (t) => {
+  const h = harness({ sshBody: EXEC_SSH, host: { driverHolder: 'none', clients: '[]' } })
+  t.after(h.stop)
+  const run = h.run(['shot', path.join(h.dir, 'client.png')])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /gate-b-player-fabric has no mapped window, so there is nothing to capture/)
+})
+
+test('shot refuses a capture warning that is not a whole number of seconds', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  const run = h.run(['shot', path.join(h.dir, 'client.png')], { NATH_SHOT_NOTICE: 'soon' })
+  assert.equal(run.status, 2)
+  assert.match(run.stderr, /NATH_SHOT_NOTICE must be a whole number of seconds: soon/)
+})
+
+test('shot fails honestly when the driver is not listening', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   const run = h.run(['shot', path.join(h.dir, 'client.png')])
   assert.equal(run.status, 1)
   assert.match(run.stderr, /the driver is not answering on 127\.0\.0\.1:25599/)
 })
 
-test('shot rejects a copy that is not a PNG', () => {
-  const h = harness()
+test('shot rejects a copy that is not a PNG', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer(JSON.stringify({ ok: true, data: { path: SCREENSHOT_PATH } }))
   const run = h.run(['shot', path.join(h.dir, 'client.png')], { NATH_TEST_SCP_MODE: 'text' })
   assert.equal(run.status, 1)
