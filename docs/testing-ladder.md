@@ -252,10 +252,15 @@ MONOPLAYER_FRONT_PORT=25565 \
 `dev:join` runs the rung from a throwaway pod that copies the attach account's
 custody into its own directory, and it sets the backend to the dev Paper. The
 front leg is the dev lane's own Monoplayer, so the proxy under test is the branch
-image. A local run works the same way through two port-forwards
-(`kubectl -n monoplayer-dev port-forward svc/paper 25565:25565` and the same for
-`svc/monoplayer`), and it needs the attach account's live custody, so prefer the
-pod.
+image. Two things must already be true: the dev lane is up (`mise run dev:up`),
+and its attach whitelist names that account. The lane's own account lands with
+[#44](https://github.com/Bafbi/monoplayer/issues/44). A local run works the same
+way through two port-forwards (`kubectl -n monoplayer-dev port-forward svc/paper
+25565:25565` and the same for `svc/monoplayer`), and it needs the attach
+account's live custody, so prefer the pod.
+
+The transfer testbed is the other pair: its front is the deployment and its
+backends are the two testbed Papers, so the same two flags measure it.
 
 The report is metadata only: no frame bytes, no `.secrets` paths, no tokens.
 
