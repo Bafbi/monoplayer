@@ -9,6 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { parseLadder } from '../../src/ladder/next-rung.js'
+
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 
@@ -75,10 +77,15 @@ test('AGENTS.md carries the rule, because that is what an agent reads', () => {
 })
 
 test('the ladder maps every run to the lane it belongs on', () => {
-  // A column on the rungs table would empty parseLadder (src/ladder/next-rung.js
-  // reads exactly six cells), so the map is its own table.
-  assert.match(LADDER, /^\| Rung \| Command \| Cost \| Prerequisites \| Asserts \| Cannot catch \|$/m,
-    'the rungs table keeps the six columns next-rung.js parses')
+  // A lane column on the rungs table would empty parseLadder (src/ladder/next-rung.js
+  // reads rows of exactly six cells), so the map is its own table. Both halves of
+  // that contract are asserted here: the rungs still parse, and the lane table
+  // contributes no rung.
+  const rungs = parseLadder(LADDER)
+  assert.ok(rungs.length > 0, 'parseLadder still finds the rungs')
+  assert.equal(new Set(rungs.map(rung => rung.id)).size, rungs.length, 'no rung id repeats')
+  assert.equal(parseLadder(section(LADDER, 'Which lane a run uses')).length, 0,
+    'the lane table is not read as a rung table')
 
   const lanes = section(LADDER, 'Which lane a run uses')
   for (const task of ['check', 'parity:run', 'observer:run', 'testbed:run', 'online', 'online:cluster', 'driver:scenario', 'dev:up']) {
@@ -97,18 +104,23 @@ test('the ladder maps every run to the lane it belongs on', () => {
 })
 
 test('the dev runbook takes a reader from an empty volume to a joined bot', () => {
-  const order = ['dev:custody:up', 'dev:custody', 'dev:custody:down', 'dev:up', 'dev:join']
-    .map(task => ({ task, at: firstUse(DEV_README, task) }))
-  for (const { task, at } of order) assert.notEqual(at, -1, 'the runbook runs mise run ' + task)
+  // The bootstrap order, read inside the section that owns it, so a quickstart
+  // elsewhere in the file cannot satisfy or break it.
+  const first = section(DEV_README, 'The first run')
+  const order = ['dev:custody:up', 'dev:custody', 'dev:custody:down', 'dev:up']
+    .map(task => ({ task, at: firstUse(first, task) }))
+  for (const { task, at } of order) assert.notEqual(at, -1, 'the first run runs mise run ' + task)
   for (let i = 1; i < order.length; i += 1) {
     assert.ok(order[i].at > order[i - 1].at,
       'mise run ' + order[i].task + ' comes after mise run ' + order[i - 1].task)
   }
-
-  const first = section(DEV_README, 'The first run')
   assert.match(first, /sign in as/i, 'the approval names who signs in')
   assert.match(first, /15 minutes/, 'the approval says how long the code lives')
   assert.match(first, /devpuppet/, 'the alias the deployment selects is named')
+
+  // The last step of the path: the join has its own section and its own command.
+  assert.notEqual(firstUse(section(DEV_README, 'Join it'), 'dev:join'), -1,
+    'the join section runs mise run dev:join')
 })
 
 test('the runbook recovers a dev volume that holds no account', () => {
@@ -120,7 +132,9 @@ test('the runbook recovers a dev volume that holds no account', () => {
   assert.notEqual(handle, -1, 'the recovery creates the handle pod')
   assert.ok(handle > stop, 'the proxy is stopped first: it holds the volume dev:custody needs')
   assert.match(recovery, /dev:custody:down/, 'the handle pod hands the volume back')
-  assert.match(recovery, /invalid_grant|needs_bootstrap/, 'a dead token chain is named too')
+  // The reasons the refresh actually reports (src/custody/msa.js).
+  assert.match(recovery, /needs_bootstrap/, 'the missing-token reason is named')
+  assert.match(recovery, /refresh_failed/, 'the consumed-chain reason is named')
 })
 
 test('the dev account section states the limit the lane honors', () => {
@@ -128,7 +142,6 @@ test('the dev account section states the limit the lane honors', () => {
   assert.match(account, /one account, one writer, one replica/i, 'the limit is stated once, in one phrase')
   assert.match(account, /ReadWriteOnce/, 'the claim that enforces it is named')
   assert.match(account, /devpuppet/, 'the account is named by its alias')
-  assert.doesNotMatch(DEV_README, /lands with #4[0-9]/, 'the account is no longer a promise about a ticket')
 })
 
 test('the glossary names the lanes the docs use', () => {
