@@ -22,7 +22,7 @@ import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
-import { PARITY_FRAME_NAMES, parityReplayNames } from './state-parity.js'
+import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
@@ -261,6 +261,29 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         block
     }, 'late-attach inventory, slots, and block in the cache')
 
+    // Entity churn: an absolute spawn, three relative moves, then an absolute
+    // correction. A delta only means something after the frame before it, and
+    // the cache routes absolutes and deltas to different rings, so this is the
+    // sequence whose replay order decides where the attaching client puts the
+    // entity (issue #35).
+    const ENTITY_ID = 99
+    const ENTITY_TRACK = { spawn: 0, moves: 3, corrected: 10 }
+    fake.sendSpawnEntity({ entityId: ENTITY_ID, x: ENTITY_TRACK.spawn, y: 64, z: 0 })
+    for (let i = 0; i < ENTITY_TRACK.moves; i++) {
+      fake.sendRelEntityMove({ entityId: ENTITY_ID, dx: 1 })
+    }
+    fake.sendSyncEntityPosition({ entityId: ENTITY_ID, x: ENTITY_TRACK.corrected, y: 64, z: 0 })
+    await waitFor(() => {
+      const snapshot = core.cache.snapshot()
+      const spawn = snapshot.entities.some(entry =>
+        entry.name === 'spawn_entity' && entry.data?.entityId === ENTITY_ID)
+      const moves = snapshot.generic.filter(entry =>
+        entry.name === 'rel_entity_move' && entry.data?.entityId === ENTITY_ID).length
+      const correction = snapshot.entities.some(entry =>
+        entry.name === 'sync_entity_position' && entry.data?.entityId === ENTITY_ID)
+      return spawn && moves === ENTITY_TRACK.moves && correction
+    }, 'the entity spawn, moves, and correction in the cache')
+
     // --- O1-O9: first attach and replay ---
     // A human whose client information differs from the vanilla defaults: the
     // server's view must show these fields, and must not take the client's
@@ -276,6 +299,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         skinParts: 96,
         mainHand: 0
       }
+    })
+    // Capture the decoded frames the parity model needs before ready(): the
+    // replay happens at attach time, so a listener installed after would miss
+    // the stream O28 compares.
+    const parityFrames = []
+    bot1.client.on('packet', (data, meta) => {
+      if (meta?.state !== 'play' || !PARITY_FRAME_NAMES.has(meta.name)) return
+      parityFrames.push({ name: meta.name, data })
     })
     await bot1.ready()
     const b1 = bot1.received
@@ -352,11 +383,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         firstChunk: b1.mapChunks[0] ? { x: b1.mapChunks[0].x, z: b1.mapChunks[0].z } : null
       }
     )
+    // The replay carries the entity the fake spawned, never a spawn for the
+    // player's own entity: that one comes from the join login frame.
+    const spawnedIds = parityFrames
+      .filter(frame => frame.name === 'spawn_entity')
+      .map(frame => frame.data?.entityId ?? null)
     check(
       'O7',
-      'no spawn_entity in the replay',
-      !playNames.includes('spawn_entity'),
-      { spawnEntity: playNames.filter(name => name === 'spawn_entity').length }
+      'the replay carries no spawn for the player entity',
+      !spawnedIds.includes(42),
+      { spawnEntityIds: spawnedIds }
     )
     const wire1 = front.wireStats
     check(
@@ -400,6 +436,41 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         expectedFrames: replayedParityNames.length,
         expected: replayedParityNames.slice(0, 12),
         captured: capturedParityNames.slice(0, 12)
+      }
+    )
+
+    // --- O28: the replay lands a moved entity where the backend put it ---
+    // The cache holds spawn x=0, three +1 deltas, then a correction to x=10. A
+    // replay that puts every absolute before every delta applies the deltas on
+    // top of the correction and lands at 13 (issue #35).
+    const firstAttach = attachCuts[0] ?? null
+    const replayedNames = firstAttach ? parityReplayNames(firstAttach.replayFrames) : []
+    if (replayedNames.length > 0) {
+      await bot1.waitFor(
+        () => parityFrames.length >= replayedNames.length,
+        'the replayed parity frames for the entity check'
+      )
+    }
+    const attachEvidence = firstAttach
+      ? attachParity({
+        attachSnapshot: firstAttach.snapshot,
+        replayFrames: firstAttach.replayFrames,
+        clientFrames: parityFrames,
+        settled: replayedNames.length > 0 && parityFrames.length >= replayedNames.length
+      })
+      : { ok: false, domains: {} }
+    const decodedEntity = (attachEvidence.domains?.entities?.actual ?? [])
+      .find(entry => entry.entityId === ENTITY_ID) ?? null
+    const decodedX = decodedEntity?.fields?.find(field => field.key === 'x')?.value ?? null
+    check(
+      'O28',
+      'the replay lands a moved entity where the backend put it',
+      attachEvidence.ok === true && decodedX === ENTITY_TRACK.corrected,
+      {
+        entityX: decodedX,
+        backendX: ENTITY_TRACK.corrected,
+        sectionOrderX: ENTITY_TRACK.corrected + ENTITY_TRACK.moves,
+        parity: attachEvidence.ok === true
       }
     )
 

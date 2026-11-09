@@ -2,7 +2,8 @@
 //
 // `stream` is the clientbound play sequence the backend sent after the join
 // prefix warmed. `cache(stream)` is createStateCache's bounded per-domain
-// rebuild, and `replay` is the same section order join-synth.synthAttach emits.
+// rebuild, and `replay` is the order join-synth.synthAttach emits, taken from its
+// own `replayFrames`. See the top of the file for the property.
 // The client-state model gives both sides the same shape, so a cache domain
 // that keys or evicts the wrong frames fails here.
 //
@@ -13,15 +14,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createStateCache } from '../../src/core/state-cache.js'
-import { synthAttach } from '../../src/core/join-synth.js'
+import { replayFrames as cacheReplayFrames, synthAttach } from '../../src/core/join-synth.js'
 import {
   createClientState,
   applyFrames,
   stateSnapshot
 } from '../../src/ladder/client-state.js'
-
-// The exact cross-domain order join-synth.synthAttach uses.
-const SECTION_ORDER = ['config', 'prefix', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic']
 
 const empty = () => ({ itemCount: 0 })
 const item = (itemId, itemCount = 1) => ({ itemCount, itemId })
@@ -55,14 +53,10 @@ function buildCache (stream, overrides = {}) {
   return cache
 }
 
+// The replay order comes from join-synth, not from a copy of it: a second
+// order here would let the harness pass while the attach replays something else.
 function replayFrames (snapshot) {
-  const frames = []
-  for (const section of SECTION_ORDER) {
-    for (const entry of snapshot[section] ?? []) {
-      frames.push({ name: entry.name, data: entry.data ?? {} })
-    }
-  }
-  return frames
+  return cacheReplayFrames(snapshot).map(entry => ({ name: entry.name, data: entry.data ?? {} }))
 }
 
 function replayState (snapshot) {
@@ -262,6 +256,37 @@ test('replay equals the stream: entity_destroy lands in the entity ring', () => 
   assert.equal(entity.removed, true)
 })
 
+test('replay equals the stream: deltas captured before the last absolute keep their order', () => {
+  // GitHub issue #35. A relative move only means something after the frame it
+  // follows, and the cache splits absolutes (`entity`) from deltas (`generic`).
+  // Replaying every entity frame before every generic one applies the three
+  // deltas on top of the sync instead of on top of the spawn.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'sync_entity_position', data: { entityId: 9, x: 10, y: 64, z: 0, yaw: 0, pitch: 0 } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  // The rings stay split: only the replay order merges them.
+  assert.deepEqual(
+    snapshot.entities.map(frame => frame.name),
+    ['spawn_entity', 'sync_entity_position']
+  )
+  assert.deepEqual(
+    snapshot.generic.map(frame => frame.name),
+    ['rel_entity_move', 'rel_entity_move', 'rel_entity_move']
+  )
+
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 10) // the backend's position, not the 13 a section-order replay gives
+})
+
 test('replay equals the stream: repeated latest health and abilities', () => {
   const stream = [
     ...joinPrefix(),
@@ -370,7 +395,7 @@ test('regression: set_slot after window_items keeps the base and both items', ()
   )
 })
 
-test('replay section order matches join-synth.synthAttach', () => {
+test('replay order is the documented sections, with the move frames merged into entity state', () => {
   const cache = createStateCache()
   // A non-empty configuration section so its position in the order is checked.
   cache.push('configuration', 'registry_data', Buffer.from('config:registry_data'), {})
@@ -381,22 +406,43 @@ test('replay section order matches join-synth.synthAttach', () => {
     { name: 'map_chunk', data: { x: 1, z: 0 } },
     { name: 'block_change', data: { location: { x: 1, y: 64, z: 0 }, type: 5 } },
     { name: 'entity_metadata', data: { entityId: 9, metadata: [] } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'entity_teleport', data: { entityId: 9, x: 1, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'update_health', data: { health: 19 } },
     windowItems(0, 1, [item(1)]),
     { name: 'health', data: { health: 20 } },
-    { name: 'update_health', data: { health: 19 } }
+    // A window the client closed: it must still replay after its base frame.
+    { name: 'close_window', data: { windowId: 0 } }
   ]
   stream.forEach((frame, index) => {
     cache.push('play', frame.name, Buffer.from(`${frame.name}:${index}`), frame.data ?? {})
   })
 
   const snapshot = cache.snapshot()
+  const expected = [
+    // configuration replay prefix
+    'registry_data', 'select_known_packs',
+    // join prefix, verbatim
+    'login', 'game_state_change', 'chunk_batch_start', 'map_chunk', 'chunk_batch_finished',
+    // warm domains, in order
+    'map_chunk', // chunks
+    'block_change', // blocks
+    // entity state, with the relative move frames merged by capture order
+    'entity_metadata', 'rel_entity_move', 'entity_teleport',
+    'window_items', // inventories
+    'health', // latest
+    'update_health', // generic, which keeps its place
+    'close_window' // generic: after its window base, not before it
+  ]
+  assert.deepEqual(replayFrames(snapshot).map(frame => frame.name), expected)
+
+  // The attach sends the same stream, plus its per-attach synthesized position.
   const { frames } = synthAttach({
     snapshot,
     pose: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0 }
   })
-
-  // The synthesized position is per-attach, not cached state; skip it.
-  const names = frames.filter(frame => frame.synth !== 'position').map(frame => frame.name)
-  const expected = SECTION_ORDER.flatMap(section => snapshot[section].map(frame => frame.name))
-  assert.deepEqual(names, expected)
+  assert.deepEqual(
+    frames.filter(frame => frame.synth !== 'position').map(frame => frame.name),
+    expected
+  )
 })

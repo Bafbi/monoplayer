@@ -37,8 +37,8 @@ const BLOCK_FRAMES = new Set([
 ])
 
 // Entity state stays in one ring, so its capture order survives the replay:
-// join-synth replays `entity` before `generic`, and a position frame split
-// across the two rings replays in the wrong order (issue #23).
+// a position frame split across the two rings would replay in the wrong order
+// unless join-synth merges them, and absolutes belong here (issue #23).
 //
 // Only names the clientbound policy accepts appear here: the policy answers
 // `block` for an unknown name, and `classifyPlay` drops it before this set is
@@ -49,11 +49,8 @@ const BLOCK_FRAMES = new Set([
 // `entity_look`) are deliberately absent. They are per-tick deltas, and this
 // ring is a 2048-entry FIFO, so promoting them lets move traffic evict
 // `spawn_entity` and `entity_metadata`, which tell the client the entity
-// exists. They stay in `generic` until the two rings are replayed in capture
-// order (issue #35). The cost until then: deltas captured before the last
-// absolute frame replay after it, so the client ends at that absolute plus the
-// deltas it had already applied. Only a live client shows it; the parity model
-// does not decode the relative moves.
+// exists. They stay in `generic`, and join-synth replays the two rings merged
+// in capture order, so a delta still follows the frame it adjusts (issue #35).
 const ENTITY_FRAMES = new Set([
   'sync_entity_position',
   'entity_destroy',
