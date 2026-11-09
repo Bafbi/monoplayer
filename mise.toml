@@ -11,7 +11,7 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh) || node src/ladder/next-rung.js lint $?"
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh) || node src/ladder/next-rung.js lint $?"
 
 [tasks."secrets:link"]
 description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
@@ -38,6 +38,10 @@ description = "Attach a real Microsoft Bafbi bot through the online front (needs
 depends = ["install"]
 wait_for = ["check"]
 run = "node src/ladder/online.js || node src/ladder/next-rung.js online $?"
+
+[tasks."online:cluster"]
+description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving."
+run = "scripts/online-cluster.sh"
 
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback."
