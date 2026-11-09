@@ -5,7 +5,7 @@
 //   node src/driver/run.js --runs 1 --force  # keep going after a failing run
 //   node src/driver/run.js --tunnel          # spawn/clean the SSH driver tunnel for you
 //   node src/driver/run.js --lane unmodded   # write the manual witness checklist (exits 1)
-//   node src/driver/run.js --verify-g0       # verify 2/2 reports + completed witness
+//   node src/driver/run.js --verify-g0       # verify a fresh 2/2 + the completed witness
 //   node src/driver/run.js --help
 //
 // Writes testdata/driver-run<N>-<timestamp>.json per run plus
@@ -47,9 +47,11 @@ Options:
   --tunnel           Spawn 'ssh -N -L <driver-port>:127.0.0.1:25599 <host>'
                      for the driver socket and clean it up on exit. Unit tests
                      never need this; the default is an operator-managed tunnel.
-  --verify-g0        Do not run anything: verify 2 consecutive PASSED driver
-                     reports exist and the unmodded witness is completed;
-                     exits 0 only when both hold.
+  --verify-g0        Do not run anything: verify this checkout holds two
+                     consecutive PASSED driver reports and a completed unmodded
+                     witness; exits 0 only when both hold.
+  --max-age-hours N  Reject driver evidence whose newest run finished more than
+                     N hours ago, so a copied report set cannot pass (default 24).
   --host             Display host for relaunch/screenshot/tunnel
                      (default: bafbi@nath.tail41e568.ts.net).
   --instance         Prism instance to launch (default: gate-b-player-fabric).
@@ -80,6 +82,7 @@ const DEFAULTS = {
   account: 'Bafbi',
   rconNamespace: process.env.GATEB_RCON_NAMESPACE || 'monoplayer-gate-b',
   rconDeployment: process.env.GATEB_RCON_DEPLOYMENT || 'paper',
+  maxAgeHours: 24,
 }
 
 // Module-level tunnel handle so any exit path (success, error, unhandled)
@@ -99,6 +102,7 @@ function parseArgs (argv) {
       case '--lane': opts.lane = argv[++i]; break
       case '--tunnel': opts.tunnel = true; break
       case '--verify-g0': opts.verifyG0 = true; break
+      case '--max-age-hours': opts.maxAgeHours = Number(argv[++i]); break
       case '--host': opts.host = argv[++i]; break
       case '--instance': opts.instance = argv[++i]; break
       case '--server': opts.server = argv[++i]; break
@@ -116,6 +120,9 @@ function parseArgs (argv) {
   }
   if (opts.lane !== 'driver' && opts.lane !== 'unmodded') {
     throw new Error(`--lane must be 'driver' or 'unmodded' (got ${opts.lane})`)
+  }
+  if (!(opts.maxAgeHours > 0)) {
+    throw new Error(`--max-age-hours must be a positive number (got ${opts.maxAgeHours})`)
   }
   return opts
 }
@@ -219,7 +226,7 @@ async function writeUnmoddedChecklist ({ laneReportPath }) {
   return checklist
 }
 
-async function verifyG0 () {
+async function verifyG0 (opts) {
   const summaryPath = path.join(TESTDATA, 'driver-summary.json')
   let summary = null
   try { summary = JSON.parse(await readFile(summaryPath, 'utf8')) } catch {}
@@ -230,10 +237,10 @@ async function verifyG0 () {
       try { reports.push(JSON.parse(await readFile(absolute, 'utf8'))) } catch {}
     }
   }
-  const verdict = verifyG0Evidence(summary, reports)
+  const verdict = verifyG0Evidence(summary, reports, { maxAgeMs: opts.maxAgeHours * 60 * 60 * 1000 })
   if (!verdict.ok) {
     console.error(`NOT 2/2: ${verdict.reason}`)
-    console.error('Run: node src/driver/run.js --runs 2  (the scenario itself, not just the checks)')
+    console.error('Run: mise run driver:scenario  (two fresh runs), then this check again')
     return 1
   }
   console.log(`driver reports: ${reports.length} from one 2-run invocation, both passed`)
@@ -269,7 +276,7 @@ async function main () {
     return
   }
   if (opts.verifyG0) {
-    process.exitCode = await verifyG0()
+    process.exitCode = await verifyG0(opts)
     return
   }
 

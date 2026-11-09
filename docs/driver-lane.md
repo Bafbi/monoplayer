@@ -94,9 +94,10 @@ break/place, disconnect, and rejoin.
 the per-run numbers, the witness record, and quotes the reports and screenshots
 git no longer carries.
 
-`mise run driver:g0` reads those reports and the witness, and the checkout no longer
-carries them. Run `node src/driver/run.js --runs 2` and record a new witness to make
-the task pass again.
+`mise run driver:g0` runs the two runs first and verifies what it wrote, so no
+committed report set is needed. It needs a completed unmodded witness in this
+checkout, and it refuses evidence whose newest run finished more than 24 hours
+ago.
 
 ## The unmodded witness lane
 
@@ -113,14 +114,19 @@ completed checklist as `testdata/driver-unmodded-witness.json` with
 ## The G0 verdict
 
 ```bash
-node src/driver/run.js --verify-g0
-mise run driver:g0                  # same thing via mise
+mise run driver:g0                    # run the two runs, then verify them
+node src/driver/run.js --verify-g0    # verify only, run nothing
 ```
 
-Exits 0 **only** when there are **two consecutive passed driver-lane reports**
-and the **unmodded witness is completed**. "2/2" means exactly that: both
-consecutive runs passed every assertion in their reports; nothing is averaged
-or carried over between runs.
+`mise run driver:g0` composes the gate, the driver build, and `driver:scenario`,
+so a red gate or a stale driver jar stops it before anything runs. Both commands exit 0 **only** when this checkout holds **two consecutive
+passed driver-lane reports whose newest run finished within 24 hours**, and the
+**unmodded witness is completed**. "2/2" means both consecutive runs passed
+every assertion in their reports, and nothing is averaged or carried over.
+
+The age window exists because a report set sitting on disk proves nothing on its
+own: before 2026-11-09 the reports were committed, so the check passed without
+anything having run. Move the window with `--max-age-hours N`.
 
 ## What is automated vs manual
 
@@ -133,7 +139,7 @@ or carried over between runs.
 | Screenshot copy-back | Automated (`scp`) |
 | Tunnel | Operator-managed or `--tunnel` |
 | Unmodded witness | **Manual** (checklist lane) |
-| Final G0 claim | Operator runs `node src/driver/run.js --runs 2` and `--verify-g0` |
+| Final G0 claim | Operator runs `mise run driver:g0` (runs the scenario, then verifies) |
 
 ## Failure modes seen so far
 
