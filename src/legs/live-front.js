@@ -71,6 +71,11 @@ export function createConfigPathInterceptor ({
   // tags, so a 26.2 client fails registry loading and crashes. Set false to
   // let onUnavailable close the client with a clear message instead.
   allowLibraryFallback = true,
+  // #16: the puppet is still in its own configuration phase, so there is
+  // nothing cached to replay. Hold the library's finish_configuration and let
+  // the core stream the puppet's frames; finishFromCore() ends the phase when
+  // the backend's own finish arrives.
+  live = false,
   onUnavailable = null
 }) {
   if (typeof originalWrite !== 'function') throw new TypeError('write is required')
@@ -80,10 +85,13 @@ export function createConfigPathInterceptor ({
 
   let resolved = false
   const stashed = [] // library-authored registry_data params (fallback only)
-  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, unavailable: 0 }
+  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, unavailable: 0, finishedByCore: 0 }
 
   function resolveConfigPath () {
     if (resolved) return
+    // Live: the core owns every configuration frame, including the finish, so
+    // the library's finish write is dropped and the phase stays open.
+    if (live) return
     resolved = true
     if (cachedConfigFrames.length > 0) {
       for (const frame of cachedConfigFrames) {
@@ -122,10 +130,25 @@ export function createConfigPathInterceptor ({
     return originalWrite(name, params)
   }
 
+  // The core relayed the backend's finish_configuration to the client. The
+  // client already has that frame on the wire, so the library's deferred write
+  // must never follow it.
+  function finishFromCore () {
+    if (resolved) return false
+    resolved = true
+    stats.finishedByCore++
+    return true
+  }
+
   return {
     write: wrappedWrite,
+    finishFromCore,
+    get live () { return live },
     get resolved () { return resolved },
-    get replayMode () { return resolved && cachedConfigFrames.length > 0 ? 'cached_replay' : resolved ? 'library_fallback' : 'pending' },
+    get replayMode () {
+      if (live) return 'live_stream'
+      return resolved && cachedConfigFrames.length > 0 ? 'cached_replay' : resolved ? 'library_fallback' : 'pending'
+    },
     stats
   }
 }
@@ -422,10 +445,29 @@ function createFrontLeg ({
 
     // Install the cached-config interceptor BEFORE loginClient's subsequent
     // writes/completion (we are inside the synchronous beforeLogin window).
-    installConfigInterceptor(client)
+    const interceptor = installConfigInterceptor(client)
 
-    // Own the client slot: a second connection is denied at the next check.
+    // Own the client slot first: the core's early attach streams the cached
+    // configuration frames straight back through writeRaw, and a second
+    // connection is denied at the next check.
     attachCandidate(client)
+
+    // #16: no cached configuration means the puppet is still configuring. The
+    // client attaches early and follows the live stream; the core refuses when
+    // no backend configuration is open, and a refusal denies the client.
+    if (interceptor.live) {
+      const outcome = coreAttachConfiguring({ name: client.username, uuid: client.uuid })
+      if (!outcome || outcome.attached !== true) {
+        metrics.denied++
+        log('attachConfiguringFailed', {
+          username: client.username ?? null,
+          reason: outcome?.reason ?? 'backend_not_ready'
+        })
+        denyConnection(client, outcome?.reason ?? 'backend_not_ready')
+        return
+      }
+      log('attachConfiguring', { username: client.username, uuid: client.uuid })
+    }
   }
 
   function denyConnection (client, reason) {
@@ -454,7 +496,9 @@ function createFrontLeg ({
         clientboundPolicy('configuration', frame.name).decision !== 'block'
     )
 
+    const live = cachedConfigFrames.length === 0
     const interceptor = createConfigPathInterceptor({
+      live,
       write: client.write.bind(client),
       // Every clientbound raw byte we push to the attaching client, in order.
       writeRaw: (buffer, meta) => {
@@ -477,6 +521,7 @@ function createFrontLeg ({
     client.write = interceptor.write
     clients.set(client, { interceptor })
     lastInterceptor = interceptor
+    return interceptor
   }
 
   // The client reached play. Hand the attach to the core: replay the join
@@ -503,9 +548,14 @@ function createFrontLeg ({
   }
 
   let coreAttach = ({ name, uuid, includeConfig = false } = {}) => ({ attached: false, reason: 'no_core_attached' })
-  // The orchestrator injects the single core attach call (keeps this module
-  // free of core imports; the core drives the pipeline through the handlers).
+  // The orchestrator injects the core attach calls (keeps this module free of
+  // core imports; the core drives the pipeline through the handlers).
+  // \`coreAttach\` runs at playerJoin: the client is in play and wants its
+  // replay. \`coreAttachConfiguring\` runs at beforeLogin, for a client that
+  // attaches while the puppet is still in configuration (#16).
+  let coreAttachConfiguring = () => ({ attached: false, reason: 'no_core_attached' })
   function setCoreAttach (fn) { coreAttach = fn }
+  function setCoreAttachConfiguring (fn) { coreAttachConfiguring = fn }
 
   function wireServerbound (client) {
     const decoded = { state: null, byName: {} }
@@ -569,6 +619,7 @@ function createFrontLeg ({
     setErrorHandler (fn) { errorHandler = fn },
     setClientSettingsHandler (fn) { clientSettingsHandler = fn },
     setCoreAttach,
+    setCoreAttachConfiguring,
     write (name, packet) {
       // Library-serialized packet (the synthesized position). The wire checker
       // guards raw replayed/relayed frames in writeRaw; a packet object cannot
@@ -594,6 +645,15 @@ function createFrontLeg ({
       }
       if (dumpRaw) {
         dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
+      }
+      // #16: the core's own finish_configuration ends the client's
+      // configuration phase. The interceptor must drop the library's deferred
+      // finish so the client never sees two of them.
+      if (meta?.state === 'configuration' && meta?.name === 'finish_configuration') {
+        const ctx = clients.get(attached)
+        if (ctx?.interceptor?.finishFromCore()) {
+          log('configFinishedByCore', { username: attached.username ?? null })
+        }
       }
       return emitCheckedRaw({ client: attached, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
     },
