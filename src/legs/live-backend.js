@@ -66,7 +66,8 @@ function dialogText (node) {
 // Choose one action from a `show_dialog` packet. `policy` is `first`, `last`,
 // or a case-insensitive label substring. Default is the last action, which is
 // the current season on the Excalia selection dialog. Exported for tests; the
-// backend leg sends the matching `custom_click_action`.
+// backend leg sends the matching `custom_click_action`. Which dialogs this
+// runs for is `decideDialogAutoAnswer`'s decision, not this function's.
 export function chooseDialogAction (data, policy = 'last') {
   const dialog = data?.dialog?.value ?? data?.dialog ?? data
   const entries = dialog?.actions?.value?.value
@@ -101,14 +102,89 @@ export function chooseDialogAction (data, policy = 'last') {
   }
 }
 
-// #16: who answers a control dialog. The auto-click exists for a headless
-// puppet; while a human is attached the dialog is theirs, so the puppet must
-// not answer it too. One decision, consulted per dialog, so a client that
-// attaches mid-session changes the answer without rebuilding the leg.
-export function decideDialogAutoAnswer ({ dialogAction, humanAttached }) {
+// #16/#20: who answers a control dialog.
+//
+// A play dialog is the human's, always: the attached client answers it, or it
+// waits in the core's pending holder until one attaches. The puppet never
+// clicks one, attached or not, so `MONOPLAYER_DIALOG_ACTION` covers the
+// configuration phase only (#20). What a headless puppet does with a
+// configuration gate is #21's decision; this function keeps the fallback that
+// ticket needs.
+//
+// One decision, consulted per dialog, so a client that attaches mid-session
+// changes the answer without rebuilding the leg.
+export function decideDialogAutoAnswer ({ dialogAction, humanAttached, state }) {
+  // The phase is checked first, so a play dialog always reports the same reason
+  // whether or not a policy is configured. An allow-list, so a state nobody
+  // named fails closed and waits for a human instead of clicking.
+  if (state !== 'configuration') {
+    return { auto: false, reason: state === 'play' ? 'play_dialog_waits' : 'unsupported_state' }
+  }
   if (!dialogAction) return { auto: false, reason: 'no_policy' }
   if (humanAttached) return { auto: false, reason: 'human_attached' }
   return { auto: true, reason: null }
+}
+
+// The most dialog answers one backend connection may attempt. A server that
+// keeps asking is a loop, not a gate.
+const DIALOG_ATTEMPT_LIMIT = 5
+
+// Answer one `show_dialog` the backend asked, on the puppet's own connection.
+//
+// `state` is the puppet's phase, not the client's: it decides whether the
+// puppet may answer at all. Exported with its IO injected, like
+// `emitCheckedRaw` in the front leg, so a test can prove that no click happens
+// without standing up a socket.
+export function answerBackendDialog ({
+  state = null,
+  data = null,
+  dialogAction = null,
+  humanAttached = false,
+  responses = 0,
+  writeRaw = () => {},
+  onAnswered = null,
+  log = () => {}
+} = {}) {
+  const decision = decideDialogAutoAnswer({ dialogAction, humanAttached, state })
+  if (!decision.auto) {
+    log('dialogUnhandled', { state, reason: decision.reason })
+    return { answered: false, reason: decision.reason, responses }
+  }
+  if (responses >= DIALOG_ATTEMPT_LIMIT) {
+    log('dialogUnhandled', { state, reason: 'too_many' })
+    return { answered: false, reason: 'too_many', responses }
+  }
+  const choice = chooseDialogAction(data, dialogAction)
+  if (!choice) {
+    log('dialogUnhandled', { state, reason: 'no_action' })
+    return { answered: false, reason: 'no_action', responses }
+  }
+  const body = buildCustomClickAction({ state, id: choice.id, additions: choice.additions })
+  if (!body) {
+    // The state is known to be configuration here, so a null body means the
+    // chosen action carried no usable id.
+    log('dialogUnhandled', { state, reason: 'no_id' })
+    return { answered: false, reason: 'no_id', responses }
+  }
+  const next = responses + 1
+  try {
+    writeRaw(body)
+    log('dialogClicked', {
+      state,
+      dialogType: choice.dialogType,
+      index: choice.index,
+      total: choice.total,
+      label: choice.label,
+      bytes: body.length
+    })
+    // This frame answers the dialog before the core sees it, so the core must
+    // not hold it as the human's question.
+    onAnswered?.({ state, name: 'show_dialog' })
+    return { answered: true, responses: next }
+  } catch (error) {
+    log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    return { answered: false, reason: 'write_failed', responses: next }
+  }
 }
 
 // VarInt encoder for the packet id, identifier length, and the payload length.
@@ -383,54 +459,24 @@ function createBackendLeg ({
         settleResolve(socketClient)
       })
 
-      // A public server may present a configuration or play dialog (season
-      // selection, rules, queue). A headless puppet cannot click it; answer
-      // with the configured action. Only `custom_click_action` dialogs are
-      // handled; anything else is logged and left alone.
+      // A play dialog is never answered here (#20): it waits for a human in the
+      // core's pending holder. A configuration-phase gate may be answered with
+      // the configured action while no human can answer it (#21). Only
+      // `custom_click_action` dialogs are handled; anything else is logged and
+      // left alone.
       let dialogResponses = 0
       socketClient.on('show_dialog', data => {
-        const decision = decideDialogAutoAnswer({
-          dialogAction,
-          humanAttached: isHumanAttached() === true
-        })
-        if (!decision.auto) {
-          log('dialogUnhandled', { reason: decision.reason })
-          return
-        }
-        if (dialogResponses >= 5) {
-          log('dialogUnhandled', { reason: 'too_many' })
-          return
-        }
-        const choice = chooseDialogAction(data, dialogAction)
-        if (!choice) {
-          log('dialogUnhandled', { reason: 'no_action' })
-          return
-        }
-        const body = buildCustomClickAction({
+        const outcome = answerBackendDialog({
           state: socketClient.state,
-          id: choice.id,
-          additions: choice.additions
+          data,
+          dialogAction,
+          humanAttached: isHumanAttached() === true,
+          responses: dialogResponses,
+          writeRaw: body => socketClient.writeRaw(body),
+          onAnswered: onDialogAnswered,
+          log
         })
-        if (!body) {
-          log('dialogUnhandled', { reason: 'unsupported_state', state: socketClient.state })
-          return
-        }
-        dialogResponses++
-        try {
-          socketClient.writeRaw(body)
-          log('dialogClicked', {
-            dialogType: choice.dialogType,
-            index: choice.index,
-            total: choice.total,
-            label: choice.label,
-            bytes: body.length
-          })
-          // This frame answers the dialog before the core sees it, so the core
-          // must not hold it as the human's question.
-          onDialogAnswered?.({ state: socketClient.state, name: 'show_dialog' })
-        } catch (error) {
-          log('dialogClickFailed', { error: String(error?.message ?? error).slice(0, 200) })
-        }
+        dialogResponses = outcome.responses
       })
 
       // One forwarder per connection: counters and pairing state never leak
@@ -656,7 +702,10 @@ export function createOfflineBackendLeg (options = {}) {
     version = '26.1',
     username = 'GlowSquidye',
     log = () => {},
-    connectTimeoutMs = 15000
+    connectTimeoutMs = 15000,
+    // The configuration-gate policy, so a rung can run one and prove it does
+    // not reach play (#20). Off by default: an offline leg answers nothing.
+    dialogAction = null
   } = options
 
   if (options.cacheDir !== undefined) {
@@ -693,7 +742,7 @@ export function createOfflineBackendLeg (options = {}) {
     version,
     log,
     connectTimeoutMs,
-    dialogAction: null,
+    dialogAction,
     prepareConnection: () => ({ username, auth: 'offline' }),
     releaseTokens: () => {},
     connectLogFields: (connection, currentTarget) => ({

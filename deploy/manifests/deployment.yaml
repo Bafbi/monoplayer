@@ -108,6 +108,9 @@ spec:
             # (system_chat) but its own messages are never forwarded.
             - name: MONOPLAYER_CHAT
               value: read-only
+            # Configuration-phase gate only (#21). A play dialog is never
+            # answered by the puppet: it waits for the human to attach and
+            # answer it (#20).
             - name: MONOPLAYER_DIALOG_ACTION
               value: last
             # Telemetry goes to the cluster collector, which fans out logs,

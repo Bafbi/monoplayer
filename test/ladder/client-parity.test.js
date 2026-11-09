@@ -49,7 +49,11 @@ test('a pending capability is a declared row with its issue, never a failure', (
   assert.equal(row.verdict, 'absent')
   assert.equal(row.issue, '#19')
   assert.match(row.reason, /read-only chat mode/)
-  assert.equal(classifyFrame({ state: 'play', name: 'show_dialog', direct: 0, proxied: 0 }).verdict, 'absent')
+  // #20 landed: a play dialog is relayed to the human, so it has no pending
+  // row any more and classifies as an ordinary control frame.
+  const dialog = classifyFrame({ state: 'play', name: 'show_dialog', direct: 1, proxied: 1 })
+  assert.equal(dialog.verdict, 'same')
+  assert.equal(dialog.issue, undefined)
   assert.equal(classifyFrame({ state: 'configuration', name: 'code_of_conduct', direct: 0, proxied: 0 }).verdict, 'absent')
 })
 

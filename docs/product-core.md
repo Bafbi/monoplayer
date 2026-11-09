@@ -154,7 +154,8 @@ it to the attached player, forwards that player's answer (`custom_click_action`,
 `accept_code_of_conduct`) to the backend as the puppet's own frame, and holds
 the last unanswered dialog in `src/core/pending-dialog.js`.
 
-- No timeout and no auto-click. A dialog with no player attached waits: the
+- No timeout and no auto-click of a play dialog. A dialog with no player
+  attached waits: the
   holder keeps it and re-sends it when a player attaches in the dialog's own
   phase. A play dialog waits for a client in play; a configuration gate waits
   for a client that is still following the puppet's configuration. A frame
@@ -169,14 +170,15 @@ the last unanswered dialog in `src/core/pending-dialog.js`.
   `core.configuringReady`). The attach call-in runs during login, before the
   protocol library writes Login Success, and a configuration frame written there
   would be read as a login packet.
-- The puppet's own auto-click (`MONOPLAYER_DIALOG_ACTION`) stands down while a
-  player is attached: `decideDialogAutoAnswer` returns `human_attached` and
-  nothing is clicked. When it does click, the leg reports the answer
+- A play dialog is never the puppet's (#20). `decideDialogAutoAnswer` returns
+  `play_dialog_waits` for every play dialog, attached or not, so the human
+  answers it or it waits in the holder. `MONOPLAYER_DIALOG_ACTION` therefore
+  covers a configuration-phase gate only, and stands down while a player is
+  attached (`human_attached`). When the leg does click, it reports the answer
   (`onDialogAnswered` → `core.notePuppetDialogAnswer`) before the core sees the
   frame, so the holder never offers an already-answered question to the next
-  client. Which dialog is the player's to answer is #20 (play) and #21
-  (configuration gates, including the protocol library's own code-of-conduct
-  accept, which happens on the backend leg before the core sees the frame).
+  client. Which configuration gate the player answers, including the protocol
+  library's own code-of-conduct accept, is #21.
 
 Serverbound frames carry their state (#16). The packet id is state-scoped, so
 the frame must be written into the state the puppet is in: a configuration

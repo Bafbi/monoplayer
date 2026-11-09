@@ -264,8 +264,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
       authTitle: resolved.account.profile?.authTitle ?? null,
       deviceType: resolved.account.profile?.deviceType ?? null,
       dialogAction: cfg.dialogAction,
-      // #16: the human answers a control dialog while attached, so the puppet's
-      // auto-click stands down for exactly that window.
+      // #16/#20: the auto-click covers a configuration gate only, and it stands
+      // down as soon as a player can answer. A play dialog is never the
+      // puppet's, attached or not.
       isHumanAttached: () => core.attached === true,
       // #16: an auto-answered dialog is not the next client's question.
       onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
