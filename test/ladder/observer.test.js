@@ -12,7 +12,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  ABSENT_FACTS,
   compareViews,
+  formatReport,
   lastView,
   main,
   records,
@@ -77,6 +79,66 @@ test('a field neither side reports is absent, not a pass', () => {
   assert.equal(report.fields.find(entry => entry.field === 'resourcePack').verdict, 'absent')
 })
 
+// #78: three fields cannot be observed on the gate Paper at all. Absent is the
+// honest verdict, and a reason is what makes it a measurement rather than a hole.
+// The reason is attached only when the run read the server fact it rests on.
+const NO_GATE = { codeOfConduct: false, resourcePack: false }
+
+test('an absent field carries the reason the server facts support', () => {
+  const without = base()
+  for (const field of ['codeOfConduct', 'codeOfConductAccepted', 'resourcePack']) delete without[field]
+  const other = { ...without }
+  const report = compareViews(without, other, { server: NO_GATE })
+  assert.equal(report.ok, true)
+  for (const entry of report.absent) {
+    assert.equal(typeof entry.reason, 'string', entry.field + ' carries a reason')
+    assert.equal(entry.reason, ABSENT_FACTS[entry.field].reason)
+  }
+  assert.match(report.absent.find(entry => entry.field === 'codeOfConduct').reason, /enable-code-of-conduct/)
+  assert.match(report.absent.find(entry => entry.field === 'resourcePack').reason, /resource pack/)
+})
+
+test('a server that serves the gate does not get its absence explained away', () => {
+  // The reason is a claim about the server, so the server gets to refute it. With
+  // the gate on and the field still absent, the listener is the suspect, and the
+  // report must say so rather than quote a fact that no longer holds.
+  const without = base()
+  delete without.codeOfConduct
+  const report = compareViews(without, { ...without }, { server: { codeOfConduct: true, resourcePack: true } })
+  const entry = report.fields.find(field => field.field === 'codeOfConduct')
+  assert.equal(entry.verdict, 'absent')
+  assert.equal(entry.reason, null)
+  assert.match(formatReport(report), /no reason recorded/)
+})
+
+test('an absence with no server facts to read is not explained', () => {
+  const without = base()
+  delete without.resourcePack
+  const report = compareViews(without, { ...without })
+  assert.equal(report.fields.find(field => field.field === 'resourcePack').reason, null,
+    'nothing was measured, so nothing is claimed')
+})
+
+test('an absence with no declared reason is named as unexplained, not excused', () => {
+  const without = base()
+  delete without.mainHand
+  const other = { ...without }
+  const report = compareViews(without, other)
+  const entry = report.fields.find(field => field.field === 'mainHand')
+  assert.equal(entry.verdict, 'absent')
+  assert.equal(entry.reason, null)
+  assert.match(formatReport(report), /mainHand: .* -- no reason recorded/)
+  assert.match(formatReport(report), /0 with a reason, 1 without: mainHand/)
+})
+
+test('a reason never stands in for a value', () => {
+  const report = compareViews(base(), base())
+  for (const entry of report.fields) {
+    assert.equal('reason' in entry, false, entry.field + ' carries a value, so it carries no reason')
+  }
+  assert.match(formatReport(report), /\nobserver: PASS 13 fields/)
+})
+
 test('every compared field is declared', () => {
   const report = compareViews(base(), base())
   assert.deepEqual(report.fields.map(entry => entry.field), VIEW_FIELDS)
@@ -123,6 +185,40 @@ test('two records for one connection merge into one view', () => {
   const report = compareViews(merged[0], merged[1])
   assert.equal(report.ok, true, 'the resource-pack field is compared, not absent')
   assert.equal(report.fields.find(entry => entry.field === 'resourcePack').verdict, 'same')
+})
+
+test('--single takes the server facts from the file it is given', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const file = path.join(dir, 'views.jsonl')
+  const facts = path.join(dir, 'server.json')
+  const reportPath = path.join(dir, 'report.json')
+  const bare = base()
+  delete bare.resourcePack
+  fs.writeFileSync(file, log(bare, { ...bare, address: '198.51.100.9:40000' }))
+  fs.writeFileSync(facts, JSON.stringify(NO_GATE))
+  const out = []
+  const code = main(['--single', file, '--server', facts, '--report', reportPath], {
+    stdout: { write: text => out.push(text) },
+    stderr: { write: text => out.push(text) }
+  })
+  assert.equal(code, 0, out.join(''))
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  assert.match(report.absent.find(entry => entry.field === 'resourcePack').reason, /no resource pack/)
+})
+
+test('an unreadable server facts file leaves every absence unexplained', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const file = path.join(dir, 'views.jsonl')
+  const bare = base()
+  delete bare.codeOfConduct
+  fs.writeFileSync(file, log(bare, { ...bare, address: '198.51.100.9:40000' }))
+  const out = []
+  const code = main(['--single', file, '--server', path.join(dir, 'missing.json'), '--report', path.join(dir, 'r.json')], {
+    stdout: { write: text => out.push(text) },
+    stderr: { write: text => out.push(text) }
+  })
+  assert.equal(code, 0, out.join(''))
+  assert.match(out.join(''), /no reason recorded/)
 })
 
 test('--single reads one log and compares its first and last view', () => {
