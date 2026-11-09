@@ -129,11 +129,37 @@ test('the rung builds its bots at the version it runs at', () => {
   assert.equal(output.stdout.trim(), '26.2', 'the bot must speak the version the front and backend run at')
 })
 
-test('a bot option set names the version it was given', () => {
-  // No explicit version: the rung's own value is used, whatever the environment
-  // says, so an operator running the suite with MONOPLAYER_VERSION=26.2 still
-  // exercises the same path.
-  assert.equal(buildRungBotOptions().version, process.env.MONOPLAYER_VERSION ?? '26.1')
+// The rung's module-level VERSION is read at import, so a child process is the
+// only honest way to prove what an environment yields.
+function rungBotVersion (env) {
+  const childEnv = { ...process.env }
+  delete childEnv.MONOPLAYER_VERSION
+  const output = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { buildOnlineBotOptions } from './src/ladder/online.js'
+    console.log(buildOnlineBotOptions({
+      frontPort: 25566,
+      attach: { uuid: '${ATTACH_UUID}', profile: {} },
+      attachCustody: { cacheFactory: () => ({}) }
+    }).version)
+  `], {
+    cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'),
+    encoding: 'utf8',
+    env: { ...childEnv, ...env }
+  })
+  assert.equal(output.status, 0, output.stderr)
+  return output.stdout.trim()
+}
+
+test('an empty MONOPLAYER_VERSION is unset, never a version of its own', () => {
+  // minecraft-protocol treats an empty version as "use my defaultVersion", which
+  // is a version choice this rung must make itself: online-cluster.sh forwards
+  // an empty MONOPLAYER_VERSION when the operator names none.
+  assert.equal(rungBotVersion({ MONOPLAYER_VERSION: '' }), '26.2')
+  assert.equal(rungBotVersion({}), '26.2')
+  assert.equal(rungBotVersion({ MONOPLAYER_VERSION: '26.1' }), '26.1')
+})
+
+test('a bot option set carries the version it was given', () => {
   assert.equal(buildOnlineBotOptions({
     frontPort: 25566,
     attach: { uuid: ATTACH_UUID, profile: {} },

@@ -111,7 +111,8 @@ mkdir -p "$(dirname "$VIEWS")" "$(dirname "$REPORT")"
 paper_pod() {
   local label pod
   label=$(kubectl -n "$GATE_NAMESPACE" get deploy "$PAPER_DEPLOYMENT" \
-    -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}')
+    -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}') \
+    || die "cannot read deploy/$PAPER_DEPLOYMENT in $GATE_NAMESPACE" 2
   [ -n "$label" ] || die "cannot read the app.kubernetes.io/name selector of deploy/$PAPER_DEPLOYMENT in $GATE_NAMESPACE" 2
   pod=$(kubectl -n "$GATE_NAMESPACE" get pods \
     -l "app.kubernetes.io/name=$label" \

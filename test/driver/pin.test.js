@@ -85,7 +85,7 @@ test('the gate Paper serves the version the driver builds for', () => {
 test('the observer rung speaks the version the gate Paper serves', () => {
   // The observer's baseline bot joins the gate Paper directly (#12), so its
   // default version has to be the version that server accepts.
-  const match = read('src/ladder/observer-baseline.js').match(/MONOPLAYER_VERSION \?\? '([^']+)'/)
+  const match = read('src/ladder/observer-baseline.js').match(/MONOPLAYER_VERSION (?:\?\?|\|\|) '([^']+)'/)
   assert.ok(match, 'src/ladder/observer-baseline.js defaults MONOPLAYER_VERSION')
   assert.equal(match[1], envValue('deploy/driver/paper.yaml', 'VERSION'),
     'the baseline bot joins the gate Paper with the version it serves')

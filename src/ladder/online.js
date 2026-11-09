@@ -31,7 +31,11 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 
-const VERSION = process.env.MONOPLAYER_VERSION ?? '26.1'
+// Every backend this repo deploys serves 26.2, so that is the default. `||` not
+// `??`: an empty value means "unset" here, and minecraft-protocol would answer an
+// empty version with its own defaultVersion, a version choice this rung must make
+// itself.
+const VERSION = process.env.MONOPLAYER_VERSION || '26.2'
 const DEFAULT_REPORT = '.reports/online-report.json'
 const WHITELIST_FILE = '.secrets/attach-whitelist.json'
 const PUPPET_SELECTOR = 'glowsquidye'
