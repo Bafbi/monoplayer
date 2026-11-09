@@ -4,9 +4,9 @@
 // one backend login across attach/detach, and the redaction sentinel.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG, USAGE } from '../src/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../src/monoplayer/fake-legs.js'
-import { SENTINEL, redact } from '../src/monoplayer/redact.js'
+import { createMonoplayer, DEFAULT_CONFIG, USAGE } from '../src/service/monoplayer.js'
+import { createFakeBackendLeg, createFakeFrontLeg } from '../src/legs/fake-legs.js'
+import { SENTINEL, redact } from '../src/observability/redact.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const OTHER = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
@@ -425,7 +425,7 @@ test('CLI guardrails: default is inert (no sockets), --start needs explicit live
 
   assert.equal(USAGE.length > 0, true)
   // (main() with no args prints usage)
-  const { main } = await import('../src/monoplayer.js')
+  const { main } = await import('../src/service/monoplayer.js')
   const codeHelp = await main([], io)
   assert.equal(codeHelp, 0)
   assert.ok(out.includes('--print-config'))

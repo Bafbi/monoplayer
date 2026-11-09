@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { createWireChecker, WIRE_CODES } from '../src/monoplayer/wire-check.js'
+import { createWireChecker, WIRE_CODES } from '../src/core/wire-check.js'
 
 const FIXTURE_URL = new URL('../testdata/wire/cases-26.1.json', import.meta.url)
 const RESULT_FIELDS = ['ok', 'code', 'parsedName', 'consumed', 'total', 'leftover']

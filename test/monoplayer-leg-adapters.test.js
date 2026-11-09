@@ -1,4 +1,4 @@
-// Adapter-local unit tests for the leg interfaces (src/monoplayer/live-backend.js,
+// Adapter-local unit tests for the leg interfaces (src/legs/live-backend.js,
 // live-front.js), driven with fakes — no sockets, no auth, no Microsoft
 // involvement. The real legs plug into the same interfaces the fake legs test
 // in monoplayer-integration.test.js; here we test the adapter-local decisions:
@@ -10,12 +10,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
-import { createBackendFrameForwarder } from '../src/monoplayer/live-backend.js'
-import { createConfigPathInterceptor } from '../src/monoplayer/live-front.js'
-import { synthAttach, LEG_OWNED } from '../src/monoplayer/join-synth.js'
-import { createMonoplayer, DEFAULT_CONFIG } from '../src/monoplayer.js'
-import { createStateCache } from '../src/monoplayer/state-cache.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../src/monoplayer/fake-legs.js'
+import { createBackendFrameForwarder } from '../src/legs/live-backend.js'
+import { createConfigPathInterceptor } from '../src/legs/live-front.js'
+import { synthAttach, LEG_OWNED } from '../src/core/join-synth.js'
+import { createMonoplayer, DEFAULT_CONFIG } from '../src/service/monoplayer.js'
+import { createStateCache } from '../src/core/state-cache.js'
+import { createFakeBackendLeg, createFakeFrontLeg } from '../src/legs/fake-legs.js'
 import { createAttachCheck } from '../src/custody/attach.js'
 import { createWhitelistStore } from '../src/custody/store.js'
 

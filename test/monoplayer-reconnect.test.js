@@ -4,9 +4,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createMonoplayer, loadConfig } from '../src/monoplayer.js'
-import { createSession, STATES } from '../src/monoplayer/session.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../src/monoplayer/fake-legs.js'
+import { createMonoplayer, loadConfig } from '../src/service/monoplayer.js'
+import { createSession, STATES } from '../src/core/session.js'
+import { createFakeBackendLeg, createFakeFrontLeg } from '../src/legs/fake-legs.js'
 
 function fakeClock () {
   let now = 0

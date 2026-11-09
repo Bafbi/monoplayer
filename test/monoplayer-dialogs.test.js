@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { chooseDialogAction, buildCustomClickAction } from '../src/monoplayer/live-backend.js'
+import { chooseDialogAction, buildCustomClickAction } from '../src/legs/live-backend.js'
 
 function action (label, id, buttonId) {
   return {

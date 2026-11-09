@@ -1,7 +1,7 @@
 // Transfer-follow controller: target memory and the failure fallback.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createTransferFollowController, DEFAULT_MAX_TARGET_FAILURES } from '../src/monoplayer/transfer-follow.js'
+import { createTransferFollowController, DEFAULT_MAX_TARGET_FAILURES } from '../src/core/transfer-follow.js'
 
 const target = { host: 'sky-2.excalia.fr', port: 25565 }
 

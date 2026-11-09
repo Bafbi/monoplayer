@@ -8,7 +8,7 @@
 //  5. a reattach after detached-state mutations sees current state
 //  6. the backend never sees a second login
 //  7. (stretch) chat from the attaching client is blocked at the proxy
-import { createFakeBackend } from './fake-backend.js'
+import { createFakeBackend } from './legs/fake-backend.js'
 import { createProxy, PUPPET_PROFILE } from './proxy.js'
 import { createFakeClient } from './fake-client.js'
 import { createRequire } from 'node:module'

@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createJournal } from '../src/monoplayer/journal.js'
+import { createJournal } from '../src/observability/journal.js'
 
 const NOW = 1_700_000_000_000
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'

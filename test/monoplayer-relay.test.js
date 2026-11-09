@@ -1,7 +1,7 @@
 // B1 target: relay drop rules and pose capture (pure decisions).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { classifyServerbound, capturePose, CHAT_SERVERBOUND, SERVERBOUND_DROPS } from '../src/monoplayer/relay.js'
+import { classifyServerbound, capturePose, CHAT_SERVERBOUND, SERVERBOUND_DROPS } from '../src/core/relay.js'
 
 test('per-leg connection mechanics drop serverbound', () => {
   for (const name of ['teleport_confirm', 'keep_alive', 'configuration_acknowledged', 'chunk_batch_received', 'cookie_response', 'resource_pack_receive', 'pong', 'message_acknowledgement']) {

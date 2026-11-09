@@ -25,19 +25,19 @@ B1 is the product-shaped core with **no real tokens, no sockets, no Microsoft
 auth**: adapters and the clock are injected. The CLI never opens a network
 connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 
-## Module map (`src/monoplayer/`)
+## Module map (`src/core/`, `src/legs/`, `src/observability/`, `src/service/`)
 
 | Module | Role | Purity |
 |---|---|---|
-| `state-cache.js` | Bounded state cache: join prefix + configuration replay prefix + per-domain warm state | pure |
-| `join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
-| `identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
-| `relay.js` | Serverbound drop rules (per-leg mechanics + chat, which stays read-only), pose capture (backend teleport authoritative over client movement) | pure |
-| `clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
-| `session.js` | `boot → warm → attached ⇄ detached`, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
-| `redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
-| `fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
-| `../monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
+| `src/core/state-cache.js` | Bounded state cache: join prefix + configuration replay prefix + per-domain warm state | pure |
+| `src/core/join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
+| `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
+| `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + chat, which stays read-only), pose capture (backend teleport authoritative over client movement) | pure |
+| `src/core/clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
+| `src/core/session.js` | `boot → warm → attached ⇄ detached`, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
+| `src/observability/redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
+| `src/legs/fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
+| `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
 
 ### Cache domains and bounds (`state-cache`)
 
@@ -81,7 +81,7 @@ client would follow it as Bafbi, outside the puppet and its custody. The
 2026-11-08 incident did exactly that, and the frame was cached too, so it also
 replayed onto the next attach.
 
-`src/monoplayer/clientbound-policy.js` is the one decision table for every
+`src/core/clientbound-policy.js` is the one decision table for every
 clientbound frame in play and configuration.
 
 | Decision | Cache | Relay live | Replay | Use |
@@ -213,7 +213,7 @@ the puppet's connection is never replayed.
 ## Interface for the live legs (G1 / M4 will implement these)
 
 `createMonoplayer({ config, backendLeg, frontLeg, clock, logStream })` — the
-real legs plug in here; the fake legs (`src/monoplayer/fake-legs.js`) are the
+real legs plug in here; the fake legs (`src/legs/fake-legs.js`) are the
 executable spec.
 
 ```js

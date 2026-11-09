@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { offlineUuid, isLoopbackHost } from '../src/monoplayer/offline-identity.js'
+import { offlineUuid, isLoopbackHost } from '../src/legs/offline-identity.js'
 import {
   createConfigPathInterceptor,
   createLiveFrontLeg,
@@ -14,8 +14,8 @@ import {
   decideOnlineAttach,
   emitCheckedRaw,
   shouldDenySecondAttach
-} from '../src/monoplayer/live-front.js'
-import { createLiveBackendLeg, createOfflineBackendLeg } from '../src/monoplayer/live-backend.js'
+} from '../src/legs/live-front.js'
+import { createLiveBackendLeg, createOfflineBackendLeg } from '../src/legs/live-backend.js'
 
 const ATTACH_UUID = '06081639-2178-368a-abb3-3f762836f9a4'
 const snapshot = () => []

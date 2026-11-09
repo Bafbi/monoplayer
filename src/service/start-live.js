@@ -1,6 +1,6 @@
 // --start orchestration: bring the live B1 legs up with the simplest path.
 //
-//   node src/monoplayer.js --start [--config file.json]
+//   node src/service/monoplayer.js --start [--config file.json]
 //
 // Config priority: --config JSON < env overlay < defaults
 //
@@ -35,18 +35,18 @@
 //   5. front leg listen, readiness log (no secrets), process stays alive
 import fs from 'node:fs'
 
-import { createMonoplayer, loadConfig } from '../monoplayer.js'
-import { redact } from './redact.js'
+import { createMonoplayer, loadConfig } from './monoplayer.js'
+import { redact } from '../observability/redact.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { resolveAccount } from '../custody/accounts.js'
 import { normalizeUuid } from '../custody/util.js'
-import { createLiveBackendLeg } from './live-backend.js'
-import { createLiveFrontLeg } from './live-front.js'
-import { waitForReady } from './live-readiness.js'
-import { createWireChecker } from './wire-check.js'
-import { createTelemetry } from './telemetry.js'
-import { createJournal } from './journal.js'
-import { createTransferFollowController } from './transfer-follow.js'
+import { createLiveBackendLeg } from '../legs/live-backend.js'
+import { createLiveFrontLeg } from '../legs/live-front.js'
+import { waitForReady } from './readiness.js'
+import { createWireChecker } from '../core/wire-check.js'
+import { createTelemetry } from '../observability/telemetry.js'
+import { createJournal } from '../observability/journal.js'
+import { createTransferFollowController } from '../core/transfer-follow.js'
 
 const flag = (argv, name) => {
   const i = argv.indexOf(name)

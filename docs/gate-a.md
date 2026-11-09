@@ -15,7 +15,7 @@ Files:
 | File | Role |
 |---|---|
 | `src/proxy.js` | Two-leg proxy: backend client leg ("Puppet"), front server leg, bounded frame cache, relay rules, metrics, JSON logs. |
-| `src/fake-backend.js` | Scripted backend: minimal flat-world join (login, game_state_change 13, position, one chunk batch), records serverbound packets, `sendBlockChange`/`sendPosition`. |
+| `src/legs/fake-backend.js` | Scripted backend: minimal flat-world join (login, game_state_change 13, position, one chunk batch), records serverbound packets, `sendBlockChange`/`sendPosition`. |
 | `src/fake-client.js` | Attaching protocol client: records clientbound frames and parsed data, sends position/dig/place/chat. |
 | `src/scenario.js` | The scenario + assertions, shared by the CLI and the test. |
 | `src/gate-a.js` | CLI runner: prints PASS/FAIL, writes `testdata/gate-a-report.json`, exits non-zero on failure. |
@@ -180,7 +180,7 @@ The proxy (`src/proxy.js`) is already shaped for it:
 2. Turn the front leg online: `'online-mode': true` plus a `hasJoined` stub or
    a whitelist check in `beforeLogin`; the forged puppet profile stays.
 3. Replace `src/fake-client.js` with the official 26.1 vanilla client pointed
-   at `proxy.frontPort`, and replace `src/fake-backend.js` with the real
+   at `proxy.frontPort`, and replace `src/legs/fake-backend.js` with the real
    backend. Cache warm, attach replay, pose synthesis, relay rules, and detach
    survival are the same code path. **Config-phase replay is not**: the front
    server still auto-configures from `minecraft-data`, so a real-client gate
