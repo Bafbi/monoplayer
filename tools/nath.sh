@@ -3,10 +3,10 @@
 #
 #   tools/nath.sh env                        session environment, as KEY=value
 #   tools/nath.sh launch <instance> [args...] start a Prism client on workspace 9, silent
-#   tools/nath.sh kill [instance]            stop the driver client
+#   tools/nath.sh kill [instance]            stop the client of <instance>
 #   tools/nath.sh shot <path>                capture the client render to <path>
 #
-# env, launch, and the kill fallback read the session on the host, deriving the
+# env, launch, and kill read the session on the host, deriving the
 # Hyprland signature from "hyprctl instances -j" and storing nothing. No caller
 # supplies DISPLAY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, or
 # HYPRLAND_INSTANCE_SIGNATURE: launch inherits them from the compositor, and
@@ -224,20 +224,43 @@ driver_payload() {
   printf '%s}' "$payload"
 }
 
+# Whether the client holding the driver port is this instance. The quit op
+# stops whichever client answers, so a kill for another instance has to check
+# first: ss names the listening process, and the instance library path in that
+# process names its client. No listener, or no ss, means no graceful quit.
+driver_holds_instance() {
+  remote '
+instance=$1
+port=$2
+pids=$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -o "pid=[0-9]*" | cut -d= -f2 || true)
+for pid in $pids; do
+  if tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "instances/$instance/natives"; then
+    echo yes
+    exit 0
+  fi
+done
+echo no
+' "$1" "$2"
+}
+
 cmd_kill() {
   local instance=${1:-${default_instance}} quit=no stopped=
   require_instance "$instance"
 
-  # Ask nicely first: the quit op closes the world and the driver socket.
-  if reply=$(printf '%s\n' "$(driver_payload quit)" | timeout 30 "${ssh_cmd[@]}" -W "127.0.0.1:${driver_port}" 2>/dev/null) && [ -n "$reply" ]; then
-    case $reply in
-      *'"ok":true'*) quit=yes ;;
-    esac
+  # Ask nicely first: the quit op closes the world and the driver socket. Only
+  # the instance that holds the port is asked, so a kill for another instance
+  # cannot quit this one; that instance goes straight to the anchor below.
+  if [ "$(driver_holds_instance "$instance" "$driver_port")" = yes ]; then
+    if reply=$(printf '%s\n' "$(driver_payload quit)" | timeout 30 "${ssh_cmd[@]}" -W "127.0.0.1:${driver_port}" 2>/dev/null) && [ -n "$reply" ]; then
+      case $reply in
+        *'"ok":true'*) quit=yes ;;
+      esac
+    fi
   fi
 
-  # The quit op needs a live mod. A wedged client still has to die, so fall back
-  # to the JVM library path. The script arrives on stdin, so this pattern never
-  # matches the remote shell that runs it.
+  # The quit op needs a live mod on this instance. Every other client still has
+  # to die, so fall back to the JVM library path. The script arrives on stdin, so
+  # this pattern never matches the remote shell that runs it.
   stopped=$(remote '
 instance=$1
 pattern=${instance//./\\.}

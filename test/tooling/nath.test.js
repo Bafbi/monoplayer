@@ -35,6 +35,19 @@ exit "$(cat "$NATH_TEST_EXIT" 2>/dev/null || echo 0)"
 `
 
 const EXEC_SSH = `#!/usr/bin/env bash
+# A driver forward carries a payload on stdin and its answer back on stdout; the
+# script path resolves the quoted command line the way the remote shell would.
+if [ "$1" = "-W" ]; then
+  {
+    printf 'ARGV'
+    for arg in "$@"; do printf '\\t%s' "$arg"; done
+    printf '\\nSTDIN\\n'
+    cat
+    printf '\\nENDUSTIN\\n'
+  } >> "$NATH_TEST_LOG"
+  [ -f "$NATH_TEST_REPLY" ] && cat "$NATH_TEST_REPLY"
+  exit "$(cat "$NATH_TEST_EXIT" 2>/dev/null || echo 0)"
+fi
 script=$(cat)
 {
   printf 'ARGV'
@@ -135,6 +148,13 @@ case "$1" in
   *) echo "fake hyprctl: unsupported command: $*" >&2; exit 1 ;;
 esac
 `
+// Answers the listening sockets the driver check asks about, in the shape ss
+// prints with -p: the wrapper reads the pid out of users:(("java",pid=N,fd=K)).
+const SS = `#!/usr/bin/env bash
+[ -f "$FAKE_SS_REPLY" ] && cat "$FAKE_SS_REPLY"
+exit 0
+`
+
 // One temp dir per test: the shims, the call log, and the canned replies.
 function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   let stop = () => {}
@@ -159,6 +179,7 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   if (fake) {
     writeScript(bin, 'jq', JQ)
     writeScript(bin, 'hyprctl', HYPRCTL)
+    writeScript(bin, 'ss', SS)
     const activeWindow = path.join(dir, 'activewindow.json')
     const workspaceSequence = path.join(dir, 'workspaces.txt')
     const clientsSequence = path.join(dir, 'clients-sequence.txt')
@@ -181,6 +202,10 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
       writeFileSync(file, json)
       return file
     })
+    // Who holds the driver port: the keeper by default, so a kill for the
+    // instance it carries can use the quit op. A test can say nobody does.
+    const ssReply = path.join(dir, 'ss.txt')
+    writeFileSync(ssReply, host.driverHolder === 'none' ? '' : 'LISTEN 0 50 [::ffff:127.0.0.1]:25599 *:* users:(("java",pid=' + keeper.pid + ',fd=93))\n')
     writeFileSync(clientsSequence, clientFiles.join('\n') + '\n')
     writeFileSync(activeWindow, host.activeWindow ?? JSON.stringify({ class: 'com.t3tools.T3Code' }))
     // One workspace id per activeworkspace call: before the launch, then after.
@@ -197,6 +222,7 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
       FAKE_CLIENTS_SEQUENCE: clientsSequence,
       FAKE_CLIENTS_COUNT: path.join(dir, 'clients-count'),
       FAKE_ACTIVEWINDOW: activeWindow,
+      FAKE_SS_REPLY: ssReply,
     })
     env.PATH = bin + ':' + env.PATH
   }
@@ -334,21 +360,53 @@ test('launch reports the host refusal and exits 1', () => {
 // kill
 // ---------------------------------------------------------------------------
 
-test('kill quits through the driver and reports no process left', () => {
-  const h = harness()
+test('kill quits through the driver and reports no process left', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer('{"ok":true,"data":{"quitting":true}}')
   const run = h.run(['kill'])
   assert.equal(run.status, 0, run.stderr)
   assert.match(run.stdout, /^QUIT=ok$/m)
   assert.match(run.stdout, /^STOPPED=$/m)
 
-  const [quit, cleanup] = h.calls()
+  // The port owner is asked first, then the quit goes over the forward, then
+  // the anchor sweep finds nothing left.
+  const [owner, quit, cleanup] = h.calls()
+  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric 25599')
+  assert.ok(owner.stdin.includes('ss -ltnpH "sport = :$port"'), 'the check asks for the driver port')
   assert.deepEqual(quit.argv, ['-W', '127.0.0.1:25599'])
   assert.match(quit.stdin, /"op":"quit"/)
   assert.equal(cleanup.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric')
 })
 
-test('kill falls back to the JVM anchor when the driver does not answer', () => {
+test('kill never asks the driver for another instance', (t) => {
+  // The driver answers for whichever client holds the port, so the quit op has
+  // to be gated: this kill is for the unmodded instance while the driver
+  // belongs to the Fabric one.
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  h.answer('{"ok":true,"data":{"quitting":true}}')
+  const run = h.run(['kill', 'gate-b-player'])
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(run.stdout, /^QUIT=no$/m)
+
+  const calls = h.calls()
+  assert.equal(calls.some(call => call.argv.includes('-W')), false, 'no driver request is sent')
+  assert.equal(calls[0].argv.join(' ').trim(), 'bash -s -- gate-b-player 25599')
+  assert.equal(calls[1].argv.join(' ').trim(), 'bash -s -- gate-b-player')
+})
+
+test('kill does not ask the driver when no client holds the port', (t) => {
+  const h = harness({ sshBody: EXEC_SSH, host: { driverHolder: 'none' } })
+  t.after(h.stop)
+  h.answer('{"ok":true,"data":{"quitting":true}}')
+  const run = h.run(['kill'])
+  assert.equal(run.status, 0, run.stderr)
+  assert.match(run.stdout, /^QUIT=no$/m)
+  assert.equal(h.calls().some(call => call.argv.includes('-W')), false, 'no driver request is sent')
+})
+
+test('kill falls back to the JVM anchor when the driver is not this instance', () => {
   const h = harness()
   h.answerScript('4242\n')
   const run = h.run(['kill', 'other-instance'])

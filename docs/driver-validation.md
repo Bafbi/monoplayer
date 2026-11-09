@@ -16,9 +16,9 @@ display host. This is the driver leg of G0, not the unmodded witness.
 ## Driving the host from the workspace
 
 `tools/nath.sh` wraps the host commands this document used to spell out by
-hand. `env`, `launch`, and the `kill` fallback derive the session on the host
-with `hyprctl instances -j` and store nothing, so no caller pastes a session
-triple. `shot` and the driver `quit` need no session at all.
+hand. `env`, `launch`, and `kill` derive the session on the host with
+`hyprctl instances -j` and store nothing, so no caller pastes a session triple.
+`shot` and the driver `quit` need no session at all.
 
 ```bash
 tools/nath.sh env
@@ -45,8 +45,10 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
   This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
   which already rejects screen-reading automation on the official client.
-- `kill` sends the driver `quit`, then falls back to the client JVM's
-  `-Djava.library.path` anchor for a wedged client.
+- `kill` asks the driver for `quit` only when `ss` shows the driver port held
+  by the requested instance, because the quit op stops whichever client answers.
+  It then falls back to the client JVM's `-Djava.library.path` anchor, for a
+  wedged client, a client without the mod, or a host without `ss`.
 
 Verified on `nath` on 2026-11-08 with no session variables exported:
 `launch` reported `SILENT=yes` and left the active workspace and the focused
