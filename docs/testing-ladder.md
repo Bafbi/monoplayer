@@ -33,22 +33,24 @@ loopback with the older harness. Keep them green; do not extend them.
 ## Which lane a run uses
 
 Every run has a lane, a cost, and a blast radius. The lane decides what a run
-may change; the rung decides what it proves.
+may change. The rung decides what it proves.
 
 | Run | Command | Lane | Cost | What it may change |
 |---|---|---|---|---|
 | rungs 0-2 | `mise run check` | none: this machine | seconds | nothing outside the working copy |
 | client-parity rung, 2a | `mise run parity:run` | none: this machine, two bots and a fake backend | about 5 seconds | nothing outside the working copy |
 | observer, the server's view | `mise run observer:run` | the gate Paper, `monoplayer-gate-b`, from throwaway pods | minutes | installs the plugin into the gate Paper and restarts it; it refuses the live namespace |
-| online rung, from a pod | `mise run online:cluster` | the gate Paper, in a throwaway pod holding a copy of the custody | minutes | nothing on the deployment: it refuses an expired token instead of rotating |
+| online rung, from a pod | `mise run online:cluster` | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart |
 | online rung, bare | `mise run online` | this machine's custody, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the live account's token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session |
 | driver lane, rung 4 | `mise run driver:scenario` | the gate Paper, `monoplayer-gate-b-paper`, and the display host | tens of minutes | the gate Paper's world and a real client; the deployment keeps serving |
-| transfer testbed, rung 2b | `mise run testbed:run` | the live custody claim and the gate Paper | about 3 minutes | **the live front goes offline for the run**: it scales `monoplayer/monoplayer` to 0 and disables Argo auto-sync, then restores both |
+| transfer testbed, rung 2b | `mise run testbed:run` | the live custody claim and the gate Paper | about 3 minutes | **the live front goes offline for the run**: it scales `monoplayer/monoplayer` to 0 and disables Argo auto-sync. `mise run testbed:down` restores the deployment, and the sync policy while the run's state file at `/tmp/opencode/monoplayer-testbed.json` survives |
 | dev lane | `mise run dev:up`, then `mise run dev:image`, then `mise run dev:join` | `monoplayer-dev` | minutes | its own Paper, proxy, and account; nothing in `monoplayer` |
 
-Two of those still touch the live deployment: the transfer testbed and a bare
-`mise run online`. No agent runs either. `AGENTS.md` states the rule and the run
-to use instead; `deploy/dev/README.md` is the dev lane runbook.
+Two of those touch the live deployment without a flag: the transfer testbed and
+a bare `mise run online`. A third, `mise run online:cluster --rotate`, writes the
+live token chain and needs a restart. No agent runs any of the three. `AGENTS.md`
+states the rule and the run to use instead; `deploy/dev/README.md` is the dev lane
+runbook.
 
 The lane is a second table on purpose. `src/ladder/next-rung.js` reads the rungs
 table above as exactly six cells, so a seventh column would leave every failing

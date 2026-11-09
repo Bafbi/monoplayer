@@ -2,21 +2,25 @@
 
 ## Lanes
 
-Three cluster lanes. One rule outranks every test.
+Three cluster lanes, and two rules that outrank a test.
 
 | Lane | Namespace | What runs there | Who changes it |
 |---|---|---|---|
-| live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the GlowSquidye account, backend `play2.excalia.fr` | a human, deliberately |
+| live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the GlowSquidye account, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
-| gate Paper | `monoplayer-gate-b` | the disposable Paper behind the observer, the online rung, the driver lane, and the transfer testbed | anyone; it is disposable |
+| gate Paper | `monoplayer-gate-b` | the Paper that the observer, the online rung, the driver lane, and the transfer testbed run against | anyone; it is disposable |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
 That covers `kubectl -n monoplayer scale`, `patch`, `delete`, `rollout restart`,
-and `set image`. It also covers the two runs that do it for you:
+and `set image`. It also covers the three ways it happens for you:
 `mise run testbed:up` and `mise run testbed:run` scale the live deployment to
-zero and disable Argo auto-sync. An interrupted testbed run leaves the live front
-offline, so `mise run testbed:down` stays available: it restores the deployment
-and the sync policy.
+zero and disable Argo auto-sync, and `scripts/online-cluster.sh --rotate` writes
+the refreshed token chain into the live custody and asks you to restart the
+deployment. An interrupted testbed run leaves the live front offline, so
+`mise run testbed:down` stays available. It restores the deployment, and it
+restores the Argo sync policy only while the run's state file at
+`/tmp/opencode/monoplayer-testbed.json` survives. `node src/testbed/switch.js
+status` reports both.
 
 **No automated join runs against Excalia.** `play.excalia.fr` and
 `play2.excalia.fr` are the live servers, and no run in this repo joins them on

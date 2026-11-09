@@ -31,25 +31,26 @@ says which lane each run belongs on.
 ## The first run
 
 The dev account does not exist until someone signs in as it, so the first run has
-an order: bootstrap the account, approve it, bring the lane up, join.
+an order: create the handle pod, approve the account, hand the volume back, bring
+the lane up.
 
-1. **Bootstrap the account.** The volume starts empty, and the proxy waits for an
+1. **Create the handle pod.** The volume starts empty, and the proxy waits for an
    account before it starts.
 
    ```bash
-   mise run dev:custody:up   # a handle pod on the dev custody volume
-   mise run dev:custody      # prints a URL and a code; approve it as the dev account
-   mise run dev:custody:down # the proxy needs the volume, so hand it back
+   mise run dev:custody:up
    ```
 
-   The account lands in `/data/accounts/<uuid>/` with the alias `devpuppet`,
-   which is the alias `deploy/dev/monoplayer.yaml` selects.
+2. **Approve the account.** The command prints a URL and a short code to the
+   terminal, then waits.
 
-2. **Approve the code as the dev account.** `mise run dev:custody` prints a URL
-   and a short code to the terminal, then waits. Open the URL in any browser,
-   sign in as the dev account, and approve. Sign in as the dev account and
-   nothing else: the approval is what binds that account to this volume, and it
-   is the only time the lane needs a person.
+   ```bash
+   mise run dev:custody      # approve it as the dev account
+   ```
+
+   Open the URL in any browser, sign in as the dev account, and approve. Sign in
+   as the dev account and nothing else: the approval is what binds that account
+   to this volume, and it is the only time the lane needs a person.
 
    The code expires in 15 minutes. An expired code is not a failure of the lane:
    run `mise run dev:custody` again for a new one. The command exits when
@@ -57,7 +58,17 @@ an order: bootstrap the account, approve it, bring the lane up, join.
    `.reports/dev-custody.json` holds the same three fields. The device code is
    never written to a file, so a closed terminal is a new code, not a lost one.
 
-3. **Bring the lane up.**
+   The account lands in `/data/accounts/<uuid>/` with the alias `devpuppet`,
+   which is the alias `deploy/dev/monoplayer.yaml` selects.
+
+3. **Hand the volume back.** The proxy needs the claim, and one account has one
+   writer.
+
+   ```bash
+   mise run dev:custody:down
+   ```
+
+4. **Bring the lane up.**
 
    ```bash
    mise run dev:up      # Paper, and a proxy that waits for that account
@@ -73,8 +84,8 @@ claim, the namespace, and the Secrets stay, so coming back is `mise run dev:up`.
 and the next run needs another device-code approval.
 
 `dev:custody` and the dev proxy cannot both hold the volume. The claim is
-`ReadWriteOnce` on a two-node cluster and one account has one writer, so the
-script refuses while the proxy is running and says how to clear it.
+`ReadWriteOnce`, so `mise run dev:custody:up` refuses while any pod of the
+proxy exists, and a pod that is still terminating counts.
 
 ## The dev account
 
@@ -85,7 +96,7 @@ attaching player. Its alias is `devpuppet`.
 single-use, so two writers race it and two copies of one account cannot both stay
 usable: the copy that refreshed last is live, and the other is dead
 ([custody](../../docs/custody.md#sessions-copies-and-refresh)). The lane honors the
-limit three ways. The claim is `ReadWriteOnce` on a two-node cluster. The
+limit three ways. The claim is `ReadWriteOnce`. The
 Deployment is `replicas: 1` with the `Recreate` strategy, so two proxy pods
 never overlap. And the only other pod that mounts the claim is the bootstrap
 handle pod, which `mise run dev:custody:up` refuses to create while the proxy
@@ -108,7 +119,7 @@ mise run dev:custody:status -- --refresh   # the silent refresh, guarded
 The proxy waits for an account before it starts: its `wait-custody` init
 container loops on `ls /data/accounts/*/profile.json` and logs
 `waiting-for-dev-custody` while the volume holds none. A proxy pod at
-`Init:0/1` with that line is this case, not a crash.
+`Init:0/2` with that line is this case, not a crash.
 
 The proxy holds the claim, so the handle pod cannot. Stop the lane first, then
 bootstrap:
@@ -122,6 +133,11 @@ mise run dev:up
 mise run dev:join          # the account is on the dev Paper again
 ```
 
+`mise run dev:down` returns before the old proxy pod is gone, and
+`mise run dev:custody:up` refuses while any pod of the proxy exists, a
+terminating one included. If it refuses, the old pod is still on its way out:
+wait for it to disappear and run it again.
+
 `mise run dev:up` prints "if the dev custody volume is empty, run: mise run
 dev:custody" when it applies the proxy. That hint is half the sequence:
 `dev:custody` needs the handle pod, and `mise run dev:custody:up` refuses while
@@ -129,7 +145,8 @@ the proxy holds the claim. Run `mise run dev:down` first, as above.
 
 A volume that holds an account whose chain is dead is a different case.
 `mise run dev:custody:status -- --refresh` reports `needs_bootstrap` when the
-volume holds no refresh token, and `invalid_grant` when the chain was consumed or
+volume holds no refresh token, `needs_reauthentication` when Microsoft wants the
+account signed in again, and `refresh_failed` when the chain was consumed or
 revoked. Recovery is the same sequence, and it ends in a new approval. Never copy
 an account directory in from another machine; a stale copy cannot refresh, and a
 fresh one is a second writer.
