@@ -86,7 +86,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bot1 = null
   let bot2 = null
   let bot3 = null
-  let bot4 = null
   let stranger = null
 
   const evidence = {
@@ -866,11 +865,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
-    // --- O21-O24: follow a transfer on the puppet leg ---
+    // --- O21-O24: a followed transfer keeps the client's connection (#22) ---
     // The transfer frame never reaches the attached client (that is the
-    // 2026-11-08 bypass). The puppet moves to the second fake backend, warms
-    // there, and the bot is detached with a clear reason; a fresh bot then
-    // attaches and sees the new server's state.
+    // 2026-11-08 bypass). Instead of a kick, the client re-enters
+    // configuration on the connection it holds, receives the target's
+    // configuration, finishes, and lands in the target's play login and state.
     const transferMark = b3.names.length
     const loginsBeforeTransfer = core.session.backendLogins
     const target = { host: '127.0.0.1', port: handshakeProxy.port }
@@ -878,56 +877,97 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     await waitFor(() => core.metrics.transfersFollowed === 1, 'transfer follow decided')
     await waitFor(() => fake2.received.logins === 1, 'puppet login on the target')
     await waitFor(
-      () => core.session.backendLogins === loginsBeforeTransfer + 1 && core.session.warmReady === true,
-      'target warm after the move',
+      () => core.metrics.reconfigurationsCompleted === 1,
+      'the same connection lands on the target',
       15_000
     )
-    await withTimeout(bot3.ended, 10_000, 'bot3 end after transfer')
+    await waitFor(
+      () => core.session.backendLogins === loginsBeforeTransfer + 1 &&
+        core.session.warmReady === true &&
+        core.session.state === 'attached',
+      'target warm under the kept connection',
+      15_000
+    )
 
-    const afterTransfer = b3.names.slice(transferMark).map(frame => frame.name)
-    const kickText = JSON.stringify(b3.kick ?? '')
+    const afterTransfer = b3.names.slice(transferMark).map(frame => ({ state: frame.state, name: frame.name }))
+    const afterNames = afterTransfer.map(frame => frame.name)
+    const targetConfigNames = afterTransfer
+      .filter(frame => frame.state === 'configuration')
+      .map(frame => frame.name)
+    evidence.transfer = {
+      target,
+      handshakeIntents: [...handshakeProxy.nextStates],
+      fake2Logins: fake2.received.logins,
+      backendLogins: core.session.backendLogins,
+      stayedConnected: b3.ended === null,
+      configuration: targetConfigNames,
+      reconfigurations: core.metrics.reconfigurationsCompleted
+    }
     check(
       'O21',
-      'a followed transfer never reaches the client and detaches it with a moving reason',
-      !afterTransfer.includes('transfer') &&
+      'a followed transfer never reaches the client and the client keeps its connection',
+      !afterNames.includes('transfer') &&
         core.metrics.transfersBlocked === 1 &&
         core.metrics.transfersFollowed === 1 &&
-        /moving/i.test(kickText),
+        core.metrics.transfersSeamless === 1 &&
+        afterNames.includes('start_configuration') &&
+        b3.ended === null && b3.kick === null,
       {
-        frames: afterTransfer,
-        kick: kickText,
+        frames: afterNames.slice(0, 12),
         ended: b3.ended,
+        kick: b3.kick,
         blocked: core.metrics.transfersBlocked,
-        followed: core.metrics.transfersFollowed
+        followed: core.metrics.transfersFollowed,
+        seamless: core.metrics.transfersSeamless
       }
     )
     check(
       'O22',
-      'the puppet follows the target and re-warms there',
+      'the same connection goes through the target configuration and play login',
       fake2.received.logins === 1 &&
         handshakeProxy.nextStates.includes(3) &&
+        core.metrics.reconfigurationsCompleted === 1 &&
+        core.metrics.reconfigurationsRestored === 0 &&
+        targetConfigNames.includes('registry_data') &&
+        targetConfigNames.includes('finish_configuration') &&
+        afterNames.includes('login') &&
         core.session.backendLogins === loginsBeforeTransfer + 1 &&
-        core.session.warmReady === true &&
-        core.session.state === 'warm',
+        core.session.state === 'attached',
       {
         loginsBeforeTransfer,
         fake2Logins: fake2.received.logins,
         handshakeIntents: handshakeProxy.nextStates,
         backendLogins: core.session.backendLogins,
-        warmReady: core.session.warmReady,
+        configuration: targetConfigNames,
+        replayed: core.metrics.reconfigurationsCompleted,
         state: core.session.state
       }
     )
 
-    // Target-specific state, cached before the fresh client attaches.
+    // Target-specific state, relayed live to the client that never left.
     const TARGET_BLOCK = { x: 9, y: 0, z: 9 }
     fake2.sendBlockChange(TARGET_BLOCK)
-    await waitFor(
-      () => core.cache.snapshot().blocks.some(entry =>
-        entry.data?.location?.x === 9 &&
-        entry.data?.location?.y === 0 &&
-        entry.data?.location?.z === 9),
-      'target block cached'
+    await bot3.waitFor(
+      () => b3.blockChanges.some(change =>
+        change.location?.x === TARGET_BLOCK.x &&
+        change.location?.y === TARGET_BLOCK.y &&
+        change.location?.z === TARGET_BLOCK.z),
+      'the target block on the kept connection'
+    )
+    check(
+      'O23',
+      'the client that followed the move is in the target server state',
+      b3.login?.entityId === 42 &&
+        core.metrics.attaches === 3 &&
+        b3.leftovers.length === 0 &&
+        b3.errors.length === 0,
+      {
+        entityId: b3.login?.entityId ?? null,
+        attaches: core.metrics.attaches,
+        blocks: b3.blockChanges.map(change => change.location),
+        leftovers: b3.leftovers.length,
+        errors: b3.errors.length
+      }
     )
 
     // Cookies on the puppet leg: store_cookie is answered on the next request.
@@ -937,26 +977,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       () => fake2.received.cookieResponses.some(packet =>
         packet.key === 'session' && Buffer.from(packet.value ?? []).toString() === 'abc'),
       'cookie response on the puppet leg'
-    )
-
-    await waitFor(() => front.attached === null, 'front attach slot cleared after the kick')
-    bot4 = createBot({ port: evidence.frontPort, username: 'Attach' })
-    await bot4.ready()
-    const b4 = bot4.received
-    check(
-      'O23',
-      'a fresh attach after the move replays the target server state',
-      b4.login?.entityId === 42 &&
-        b4.blockChanges.some(change =>
-          change.location?.x === 9 && change.location?.y === 0 && change.location?.z === 9) &&
-        b4.leftovers.length === 0 &&
-        b4.errors.length === 0,
-      {
-        entityId: b4.login?.entityId ?? null,
-        blocks: b4.blockChanges.map(change => change.location),
-        leftovers: b4.leftovers.length,
-        errors: b4.errors.length
-      }
     )
     check(
       'O24',
@@ -977,13 +997,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // front leg, so this asserts what a client received.
     const noticesBefore = core.metrics.noticesSent
     fake2.sendTransfer('', 0)
-    await waitFor(() => b4.advancements.length === 2, 'the notice toast and its removal')
-    const [toast, removal] = b4.advancements
+    await bot3.waitFor(() => b3.advancements.length === 2, 'the notice toast and its removal')
+    const [toast, removal] = b3.advancements
     const noticeKey = toast?.advancementMapping?.[0]?.key ?? null
     // The client held the notice after the add, complete and asking for a toast;
     // after the removal it holds nothing of ours.
     const completed = advancementComplete(applyAdvancementFrames([toast]).get(noticeKey))
-    const held = applyAdvancementFrames(b4.advancements)
+    const held = applyAdvancementFrames(b3.advancements)
     check(
       'O24b',
       'a proxy notice reaches the client complete as a toast and leaves no advancement behind',
@@ -996,15 +1016,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         Array.isArray(removal?.identifiers) &&
         removal.identifiers.includes(noticeKey) &&
         held.size === 0 &&
-        b4.errors.length === 0,
+        b3.errors.length === 0,
       {
         notice: noticeKey,
-        frames: b4.advancements.length,
+        frames: b3.advancements.length,
         showToast: toast?.advancementMapping?.[0]?.value?.displayData?.flags?.show_toast ?? null,
         complete: completed,
         removed: removal?.identifiers ?? null,
         held: [...held.keys()],
-        errors: b4.errors.length
+        errors: b3.errors.length
       }
     )
 
@@ -1053,20 +1073,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
-    evidence.transfer = {
-      target,
-      handshakeIntents: [...handshakeProxy.nextStates],
-      fake2Logins: fake2.received.logins,
-      backendLogins: core.session.backendLogins,
-      botEnded: b3.ended
-    }
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot4, bot3, bot2, bot1, stranger]) {
+    for (const bot of [bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }

@@ -13,6 +13,14 @@
 //   reconnecting  - backend fault; one reconnect armed at a time, with an
 //                   optional retry budget and capped exponential backoff
 //   failed        - the retry budget was exhausted (default: after one attempt)
+//   transferring  - (#22) the attaching client keeps its connection while the
+//                   puppet moves to another server, or while the backend
+//                   restarts its configuration phase on the same connection.
+//                   The client re-enters configuration on its own socket and
+//                   the session returns to `attached` at the target's play
+//                   login. A failed target returns it to `attached` on the
+//                   restored pre-transfer snapshot instead, so the client is
+//                   never detached for a move it can follow.
 //
 // Hard invariants:
 //   - backendLogins counts real backend login events only, so an
@@ -32,6 +40,7 @@ export const STATES = Object.freeze({
   CONFIGURING: 'configuring',
   ATTACHED: 'attached',
   DETACHED: 'detached',
+  TRANSFERRING: 'transferring',
   RECONNECTING: 'reconnecting',
   FAILED: 'failed'
 })
@@ -70,6 +79,9 @@ export function createSession ({
   let detachCount = 0
   let currentPose = { ...pose }
   let pendingReconnect = false
+  // #22: the target's play login can land before the caller marks the move
+  // done, so the login itself records that the transfer reached the client.
+  let transferLanded = false
   let reconnectTimer = null
   let reconnectScheduledAt = null
   let reconnectAttempts = 0
@@ -98,6 +110,13 @@ export function createSession ({
     // session completes its own warm.
     if (!initial) warmReady = false
     if (!initial) {
+      // #22: a client that is following a move (or playing a restored
+      // snapshot) keeps the session where it is; the dial only changes which
+      // backend the puppet talks to.
+      if (state === STATES.TRANSFERRING || state === STATES.ATTACHED) {
+        emit('transfer_connecting', { state })
+        return
+      }
       transition('reconnect_attempt', STATES.BOOT, { reconnecting: true })
       return
     }
@@ -112,12 +131,22 @@ export function createSession ({
     // playing: it followed the live stream into play, so the login moves it to
     // `attached` without a replay.
     const wasConfiguring = state === STATES.CONFIGURING
-    transition('backend_login', wasConfiguring ? STATES.ATTACHED : STATES.WARM, {
+    // #22: a login during a followed move, or while a restored client is
+    // playing, is the target's play login. The client is already on the
+    // connection, so the session lands in `attached` and the front replays the
+    // new session's state on it.
+    const fromTransfer = state === STATES.TRANSFERRING
+    const restored = state === STATES.ATTACHED
+    const carriesClient = wasConfiguring || fromTransfer || restored
+    if (fromTransfer) transferLanded = true
+    transition('backend_login', carriesClient ? STATES.ATTACHED : STATES.WARM, {
       backendLogins,
       entityId: packet.entityId,
-      fromConfiguring: wasConfiguring
+      fromConfiguring: wasConfiguring,
+      fromTransfer,
+      restored
     })
-    return { backendLogins, wasConfiguring }
+    return { backendLogins, wasConfiguring, fromTransfer, restored }
   }
 
   function warmComplete (info = {}) {
@@ -143,7 +172,13 @@ export function createSession ({
       if (!pendingReconnect) return // backendUp() rescinded it
       pendingReconnect = false
       reconnectTimer = null
-      transition('reconnect_fired', STATES.BOOT, { delayMs, attempt: reconnectAttempts })
+      // #22: a retained client keeps its state through the dial. A session
+      // only reaches here in `attached` because a failed transfer restored it
+      // and armed the next attempt itself.
+      const fired = state === STATES.TRANSFERRING || state === STATES.ATTACHED
+        ? state
+        : STATES.BOOT
+      transition('reconnect_fired', fired, { delayMs, attempt: reconnectAttempts })
       // Exactly one call per scheduled reconnect. A fault that arrives while
       // RECONNECTING returns before scheduling, so it never lands here.
       if (onReconnect) onReconnect({ delayMs, attempt: reconnectAttempts })
@@ -155,6 +190,13 @@ export function createSession ({
   // A fired attempt failed. Retry while the budget lasts, otherwise fail
   // closed. `attempts: 1` reproduces the G0 behavior exactly.
   function retryOrFail (reason) {
+    // #22: under a retained client the session never fails closed. The
+    // transfer-follow controller owns the give-up, and it reverts to the
+    // configured backend instead of ending the connection.
+    if (state === STATES.TRANSFERRING || state === STATES.ATTACHED) {
+      transition('transfer_retry', state, { reason, attempt: reconnectAttempts })
+      return scheduleReconnect(reason)
+    }
     if (reconnectAttempts >= attempts) {
       transition('failed', STATES.FAILED, { reason, backendLogins, attempts: reconnectAttempts })
       return { scheduled: false, state, failed: true }
@@ -166,9 +208,17 @@ export function createSession ({
   // Backend fault (end/error/status). A second fault while a reconnect is
   // already pending is recorded but never arms a second timer. A failed
   // attempt retries with backoff while the policy allows it.
-  function backendDown ({ reason = 'unknown', at = clock.now() } = {}) {
+  function backendDown ({ reason = 'unknown', at = clock.now(), retainFront = false } = {}) {
     lastFault = { reason, at }
     warmReady = false // the cache is reset with the session; require a fresh warm
+    // #22: the attached client follows a move on its own connection, so the
+    // backend end under a transfer is not a detach. One reconnect is armed and
+    // the session stays put; the front learns about the move from the transfer
+    // state, never from a kick.
+    if (retainFront && (state === STATES.TRANSFERRING || state === STATES.ATTACHED)) {
+      transition('backend_down_retained', state, { reason, frontEnded: false })
+      return { ...scheduleReconnect(reason), wasAttached: true, retained: true }
+    }
     if (state === STATES.RECONNECTING) {
       emit('fault_while_reconnecting', { reason }) // recorded, NOT a new timer
       return { scheduled: false, state }
@@ -207,8 +257,10 @@ export function createSession ({
   }
 
   // The adapter's connect() threw while the attempt was in flight. Retry while
-  // the policy allows it; the G0 default fails closed after one attempt.
+  // the policy allows it; the G0 default fails closed after one attempt. A
+  // retained client (#22) never fails closed: retryOrFail keeps the session.
   function fail () {
+    if (state === STATES.TRANSFERRING || state === STATES.ATTACHED) return retryOrFail('reconnect_failed')
     if (state !== STATES.BOOT || backendLogins === 0) return { scheduled: false, state }
     return retryOrFail('reconnect_failed')
   }
@@ -220,7 +272,7 @@ export function createSession ({
       emit('attach_rejected', { uuid, name, reason: 'backend_down' })
       return { accepted: false, reason: 'backend_down' }
     }
-    if (state === STATES.ATTACHED || state === STATES.CONFIGURING) {
+    if (state === STATES.ATTACHED || state === STATES.CONFIGURING || state === STATES.TRANSFERRING) {
       emit('attach_rejected', { uuid, name, reason: 'already_attached' })
       return { accepted: false, reason: 'already_attached' }
     }
@@ -248,13 +300,58 @@ export function createSession ({
   }
 
   function detach ({ reason = 'client_disconnect' } = {}) {
-    if (state !== STATES.ATTACHED && state !== STATES.CONFIGURING) {
+    if (state !== STATES.ATTACHED && state !== STATES.CONFIGURING && state !== STATES.TRANSFERRING) {
       emit('detach_ignored', { reason })
       return { detached: false, state }
     }
     detachCount++
+    transferLanded = false
     transition('detach', STATES.DETACHED, { reason, pose: { ...currentPose } })
     return { detached: true, pose: { ...currentPose } }
+  }
+
+  // --- transfer lifecycle (#22) ---
+
+  // The attaching client starts following a move (a backend transfer) or a
+  // server-initiated reconfiguration. Only a session that holds a client can
+  // transfer: with nobody attached there is no connection to keep, and the
+  // ordinary backend-down path moves the puppet.
+  function transferStart ({ target = null, reason = 'transfer' } = {}) {
+    transferLanded = false
+    if (state !== STATES.ATTACHED && state !== STATES.CONFIGURING) {
+      emit('transfer_start_ignored', { reason, target, state })
+      return { started: false, state }
+    }
+    const from = transition('transfer_start', STATES.TRANSFERRING, { reason, target })
+    return { started: true, from, target }
+  }
+
+  // The target's play login landed on the retained connection.
+  function transferComplete ({ reason = 'transfer_complete' } = {}) {
+    if (state === STATES.TRANSFERRING) {
+      transferLanded = false
+      transition('transfer_complete', STATES.ATTACHED, { reason })
+      return { completed: true }
+    }
+    // The login already landed the client in the target; this call only marks
+    // the move done, so nothing is transitioned twice.
+    if (state === STATES.ATTACHED && transferLanded) {
+      transferLanded = false
+      emit('transfer_complete_recorded', { reason })
+      return { completed: true, landed: true }
+    }
+    return { completed: false, state }
+  }
+
+  // The target failed. The client keeps its connection and is restored from
+  // the pre-transfer snapshot, so the session returns to `attached` and one
+  // reconnect goes back to the configured backend.
+  function transferFailed ({ reason = 'transfer_failed' } = {}) {
+    if (state !== STATES.TRANSFERRING) return { failed: false, state }
+    transferLanded = false
+    warmReady = false
+    transition('transfer_fail', STATES.ATTACHED, { reason, restored: true })
+    return { failed: true, restored: true, ...scheduleReconnect(reason) }
   }
 
   function setPose (next) {
@@ -277,6 +374,7 @@ export function createSession ({
     get lastFault () { return lastFault },
     get pendingReconnect () { return pendingReconnect },
     events: () => [...events],
+    get transferring () { return state === STATES.TRANSFERRING },
     isAttachReady,
     backendConnecting,
     backendLogin,
@@ -286,6 +384,9 @@ export function createSession ({
     fail,
     attachAttempt,
     detach,
+    transferStart,
+    transferComplete,
+    transferFailed,
     setPose
   }
 }

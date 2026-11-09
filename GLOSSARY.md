@@ -115,15 +115,19 @@ Re-establishing the backend session after a fault, with at most one attempt pend
 _Avoid_: retry, reconnect loop
 
 **Reconfiguration**:
-A server restarting the configuration phase on the live backend session. The front leg cannot serve that phase, so Monoplayer detaches the player and reconnects.
-_Avoid_: config reload, rejoin
+The client's own configuration phase restarting on the connection it holds, served by Monoplayer with the target's or the same server's configuration frames. The player sees a loading screen and keeps the connection.
+_Avoid_: config reload, rejoin, reconnect
+
+**Seamless transfer**:
+A followed transfer that keeps the attaching client's connection and lands it in the target's play state through a reconfiguration.
+_Avoid_: hot swap, live migration
 
 **Transfer**:
 A server instruction, sent on the puppet's connection, to move the session to another address.
 _Avoid_: redirect, handoff, switch
 
 **Transfer follow**:
-Monoplayer's decision to move the puppet to a transfer's target rather than pass the transfer to the attaching player.
+Monoplayer's decision to move the puppet to a transfer's target rather than pass the transfer to the attaching player. With a client attached, the client follows on its own connection (see seamless transfer); with nobody attached, the puppet moves alone.
 _Avoid_: redirect follow, migration
 
 **Transfer chain**:
