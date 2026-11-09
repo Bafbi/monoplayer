@@ -2,6 +2,11 @@
 
 *Driver lane · testbed plan · draft for decision*
 
+> **Historical plan, written for 26.1.2 / protocol 775.** The lane moved to
+> 26.2 / 776 in [#71](https://github.com/Bafbi/monoplayer/issues/71); the
+> present-tense facts below describe the environment as it stood when this plan
+> was written. [driver-lane.md](driver-lane.md) is the runbook that tracks it.
+
 Real client, real accounts, real backends. The next gate is not another
 protocol harness; it is the first time the product has to survive Minecraft as
 a player experiences it. This plan separates the instrument from the evidence,
