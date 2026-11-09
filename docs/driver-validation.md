@@ -16,9 +16,9 @@ display host. This is the driver leg of G0, not the unmodded witness.
 ## Driving the host from the workspace
 
 `tools/nath.sh` wraps the host commands this document used to spell out by
-hand. `env`, `launch`, and the `kill` fallback derive the session on the host
-with `hyprctl instances -j` and store nothing, so no caller pastes a session
-triple. `shot` and the driver `quit` need no session at all.
+hand. `env`, `launch`, and `kill` derive the session on the host with
+`hyprctl instances -j` and store nothing, so no caller pastes a session triple.
+`shot` and the driver `quit` need no session at all.
 
 ```bash
 tools/nath.sh env
@@ -33,15 +33,25 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
   needs them.
 - `launch` hands the client to the compositor with `hl.dsp.exec_cmd` and the
   rules `{ workspace = "9 silent", no_initial_focus = true, focus_on_activate = false }`.
-  The child inherits the session environment, and the window lands on workspace 9
-  without switching to it. Anything after the instance name goes to
+  The child inherits the session environment. The rules place the window only
+  when the compositor spawns the process that opens it. A second launch goes to
+  the PrismLauncher that is already running, and that process carries no rule.
+  So `launch` also finds the window by the instance library path on any
+  workspace, then moves it to 9 without following. It reads the placement back,
+  because `hyprctl eval` answers `ok` even when the dispatcher found no window.
+  It prints `OPENED_WORKSPACE=`, `WORKSPACE=9`, and `SILENT=`. A `SILENT=no`
+  with exit 1 reports a launch that switched the workspace or took focus, and
+  stderr names which. Anything after the instance name goes to
   `prismlauncher`.
 - `shot` asks the driver for its render target and copies the PNG back with
   `scp`. It needs the mod and no Hyprland state, and it never moves the desktop.
   This follows [the driver-lane ADR](adr/driver-lane-and-unmodded-witness.md),
   which already rejects screen-reading automation on the official client.
-- `kill` sends the driver `quit`, then falls back to the client JVM's
-  `-Djava.library.path` anchor for a wedged client.
+- `kill` asks the driver for `quit` only when `ss` shows the driver port held
+  by the requested instance. The quit op stops whichever client answers, so
+  another instance goes straight to the fallback. The fallback is the client
+  JVM's `-Djava.library.path` anchor, which also covers a wedged client, a
+  client without the mod, and a host without `ss`.
 
 Verified on `nath` on 2026-11-08 with no session variables exported:
 `launch` reported `SILENT=yes` and left the active workspace and the focused
@@ -116,10 +126,13 @@ o.window("Monoplayer Gate B", {
 
 Verified on `nath`: the window landed on workspace 9 without switching the
 active workspace (T3 Code stayed focused on workspace 3). That rule covers the
-runner's CLI launches. `tools/nath.sh launch` passes the same placement as
-exec rules to the compositor, so it keeps the window off your workspace even on
-a host without the config entry. Normal Minecraft
-windows keep their `Minecraft* 26.1.2` class and are not matched.
+driver client only, because it matches the driver window's title. Normal
+Minecraft windows keep their `Minecraft* 26.1.2` class and are not matched.
+
+`tools/nath.sh launch` keeps the window off your workspace on a host without the
+config entry, by moving it after it appears. It does not depend on the exec rule
+alone. It does not depend on the window class either: the instance library path
+in the window process names the client.
 
 Prism's per-instance console window is reused across launches, so the console
 rule is best-effort. Set `OverrideConsole=true` and `ShowConsole=false` while
