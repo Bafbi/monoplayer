@@ -164,7 +164,7 @@ function keys (body) {
 }
 
 // ---------------------------------------------------------------------------
-// Fault shapes (docs/driver-lane-plan.html, F1-F6). F1/F4/F5 are not toxiproxy
+// Fault shapes (docs/driver-lane-plan.md, F1-F6). F1/F4/F5 are not toxiproxy
 // shapes: detach is client-side, backend death is a deployment restart, kick
 // is an RCON command. Only F2/F3/F6 are network toxics here; hold duration is
 // the lane's timing and stays with the B-lane runner.

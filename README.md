@@ -7,7 +7,7 @@ that can attach to it and play normally.
 
 ## Architecture
 
-The proposed architecture is in [docs/architecture.html](docs/architecture.html).
+The proposed architecture is in [docs/architecture.md](docs/architecture.md).
 It covers the protocol approach, session lifecycle, auth and security, the
 `mise` + BuildKit + Kubernetes validation loop, risks, and the first MVP slice.
 
@@ -41,7 +41,7 @@ What it does and does not prove: [docs/protocol-spike.md](docs/protocol-spike.md
 
 The real-client testbed plan — Prism + Fabric driver, Vanilla/Paper backends,
 Toxiproxy, two accounts, and the decompiled-source recipe — is in
-[docs/driver-lane-plan.html](docs/driver-lane-plan.html).
+[docs/driver-lane-plan.md](docs/driver-lane-plan.md).
 
 The client driver is in [tools/driver/](tools/driver/); build it with
 `mise run driver:build`. The host `nath` is driven with
