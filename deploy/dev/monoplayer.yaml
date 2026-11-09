@@ -2,7 +2,8 @@
 #
 # The live custody volume holds one writer and one replica, and a test pod must
 # never mount it. This deployment owns `monoplayer-dev-custody` instead, and
-# the account in it is the dev account (#44), never GlowSquidye.
+# the account in it is the dev account (#44), never GlowSquidye. That account is
+# bootstrapped once by `mise run dev:custody`; the image carries no tokens.
 #
 # The image is `:main` in the manifest so `kubectl kustomize` works with no
 # extra step. The lane under test sets it to the branch image (#43):
@@ -43,6 +44,46 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # The dev account's tokens are in neither this repository nor the image:
+        # #44 bootstraps them onto the claim once, and until then the app would
+        # exit 2 and CrashLoop. Wait for them instead. The UUID is not pinned
+        # because the account is a new identity; the alias is the contract.
+        - name: wait-custody
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - until ls /data/accounts/*/profile.json >/dev/null 2>&1; do echo waiting-for-dev-custody; sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
+        # A crashed pod can leave writer.lock behind with a pid that now exists,
+        # so the lock would look held forever. One replica plus Recreate makes
+        # this pod the only writer of the dev account.
+        - name: clear-stale-lock
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - rm -f /data/accounts/*/writer.lock
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: custody
+              mountPath: /data
       containers:
         - name: monoplayer
           image: ghcr.io/bafbi/monoplayer:main
@@ -52,6 +93,7 @@ spec:
             capabilities:
               drop:
                 - ALL
+            readOnlyRootFilesystem: true
           env:
             - name: MONOPLAYER_VERSION
               value: "26.2"
@@ -65,9 +107,12 @@ spec:
               value: "25565"
             - name: MONOPLAYER_PUPPET_ACCOUNTS_DIR
               value: /data/accounts
-            # The dev account, bootstrapped by #44. Never GlowSquidye: borrowing
-            # the live account would rebuild the one-writer problem the lane
-            # exists to avoid.
+            # The dev account's alias, which `mise run dev:custody` sets at
+            # bootstrap. Never GlowSquidye: borrowing the live account would
+            # rebuild the one-writer problem the lane exists to avoid. There is no
+            # MONOPLAYER_PUPPET_UUID or _USERNAME assertion here on purpose: the
+            # account is bootstrapped after this manifest is written, so the alias
+            # is the only identity the manifest can name.
             - name: MONOPLAYER_PUPPET_ACCOUNT
               value: devpuppet
             - name: MONOPLAYER_ATTACH_WHITELIST
@@ -112,25 +157,6 @@ spec:
           emptyDir: {}
 ---
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: monoplayer-dev-custody
-  namespace: monoplayer-dev
-  labels:
-    app.kubernetes.io/name: monoplayer
-    app.kubernetes.io/part-of: monoplayer
-  annotations:
-    # Deleting the lane deletes this claim. The dev account is re-bootstrapped
-    # (#44), and the live custody volume is a different object.
-    argocd.argoproj.io/sync-options: Delete=false
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
----
-apiVersion: v1
 kind: ConfigMap
 metadata:
   name: monoplayer-dev-config
@@ -138,8 +164,10 @@ metadata:
   labels:
     app.kubernetes.io/part-of: monoplayer
 data:
-  # Empty: the operator adds the attach account before a bot can join. The shape
-  # is the live one, { version, players }, and no secret belongs in it.
+  # Who may control the dev proxy. `--start` refuses an empty list, so a lane with
+  # no controller can never serve: `mise run dev:up` fills it from the live
+  # ConfigMap, which names the human who attaches. It is not a secret, and an
+  # operator's edit is never overwritten.
   attach-whitelist.json: |
     {
       "version": 1,
