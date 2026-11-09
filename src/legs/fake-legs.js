@@ -67,11 +67,13 @@ export function createFakeBackendLeg () {
 export function createFakeFrontLeg () {
   const sent = [] // {kind:'raw'|'packet'|'synth', name, buffer?, packet?, reason?}
   const ended = [] // {reason}
+  const reconfiguredCalls = [] // {reason} per startReconfiguration (#22)
   let loginStartHandler = null
   let serverboundHandler = null
   let detachHandler = null
   let clientSettingsHandler = null
   let configuringHandler = null
+  let reconfiguredHandler = null
 
   const client = {
     username: 'Bafbi',
@@ -87,6 +89,13 @@ export function createFakeFrontLeg () {
     setDetachHandler (fn) { detachHandler = fn },
     setClientSettingsHandler (fn) { clientSettingsHandler = fn },
     setConfiguringHandler (fn) { configuringHandler = fn },
+    setReconfiguredHandler (fn) { reconfiguredHandler = fn },
+    // #22: the core asks the client to re-enter configuration on the same
+    // connection. The fake records the request; the core drives the state.
+    startReconfiguration ({ reason = 'transfer' } = {}) {
+      reconfiguredCalls.push({ reason })
+      return { started: true, reason }
+    },
     writeRaw (buffer, meta) { sent.push({ kind: 'raw', name: meta?.name, buffer, meta }) },
     write (name, packet, { synth = false, meta } = {}) {
       sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta })
@@ -134,7 +143,14 @@ export function createFakeFrontLeg () {
     clientDisconnect ({ reason = 'player_quit' } = {}) {
       if (!detachHandler) throw new Error('no detach handler')
       detachHandler({ reason })
-    }
+    },
+    // #22: the client answered the reconfiguration's finish frame and is in
+    // play again on its own connection.
+    clientReconfigured ({ name = client.username, uuid = client.uuid } = {}) {
+      if (!reconfiguredHandler) throw new Error('no reconfigured handler')
+      return reconfiguredHandler({ name, uuid })
+    },
+    reconfigurations: () => [...reconfiguredCalls],
   }
 
   return leg

@@ -171,7 +171,7 @@ test('snapshot exposes every domain and metrics count cached vs dropped', () => 
   const snapBefore = cache.snapshot()
   assert.deepEqual(
     Object.keys(snapBefore).sort(),
-    ['blocks', 'chunks', 'config', 'entities', 'generic', 'inventories', 'latest', 'prefix'].sort()
+    ['blocks', 'chunks', 'config', 'entities', 'frameSeq', 'generic', 'inventories', 'latest', 'prefix', 'warm'].sort()
   )
   cache.push('play', 'login', buf('login'))
   cache.push('play', 'keep_alive', buf('ka'))
@@ -181,4 +181,70 @@ test('snapshot exposes every domain and metrics count cached vs dropped', () => 
   assert.deepEqual(cache.snapshot().prefix.map(f => f.name), ['login'])
   assert.equal(s.metrics.framesCached, 1)
   assert.equal(s.metrics.framesDropped, 2)
+})
+
+test('restore puts a snapshot back exactly, warm and sequence numbers included', () => {
+  const cache = createStateCache()
+  cache.push('play', 'login', buf('login'), { entityId: 42 })
+  cache.push('play', 'chunk_batch_finished', buf('marker'), {})
+  cache.push('play', 'block_update', buf('block'), { location: { x: 1, y: 0, z: 1 } })
+  cache.push('play', 'window_items', buf('window'), { windowId: 0 })
+  cache.push('play', 'set_slot', buf('slot'), { windowId: 0, slot: 40 })
+  cache.push('play', 'health', buf('health'), { health: 20 })
+  cache.push('play', 'bossbar', buf('bossbar'), { uuid: 'b1' })
+  cache.push('play', 'map_chunk', buf('chunk'), { x: 0, z: 0 })
+  cache.push('configuration', 'registry_data', buf('registry'), {})
+  const before = cache.snapshot()
+  const sizes = cache.stats().sizes
+
+  cache.reset()
+  assert.equal(cache.warm, false)
+  cache.push('play', 'login', buf('other'), {})
+
+  const outcome = cache.restore(before)
+  assert.equal(outcome.restored, true)
+  assert.equal(outcome.warm, true)
+  assert.equal(cache.warm, true)
+  assert.deepEqual(cache.stats().sizes, sizes)
+  const after = cache.snapshot()
+  assert.deepEqual(
+    after.prefix.map(entry => entry.name),
+    before.prefix.map(entry => entry.name)
+  )
+  assert.deepEqual(after.blocks.map(entry => entry.name), ['block_update'])
+  assert.deepEqual(after.latest.map(entry => entry.name), ['health'])
+  assert.deepEqual(after.generic.map(entry => entry.name), ['bossbar'])
+  assert.deepEqual(after.inventories.map(entry => entry.name), ['window_items', 'set_slot'])
+  assert.deepEqual(after.chunks.map(entry => entry.data.x), [0])
+  assert.deepEqual(after.config.map(entry => entry.name), ['registry_data'])
+  assert.equal(cache.stats().metrics.restores, 1)
+})
+
+test('restore keeps the capture sequence, so a restored inventory replays in order', () => {
+  const cache = createStateCache()
+  cache.push('play', 'chunk_batch_finished', buf('marker'), {})
+  cache.push('play', 'window_items', buf('window'), { windowId: 0 })
+  cache.push('play', 'set_slot', buf('slot'), { windowId: 0, slot: 40 })
+  const snapshot = cache.snapshot()
+  const baseSeq = snapshot.inventories[0].seq
+  const slotSeq = snapshot.inventories[1].seq
+
+  cache.restore(snapshot)
+  const restored = cache.snapshot()
+  assert.equal(restored.frameSeq >= slotSeq, true, 'frameSeq is raised past the snapshot')
+  assert.equal(restored.inventories[0].seq, baseSeq)
+  assert.equal(restored.inventories[1].seq, slotSeq)
+
+  // A new frame after the restore is newer than everything restored.
+  cache.push('play', 'set_slot', buf('slot-41'), { windowId: 0, slot: 41 })
+  const newest = cache.snapshot().inventories.at(-1)
+  assert.equal(newest.name, 'set_slot')
+  assert.equal(newest.data.slot, 41)
+  assert.equal(newest.seq > slotSeq, true)
+})
+
+test('restore rejects a value that is not a snapshot', () => {
+  const cache = createStateCache()
+  assert.throws(() => cache.restore(null), /snapshot/)
+  assert.throws(() => cache.restore({ prefix: [] }), /snapshot\.config must be an array/)
 })

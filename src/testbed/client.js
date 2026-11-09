@@ -2,11 +2,11 @@
 //
 //   node src/testbed/client.js [host] [port]
 //
-// It attaches, records the play login, and on a kick logs the reason and
-// retries until it lands on the new server. Run it before
-// `node src/testbed/switch.js transfer`. A stable attach for the whole window
-// is the seamless-switch success signal; an end plus a successful reattach is
-// the current kick behavior.
+// It attaches and records the play login. Run it before
+// `node src/testbed/switch.js transfer`. A single attach for the whole window,
+// with the client re-entering configuration and landing on the target, is the
+// seamless-switch success signal (#22). If the client is kicked, the reason is
+// logged and the client retries: that is the pre-#22 behavior and a failed run.
 import fs from 'node:fs'
 import { createTokenCustody } from '../custody/cache.js'
 import { createBot } from '../ladder/bot.js'

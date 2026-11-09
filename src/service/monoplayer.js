@@ -49,6 +49,7 @@ import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
 import { createSession, STATES } from '../core/session.js'
+import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact, SENTINEL } from '../observability/redact.js'
 import { pathToFileURL } from 'node:url'
 
@@ -97,14 +98,28 @@ export const DEFAULT_CONFIG = Object.freeze({
   }),
   reconnect: Object.freeze({ delayMs: 1000, attempts: 1, maxDelayMs: 60_000 }),
   transfer: Object.freeze({
-    // Follow a backend transfer on the puppet leg. The front client is always
-    // detached; it rejoins the proxy after the puppet is warm on the target.
+    // Follow a backend transfer on the puppet leg. With a client attached the
+    // front serves a same-connection reconfiguration, so the client keeps its
+    // socket and lands on the target's play state (#22). With nobody attached
+    // the puppet moves alone.
     follow: true,
     // A chain deeper than this, or a repeated target, is refused.
     chainLimit: 8,
     // After this long on one server, the chain history resets, so a later
     // transfer to a previously visited server is allowed again.
-    chainResetMs: 120_000
+    chainResetMs: 120_000,
+    // Keep the attached client's connection through a followed transfer (or a
+    // server reconfiguration): the client re-enters configuration on its own
+    // socket and lands in the target's play state (#22). Off by default: the
+    // client is detached, the puppet moves, and the client rejoins. The
+    // testbed run that proves the kept connection is the evidence gate for
+    // flipping this default.
+    keepConnection: false,
+    // A kept client's configuration round has a deadline: a target that
+    // restarts the phase and then sends nothing must not freeze the human's
+    // connection on a loading screen. On expiry the move is restored. 0
+    // disables it. Only read while `keepConnection` is on.
+    reconfigureTimeoutMs: 30_000
   }),
   redaction: Object.freeze({ sentinel: SENTINEL })
 })
@@ -136,6 +151,12 @@ export function loadConfig (doc = {}) {
   }
   if (!Number.isFinite(merged.transfer.chainResetMs) || merged.transfer.chainResetMs < 0) {
     throw new TypeError('config.transfer.chainResetMs must be a non-negative number')
+  }
+  if (typeof merged.transfer.keepConnection !== 'boolean') {
+    throw new TypeError('config.transfer.keepConnection must be a boolean')
+  }
+  if (!Number.isFinite(merged.transfer.reconfigureTimeoutMs) || merged.transfer.reconfigureTimeoutMs < 0) {
+    throw new TypeError('config.transfer.reconfigureTimeoutMs must be a non-negative number')
   }
   return merged
 }
@@ -191,6 +212,17 @@ export function createMonoplayer ({
     onReconnect: ({ delayMs, attempt }) => {
       const target = pendingTransfer
       pendingTransfer = null
+      // The dial starts now: the ended leg's late end event, if any, arrives
+      // before this and must not be read as the target faulting (#22).
+      legHandover = false
+      // #22: after a restore the cache holds the snapshot the client was put
+      // back on. The returning backend is a fresh session, and its frames must
+      // not append to that snapshot: the client already has it, and a later
+      // attach would replay a doubled login and configuration.
+      if (move.restored) {
+        cache.reset()
+        log('cacheReset', { reason: 'transfer_restored' })
+      }
       emit('reconnect_due', { delayMs, attempt, target })
     }
   })
@@ -217,6 +249,14 @@ export function createMonoplayer ({
     transfersRefused: 0,
     noticesSent: 0,
     noticeFallbacks: 0,
+    // #22: same-connection reconfiguration.
+    transfersSeamless: 0,
+    reconfigurationsStarted: 0,
+    reconfigurationsCompleted: 0,
+    reconfigurationsRestored: 0,
+    reconfigurationRefusals: 0,
+    configFramesReconfigured: 0,
+    lateFramesAfterHandover: 0,
     noticeGhosts: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
@@ -272,6 +312,11 @@ export function createMonoplayer ({
     'The proxy could not follow it, so you stay on the current server.'
   const TRANSFER_FOLLOW_REASON =
     'This session is moving. Reconnect in a few seconds to continue.'
+  // #22: the failed-target notice. The target address never appears here:
+  // the notice is proxy speech about the human's own session.
+  const TRANSFER_RESTORED_NOTICE =
+    '[Monoplayer] The new server could not be reached. ' +
+    'You are still on the previous server.'
   const RECONFIGURE_REASON =
     'The server reconfigured this session. Reconnect in a few seconds.'
 
@@ -298,8 +343,40 @@ export function createMonoplayer ({
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
   let transferNoticeSent = false // one refusal notice per attach
   let noticeSeq = 0 // one advancing id per notice, so a removal names its own
-  let reconfigureRequested = false // this backend end is a server reconfiguration
   let pendingTransfer = null // target for the next reconnect_due
+  // The default path: a backend start_configuration ends the leg, and the end
+  // handler turns that into a kick with the reconfiguration reason.
+  let reconfigureRequested = false
+  // #22: the same-connection reconfiguration. `move` owns the pre-transfer
+  // snapshot and the session transitions; `moveKind` names the move while it
+  // is in flight. `clientReconfiguring` says the client is in its own
+  // configuration phase on the connection it kept, `targetLoginReady` that the
+  // new session's play login has landed, and `attachedName` the human the
+  // replay is built for.
+  const move = createTransfer({ session, cache })
+  let moveKind = null
+  let clientReconfiguring = false
+  let targetLoginReady = false
+  let restoreReplayPending = false
+  // The client left play for this move at some point. It stays true after the
+  // client finishes the target's configuration, so a failure after that still
+  // restores a configuration round instead of a play state the client no
+  // longer holds.
+  let clientLeftPlay = false
+  // The deadline for a client's configuration round: a server that restarts
+  // configuration and sends nothing must not freeze the human forever.
+  let reconfigurationTimer = null
+  let attachedName = null
+  // A backend frame arriving proves the leg has a live session again; the
+  // serverbound pipeline refuses to write into a leg that is between
+  // connections (a transfer or a restore).
+  let backendSessionOpen = false
+  // The leg the core ended on purpose for a handover. Its late end event is
+  // not the moved-to target faulting, and must not restore the client.
+  let legHandover = false
+  // A play login counts once per backend connection. The state alone cannot
+  // answer this: a restored or reconfiguring session is already `attached`.
+  let awaitingBackendLogin = true
   // #16: the last control dialog the human has not answered. It survives a
   // detach and is re-sent on attach. A control dialog is neither cached nor
   // replayed, so this is the one copy and a replay cannot deliver a stale one.
@@ -332,7 +409,13 @@ export function createMonoplayer ({
   }
 
   function isAttached () {
-    return attached && (session.state === STATES.ATTACHED || session.state === STATES.CONFIGURING)
+    // #22: a client following a move still holds the attach slot; it is not
+    // attachable around, and its frames are the human's.
+    return attached && (
+      session.state === STATES.ATTACHED ||
+      session.state === STATES.CONFIGURING ||
+      session.state === STATES.TRANSFERRING
+    )
   }
 
   // Live play frames only go to a front client that is in play. A pre-warm
@@ -456,6 +539,13 @@ export function createMonoplayer ({
   // to the human's local render distance.
   function sendClientSettings (reason) {
     if (backendViewDistance === null) return { sent: false, reason: 'no_backend_view_distance' }
+    // #22: a client re-entering configuration sends its settings while the move
+    // is still dialing. There is no session to write into yet, and the target's
+    // own login re-sends the merged packet.
+    if (!backendSessionOpen) {
+      log('clientSettingsDeferred', { reason })
+      return { sent: false, reason: 'no_backend_session' }
+    }
     const packet = mergeClientSettings(humanClientSettings, backendViewDistance)
     try {
       backendLeg.write('settings', packet)
@@ -544,7 +634,11 @@ export function createMonoplayer ({
   // the client parses the frame as the wrong packet.
   function canReceiveControl (state) {
     if (state === 'play') return canRelayPlay()
-    if (state === 'configuration') return attached && session.state === STATES.CONFIGURING
+    // A client following a move is in the same configuration phase (#22), so a
+    // gate the target asks reaches it there.
+    if (state === 'configuration') {
+      return attached && (session.state === STATES.CONFIGURING || clientReconfiguring)
+    }
     return false
   }
 
@@ -723,7 +817,7 @@ export function createMonoplayer ({
   // server reconfiguration, or a followed transfer. The transfer branch calls
   // this synchronously before ending the leg, because a socket end event can
   // be skipped when the next connect replaces the client first.
-  function teardownBackend ({ reason, kickReason = 'backend_disconnected', reconfiguring = false } = {}) {
+  function teardownBackend ({ reason, kickReason = 'backend_disconnected', retainFront = false } = {}) {
     // Per-connection client identity (#17/#18): the next connection announces
     // its own brand and learns its own view distance. The human's client
     // information survives, because the human is still the one playing.
@@ -732,29 +826,52 @@ export function createMonoplayer ({
     backendConfiguring = false
     earlyAttach = null
     pendingEarlyReplay = null
+    backendSessionOpen = false
+    awaitingBackendLogin = true
     // A dialog belongs to the backend session that asked it; the next session
     // asks its own.
     pendingDialog.clear()
     puppetAnsweredDialog = null
+    // A move that reaches an ordinary teardown has already lost its client:
+    // the snapshot is no longer a state anyone holds. A retained teardown is
+    // the move itself and keeps it.
+    if (!retainFront && moveKind !== null) {
+      log('moveAbandonedByTeardown', { kind: moveKind, reason })
+      move.discard()
+      moveKind = null
+      clientReconfiguring = false
+      clientLeftPlay = false
+      targetLoginReady = false
+      restoreReplayPending = false
+      clearReconfigurationTimer()
+    }
     if (session.state === STATES.RECONNECTING) {
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
       return outcome
     }
     cache.reset()
-    log('cacheReset', { reason: 'backend_down', backendLogins: session.backendLogins, reconfiguring })
+    log('cacheReset', { reason: retainFront ? 'transfer' : 'backend_down', backendLogins: session.backendLogins })
+    // #22: a client following a move keeps its connection and the session
+    // stays attached to it. One reconnect is armed; the front is never kicked
+    // and never told to rejoin.
+    if (retainFront && (session.state === STATES.TRANSFERRING || session.state === STATES.ATTACHED)) {
+      const retained = session.backendDown({ reason, retainFront: true })
+      log('backendDown', { reason, frontEnded: false, retained: true, outcome: retained })
+      return retained
+    }
     if (isAttached()) {
       // Session invariant: the attaching client cannot survive the backend.
       detachedHandoff()
       session.detach({ reason: `backend_down:${reason}` })
       const outcome = session.backendDown({ reason })
-      log('backendDown', { reason, frontEnded: true, outcome, reconfiguring })
+      log('backendDown', { reason, frontEnded: true, outcome })
       frontLeg.end(kickReason)
       emit('backend_down', { reason, target: pendingTransfer })
       return outcome
     }
     const outcome = session.backendDown({ reason })
-    log('backendDown', { reason, frontEnded: false, outcome, reconfiguring })
+    log('backendDown', { reason, frontEnded: false, outcome })
     emit('backend_down', { reason, target: pendingTransfer })
     return outcome
   }
@@ -806,7 +923,9 @@ export function createMonoplayer ({
 
   // A backend transfer. The frame never crosses to the front; the decision is
   // whether the puppet follows it. Following means: end this session, dial the
-  // target on the next reconnect, reset the cache, detach the front client.
+  // target on the next reconnect, reset the cache. With a client attached the
+  // client keeps its connection and re-enters configuration when the target's
+  // configuration begins (#22); with nobody attached the puppet moves alone.
   function handleTransfer (data = {}) {
     metrics.clientboundBlocked++
     metrics.transfersBlocked++
@@ -817,6 +936,15 @@ export function createMonoplayer ({
     const valid = host.length > 0 && Number.isInteger(port) && port > 0 && port <= 65535
     if (!cfg.transfer.follow) return refuseTransfer('disabled', host, port, valid)
     if (!valid) return refuseTransfer('invalid_target', host, port, valid)
+    // One move at a time: a second transfer during a reconfiguration would
+    // tear down the connection the first move is holding.
+    if (moveKind !== null) return refuseTransfer('in_flight', host, port, true)
+    // A client that is still finishing its own configuration cannot start a
+    // second one, and the move would write play frames into it. The puppet
+    // stays where it is instead.
+    if (cfg.transfer.keepConnection && isAttached() && !frontPlayReady) {
+      return refuseTransfer('client_not_in_play', host, port, true)
+    }
     const key = `${host}:${port}`
     if (transferChain.visited.has(key)) return refuseTransfer('loop', host, port, true)
     if (transferChain.depth >= cfg.transfer.chainLimit) return refuseTransfer('chain_limit', host, port, true)
@@ -831,7 +959,33 @@ export function createMonoplayer ({
     metrics.transfersFollowed++
     log('transferFollow', { host, port, depth: transferChain.depth })
 
-    teardownBackend({ reason: 'backend_transfer', kickReason: TRANSFER_FOLLOW_REASON })
+    // #22: with `transfer.keepConnection` on, the client keeps its connection
+    // and the move holds the pre-transfer state so a target that never answers
+    // can be rolled back onto the same socket. Off (the default), the client is
+    // detached and rejoins once the puppet is warm on the target.
+    const begun = cfg.transfer.keepConnection && isAttached()
+      ? move.begin({ target: { host, port }, kind: TRANSFER_KINDS.TRANSFER, reason: 'backend_transfer' })
+      : { began: false }
+    if (begun.began) {
+      metrics.transfersSeamless++
+      moveKind = TRANSFER_KINDS.TRANSFER
+      clientReconfiguring = false
+      clientLeftPlay = false
+      targetLoginReady = false
+      restoreReplayPending = false
+      frontPlayReady = false
+      log('transferSeamless', { host, port, depth: transferChain.depth })
+      emit('transfer_seamless', { host, port })
+    }
+
+    teardownBackend({
+      reason: 'backend_transfer',
+      retainFront: begun.began,
+      kickReason: TRANSFER_FOLLOW_REASON
+    })
+    // A retained client keeps the session in `transferring`, so the ended
+    // leg's own end event cannot be told apart from a fault by state alone.
+    legHandover = begun.began
     try {
       backendLeg.end('backend_transfer')
     } catch (error) {
@@ -850,8 +1004,252 @@ export function createMonoplayer ({
       host: abandoned?.host ?? null,
       port: abandoned?.port ?? null
     })
-    return { abandoned }
+    // #22: an abandoned move with a client attached is restored, not left
+    // waiting on a server that will never answer.
+    const restored = failTransfer({ reason: `transfer_aborted:${reason}` })
+    return { abandoned, ...restored }
   }
+
+  // --- #22: same-connection reconfiguration ---
+
+  // The target (or the restarted session) has sent its first configuration
+  // frame. The client's loading screen starts here, on the connection it
+  // already holds: before this point there is no configuration to serve, so a
+  // target that never answers costs no reconfiguration at all and the client
+  // never leaves play.
+  function startClientReconfiguration () {
+    if (moveKind === null || clientReconfiguring) return { started: false, reason: 'not_moving' }
+    const started = typeof frontLeg.startReconfiguration === 'function'
+      ? frontLeg.startReconfiguration({ reason: moveKind })
+      : { started: false, reason: 'leg_unsupported' }
+    if (started?.started !== true) {
+      // The front cannot re-enter configuration. The move still runs: the
+      // client keeps its play state and gets the target's replay at its login,
+      // which is a world rebuild rather than a loading screen.
+      metrics.reconfigurationRefusals++
+      log('reconfigurationRefused', {
+        reason: started?.reason ?? 'unknown',
+        kind: moveKind,
+        state: session.state
+      })
+      return { started: false, reason: started?.reason ?? 'unknown' }
+    }
+    clientReconfiguring = true
+    clientLeftPlay = true
+    frontPlayReady = false
+    metrics.reconfigurationsStarted++
+    armReconfigurationTimer()
+    log('reconfigurationStarted', { kind: moveKind, target: move.target })
+    emit('reconfiguration_started', { kind: moveKind, target: move.target })
+    return { started: true, kind: moveKind }
+  }
+
+  // A configuration round has a deadline. A target that restarts configuration
+  // and then sends nothing would otherwise hold the human's connection open on
+  // a loading screen with no end.
+  function armReconfigurationTimer () {
+    clearReconfigurationTimer()
+    const timeoutMs = cfg.transfer.reconfigureTimeoutMs
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof clock?.setTimeout !== 'function') return
+    reconfigurationTimer = clock.setTimeout(() => {
+      reconfigurationTimer = null
+      if (restoreReplayPending) {
+        // The restore round never completed. The client is unrecoverable on
+        // this connection, so it is detached rather than left frozen.
+        log('reconfigurationRestoreTimeout', { timeoutMs })
+        restoreReplayPending = false
+        try { frontLeg.end('transfer_restore_timeout') } catch { /* already gone */ }
+        detachPlayer({ reason: 'transfer_restore_timeout' })
+        return
+      }
+      log('reconfigurationTimeout', { kind: moveKind, timeoutMs })
+      failTransfer({ reason: 'reconfigure_timeout' })
+    }, timeoutMs)
+    reconfigurationTimer?.unref?.()
+  }
+
+  function clearReconfigurationTimer () {
+    if (reconfigurationTimer === null) return false
+    clock?.clearTimeout?.(reconfigurationTimer)
+    reconfigurationTimer = null
+    return true
+  }
+
+  // A failed target ends the client's aborted configuration round from the
+  // pre-transfer snapshot: the previous server's configuration frames, the
+  // finish, and then (when the client is back in play) its state. Nothing
+  // dials the old server for this: the snapshot is the state the client had.
+  function restoreClientReconfiguration ({ snapshot } = {}) {
+    if (!clientReconfiguring || !snapshot) return { replayed: 0 }
+    let replayed = 0
+    let finish = null
+    for (const frame of snapshot.config ?? []) {
+      if (frame.name === 'finish_configuration') { finish = frame; continue }
+      if (!Buffer.isBuffer(frame.buffer)) continue
+      if (!clientboundPolicy('configuration', frame.name).relay) continue
+      if (frontLeg.writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) replayed++
+    }
+    metrics.configFramesReconfigured += replayed
+    restoreReplayPending = true
+    // The restore round is a configuration round too. If the client never
+    // answers its finish, the deadline ends it.
+    armReconfigurationTimer()
+    try {
+      if (finish && Buffer.isBuffer(finish.buffer)) {
+        frontLeg.writeRaw(finish.buffer, { state: 'configuration', name: 'finish_configuration' })
+      } else {
+        // A session whose finish frame was never cached still has to end the
+        // phase the client is in. The frame carries no fields.
+        frontLeg.write('finish_configuration', {})
+      }
+    } catch (error) {
+      log('reconfigurationRestoreFinishFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    log('reconfigurationRestore', { frames: replayed, hadFinish: finish !== null })
+    return { replayed }
+  }
+
+  // The client is back in play on the restored snapshot. Replay the state the
+  // move rolled back to, then say why.
+  function completeRestoreReplay () {
+    if (!restoreReplayPending || !attached) return null
+    restoreReplayPending = false
+    frontPlayReady = true
+    // Replay from the held snapshot, not the live cache: the cache is reset
+    // when the restore's reconnect dials the configured backend, and the client
+    // must still receive the state the move rolled back to.
+    const outcome = replaySnapshot({
+      name: attachedName ?? 'player',
+      includeConfig: false,
+      reason: 'transfer_restored',
+      snapshot: move.snapshot
+    })
+    move.discard()
+    clientLeftPlay = false
+    log('reconfigurationRestored', { replayed: outcome.replayed, state: session.state })
+    emit('reconfiguration_restored', { replayed: outcome.replayed })
+    sendTransferRestoredNotice()
+    return outcome
+  }
+
+  // Both halves are in: the client is back in play on its own connection and
+  // the moved-to session sent its play login. The replay is the new session's
+  // state, then the move is committed.
+  function maybeCompleteReconfiguration ({ reason = null } = {}) {
+    if (moveKind === null || targetLoginReady !== true || clientReconfiguring || !attached) return null
+    const kind = moveKind
+    const name = attachedName ?? 'player'
+    moveKind = null
+    targetLoginReady = false
+    clientLeftPlay = false
+    clearReconfigurationTimer()
+    frontPlayReady = true
+    const outcome = replaySnapshot({ name, includeConfig: false, reason: reason ?? kind })
+    const committed = move.commit()
+    metrics.reconfigurationsCompleted++
+    log('reconfigurationComplete', {
+      kind,
+      name,
+      replayed: outcome.replayed,
+      committed: committed.committed === true,
+      state: session.state
+    })
+    emit('reconfiguration', { kind, replayed: outcome.replayed })
+    return outcome
+  }
+
+  // The front leg reports the client answered the reconfiguration's finish
+  // frame and is in play again (#22).
+  function frontReconfigured ({ name = null, uuid = null } = {}) {
+    if (restoreReplayPending) {
+      clientReconfiguring = false
+      clearReconfigurationTimer()
+      const outcome = completeRestoreReplay()
+      return { reconfigured: true, restored: true, replayed: outcome?.replayed ?? 0 }
+    }
+    if (moveKind === null) {
+      log('reconfigurationIgnored', { reason: 'no_move_in_flight', name, uuid })
+      return { reconfigured: false }
+    }
+    clientReconfiguring = false
+    // The deadline stays armed: it now covers the wait for the target's play
+    // login, which is what a client parked in play cannot end by itself.
+    const outcome = maybeCompleteReconfiguration()
+    return {
+      reconfigured: true,
+      replayed: outcome?.replayed ?? null,
+      waitingForLogin: outcome === null
+    }
+  }
+
+  // The target failed. The client keeps its connection and the pre-transfer
+  // state goes back into the cache and (when it is in configuration) onto the
+  // client. The session returns to its client and one reconnect goes back to
+  // the configured backend.
+  function failTransfer ({ reason = 'transfer_failed' } = {}) {
+    if (moveKind === null) return { restored: false, reason: 'no_move' }
+    const kind = moveKind
+    const outcome = move.fail({ reason })
+    if (outcome.failed !== true) return { restored: false, state: session.state }
+    moveKind = null
+    targetLoginReady = false
+    clearReconfigurationTimer()
+    // The reconnect this restore armed is a new backend session: its play
+    // login is a real login and must re-send the human's client information.
+    awaitingBackendLogin = true
+    if (clientReconfiguring) {
+      // The client is in configuration: finish the aborted round from the
+      // snapshot before a notice can reach it.
+      restoreClientReconfiguration({ snapshot: outcome.snapshot })
+    } else if (clientLeftPlay) {
+      // The client already answered the target's finish and holds the target's
+      // registries, so its play state is not the previous server's. Open one
+      // more configuration round and serve the snapshot through it.
+      const started = frontLeg.startReconfiguration?.({ reason: 'transfer_restored' })
+      if (started?.started === true) {
+        clientReconfiguring = true
+        frontPlayReady = false
+        restoreClientReconfiguration({ snapshot: outcome.snapshot })
+      } else {
+        // No leg support for a second round: rebuild the world with the state
+        // replay alone and say so.
+        log('reconfigurationRestoreRefused', { reason: started?.reason ?? 'unsupported' })
+        clientLeftPlay = false
+        frontPlayReady = true
+        replaySnapshot({
+          name: attachedName ?? 'player',
+          includeConfig: false,
+          reason: 'transfer_restored',
+          snapshot: outcome.snapshot
+        })
+        move.discard()
+        sendTransferRestoredNotice()
+      }
+    } else {
+      // The client never left play: it still shows the previous state, which
+      // transfer.fail() just put back in the cache.
+      frontPlayReady = true
+      restoreReplayPending = false
+      sendTransferRestoredNotice()
+    }
+    metrics.reconfigurationsRestored++
+    log('transferRestored', {
+      kind,
+      reason,
+      state: session.state,
+      clientConfiguration: clientReconfiguring,
+      scheduled: outcome.scheduled === true
+    })
+    emit('transfer_restored', { kind, reason })
+    return { restored: true, kind, snapshot: outcome.snapshot }
+  }
+
+  function sendTransferRestoredNotice () {
+    const outcome = sendProxyNotice(TRANSFER_RESTORED_NOTICE, { reason: 'transfer_restored' })
+    log('transferRestoredNotice', { sent: outcome.sent === true, kind: outcome.kind ?? null })
+    return outcome
+  }
+
 
   // Called by the front-leg adapter after gates 1+2 pass and Login Success
   // (forged puppet profile) has been sent. Replay via join-synth.
@@ -875,6 +1273,7 @@ export function createMonoplayer ({
       return { attached: false, reason: attempt.reason }
     }
     attached = true
+    attachedName = name ?? null
     frontPlayReady = false
     earlyAttach = { name, uuid }
     transferNoticeSent = false
@@ -908,10 +1307,10 @@ export function createMonoplayer ({
   // The replay half of an attach: the join prefix and the warm state as they
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
-  function replaySnapshot ({ name, includeConfig = true, reason = 'attach' } = {}) {
-    const snapshot = cache.snapshot()
+  function replaySnapshot ({ name, includeConfig = true, reason = 'attach', snapshot = null } = {}) {
+    const source = snapshot ?? cache.snapshot()
     const synthesized = synthAttach({
-      snapshot,
+      snapshot: source,
       pose: session.currentPose,
       teleportId: frontTeleportSeq,
       includeConfig
@@ -974,6 +1373,7 @@ export function createMonoplayer ({
       return { attached: false, reason: attempt.reason }
     }
     attached = true
+    attachedName = name ?? null
     frontPlayReady = true
     transferNoticeSent = false
     metrics.attaches++
@@ -983,6 +1383,19 @@ export function createMonoplayer ({
 
   function detachPlayer ({ reason = 'client_disconnect' } = {}) {
     if (!isAttached()) return { detached: false, state: session.state }
+    // #22: the client left mid-move. There is nobody left to restore, so the
+    // move becomes the ordinary puppet-only transfer and the held snapshot is
+    // released.
+    if (moveKind !== null || restoreReplayPending) {
+      move.discard()
+      moveKind = null
+      clientReconfiguring = false
+      clientLeftPlay = false
+      targetLoginReady = false
+      restoreReplayPending = false
+      clearReconfigurationTimer()
+      log('reconfigurationAbandoned', { reason })
+    }
     detachedHandoff()
     const result = session.detach({ reason })
     log('detach', { reason, pose: result.pose })
@@ -992,6 +1405,7 @@ export function createMonoplayer ({
 
   function detachedHandoff () {
     attached = false
+    attachedName = null
     frontPlayReady = false
     earlyAttach = null
     pendingEarlyReplay = null
@@ -1004,7 +1418,22 @@ export function createMonoplayer ({
     started = true
 
     backendLeg.setEndHandler(({ reason = 'backend_end' } = {}) => {
-      const reconfiguring = reconfigureRequested
+      // #22: the leg the core ended for a handover reports its end late.
+      if (legHandover) {
+        legHandover = false
+        log('backendEndHandedOver', { reason })
+        return
+      }
+      // #22: the moved-to session faulted while the client follows it, at any
+      // stage of the move: before its configuration, during it, or after its
+      // play login. The client is restored from the pre-transfer snapshot on
+      // the connection it kept; it is never kicked for a move it can survive.
+      if (moveKind !== null) {
+        log('backendEndDuringMove', { reason, kind: moveKind, state: session.state })
+        failTransfer({ reason: `target_lost:${reason}` })
+        return
+      }
+      const reconfigured = reconfigureRequested
       reconfigureRequested = false
       // A transfer already tore the session down synchronously; the late
       // socket end is recorded, not replayed.
@@ -1017,8 +1446,7 @@ export function createMonoplayer ({
       if (pendingTransfer === null) clearTransferChain('backend_end')
       teardownBackend({
         reason,
-        reconfiguring,
-        kickReason: reconfiguring ? RECONFIGURE_REASON : 'backend_disconnected'
+        kickReason: reconfigured ? RECONFIGURE_REASON : 'backend_disconnected'
       })
     })
 
@@ -1028,6 +1456,15 @@ export function createMonoplayer ({
 
     backendLeg.setFrameHandler(frame => {
       const { state, name, buffer, data = {} } = frame
+      // #22: a frame from the leg the core ended for a handover belongs to the
+      // dead session. It must not enter the target's cache, and it must not
+      // clear the handover flag: the old socket's end would then read as the
+      // target faulting.
+      if (legHandover) {
+        metrics.lateFramesAfterHandover++
+        return
+      }
+      backendSessionOpen = true
       // Exact packet journal + one frame counter per backend frame. Lifecycle
       // log records come only from the log() funnel, never one per frame.
       journal.frame({ dir: 's2c', state, name, buffer })
@@ -1046,6 +1483,11 @@ export function createMonoplayer ({
       })
       if (state === 'configuration') {
         metrics.configFrames++
+        backendSessionOpen = true
+        // #22: the first configuration frame of a followed move is where the
+        // client's loading screen starts. The target has accepted the session,
+        // so there is a configuration to serve.
+        if (moveKind !== null && !clientReconfiguring) startClientReconfiguration()
         announceBrand()
         const policy = clientboundPolicy('configuration', name)
         if (name === 'add_resource_pack') answerResourcePack(data)
@@ -1086,9 +1528,11 @@ export function createMonoplayer ({
         }
         if (!policy.cache) return
         const pushed = cache.push('configuration', name, buffer, data)
-        if (pushed.cached && policy.relay && session.state === STATES.CONFIGURING) {
+        const clientInConfiguration = session.state === STATES.CONFIGURING || clientReconfiguring
+        if (pushed.cached && policy.relay && clientInConfiguration) {
           if (frontLeg.writeRaw(buffer, { state: 'configuration', name }) !== false) {
             metrics.configFramesRelayed++
+            if (clientReconfiguring) metrics.configFramesReconfigured++
           }
         }
         return
@@ -1129,6 +1573,15 @@ export function createMonoplayer ({
       if (!attachedNow) {
         metrics.serverboundNotAttached++
         log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
+        return
+      }
+      // #22: a retained client outlives the backend leg for the length of a
+      // move. The frame belongs to the connection being handed over and cannot
+      // be written into the new one, so it is dropped and counted.
+      if (!backendSessionOpen) {
+        metrics.serverboundDropped++
+        bumpName(metrics.serverboundDroppedByName, name)
+        log('serverboundDropped', { name, state, reason: 'backend_moving' })
         return
       }
       if (decision.action === 'rewrite') {
@@ -1225,6 +1678,15 @@ export function createMonoplayer ({
       configuringReady({ name })
     })
 
+    // #22: the client answered the reconfiguration's finish frame and is in
+    // play again on its own connection. A leg without the call-in keeps the
+    // play state and gets the target's replay at its login instead.
+    if (typeof frontLeg.setReconfiguredHandler === 'function') {
+      frontLeg.setReconfiguredHandler(({ name = null, uuid = null } = {}) => {
+        frontReconfigured({ name, uuid })
+      })
+    }
+
     log('start', { whitelist: identity.whoAmI().whitelist, puppet: cfg.puppet, started: true })
     emit('start')
   }
@@ -1256,6 +1718,7 @@ export function createMonoplayer ({
 
   function backendPlayFrame ({ name, buffer, data }) {
     metrics.backendFrames++
+    backendSessionOpen = true
 
     // #16: an early-attach client gets its replay as soon as the join prefix is
     // warm. The live path warms on the readiness fallback as well as on the
@@ -1272,12 +1735,15 @@ export function createMonoplayer ({
     }
 
     if (name === 'login') {
+      // Cache the login first: a move that completes on this frame builds its
+      // replay from the cache, and the replay must carry the login.
+      const pushed = cache.push('play', name, buffer, data)
+      if (pushed.cached) metrics.framesCached++
       // The real backend login event backendLogins counts. Attach/detach never
-      // touches this. Only counted when the leg is (re)booting — a doubled
-      // replayed login frame during an already-warm session is not a login.
-      // A pre-warm configuring attach is attached but not warm; its backend
-      // login is still the play login that ends the configuration phase.
-      if (session.state === STATES.BOOT || session.state === STATES.CONFIGURING) {
+      // touches this, and a doubled replayed login frame during an already-warm
+      // session is not a login: one real login per backend connection.
+      if (awaitingBackendLogin) {
+        awaitingBackendLogin = false
         const login = session.backendLogin({ entityId: data.entityId })
         backendConfiguring = false
         scheduleTransferChainReset()
@@ -1285,12 +1751,18 @@ export function createMonoplayer ({
         log('backendLogin', {
           entityId: data.entityId,
           backendLogins: session.backendLogins,
-          fromConfiguring: login.wasConfiguring === true
+          fromConfiguring: login.wasConfiguring === true,
+          fromTransfer: login.fromTransfer === true,
+          restored: login.restored === true
         })
         emit('backend_login', { entityId: data.entityId })
+        // #22: the moved-to session's play login. The client's replay waits for
+        // the client itself to be back in play on its own connection.
+        if (login.fromTransfer === true || login.restored === true) {
+          targetLoginReady = true
+          maybeCompleteReconfiguration()
+        }
       }
-      const pushed = cache.push('play', name, buffer, data)
-      if (pushed.cached) metrics.framesCached++
       // Cache-only: a login frame is replayed to an attach, never relayed
       // into an already-playing client's connection.
       return
@@ -1357,19 +1829,54 @@ export function createMonoplayer ({
     }
 
     if (name === 'start_configuration') {
-      // The server wants this connection to re-enter configuration. The front
-      // client cannot follow that on its own connection (the proxy would have
-      // to serve a configuration phase it does not own), so block the frame
-      // and end the puppet leg on purpose. The end handler resets the cache,
-      // detaches the client with a clear reason, and schedules a fresh login.
-      blockClientbound('play', name, clientboundPolicy('play', name), data)
-      log('backendReconfigure', { name })
-      reconfigureRequested = true
-      try {
-        backendLeg.end('backend_reconfigure')
-      } catch (error) {
-        log('backendReconfigureFailed', { error: String(error?.message ?? error) })
+      // #22: a reconfiguration cannot start under a move that is already
+      // holding the client and the cache. It is recorded and left alone.
+      if (moveKind !== null) {
+        metrics.clientboundBlocked++
+        bumpName(metrics.clientboundBlockedByName, name)
+        log('backendReconfigureIgnored', { reason: 'move_in_flight', kind: moveKind })
+        return
       }
+      blockClientbound('play', name, clientboundPolicy('play', name), data)
+      // Default path: the front cannot serve a restarted configuration phase
+      // on the client's own connection, so the puppet leg is ended on purpose
+      // and the normal backend-down path kicks the client with a clear reason.
+      if (!cfg.transfer.keepConnection) {
+        log('backendReconfigure', { name, keepConnection: false })
+        reconfigureRequested = true
+        try {
+          backendLeg.end('backend_reconfigure')
+        } catch (error) {
+          log('backendReconfigureFailed', { error: String(error?.message ?? error) })
+        }
+        return
+      }
+      // Kept connection: the puppet follows the restarted phase on its own
+      // backend connection (the protocol library answers the finish and
+      // re-enters configuration), and an attached client follows it on the
+      // connection it holds. Neither is detached and no leg is ended.
+      const begun = isAttached()
+        ? move.begin({ kind: TRANSFER_KINDS.RECONFIGURE, reason: 'backend_reconfigure' })
+        : { began: false }
+      if (begun.began) {
+        moveKind = TRANSFER_KINDS.RECONFIGURE
+        clientReconfiguring = false
+        targetLoginReady = false
+        restoreReplayPending = false
+        frontPlayReady = false
+      }
+      // The restarted phase is a new session state: the old configuration
+      // replay and join prefix would otherwise sit beside it.
+      cache.reset()
+      pendingDialog.clear()
+      awaitingBackendLogin = true
+      backendConfiguring = false
+      log('backendReconfigure', {
+        keepConnection: true,
+        followed: begun.began,
+        state: session.state,
+        cacheReset: true
+      })
       return
     }
 
@@ -1427,6 +1934,9 @@ export function createMonoplayer ({
     attachPlayer,
     detachPlayer,
     abortTransfer,
+    // #22: the front leg reports the client answered the reconfiguration's
+    // finish frame and is back in play on its own connection.
+    frontReconfigured,
     notice: sendProxyNotice,
     // lifecycle:
     start,
@@ -1437,6 +1947,15 @@ export function createMonoplayer ({
     get backendConfiguring () { return backendConfiguring },
     get pendingDialog () { return pendingDialog },
     get frontPlayReady () { return frontPlayReady },
+    // #22: the move in flight, the client's own configuration phase, and the
+    // target's play login. The rungs read these instead of inferring them.
+    get move () { return move },
+    get moveKind () { return moveKind },
+    get reconfiguring () { return moveKind !== null },
+    get clientReconfiguring () { return clientReconfiguring },
+    get targetLoginReady () { return targetLoginReady },
+    get restoring () { return restoreReplayPending },
+    get backendSessionOpen () { return backendSessionOpen },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }
   }
