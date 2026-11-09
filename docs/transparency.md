@@ -22,7 +22,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The human answers every play dialog | **not built** | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | **not built** | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
 | A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
-| Proxy notices reach the human as a toast | **not built** | [#15](https://github.com/Bafbi/monoplayer/issues/15) |
+| Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
 | The proxy's egress address is accepted as different | **accepted limit** | [#11](https://github.com/Bafbi/monoplayer/issues/11) |
 
 ## Client identity
@@ -112,9 +112,10 @@ detaches the human with a moving notice, so the server sees a normal accepting
 client and the human rejoins the proxy once the puppet is warm on the target.
 Keeping the human's connection and re-entering configuration on it, so the move
 reads as a dimension change, is [#22](https://github.com/Bafbi/monoplayer/issues/22).
-A failed target restores the previous session on the next reconnect; the local
-notice is a `system_chat` from the proxy, and the toast variant is
-[#15](https://github.com/Bafbi/monoplayer/issues/15).
+A failed target restores the previous session on the next reconnect. The notice
+is the proxy's own: a synthetic advancement with a visible toast, removed in the
+same call so the client keeps no ghost advancement, with a local `system_chat`
+line as the fallback ([#15](https://github.com/Bafbi/monoplayer/issues/15)).
 
 ## Known limits
 

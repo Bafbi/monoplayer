@@ -44,6 +44,7 @@ import {
 } from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
+import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
@@ -213,6 +214,9 @@ export function createMonoplayer ({
     transfersBlocked: 0,
     transfersFollowed: 0,
     transfersRefused: 0,
+    noticesSent: 0,
+    noticeFallbacks: 0,
+    noticeGhosts: 0,
     bundleDelimitersDropped: 0,
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
@@ -292,6 +296,7 @@ export function createMonoplayer ({
   let humanClientSettings = null
   let frontTeleportSeq = 0 // proxy-owned teleport IDs
   let transferNoticeSent = false // one refusal notice per attach
+  let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let reconfigureRequested = false // this backend end is a server reconfiguration
   let pendingTransfer = null // target for the next reconnect_due
   // #16: the last control dialog the human has not answered. It survives a
@@ -641,21 +646,75 @@ export function createMonoplayer ({
     emit('chat_blocked', { name, reason })
   }
 
+  // A proxy notice is local proxy speech, not server speech: it never carries
+  // the target address, and it is never cached, so no later attach replays it.
+  //
+  // The notice rides one synthetic advancement toast (#15), added and removed in
+  // the same call: the add queues the toast, and the removal leaves the client's
+  // advancement map as the server left it. A toast the front leg cannot write
+  // falls back to a local system chat line, so a client in play always gets the
+  // notice.
+  //
+  // The path runs in either state. With no client in play the front leg drops
+  // the writes, so the call reports that it wrote nothing rather than claiming a
+  // delivery nobody saw, and a caller (#22) can queue the notice for the next
+  // attach.
+  function sendProxyNotice (text, { reason = 'notice' } = {}) {
+    // A notice with no text is a caller bug. Say so in the log instead of
+    // throwing into a frame handler.
+    if (typeof text !== 'string' || text.length === 0) {
+      log('proxyNoticeRejected', { reason, error: 'text_required' })
+      return { sent: false, kind: null, id: null }
+    }
+    const id = noticeId(++noticeSeq)
+    if (!canRelayPlay()) {
+      log('proxyNoticeUndelivered', { reason, id, error: 'no_client_in_play' })
+      return { sent: false, kind: null, id }
+    }
+    const [add, removal] = noticeFrames({ text, id })
+    let failed = null
+    try {
+      frontLeg.write(add.name, add.packet, { synth: true })
+      frontLeg.write(removal.name, removal.packet, { synth: true })
+    } catch (error) {
+      failed = error
+      metrics.noticeFallbacks++
+      log('proxyNoticeFailed', { reason, id, error: String(error?.message ?? error) })
+      // The add may have landed before the removal failed. A removal is
+      // idempotent, because it deletes an id the client may never have held, so
+      // a retry is the only way back to a clean advancement state.
+      try {
+        frontLeg.write(removal.name, removal.packet, { synth: true })
+      } catch (cleanupError) {
+        // Both writes failed after the add landed, so the client keeps this one
+        // advancement until its state is rebuilt. The id is never reused, so no
+        // later notice names it.
+        metrics.noticeGhosts++
+        log('proxyNoticeGhost', { reason, id, error: String(cleanupError?.message ?? cleanupError) })
+      }
+    }
+    if (failed === null) {
+      metrics.noticesSent++
+      log('proxyNotice', { reason, kind: 'toast', id })
+      return { sent: true, kind: 'toast', id }
+    }
+    try {
+      const fallback = systemChatFrame(text)
+      frontLeg.write(fallback.name, fallback.packet, { synth: true })
+      metrics.noticesSent++
+      log('proxyNotice', { reason, kind: 'chat', id })
+      return { sent: true, kind: 'chat', id }
+    } catch (error) {
+      log('proxyNoticeLost', { reason, id, error: String(error?.message ?? error) })
+      return { sent: false, kind: null, id }
+    }
+  }
+
   // The refusal notice is local proxy speech, not server speech. It never
   // carries the target address.
   function sendTransferNotice () {
     transferNoticeSent = true
-    try {
-      frontLeg.write('system_chat', {
-        content: {
-          type: 'compound',
-          value: { text: { type: 'string', value: TRANSFER_REFUSED_NOTICE } }
-        },
-        isActionBar: false
-      })
-    } catch (error) {
-      log('transferNoticeFailed', { error: String(error?.message ?? error) })
-    }
+    return sendProxyNotice(TRANSFER_REFUSED_NOTICE, { reason: 'transfer_refused' })
   }
 
   // Shared teardown for a session that cannot continue: a backend fault, a
@@ -733,7 +792,14 @@ export function createMonoplayer ({
       port: valid ? port : null,
       depth: transferChain.depth
     })
-    if (isAttached() && !transferNoticeSent) sendTransferNotice()
+    // Only a client in play can display a notice: a configuring client would
+    // parse a play frame as configuration, and writing one would hand it a
+    // frame it cannot read. A refusal in that window is dropped rather than
+    // queued, because the queue belongs to the pending-notice work in #22.
+    if (canRelayPlay() && !transferNoticeSent) sendTransferNotice()
+    else if (isAttached() && !transferNoticeSent) {
+      log('transferNoticeSkipped', { reason: 'client_not_in_play' })
+    }
   }
 
   // A backend transfer. The frame never crosses to the front; the decision is
@@ -1359,6 +1425,7 @@ export function createMonoplayer ({
     attachPlayer,
     detachPlayer,
     abortTransfer,
+    notice: sendProxyNotice,
     // lifecycle:
     start,
     stop,
