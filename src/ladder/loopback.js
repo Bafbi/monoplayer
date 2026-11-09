@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O31 (including O11b) are the contract
+// Assertions R0 and O1-O31 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -55,6 +55,19 @@ function waitFor (pred, label, ms = 10_000) {
     }
     tick()
   })
+}
+
+// The client's advancement state after a run of advancements frames, applied
+// the way the vanilla client applies them: reset clears, identifiers remove,
+// the mapping adds. A frame that leaves nothing behind is a clean notice.
+function applyAdvancements (frames) {
+  const held = new Map()
+  for (const frame of frames) {
+    if (frame.reset) held.clear()
+    for (const id of frame.identifiers ?? []) held.delete(id)
+    for (const entry of frame.advancementMapping ?? []) held.set(entry.key, entry)
+  }
+  return held
 }
 
 function detail (value) {
@@ -917,6 +930,38 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         }))
       }
     )
+    // --- O24b: a proxy notice reaches the client as a toast (#15) ---
+    // A refusal is the notice path #15 builds: one synthetic advancement with a
+    // visible toast, then the removal that leaves the client's advancement
+    // state as the server left it. The bot decodes both frames off the real
+    // front leg, so this asserts what a client received.
+    const noticesBefore = core.metrics.noticesSent
+    fake2.sendTransfer('', 0)
+    await waitFor(() => b4.advancements.length === 2, 'the notice toast and its removal')
+    const held = applyAdvancements(b4.advancements)
+    const [toast, removal] = b4.advancements
+    const noticeKey = toast?.advancementMapping?.[0]?.key ?? null
+    check(
+      'O24b',
+      'a proxy notice reaches the client as a toast and leaves no advancement behind',
+      core.metrics.noticesSent === noticesBefore + 1 &&
+        /^monoplayer:notice\//.test(String(noticeKey)) &&
+        toast?.advancementMapping?.[0]?.value?.displayData?.flags?.show_toast === 1 &&
+        removal?.reset === false &&
+        Array.isArray(removal?.identifiers) &&
+        removal.identifiers.includes(noticeKey) &&
+        held.size === 0 &&
+        b4.errors.length === 0,
+      {
+        notice: noticeKey,
+        frames: b4.advancements.length,
+        showToast: toast?.advancementMapping?.[0]?.value?.displayData?.flags?.show_toast ?? null,
+        removed: removal?.identifiers ?? null,
+        held: [...held.keys()],
+        errors: b4.errors.length
+      }
+    )
+
     // --- O25-O26: the server's view of the puppet's client identity (#17/#18) ---
     const brandFrames = backend =>
       backend.received.customPayloads.filter(entry => entry.channel === 'minecraft:brand')
