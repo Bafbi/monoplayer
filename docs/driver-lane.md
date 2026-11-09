@@ -111,6 +111,10 @@ checklist the command generates. When every step is honestly recorded, save the
 completed checklist as `testdata/driver-unmodded-witness.json` with
 `completed: true`.
 
+Capture the steps with `tools/nath.sh shot <path> gate-b-player`. Without a
+driver, that path moves the view to the client's workspace for the capture and
+back, after a notification that warns `NATH_SHOT_NOTICE` seconds ahead.
+
 ## The G0 verdict
 
 ```bash
