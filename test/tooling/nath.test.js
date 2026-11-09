@@ -1,4 +1,4 @@
-// tools/nath.sh drives the Gate B display host from the workspace. Every call
+// tools/nath.sh drives the driver display host from the workspace. Every call
 // reaches the host through exactly two transports: ssh and, for the driver ops,
 // scp. These tests replace both with shims, so nothing here opens a socket,
 // reaches a compositor, or needs the host. The shims record the argv and stdin of
@@ -12,9 +12,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'nath.sh')
+const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools', 'nath.sh')
 const SIGNATURE = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef_1700000000_1000000000'
-const SCREENSHOT_PATH = '/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/gate-b-1.png'
+const SCREENSHOT_PATH = '/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/driver-1.png'
 
 const RECORD_SSH = `#!/usr/bin/env bash
 {
