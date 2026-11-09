@@ -2,7 +2,13 @@
 # Run the online rung against a cluster backend, from a throwaway pod.
 #
 #   scripts/online-cluster.sh [--backend-host H] [--backend-port P]
-#                             [--report PATH] [--rotate] [--keep-pod]
+#                             [--rung FILE] [--report PATH] [--rotate] [--keep-pod]
+#
+# `--rung` runs another ladder module in the same pod instead of the online
+# rung, which is how the observer report gets its direct baseline join
+# (scripts/observer-report.sh). The custody handling, the token expiry refusal,
+# and the pod lifecycle are identical; only the module differs. A rung other
+# than online.js writes no report, so the report copy-back is skipped.
 #
 # Why a pod: the puppet's live refresh token belongs to the copy the deployment
 # holds (docs/custody.md#sessions-copies-and-refreshes). A laptop copy is stale,
@@ -42,6 +48,7 @@ BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper.monoplayer-gate-b.svc.cluster.loca
 BACKEND_PORT=${MONOPLAYER_BACKEND_PORT:-25565}
 SECRETS=${MONOPLAYER_SECRETS_SOURCE:-.secrets}
 ATTACH_ALIAS=${MONOPLAYER_ATTACH_ACCOUNT:-bafbi}
+RUNG=${MONOPLAYER_RUNG:-src/ladder/online.js}
 ROTATE=0
 KEEP_POD=0
 REPORT=
@@ -53,6 +60,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --backend-host) BACKEND_HOST=${2:?--backend-host needs a value}; shift 2 ;;
     --backend-port) BACKEND_PORT=${2:?--backend-port needs a value}; shift 2 ;;
+    --rung) RUNG=${2:?--rung needs a value}; shift 2 ;;
     --report) REPORT=${2:?--report needs a value}; shift 2 ;;
     --rotate) ROTATE=1; shift ;;
     --keep-pod) KEEP_POD=1; shift ;;
@@ -62,6 +70,14 @@ while [ $# -gt 0 ]; do
 done
 
 command -v kubectl >/dev/null || die 'kubectl is not on PATH'
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+[ -f "$ROOT/$RUNG" ] || die "no such rung: $RUNG"
+# Only the online rung writes a report; another module's exit status is its
+# whole result.
+rung_args=
+if [ "$RUNG" = src/ladder/online.js ]; then
+  rung_args='--report /work/online-report.json'
+fi
 [ -d "$SECRETS/accounts" ] || die "no accounts in $SECRETS/accounts; run mise run secrets:link first"
 
 # The attach account, by alias, from the working copy.
@@ -200,16 +216,18 @@ if [ "$expired" = expired ] && [ "$ROTATE" != 1 ]; then
   die 'the puppet access token has expired. A refresh here would invalidate the live proxy chain; re-run with --rotate to accept that, or wait for the deployment to refresh first.' 2
 fi
 
-say "running the online rung: backend $BACKEND_HOST:$BACKEND_PORT"
+say "running $RUNG: backend $BACKEND_HOST:$BACKEND_PORT"
 set +e
 kubectl -n "$NAMESPACE" exec "$pod" -- env \
   MONOPLAYER_BACKEND_HOST="$BACKEND_HOST" MONOPLAYER_BACKEND_PORT="$BACKEND_PORT" \
-  sh -c 'cd /work && node src/ladder/online.js --report /work/online-report.json'
+  sh -c "cd /work && node $RUNG $rung_args"
 run_status=$?
 set -e
 
-kubectl cp "$NAMESPACE/$pod:/work/online-report.json" "$REPORT" >/dev/null 2>&1 \
-  && say "report written to $REPORT"
+if [ -n "$rung_args" ]; then
+  kubectl cp "$NAMESPACE/$pod:/work/online-report.json" "$REPORT" >/dev/null 2>&1 \
+    && say "report written to $REPORT"
+fi
 
 # The attach account was copied in, so copy its rotation back: still one copy.
 rotated_attach=$(mktemp -d)

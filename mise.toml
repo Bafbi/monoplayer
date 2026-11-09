@@ -108,6 +108,11 @@ run = "gradle -p tools/observer --no-daemon build"
 description = "Build the pinned ProtocolLib jar the observer plugin links against (no release supports 26.x)."
 run = "scripts/build-protocollib.sh"
 
+[tasks."observer:run"]
+description = "Run the server-view report: the direct baseline join and the puppet join on the gate Paper, compared (#12)."
+depends = ["install", "observer:build"]
+run = "scripts/observer-report.sh"
+
 [tasks."testbed:up"]
 description = "Take the live proxy offline, start the two-Paper transfer testbed, and compare registries."
 depends = ["install"]
