@@ -14,6 +14,7 @@ import mc from 'minecraft-protocol'
 import prismarineChunk from 'prismarine-chunk'
 import minecraftData from 'minecraft-data'
 import nbt from 'prismarine-nbt'
+import { decodeBrand } from '../core/client-settings.js'
 
 const VERSION = '26.1'
 
@@ -40,7 +41,10 @@ export function itemStack (itemId, itemCount = 1) {
   }
 }
 
-export async function createFakeBackend ({ port = 0, logStream = process.stdout } = {}) {
+// `viewDistance` overrides the cap the fake backend advertises in its play
+// login. The loopback picks a value the protocol library never sends by
+// default, so a puppet that kept the library's own value fails the check.
+export async function createFakeBackend ({ port = 0, logStream = process.stdout, viewDistance = null } = {}) {
   const mcData = minecraftData(VERSION)
   const Chunk = prismarineChunk(VERSION)
   const grassState = mcData.blocksByName.grass_block.defaultState
@@ -60,7 +64,10 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     chunkBatchAcks: [],
     cookieResponses: [],
     resourcePackResponses: [],
-    pongs: []
+    pongs: [],
+    // #17/#18: what the server knows about the client's own identity.
+    customPayloads: [], // { channel, data, brand }
+    settings: [] // Client Information frames, in arrival order
   }
 
   const log = (event, fields = {}) => {
@@ -75,7 +82,13 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
   })
 
   let teleportSeq = 0
-  const join = { position: { x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 }, blockChange: null }
+  const join = {
+    position: { x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 },
+    blockChange: null,
+    // The view distance this server advertises in its play login, i.e. the cap
+    // the puppet must request (#18).
+    viewDistance: Number.isInteger(viewDistance) ? viewDistance : mcData.loginPacket.viewDistance
+  }
 
   function makeFlatChunk () {
     const chunk = new Chunk({ minY: -64, worldHeight: 384 })
@@ -96,6 +109,29 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     return chunk
   }
 
+  // Configuration-phase frames arrive before playerJoin, so the listeners are
+  // attached as soon as the server accepts the login.
+  server.on('login', client => {
+    client.on('custom_payload', packet => {
+      const brand = packet.channel === 'minecraft:brand' ? decodeBrand(packet.data) : null
+      received.customPayloads.push({ channel: packet.channel, data: packet.data, brand })
+      log('receivedCustomPayload', { channel: packet.channel, brand })
+    })
+    client.on('settings', packet => {
+      // The state matters: the puppet's own client sends its library defaults
+      // in configuration, before any play login advertises the cap, and the
+      // proxy re-sends the packet in play with the cap (#18).
+      received.settings.push({ ...packet, state: client.state })
+      log('receivedSettings', {
+        state: client.state,
+        locale: packet.locale,
+        viewDistance: packet.viewDistance,
+        skinParts: packet.skinParts,
+        mainHand: packet.mainHand
+      })
+    })
+  })
+
   server.on('playerJoin', client => {
     received.logins++
     log('playerJoin', { address: client.socket.remoteAddress })
@@ -103,7 +139,7 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout 
     const chunk = makeFlatChunk()
     const light = chunk.dumpLight()
 
-    client.write('login', { ...mcData.loginPacket, entityId: 42 })
+    client.write('login', { ...mcData.loginPacket, entityId: 42, viewDistance: join.viewDistance })
     client.write('game_state_change', { reason: 'level_chunks_load_start', gameMode: 0 })
     client.write('position', { teleportId: ++teleportSeq, ...join.position, dx: 0, dy: 0, dz: 0, flags: 0 })
     client.write('chunk_batch_start', {})

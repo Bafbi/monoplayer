@@ -14,6 +14,12 @@ It covers the protocol approach, session lifecycle, auth and security, the
 The research, council, and audit trail lives under `.scratch/`, local only and
 never in git.
 
+## Transparency
+
+What the server sees of the puppet's client identity — the Fabric Loader
+brand, the human's client information, the view distance the puppet requests,
+and the remaining tells — is in [docs/transparency.md](docs/transparency.md).
+
 ## The protocol spike
 
 The frozen protocol spike is in `src/spike/` and `test/spike/`. It proves the
