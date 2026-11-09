@@ -26,7 +26,7 @@ are listed in [The G1 live sequence](#the-g1-live-sequence).
 | `src/custody/cli.js` | `accounts` / `device-code` / `status [--refresh]` / `migrate [--apply]` / `whitelist attach|backend add|remove`. |
 | `src/custody/fixture.js` | Minimal `mc.createServer` fixture embedding the check (optional; not run in tests, no live login). |
 
-Unit tests: `node --test test/auth-*.test.js` (no network, no real account):
+Unit tests: `node --test 'test/custody/*.test.js'` (no network, no real account):
 cache atomicity + modes, legacy file adoption, stale/contended writer lock,
 account listing/resolution, staging finalize, migration plan/apply, the
 identity-mismatch guard, silent-refresh guard, hasJoined

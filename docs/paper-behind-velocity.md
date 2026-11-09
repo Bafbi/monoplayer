@@ -295,4 +295,4 @@ kubectl -n monoplayer-gate-b delete secret gate-b-velocity
 
 Both files group their objects with `---` and carry a namespace, so
 `kubectl delete -f` removes configmap + deployment + services per file and
-leaves the G0 backend (`deploy/paper.yaml`) untouched.
+leaves the G0 backend (`deploy/driver/paper.yaml`) untouched.
