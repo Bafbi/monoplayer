@@ -65,7 +65,7 @@ Next rung: mise run loopback (rung 2, loopback) — about 3 seconds
 ```
 
 `src/ladder/next-rung.js` reads those sentences from the rungs table above, so
-editing the table edits the failure output. `test/mise-tasks.test.js` fails when
+editing the table edits the failure output. `test/tooling/mise-tasks.test.js` fails when
 a rung task stops printing the hint.
 
 A rung that exits 2 (its setup failed before the run) or that is interrupted

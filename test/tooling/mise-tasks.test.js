@@ -32,6 +32,15 @@ test('the unit rung runs every test directory except the spike', () => {
     assert.ok(listed.includes(dir), `the unit rung runs test/${dir}/`)
   }
   assert.ok(!listed.includes('spike'), 'the unit rung keeps the socket spike out')
+
+  // package.json runs the same list for anyone who types npm test. A second
+  // copy can drift, so the gate reads both.
+  const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
+  assert.deepEqual(
+    [...pkg.scripts.test.matchAll(/test\/(\{([^}]+)\})/g)].map(m => m[2]),
+    [brace[1].trim()],
+    'npm test runs the same brace list as mise run test'
+  )
 })
 
 test('check runs the three cheap rungs and nothing else', () => {

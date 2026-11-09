@@ -3,7 +3,7 @@
 // All side effects arrive through injected adapters, so the orchestration
 // logic is testable without a network:
 //
-//   driver          -> NDJSON client for 127.0.0.1:25599 (src/driver/driver.js)
+//   driver          -> NDJSON client for 127.0.0.1:25599 (src/driver/client-driver.js)
 //   rcon            -> kubectl exec rcon-cli adapter (src/driver/rcon.js)
 //   relaunch        -> async fn: starts a FRESH Prism client on the display
 //                      host via `ssh` + prismlauncher; the caller is expected

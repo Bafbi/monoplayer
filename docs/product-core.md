@@ -2,8 +2,7 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see `testdata/b1-verdict.json`).
-159/159 targeted tests pass (`node --test test/monoplayer-*.test.js`), the
-socket-free unit suite runs 350 tests, and `mise run check` also runs the
+The socket-free unit suite runs 402 tests (`mise run test`), and `mise run check` also runs the
 26-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
@@ -236,8 +235,8 @@ frontLeg = {                      // one attaching client (Bafbi)
 }
 ```
 
-The front leg calls, in order: `core.processLoginStart` (gate 1),
-`core.processVerifySession` (gate 2, only with a real verifier),
+The front leg calls, in order: `core.processLoginStart` (the whitelist review),
+`core.processVerifySession` (session verification, only with a real verifier),
 then after sending the forged puppet Login Success: `core.attachPlayer({ name, uuid })`
 (forged profile comes from `config.puppet`; profile capture is leg work).
 
@@ -252,7 +251,7 @@ Acceptance codes per the delivery-gate-owner council memo
 
 | AC | Real sequence (M2 direct Paper) | B1 proof standing in |
 |---|---|---|
-| AC1 join & render ≤10 s/120 s | official client joins front leg, renders | fake integration: attach replay order is exactly `registry_data… → login → game_state_change → position(synth) → chunk_batch_start → map_chunk → chunk_batch_finished` (`test/monoplayer-integration.test.js` AC1-shape) |
+| AC1 join & render ≤10 s/120 s | official client joins front leg, renders | fake integration: attach replay order is exactly `registry_data… → login → game_state_change → position(synth) → chunk_batch_start → map_chunk → chunk_batch_finished` (`test/service/monoplayer.test.js` AC1-shape) |
 | AC2 movement delta client==server | driver/xxbot moves, RCON `data get entity` | serverbound `position` forwarded once, pose updated, no duplicate stream (relay + integration) |
 | AC3 break+place, exactly one action | driver breaks/places, RCON `execute if block` | serverbound dig/place forward (drop rules are the only gate); backend mutation frames cached while detached and replayed on reattach |
 | AC4 5-minute detach, `backendLogins` unchanged | detach ≥300 s, backend keep-alives answered | session `detached` state + `backendLogins===1` across the cycle; per-leg keep-alive answering is in the frame router (fake legs assert it) |
@@ -302,7 +301,7 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   stale mobs, promote to per-entityId latest with a ring of entityIds.
 - Chunk unload during the join prefix is replayed as captured (no-op then
   reload); an unload of a post-warm chunk removes the cached chunk.
-- `identity.js` gate 2 passes through when no verifier is injected — safe for
+- `identity.js` session verification passes through when no verifier is injected — safe for
   B1 fakes but the live front leg MUST inject a real verifier (online-mode
   front leg) or B4 cannot pass.
 - Session "one reconnect" is per fault episode; B3's F1–F6 fidelity (e.g. F6

@@ -21,7 +21,7 @@
 //
 // Anything not listed is `block` with `unknown: true`, so a protocol bump that
 // introduces a frame fails closed and is logged instead of silently reaching
-// the front. test/monoplayer-clientbound-policy.test.js walks the vendored
+// the front. test/core/clientbound-policy.test.js walks the vendored
 // 26.2 protocol and fails when a name is not classified here.
 
 export const DECISION = Object.freeze({

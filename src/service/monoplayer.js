@@ -19,7 +19,7 @@
 //   }
 //
 //   frontLeg = {                                  // one attaching client
-//     setLoginStartHandler(({ uuid, name }): decision[])   // -> gate 1
+//     setLoginStartHandler(({ uuid, name }): decision[])   // -> whitelist review
 //     setServerboundHandler(({ state, name, buffer, data }): void)
 //     setDetachHandler(({ reason }): void)
 //     write(name, packet, { synth })              // clientbound, packet level
@@ -272,7 +272,7 @@ export function createMonoplayer ({
 
   // --- front-leg login pipeline (pure decisions; adapter owns kick/close IO) ---
 
-  // Gate 1: Login Start whitelist review. Denied here, i.e. strictly before
+  // Whitelist review: Login Start. Denied here, i.e. strictly before
   // Login Success can ever be sent for that connection. The backend readiness
   // gate sits here too: a client that logs in while the puppet has no backend
   // session would be handed an incomplete configuration and crash in registry
@@ -306,7 +306,7 @@ export function createMonoplayer ({
     return decision
   }
 
-  // Gate 2 (only when a verifier was injected): online-mode hasJoined check.
+  // Session verification (only when a verifier was injected): hasJoined.
   async function processVerifySession (payload = {}) {
     const decision = await identity.verifySession(payload)
     if (!decision.allowed) {

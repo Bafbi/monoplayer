@@ -216,9 +216,9 @@ runbook only guarantees the instruments are live and shape-correct.
 
 ```bash
 node --check src/driver/backends.js src/driver/toxiproxy.js src/driver/logins.js
-node --test test/gate-b-m4-backends.test.js \
-           test/gate-b-m4-toxiproxy.test.js \
-           test/gate-b-m4-logins.test.js   # 27 tests, pure
+node --test test/driver/backends.test.js \
+           test/driver/toxiproxy.test.js \
+           test/driver/logins.test.js   # 27 tests, pure
 ```
 
 ## What waits for Monoplayer

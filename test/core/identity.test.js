@@ -26,7 +26,7 @@ test('non-whitelisted Login Start is denied at phase login_start (deny before Lo
   assert.equal(decision.phase, 'login_start')
 })
 
-test('malformed/absent UUID cannot sneak past gate 1, denied with a distinct reason + surfaced identity', () => {
+test('malformed/absent UUID cannot sneak past the whitelist review, denied with a distinct reason + surfaced identity', () => {
   const noUuid = identity.reviewLoginStart({ name: 'NoUuid' })
   assert.equal(noUuid.allowed, false)
   assert.equal(noUuid.reason, DENY_REASONS.MALFORMED_UUID)
@@ -74,7 +74,7 @@ test('injected verifier: offline (null profile) or thrown lookup denies, no cras
   assert.equal((await broken.verifySession({ uuid: PLAYER, name: 'Bafbi' })).allowed, false)
 })
 
-test('no verifier injected: gate 2 explicitly passes through (offline/dev mode, documented)', async () => {
+test('no verifier injected: session verification explicitly passes through (offline/dev mode, documented)', async () => {
   const decision = await identity.verifySession({ uuid: PLAYER, name: 'Bafbi' })
   assert.equal(decision.allowed, true)
   assert.equal(decision.reason, ALLOW_REASONS.NO_VERIFIER)

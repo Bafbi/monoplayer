@@ -30,7 +30,7 @@
     "fps": 120,
     "loadedChunks": 117,
     "renderedSections": 38,
-    "screenshot": "testdata/gate-b-b1-join.png"
+    "screenshot": "testdata/b1-join.png"
   },
   "interaction": {
     "move": "z 8.5 -> 12.77 (driver move 1500 ms), then -> 14.97",

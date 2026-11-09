@@ -37,7 +37,7 @@ ssh -N -L 25599:127.0.0.1:25599 bafbi@nath.tail41e568.ts.net
 node src/driver/run.js --tunnel
 ```
 
-Unit tests never touch SSH or the network (`node --test test/gate-b-checks.test.js`
+Unit tests never touch SSH or the network (`node --test test/driver/checks.test.js`
 is pure).
 
 ## Running the scenario

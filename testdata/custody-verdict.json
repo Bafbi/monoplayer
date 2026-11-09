@@ -35,7 +35,7 @@
       "username": "Bafbi",
       "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
       "stage": "login",
-      "evidence": "testdata/gate-b-g1-allow.log"
+      "evidence": "testdata/custody-allow.log"
     },
     "deny": {
       "event": "attachDenied",
@@ -43,8 +43,8 @@
       "stage": "login",
       "clientMessage": "Failed to connect to the server — attach denied (not_whitelisted)",
       "evidence": [
-        "testdata/gate-b-g1-deny.log",
-        "testdata/gate-b-g1-deny-screen.png"
+        "testdata/custody-deny.log",
+        "testdata/custody-deny-screen.png"
       ]
     }
   },

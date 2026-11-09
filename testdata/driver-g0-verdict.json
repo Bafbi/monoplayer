@@ -9,19 +9,19 @@
     "runsExecuted": 2,
     "runsPassed": 2,
     "assertionsPerRun": 38,
-    "summary": "testdata/gate-b-driver-summary.json",
+    "summary": "testdata/driver-summary.json",
     "reports": [
-      "testdata/gate-b-driver-run1-2026-11-06T14-20-59-578Z.json",
-      "testdata/gate-b-driver-run2-2026-11-06T14-20-59-578Z.json"
+      "testdata/driver-run1-2026-11-06T14-20-59-578Z.json",
+      "testdata/driver-run2-2026-11-06T14-20-59-578Z.json"
     ],
     "screenshots": [
-      "testdata/gate-b-screenshot-mw52bqrgu38etw-gate-b-1793974882660.png",
-      "testdata/gate-b-screenshot-mw52co9wuw3sck-gate-b-1793974926080.png"
+      "testdata/screenshot-mw52bqrgu38etw-1793974882660.png",
+      "testdata/screenshot-mw52co9wuw3sck-1793974926080.png"
     ]
   },
   "unmoddedWitness": {
-    "report": "testdata/gate-b-unmodded-witness.json",
-    "screenshot": "testdata/gate-b-witness-2026-11-06.png",
+    "report": "testdata/driver-unmodded-witness.json",
+    "screenshot": "testdata/witness-2026-11-06.png",
     "client": "Prism 11.0.3, Minecraft 26.1.2, gate-b-player (no mods)",
     "account": "Bafbi",
     "completed": true

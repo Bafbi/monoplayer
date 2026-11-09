@@ -22,7 +22,7 @@
       "GlowSquidye joined the game",
       "GlowSquidye[/10.244.0.11:43988] logged in with entity id 23 at ([minecraft:overworld]0.5, -60.0, -2.5)"
     ],
-    "evidence": "testdata/gate-b-m4-puppet-smoke.log"
+    "evidence": "testdata/m4-puppet-smoke.log"
   },
   "checks": {
     "modernForwardingActive": true,
