@@ -6,8 +6,13 @@
 #
 # Environment:
 #   PRISM_ROOT  Prism data root (default: ~/.local/share/PrismLauncher)
-#   BASE        Base 26.1.2 instance (default: gate-b-player)
+#   BASE        Base instance to clone (default: gate-b-player)
 #   INSTANCE    New Fabric instance ID (default: gate-b-player-fabric)
+#   LOADER      Fabric Loader version (default: 0.20.1)
+#
+# The Minecraft version is not a value here. It comes from the base instance's
+# mmc-pack.json, so the driver instance cannot drift from the client the
+# operator already has, and the pin lives in one place: tools/driver/build.gradle.
 set -euo pipefail
 
 jar=${1:-}
@@ -19,11 +24,16 @@ fi
 prism_root=${PRISM_ROOT:-"$HOME/.local/share/PrismLauncher"}
 base=${BASE:-gate-b-player}
 instance=${INSTANCE:-gate-b-player-fabric}
+loader=${LOADER:-0.20.1}
 base_dir="$prism_root/instances/$base"
 instance_dir="$prism_root/instances/$instance"
 
 if [ ! -d "$base_dir" ]; then
   echo "base instance not found: $base_dir" >&2
+  exit 1
+fi
+if [ ! -f "$base_dir/mmc-pack.json" ]; then
+  echo "base instance has no mmc-pack.json: $base_dir" >&2
   exit 1
 fi
 
@@ -37,49 +47,44 @@ cp -a "$base_dir" "$instance_dir"
 mkdir -p "$instance_dir/minecraft/mods"
 cp "$jar" "$instance_dir/minecraft/mods/monoplayer-driver.jar"
 
-cat > "$instance_dir/mmc-pack.json" <<'JSON'
-{
-  "components": [
-    {
-      "cachedName": "LWJGL 3",
-      "cachedVersion": "3.4.1",
-      "dependencyOnly": true,
-      "uid": "org.lwjgl3",
-      "version": "3.4.1"
-    },
-    {
-      "cachedName": "Minecraft",
-      "cachedRequires": [
-        { "suggests": "3.4.1", "uid": "org.lwjgl3" }
-      ],
-      "cachedVersion": "26.1.2",
-      "important": true,
-      "uid": "net.minecraft",
-      "version": "26.1.2"
-    },
-    {
-      "cachedName": "Intermediary Mappings",
-      "cachedRequires": [
-        { "equals": "26.1.2", "uid": "net.minecraft" }
-      ],
-      "cachedVersion": "26.1.2",
-      "dependencyOnly": true,
-      "uid": "net.fabricmc.intermediary",
-      "version": "26.1.2"
-    },
-    {
-      "cachedName": "Fabric Loader",
-      "cachedRequires": [
-        { "uid": "net.fabricmc.intermediary" }
-      ],
-      "cachedVersion": "0.20.1",
-      "uid": "net.fabricmc.fabric-loader",
-      "version": "0.20.1"
-    }
-  ],
-  "formatVersion": 1
-}
-JSON
+# Take the Minecraft version from the base instance, then add the two Fabric
+# components pinned to it. Prism resolves the rest from its meta API.
+mc_version=$(python3 - "$base_dir/mmc-pack.json" "$instance_dir/mmc-pack.json" "$loader" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+base_pack = json.loads(Path(sys.argv[1]).read_text())
+out_path = Path(sys.argv[2])
+loader_version = sys.argv[3]
+
+components = [c for c in base_pack.get("components", [])
+              if c.get("uid") in ("org.lwjgl3", "net.minecraft")]
+minecraft = next((c for c in components if c.get("uid") == "net.minecraft"), None)
+if minecraft is None:
+    raise SystemExit("base mmc-pack.json has no net.minecraft component")
+version = minecraft["version"]
+
+components.append({
+    "cachedName": "Intermediary Mappings",
+    "cachedRequires": [{"equals": version, "uid": "net.minecraft"}],
+    "cachedVersion": version,
+    "dependencyOnly": True,
+    "uid": "net.fabricmc.intermediary",
+    "version": version,
+})
+components.append({
+    "cachedName": "Fabric Loader",
+    "cachedRequires": [{"uid": "net.fabricmc.intermediary"}],
+    "cachedVersion": loader_version,
+    "uid": "net.fabricmc.fabric-loader",
+    "version": loader_version,
+})
+
+out_path.write_text(json.dumps({"components": components, "formatVersion": 1}, indent=4) + "\n")
+print(version)
+PY
+)
 
 python3 - "$instance_dir/instance.cfg" "$instance" <<'PY'
 from pathlib import Path
@@ -104,7 +109,7 @@ s = set_key(s, 'ShowConsoleOnError', 'false')
 p.write_text(s)
 PY
 
-echo "installed $instance"
+echo "installed $instance (Minecraft $mc_version, Fabric Loader $loader)"
 echo "launch, from the workspace:"
 echo "  tools/nath.sh launch $instance \\"
 echo "    -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi"

@@ -96,6 +96,12 @@ description = "Driver-lane G0 verdict: run the two-run scenario, then verify bot
 depends = ["check", "driver:build", "driver:scenario"]
 run = "node src/driver/run.js --verify-g0 || node src/ladder/next-rung.js driver:g0 $?"
 
+[tasks."driver:parity"]
+description = "Client parity on the real client: join a backend directly, then through the proxy, and compare the client state (#62). Needs the driver tunnel and both endpoints."
+depends = ["install"]
+wait_for = ["check", "driver:build"]
+run = "node src/driver/run.js --lane parity --tunnel || node src/ladder/next-rung.js driver:parity $?"
+
 [tasks."driver:install"]
 description = "Install the built driver into the display host's Prism root (run on the host)."
 run = "tools/driver/install.sh tools/driver/build/libs/monoplayer-driver-0.1.0.jar"
