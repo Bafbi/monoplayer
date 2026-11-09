@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "eu.monoplayer.driver.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MinecraftTitleMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

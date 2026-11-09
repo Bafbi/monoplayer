@@ -1,0 +1,164 @@
+# Toxiproxy 2.13.0 — fault injection on the puppet leg.
+#
+#   Monoplayer back leg (later) -> Toxiproxy -> Velocity -> Paper-m4
+#   Monoplayer back leg (later) -> Toxiproxy -> Vanilla / Fabric direct
+#
+# A fault on the client leg tests the client's tolerance; a fault on the
+# puppet leg tests Monoplayer's session ownership. This is the latter. Only
+# the M4 listener (puppet-velocity) is enabled at bring-up; the vanilla and
+# fabric listeners flip enabled=true via the HTTP API when their rows and
+# backends exist (docs/paper-behind-velocity.md). F1/F4/F5 are not network toxics: detach
+# is client-side, backend death is a restart, kick is an RCON command.
+#
+# The HTTP API is ClusterIP-only — never expose it with the listeners; anyone
+# on the API can take the gate down.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gate-b-toxiproxy-proxies
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/part-of: monoplayer
+data:
+  proxies.json: |
+    [
+      {
+        "name": "puppet-velocity",
+        "listen": "[::]:25570",
+        "upstream": "velocity:25566",
+        "enabled": true
+      },
+      {
+        "name": "puppet-paper-m4",
+        "listen": "[::]:25573",
+        "upstream": "paper-m4:25565",
+        "enabled": false
+      },
+      {
+        "name": "puppet-vanilla",
+        "listen": "[::]:25571",
+        "upstream": "vanilla:25565",
+        "enabled": false
+      },
+      {
+        "name": "puppet-fabric",
+        "listen": "[::]:25572",
+        "upstream": "fabric:25565",
+        "enabled": false
+      }
+    ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toxiproxy
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      containers:
+        - name: toxiproxy
+          image: ghcr.io/shopify/toxiproxy:2.13.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --host=0.0.0.0
+            - --port=8474
+            - --config=/etc/toxiproxy/proxies.json
+          ports:
+            - name: api
+              containerPort: 8474
+            - name: px-velocity
+              containerPort: 25570
+            - name: px-vanilla
+              containerPort: 25571
+            - name: px-fabric
+              containerPort: 25572
+            - name: px-paper-m4
+              containerPort: 25573
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            tcpSocket:
+              port: api
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            tcpSocket:
+              port: api
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: proxies
+              mountPath: /etc/toxiproxy
+              readOnly: true
+      volumes:
+        - name: proxies
+          configMap:
+            name: gate-b-toxiproxy-proxies
+            items:
+              - key: proxies.json
+                path: proxies.json
+---
+# Listener service: the back leg of the gate dials these ports. ClusterIP only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxiproxy
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+  ports:
+    - name: px-velocity
+      port: 25570
+      targetPort: px-velocity
+    - name: px-vanilla
+      port: 25571
+      targetPort: px-vanilla
+    - name: px-fabric
+      port: 25572
+      targetPort: px-fabric
+    - name: px-paper-m4
+      port: 25573
+      targetPort: px-paper-m4
+---
+# HTTP API only (proxies/toxics/reset). ClusterIP only on purpose.
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxiproxy-api
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+  ports:
+    - name: api
+      port: 8474
+      targetPort: api

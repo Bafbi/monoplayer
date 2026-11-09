@@ -1,0 +1,38 @@
+{
+  "gate": "B",
+  "row": "M4 real-client driver through Velocity + Paper",
+  "verifiedAt": "2026-11-07T19:48:00.000Z",
+  "result": "PASS (join, render, move, break, place)",
+  "topology": {
+    "front": "Monoplayer 127.0.0.1:25565, online-mode, hasJoined, account pinned glowsquidye",
+    "backend": "Velocity 4.3.1 b45 -> paper-m4, Paper 26.1.2 b74, modern forwarding",
+    "puppet": "GlowSquidye 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed, alias glowsquidye",
+    "attach": "Bafbi 6eb73524-ff88-4a62-a8d0-c63905e7afba, official 26.1.2 + gate-b-driver"
+  },
+  "evidence": {
+    "attachReplayedFrames": 1374,
+    "configReplay": "cached_replay, 32 frames, 28 registry_data suppressed",
+    "loadedChunks": 81,
+    "renderedSections": 26,
+    "fps": 44,
+    "move": {
+      "from": { "x": 0.5, "y": -60, "z": -2.5 },
+      "to": { "x": 0.5, "y": -60, "z": 1.7734 }
+    },
+    "break": { "position": "2,-60,0", "before": "minecraft:stone", "after": "minecraft:air" },
+    "place": { "support": "2,-61,0 minecraft:dirt", "target": "2,-60,0 minecraft:stone", "placed": true },
+    "backendPosition": [0.5, -60.0, 3.972016653595148],
+    "backendLogins": 1,
+    "wire": {
+      "checked": 1952,
+      "rejected": 0,
+      "byState": { "configuration": 32, "play": 1920 }
+    },
+    "screenshot": "testdata/m4-driver-join.png"
+  },
+  "limits": [
+    "The attaching client profile is Bafbi; the replayed play stream is the GlowSquidye puppet session. B4 identity separation is later.",
+    "paper-m4 does not emit chunk batch markers; the warm fallback pinned the prefix at 745 frames.",
+    "The screenshot is driver-owned (the Fabric client render target), not a compositor capture."
+  ]
+}

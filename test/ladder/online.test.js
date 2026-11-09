@@ -1,0 +1,280 @@
+// Socket-free tests for the online rung's pure pieces: the bot client-option
+// builder, account resolution, and the N1-N12 assertion contract.
+//
+// No sockets, no auth, no .secrets read. Fixture accounts live in a temp tree.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import { buildClientOptions } from '../../src/ladder/bot.js'
+import {
+  ONLINE_ASSERTION_IDS,
+  evaluateOnlineAssertions,
+  resolveOnlineAccounts,
+  summarizeAssertions
+} from '../../src/ladder/online.js'
+
+const PUPPET_UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
+const ATTACH_UUID = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
+
+function tempAccounts (t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-online-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  function write (uuid, profile) {
+    const accountDir = path.join(dir, uuid)
+    fs.mkdirSync(accountDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(accountDir, 'profile.json'),
+      JSON.stringify({ version: 1, uuid, ...profile })
+    )
+    return accountDir
+  }
+
+  return { dir, write }
+}
+
+function allPassEvidence () {
+  return {
+    accounts: {
+      puppet: { uuid: PUPPET_UUID, name: 'GlowSquidye', alias: 'glowsquidye' },
+      attach: { uuid: ATTACH_UUID, name: 'Bafbi', alias: 'bafbi' }
+    },
+    front: {
+      kind: 'live-front-leg',
+      verifier: 'online-mode_hasjoined',
+      allowed: 1,
+      denied: 0,
+      attaches: 1,
+      configReplayMode: 'cached_replay',
+      wire: { checked: 42, rejected: 0, byState: { configuration: 12, play: 30 } }
+    },
+    core: {
+      attached: true,
+      attaches: 1,
+      backendLoginsFirst: 1,
+      serverboundForwarded: 3,
+      serverboundDropped: 0,
+      sessionState: 'attached'
+    },
+    bot: {
+      ready: true,
+      uuid: ATTACH_UUID,
+      name: 'Bafbi',
+      playPrefix: [
+        'login',
+        'game_state_change',
+        'position',
+        'chunk_batch_start',
+        'map_chunk',
+        'chunk_batch_finished'
+      ],
+      joinShape: { loginIndex: 0, positionIndex: 2, chunkIndex: 4 },
+      loginStateLeaks: [],
+      playFrameCount: 30,
+      leftovers: 0,
+      errors: 0
+    },
+    serverbound: {
+      forwarded: 3,
+      backendObserved: true,
+      backendNames: ['position', 'block_dig', 'block_place']
+    },
+    reattach: { attaches: 2, backendLogins: 1 },
+    denial: { observed: false, reason: 'no stranger account' },
+    parity: {
+      ok: true,
+      settled: true,
+      capturedFrames: 30,
+      domains: {
+        inventory: { ok: true },
+        heldItemSlot: { ok: true },
+        pose: { ok: true },
+        chunks: { ok: true }
+      }
+    },
+    custody: { puppetLockReleased: true }
+  }
+}
+
+test('buildClientOptions defaults to offline and adds no auth material', () => {
+  const options = buildClientOptions({ port: 25565, username: 'Attach' })
+  assert.deepEqual(options, {
+    host: '127.0.0.1',
+    port: 25565,
+    username: 'Attach',
+    version: '26.1',
+    auth: 'offline',
+    keepAlive: true
+  })
+  assert.equal('profilesFolder' in options, false)
+  assert.equal('authTitle' in options, false)
+  assert.equal('deviceType' in options, false)
+})
+
+test('buildClientOptions passes Microsoft auth material only when set', () => {
+  const cacheFactory = () => ({})
+  const options = buildClientOptions({
+    port: 25566,
+    username: ATTACH_UUID,
+    auth: 'microsoft',
+    profilesFolder: cacheFactory,
+    authTitle: '00000000441cc96b',
+    deviceType: 'Nintendo'
+  })
+  assert.equal(options.auth, 'microsoft')
+  assert.equal(options.profilesFolder, cacheFactory)
+  assert.equal(options.authTitle, '00000000441cc96b')
+  assert.equal(options.deviceType, 'Nintendo')
+
+  const bare = buildClientOptions({
+    port: 25566,
+    username: ATTACH_UUID,
+    auth: 'microsoft',
+    profilesFolder: null,
+    authTitle: null,
+    deviceType: null
+  })
+  assert.equal('profilesFolder' in bare, false)
+  assert.equal('authTitle' in bare, false)
+  assert.equal('deviceType' in bare, false)
+})
+
+test('buildClientOptions refuses a plain cache path', () => {
+  assert.throws(
+    () => buildClientOptions({
+      port: 25566,
+      username: ATTACH_UUID,
+      auth: 'microsoft',
+      profilesFolder: '.secrets/accounts/' + ATTACH_UUID
+    }),
+    TypeError
+  )
+})
+
+test('resolveOnlineAccounts resolves the puppet and attach aliases', (t) => {
+  const fixture = tempAccounts(t)
+  fixture.write(PUPPET_UUID, { name: 'GlowSquidye', alias: 'glowsquidye', authTitle: '00000000441cc96b', deviceType: 'Nintendo' })
+  fixture.write(ATTACH_UUID, { name: 'Bafbi', alias: 'bafbi', authTitle: '00000000441cc96b', deviceType: 'Nintendo' })
+
+  const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
+  assert.equal(resolved.ok, true)
+  assert.equal(resolved.reason, null)
+  assert.equal(resolved.puppet.uuid, PUPPET_UUID)
+  assert.equal(resolved.puppet.alias, 'glowsquidye')
+  assert.equal(resolved.attach.uuid, ATTACH_UUID)
+  assert.equal(resolved.attach.alias, 'bafbi')
+})
+
+test('resolveOnlineAccounts reports a missing puppet as a setup error', (t) => {
+  const fixture = tempAccounts(t)
+  fixture.write(ATTACH_UUID, { name: 'Bafbi', alias: 'bafbi' })
+
+  const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
+  assert.equal(resolved.ok, false)
+  assert.equal(resolved.puppet, null)
+  assert.equal(resolved.attach, null)
+  assert.deepEqual(resolved.missing.map(entry => entry.role), ['puppet'])
+  assert.equal(resolved.missing[0].selector, 'glowsquidye')
+  assert.match(resolved.reason, /puppet:/)
+})
+
+test('resolveOnlineAccounts reports a missing attach account as a setup error', (t) => {
+  const fixture = tempAccounts(t)
+  fixture.write(PUPPET_UUID, { name: 'GlowSquidye', alias: 'glowsquidye' })
+
+  const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
+  assert.equal(resolved.ok, false)
+  assert.deepEqual(resolved.missing.map(entry => entry.role), ['attach'])
+  assert.equal(resolved.missing[0].selector, 'bafbi')
+  assert.match(resolved.reason, /attach:/)
+})
+
+test('resolveOnlineAccounts reports both missing accounts from an empty tree', (t) => {
+  const fixture = tempAccounts(t)
+  const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
+  assert.equal(resolved.ok, false)
+  assert.deepEqual(resolved.missing.map(entry => entry.role), ['puppet', 'attach'])
+  assert.match(resolved.reason, /puppet:no_accounts/)
+  assert.match(resolved.reason, /attach:no_accounts/)
+})
+
+test('evaluateOnlineAssertions returns every id exactly once', () => {
+  const assertions = evaluateOnlineAssertions(allPassEvidence())
+  assert.deepEqual(assertions.map(assertion => assertion.id), [...ONLINE_ASSERTION_IDS])
+  assert.equal(new Set(assertions.map(assertion => assertion.id)).size, ONLINE_ASSERTION_IDS.length)
+})
+
+test('a clean run passes N1-N10 and N12 and skips N11 honestly', () => {
+  const assertions = evaluateOnlineAssertions(allPassEvidence())
+  const byId = Object.fromEntries(assertions.map(assertion => [assertion.id, assertion]))
+
+  for (const id of ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N12', 'N13']) {
+    assert.equal(byId[id].status, 'pass', `${id}: ${JSON.stringify(byId[id].detail)}`)
+    assert.equal(byId[id].ok, true)
+  }
+  assert.equal(byId.N11.status, 'not_observed')
+  assert.equal(byId.N11.ok, null)
+
+  const summary = summarizeAssertions(assertions)
+  assert.deepEqual(
+    { pass: summary.pass, fail: summary.fail, not_observed: summary.not_observed, total: summary.total },
+    { pass: 12, fail: 0, not_observed: 1, total: 13 }
+  )
+})
+
+test('N9 passes on the core counter alone when the backend exposes no observation', () => {
+  const evidence = allPassEvidence()
+  evidence.serverbound = { forwarded: 3, backendObserved: false, backendNames: [] }
+
+  const n9 = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N9')
+  assert.equal(n9.status, 'pass')
+  assert.equal(n9.detail.backendObservation, 'not_observed')
+  assert.match(n9.detail.reason, /core counter only/)
+})
+
+test('N11 passes only when a real denial was observed', () => {
+  const evidence = allPassEvidence()
+  evidence.denial = { observed: true, denied: 1, playFrames: 0, errors: 0 }
+
+  const n11 = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N11')
+  assert.equal(n11.status, 'pass')
+
+  evidence.denial = { observed: true, denied: 1, playFrames: 2, errors: 0 }
+  const failed = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N11')
+  assert.equal(failed.status, 'fail')
+})
+
+test('a broken run fails the matching assertions', () => {
+  const evidence = allPassEvidence()
+  evidence.front.wire = { checked: 10, rejected: 1 }
+  evidence.bot.leftovers = 1
+  evidence.bot.loginStateLeaks = ['success']
+  evidence.reattach = { attaches: 2, backendLogins: 2 }
+  evidence.custody.puppetLockReleased = false
+
+  const assertions = evaluateOnlineAssertions(evidence)
+  const byId = Object.fromEntries(assertions.map(assertion => [assertion.id, assertion]))
+
+  assert.equal(byId.N5.status, 'fail')
+  assert.equal(byId.N7.status, 'fail')
+  assert.equal(byId.N8.status, 'fail')
+  assert.equal(byId.N10.status, 'fail')
+  assert.equal(byId.N12.status, 'fail')
+
+  const summary = summarizeAssertions(assertions)
+  assert.equal(summary.fail, 5)
+  assert.equal(summary.not_observed, 1)
+})
+
+test('empty evidence fails closed instead of throwing', () => {
+  const assertions = evaluateOnlineAssertions({})
+  assert.equal(assertions.length, ONLINE_ASSERTION_IDS.length)
+  assert.equal(assertions.find(assertion => assertion.id === 'N11').status, 'not_observed')
+  for (const assertion of assertions) {
+    if (assertion.id === 'N11') continue
+    assert.equal(assertion.status, 'fail', assertion.id)
+  }
+})
