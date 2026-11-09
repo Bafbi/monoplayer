@@ -116,6 +116,10 @@ run = "scripts/dev-lane.sh up"
 description = "Run a branch image on the dev lane: mise run dev:image <sha-tag> (#43)."
 run = "scripts/dev-lane.sh set-image"
 
+[tasks."dev:join"]
+description = "Join the dev Paper through a throwaway proxy pod, borrowing the live account for one supervised run."
+run = "scripts/dev-lane.sh join"
+
 [tasks."dev:down"]
 description = "Delete the dev validation lane. Never touches the live lane."
 run = "scripts/dev-lane.sh down"

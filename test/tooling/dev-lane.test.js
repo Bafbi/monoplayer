@@ -182,6 +182,23 @@ test('up with a steady live lane reports the same count twice', () => {
   assert.match(output, /live replicas before monoplayer-dev came up: 1, after: 1/)
 })
 
+test('join points a throwaway proxy at the dev Paper, never at a live backend', () => {
+  // Borrowing the live account for one supervised run is safe while the pod never
+  // refreshes (docs/custody.md, "Sessions, copies, and refresh"): sessions are not
+  // exclusive, refreshes are. The pod path is what enforces it, so the join has to
+  // go through it rather than through a standing deployment.
+  const script = fs.readFileSync(SCRIPT, 'utf8')
+  const join = script.slice(script.indexOf('join() {'))
+  const body = join.slice(0, join.indexOf('\n}'))
+  assert.match(body, /scripts\/online-cluster\.sh/, 'the join reuses the throwaway pod')
+  assert.match(body, /--backend-host "paper\.\$\{DEV_NAMESPACE\}\.svc\.cluster\.local"/, 'the backend is the dev Paper')
+  assert.doesNotMatch(body, /excalia|play2\./i, 'never the live backend')
+  assert.match(script, /^  join\) shift; join "\$@" ;;$/m, 'join is a subcommand')
+
+  const toml = fs.readFileSync(path.join(ROOT, 'mise.toml'), 'utf8')
+  assert.match(toml, /\[tasks\."dev:join"\]/, 'mise run dev:join')
+})
+
 test('set-image puts the branch image on the dev proxy only', () => {
   const space = workspace()
   const { status, output, calls } = run(space, ['set-image', 'sha-abc1234'])

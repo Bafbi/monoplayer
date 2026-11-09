@@ -7,6 +7,8 @@
 #   scripts/dev-lane.sh image TAG the image reference the dev lane should run
 #   scripts/dev-lane.sh set-image TAG
 #                                 put that image on the dev proxy (#43)
+#   scripts/dev-lane.sh join [args]  run a throwaway proxy pod against the dev
+#                                 Paper and report the join (see below)
 #
 # What this lane is for: validating a branch without taking the live front down.
 # The live lane holds one writer and one replica of the puppet custody, so a test
@@ -137,11 +139,23 @@ set_image() {
     || die "the dev proxy did not become ready on $ref" 1
 }
 
+# A short, supervised join. The throwaway pod copies the live account's custody,
+# refuses to refresh it, and dies with the pod. Nothing about it can rotate the
+# live deployment's chain.
+join() {
+  guard
+  "$ROOT/scripts/online-cluster.sh" \
+    --backend-host "paper.${DEV_NAMESPACE}.svc.cluster.local" \
+    --backend-port 25565 \
+    "$@"
+}
+
 case "${1:-}" in
   up) up ;;
   down) down ;;
   status) status ;;
   set-image) shift; set_image "$@" ;;
+  join) shift; join "$@" ;;
   image)
     [ $# -ge 2 ] && [ -n "$2" ] || die 'image needs a tag or a commit sha' 2
     printf '%s:%s\n' "$IMAGE_REPO" "$2"
