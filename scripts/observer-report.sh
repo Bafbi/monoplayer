@@ -34,6 +34,10 @@
 #   MONOPLAYER_OBSERVER_JAR          the built observer jar    (default tools/observer/build/libs)
 #   MONOPLAYER_PROTOCOLLIB_JAR       the ProtocolLib plugin    (default .cache/protocollib)
 #   MONOPLAYER_VERSION               game version both joins speak (default: the gate Paper's VERSION)
+#   MONOPLAYER_OBSERVER_START_TIMEOUT
+#                                    seconds the gate Paper may take to finish a
+#                                    restart before the joins start (default 600;
+#                                    MONOPLAYER_OBSERVER_TIMEOUT is the old name)
 #
 # Exit codes: 0 every field explained, 1 an unexplained difference or a failed
 # join, 2 setup refused or incomplete.
@@ -49,7 +53,11 @@ REPORT=${MONOPLAYER_OBSERVER_REPORT:-.reports/observer-report.json}
 VIEWS=${MONOPLAYER_OBSERVER_VIEWS:-.reports/observer-views.jsonl}
 JAR=${MONOPLAYER_OBSERVER_JAR:-}
 PROTOCOLLIB=${MONOPLAYER_PROTOCOLLIB_JAR:-}
-TIMEOUT=${MONOPLAYER_OBSERVER_TIMEOUT:-300}
+# The gate Paper's restart is a start wait, not a join wait. Measured on the
+# 26.2 gate Paper: 240 to 310 seconds from `kill 1` to the plugin's own "wire
+# listeners registered" line, so the old 300 was already too tight.
+START_TIMEOUT=${MONOPLAYER_OBSERVER_START_TIMEOUT:-${MONOPLAYER_OBSERVER_TIMEOUT:-600}}
+WAIT_INTERVAL=5
 PLUGINS_DIR=/data/plugins
 
 die() { printf 'observer-report: %s\n' "$1" >&2; exit "${2:-2}"; }
@@ -76,7 +84,7 @@ while [ $# -gt 0 ]; do
     --namespace) GATE_NAMESPACE=${2:?--namespace needs a value}; shift 2 ;;
     --paper-deployment) PAPER_DEPLOYMENT=${2:?--paper-deployment needs a value}; shift 2 ;;
     --jar) JAR=${2:?--jar needs a value}; shift 2 ;;
-    --timeout) TIMEOUT=${2:?--timeout needs a value}; shift 2 ;;
+    --timeout) START_TIMEOUT=${2:?--timeout needs a value}; shift 2 ;;
     -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" 2 ;;
   esac
@@ -120,31 +128,76 @@ paper_pod() {
   printf '%s' "$pod"
 }
 
+# The container the deployment declares, so the log read names it instead of
+# assuming the only one.
+paper_container() {
+  local container
+  container=$(kubectl -n "$GATE_NAMESPACE" get deploy "$PAPER_DEPLOYMENT" \
+    -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null)
+  [ -n "$container" ] || die "cannot read the container name of deploy/$PAPER_DEPLOYMENT in $GATE_NAMESPACE" 2
+  printf '%s' "$container"
+}
+
+# How often that container has restarted. The install asks the kubelet for a
+# restart, so a count that has not moved means the new process is not there yet,
+# whatever the previous process's log still says.
+restart_count() {
+  kubectl -n "$GATE_NAMESPACE" get pod "$1" \
+    -o jsonpath="{.status.containerStatuses[?(@.name==\"$2\")].restartCount}" 2>/dev/null
+}
+
 # Wire the observer in, then restart the server so Paper loads it. A container
 # restart keeps the pod and its volume. A new pod would lose the copied jars.
+#
+# The wait is a START wait, and it reports as one (#79). Two runs were lost to a
+# restart longer than the old bound and both read as join failures. They read
+# that way because the readiness grep matched the marker in the pod's log, and
+# the log it matched was the previous container's, which still held the line from
+# the install before it: the joins then ran against a server that was booting.
+# So the wait follows the restart count and reads only the log written since the
+# kill. A run that never gets there says the server did not start, and the joins
+# never run.
 install_observer() {
-  local pod
+  local pod container before started now current waited=0
   pod=$(paper_pod)
   [ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE" 2
+  container=$(paper_container)
   kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c "mkdir -p $PLUGINS_DIR" >/dev/null
   kubectl -n "$GATE_NAMESPACE" cp "$PROTOCOLLIB" "$pod:$PLUGINS_DIR/$(basename "$PROTOCOLLIB")" >/dev/null
   kubectl -n "$GATE_NAMESPACE" cp "$JAR" "$pod:$PLUGINS_DIR/$(basename "$JAR")" >/dev/null
   say "copied both jars into $pod:$PLUGINS_DIR"
+  # One run's log. The pod keeps /data across a container restart, so the last
+  # run's views are still in this file, and a report that read them would compare
+  # the previous run's baseline against this run's puppet.
+  kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c "rm -f $PLUGINS_DIR/MonoplayerObserver/views.jsonl" >/dev/null 2>&1 || true
+  before=$(restart_count "$pod" "$container")
+  before=${before:-0}
   # Restart the server process in place. Killing PID 1 is what the kubelet acts
   # on; the volume survives, the world does not, and this Paper is disposable.
+  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c 'kill 1' >/dev/null 2>&1 || true
   # The plugin logs this when its packet listeners are live, so it is the
   # readiness signal rather than a guess about boot time.
-  local waited=0
-  while [ "$waited" -lt "$TIMEOUT" ]; do
-    if kubectl -n "$GATE_NAMESPACE" logs "$pod" --tail=400 2>/dev/null | grep -q 'wire listeners registered'; then
-      say "the observer is live on $pod"
+  while [ "$waited" -lt "$START_TIMEOUT" ]; do
+    # A pod replaced mid-restart is followed by name: the old name writes no log.
+    current=$(paper_pod 2>/dev/null || true)
+    if [ -n "$current" ] && [ "$current" != "$pod" ]; then
+      say "the gate Paper pod was replaced: $pod -> $current"
+      pod=$current
+      before=0
+      started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    fi
+    now=$(restart_count "$pod" "$container")
+    if [ -n "$now" ] && [ "$now" -gt "$before" ] \
+      && kubectl -n "$GATE_NAMESPACE" logs "$pod" -c "$container" --since-time="$started" --tail=2000 2>/dev/null \
+        | grep -q 'wire listeners registered'; then
+      say "the observer is live on $pod after ${waited}s"
       return 0
     fi
-    sleep 5
-    waited=$((waited + 5))
+    sleep "$WAIT_INTERVAL"
+    waited=$((waited + WAIT_INTERVAL))
   done
-  die "the observer did not come up within ${TIMEOUT}s; kubectl -n $GATE_NAMESPACE logs $pod" 2
+  die "the gate Paper did not finish starting within ${START_TIMEOUT}s (container $container on $pod): this is a slow start, not a join failure, and the joins never ran. kubectl -n $GATE_NAMESPACE logs $pod -c $container" 2
 }
 
 install_observer
@@ -153,13 +206,13 @@ say "baseline join: the account straight to $BACKEND_HOST:$BACKEND_PORT"
 "$ROOT/scripts/online-cluster.sh" \
   --rung src/ladder/observer-baseline.js \
   --backend-host "$BACKEND_HOST" --backend-port "$BACKEND_PORT" \
-  || die 'the direct baseline join failed' 1
+  || die 'the direct baseline join failed (the gate Paper had started, so this is the join)' 1
 
 say 'puppet join: the same account through Monoplayer'
 "$ROOT/scripts/online-cluster.sh" \
   --backend-host "$BACKEND_HOST" --backend-port "$BACKEND_PORT" \
   --report "$(dirname "$REPORT")/online-from-observer.json" \
-  || die 'the puppet join failed' 1
+  || die 'the puppet join failed (the gate Paper had started, so this is the join)' 1
 
 pod=$(paper_pod)
 [ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE" 2
