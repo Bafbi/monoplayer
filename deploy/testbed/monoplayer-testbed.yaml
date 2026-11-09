@@ -105,6 +105,10 @@ spec:
             # the human to attach and answer it (#20).
             - name: MONOPLAYER_DIALOG_ACTION
               value: last
+            # The testbed is where the kept connection (#22) is measured before
+            # its default flips. Off everywhere else.
+            - name: MONOPLAYER_TRANSFER_KEEP_CONNECTION
+              value: "1"
             - name: HOME
               value: /tmp
           ports:
