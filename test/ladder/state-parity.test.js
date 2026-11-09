@@ -17,7 +17,6 @@ import {
   DOMAIN_PARITY,
   PARITY_DOMAINS,
   PARITY_FRAME_NAMES,
-  PARITY_SECTIONS,
   UNPARITY,
   attachParity,
   parityReplayNames,
@@ -421,7 +420,7 @@ test('every state-cache domain is compared or excused in UNPARITY', () => {
   )
 })
 
-test('snapshotFrames order matches join-synth.synthAttach', () => {
+test('snapshotFrames order matches join-synth.synthAttach, move frames merged included', () => {
   const cache = createStateCache()
   cache.push('configuration', 'registry_data', Buffer.from('config:registry_data'), {})
   cache.push('configuration', 'select_known_packs', Buffer.from('config:select_known_packs'), {})
@@ -429,6 +428,11 @@ test('snapshotFrames order matches join-synth.synthAttach', () => {
   const stream = joinedStream(
     { name: 'map_chunk', data: { x: 1, z: 0 } },
     { name: 'block_change', data: { location: { x: 1, y: 64, z: 0 }, type: 5 } },
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    // The delta comes after the spawn and before the metadata: the entity ring
+    // holds the two absolutes, the generic ring holds the delta, and the replay
+    // must keep the wire order.
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
     { name: 'entity_metadata', data: { entityId: 9, metadata: [] } },
     { name: 'window_items', data: { windowId: 0, stateId: 1, items: [item(1)] } },
     { name: 'held_item_slot', data: { slot: 2 } },
@@ -439,8 +443,17 @@ test('snapshotFrames order matches join-synth.synthAttach', () => {
   })
   const snapshot = cache.snapshot()
 
-  const expected = PARITY_SECTIONS.flatMap(section =>
-    snapshot[section].map(frame => frame.name))
+  const expected = [
+    'registry_data', 'select_known_packs',
+    'login', 'map_chunk', 'chunk_batch_finished',
+    'map_chunk', // warm chunk
+    'block_change',
+    // entity state, with the relative move frames in capture order
+    'spawn_entity', 'rel_entity_move', 'entity_metadata',
+    'window_items', // inventories
+    'held_item_slot', // latest
+    'update_health' // generic, which keeps its place
+  ]
   assert.deepEqual(snapshotFrames(snapshot).map(frame => frame.name), expected)
 
   // join-synth omits the per-attach synthesized position; every replayed frame
@@ -660,6 +673,39 @@ test('parityNameEvidence keeps the counts and trims a name mismatch', () => {
   // A short capture names its first missing index, not -1.
   assert.equal(parityNameEvidence({ ok: false, expected, actual: expected.slice(0, 5) }).mismatchAt, 5)
   assert.equal(parityNameEvidence(null), null)
+})
+
+test('attachParity compares where a moved entity ends, not just its last absolute', () => {
+  // Issue #35: the parity model used to ignore the delta frames, so both sides
+  // agreed on the absolute position and a wrong replay passed.
+  const cut = attachCut(joinedStream(
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } }
+  ))
+
+  const moved = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: cut.clientFrames,
+    settled: true
+  })
+  assert.equal(moved.ok, true, JSON.stringify(moved.domains))
+  const entity = moved.domains.entities.expected.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 2) // 0 + 1 + 1, exactly where the backend ended
+
+  // One delta applied differently on the client is a mismatch in entities.
+  const skewed = cut.clientFrames.map(frame =>
+    frame.name === 'rel_entity_move' ? { name: frame.name, data: { ...frame.data, dX: 4096 * 5 } } : frame)
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: skewed,
+    settled: true
+  })
+  assert.equal(evidence.ok, false)
+  assert.equal(evidence.domains.entities.ok, false)
 })
 
 test('N13 fails the run on a parity mismatch and passes only on a settled ok', () => {

@@ -10,13 +10,10 @@
 // never models: the client's decoded state must equal the state the cache says
 // it replayed.
 //
-// Pure: no I/O, no timers, no protocol dependency.
+// Pure: no I/O, no timers. The replay order comes from `core/join-synth.js`, so
+// this module reads protocol frame names through `clientbound-policy.js`.
 import { createClientState, applyFrames, stateSnapshot } from './client-state.js'
-
-// The exact cross-domain order join-synth.synthAttach uses.
-export const PARITY_SECTIONS = Object.freeze([
-  'config', 'prefix', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic'
-])
+import { replayFrames } from '../core/join-synth.js'
 
 export const PARITY_DOMAINS = Object.freeze([
   'inventory', 'heldItemSlot', 'pose', 'chunks', 'blocks', 'entities'
@@ -39,6 +36,10 @@ export const PARITY_FRAME_NAMES = Object.freeze(new Set([
   'entity_teleport',
   'entity_position',
   'sync_entity_position',
+  'spawn_entity',
+  'rel_entity_move',
+  'entity_move_look',
+  'entity_look',
   'remove_entities',
   'entity_destroy',
   'update_health'
@@ -66,25 +67,26 @@ export const DOMAIN_PARITY = Object.freeze({
 export const UNPARITY = Object.freeze({
   prefix: 'The join prefix is replayed verbatim. Its state frames are compared through chunks, blocks, entities, inventory, and heldItemSlot, but the prefix has no state of its own to compare.',
   config: 'The configuration phase replay carries no play state. The client-state model ignores configuration frame names, so the domain has nothing to compare.',
-  generic: 'The generic ring holds unclassified frames. rel_entity_move, entity_move_look, and entity_look are captured here and not decoded, so a moved entity is compared only at its last absolute position. update_health decodes into latest, which is not compared.',
+  generic: 'The generic ring holds unclassified frames. rel_entity_move, entity_move_look, and entity_look are captured here, decoded, and compared through entities: a replay that reordered them would land the client at a different position, and the entity comparison shows it. update_health decodes into latest, which is not compared.',
   latest: 'Only held_item_slot is compared. health, food, experience, abilities, game_state_change, entity_event, and advancements are decoded but not compared by this issue.'
 })
 
 const POSE_FIELDS = Object.freeze(['x', 'y', 'z', 'yaw', 'pitch'])
 
-// Flatten a cache snapshot into decoded model frames, in join-synth order.
+// Flatten a cache snapshot into decoded model frames, in replay order.
+//
+// The order comes from join-synth's own `replayFrames`, so the expectation
+// cannot drift from the stream the attach sends.
 //
 // `position` is per-leg: the cache drops every position frame and the proxy
 // synthesizes one from the session pose on attach. A caller that wants the
 // pose domain compared carries that pose on the snapshot (`snapshot.pose`);
 // without it the pose expectation stays null, exactly like the cache.
 export function snapshotFrames (cacheSnapshot) {
-  const frames = []
-  for (const section of PARITY_SECTIONS) {
-    for (const entry of cacheSnapshot?.[section] ?? []) {
-      frames.push({ name: entry.name, data: entry.data ?? {} })
-    }
-  }
+  const frames = replayFrames(cacheSnapshot ?? {}).map(entry => ({
+    name: entry.name,
+    data: entry.data ?? {}
+  }))
   const pose = cacheSnapshot?.pose
   if (pose && typeof pose === 'object') {
     frames.push({ name: 'position', data: { ...pose } })

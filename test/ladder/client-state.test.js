@@ -125,6 +125,69 @@ test('entity_position and sync_entity_position also set position fields', () => 
   )
 })
 
+test('spawn_entity gives an entity its first pose, with i8 angles as degrees', () => {
+  const state = createClientState()
+  applyFrame(state, {
+    name: 'spawn_entity',
+    data: { entityId: 9, x: 1.5, y: 64, z: -3.5, yaw: 64, pitch: -32, headPitch: 10 }
+  })
+
+  const entity = stateSnapshot(state).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 1.5)
+  assert.equal(fields.y, 64)
+  assert.equal(fields.z, -3.5)
+  assert.equal(fields.yaw, 90) // 64 * 360/256
+  assert.equal(fields.pitch, -45) // -32 * 360/256
+  assert.equal('headPitch' in fields, false)
+})
+
+test('relative moves adjust the position the client already has, in 1/4096 blocks', () => {
+  const state = createClientState()
+  applyFrames(state, [
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 2048, dY: 1024, dZ: -4096 } }
+  ])
+
+  const entity = stateSnapshot(state).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 1.5)
+  assert.equal(fields.y, 64.25)
+  assert.equal(fields.z, -1)
+})
+
+test('entity_move_look moves and turns; entity_look only turns', () => {
+  const state = createClientState()
+  applyFrames(state, [
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_move_look', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0, yaw: 128, pitch: 0 } },
+    { name: 'entity_look', data: { entityId: 9, yaw: 128, pitch: 64 } }
+  ])
+
+  const entity = stateSnapshot(state).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 1) // the look frame does not move it
+  assert.equal(fields.yaw, 180) // 128 * 360/256, the last angle wins
+  assert.equal(fields.pitch, 90)
+})
+
+test('a delta for an entity with no position on record is ignored', () => {
+  // The vanilla client ignores a move for an entity it does not know, and a
+  // delta means nothing without the absolute frame before it.
+  const state = createClientState()
+  applyFrames(state, [
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'rel_entity_move', data: { entityId: 9, dX: 4096, dY: 0, dZ: 0 } },
+    { name: 'rel_entity_move', data: { entityId: 77, dX: 4096, dY: 0, dZ: 0 } }
+  ])
+
+  const entities = stateSnapshot(state).entities
+  const known = entities.find(entry => entry.entityId === 9)
+  assert.deepEqual(known.fields, [{ key: 0, value: 1 }]) // metadata only, no position invented
+  assert.equal(entities.some(entry => entry.entityId === 77), false) // never materialized
+})
+
 test('latest keeps the newest frame per name; held_item_slot updates selectedSlot', () => {
   const state = createClientState()
   applyFrame(state, { name: 'health', data: { health: 20, food: 20, foodSaturation: 5 } })
