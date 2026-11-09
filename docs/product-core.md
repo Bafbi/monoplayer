@@ -104,10 +104,14 @@ clientbound frame in play and configuration.
 | `block` | no | no | no | connection control |
 
 Blocked frames: `transfer`, `start_configuration`, `kick_disconnect`,
-`cookie_request`, `store_cookie`, `show_dialog`, `clear_dialog`,
-`player_chat`, `hide_message`, plus the configuration-state `transfer`,
-`disconnect`, cookies, dialogs, and `code_of_conduct`. Unknown names and
+`cookie_request`, `store_cookie`, `player_chat`, `hide_message`, plus the
+configuration-state `transfer`, `disconnect`, and cookies. Unknown names and
 unknown states fail closed (`block`, `unknown: true`) and log once.
+
+`control` is the sixth decision (#16): `show_dialog` and `clear_dialog` in
+both states, and `code_of_conduct` in configuration. A control frame relays to
+the player who answers it, and never caches or replays, because the pending
+holder keeps the one copy.
 
 The router, `state-cache` (`classifyPlay`/`classifyConfig`), `join-synth`
 (`LEG_OWNED`), and the front leg's configuration replay read the same policy.
@@ -115,16 +119,72 @@ The front leg's `writeRaw` keeps a counted last-write gate, so a router
 regression cannot leak a blocked frame. A coverage test walks the vendored
 26.2 protocol and fails when a name is not classified.
 
-A **refused** transfer while attached (follow disabled, invalid target, a
-loop, or the chain limit) sends one local `system_chat` notice per attach. The
+A **refused** transfer while a client is in play (follow disabled, invalid
+target, a loop, or the chain limit) sends one proxy notice per attach. The
 notice is proxy speech, not server speech, and never includes the target
-address.
+address. It rides a synthetic advancement with a visible toast
+(`src/core/notice.js`): the add completes one named criterion and asks for the
+toast, and the removal that follows leaves the client's advancement map as the
+server left it. The frames set `showAdvancements: true`, the flag the 26.x
+client reads to decide whether to raise a toast, so a backend that just muted
+its own toasts cannot silence the proxy's notice. A toast frame the front leg
+cannot write falls back to a local `system_chat` line. A removal that fails
+twice leaves that one advancement on the client until its state is rebuilt: it
+is counted in `noticeGhosts` and logged as `proxyNoticeGhost`, and the id is
+never reused.
+
+`notice(text)` on the core is the entry point. It runs with no client
+attached: the front leg would drop the writes, so the call logs
+`proxyNoticeUndelivered` and returns `sent: false` rather than claiming a
+delivery nobody saw. A refusal that arrives while the client is still finishing
+its configuration is dropped and logged as `transferNoticeSkipped`, because a
+play frame cannot reach that client. Queueing a notice for the next attach
+belongs to the transfer work in #22.
 
 `start_configuration` cannot be served to the front client on its connection.
 The core blocks it, ends the puppet leg on purpose, and lets the normal
 backend-down path reset the cache, detach the client with
 `The server reconfigured this session. Reconnect in a few seconds.`, and
 reconnect.
+
+### Control dialogs (#16)
+
+A control dialog is the server asking the player a question. Monoplayer relays
+it to the attached player, forwards that player's answer (`custom_click_action`,
+`accept_code_of_conduct`) to the backend as the puppet's own frame, and holds
+the last unanswered dialog in `src/core/pending-dialog.js`.
+
+- No timeout and no auto-click. A dialog with no player attached waits: the
+  holder keeps it and re-sends it when a player attaches in the dialog's own
+  phase. A play dialog waits for a client in play; a configuration gate waits
+  for a client that is still following the puppet's configuration. A frame
+  delivered into the wrong phase is withheld and logged
+  (`controlDialogWithheld`), because the client would parse it as a frame of
+  its own state.
+- `clear_dialog` withdraws the held dialog and reaches the attached client, so
+  its screen closes. A backend teardown drops the held dialog: it belongs to the
+  session that asked it.
+- On a fresh connection the answer must arrive in its own state, so the front
+  leg reports the client's configuration phase (`setConfiguringHandler`,
+  `core.configuringReady`). The attach call-in runs during login, before the
+  protocol library writes Login Success, and a configuration frame written there
+  would be read as a login packet.
+- The puppet's own auto-click (`MONOPLAYER_DIALOG_ACTION`) stands down while a
+  player is attached: `decideDialogAutoAnswer` returns `human_attached` and
+  nothing is clicked. When it does click, the leg reports the answer
+  (`onDialogAnswered` → `core.notePuppetDialogAnswer`) before the core sees the
+  frame, so the holder never offers an already-answered question to the next
+  client. Which dialog is the player's to answer is #20 (play) and #21
+  (configuration gates, including the protocol library's own code-of-conduct
+  accept, which happens on the backend leg before the core sees the frame).
+
+Serverbound frames carry their state (#16). The packet id is state-scoped, so
+the frame must be written into the state the puppet is in: a configuration
+answer after the play login, or a play frame while the puppet is still
+configuring, drops with `puppet_state_mismatch` instead of ending the backend
+session. The frames the front client's own connection answers stay per-leg: `CONFIG_SERVERBOUND_DROPS` in `src/core/relay.js` holds
+`finish_configuration`, `select_known_packs`, and `settings`, and the core's
+name-based drops cover keep-alive, pong, cookies, and resource-pack replies.
 
 ### Transfer follow (`config.transfer`)
 
@@ -217,7 +277,7 @@ never replayed.
   still displays and the client marks that sender's chain as broken, which only
   changes the acknowledgements the human's client would have sent. Those are
   dropped, because they describe the human's stream. No run has confirmed the
-  display behaviour yet; #13 is where it gets confirmed.
+  display behaviour yet. #62 is where a real client confirms it.
   `profileless_chat` is the unsigned player variant and is relayed in every
   mode.
 - Serverbound `chat_session_update`, `chat_ack`, and
@@ -259,7 +319,7 @@ backendLeg = {                    // = the GlowSquidye puppet session
   setEndHandler(({ reason }) => {}), setErrorHandler(({ error }) => {})
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
-  writeRaw(buffer, meta)          // forwarded serverbound play frames
+  writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
   chat(text)                      // speak as the puppet: sign with this connection's keys (#19)
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
@@ -271,6 +331,9 @@ frontLeg = {                      // one attaching client (Bafbi)
   setDetachHandler(({ reason }) => {})
   setClientSettingsHandler(settings => {})    // -> createMonoplayer().noteClientSettings
                                               //    the human's Client Information, read-only
+  setConfiguringHandler(({ name }) => {})     // -> createMonoplayer().configuringReady
+                                              //    the client entered its own configuration
+                                              //    phase (#16)
   write(name, packet, { synth }), writeRaw(buffer, meta)
   end(reason)                     // deny/kick/close
 }

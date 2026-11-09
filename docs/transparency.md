@@ -18,10 +18,11 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The server sees the human's locale, skin parts, main hand, chat settings | done | [#18](https://github.com/Bafbi/monoplayer/issues/18) |
 | A client can attach while the puppet is still configuring | done | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human's chat and commands are spoken as the account | built, off by default | [#19](https://github.com/Bafbi/monoplayer/issues/19) |
+| A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human answers every play dialog | **not built** | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | **not built** | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
 | A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
-| Proxy notices reach the human as a toast | **not built** | [#15](https://github.com/Bafbi/monoplayer/issues/15) |
+| Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
 | The proxy's egress address is accepted as different | **accepted limit** | [#11](https://github.com/Bafbi/monoplayer/issues/11) |
 
 ## Client identity
@@ -74,8 +75,9 @@ key never reach the server; a message the server rejects arrives back as a
 rejection on GlowSquidye; and the human's client receives `player_chat` from
 another connection, so its per-sender signature chain is out of order. The
 expectation is that the message still displays with a broken-chain marker. No
-run has confirmed that, and [#13](https://github.com/Bafbi/monoplayer/issues/13)
-is where it gets confirmed.
+run has confirmed that, and [#62](https://github.com/Bafbi/monoplayer/issues/62)
+is where a real client confirms it. The protocol bot cannot: it decodes frames,
+never renders them.
 
 The proxy answers the backend's own acknowledgements and keeps its own
 last-seen window. The human's session key and acknowledgements never reach the
@@ -83,15 +85,25 @@ backend, in any mode.
 
 ## Dialogs and configuration gates
 
-Every `show_dialog` and `clear_dialog` is answered by the puppet when
-`MONOPLAYER_DIALOG_ACTION` names an action, and left alone when it is unset.
-The human never sees a dialog and never clicks one. A dialog that arrives with
-no policy leaves a headless leg waiting rather than guessing.
+A dialog is a server question the human answers. Monoplayer relays it to the
+attached client, forwards the client's click to the server as the puppet's own
+frame, and holds the last unanswered dialog: a dialog that arrives while nobody
+is attached waits, and is re-sent when someone attaches in its phase. There is
+no timeout and no auto-click, so a dialog is never answered by the proxy while a
+human is looking at it.
 
-The code of conduct is accepted by the protocol library itself, before the core
-sees the frame, so it cannot become a human decision without a write-time
-interception. That is [#21](https://github.com/Bafbi/monoplayer/issues/21), and
-the human-owned play dialog is [#20](https://github.com/Bafbi/monoplayer/issues/20).
+Two answerers could collide, and the proxy keeps them apart. The puppet's
+auto-click answers a dialog only while no player is attached, so
+`MONOPLAYER_DIALOG_ACTION` now covers a headless session and nothing else. What
+that headless session does with a configuration gate is
+[#21](https://github.com/Bafbi/monoplayer/issues/21), and the play-dialog policy
+is [#20](https://github.com/Bafbi/monoplayer/issues/20).
+
+The code of conduct is accepted by the protocol library itself, on the puppet's
+connection, before the core sees the frame. The gate therefore reaches the human
+already answered, and making it a human decision needs a write-time interception
+on the backend leg. That is [#21](https://github.com/Bafbi/monoplayer/issues/21).
+The relay and hold path this section describes is #16.
 
 ## A followed transfer
 
@@ -100,9 +112,10 @@ detaches the human with a moving notice, so the server sees a normal accepting
 client and the human rejoins the proxy once the puppet is warm on the target.
 Keeping the human's connection and re-entering configuration on it, so the move
 reads as a dimension change, is [#22](https://github.com/Bafbi/monoplayer/issues/22).
-A failed target restores the previous session on the next reconnect; the local
-notice is a `system_chat` from the proxy, and the toast variant is
-[#15](https://github.com/Bafbi/monoplayer/issues/15).
+A failed target restores the previous session on the next reconnect. The notice
+is the proxy's own: a synthetic advancement with a visible toast, removed in the
+same call so the client keeps no ghost advancement, with a local `system_chat`
+line as the fallback ([#15](https://github.com/Bafbi/monoplayer/issues/15)).
 
 ## Known limits
 
@@ -183,6 +196,10 @@ It does not prove:
 - **The client side against a direct connection.** The observer covers what the
   server knows. Today the clientbound comparison is one assertion: `N13` on the
   online rung compares the attach replay's frame cut against what a real client
-  decoded (`src/ladder/state-parity.js`, run with `mise run online`). The wider
-  direct-versus-proxy parity run, with the bot and the Fabric driver, is
-  [#13](https://github.com/Bafbi/monoplayer/issues/13) and is not built.
+  decoded (`src/ladder/state-parity.js`, run with `mise run online`). The
+  direct-versus-proxy comparison with the protocol bot is
+  `mise run parity:run`
+  ([#13](https://github.com/Bafbi/monoplayer/issues/13)). It lists frame and
+  decoded-state differences and separates the expected ones from the
+  unexplained. The same comparison with the Fabric driver is
+  [#62](https://github.com/Bafbi/monoplayer/issues/62) and is not built.

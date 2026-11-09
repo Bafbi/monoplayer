@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { chooseDialogAction, buildCustomClickAction } from '../../src/legs/live-backend.js'
+import { chooseDialogAction, buildCustomClickAction, decideDialogAutoAnswer } from '../../src/legs/live-backend.js'
 
 function action (label, id, buttonId) {
   return {
@@ -98,6 +98,24 @@ test('the click body includes the identifier and the length-prefixed optional NB
   assert.equal(body[offset + 1], 0x0a) // compound root
   assert.equal(body[offset + 2], 0x00) // empty root name length
   assert.equal(body[offset + 3], 0x00)
+})
+
+test('#16 no auto-answer while a human is attached', () => {
+  // A headless puppet answers with the configured action; the same policy with
+  // a human attached answers nothing, so the two answerers cannot both fire.
+  assert.deepEqual(
+    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: false }),
+    { auto: true, reason: null }
+  )
+  assert.deepEqual(
+    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: true }),
+    { auto: false, reason: 'human_attached' }
+  )
+  // No policy, no click, human or not.
+  assert.deepEqual(
+    decideDialogAutoAnswer({ dialogAction: null, humanAttached: false }),
+    { auto: false, reason: 'no_policy' }
+  )
 })
 
 test('play uses the play packet id and a missing NBT is optional-absent', () => {

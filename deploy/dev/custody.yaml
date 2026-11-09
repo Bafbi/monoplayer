@@ -1,0 +1,30 @@
+# The dev custody volume (#44): the dev account's token chain, and nothing else.
+#
+# The live claim (`monoplayer-custody` in the `monoplayer` namespace) is a
+# different object. No pod in this namespace mounts it: the dev account has its own
+# chain, and one account has one writer (docs/custody.md, "Sessions, copies, and
+# refresh").
+#
+# This file is separate from monoplayer.yaml so a custody bootstrap can create the
+# volume without also creating a proxy that races it for the claim
+# (scripts/dev-custody.sh up). `kubectl apply -k deploy/dev` creates both.
+#
+# It outlives a teardown. `mise run dev:down` stops the workload and leaves this
+# claim and the account on it, because the account took one human device-code
+# approval and losing it would mean asking for another. The live claim carries
+# the same rule (deploy/manifests/pvc.yaml). `dev:down -- --purge` is the
+# destructive path.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: monoplayer-dev-custody
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

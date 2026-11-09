@@ -27,6 +27,22 @@
 // their render distance must not lower the server's chunk send below the
 // backend cap (#18).
 
+// Configuration-phase frames the front client's own connection answers. They
+// are handshake, not the puppet's: a second `finish_configuration` reaches a
+// backend leg the library already moved to play, `select_known_packs` was
+// negotiated on a different connection, and the human's `settings` reaches the
+// backend through the client-information path, which writes the puppet's own
+// packet (#16, #18).
+//
+// Everything else in configuration state forwards: the human's dialog answers
+// (`custom_click_action`, `accept_code_of_conduct`) are the frames this state
+// exists to carry.
+export const CONFIG_SERVERBOUND_DROPS = new Set([
+  'finish_configuration',
+  'select_known_packs',
+  'settings'
+])
+
 export const SERVERBOUND_DROPS = new Set([
   'teleport_confirm', // proxy owns teleport IDs per leg
   'keep_alive', // the front leg answers its own keep-alives
@@ -89,8 +105,12 @@ export function chatText (name, data = null) {
 
 // `mode` is the configured chat mode, and it defaults to the mode the config
 // defaults to. `full` speaks the human's chat as the puppet; `read-only` and
-// `off` drop it.
-export function classifyServerbound (name, data = null, { mode = 'read-only' } = {}) {
+// `off` drop it. `state` is the phase the client sent the frame in, so a
+// configuration answer is not mistaken for a play frame (#16).
+export function classifyServerbound (name, data = null, { mode = 'read-only', state = 'play' } = {}) {
+  if (state === 'configuration' && CONFIG_SERVERBOUND_DROPS.has(name)) {
+    return { action: 'drop', chat: false, reason: 'front_owned_config_handshake' }
+  }
   if (name === 'custom_payload' && CLIENT_IDENTITY_CHANNELS.has(data?.channel)) {
     return { action: 'drop', chat: false, reason: 'client_identity_channel' }
   }

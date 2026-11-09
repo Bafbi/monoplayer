@@ -7,6 +7,7 @@ import {
   chatText,
   CHAT_SERVERBOUND,
   CLIENT_IDENTITY_CHANNELS,
+  CONFIG_SERVERBOUND_DROPS,
   SERVERBOUND_DROPS,
   SERVERBOUND_REWRITE
 } from '../../src/core/relay.js'
@@ -16,6 +17,21 @@ test('per-leg connection mechanics drop serverbound', () => {
     assert.equal(classifyServerbound(name).action, 'drop', name)
     assert.equal(classifyServerbound(name).chat, false, name)
   }
+})
+
+test('#16 a configuration answer forwards, the front-owned handshake drops', () => {
+  // The frames the human's own connection answers are per-leg; the frames that
+  // answer something the puppet's backend asked are the whole point.
+  for (const name of ['custom_click_action', 'accept_code_of_conduct']) {
+    assert.equal(classifyServerbound(name, null, { state: 'configuration' }).action, 'forward', name)
+  }
+  for (const name of CONFIG_SERVERBOUND_DROPS) {
+    const decision = classifyServerbound(name, null, { state: 'configuration' })
+    assert.equal(decision.action, 'drop', name)
+    assert.equal(decision.reason, 'front_owned_config_handshake', name)
+  }
+  // The state is what decides: in play, `settings` is still rewritten, not dropped.
+  assert.equal(classifyServerbound('settings').action, 'rewrite')
 })
 
 test('the human chat text is spoken as the puppet in full mode', () => {

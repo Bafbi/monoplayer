@@ -106,8 +106,26 @@ export function parityReport ({ cacheSnapshot, clientFrames = [], domains = PARI
   if (!Array.isArray(clientFrames)) throw new TypeError('clientFrames must be an array')
   if (!Array.isArray(domains)) throw new TypeError('domains must be an array')
 
-  const expected = stateSnapshot(applyFrames(createClientState(), snapshotFrames(cacheSnapshot)))
-  const actual = stateSnapshot(applyFrames(createClientState(), clientFrames))
+  const expected = decodeState(snapshotFrames(cacheSnapshot))
+  const actual = decodeState(clientFrames)
+
+  return compareSnapshots(expected, actual, domains)
+}
+
+// Decode a frame stream into the client-state snapshot. One decode path, so a
+// caller that compares two decoded states sees what parityReport sees.
+export function decodeState (frames) {
+  if (!Array.isArray(frames)) throw new TypeError('frames must be an array')
+  return stateSnapshot(applyFrames(createClientState(), frames))
+}
+
+// Compare two decoded snapshots over the parity domains. parityReport compares
+// a cache snapshot with a client's decode; the client-parity rung compares two
+// clients' decodes. Same domains, same comparators, one implementation.
+export function compareSnapshots (expected, actual, domains = PARITY_DOMAINS) {
+  if (!expected || typeof expected !== 'object') throw new TypeError('expected snapshot is required')
+  if (!actual || typeof actual !== 'object') throw new TypeError('actual snapshot is required')
+  if (!Array.isArray(domains)) throw new TypeError('domains must be an array')
 
   const results = {}
   let ok = true

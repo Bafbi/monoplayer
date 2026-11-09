@@ -11,7 +11,7 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/observer-report.sh) || node src/ladder/next-rung.js lint $?"
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/observer-report.sh) || node src/ladder/next-rung.js lint $?"
 
 [tasks."secrets:link"]
 description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
@@ -32,6 +32,12 @@ run = "node --test test/spike/*.test.js"
 description = "Run the product offline loopback rung (real legs, fake backend, protocol bot; no auth)."
 depends = ["install"]
 run = "node src/ladder/loopback.js || node src/ladder/next-rung.js loopback $?"
+
+[tasks."parity:run"]
+description = "Run the client parity report: two protocol bots join a server, one directly and one through the proxy, compared (#13)."
+depends = ["install"]
+wait_for = ["check"]
+run = "node src/ladder/client-parity.js || node src/ladder/next-rung.js parity:run $?"
 
 [tasks.online]
 description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and the live backend)."
@@ -55,8 +61,8 @@ depends = ["lint", "test", "loopback"]
 # schedules nothing, so a bare `mise run online` is unchanged.
 
 [tasks."verify:relay"]
-description = "Verify a relay change: the gate, then the frozen protocol spike."
-depends = ["check", "spike"]
+description = "Verify a relay change: the gate, the frozen protocol spike, then the client parity report."
+depends = ["check", "spike", "parity:run"]
 
 [tasks."verify:custody"]
 description = "Verify a custody change: the gate, then the online bot rung (needs the live backend and both custodians)."
@@ -117,11 +123,31 @@ description = "Run a branch image on the dev lane: mise run dev:image <sha-tag> 
 run = "scripts/dev-lane.sh set-image"
 
 [tasks."dev:join"]
-description = "Join the dev Paper through a throwaway proxy pod, borrowing the live account for one supervised run."
+description = "Report whether the dev proxy's own account is on the dev Paper (#43 AC3)."
 run = "scripts/dev-lane.sh join"
 
+[tasks."dev:custody:up"]
+description = "Create the dev custody handle pod: the operator's shell on the dev custody volume (#44)."
+run = "scripts/dev-custody.sh up"
+
+[tasks."dev:custody:down"]
+description = "Delete the dev custody handle pod. The dev proxy needs the volume, so remove this pod before mise run dev:up."
+run = "scripts/dev-custody.sh down"
+
+[tasks."dev:custody"]
+description = "Bootstrap the dev puppet account onto the dev custody volume (#44): one device-code approval, headless after that."
+run = "scripts/dev-custody.sh bootstrap"
+
+[tasks."dev:custody:status"]
+description = "Report the dev account's custody health from the dev custody volume."
+run = "scripts/dev-custody.sh status"
+
+[tasks."dev:prove-live"]
+description = "Run a command and prove the live account's token files are byte-identical afterwards (#44 AC4): mise run dev:prove-live -- <command>."
+run = "scripts/dev-custody.sh prove-live"
+
 [tasks."dev:down"]
-description = "Delete the dev validation lane. Never touches the live lane."
+description = "Stop the dev validation lane, keeping the dev account: mise run dev:down -- --purge removes the account too."
 run = "scripts/dev-lane.sh down"
 
 [tasks."dev:status"]
