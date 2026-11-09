@@ -31,4 +31,4 @@ The record states three limits:
 - The attaching player's profile is Bafbi, and the replayed play stream is the GlowSquidye session. Identity separation is row B4.
 - The screenshot comes from the driver mod, not the compositor.
 
-The deployed image reached a live public server later: [the deployed front](deployed-front-verdict.md).
+The deployed image reached a live public server later: [the deployed service](service-verdict.md).

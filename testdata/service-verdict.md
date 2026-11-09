@@ -1,4 +1,4 @@
-# The deployed front carried a vanilla client onto Excalia Season 3
+# The deployed service carried a vanilla client onto Excalia Season 3
 
 Verdict: **PASS**, `passed: true`, with 8 assertions passed and V9 `not_observed`.
 Date: 2026-11-07T23:51:50Z.
@@ -22,7 +22,7 @@ Cluster `deepmine`, namespace `monoplayer`, Argo app `deepmine-dev-monoplayer` a
 - V8: the wire checker inspected 785 frames and rejected none, 33 configuration and 752 play.
 - V9 stayed `not_observed`. The record's reason reads `needs the player's in-world confirmation; client frames alone do not prove the backend accepted the actions`.
 
-## The counters
+## The counters report no denial and no kick
 
 779 backend frames, 34 configuration frames, 752 cached, 673 replayed, 1 synthesized position, 1 attach, 0 denials, 0 front kicks, and 3 non-play frames ignored. The named backend frames were 401 `map_chunk`, 82 `update_time`, 81 `entity_metadata`, 78 `entity_teleport`, 78 `keep_alive`, 25 `system_chat`, and 10 `player_info`.
 

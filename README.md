@@ -88,8 +88,8 @@ rendered, moved, and edited blocks. B1 live is green; next are B2-B6.
 Each verdict is one page in `testdata/`: [the protocol spike](testdata/spike-verdict.md),
 [the driver lane](testdata/driver-verdict.md), [custody](testdata/custody-verdict.md),
 [M4](testdata/m4-verdict.md), [the live attach](testdata/live-attach-verdict.md),
-[the online rung](testdata/online-verdict.md), and [the deployed front](testdata/deployed-front-verdict.md).
-Each page quotes the verdict, the date, and the fact the run establishes, plus the
-command where the record names one. The records themselves stay in git history.
+[the online rung](testdata/online-verdict.md), and [the deployed service](testdata/service-verdict.md).
+Each page quotes the verdict, the date where the record carries one, and the fact
+the run establishes, plus the command where the record names one. The records themselves stay in git history.
 
 Created in [T3 Code](https://t3.codes).

@@ -3,7 +3,7 @@
 Verdict: **PASS** on 2026-11-07T13:06:00.000Z for row `G1 — auth readiness`.
 Date: 2026-11-07.
 Commands: the record lists five. `node src/custody/cli.js device-code --account puppet --dir .secrets/puppet` bootstrapped the account. `node src/custody/cli.js status --refresh --account puppet --dir .secrets/puppet` ran twice. `node src/custody/cli.js whitelist attach add Bafbi --file .secrets/attach-whitelist.json` and `node src/custody/cli.js whitelist backend add GlowSquidye` set the two whitelists. `node src/custody/fixture-cli.js --port 25565 --file .secrets/attach-whitelist.json` served the attach check.
-Fact: the deny landed at the `login` stage, so the whitelist review refused the player before any login success.
+Fact: the whitelist review refused the player before any login success, and the client was told the reason.
 
 Source: `testdata/custody-verdict.json`, plus `testdata/custody-allow.log`, `testdata/custody-deny.log`, and `testdata/custody-deny-screen.png`. All are removed from git, and every quote below comes from them.
 
@@ -19,7 +19,7 @@ The attaching player was Bafbi, UUID `6eb73524-ff88-4a62-a8d0-c63905e7afba`, fou
 
 ## The live attach check
 
-The fixture ran in online mode with a real sessionserver `hasJoined` and a synchronous UUID gate in `beforeLogin`. The route was the official Fabric driver client on `nath`, through a reverse SSH tunnel to `127.0.0.1:25565`, into the fixture.
+The fixture ran in online mode with a real sessionserver `hasJoined` and a synchronous UUID check in `beforeLogin`. The route was the official Fabric driver client on `nath`, through a reverse SSH tunnel to `127.0.0.1:25565`, into the fixture.
 
 `testdata/custody-allow.log` ran five lines. The first is the fixture's own listen line:
 

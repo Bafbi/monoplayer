@@ -9,7 +9,7 @@ Mojang calls, no Microsoft accounts; loopback only.
 
 **Result (2026-11-05):** `mise run check` passes, `mise run spike:report` passes
 37/37 assertions. Verdict and quotes: [../testdata/spike-verdict.md](../testdata/spike-verdict.md).
-The runner writes `testdata/spike-report.json`; git does not carry it.
+The runner writes `testdata/spike-report.json`, and git does not carry it.
 
 Files:
 

@@ -88,7 +88,7 @@ run stops the loop unless `--force`.
 per run. Both runs used fresh client processes, server-verified movement,
 break/place, disconnect, and rejoin.
 
-**G0 passes.** The manual unmodded witness was completed on 2026-11-06
+**G0 passed.** The manual unmodded witness was completed on 2026-11-06
 (join, render, move, break, place, screenshot, disconnect, rejoin).
 [`testdata/driver-verdict.md`](../testdata/driver-verdict.md) holds the verdict,
 the per-run numbers, the witness record, and quotes the reports and screenshots

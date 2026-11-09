@@ -48,4 +48,4 @@ Two screenshots backed the host wrapper and the driver's UI operations:
 
 ## What this costs now that the files are gone
 
-`mise run driver:g0` reads `testdata/driver-summary.json`, the two run reports, and `testdata/driver-unmodded-witness.json`. The checkout no longer supplies them, so the task reports `NOT 2/2` until a fresh `--runs 2` writes new reports and an operator records a new witness. `mise run check` never read any of them.
+`mise run driver:g0` reads these records. The checkout no longer carries them, so the task reports `NOT 2/2` until a fresh 2-run invocation writes new reports and an operator records a new witness. `mise run check` never read any of them, and `docs/driver-lane.md` gives the commands.
