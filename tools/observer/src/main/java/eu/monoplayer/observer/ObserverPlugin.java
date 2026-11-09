@@ -17,11 +17,14 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -90,26 +93,41 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
                         View view = viewFor(event);
-                        Object locale = read(event.getPacket(), 0);
-                        Object distance = read(event.getPacket(), 1);
-                        Object skin = read(event.getPacket(), 4);
-                        Object hand = read(event.getPacket(), 5);
+                        // 26.x exposes the whole settings packet as one value
+                        // object: measured on the gate Paper, "settings fields 1:
+                        // 0=ClientInformation[language=fr_fr, viewDistance=8,
+                        // ..., modelCustomisation=96, mainHand=LEFT, ...]". So the
+                        // fields are that object's members, not the packet's. A
+                        // shape that still carries them flat is read by index, and
+                        // a member that is not there stays unobserved.
+                        Object settings = read(event.getPacket(), 0);
+                        Object locale = firstNonNull(called(settings, "language", "locale"), read(event.getPacket(), 0));
+                        Object distance = firstNonNull(called(settings, "viewDistance"), read(event.getPacket(), 1));
+                        Object skin = firstNonNull(called(settings, "modelCustomisation", "skinParts"), read(event.getPacket(), 4));
+                        Object hand = firstNonNull(called(settings, "mainHand"), read(event.getPacket(), 5));
                         if (locale instanceof String value) view.locale = value;
-                        // The wire types are narrow (i8 distance, u8 skin parts,
-                        // VarInt hand); ProtocolLib boxes them at different widths,
-                        // so accept any Number and narrow where the field is unsigned.
+                        // The wire types are narrow (i8 distance, u8 skin parts);
+                        // ProtocolLib boxes them at different widths, so accept any
+                        // Number and narrow where the field is unsigned.
                         if (distance instanceof Number value) view.viewDistance = value.intValue();
                         if (skin instanceof Number value) view.skinParts = value.intValue() & 0xff;
                         if (hand instanceof Number value) view.mainHand = value.intValue() == 0 ? "left" : "right";
+                        else if (hand instanceof String || hand instanceof Enum<?>) view.mainHand = handName(hand);
                     }
                 });
         ProtocolLibrary.getProtocolManager().addPacketListener(
                 new PacketAdapter(this, ListenerPriority.MONITOR, PacketType.Configuration.Client.CUSTOM_PAYLOAD) {
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
-                        Object channel = read(event.getPacket(), 0);
-                        Object data = read(event.getPacket(), 1);
-                        if (BRAND_CHANNEL.equals(channel) && data instanceof byte[] bytes) {
+                        // Same value-object shape as the settings packet: measured
+                        // on the gate Paper, the payload reads
+                        // "DiscardedPayload[id=minecraft:brand, data=[B@...]", with
+                        // nothing at index 1. Both shapes are read, and the payload
+                        // object is preferred when it names the channel.
+                        Object payload = read(event.getPacket(), 0);
+                        Object channel = payload instanceof String value ? value : called(payload, "id", "channel");
+                        Object data = firstNonNull(read(event.getPacket(), 1), called(payload, "data", "payload", "bytes"));
+                        if (data instanceof byte[] bytes && BRAND_CHANNEL.equals(String.valueOf(channel))) {
                             viewFor(event).brand = decodeBrand(bytes);
                         }
                     }
@@ -136,9 +154,81 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
                 new PacketAdapter(this, ListenerPriority.MONITOR, PacketType.Play.Client.CHAT_SESSION_UPDATE) {
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
-                        viewFor(event).chatSession = true;
+                        // The session key arrives after the join, so the view is
+                        // written again: the record at join cannot carry it, and a
+                        // field observed late must not read as a default.
+                        View view = viewFor(event);
+                        view.chatSession = true;
+                        write(view);
                     }
                 });
+    }
+
+    // A named member of a packet's value object, by accessor or field name. The
+    // object is the server's own type, so nothing here links against an NMS class;
+    // a name that is not there returns null and the field stays unobserved rather
+    // than guessed.
+    private static Object called(Object target, String... names) {
+        if (target == null) return null;
+        Class<?> type = target.getClass();
+        for (String name : names) {
+            for (String candidate : new String[] { name, getterName(name) }) {
+                Method method = declaredMethod(type, candidate);
+                if (method != null) {
+                    try {
+                        return method.invoke(target);
+                    } catch (ReflectiveOperationException | RuntimeException ignored) {
+                        // fall through to the field of the same name
+                    }
+                }
+            }
+            Field field = declaredField(type, name);
+            if (field != null) {
+                try {
+                    return field.get(target);
+                } catch (ReflectiveOperationException | RuntimeException ignored) {
+                    // a member the observer cannot read is a field it did not see
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String getterName(String name) {
+        return "get" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
+    }
+
+    private static Method declaredMethod(Class<?> type, String name) {
+        try {
+            Method found = type.getDeclaredMethod(name);
+            found.setAccessible(true);
+            return found;
+        } catch (NoSuchMethodException | RuntimeException absent) {
+            return null;
+        }
+    }
+
+    private static Field declaredField(Class<?> type, String name) {
+        try {
+            Field found = type.getDeclaredField(name);
+            found.setAccessible(true);
+            return found;
+        } catch (NoSuchFieldException | RuntimeException absent) {
+            return null;
+        }
+    }
+
+    private static Object firstNonNull(Object first, Object second) {
+        return first != null ? first : second;
+    }
+
+    // The main hand as the report names it. The wire carries an enum on 26.x
+    // ("RIGHT", "LEFT") and a VarInt on the shapes before it.
+    private static String handName(Object hand) {
+        String name = String.valueOf(hand).toUpperCase(Locale.ROOT);
+        if (name.contains("LEFT")) return "left";
+        if (name.contains("RIGHT")) return "right";
+        return null;
     }
 
     // A packet's field by index, whatever its declared type. The observer reads
@@ -151,6 +241,12 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    // One view per connection, keyed by the client's address. Measured on 26.2:
+    // the handshake and configuration frames carry a player object already (the
+    // handshake one logs as UNKNOWN[<address>]), so the key is the same address the
+    // join uses. A frame the server attributes to no address keys a view under
+    // "null", and such a view is never written, because only the join and the
+    // packet handlers write, and a join always has an address.
     private View viewFor(PacketEvent event) {
         Player player = event.getPlayer();
         InetSocketAddress address = player == null ? null : player.getAddress();

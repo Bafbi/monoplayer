@@ -36,10 +36,46 @@ export const KNOWN_DIFFERENCES = Object.freeze({
   address: 'the proxy egress address is the one accepted difference, and reads as a client behind a VPN'
 })
 
+// Why a field can be absent on both joins, and the server fact that has to hold
+// for the reason to be true. The gate Paper reads these facts out of its own
+// server.properties (`--server`), and a reason is attached only when the read
+// agrees. That way a server that starts serving the gate or a resource pack stops
+// excusing the field by itself, and an absence nobody can explain is printed as
+// one instead of being explained away.
+//
+// Measured on the gate Paper (2026-11-09): turning enable-code-of-conduct on does
+// not just add a gate, it stops the server — "Code of Conduct folder does not
+// exist: codeofconduct", from DedicatedServer.readCodeOfConducts — so the lane
+// keeps it off and the observer has no gate to witness.
+export const ABSENT_FACTS = Object.freeze({
+  codeOfConduct: {
+    setting: 'codeOfConduct',
+    value: false,
+    reason: 'the gate Paper reports enable-code-of-conduct=false, so the server never sends the gate'
+  },
+  codeOfConductAccepted: {
+    setting: 'codeOfConduct',
+    value: false,
+    reason: 'the gate Paper reports enable-code-of-conduct=false, so there is no gate to accept'
+  },
+  resourcePack: {
+    setting: 'resourcePack',
+    value: false,
+    reason: 'the gate Paper reports no resource pack, so no status event ever fires'
+  }
+})
+
+// The reason for an absent field, or null when the run has no fact to stand on.
+function absentReason (field, server) {
+  const fact = ABSENT_FACTS[field]
+  if (!fact || !server) return null
+  return server[fact.setting] === fact.value ? fact.reason : null
+}
+
 const absent = value => value === undefined || value === null
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
-export function compareViews (baseline = {}, puppet = {}) {
+export function compareViews (baseline = {}, puppet = {}, { server = null } = {}) {
   const fields = VIEW_FIELDS.map(field => {
     const left = baseline[field]
     const right = puppet[field]
@@ -49,7 +85,12 @@ export function compareViews (baseline = {}, puppet = {}) {
     else if (same(left, right)) verdict = 'same'
     else if (KNOWN_DIFFERENCES[field]) verdict = 'expected'
     else verdict = 'unexplained'
-    return { field, baseline: left ?? null, puppet: right ?? null, verdict }
+    const entry = { field, baseline: left ?? null, puppet: right ?? null, verdict }
+    // A reason explains an absence; it never stands in for a value. The moment a
+    // join reports the field, the verdict is no longer 'absent' and the reason is
+    // gone with it.
+    if (verdict === 'absent') entry.reason = absentReason(field, server)
+    return entry
   })
   const unexplained = fields.filter(entry => entry.verdict === 'unexplained')
   return {
@@ -113,14 +154,31 @@ export function readView (file) {
   return record
 }
 
+// The server facts the absence reasons stand on, or null when the run read none.
+// A missing or unreadable file is not an error: it means no absence can be
+// explained, which is the honest answer when the facts were not measured.
+export function readServerFacts (file) {
+  if (!file) return null
+  try {
+    const facts = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return facts && typeof facts === 'object' ? facts : null
+  } catch {
+    return null
+  }
+}
+
 export function formatReport (report) {
   const lines = report.fields.map(entry => {
     const mark = entry.verdict === 'unexplained' ? 'FAIL' : entry.verdict.toUpperCase()
-    return `${mark.padEnd(12)} ${entry.field}: baseline=${JSON.stringify(entry.baseline)} puppet=${JSON.stringify(entry.puppet)}`
+    const line = `${mark.padEnd(12)} ${entry.field}: baseline=${JSON.stringify(entry.baseline)} puppet=${JSON.stringify(entry.puppet)}`
+    if (entry.verdict !== 'absent') return line
+    return `${line} -- ${entry.reason ?? 'no reason recorded'}`
   })
+  const bare = report.absent.filter(entry => entry.reason === null || entry.reason === undefined)
   lines.push('')
   lines.push(report.ok
-    ? `observer: PASS ${report.fields.length} fields, ${report.expected.length} expected, ${report.absent.length} absent`
+    ? `observer: PASS ${report.fields.length} fields, ${report.expected.length} expected, ${report.absent.length} absent` +
+      ` (${report.absent.length - bare.length} with a reason${bare.length > 0 ? `, ${bare.length} without: ${bare.map(entry => entry.field).join(', ')}` : ''})`
     : `observer: FAIL ${report.unexplained.length} unexplained: ${report.unexplained.map(entry => entry.field).join(', ')}`)
   return lines.join('\n')
 }
@@ -135,10 +193,11 @@ export function main (argv = process.argv.slice(2), io = { stdout: process.stdou
   const puppetPath = flag(argv, '--puppet')
   const singlePath = flag(argv, '--single')
   if (!singlePath && (!baselinePath || !puppetPath)) {
-    io.stderr.write('usage: node src/ladder/observer.js --baseline <views.jsonl> --puppet <views.jsonl> [--report <file>]\n' +
-      '       node src/ladder/observer.js --single <views.jsonl> [--report <file>]\n')
+    io.stderr.write('usage: node src/ladder/observer.js --baseline <views.jsonl> --puppet <views.jsonl> [--server <facts.json>] [--report <file>]\n' +
+      '       node src/ladder/observer.js --single <views.jsonl> [--server <facts.json>] [--report <file>]\n')
     return 2
   }
+  const server = readServerFacts(flag(argv, '--server'))
   let report
   try {
     if (singlePath) {
@@ -149,9 +208,9 @@ export function main (argv = process.argv.slice(2), io = { stdout: process.stdou
       if (all.length < 2) {
         throw new Error(`${singlePath} holds ${all.length} client_view records; a baseline and a puppet join need at least two`)
       }
-      report = compareViews(all[0], all.at(-1))
+      report = compareViews(all[0], all.at(-1), { server })
     } else {
-      report = compareViews(readView(baselinePath), readView(puppetPath))
+      report = compareViews(readView(baselinePath), readView(puppetPath), { server })
     }
   } catch (error) {
     io.stderr.write(`observer: ${String(error?.message ?? error)}\n`)
