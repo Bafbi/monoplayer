@@ -126,28 +126,64 @@ lua="hl.dispatch(hl.dsp.exec_cmd(\"$escaped\", { workspace = \"9 silent\", no_in
 active_before=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
 # exec_cmd runs the client as a compositor child, so it inherits DISPLAY,
 # WAYLAND_DISPLAY, XDG_RUNTIME_DIR, and the signature. The rules put its window
-# on workspace 9 without switching to it.
+# on workspace 9 without switching to it, but only when the compositor spawns
+# the process that opens the window. Prism hands a second launch to a
+# PrismLauncher that is already running, and that process carries no rule, so
+# the move below is the placement that always lands.
 if ! eval_reply=$(hyprctl eval "$lua" 2>&1); then
   echo "nath: the compositor refused the launch: $eval_reply" >&2
   exit 1
 fi
 
-window=
+# Every mapped window, on every workspace. The instance owns a window when the
+# window process carries the instance library path, so another instance cannot
+# stand in and no class name has to match.
+clients() { hyprctl clients -j | jq -r ".[] | select(.mapped != false) | \"\(.address) \(.pid) \(.workspace.name // (.workspace.id | tostring))\""; }
+workspace_of() {
+  local address=$1 address_now pid_now workspace_now
+  while read -r address_now pid_now workspace_now; do
+    if [ "$address_now" = "$address" ]; then printf "%s\n" "$workspace_now"; return 0; fi
+  done <<<"$(clients || true)"
+  return 1
+}
+
+window= opened_on=
 deadline=$((SECONDS + ${NATH_LAUNCH_TIMEOUT:-90}))
 while [ $SECONDS -lt $deadline ]; do
-  # The window belongs to the instance when its process carries the instance
-  # library path, so another instance cannot stand in.
-  candidate=$(hyprctl clients -j | jq -r ".[] | select((.class // \"\") | test(\"^(Monoplayer Gate B|Minecraft)\")) | select(.workspace.name == \"9\") | \"\(.address) \(.pid)\"" | head -1) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
-  pid=${candidate#* }
-  if [ -n "$candidate" ] && tr "\0" " " < "/proc/$pid/cmdline" | grep -qF -- "instances/$instance/natives"; then
-    window=${candidate%% *}
-    break
-  fi
-  sleep 2
+  candidates=$(clients) || { echo "nath: hyprctl clients failed" >&2; exit 1; }
+  while read -r address pid workspace; do
+    [ -n "$address" ] || continue
+    if tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "instances/$instance/natives"; then
+      window=$address
+      opened_on=$workspace
+      break
+    fi
+  done <<<"$candidates"
+  if [ -n "$window" ]; then break; fi
+  sleep 1
 done
 if [ -z "$window" ]; then
-  echo "nath: $instance opened no window on workspace 9 within the launch budget" >&2
+  echo "nath: $instance opened no window carrying instances/$instance/natives within the launch budget" >&2
   exit 1
+fi
+
+# Move it without following, so the caller keeps the workspace it is on. eval
+# answers ok even when the dispatcher found no window, so read the placement
+# back instead of trusting the reply.
+if [ "$opened_on" != "9" ]; then
+  lua="hl.dispatch(hl.dsp.window.move({ window = \"address:$window\", workspace = 9, follow = false }))"
+  if ! move_reply=$(hyprctl eval "$lua" 2>&1); then
+    echo "nath: the compositor refused to move $window from workspace $opened_on: $move_reply" >&2
+    exit 1
+  fi
+  if ! moved_on=$(workspace_of "$window"); then
+    echo "nath: cannot read the workspace of $window after the move; it left the compositor, or hyprctl failed" >&2
+    exit 1
+  fi
+  if [ "$moved_on" != "9" ]; then
+    echo "nath: $window is on workspace $moved_on, not 9, after the move" >&2
+    exit 1
+  fi
 fi
 
 active_after=$(hyprctl activeworkspace -j | jq -r ".id") || { echo "nath: hyprctl activeworkspace failed" >&2; exit 1; }
@@ -155,6 +191,7 @@ focused=$(hyprctl activewindow -j | jq -r "(.class // \"\")") || { echo "nath: h
 focused_window=$(hyprctl activewindow -j | jq -r ".address") || focused_window=
 printf "INSTANCE=%s\n" "$instance"
 printf "WINDOW=%s\n" "$window"
+printf "OPENED_WORKSPACE=%s\n" "$opened_on"
 printf "WORKSPACE=9\n"
 if [ "$active_after" = "$active_before" ] && [ "$focused_window" != "$window" ]; then
   printf "SILENT=yes\n"
