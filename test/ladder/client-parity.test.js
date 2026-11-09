@@ -53,20 +53,65 @@ test('a pending capability is a declared row with its issue, never a failure', (
   assert.equal(classifyFrame({ state: 'configuration', name: 'code_of_conduct', direct: 0, proxied: 0 }).verdict, 'absent')
 })
 
-test('presence decides the verdict, so a count difference stays evidence', () => {
-  assert.equal(classifyFrame({ state: 'play', name: 'map_chunk', direct: 81, proxied: 80 }).verdict, 'same')
-  assert.equal(classifyFrame({ state: 'play', name: 'position', direct: 4, proxied: 1 }).verdict, 'same')
+test('a count difference is a finding on a deterministic lane and evidence elsewhere', () => {
+  const deterministic = classifyFrame({ state: 'play', name: 'map_chunk', direct: 81, proxied: 80, deterministic: true })
+  assert.equal(deterministic.verdict, 'unexplained')
+  assert.match(deterministic.reason, /deterministic/)
+
+  const live = classifyFrame({ state: 'play', name: 'map_chunk', direct: 81, proxied: 80, deterministic: false })
+  assert.equal(live.verdict, 'same')
+  assert.match(live.reason, /timing/)
+
+  const equal = classifyFrame({ state: 'play', name: 'map_chunk', direct: 3, proxied: 3, deterministic: true })
+  assert.equal(equal.verdict, 'same')
 })
 
-test('the proxy policy is what makes a one-sided frame expected', () => {
-  // per_leg: each connection owns it.
-  assert.equal(classifyFrame({ state: 'play', name: 'position', direct: 1, proxied: 0 }).verdict, 'expected')
-  // block, outside the pending tickets.
-  assert.equal(classifyFrame({ state: 'play', name: 'kick_disconnect', direct: 1, proxied: 0 }).verdict, 'expected')
-  // live_only: relayed live, never cached, so two runs catch different traffic.
-  assert.equal(classifyFrame({ state: 'play', name: 'system_chat', direct: 2, proxied: 0 }).verdict, 'expected')
-  // cache_only: the login the client sees is the session the proxy holds.
-  assert.equal(classifyFrame({ state: 'play', name: 'login', direct: 1, proxied: 0 }).verdict, 'expected')
+// The policy table is the code under test, so every decision is a prediction
+// about which clients see the frame. These four cases are the ones a free pass
+// would hide: a classification is not a reason to accept a one-sided frame.
+test('a per_leg frame on one side only is a finding', () => {
+  for (const direct of [1, 0]) {
+    const row = classifyFrame({ state: 'play', name: 'position', direct, proxied: 1 - direct })
+    assert.equal(row.verdict, 'unexplained', 'position direct=' + direct)
+    assert.equal(row.predicted, 'both')
+    assert.equal(row.observed, direct === 1 ? 'direct' : 'proxied')
+  }
+})
+
+test('a cache_only frame on one side only is a finding', () => {
+  // login is cached and replayed, so both clients see one: the direct client
+  // its own, the proxied client the session the proxy holds.
+  const row = classifyFrame({ state: 'play', name: 'login', direct: 1, proxied: 0 })
+  assert.equal(row.verdict, 'unexplained')
+  assert.equal(row.predicted, 'both')
+})
+
+test('a kick the direct client saw and the proxied one did not is a finding', () => {
+  const row = classifyFrame({ state: 'play', name: 'kick_disconnect', direct: 1, proxied: 0 })
+  assert.equal(row.verdict, 'unexplained')
+  assert.equal(row.predicted, 'both')
+  assert.match(row.reason, /kick_disconnect/)
+})
+
+test('a blocked frame that reached the front client is a finding', () => {
+  const row = classifyFrame({ state: 'play', name: 'store_cookie', direct: 1, proxied: 1 })
+  assert.equal(row.verdict, 'unexplained')
+  assert.equal(row.predicted, 'direct')
+})
+
+test('a block frame only the proxied client saw is a finding', () => {
+  const row = classifyFrame({ state: 'play', name: 'store_cookie', direct: 0, proxied: 1 })
+  assert.equal(row.verdict, 'unexplained')
+})
+
+test('a live_only frame on one side only is a finding on a deterministic lane', () => {
+  const deterministic = classifyFrame({ state: 'play', name: 'system_chat', direct: 2, proxied: 0, deterministic: true })
+  assert.equal(deterministic.verdict, 'unexplained')
+  assert.equal(deterministic.predicted, 'both')
+
+  const live = classifyFrame({ state: 'play', name: 'system_chat', direct: 2, proxied: 0, deterministic: false })
+  assert.equal(live.verdict, 'expected')
+  assert.match(live.reason, /live traffic|two runs/)
 })
 
 test('ordinary state only the direct client saw is a finding', () => {
@@ -96,6 +141,24 @@ test('compareRuns passes when both clients saw the same frames', () => {
   assert.ok(report.state.domains.every(row => row.verdict === 'same'))
   assert.equal(report.counts.absent, PENDING_ROWS, 'every pending row is in the report')
   assert.equal(report.state.ok, true)
+})
+
+test('compareRuns fails a count difference when the lane is deterministic', () => {
+  const report = compareRuns({
+    direct: run('direct', [frame('map_chunk'), frame('map_chunk')], []),
+    proxied: run('proxied', [frame('map_chunk')], []),
+    deterministic: true
+  })
+
+  assert.equal(report.deterministic, true)
+  assert.equal(report.ok, false)
+  assert.deepEqual(report.unexplained.map(row => row.name), ['map_chunk'])
+
+  const live = compareRuns({
+    direct: run('direct', [frame('map_chunk'), frame('map_chunk')], []),
+    proxied: run('proxied', [frame('map_chunk')], [])
+  })
+  assert.equal(live.ok, true, 'a lane that is not deterministic keeps the count as evidence')
 })
 
 test('compareRuns fails on a frame only one client saw', () => {

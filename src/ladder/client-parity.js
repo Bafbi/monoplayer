@@ -3,10 +3,10 @@
 // from unexplained ones (issue #13).
 //
 // This is not the #2 check. #2 (closed by PR #25) compares one client's decode
-// against what the cache replayed on that same connection; src/ladder/
-// state-parity.js is its module and this report reuses it. #13 asks a different
-// question: what does a client that joined directly see, that a client behind
-// the proxy does not.
+// against what the cache replayed on that same connection, and src/ladder/
+// state-parity.js is its module. This report reuses it: #13 asks a different
+// question, which is what a client that joined directly sees that a client
+// behind the proxy does not.
 //
 // The pieces it reuses, and why:
 //
@@ -21,7 +21,8 @@
 //
 //   fake      (default) the repo's own fake backend plus an in-process
 //             Monoplayer, the same shape as the loopback rung. No auth, no
-//             cluster, no .secrets. This is the lane the gate can run.
+//             cluster, no .secrets. Section 2a of the ladder, and the lane a
+//             laptop or CI can run without one.
 //   endpoint  --backend and --front given: the harness only runs the two joins
 //             against endpoints an operator stood up — the dev lane, the
 //             transfer testbed, or a local port-forward. The harness never
@@ -112,7 +113,7 @@ function joinEndpoint (host, port) {
 
 // The differences that are not findings yet, because the ticket that makes the
 // human own them has not landed. Every row here is reported as absent and never
-// fails the run; the issue and the reason are in the row.
+// fails the run, and the issue and the reason are in the row.
 export const PENDING = Object.freeze([
   Object.freeze({
     issue: '#19',
@@ -144,22 +145,45 @@ export const PENDING = Object.freeze([
   })
 ])
 
-// Why a frame the proxy treats as per-connection, blocked, cached, or live-only
-// may differ. The policy table gives the decision; these give the sentence a
-// reader needs to judge it.
-const POLICY_REASONS = Object.freeze({
-  [DECISION.PER_LEG]: 'each connection owns this frame, so it never crosses and each side is expected to differ',
-  [DECISION.BLOCK]: 'the proxy takes this action on its own connection and never relays it',
-  [DECISION.CACHE_ONLY]: 'a login is cached and replayed, so the client sees the session the proxy holds',
-  [DECISION.LIVE_ONLY]: 'relayed live and never cached, so the two runs caught different live traffic'
+// What each clientbound decision predicts about which clients see the frame.
+//
+// The policy table is the code under test, so these are predictions to check,
+// not reasons to accept: an observation that does not match its prediction is a
+// finding, in either direction. A table that mislabels a frame therefore shows
+// up as a failed run rather than as a free pass for the frame it mislabels.
+const PREDICTIONS = Object.freeze({
+  // Cached and relayed: the direct client sees the live state, and the proxied
+  // client sees that state live or replayed, so the direct side is contained in
+  // the proxied one.
+  [DECISION.STATE]: 'direct_within_proxied',
+  // Cached and replayed, never relayed: both clients end up with one login.
+  [DECISION.CACHE_ONLY]: 'both',
+  // Owned by each connection: each client has its own, from its own leg.
+  [DECISION.PER_LEG]: 'both',
+  // Relayed while attached and never cached: both clients see the traffic that
+  // happened while they were attached.
+  [DECISION.LIVE_ONLY]: 'both',
+  // The proxy takes the action on its own connection and never relays it, so
+  // only the direct client sees the frame.
+  [DECISION.BLOCK]: 'direct'
 })
 
+// The one blocked frame whose client-visible effect is the end of the session.
+// The product ends the front client's socket instead of relaying the frame
+// (monoplayer.js teardownBackend), so a kick the proxied client never received
+// as a frame is the difference the harness exists to surface, not an expected
+// one. It is predicted on both sides.
+const KICK_FRAME = 'kick_disconnect'
+
 // An ordinary state frame only the proxied client saw. The cache holds the
-// puppeted session's state, so the attach replay can carry a frame kind a fresh
-// direct join never produced. The other direction is a finding: the relay lost a
-// frame the server sent.
+// puppeted session's state, so the attach replay can carry state a fresh direct
+// join never produced. Under the STATE prediction that is the one allowed
+// one-sided case: the direct side must always be contained in the proxied one.
 const REPLAY_INSERT =
-  'only the proxied client saw it: the attach replay carries the cached state of the puppeted session, and a fresh direct join never had that state'
+  'the attach replay carries the cached state of the puppeted session, and a fresh direct join never had that state'
+
+// An ordinary state frame only the direct client saw. The relay lost it.
+const RELAY_LOST = 'so the relay lost a frame the server sent'
 
 // The decoded-state domains that may differ between two connections.
 const STATE_REASONS = Object.freeze({
@@ -187,7 +211,7 @@ function countFrames (frames) {
 // One row per frame kind either side saw, plus one row per pending frame kind
 // whether or not anyone saw it: a row that measures nothing today still belongs
 // in the report, with its issue.
-function frameRows (directFrames, proxiedFrames) {
+function frameRows (directFrames, proxiedFrames, deterministic) {
   const direct = countFrames(directFrames)
   const proxied = countFrames(proxiedFrames)
   const keys = new Set([...direct.keys(), ...proxied.keys()])
@@ -201,44 +225,133 @@ function frameRows (directFrames, proxiedFrames) {
     const state = key.slice(0, separator)
     const name = key.slice(separator + 1)
     const row = { state, name, direct: direct.get(key) ?? 0, proxied: proxied.get(key) ?? 0 }
-    rows.push({ ...row, ...classifyFrame(row) })
+    rows.push({ ...row, ...classifyFrame({ ...row, deterministic }) })
   }
   return rows
 }
 
-// The verdict for one frame kind. Presence is the question: a frame kind one
-// client saw and the other never did is a difference, while a count of 2 against
-// 1 is timing and stays in the row as evidence. Which side saw it decides
-// whether the difference is expected: ordinary state only the proxied client saw
-// is the replay's own content, and only the direct client saw it is a gap.
-export function classifyFrame ({ state, name, direct, proxied }) {
+function observeSides (direct, proxied) {
+  if (direct > 0 && proxied > 0) return 'both'
+  if (direct > 0) return 'direct'
+  if (proxied > 0) return 'proxied'
+  return 'neither'
+}
+
+// What the proxy's own rules predict about this frame, or null when nothing in
+// the repo classifies it. The prediction is the thing under test, never the
+// verdict.
+export function predictionFor (state, name) {
+  // The login handshake belongs to each connection: the front answers the
+  // attaching client's own handshake and never replays the puppet's. The policy
+  // table covers play and configuration only, so this state is predicted here
+  // instead of reading as an unknown frame.
+  if (state === 'login') return { predicted: 'both', decision: 'per_connection' }
+
+  const policy = clientboundPolicy(state, name)
+  if (policy.unknown) return null
+  if (state === 'play' && name === KICK_FRAME) return { predicted: 'both', decision: policy.decision }
+  return { predicted: PREDICTIONS[policy.decision], decision: policy.decision }
+}
+
+// Why an observation that contradicts its prediction is a finding. The sentence
+// names what the table predicted and what the two clients actually saw, so a
+// reader can judge the table itself, not only the relay.
+function mismatchReason (key, predicted, observed, decision) {
+  const saw = observed === 'direct' ? 'the direct client saw it and the proxied client did not'
+    : observed === 'proxied' ? 'the proxied client saw it and the direct client did not'
+      : 'both clients saw it'
+  if (predicted === 'both') {
+    return key + ' is ' + decision + ', so both clients should have it, and ' + saw
+  }
+  if (predicted === 'direct') {
+    return key + ' is ' + decision + ', so only the direct client may see it, and ' + saw
+  }
+  return key + ' is ordinary state (' + decision + '), so the proxied side must contain the direct side, and ' + saw + ', ' + RELAY_LOST
+}
+
+// The verdict for one frame kind.
+//
+// The policy table decides what to *predict* about which clients see a frame,
+// and the observation decides the verdict: a prediction that does not match is a
+// finding in either direction. A classification is never a reason on its own,
+// because the table is the code under test.
+//
+// Counts are a finding only where they can be. The offline lane is
+// deterministic, so a count difference there is a lost or duplicated frame. A
+// real server's counts drift with time, so there they stay evidence in the row.
+export function classifyFrame ({ state, name, direct, proxied, deterministic = false }) {
   const pending = pendingFor(state, name)
   if (pending) {
     return { verdict: 'absent', issue: pending.issue, capability: pending.capability, reason: pending.reason }
   }
-  const seenDirect = direct > 0
-  const seenProxied = proxied > 0
-  if (seenDirect === seenProxied) return { verdict: 'same' }
 
-  const policy = clientboundPolicy(state, name)
-  if (policy.unknown) {
+  const key = frameKey(state, name)
+  const observed = observeSides(direct, proxied)
+  const prediction = predictionFor(state, name)
+  if (prediction === null) {
     return {
       verdict: 'unexplained',
-      reason: 'no clientbound policy entry for ' + frameKey(state, name) + ', so the proxy decides it by failing closed'
+      predicted: 'none',
+      observed,
+      reason: 'no clientbound policy entry for ' + key + ', so the proxy decides it by failing closed'
     }
   }
-  const reason = POLICY_REASONS[policy.decision]
-  if (reason) return { verdict: 'expected', decision: policy.decision, reason }
-  if (seenProxied) return { verdict: 'expected', decision: policy.decision, reason: REPLAY_INSERT }
-  return {
-    verdict: 'unexplained',
-    decision: policy.decision,
-    reason: 'ordinary state reaches the live connection, so the client that joined directly saw it and the client behind the proxy did not'
+
+  const { predicted, decision } = prediction
+  const evidence = { predicted, observed, decision }
+
+  if (observed === 'both') {
+    // A frame the table says must never cross, or a kick both clients saw when
+    // only one connection was kicked. The prediction decides, not the count.
+    if (predicted === 'direct') {
+      return {
+        verdict: 'unexplained',
+        ...evidence,
+        reason: mismatchReason(key, predicted, observed, decision)
+      }
+    }
+    if (direct === proxied) return { verdict: 'same', ...evidence }
+    if (deterministic) {
+      return {
+        verdict: 'unexplained',
+        ...evidence,
+        reason: key + ': ' + direct + ' direct against ' + proxied + ' proxied on a lane that is deterministic, so a frame was lost or repeated'
+      }
+    }
+    return {
+      verdict: 'same',
+      ...evidence,
+      reason: key + ': ' + direct + ' direct against ' + proxied + ' proxied, which is timing, so the count stays evidence'
+    }
   }
+
+  if (observed === 'neither') return { verdict: 'same', ...evidence }
+
+  if (predicted === observed) {
+    return {
+      verdict: 'expected',
+      ...evidence,
+      reason: key + ' is ' + decision + ', and only the ' + observed + ' client sees it, which is what the table predicts'
+    }
+  }
+
+  if (predicted === 'direct_within_proxied' && observed === 'proxied') {
+    return { verdict: 'expected', ...evidence, reason: REPLAY_INSERT }
+  }
+
+  if (predicted === 'both' && decision === DECISION.LIVE_ONLY && !deterministic) {
+    return {
+      verdict: 'expected',
+      ...evidence,
+      reason: key + ' is relayed live and never cached, so on a lane that is not deterministic the two runs caught different live traffic'
+    }
+  }
+
+  return { verdict: 'unexplained', ...evidence, reason: mismatchReason(key, predicted, observed, decision) }
 }
 
 // A compact read of a decoded client state. The full snapshot holds every block
-// and entity; the report needs the shape, and the domain diffs carry the detail.
+// and entity. The report needs the shape, and the domain diffs carry the detail.
 function summarizeState (snapshot) {
   const slots = snapshot.windows.reduce((total, window) => total + window.slots.length, 0)
   return {
@@ -253,7 +366,7 @@ function summarizeState (snapshot) {
 }
 
 // The decoded-state comparison, in the report's vocabulary. pose and entities
-// are the two domains two connections cannot share; the rest are state the
+// are the two domains two connections cannot share. The rest are state the
 // replay must reproduce.
 export function compareState (directFrames, proxiedFrames, domains) {
   const expected = decodeState(directFrames)
@@ -286,14 +399,14 @@ function tally (list) {
 // The comparison body. Both sides are run records: { frames, playFrames }, where
 // frames carry { state, name } and playFrames carry { name, data } for the
 // client-state decode.
-export function compareRuns ({ direct, proxied, domains } = {}) {
+export function compareRuns ({ direct, proxied, domains, deterministic = false } = {}) {
   if (!direct || !proxied) throw new TypeError('two run records are required')
   for (const run of [direct, proxied]) {
     if (!Array.isArray(run.frames)) throw new TypeError('each run record needs a frames array')
     if (!Array.isArray(run.playFrames)) throw new TypeError('each run record needs a playFrames array')
   }
 
-  const frames = frameRows(direct.frames, proxied.frames)
+  const frames = frameRows(direct.frames, proxied.frames, deterministic === true)
   const state = compareState(direct.playFrames, proxied.playFrames, domains)
   const unexplained = [
     ...frames.filter(row => row.verdict === 'unexplained'),
@@ -304,6 +417,7 @@ export function compareRuns ({ direct, proxied, domains } = {}) {
 
   return {
     ok: unexplained.length === 0,
+    deterministic: deterministic === true,
     frames,
     state,
     unexplained,
@@ -315,6 +429,13 @@ export function compareRuns ({ direct, proxied, domains } = {}) {
 
 export function formatReport (report) {
   const lines = []
+  // Which lane ran decides whether a count difference is a finding, so the
+  // report says it before the rows.
+  if (report.lane) {
+    lines.push('lane ' + report.lane + (report.deterministic
+      ? ' (deterministic: a count difference is a finding)'
+      : ' (timing allowed: a count difference is evidence)'))
+  }
   for (const side of ['direct', 'proxied']) {
     const run = report.sides?.[side]
     if (!run) continue
@@ -711,11 +832,15 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
       return 2
     }
 
-    const comparison = compareRuns({ direct, proxied })
+    // The fake lane is deterministic: the same backend script answers both
+    // joins, so a count difference there is a frame lost or repeated. A real
+    // server's counts drift with time, so there a count is evidence only.
+    const deterministic = backend === null
+    const comparison = compareRuns({ direct, proxied, deterministic })
     const report = {
       rung: 'client-parity',
       issue: 13,
-      lane: backend === null ? 'fake' : 'endpoint',
+      lane: deterministic ? 'fake' : 'endpoint',
       version,
       chat: lanes.chat,
       churn: lanes.churnFrames ?? null,

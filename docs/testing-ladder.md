@@ -200,27 +200,44 @@ decodes both play streams through `src/ladder/client-state.js`, and writes
 `compareSnapshots` in `src/ladder/state-parity.js`, the same comparator the
 attach replay check uses.
 
-Every frame kind either side saw becomes one row, with four verdicts:
+Every frame kind either side saw becomes one row, with four verdicts. The
+policy table is the code under test, so it never decides a verdict on its own.
+It says which clients should see a frame, and the two clients say which ones did.
+A row that contradicts its prediction is a finding, in either direction.
 
-- `same`: both clients saw it, or neither did. A count difference stays in the
-  row as evidence and does not change the verdict.
-- `expected`: the difference follows from a decision the proxy already makes, so
-  the row carries the reason. `clientboundPolicy` in
-  `src/core/clientbound-policy.js` supplies it: a `per_leg` frame belongs to one
-  connection, a `block` frame is the proxy's own action, `cache_only` is the
-  cached login, and a `live_only` frame is traffic the two runs did not share.
-  Two decoded domains are expected to differ for the same reason: `pose`, which
-  the attach replay takes from the puppeted session, and `entities`, whose ids
-  belong to a connection.
+| Decision | Predicted sides | A row that contradicts it |
+|---|---|---|
+| `state` | both, and the proxied side is a superset because the cache can hold earlier state | the direct client saw it and the proxied one did not: the relay lost it |
+| `cache_only` | both, one live and one replayed | either client without a login |
+| `per_leg` | both, each from its own leg | either client without one |
+| `live_only` | both, when the traffic happened in both runs | either client without it, on a deterministic lane |
+| `block` | the direct client only | the proxied client saw it, which is a frame that crossed when it must not |
+| `kick_disconnect` | both | the proxied client never received the kick as a frame |
+
+The four verdicts:
+
+- `same`: the observation matches the prediction on both sides, and the counts
+  agree where they have to. On a lane that is not deterministic a count
+  difference is timing, and the row says so without changing the verdict.
+- `expected`: an observation the prediction allows. A `block` frame only the
+  direct client saw, state the attach replay inserted, live-only traffic one run
+  missed. The row names what was predicted and what was seen.
 - `absent`: a capability that #19, #20, #21, or #22 owns has not landed yet. The
   row names the issue and never fails the run. Today `play:player_chat` records
   the #19 gap with evidence: the direct client gets the signed chat and the
   proxied client does not, because the shipping chat mode is `read-only`.
-- `unexplained`: ordinary state reached the client that joined directly and never
-  reached the client behind the proxy. This is the only verdict that fails the
-  run, and it exits 1. The other direction is `expected`: state only the proxied
-  client saw came out of the attach replay, which carries the cache of a session
-  that started before the direct join.
+- `unexplained`: the observation contradicts the prediction. This is the only
+  verdict that fails the run, and it exits 1.
+
+Two decoded domains are predicted to differ between two connections: `pose`,
+which the attach replay takes from the puppeted session, and `entities`, whose
+ids belong to a connection. The other four must match, and they fail the run
+when they do not.
+
+A count is a finding only where it can be. The offline lane is deterministic, so
+a count difference there is a frame lost or repeated. A real server's counts
+drift with time, so a count there stays evidence. The report's first line names
+the lane and which rule applied.
 
 ### The two lanes
 
@@ -234,18 +251,34 @@ measures the relay rather than the cache. No auth, no cluster, no `.secrets`.
 With `--backend HOST:PORT` and `--front HOST:PORT` it runs the endpoint lane: the
 two joins and nothing else, against a server and a proxy an operator stood up.
 Both endpoints are required. The harness never builds a proxy with live legs, so
-it holds no custody and cannot disturb a deployment. The two joins run one after
-the other, because a server kicks the first session when one account opens two.
+it never holds the puppet's custody and cannot disturb the live deployment. The
+two joins run one after the other, because a server kicks the first session when
+one account opens two.
 
 The harness never joins the live Excalia fleet. Any `*.excalia.fr` host exits 2
 before a socket opens, so a mistyped endpoint cannot measure a server this repo
 does not own.
 
-The dev lane is the pair to point it at, with both endpoints in the cluster:
+The version is the target's, not the rung's. The fake lane serves 26.1 and
+refuses anything else. The dev lane and the testbed serve 26.2, so pass
+`--version 26.2`, or `MONOPLAYER_VERSION=26.2`, which
+`scripts/online-cluster.sh` forwards into the pod.
+
+Three pairs this repo deploys, and where each stands:
+
+| Target | `--backend` | `--front` | Version | Stands? |
+|---|---|---|---|---|
+| the offline lane | the fake backend | the rung's own Monoplayer | 26.1 | yes, `mise run parity:run` |
+| the dev lane | `paper.monoplayer-dev.svc.cluster.local:25565` | `monoplayer.monoplayer-dev.svc.cluster.local:25565` | 26.2 | wired, needs `dev:up`, its whitelist, and #44's account |
+| the transfer testbed | `paper-hub.monoplayer-gate-b.svc.cluster.local:25565` | `monoplayer-testbed.monoplayer.svc.cluster.local:25565` | 26.2 | wired, needs `testbed:up` |
+| the gate Paper | `paper.monoplayer-gate-b.svc.cluster.local:25565` | nothing is deployed | 26.2 | **unmet**: no proxy serves in front of it |
+
+The dev lane is the pair to run first. It needs no port-forward, because both
+endpoints are in the cluster:
 
 ```bash
 MONOPLAYER_FRONT_HOST=monoplayer.monoplayer-dev.svc.cluster.local \
-MONOPLAYER_FRONT_PORT=25565 \
+MONOPLAYER_FRONT_PORT=25565 MONOPLAYER_VERSION=26.2 \
   mise run dev:join -- --rung src/ladder/client-parity.js
 ```
 
@@ -257,10 +290,12 @@ and its attach whitelist names that account. The lane's own account lands with
 [#44](https://github.com/Bafbi/monoplayer/issues/44). A local run works the same
 way through two port-forwards (`kubectl -n monoplayer-dev port-forward svc/paper
 25565:25565` and the same for `svc/monoplayer`), and it needs the attach
-account's live custody, so prefer the pod.
+account's custody, so prefer the pod.
 
-The transfer testbed is the other pair: its front is the deployment and its
-backends are the two testbed Papers, so the same two flags measure it.
+The gate Paper has no row it can meet. A proxy in front of it needs the puppet's
+custody, and the harness will not build one, because that is the live custody the
+deployment owns. The dev lane is the deployed proxy that exists, and the endpoint
+lane's refusal tests cover the rest.
 
 The report is metadata only: no frame bytes, no `.secrets` paths, no tokens.
 

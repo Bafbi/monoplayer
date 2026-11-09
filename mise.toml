@@ -34,8 +34,9 @@ depends = ["install"]
 run = "node src/ladder/loopback.js || node src/ladder/next-rung.js loopback $?"
 
 [tasks."parity:run"]
-description = "Run the client parity report: the protocol bot joins a server directly and through the proxy, compared (#13)."
+description = "Run the client parity report: two protocol bots join a server, one directly and one through the proxy, compared (#13)."
 depends = ["install"]
+wait_for = ["check"]
 run = "node src/ladder/client-parity.js || node src/ladder/next-rung.js parity:run $?"
 
 [tasks.online]
