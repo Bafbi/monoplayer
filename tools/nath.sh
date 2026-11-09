@@ -4,7 +4,7 @@
 #   tools/nath.sh env                        session environment, as KEY=value
 #   tools/nath.sh launch <instance> [args...] start a Prism client on workspace 9, silent
 #   tools/nath.sh kill [instance]            stop the client of <instance>
-#   tools/nath.sh shot <path>                capture the client render to <path>
+#   tools/nath.sh shot <path> [instance]     capture the client render to <path>
 #
 # env, launch, and kill read the session on the host, deriving the
 # Hyprland signature from "hyprctl instances -j" and storing nothing. No caller
@@ -300,8 +300,16 @@ printf "%s\n" "$pids"
   fi
 }
 cmd_shot() {
-  local target=${1:-} reply path magic
+  local target=${1:-} instance=${2:-$default_instance} reply path magic
   [ -n "$target" ] || die "shot needs a destination path" 2
+  require_instance "$instance"
+
+  # The driver captures its own client, and another instance's client answers on
+  # the same port. The frame means something only when the port owner is this
+  # instance, so a capture for another instance is refused rather than returned.
+  if [ "$(driver_serves_instance "$instance" "$driver_port")" != yes ]; then
+    die "the driver port ${driver_port} belongs to another client or to none, so $instance cannot be captured: it has no mod, or another instance is running"
+  fi
 
   reply=$(driver_reply "$(driver_payload screenshot)")
   case $reply in

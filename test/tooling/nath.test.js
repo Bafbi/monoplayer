@@ -441,8 +441,9 @@ test('kill refuses an instance name that is not a bare name', () => {
 // shot
 // ---------------------------------------------------------------------------
 
-test('shot asks the driver, copies the PNG back, and checks it is a PNG', () => {
-  const h = harness()
+test('shot asks the driver, copies the PNG back, and checks it is a PNG', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer(JSON.stringify({ ok: true, data: { path: SCREENSHOT_PATH } }))
   const target = path.join(h.dir, 'shots', 'client.png')
   const run = h.run(['shot', target])
@@ -452,31 +453,48 @@ test('shot asks the driver, copies the PNG back, and checks it is a PNG', () => 
   assert.match(run.stdout, new RegExp('^REMOTE_PATH=' + SCREENSHOT_PATH + '$', 'm'))
   assert.match(run.stdout, /^BYTES=12$/m)
 
-  const [request, copy] = h.calls()
+  // The port owner is asked first, then the capture, then the copy.
+  const [owner, request, copy] = h.calls()
+  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric 25599')
   assert.deepEqual(request.argv, ['-W', '127.0.0.1:25599'])
   assert.match(request.stdin, /"op":"screenshot"/)
   assert.deepEqual(copy.argv, ['bafbi@nath.tail41e568.ts.net:' + SCREENSHOT_PATH, target + '.part'])
   assert.equal(readFileSync(target, 'latin1'), '\x89PNG\r\n\x1a\n0000')
 })
 
-test('shot surfaces the driver refusal and copies nothing', () => {
-  const h = harness()
+test('shot surfaces the driver refusal and copies nothing', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer('{"ok":false,"error":"not in a world"}')
   const run = h.run(['shot', path.join(h.dir, 'client.png')])
   assert.equal(run.status, 1)
   assert.match(run.stderr, /not in a world/)
-  assert.equal(h.calls().length, 1)
+  assert.equal(h.calls().length, 2)
 })
 
-test('shot fails honestly when the driver is not listening', () => {
-  const h = harness()
+test('shot refuses a capture for an instance the driver does not serve', (t) => {
+  // The Fabric client holds the port and would answer with its own window, so a
+  // capture for the unmodded instance has to fail instead of returning a frame.
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  h.answer(JSON.stringify({ ok: true, data: { path: SCREENSHOT_PATH } }))
+  const run = h.run(['shot', path.join(h.dir, 'client.png'), 'gate-b-player'])
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /the driver port 25599 belongs to another client or to none, so gate-b-player cannot be captured/)
+  assert.equal(h.calls().some(call => call.argv.includes('-W')), false, 'no capture is requested')
+})
+
+test('shot fails honestly when the driver is not listening', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   const run = h.run(['shot', path.join(h.dir, 'client.png')])
   assert.equal(run.status, 1)
   assert.match(run.stderr, /the driver is not answering on 127\.0\.0\.1:25599/)
 })
 
-test('shot rejects a copy that is not a PNG', () => {
-  const h = harness()
+test('shot rejects a copy that is not a PNG', (t) => {
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
   h.answer(JSON.stringify({ ok: true, data: { path: SCREENSHOT_PATH } }))
   const run = h.run(['shot', path.join(h.dir, 'client.png')], { NATH_TEST_SCP_MODE: 'text' })
   assert.equal(run.status, 1)
