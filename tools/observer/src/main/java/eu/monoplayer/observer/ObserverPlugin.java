@@ -33,8 +33,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Records what the server knows about a joining client: identity, address,
  * brand, client information, chat session presence, transfer intent, the
- * configuration gate, and resource pack status. One JSONL record per join, in
- * {@code plugins/MonoplayerObserver/views.jsonl}.
+ * configuration gate, and resource pack status. One JSONL record per
+ * observation of one connection, in
+ * {@code plugins/MonoplayerObserver/views.jsonl}: the join, and then again for
+ * each field that can only arrive after it. The report merges the records that
+ * share a source address into one view.
  *
  * <p>Read-only by construction: listeners run at MONITOR priority and never
  * cancel or edit a packet, so the observer cannot change what the server or the
@@ -270,9 +273,9 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
         return new String(data, index, length, StandardCharsets.UTF_8);
     }
 
-    // The resource-pack status is the one field that always arrives after the
-    // join, so a join alone cannot carry it. The view stays in the map and is
-    // written again when that status lands: one record per observation of one
+    // The resource-pack status arrives after the join, so the join record cannot
+    // carry it. The view stays in the map and is written again when the status
+    // lands, as it is for the chat session key. One record per observation of one
     // connection, and the report merges the records that share an address.
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
