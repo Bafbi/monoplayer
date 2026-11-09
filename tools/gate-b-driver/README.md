@@ -27,10 +27,12 @@ The installer copies the existing `gate-b-player` 26.1.2 instance to
 Launch:
 
 ```bash
-XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \
-  prismlauncher -l gate-b-player-fabric \
+tools/nath.sh launch gate-b-player-fabric \
   -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi
 ```
+
+`tools/nath.sh` derives the Hyprland session on the host, so no caller supplies
+`DISPLAY`, `WAYLAND_DISPLAY`, or `XDG_RUNTIME_DIR`.
 
 The driver binds loopback only. From the workspace, forward it:
 
