@@ -33,6 +33,7 @@ LIVE_NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
 LIVE_DEPLOYMENT=${MONOPLAYER_LIVE_DEPLOYMENT:-monoplayer}
 READY_TIMEOUT=${MONOPLAYER_DEV_READY_TIMEOUT:-600s}
 IMAGE_REPO=ghcr.io/bafbi/monoplayer
+LIVE_REPORT=${MONOPLAYER_DEV_REPORT:-.reports/dev-lane.json}
 
 die() { printf 'dev-lane: %s\n' "$1" >&2; exit "${2:-2}"; }
 say() { printf 'dev-lane: %s\n' "$1"; }
@@ -67,6 +68,10 @@ ensure_rcon_secret() {
 up() {
   guard
   ensure_rcon_secret
+  # The lane exists so the live deployment keeps serving. Reading its replica
+  # count before and after is what makes that a measurement, not a claim.
+  local before
+  before=$(live_replicas)
   kubectl apply -k "$ROOT/deploy/dev" >/dev/null
   say "applied deploy/dev to $DEV_NAMESPACE"
   kubectl -n "$DEV_NAMESPACE" rollout status deploy/paper --timeout="$READY_TIMEOUT" >/dev/null \
@@ -75,6 +80,15 @@ up() {
   # The proxy waits for the dev account (#44). Saying so beats a CrashLoop.
   kubectl -n "$DEV_NAMESPACE" get deploy monoplayer >/dev/null 2>&1 \
     && say 'the proxy is applied; it needs the dev account in monoplayer-dev-custody (#44)'
+  local after
+  after=$(live_replicas)
+  mkdir -p "$(dirname "$LIVE_REPORT")"
+  printf '{"devNamespace":"%s","live":{"before":"%s","after":"%s"}}\n' \
+    "$DEV_NAMESPACE" "${before:-unknown}" "${after:-unknown}" >"$LIVE_REPORT"
+  say "live replicas before $DEV_NAMESPACE came up: ${before:-unknown}, after: ${after:-unknown} ($LIVE_REPORT)"
+  if [ -n "$before" ] && [ "$before" != "$after" ]; then
+    die "the live deployment changed its replica count ($before -> $after) while the dev lane came up" 1
+  fi
   status
 }
 
@@ -90,12 +104,16 @@ down() {
 
 # Reading, never writing: this is how the "the live lane kept serving" claim is
 # checked after a dev run.
+live_replicas() {
+  kubectl -n "$LIVE_NAMESPACE" get deploy "$LIVE_DEPLOYMENT" \
+    -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true
+}
+
 status() {
   say "dev namespace $DEV_NAMESPACE"
   kubectl -n "$DEV_NAMESPACE" get pods --no-headers 2>/dev/null || say '  nothing running'
   local replicas
-  replicas=$(kubectl -n "$LIVE_NAMESPACE" get deploy "$LIVE_DEPLOYMENT" \
-    -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)
+  replicas=$(live_replicas)
   say "live $LIVE_NAMESPACE/$LIVE_DEPLOYMENT available replicas: ${replicas:-unknown}"
   local players
   players=$(kubectl -n "$DEV_NAMESPACE" get configmap monoplayer-dev-config \

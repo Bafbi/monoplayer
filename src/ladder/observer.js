@@ -59,9 +59,10 @@ export function compareViews (baseline = {}, puppet = {}) {
   }
 }
 
-// Every view record in a JSONL file, in order. The plugin also logs lifecycle
-// lines; anything that is not JSON, or not a client_view record, is skipped.
-export function views (text) {
+// The raw client_view records in a JSONL file, in order. The plugin also logs
+// lifecycle lines; anything that is not JSON, or not a client_view record, is
+// skipped.
+export function records (text) {
   const found = []
   for (const line of String(text).split('\n')) {
     const trimmed = line.trim()
@@ -71,6 +72,30 @@ export function views (text) {
     if (record && record.event === 'client_view') found.push(record)
   }
   return found
+}
+
+// The observed fields of one record, with the unobserved ones dropped, so a later
+// record can fill an earlier one without erasing what it already knew.
+const observed = record => Object.fromEntries(
+  Object.entries(record).filter(([, value]) => value !== null && value !== undefined)
+)
+
+// One view per connection. A connection is written more than once: the join
+// record, then the resource-pack status, which always arrives afterwards. Two
+// records that share an address describe the same connection, so the later one
+// fills in the fields the earlier one could not see. A reconnect gets a new
+// source port, so it starts a new view.
+export function views (text) {
+  const merged = []
+  for (const record of records(text)) {
+    const previous = merged.at(-1)
+    if (previous && previous.address && previous.address === record.address) {
+      Object.assign(previous, observed(record))
+      continue
+    }
+    merged.push({ ...record })
+  }
+  return merged
 }
 
 // The last view record in a JSONL file.

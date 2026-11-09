@@ -11,7 +11,7 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh) || node src/ladder/next-rung.js lint $?"
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/observer-report.sh) || node src/ladder/next-rung.js lint $?"
 
 [tasks."secrets:link"]
 description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
@@ -109,7 +109,7 @@ description = "Build the pinned ProtocolLib jar the observer plugin links agains
 run = "scripts/build-protocollib.sh"
 
 [tasks."dev:up"]
-description = "Bring up the dev validation lane: its own Paper, Monoplayer, custody volume, and account (#42)."
+description = "Bring up the dev validation lane: its own Paper, Monoplayer, and custody volume (#42). The account is #44."
 run = "scripts/dev-lane.sh up"
 
 [tasks."dev:image"]

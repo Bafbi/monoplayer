@@ -10,9 +10,10 @@ account token chain is a rolling file, and two writers race it. So every test
 that needs a real backend used to serialize against the live deployment, and
 the testbed cycle took the live front down for the length of a run.
 
-This lane has its own Paper, its own Monoplayer, its own custody volume, and its
-own account. Compute is cheap; the one-writer identity is what shaped the split,
-so the lane gets its own account rather than borrowing the live one.
+This lane has its own Paper, its own Monoplayer, and its own custody volume.
+Compute is cheap. The one-writer identity is what shaped the split, so the lane
+gets its own account rather than borrowing the live one, and that account lands
+with [#44](https://github.com/Bafbi/monoplayer/issues/44).
 
 | Piece | Where |
 |---|---|

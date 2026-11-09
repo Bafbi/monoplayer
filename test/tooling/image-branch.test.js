@@ -32,15 +32,10 @@ test('the branch workflow cannot reach the deploy branch or the live lane', () =
   assert.doesNotMatch(BRANCH, /git checkout deploy/, 'no deploy branch checkout')
   assert.doesNotMatch(BRANCH, /deploy\/manifests/, 'never writes the live manifests')
   assert.doesNotMatch(BRANCH, /argocd/i, 'never touches Argo')
-  // The only kubectl in the file is the operator instructions printed to the step
-  // summary, not a call. Anything else would mean the build reaches a cluster.
-  const kubectlLines = BRANCH.split('\n').filter(line => line.includes('kubectl'))
-  assert.ok(kubectlLines.length > 0, 'the summary tells the operator what to run')
-  assert.equal(
-    kubectlLines.every(line => line.trim().startsWith('echo')),
-    true,
-    'kubectl appears only inside an echo: ' + kubectlLines.join(' / ')
-  )
+  // No cluster call at all. The summary points the operator at the mise task,
+  // which honours the dev namespace variable rather than hardcoding one.
+  assert.doesNotMatch(BRANCH, /kubectl/, 'never talks to a cluster')
+  assert.match(BRANCH, /echo "mise run dev:image \$TAG"/, 'the summary tells the operator what to run')
 })
 
 test('the branch workflow refuses main, which has its own producer', () => {

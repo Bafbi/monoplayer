@@ -93,12 +93,22 @@ change what the server or the client does.
 | `address` | the socket | **the one accepted difference**: the proxy's egress address reads as a client behind a VPN |
 | `brand` | `minecraft:brand` in configuration | none: the puppet announces `fabric` |
 | `locale`, `viewDistance`, `mainHand`, `skinParts` | `settings` | none once a human has attached; the view distance is the backend's cap, not the human's render distance |
-| `chatSession` | the session key registration | **expected**: the puppet registers its own key, so the server sees a session, but the human's key never crosses |
+| `chatSession` | the session key registration | none: both joins register the account's own key, so the field matches. The human's key never crosses |
 | `resourcePack` | the resource-pack status | none: the puppet answers its own pack |
 | `transferred` | the transfer intent | none |
 
 Anything not in that table is a finding, and the comparison fails the run for
-it. `node src/ladder/observer.js` is the comparison: it takes two logs, or one
+it.
+
+**Not recorded yet:** dialog interactions. The plugin has no dialog field, so a
+dialog and its click are invisible to this report until
+[#20](https://github.com/Bafbi/monoplayer/issues/20) and
+[#21](https://github.com/Bafbi/monoplayer/issues/21) give the human the dialog.
+
+A connection is written more than once: the record at join, then another when
+the resource-pack status arrives, because that status always comes later. The
+report merges the records that share a source address into one view, so a later
+field fills in what the join could not see. `node src/ladder/observer.js` is the comparison: it takes two logs, or one
 log holding both joins, and prints a verdict per field.
 
 ## Running the server-view report
@@ -122,6 +132,11 @@ when any field is unexplained.
 The direct baseline is the same account, not a control account. A different
 account would put `player` and `uuid` in the report as differences and hide
 the ones being measured.
+
+**The baseline client is the protocol bot, not a vanilla client.** The ticket
+asks for "a direct vanilla or Fabric baseline client". The bot proves the wire
+and nothing about rendering, and it is what runs today. A vanilla client in
+either role is not built.
 
 ## Not built yet
 
