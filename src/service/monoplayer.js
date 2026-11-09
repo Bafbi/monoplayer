@@ -110,11 +110,12 @@ export const DEFAULT_CONFIG = Object.freeze({
     chainResetMs: 120_000,
     // Keep the attached client's connection through a followed transfer (or a
     // server reconfiguration): the client re-enters configuration on its own
-    // socket and lands in the target's play state (#22). Off by default: the
-    // client is detached, the puppet moves, and the client rejoins. The
-    // testbed run that proves the kept connection is the evidence gate for
-    // flipping this default.
-    keepConnection: false,
+    // socket and lands in the target's play state (#22). The transfer testbed
+    // measured this with a real client on 2026-11-09: one socket, no kick,
+    // `transfersSeamless 1`, `frontKicks 0`, the target's login on the same
+    // connection. Setting it false is the pre-#22 behaviour: the client is
+    // detached, the puppet moves, and the client rejoins.
+    keepConnection: true,
     // A kept client's configuration round has a deadline: a target that
     // restarts the phase and then sends nothing must not freeze the human's
     // connection on a loading screen. On expiry the move is restored. 0
