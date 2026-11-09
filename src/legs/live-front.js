@@ -818,7 +818,10 @@ function createFrontLeg ({
       if (pending && attached.state === 'play' && meta?.state === 'configuration') {
         pending.frames.push({ buffer, meta })
         while (pending.frames.length > MAX_PENDING_RECONFIGURATION_FRAMES) {
-          pending.frames.shift()
+          // Drop the newest: the earliest frames carry the registries the rest
+          // of the round depends on. A queue this deep means the client never
+          // acknowledged, and the core's configuration deadline ends the round.
+          pending.frames.pop()
           pending.dropped++
           metrics.reconfigurationFramesDropped++
         }

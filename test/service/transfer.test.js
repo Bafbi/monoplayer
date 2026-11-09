@@ -3,7 +3,7 @@
 // with the target's state (#22); with nobody attached the puppet moves alone.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
+import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -494,4 +494,32 @@ test('a transfer during the client\'s own configuration is refused, not half-ser
   assert.equal(rig.core.metrics.transfersSeamless, 0)
   assert.equal(rig.core.session.state, 'attached')
   assert.equal(rig.core.moveKind, null)
+})
+
+test('the reconfiguration deadline is configurable and validated', () => {
+  assert.equal(loadConfig().transfer.reconfigureTimeoutMs, 30_000)
+  assert.equal(loadConfig({ transfer: { reconfigureTimeoutMs: 0 } }).transfer.reconfigureTimeoutMs, 0)
+  assert.equal(loadConfig({ transfer: { reconfigureTimeoutMs: 5000 } }).transfer.reconfigureTimeoutMs, 5000)
+  assert.throws(() => loadConfig({ transfer: { reconfigureTimeoutMs: -1 } }), /reconfigureTimeoutMs/)
+  assert.throws(() => loadConfig({ transfer: { reconfigureTimeoutMs: 'soon' } }), /reconfigureTimeoutMs/)
+})
+
+test('a restore round the client never finishes detaches it at the deadline', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  // The target dies, so the restore round starts and the client never answers.
+  rig.backendLeg.deliverEnd({ reason: 'target_lost' })
+  assert.equal(rig.core.restoring, true)
+  assert.ok(rig.clock.pending >= 1, 'the restore round has a deadline')
+
+  rig.clock.tick(30_000)
+  assert.equal(rig.core.restoring, false)
+  assert.equal(rig.core.attached, false)
+  assert.equal(rig.core.session.state, 'detached')
+  assert.match(String(rig.frontLeg.endReasons().at(-1)?.reason), /transfer_restore_timeout/)
 })

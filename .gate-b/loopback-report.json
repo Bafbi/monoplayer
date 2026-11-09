@@ -5,7 +5,7 @@
   "backend": "node-fake",
   "version": "26.1",
   "passed": true,
-  "durationMs": 5714,
+  "durationMs": 5711,
   "assertions": [
     {
       "id": "R0",
@@ -578,8 +578,8 @@
     }
   ],
   "evidence": {
-    "frontPort": 37247,
-    "backendPort": 45843,
+    "frontPort": 43379,
+    "backendPort": 41683,
     "configReplayMode": "cached_replay",
     "wire": {
       "checked": 86,
@@ -609,8 +609,8 @@
       "leftovers": 0,
       "errors": 0
     },
-    "backend2Port": 45765,
-    "handshakeProxyPort": 39025,
+    "backend2Port": 41565,
+    "handshakeProxyPort": 35081,
     "gate": {
       "sends": 1,
       "accepts": 1,
@@ -636,7 +636,7 @@
     "transfer": {
       "target": {
         "host": "127.0.0.1",
-        "port": 39025
+        "port": 35081
       },
       "handshakeIntents": [
         3
