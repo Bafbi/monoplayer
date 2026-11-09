@@ -1,5 +1,0 @@
-fixture listening on 127.0.0.1:25565 version=26.1 whitelist=.secrets/attach-whitelist.json
-attachAllowed user=Bafbi uuid=6eb73524-ff88-4a62-a8d0-c63905e7afba
-{"event":"attachAllowed","username":"Bafbi","uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi","stage":"login"}
-{"event":"login","username":"Bafbi","uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba"}
-{"event":"end","username":"Bafbi","reason":"socketClosed"}

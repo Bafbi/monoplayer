@@ -81,11 +81,14 @@ with `node src/custody/cli.js accounts` and `node src/custody/cli.js status --ac
 glowsquidye`; the runbook is [docs/custody.md](docs/custody.md).
 
 **Paper behind Velocity** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
-forwarding; the authenticated puppet joined through the proxy. Evidence:
-[testdata/custody-verdict.json](testdata/custody-verdict.json),
-[testdata/m4-verdict.json](testdata/m4-verdict.json). The official
+forwarding; the authenticated puppet joined through the proxy. The official
 26.1.2 client has since attached through the full Velocity + Paper path,
-rendered, moved, and edited blocks: [testdata/m4-driver-verdict.json](testdata/m4-driver-verdict.json). B1 live is
-green; next are B2-B6.
+rendered, moved, and edited blocks. B1 live is green; next are B2-B6.
+
+Each row's evidence is one page in `testdata/`: [custody](testdata/gate-b-custody.md),
+[driver G0](testdata/gate-b-driver.md), [M4](testdata/gate-b-m4.md),
+[the live front](testdata/gate-b-live.md), [the online rung](testdata/online-rung.md),
+and [the protocol spike](testdata/gate-a.md). Each page quotes the verdict, the
+date, the command that produced it, and the fact the run establishes.
 
 Created in [T3 Code](https://t3.codes).
