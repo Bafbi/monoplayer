@@ -197,6 +197,10 @@ The runner builds:
 - `O30` a dialog sent while nobody is attached is held (`controlDialogsHeld`
   1) and re-sent to the reattaching client (`controlDialogsResent` 1, one
   `show_dialog` decoded by the second bot, a `controlDialogResent` log line).
+  The backend leg runs `MONOPLAYER_DIALOG_ACTION=last`, and it must log
+  `dialogUnhandled` with `play_dialog_waits`: the wait, not a click attempt.
+  The fake backend also records no `custom_click_action` before the bot
+  answers (#20).
 - `O31` the client's answer reaches the backend as the puppet's dialog click:
   one `custom_click_action` with the dialog's id on the fake backend,
   `controlDialogsAnswered` 1, and nothing left pending.
@@ -234,7 +238,7 @@ The four verdicts:
 - `expected`: an observation the prediction allows. A `block` frame only the
   direct client saw, state the attach replay inserted, live-only traffic one run
   missed. The row names what was predicted and what was seen.
-- `absent`: a capability that #19, #20, #21, or #22 owns has not landed yet. The
+- `absent`: a capability that #19, #21, or #22 owns has not landed yet. The
   row names the issue and never fails the run. Today `play:player_chat` records
   the #19 gap with evidence: the direct client gets the signed chat and the
   proxied client does not, because the shipping chat mode is `read-only`.

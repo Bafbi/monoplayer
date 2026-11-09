@@ -220,8 +220,10 @@ test('#16 an answer in the wrong state leaves the gate pending', () => {
 
 test('#16 a dialog the puppet answered itself is not offered to the next client', () => {
   const rig = warmBackend()
-  // The backend leg answered it with MONOPLAYER_DIALOG_ACTION before the core
-  // saw the frame, so there is no question left for the human.
+  // The backend leg answers a configuration gate with MONOPLAYER_DIALOG_ACTION
+  // before the core sees the frame, and reports it through onDialogAnswered. A
+  // play dialog can never be reported that way (#20), so the marker is set
+  // directly here to prove the core still spends it.
   rig.core.notePuppetDialogAnswer({ state: 'play' })
   rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('answered') })
 
@@ -248,4 +250,71 @@ test('#16 a backend teardown drops the held dialog', () => {
 
   rig.backendLeg.deliverEnd({ reason: 'backend_restart' })
   assert.equal(rig.core.pendingDialog.held, false, 'a dialog from a dead session is not the next session\'s question')
+})
+
+// --- #20: the human owns every play dialog ---------------------------------
+
+test('#20 a play dialog with no client attached waits and is delivered on attach', () => {
+  const rig = warmBackend()
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('play-dialog') })
+
+  assert.equal(relayedNames(rig, 'show_dialog').length, 0, 'nothing is relayed with no client')
+  assert.equal(rig.core.metrics.controlDialogsHeld, 1)
+  assert.equal(rig.core.pendingDialog.peek().name, 'show_dialog')
+
+  attach(rig)
+  const relayed = relayedNames(rig, 'show_dialog')
+  assert.equal(relayed.length, 1, 'the human receives it when they attach')
+  assert.equal(relayed[0].meta.state, 'play')
+  assert.equal(rig.core.metrics.controlDialogsResent, 1)
+  assert.equal(rig.core.metrics.controlDialogsRelayed, 0, 'a re-send is not a live relay')
+  assert.equal(rig.core.pendingDialog.held, true, 'it stays held until the human answers it')
+})
+
+test('#20 a newer play dialog replaces the held one', () => {
+  const rig = warmBackend()
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('first') })
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('second') })
+
+  assert.equal(rig.core.metrics.controlDialogsShown, 2)
+  assert.equal(rig.core.pendingDialog.held, true, 'one dialog is outstanding at a time')
+
+  attach(rig)
+  const relayed = relayedNames(rig, 'show_dialog')
+  assert.equal(relayed.length, 1, 'only the newer dialog is delivered')
+  assert.equal(relayed[0].buffer.toString(), 'second')
+})
+
+test('#20 a play dialog that arrives before the cache is warm is delivered through the early attach', () => {
+  // The client attaches while the puppet is still configuring, then the puppet
+  // logs in and the server asks a play dialog before the join prefix is warm.
+  // Nothing can be written to the client yet, so the holder keeps the dialog
+  // and the early attach's replay delivers it.
+  const rig = makeCore()
+  attachConfiguring(rig)
+  rig.core.attachPlayer({ name: 'Bafbi', uuid: PLAYER, includeConfig: false })
+  assert.equal(rig.core.frontPlayReady, false)
+
+  rig.backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 42 } })
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('pre-warm') })
+  assert.equal(relayedNames(rig, 'show_dialog').length, 0, 'a pre-warm client cannot take a play frame')
+  assert.equal(rig.core.pendingDialog.held, true)
+  assert.equal(rig.core.metrics.controlDialogsHeld, 1)
+
+  for (const frame of [
+    { name: 'game_state_change', data: { reason: 13, gameMode: 0 } },
+    { name: 'position', data: { teleportId: 9, x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 } },
+    { name: 'chunk_batch_start', data: {} },
+    { name: 'map_chunk', data: { x: 0, z: 0 } },
+    { name: 'chunk_batch_finished', data: {} }
+  ]) rig.backendLeg.deliver({ state: 'play', ...frame })
+
+  assert.equal(rig.core.cache.warm, true)
+  assert.equal(rig.core.frontPlayReady, true, 'the early attach is now play-ready')
+  const relayed = relayedNames(rig, 'show_dialog')
+  assert.equal(relayed.length, 1, 'the early attach delivers the dialog it arrived too soon for')
+  assert.equal(relayed[0].buffer.toString(), 'pre-warm')
+  assert.equal(rig.core.metrics.controlDialogsResent, 1)
+  assert.equal(rig.frontLeg.frames().at(-1).name, 'show_dialog',
+    'and it arrives after the replay, with the client in play')
 })

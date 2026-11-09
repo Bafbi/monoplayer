@@ -123,13 +123,6 @@ export const PENDING = Object.freeze([
     reason: 'the read-only chat mode drops the signed player chat until #19 flips it to full'
   }),
   Object.freeze({
-    issue: '#20',
-    capability: 'play dialogs',
-    state: 'play',
-    names: Object.freeze(['show_dialog', 'clear_dialog']),
-    reason: 'the puppet answers play dialogs on its own connection until #20 relays them to the human'
-  }),
-  Object.freeze({
     issue: '#21',
     capability: 'configuration gates',
     state: 'configuration',
