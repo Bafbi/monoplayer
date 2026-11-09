@@ -20,7 +20,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The human's chat and commands are spoken as the account | built, off by default | [#19](https://github.com/Bafbi/monoplayer/issues/19) |
 | A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human answers every play dialog, and the puppet never clicks one | built | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
-| The human answers configuration gates, including the code of conduct | **not built** | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
+| The human answers configuration gates, including the code of conduct | built | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
 | A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
 | Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
 | The proxy's egress address is accepted as different | **accepted limit** | [#11](https://github.com/Bafbi/monoplayer/issues/11) |
@@ -100,11 +100,17 @@ for one case only, a configuration gate with no player attached, and it stands
 down as soon as a player can answer. What that headless configuration session
 does is [#21](https://github.com/Bafbi/monoplayer/issues/21).
 
-The code of conduct is accepted by the protocol library itself, on the puppet's
-connection, before the core sees the frame. The gate therefore reaches the human
-already answered, and making it a human decision needs a write-time interception
-on the backend leg. That is [#21](https://github.com/Bafbi/monoplayer/issues/21).
-The relay and hold path this section describes is #16.
+The code of conduct is the one gate the protocol library answers itself. Its
+configuration handler writes `accept_code_of_conduct` as soon as the gate
+arrives, before the core sees the frame. The backend leg therefore wraps that
+connection's writer, and the accept becomes the leg's decision. While a player is
+attached the library's frame is dropped, and the player answers the gate over the
+relay path above. With nobody attached the leg sends the accept and logs
+`codeOfConductAccepted`, so a headless session is not left at a gate. The leg
+also reports that answer to the core, which therefore never holds a gate the
+server already considers closed. Neither branch has a timeout: an attached player
+keeps the gate as long as it takes. The relay and hold path this section
+describes is #16.
 
 ## A followed transfer
 

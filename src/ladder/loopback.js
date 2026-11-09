@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O31 (including O11b and O24b) are the contract
+// Assertions R0, O32, and O1-O31 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -118,7 +118,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // --- setup: fake backend, config, real legs, core ---
     // A cap the protocol library never sends by default (10), so O26 proves the
     // puppet replaced its own value instead of matching it by accident.
-    fake = await createFakeBackend({ port: 0, logStream: null, viewDistance: 6 })
+    // #21: this backend also has the code of conduct enabled, so the puppet's
+    // first configuration phase carries a gate that the protocol library
+    // answers itself. Nothing is attached yet, so this is the no-client
+    // fallback: the leg accepts it and says so (O32).
+    fake = await createFakeBackend({ port: 0, logStream: null, viewDistance: 6, codeOfConduct: true })
     evidence.backendPort = fake.port
     // A second backend is the target of the followed transfer (O21-O24).
     fake2 = await createFakeBackend({ port: 0, logStream: null })
@@ -155,6 +159,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // The deployed lanes set this, and O30 proves it never reaches a play
       // dialog: the dialog waits for the human instead of being clicked (#20).
       dialogAction: 'last',
+      // #21: a gate is the human's while they are attached, and the puppet's
+      // own accept is reported to the core so nothing waits for a client.
+      isHumanAttached: () => core.attached === true,
+      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
       log
     })
     const wire = createWireChecker({ version: VERSION })
@@ -229,6 +237,17 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // --- run: connect, readiness, listen ---
     phase = 'run'
     await backend.connect()
+    // #21: the gate is answered before this promise resolves, because the fake
+    // backend withholds finish_configuration until the accept arrives.
+    const gateAtConnect = {
+      sends: fake.received.codeOfConductSends,
+      accepts: fake.received.codeOfConductAccepts,
+      logged: logs.some(entry => entry.event === 'codeOfConductAccepted'),
+      heldLogged: logs.some(entry => entry.event === 'codeOfConductHeld'),
+      queued: core.pendingDialog.held,
+      answeredByPuppet: core.metrics.controlDialogsPuppetAnswered
+    }
+    evidence.gate = gateAtConnect
     const readiness = await waitForReady({ core, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
     check('R0', 'readiness warm from chunk_batch_finished', readiness.warm === true, {
       warm: readiness.warm,
@@ -705,6 +724,27 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         clicks: fake.received.customClickActions.map(click => click.id),
         answered: core.metrics.controlDialogsAnswered,
         pending: core.pendingDialog.held
+      }
+    )
+
+    // --- O32: the code-of-conduct gate, answered by the puppet while nobody was
+    // attached ---
+    // The library writes the accept itself, before the core sees the gate. The
+    // leg's write wrapper lets it out only because no client holds the slot,
+    // logs it, and tells the core, so the gate never becomes the next client's
+    // question. The bot never answered it: O30's one resent dialog is the play
+    // dialog, and the gate's accept is the one the backend counted at connect.
+    check(
+      'O32',
+      'a configuration gate with no client attached is accepted by the puppet, logged, and not held for the next client',
+      gateAtConnect.sends === 1 && gateAtConnect.accepts === 1 &&
+        gateAtConnect.logged === true && gateAtConnect.heldLogged === false &&
+        gateAtConnect.queued === false && gateAtConnect.answeredByPuppet === 1 &&
+        core.metrics.controlDialogsResent === 1,
+      {
+        ...gateAtConnect,
+        resent: core.metrics.controlDialogsResent,
+        held: core.metrics.controlDialogsHeld
       }
     )
 
