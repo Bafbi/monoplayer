@@ -275,7 +275,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O1',
       'first attach allowed, no denials, offline front leg',
       front.metrics.allowed === 1 && front.metrics.denied === 0 &&
-        front.kind === 'offline-front-leg' && front.gateStoreFile === null,
+        front.kind === 'offline-front-leg' && front.checkStoreFile === null,
       { allowed: front.metrics.allowed, denied: front.metrics.denied, kind: front.kind }
     )
     check(

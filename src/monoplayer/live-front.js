@@ -16,7 +16,7 @@
 //      "OfflinePlayer:<name>").
 //   2. beforeLogin (synchronous; createServer option): deny a second attach
 //      before any verification, then run the core login decision (fail closed)
-//      and the mode's gate. Deny = client.end('attach denied (...)'): the
+//      and the mode's check. Deny = client.end('attach denied (...)'): the
 //      Server.end override writes the login-state disconnect then ends the
 //      serializer chain, so the library's follow-up compress/success writes in
 //      loginClient are mechanically dropped (client.write no-ops on an ended
@@ -44,9 +44,9 @@
 // still describes the puppet's session (backend entity id and state).
 import mc from 'minecraft-protocol'
 
-import { createAttachGate, DENY_REASONS } from '../auth/attach.js'
-import { createWhitelistStore } from '../auth/store.js'
-import { normalizeUuid } from '../auth/util.js'
+import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
+import { createWhitelistStore } from '../custody/store.js'
+import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { clientboundPolicy } from './clientbound-policy.js'
 
@@ -207,36 +207,36 @@ function evaluateCoreDecision (coreDecision) {
   return { ok: true, reason: null }
 }
 
-function decideViaGate ({ client, store = null, gate, coreDecision = null } = {}) {
+function decideViaCheck ({ client, store = null, check, coreDecision = null } = {}) {
   const core = evaluateCoreDecision(coreDecision)
   if (!core.ok) return core
-  if (!gate || typeof gate.gateVerified !== 'function') {
-    return { ok: false, reason: 'gate_unavailable' }
+  if (!check || typeof check.checkVerified !== 'function') {
+    return { ok: false, reason: 'check_unavailable' }
   }
 
   let decision
   try {
-    decision = gate.gateVerified({ client, store })
+    decision = check.checkVerified({ client, store })
   } catch (error) {
-    return { ok: false, reason: 'gate_error', detail: String(error?.message ?? error).slice(0, 200) }
+    return { ok: false, reason: 'check_error', detail: String(error?.message ?? error).slice(0, 200) }
   }
   if (!decision || decision.ok !== true) {
-    return { ok: false, reason: decision?.reason ?? 'gate_denied' }
+    return { ok: false, reason: decision?.reason ?? 'check_denied' }
   }
   return { ok: true, reason: null, uuid: decision.uuid ?? null, username: decision.username ?? null }
 }
 
 // Pure online attach decision: core loginStart (fail closed), then the real
-// hasJoined-backed whitelist gate. Exported for socket-free tests.
+// hasJoined-backed whitelist check. Exported for socket-free tests.
 export function decideOnlineAttach (input = {}) {
-  return decideViaGate(input)
+  return decideViaCheck(input)
 }
 
-// Offline gate: username and uuid must be strings; the normalized uuid must be
+// Offline check: username and uuid must be strings; the normalized uuid must be
 // on the offline whitelist. No name matching, no wildcard.
-function createOfflineAttachGate ({ whitelist }) {
+function createOfflineAttachCheck ({ whitelist }) {
   return {
-    gateVerified ({ client } = {}) {
+    checkVerified ({ client } = {}) {
       const username = typeof client?.username === 'string' && client.username.length > 0
         ? client.username
         : null
@@ -258,7 +258,7 @@ function createOfflineAttachGate ({ whitelist }) {
   }
 }
 
-// Shared body. The constructors below own the mode-specific pieces (gate,
+// Shared body. The constructors below own the mode-specific pieces (check,
 // store, loopback checks); this body never decides the mode itself.
 function createFrontLeg ({
   kind,
@@ -267,7 +267,7 @@ function createFrontLeg ({
   host,
   port,
   version,
-  gate,
+  check,
   store,
   getSnapshotConfig,
   log,
@@ -285,11 +285,11 @@ function createFrontLeg ({
   if (dumpRaw !== null && typeof dumpRaw !== 'function') throw new TypeError('dumpRaw must be null or a function')
   if (dumpFramed !== null && typeof dumpFramed !== 'function') throw new TypeError('dumpFramed must be null or a function')
 
-  let loginStartHandler = null // core gate 1 call-in (processLoginStart)
+  let loginStartHandler = null // core check 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
   let detachHandler = null // core detach
   let errorHandler = null
-  let attached = null // the one client through the pipeline (gate pass or attached)
+  let attached = null // the one client through the pipeline (check pass or attached)
 
   const wireStats = { checked: 0, rejected: 0, lastFailure: null }
 
@@ -384,10 +384,10 @@ function createFrontLeg ({
       return
     }
 
-    const decision = decideViaGate({
+    const decision = decideViaCheck({
       client,
       store,
-      gate,
+      check,
       coreDecision: coreDecisionFor(client)
     })
     if (!decision.ok) {
@@ -409,7 +409,7 @@ function createFrontLeg ({
     // writes/completion (we are inside the synchronous beforeLogin window).
     installConfigInterceptor(client)
 
-    // Own the client slot: a second connection is denied at the next gate.
+    // Own the client slot: a second connection is denied at the next check.
     attachCandidate(client)
   }
 
@@ -422,7 +422,7 @@ function createFrontLeg ({
     try { client.end(`attach denied (${reason})`) } catch { /* client already gone */ }
   }
 
-  // The attach slot is claimed at gate-pass time so a second racing client
+  // The attach slot is claimed at check-pass time so a second racing client
   // is denied up-front rather than kicked at playerJoin.
   function attachCandidate (client) {
     if (attached && attached !== client) return // first client still holds the slot
@@ -544,7 +544,7 @@ function createFrontLeg ({
     },
     writeRaw (buffer, meta = null) {
       if (!attached) return false
-      // Last-write gate: even if the core router regresses, a frame the
+      // Last-write check: even if the core router regresses, a frame the
       // clientbound policy blocks never reaches the client. The cache and
       // router already drop these; this is the independent backstop.
       if (meta && (meta.state === 'play' || meta.state === 'configuration')) {
@@ -570,7 +570,7 @@ function createFrontLeg ({
     get listening () { return Boolean(server) },
     get attached () { return attached ?? null },
     get metrics () { return { ...metrics } },
-    get gateStoreFile () { return store?.file ?? null },
+    get checkStoreFile () { return store?.file ?? null },
     get port () { return actualPort() },
     get wireStats () {
       return {
@@ -631,7 +631,7 @@ export function createLiveFrontLeg (options = {}) {
     host,
     port,
     version,
-    gate: createAttachGate({ log: () => {} }),
+    check: createAttachCheck({ log: () => {} }),
     store: createWhitelistStore({ file: attachWhitelistFile }),
     getSnapshotConfig,
     log,
@@ -686,7 +686,7 @@ export function createOfflineFrontLeg (options = {}) {
     host,
     port,
     version,
-    gate: createOfflineAttachGate({ whitelist }),
+    check: createOfflineAttachCheck({ whitelist }),
     store: null,
     getSnapshotConfig,
     log,

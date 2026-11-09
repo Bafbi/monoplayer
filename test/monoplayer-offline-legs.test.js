@@ -82,7 +82,7 @@ test('offline front leg rejects attachWhitelistFile and is loopback-scoped', () 
   })
   assert.equal(leg.kind, 'offline-front-leg')
   assert.equal(leg.port, null)
-  assert.equal(leg.gateStoreFile, null)
+  assert.equal(leg.checkStoreFile, null)
   assert.equal(leg.lastConfigMode, 'pending')
   assert.deepEqual(leg.wireStats, { checked: 0, rejected: 0, byState: {}, lastFailure: null })
 })
@@ -105,7 +105,7 @@ test('live front leg requires attachWhitelistFile and rejects offlineWhitelist',
   })
   assert.equal(leg.kind, 'live-front-leg')
   assert.equal(leg.port, null)
-  assert.equal(leg.gateStoreFile, '/tmp/opencode/attach-whitelist.json')
+  assert.equal(leg.checkStoreFile, '/tmp/opencode/attach-whitelist.json')
   assert.equal(leg.lastConfigMode, 'pending')
 })
 
@@ -330,13 +330,13 @@ test('second attach is denied before verification', () => {
 
 test('online attach decision fails closed on a thrown or non-allow core decision', () => {
   const client = { username: 'Bafbi', uuid: 'd18d8d12-ce09-3d31-9737-2e800b83b67c' }
-  const allowGate = {
-    gateVerified: () => ({ ok: true, reason: null, username: 'Bafbi', uuid: client.uuid })
+  const allowCheck = {
+    checkVerified: () => ({ ok: true, reason: null, username: 'Bafbi', uuid: client.uuid })
   }
 
   const thrown = decideOnlineAttach({
     client,
-    gate: allowGate,
+    check: allowCheck,
     coreDecision: () => { throw new Error('core blew up') }
   })
   assert.equal(thrown.ok, false)
@@ -344,7 +344,7 @@ test('online attach decision fails closed on a thrown or non-allow core decision
 
   const empty = decideOnlineAttach({
     client,
-    gate: allowGate,
+    check: allowCheck,
     coreDecision: () => ({})
   })
   assert.equal(empty.ok, false)
@@ -352,7 +352,7 @@ test('online attach decision fails closed on a thrown or non-allow core decision
 
   const denied = decideOnlineAttach({
     client,
-    gate: allowGate,
+    check: allowCheck,
     coreDecision: () => ({ allowed: false, reason: 'name_not_on_whitelist' })
   })
   assert.equal(denied.ok, false)
@@ -360,24 +360,24 @@ test('online attach decision fails closed on a thrown or non-allow core decision
 
   const allowed = decideOnlineAttach({
     client,
-    gate: allowGate,
+    check: allowCheck,
     coreDecision: () => ({ allowed: true })
   })
   assert.equal(allowed.ok, true)
 
-  const gateDenied = decideOnlineAttach({
+  const checkDenied = decideOnlineAttach({
     client,
-    gate: { gateVerified: () => ({ ok: false, reason: 'not_whitelisted' }) },
+    check: { checkVerified: () => ({ ok: false, reason: 'not_whitelisted' }) },
     coreDecision: null
   })
-  assert.equal(gateDenied.ok, false)
-  assert.equal(gateDenied.reason, 'not_whitelisted')
+  assert.equal(checkDenied.ok, false)
+  assert.equal(checkDenied.reason, 'not_whitelisted')
 
-  const gateThrew = decideOnlineAttach({
+  const checkThrew = decideOnlineAttach({
     client,
-    gate: { gateVerified: () => { throw new Error('store unavailable') } },
+    check: { checkVerified: () => { throw new Error('store unavailable') } },
     coreDecision: null
   })
-  assert.equal(gateThrew.ok, false)
-  assert.equal(gateThrew.reason, 'gate_error')
+  assert.equal(checkThrew.ok, false)
+  assert.equal(checkThrew.reason, 'check_error')
 })

@@ -11,12 +11,12 @@
 // raw-directory escape hatch and must already hold a profile.json.
 //
 // Usage:
-//   node src/auth/cli.js accounts [--accounts-dir <dir>] [--json]
-//   node src/auth/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]
-//   node src/auth/cli.js device-code --dir <accountDir>
-//   node src/auth/cli.js status [--account ...] [--json] [--refresh]
-//   node src/auth/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine]
-//   node src/auth/cli.js whitelist <attach|backend> add|remove <name-or-uuid>
+//   node src/custody/cli.js accounts [--accounts-dir <dir>] [--json]
+//   node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]
+//   node src/custody/cli.js device-code --dir <accountDir>
+//   node src/custody/cli.js status [--account ...] [--json] [--refresh]
+//   node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine]
+//   node src/custody/cli.js whitelist <attach|backend> add|remove <name-or-uuid>
 //        [--file .secrets/attach-whitelist.json] [--namespace ... --deployment ...]
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -88,12 +88,12 @@ function parseArgs (argv) {
 
 const USAGE = [
   'usage:',
-  '  node src/auth/cli.js accounts [--accounts-dir <dir>] [--json]',
-  '  node src/auth/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]',
-  '  node src/auth/cli.js device-code --dir <accountDir>',
-  '  node src/auth/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--json] [--refresh]',
-  '  node src/auth/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine]',
-  '  node src/auth/cli.js whitelist attach|backend add|remove <name-or-uuid> [--file <path>] [--namespace <ns>] [--deployment <dep>]',
+  '  node src/custody/cli.js accounts [--accounts-dir <dir>] [--json]',
+  '  node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]',
+  '  node src/custody/cli.js device-code --dir <accountDir>',
+  '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--json] [--refresh]',
+  '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine]',
+  '  node src/custody/cli.js whitelist attach|backend add|remove <name-or-uuid> [--file <path>] [--namespace <ns>] [--deployment <dep>]',
 ].join('\n')
 
 function fail (message, code = 1) {
@@ -131,9 +131,9 @@ function candidateLines (candidates = []) {
 
 function accountHint () {
   return [
-    'hint: list accounts: node src/auth/cli.js accounts',
-    '      bootstrap a new account: node src/auth/cli.js device-code',
-    '      migrate the single-account layout: node src/auth/cli.js migrate --apply',
+    'hint: list accounts: node src/custody/cli.js accounts',
+    '      bootstrap a new account: node src/custody/cli.js device-code',
+    '      migrate the single-account layout: node src/custody/cli.js migrate --apply',
   ].join('\n')
 }
 
@@ -304,7 +304,7 @@ async function main () {
         lines.push(
           `legacy: ${legacy.dir} uuid=${legacy.profile?.uuid ?? '?'} alias=${legacy.profile?.alias ?? '-'} ` +
           `target=${legacy.target ?? '(none)'} targetExists=${legacy.targetExists} ` +
-          `hint="node src/auth/cli.js migrate --apply"`
+          `hint="node src/custody/cli.js migrate --apply"`
         )
       } else {
         lines.push(`legacy: none (${legacy.dir}: ${legacy.reason})`)

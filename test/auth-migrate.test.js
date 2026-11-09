@@ -7,9 +7,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { planMigration, applyMigration } from '../src/auth/migrate.js'
-import { cacheIdHash, PROFILE_FILE, LEGACY_PROFILE_FILE } from '../src/auth/cache.js'
-import { resolveAccount } from '../src/auth/accounts.js'
+import { planMigration, applyMigration } from '../src/custody/migrate.js'
+import { cacheIdHash, PROFILE_FILE, LEGACY_PROFILE_FILE } from '../src/custody/cache.js'
+import { resolveAccount } from '../src/custody/accounts.js'
 
 const UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const NAME = 'GlowSquidye'

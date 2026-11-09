@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { loadLadder } from '../src/ladder/next-rung.js'
 import { readMiseTasks } from './mise-toml.js'
 
-const AREAS = ['relay', 'auth', 'driver', 'deploy']
+const AREAS = ['relay', 'custody', 'driver', 'deploy']
 const tasks = readMiseTasks()
 
 test('check runs the three cheap rungs and nothing else', () => {
@@ -38,7 +38,7 @@ test('every verify:<area> task composes tasks instead of copying a command', () 
 test('an expensive rung waits for the gate instead of racing it', () => {
   const expensive = new Map([
     ['verify:relay', 'spike'],
-    ['verify:auth', 'online'],
+    ['verify:custody', 'online'],
     ['verify:driver', 'gate-b:scenario'],
     ['verify:deploy', 'image:build']
   ])

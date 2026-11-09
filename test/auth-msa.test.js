@@ -11,8 +11,8 @@ import path from 'node:path'
 import {
   createMsaAuth, classifyAuthFailure, summarizeEntitlements, summarizePlayerAttributes,
   buildIdentity, describeIdentity, sanitizeError, JAVA_AUTH_TITLE, SWITCH_AUTH_TITLE,
-} from '../src/auth/msa.js'
-import { atomicWriteFile, cacheFilePath, cacheIdHash } from '../src/auth/cache.js'
+} from '../src/custody/msa.js'
+import { atomicWriteFile, cacheFilePath, cacheIdHash } from '../src/custody/cache.js'
 
 const PLAYER = {
   dashed: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af',
