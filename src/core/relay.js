@@ -44,7 +44,7 @@ const numeric = v => typeof v === 'number' && Number.isFinite(v)
 
 // Relay pose: the puppet's authoritative pose comes from backend teleports,
 // but attaching-client movement must update it too, so a reattach lands
-// where the player actually left the puppet (Gate A invariant).
+// where the player actually left the puppet (spike invariant).
 
 // Pure pose update. backend = true for a backend position frame (authoritative
 // teleport); false for a serverbound client movement frame.

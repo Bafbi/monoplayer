@@ -1,6 +1,6 @@
 // Scripted fake backend (26.1) serving a one-chunk flat world.
 //
-// Shared by the frozen Gate A spike and the product offline loopback rung
+// Shared by the frozen protocol spike and the product offline loopback rung
 // (`src/ladder/loopback.js`). Changes here affect both; run `mise run spike`
 // and `mise run loopback` after editing.
 //
