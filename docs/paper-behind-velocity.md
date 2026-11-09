@@ -16,7 +16,7 @@ Scope split, so nothing is doubled by another workstream:
 - **Still owned elsewhere:** the Monoplayer deployment itself; the M1
   (Vanilla) and M3 (Fabric) backend manifests; the B-lane runner that turns
   `src/driver/backends.js` + `logins.js` into `backendLogins=1` verdicts
-  (docs/driver-lane-plan.html, criteria B1–B6).
+  (docs/driver-lane-plan.md, criteria B1–B6).
 
 ## Pins
 
