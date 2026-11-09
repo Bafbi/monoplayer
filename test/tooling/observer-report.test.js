@@ -45,6 +45,8 @@ const SHIM = [
   '  *" logs "*) printf \'[Server] MonoplayerObserver wire listeners registered\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*) exit 0 ;;',
+  // The gate Paper's own settings, which is where the absent reasons are read.
+  '  *"server.properties"*) printf \'%s\\n\' "$KUBECTL_SERVER_PROPERTIES"; exit 0 ;;',
   // Two records per connection, as the plugin writes them: the join, then the
   // resource-pack status. The report has to merge each pair.
   '  *views.jsonl*) mkdir -p "$(dirname "$last")"; { printf \'%s\\n\' "$KUBECTL_BASELINE_VIEW"; printf \'%s\\n\' "$KUBECTL_BASELINE_LATE"; printf \'%s\\n\' "$KUBECTL_PUPPET_VIEW"; printf \'%s\\n\' "$KUBECTL_PUPPET_LATE"; } > "$last"; exit 0 ;;',
@@ -101,6 +103,11 @@ function run (space, env = {}, args = []) {
       KUBECTL_LOG: space.log,
       KUBECTL_STATE: space.state,
       KUBECTL_STUCK: '0',
+      KUBECTL_SERVER_PROPERTIES: [
+        'enable-code-of-conduct=false',
+        'resource-pack=',
+        'online-mode=true'
+      ].join('\n'),
       KUBECTL_PUPPET: PUPPET,
       KUBECTL_ATTACH: ATTACH,
       KUBECTL_POD: POD,
@@ -240,6 +247,30 @@ test('measuring the live lane is refused before anything runs', () => {
   assert.equal(status, 2)
   assert.match(output, /never measures the live lane/)
   assert.deepEqual(calls, [], 'kubectl was never called')
+})
+
+test('the absent reasons are read from the gate Paper, not asserted', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+  assert.ok(calls.some(line => line.includes('server.properties')), 'the run reads the server settings')
+  const report = JSON.parse(fs.readFileSync(path.join(space.root, '.reports', 'observer-report.json'), 'utf8'))
+  assert.match(report.fields.find(entry => entry.field === 'codeOfConduct').reason, /enable-code-of-conduct=false/)
+  assert.match(output, /2 absent \(2 with a reason\)/)
+})
+
+test('a gate Paper that serves the gate stops excusing the field', () => {
+  // The point of reading the facts: if someone turns the gate on for a run like
+  // this one, an absent codeOfConduct means the listener, not the setting, and the
+  // report must say so.
+  const space = workspace()
+  const { status, output } = run(space, {
+    KUBECTL_SERVER_PROPERTIES: ['enable-code-of-conduct=true', 'resource-pack=https://example.invalid/pack.zip'].join('\n')
+  })
+  assert.equal(status, 0, output)
+  const report = JSON.parse(fs.readFileSync(path.join(space.root, '.reports', 'observer-report.json'), 'utf8'))
+  assert.equal(report.fields.find(entry => entry.field === 'codeOfConduct').reason, null)
+  assert.match(output, /0 with a reason, 2 without: codeOfConduct, codeOfConductAccepted/)
 })
 
 test('an unexplained difference fails the run', () => {

@@ -241,6 +241,12 @@ public final class ObserverPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    // One view per connection, keyed by the client's address. Measured on 26.2:
+    // the handshake and configuration frames carry a player object already (the
+    // handshake one logs as UNKNOWN[<address>]), so the key is the same address the
+    // join uses. A frame the server attributes to no address keys a view under
+    // "null", and such a view is never written, because only the join and the
+    // packet handlers write, and a join always has an address.
     private View viewFor(PacketEvent event) {
         Player player = event.getPlayer();
         InetSocketAddress address = player == null ? null : player.getAddress();

@@ -68,8 +68,9 @@ export function resolveBotIdentity ({ accountsDir = DEFAULT_ACCOUNTS_DIR, select
 // client #17 decided the server sees, so it announces the brand the proxy
 // announces. Without it the report's brand row compares what the puppet says
 // against nothing, and a bot that says nothing is a tell a real server can see.
-// The frame goes out once per connection, on the first frame the server sends in
-// configuration, which is where the proxy writes its own.
+// The frame goes out once per connection, on the server's `select_known_packs`,
+// which is the first configuration frame this client sees. The proxy writes its
+// own brand on the first configuration frame for the same reason.
 export function announceBrand (client, { brand = FABRIC_BRAND, log = () => {} } = {}) {
   if (typeof client?.once !== 'function' || typeof client?.write !== 'function') {
     throw new TypeError('client must be a minecraft-protocol client')
