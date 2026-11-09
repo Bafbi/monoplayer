@@ -49,6 +49,22 @@ export const ONLINE_ASSERTION_IDS = Object.freeze([
   'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N13'
 ])
 
+// The bot's client options, built here so the version is the rung's own. A bot
+// left on bot.js's 26.1 default decodes a 26.2 front's login frames one field
+// short and records leftover bytes instead of a clean join (#71, N8).
+export function buildOnlineBotOptions ({ frontPort, attach, attachCustody, version = VERSION }) {
+  return {
+    host: '127.0.0.1',
+    port: frontPort,
+    username: attach.uuid,
+    auth: 'microsoft',
+    version,
+    profilesFolder: attachCustody.cacheFactory, // a function, never a path
+    authTitle: attach.profile?.authTitle ?? null,
+    deviceType: attach.profile?.deviceType ?? null
+  }
+}
+
 function flag (argv, name) {
   const i = argv.indexOf(name)
   return i >= 0 ? argv[i + 1] : undefined
@@ -610,15 +626,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
       dir: attach.dir,
       create: false
     })
-    const botOptions = () => ({
-      host: '127.0.0.1',
-      port: frontPort,
-      username: attach.uuid,
-      auth: 'microsoft',
-      profilesFolder: attachCustody.cacheFactory, // a function, never a path
-      authTitle: attach.profile?.authTitle ?? null,
-      deviceType: attach.profile?.deviceType ?? null
-    })
+    const botOptions = () => buildOnlineBotOptions({ frontPort, attach, attachCustody })
 
     bot = createBot(botOptions())
     // Capture the decoded frames before ready(): the cache replay happens at

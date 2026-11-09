@@ -1,8 +1,8 @@
 # Driver lane runbook — G0
 
 This is the runbook for the **G0 driver-lane evidence slice**: an official
-Minecraft 26.1.2 client (Prism + the `gate-b-driver` Fabric mod on the
-`nath` display host) joins the direct Paper 26.1.2 backend and the scenario
+Minecraft 26.2 client (Prism + the `gate-b-driver` Fabric mod on the
+`nath` display host) joins the direct Paper 26.2 backend and the scenario
 controller proves **join → settle → move → look → break → place → screenshot →
 disconnect → quit → relaunch → rejoin**, twice in a row, with every pass claim
 backed by client state **and** an independent server-side assertion.
@@ -12,19 +12,19 @@ row. It is the G0 host baseline (row M2 in the plan).
 
 ## Prerequisites (one-time)
 
-1. **Backend:** Paper 26.1.2 b74 running in `monoplayer-gate-b` (see
+1. **Backend:** Paper 26.2 b135 running in `monoplayer-gate-b` (see
    [deploy/driver/README.md](../deploy/driver/README.md)). RCON lives behind
    `kubectl -n monoplayer-gate-b exec deploy/paper -- rcon-cli`; the browser
    password is a cluster Secret and never leaves the pod.
-   **The driver client is built for 26.2 since #62, and this backend still serves
-   26.1.2**, so the G0 scenario refuses before its first launch
-   (`versionRefusal` in `src/driver/checks.js`). [#71](https://github.com/Bafbi/monoplayer/issues/71)
-   moves the lane. The client parity lane below runs today against the dev lane,
-   which serves 26.2.
+   The driver client and this backend serve the same version. The scenario still
+   refuses a target the driver was not built for, before the first launch
+   (`versionRefusal` in `src/driver/checks.js`), so a version skew is named
+   rather than debugged as a driver bug.
 2. **Display host:** `nath` reachable over SSH
    (`bafbi@nath.tail41e568.ts.net`), Prism 11.0.3 with the
    `gate-b-player-262-fabric` 26.2 instance and the built driver jar installed
-   ([tools/driver/README.md](../tools/driver/README.md)). The older
+   ([tools/driver/README.md](../tools/driver/README.md)). The unmodded
+   `gate-b-player-262` 26.2 instance is the one the witness lane uses. The older
    `gate-b-player-fabric` 26.1.2 instance stays on the host as the record of the
    G0 run on that version, and the 26.2 client cannot join with it.
 3. **Cluster access:** `kubectl` context that can `exec` into the Paper pod.
@@ -118,7 +118,7 @@ checklist the command generates. When every step is honestly recorded, save the
 completed checklist as `testdata/driver-unmodded-witness.json` with
 `completed: true`.
 
-Capture the steps with `tools/nath.sh shot <path> gate-b-player`. Without a
+Capture the steps with `tools/nath.sh shot <path> gate-b-player-262`. Without a
 driver, that path moves the view to the client's workspace for the capture and
 back, after a notification that warns `NATH_SHOT_NOTICE` seconds ahead.
 
