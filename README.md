@@ -36,6 +36,7 @@ mise run spike             # frozen protocol spike (real sockets, offline protoc
 mise run spike:report      # full spike scenario, writes testdata/spike-report.json
 mise run driver:scenario   # driver-lane G0 scenario (live testbed)
 mise run secrets:link      # symlink the main working copy's .secrets here (worktrees)
+mise run online:cluster    # online rung from a throwaway pod, deployment untouched
 ```
 
 Rungs, cost, prerequisites, what each catches, and which `verify:<area>` task

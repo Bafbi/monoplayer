@@ -80,9 +80,9 @@ escape hatch: the directory must already contain a readable `profile.json`.
   temp + fsync + rename; a failed write leaves the previous cache intact.
 - **One writer per account.** `writer.lock` (pid + random owner id, dead
   holders are stale-stealable) lives inside the account directory, so account
-  A's lock never blocks account B. The proxy holds it for its life; the CLI
-  holds it during device-code or `--refresh`. A second writer is refused
-  (`writer_lock_held`), never queued.
+  A's lock never blocks account B. It is held around a device-code bootstrap or
+  a silent refresh, then released (`src/custody/msa.js`); the proxy does not hold
+  it for its life. A second writer is refused (`writer_lock_held`), never queued.
 - **UUID is the identity.** A login that resolves to a different UUID is
   refused (`identity_mismatch`) and `profile.json` is not overwritten.
 - **No restore of old caches.** After a refresh the old refresh token is
@@ -97,6 +97,50 @@ escape hatch: the directory must already contain a readable `profile.json`.
   when there is nothing to link, and never prints file contents. Outside a git
   work tree that has no source it links nothing, and the live rungs then fail
   with their own message.
+- `profile.json` records the last bootstrapped
+  `{ uuid, name, alias, authTitle, deviceType, updatedAt }` — this is what
+  makes "same UUID across refresh" a pass claim instead of an observation.
+
+### Sessions, copies, and refresh
+
+Three rules, written down because guessing at them has already cost a wrong
+runbook. They are separate: the first is about game sessions, the second and
+third are about the token.
+
+1. **Sessions are not exclusive.** Several clients may play one account at the
+   same time. A second login to the **same** server disconnects the first
+   (`multiplayer.disconnect.duplicate_login`); logins to different servers
+   coexist. That is a rule of the game server, not of the account, and it holds
+   while every client shares one token.
+2. **Refresh is exclusive.** `writer.lock` is held around a device-code
+   bootstrap or a silent refresh, then released (`src/custody/msa.js`). It
+   serializes the token rotation, and it says nothing about how many sessions may
+   be open. Two processes pointed at one account directory take turns; the second
+   gets `writer_lock_held` rather than a corrupted chain.
+3. **One live copy per account.** The refresh token is rolling and single-use, so
+   a refresh returns a new one and invalidates the old. Two *directories* holding
+   one account therefore cannot both stay usable: the copy that refreshed last is
+   live, and the other is dead until a `device-code` bootstrap. This is the rule
+   the `one-account-one-writer-one-replica` decision rests on.
+
+What follows for a live rung:
+
+- A local `mise run online` needs the copy that holds the live token. When the
+  deployed proxy owns it, a second copy on a laptop is stale unless nothing else
+  has refreshed that account.
+- The deployment does **not** need to stop for a run that uses a different
+  backend and a fresh enough access token. A cached Minecraft access token is
+  valid for about a day; while it is, a login reuses it and rotates nothing.
+- Stopping it *is* needed when the run would use the same account directory (the
+  lock is held during its own refresh, and the token chain is shared) or the same
+  server as a live session (duplicate login).
+
+The session rule was checked, not assumed: two `minecraft-protocol` clients with
+one custody directory, logged into the same server, and the first was kicked with
+`multiplayer.disconnect.duplicate_login` while the second stayed in game. The
+cached files under the account directory were byte-identical afterwards, so that
+run rotated nothing.
+
 - `profile.json` records the last bootstrapped
   `{ uuid, name, alias, authTitle, deviceType, updatedAt }` — this is what
   makes "same UUID across refresh" a pass claim instead of an observation.

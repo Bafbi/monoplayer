@@ -18,6 +18,13 @@ cheapest rung that can fail for the defect you are chasing.
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
 loopback. It is the default gate.
 
+A live rung needs custody that holds a live token, and it needs no exclusive
+session: several clients may play one account at once, and only a refresh from a
+second copy, or a login to the same server, disturbs anything
+([custody](custody.md#sessions-copies-and-refresh)). `mise run online:cluster`
+therefore runs the online rung from a throwaway pod that copies the puppet's
+custody into its own directory, so the deployment keeps serving.
+
 The frozen protocol spike (`mise run spike`) and the spike scenario
 (`mise run spike:report`) sit beside the ladder. They prove the two-leg relay on
 loopback with the older harness. Keep them green; do not extend them.
