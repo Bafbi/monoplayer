@@ -49,7 +49,7 @@ cp "$jar" "$instance_dir/minecraft/mods/monoplayer-driver.jar"
 
 # Take the Minecraft version from the base instance, then add the two Fabric
 # components pinned to it. Prism resolves the rest from its meta API.
-python3 - "$base_dir/mmc-pack.json" "$instance_dir/mmc-pack.json" "$loader" <<'PY'
+mc_version=$(python3 - "$base_dir/mmc-pack.json" "$instance_dir/mmc-pack.json" "$loader" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -84,8 +84,7 @@ components.append({
 out_path.write_text(json.dumps({"components": components, "formatVersion": 1}, indent=4) + "\n")
 print(version)
 PY
-
-mc_version=$(python3 -c 'import json,sys; print(next(c["version"] for c in json.load(open(sys.argv[1]))["components"] if c["uid"] == "net.minecraft"))' "$instance_dir/mmc-pack.json")
+)
 
 python3 - "$instance_dir/instance.cfg" "$instance" <<'PY'
 from pathlib import Path

@@ -387,11 +387,18 @@ fields, so a new status field cannot pass unclassified.
 | `connected`, `level`, `player`, `name`, `health`, `dimension`, `screen` | `unexplained` | the proxy does not reshape them |
 | `pos` | `expected` | the attach replay lands the client at the puppeted session's pose |
 | `held`, `selectedSlot` | `expected` | the replay serves the puppeted session's inventory |
-| `loadedChunks`, `renderedSections` | `expected` | chunk and render counts follow the client's own timing |
+| `loadedChunks`, `renderedSections` | `expected` | the attach replay serves the puppeted session's chunk set; a direct join streams its own |
 
-A dialog or transfer screen only the proxied client showed is `unexplained`, not
-"absent": for the human's client that screen is the symptom #20 and #22 describe,
-so the lane reports it red until those tickets land.
+A dialog or transfer screen has no `expected` row. A screen that is up when the
+lane looks means the client never settled, so the lane exits 2 with the screen's
+own title and reason in the report; a screen that appears between the last settle
+poll and the read is an `unexplained` `screen` row and exits 1. Either way the
+lane is red, because for the human's client that screen is the symptom #20 and #22
+describe.
+
+The lane compares two fresh joins and applies no churn, so state a backend sends
+only on change can only agree by default. Agreement here is evidence that the
+join landed, not that the relay carries later state: rung 2a sends the churn.
 
 Exit codes match rung 2a: 0 every difference explained, 1 an unexplained
 difference, 2 a setup that never joined. The report is written on 0 and 1,

@@ -23,8 +23,10 @@ row. It is the G0 host baseline (row M2 in the plan).
    which serves 26.2.
 2. **Display host:** `nath` reachable over SSH
    (`bafbi@nath.tail41e568.ts.net`), Prism 11.0.3 with the
-   `gate-b-player-fabric` 26.1.2 instance and the built driver jar installed
-   ([tools/driver/README.md](../tools/driver/README.md)).
+   `gate-b-player-262-fabric` 26.2 instance and the built driver jar installed
+   ([tools/driver/README.md](../tools/driver/README.md)). The older
+   `gate-b-player-fabric` 26.1.2 instance stays on the host as the record of the
+   G0 run on that version, and the 26.2 client cannot join with it.
 3. **Cluster access:** `kubectl` context that can `exec` into the Paper pod.
 
 ## Driver tunnel (required each session)
@@ -155,7 +157,8 @@ cannot overlap: a server kicks the first session, and the driver has no
 reconnect op.
 
 Reads `.reports/driver-parity-report.json`. Exit 0 every difference explained,
-1 an unexplained difference, 2 a lane that never settled or a refused endpoint.
+1 an unexplained difference, 2 a refused endpoint, a lane that never settled, or a
+report that could not be written.
 The report is metadata only, scanned for token-shaped strings before it is
 written.
 
@@ -207,10 +210,15 @@ clear it with the operator first.
 | direct | `127.0.0.1:25565` → dev Paper 26.2 | 18 s | `127.0.0.1:25565` |
 | proxied | `127.0.0.1:25566` → dev Monoplayer 26.2 | 28 s | `127.0.0.1:25566` |
 
-The three expected rows were the two the policy predicts plus a chunk count:
-pose `5.5/-60/-3.5` direct against `8.5/-60/-4.5` proxied, loaded chunks 40 against
-213, rendered sections 18 against 36. Health, dimension, name, connection, level,
+The three expected rows were the pose, and the two counts that follow the chunk
+set: pose `5.5/-60/-3.5` direct against `8.5/-60/-4.5` proxied, loaded chunks 40
+against 213, rendered sections 18 against 36. The 5x chunk gap is the attach
+replay serving the puppeted session's cached chunks against a fresh join that
+streams its own, not a stutter. Health, dimension, name, connection, level,
 player, screen, held item, and selected slot all matched exactly.
+
+A second run passed the same way (9 same, 3 expected, 0 unexplained; 28 s per
+lane), from a cold start with no client on the socket.
 
 The two endpoints were reached through the port-forwards and reverse tunnel in
 "Reaching the dev lane", so the client joined the dev lane's own Paper and its own

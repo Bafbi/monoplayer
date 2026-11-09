@@ -71,12 +71,12 @@ export const PARITY_FIELDS = Object.freeze([
   Object.freeze({
     field: 'loadedChunks',
     policy: 'expected',
-    reason: 'a chunk count follows the client\'s own load and view distance, and the two runs are minutes apart'
+    reason: 'the attach replay serves the chunk set the puppeted session already holds, and a direct join streams its own: the two counts measure two different joins, not one server (the observed run read 40 direct against 213 proxied)'
   }),
   Object.freeze({
     field: 'renderedSections',
     policy: 'expected',
-    reason: 'rendered sections follow the client\'s own frame and culling state; the settle predicate already requires a nonzero count'
+    reason: 'rendered sections follow that chunk set and the client\'s own culling, and the settle predicate already requires a nonzero count'
   })
 ])
 
@@ -86,6 +86,7 @@ export const PARITY_LIMITATIONS = Object.freeze([
   'No packet observer: the driver reads client state and no frame stream, and tools/driver/README.md bans mixins into the packet path. Frame rows are rung 2a (mise run parity:run).',
   'Both runs use one account and run one after the other: two sessions of one account are kicked, and the driver has no reconnect op.',
   'Chat, dialogs, and the transfer loading screen are compared only as far as they change the current screen; the driver reads no chat history.',
+  'No churn is applied: the lane compares two fresh joins. State the backend sends only on change, such as health after damage or inventory contents beyond the held slot, can only agree by default, so agreement here is not evidence that the relay carries later state. Rung 2a sends that churn.',
   'The client gamemode and world are the target\'s, so a survival target and a creative target are not comparable runs.'
 ])
 
@@ -288,7 +289,18 @@ async function waitSettled ({ driver, timeoutMs, pollMs, now, sleep, log }) {
     await sleep(pollMs)
   }
   const where = last ? describeStatus(last) : 'last error: ' + (lastError?.message ?? 'none')
-  throw new Error('the client did not settle within ' + timeoutMs + ' ms (' + where + ')')
+  // The screen on the last poll is what explains a refusal or a kick; without it
+  // the lane reports a bare timeout and the operator relaunches to find out.
+  let shown = ''
+  try {
+    const envelope = await driver.request('screen', {}, { timeoutMs: 5000 })
+    if (envelope.ok && envelope.data?.screen && envelope.data.screen !== 'none') {
+      const title = envelope.data.title ? ' "' + envelope.data.title + '"' : ''
+      const reason = envelope.data.reason ? ': ' + envelope.data.reason : ''
+      shown = '; screen ' + envelope.data.screen + title + reason
+    }
+  } catch { /* the timeout is the finding; a screen read is a bonus */ }
+  throw new Error('the client did not settle within ' + timeoutMs + ' ms (' + where + shown + ')')
 }
 
 // Wait until the driver port stops answering. The tunnel keeps the local port
