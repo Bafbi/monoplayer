@@ -1,4 +1,4 @@
-// Row registry for the backend matrix (docs/driver-lane-plan.html, "Backend
+// Row registry for the backend matrix (docs/driver-lane-plan.md, "Backend
 // matrix" / "Pins that matter"). Pure data + pure helpers: no I/O, no env, no
 // child processes, so the M4 unit tests stay fully offline.
 //
