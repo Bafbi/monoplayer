@@ -104,8 +104,8 @@ test('stats count each outcome and a second checker has independent state', asyn
 })
 
 test('the check leaves the frame it approved byte for byte', () => {
-  // #82: the library's reader for \`topBitSetTerminatedArray\` clears the high bit
-  // of every slot byte in the buffer it decodes. A check that parsed the
+  // #82: the library's reader for `topBitSetTerminatedArray` clears the high
+  // bit of every slot byte in the buffer it decodes. A check that parsed the
   // caller's buffer would corrupt the frame it just approved, and the front leg
   // writes that same buffer next (live-front.js emitCheckedRaw).
   const buffer = Buffer.from(TWO_ENTRIES, 'hex')
