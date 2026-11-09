@@ -85,10 +85,11 @@ forwarding; the authenticated puppet joined through the proxy. The official
 26.1.2 client has since attached through the full Velocity + Paper path,
 rendered, moved, and edited blocks. B1 live is green; next are B2-B6.
 
-Each row's evidence is one page in `testdata/`: [custody](testdata/gate-b-custody.md),
-[driver G0](testdata/gate-b-driver.md), [M4](testdata/gate-b-m4.md),
-[the live front](testdata/gate-b-live.md), [the online rung](testdata/online-rung.md),
-and [the protocol spike](testdata/gate-a.md). Each page quotes the verdict, the
-date, the command that produced it, and the fact the run establishes.
+Each verdict is one page in `testdata/`: [the protocol spike](testdata/spike-verdict.md),
+[the driver lane](testdata/driver-verdict.md), [custody](testdata/custody-verdict.md),
+[M4](testdata/m4-verdict.md), [the live attach](testdata/live-attach-verdict.md),
+[the online rung](testdata/online-verdict.md), and [the deployed front](testdata/deployed-front-verdict.md).
+Each page quotes the verdict, the date, and the fact the run establishes, plus the
+command where the record names one. The records themselves stay in git history.
 
 Created in [T3 Code](https://t3.codes).

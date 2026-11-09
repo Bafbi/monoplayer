@@ -104,7 +104,7 @@ look, break, place, screenshot, respawn, disconnect, and quit all passed, with
 server-side block and position checks. On 2026-11-07, `screen`, `pause`,
 `click`, and the unfocused pause-menu screenshot were validated live; the
 client returned to play with `click Back to Game`. The driver-owned pause
-screenshot is quoted in [testdata/gate-b-driver.md](../../testdata/gate-b-driver.md).
+screenshot is quoted in [testdata/driver-verdict.md](../../testdata/driver-verdict.md).
 See [docs/driver-validation.md](../../docs/driver-validation.md).
 
 ## Safety

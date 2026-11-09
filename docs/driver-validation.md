@@ -46,7 +46,7 @@ tools/nath.sh shot testdata/witness-2026-11-06.png
 Verified on `nath` on 2026-11-08 with no session variables exported:
 `launch` reported `SILENT=yes` and left the active workspace and the focused
 window untouched, `shot` returned a 1916x1050 PNG, and `kill` reported `QUIT=ok`, stopped the client JVM, and closed
-the driver port. [The driver verdict page](../testdata/gate-b-driver.md) quotes
+the driver port. [The driver verdict page](../testdata/driver-verdict.md) quotes
 that run. The host reported a Hyprland instance signature the earlier
 sessions never saw, which is why the wrapper derives it on every call instead of
 copying one.
@@ -130,12 +130,10 @@ Prism is closed if the console window should be removed entirely.
 - The driver lane is now **2/2**: `node src/driver/run.js --runs 2 --tunnel` passed
   twice on 2026-11-06, 38/38 assertions each, with server-side position and
   block checks. Verdict and per-run numbers:
-  [`testdata/gate-b-driver.md`](../testdata/gate-b-driver.md).
+  [`testdata/driver-verdict.md`](../testdata/driver-verdict.md).
 - The unmodded Prism client witness (no driver) was completed on 2026-11-06
   (join, render, move, break, place, screenshot, disconnect, rejoin). The same
-  page quotes the witness record. That run predates the reports leaving git, so
-  `mise run driver:g0` exits 0 again only after a fresh `--runs 2` and a
-  re-recorded witness.
+  page quotes the witness record and states what re-running the G0 gate needs.
 - Assert a survival (non-creative) break/place hold, not just the creative row.
 
 The repeatable runner for exactly this row is now in `src/driver/` +

@@ -254,7 +254,7 @@ GlowSquidye joined the game
 GlowSquidye logged in with entity id 23 at 0.5, -60.0, -2.5
 ```
 
-Evidence: [`testdata/gate-b-m4.md`](../testdata/gate-b-m4.md) quotes the verdict
+Evidence: [`testdata/m4-verdict.md`](../testdata/m4-verdict.md) quotes the verdict
 and the smoke log.
 Toxiproxy is deployed but the F1–F6 fault rows are still pending. This smoke is
 `twoAccount=false`: it proves the proxy/forwarding path, not the player attach
@@ -269,7 +269,7 @@ commands moved the player, broke a seeded stone block, and placed stone on a
 dirt support; the backend position followed and the backend saw exactly one
 login. The live wire check inspected 1952 frames with zero rejects.
 
-Evidence: [`testdata/gate-b-m4.md`](../testdata/gate-b-m4.md).
+Evidence: [`testdata/m4-verdict.md`](../testdata/m4-verdict.md).
 
 The unmodded 26.1.2 client attached through the same front: 1786 replayed
 frames, two attaches, one backend login, and the client log reached
