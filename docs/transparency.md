@@ -18,6 +18,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The server sees the human's locale, skin parts, main hand, chat settings | done | [#18](https://github.com/Bafbi/monoplayer/issues/18) |
 | A client can attach while the puppet is still configuring | done | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human's chat and commands are spoken as the account | built, off by default | [#19](https://github.com/Bafbi/monoplayer/issues/19) |
+| A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human answers every play dialog | **not built** | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | **not built** | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
 | A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
@@ -83,15 +84,25 @@ backend, in any mode.
 
 ## Dialogs and configuration gates
 
-Every `show_dialog` and `clear_dialog` is answered by the puppet when
-`MONOPLAYER_DIALOG_ACTION` names an action, and left alone when it is unset.
-The human never sees a dialog and never clicks one. A dialog that arrives with
-no policy leaves a headless leg waiting rather than guessing.
+A dialog is a server question the human answers. Monoplayer relays it to the
+attached client, forwards the client's click to the server as the puppet's own
+frame, and holds the last unanswered dialog: a dialog that arrives while nobody
+is attached waits, and is re-sent when someone attaches in its phase. There is
+no timeout and no auto-click, so a dialog is never answered by the proxy while a
+human is looking at it.
 
-The code of conduct is accepted by the protocol library itself, before the core
-sees the frame, so it cannot become a human decision without a write-time
-interception. That is [#21](https://github.com/Bafbi/monoplayer/issues/21), and
-the human-owned play dialog is [#20](https://github.com/Bafbi/monoplayer/issues/20).
+Two answerers could collide, and the proxy keeps them apart. The puppet's
+auto-click answers a dialog only while no player is attached, so
+`MONOPLAYER_DIALOG_ACTION` now covers a headless session and nothing else. What
+that headless session does with a configuration gate is
+[#21](https://github.com/Bafbi/monoplayer/issues/21), and the play-dialog policy
+is [#20](https://github.com/Bafbi/monoplayer/issues/20).
+
+The code of conduct is accepted by the protocol library itself, on the puppet's
+connection, before the core sees the frame. The gate therefore reaches the human
+already answered, and making it a human decision needs a write-time interception
+on the backend leg. That is [#21](https://github.com/Bafbi/monoplayer/issues/21).
+The relay and hold path this section describes is #16.
 
 ## A followed transfer
 

@@ -10,11 +10,13 @@
 // cookie jar, or strand the client in a configuration phase the front does
 // not serve.
 //
-// Five decisions:
+// Six decisions:
 //   state       cache it and relay/replay it (ordinary game state)
 //   cache_only  keep it for an attach replay, never relay it live (`login`)
 //   live_only   relay it while attached, never cache or replay it (chat,
 //               per-request responses such as ping/nbt query answers)
+//   control     relay it to the human that answers it, never cache or replay
+//               it (control dialogs; the pending holder keeps the one copy, #16)
 //   per_leg     owned by each connection, never crosses (keep-alive, position,
 //               ping, bundle delimiters)
 //   block       never crosses, never cached, never replayed
@@ -28,9 +30,26 @@ export const DECISION = Object.freeze({
   STATE: 'state',
   CACHE_ONLY: 'cache_only',
   LIVE_ONLY: 'live_only',
+  CONTROL: 'control',
   PER_LEG: 'per_leg',
   BLOCK: 'block'
 })
+
+// Control dialogs: the server asks the human a question (`show_dialog`) or
+// withdraws it (`clear_dialog`), in play or in configuration. `code_of_conduct`
+// is the configuration gate with the same shape.
+//
+// The human answers these, so a control frame is not connection control: it
+// crosses to the client that answers it, and its answer goes back to the
+// backend as the puppet's own frame. What a dialog with no client attached
+// does is the pending holder's business (#16), and which dialog is the human's
+// to answer is #20 and #21's. Never cached and never replayed: the holder keeps
+// the one copy, so a replay would deliver a stale dialog beside it.
+export const CONTROL_FRAMES = new Set([
+  'show_dialog',
+  'clear_dialog',
+  'code_of_conduct'
+])
 
 // Never relayed to the front client. `hide_message` carries the puppet
 // connection's message index, so relaying it would hide the wrong message.
@@ -40,8 +59,6 @@ export const PLAY_BLOCK = new Set([
   'kick_disconnect',
   'cookie_request',
   'store_cookie',
-  'show_dialog',
-  'clear_dialog',
   'hide_message'
 ])
 
@@ -131,10 +148,7 @@ export const CONFIG_BLOCK = new Set([
   'cookie_request',
   'disconnect',
   'store_cookie',
-  'transfer',
-  'clear_dialog',
-  'show_dialog',
-  'code_of_conduct'
+  'transfer'
 ])
 
 export const CONFIG_PER_LEG = new Set(['keep_alive', 'ping'])
@@ -159,11 +173,14 @@ export const NOT_REPLAYABLE = new Set([
   ...PLAY_BLOCK,
   ...PLAY_LIVE_ONLY,
   ...PLAY_PER_LEG,
+  ...CONTROL_FRAMES,
   ...CONFIG_BLOCK,
   ...CONFIG_PER_LEG,
   'pong'
 ])
 
+// A control dialog exists in both states, so the control set is added to each
+// table rather than repeated per state.
 function buildTable (ordinary, cacheOnly, liveOnly, perLeg, block) {
   const table = new Map()
   for (const name of ordinary) table.set(name, DECISION.STATE)
@@ -171,6 +188,7 @@ function buildTable (ordinary, cacheOnly, liveOnly, perLeg, block) {
   for (const name of liveOnly) table.set(name, DECISION.LIVE_ONLY)
   for (const name of perLeg) table.set(name, DECISION.PER_LEG)
   for (const name of block) table.set(name, DECISION.BLOCK)
+  for (const name of CONTROL_FRAMES) table.set(name, DECISION.CONTROL)
   return table
 }
 
@@ -197,7 +215,7 @@ export function clientboundPolicy (state, name) {
   return {
     decision,
     cache: decision === DECISION.STATE || decision === DECISION.CACHE_ONLY,
-    relay: decision === DECISION.STATE || decision === DECISION.LIVE_ONLY,
+    relay: decision === DECISION.STATE || decision === DECISION.LIVE_ONLY || decision === DECISION.CONTROL,
     replay: decision === DECISION.STATE || decision === DECISION.CACHE_ONLY,
     unknown: false
   }

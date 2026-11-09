@@ -151,6 +151,12 @@ The runner builds:
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
 - `O14` the second bot recorded no leftover bytes and the front wire checker
   still rejected nothing.
+- `O30` a dialog sent while nobody is attached is held (`controlDialogsHeld`
+  1) and re-sent to the reattaching client (`controlDialogsResent` 1, one
+  `show_dialog` decoded by the second bot, a `controlDialogResent` log line).
+- `O31` the client's answer reaches the backend as the puppet's dialog click:
+  one `custom_click_action` with the dialog's id on the fake backend,
+  `controlDialogsAnswered` 1, and nothing left pending.
 - `O15` one backend fault produces one reconnect: two backend logins and no
   loop.
 - `O16` the attach after the reconnect replays the join prefix and a chunk.

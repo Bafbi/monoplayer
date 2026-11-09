@@ -264,6 +264,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
       authTitle: resolved.account.profile?.authTitle ?? null,
       deviceType: resolved.account.profile?.deviceType ?? null,
       dialogAction: cfg.dialogAction,
+      // #16: the human answers a control dialog while attached, so the puppet's
+      // auto-click stands down for exactly that window.
+      isHumanAttached: () => core.attached === true,
       log
     })
     : createLiveBackendLeg({
@@ -314,8 +317,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
   front.setCoreAttach(({ name, uuid }) =>
     core.attachPlayer({ name, uuid, includeConfig: false })
   )
-  // #16: a client may attach while the puppet is still configuring.
+  // #16: a client may attach while the puppet is still configuring, and a
+  // configuration gate the backend asked before it arrived is delivered when
+  // the client enters its own configuration phase.
   front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
+  front.setConfiguringHandler(({ name }) => core.configuringReady({ name }))
   // #18: the human's client information is the source of the fields the
   // server sees; the core merges it with the backend's view distance cap.
   front.setClientSettingsHandler(settings => core.noteClientSettings(settings))

@@ -9,8 +9,10 @@ import { createConfigPathInterceptor } from '../../src/legs/live-front.js'
 function rig ({ live = true, cached = [] } = {}) {
   const writes = []
   const raws = []
+  const configuring = []
   let configuration = true
   const interceptor = createConfigPathInterceptor({
+    onConfiguring: () => configuring.push('configuring'),
     write: (name, params) => writes.push({ name, params }),
     writeRaw: (buffer, meta) => raws.push({ buffer, meta }),
     isConfigurationState: () => configuration,
@@ -19,7 +21,7 @@ function rig ({ live = true, cached = [] } = {}) {
     allowLibraryFallback: false,
     onUnavailable: () => { throw new Error('must not be unavailable in live mode') }
   })
-  return { interceptor, writes, raws, endConfiguration: () => { configuration = false } }
+  return { interceptor, writes, raws, configuring, endConfiguration: () => { configuration = false } }
 }
 
 test('live mode holds the library registry and finish writes', () => {
@@ -39,6 +41,14 @@ test('the core finisher ends the phase without a second finish frame', () => {
   assert.deepEqual(r.writes, [], 'the library finish is dropped, not sent twice')
   assert.equal(r.interceptor.stats.finishedByCore, 1)
   assert.equal(r.interceptor.finishFromCore(), false, 'finishing twice is a no-op')
+})
+
+test('#16 the configuration phase is reported once, before the frames', () => {
+  const r = rig()
+  r.interceptor.write('finish_configuration', {})
+  r.interceptor.write('finish_configuration', {})
+  assert.deepEqual(r.configuring, ['configuring'], 'one report per client, however often the library writes')
+  assert.deepEqual(r.writes, [])
 })
 
 test('cached mode still replays what it has and is unaffected by live', () => {

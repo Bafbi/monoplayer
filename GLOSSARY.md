@@ -141,8 +141,16 @@ The one table that decides, for each clientbound frame, whether Monoplayer cache
 _Avoid_: rules, filters, packet list
 
 **Clientbound decision**:
-One of five outcomes the clientbound policy returns for a frame. State caches, relays, and replays it; cache only caches and replays; live only relays while attached; per leg leaves it to the connection that received it; block never crosses.
+One of six outcomes the clientbound policy returns for a frame. State caches, relays, and replays it; cache only caches and replays; live only relays while attached; control relays it to the answering player and never caches or replays it; per leg leaves it to the connection that received it; block never crosses.
 _Avoid_: action, verdict
+
+**Control dialog**:
+A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the player who answers it, and their answer goes back to the server as the puppet's own frame.
+_Avoid_: prompt, popup, form, UI
+
+**Pending dialog**:
+The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog` or on the player's answer, and re-sends it when a player attaches in its phase.
+_Avoid_: dialog queue, dialog cache
 
 **Per-leg frame**:
 A frame that belongs to the connection that received it, such as a keep-alive, a position, a ping, or a bundle delimiter. Each leg answers or ignores its own.
