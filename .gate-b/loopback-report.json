@@ -5,7 +5,7 @@
   "backend": "node-fake",
   "version": "26.1",
   "passed": true,
-  "durationMs": 6526,
+  "durationMs": 5714,
   "assertions": [
     {
       "id": "R0",
@@ -88,10 +88,12 @@
     },
     {
       "id": "O7",
-      "name": "no spawn_entity in the replay",
+      "name": "the replay carries no spawn for the player entity",
       "ok": true,
       "detail": {
-        "spawnEntity": 0
+        "spawnEntityIds": [
+          99
+        ]
       }
     },
     {
@@ -99,11 +101,11 @@
       "name": "wire checker accepted both configuration and play frames",
       "ok": true,
       "detail": {
-        "checked": 37,
+        "checked": 42,
         "rejected": 0,
         "byState": {
           "configuration": 28,
-          "play": 9
+          "play": 14
         }
       }
     },
@@ -114,6 +116,51 @@
       "detail": {
         "leftovers": 0,
         "errors": 0
+      }
+    },
+    {
+      "id": "O27",
+      "name": "the N13 frame cut matches the replay the client decoded",
+      "ok": true,
+      "detail": {
+        "expectedFrames": 11,
+        "expected": [
+          "position",
+          "map_chunk",
+          "block_change",
+          "spawn_entity",
+          "rel_entity_move",
+          "rel_entity_move",
+          "rel_entity_move",
+          "sync_entity_position",
+          "window_items",
+          "set_slot",
+          "set_slot"
+        ],
+        "captured": [
+          "position",
+          "map_chunk",
+          "block_change",
+          "spawn_entity",
+          "rel_entity_move",
+          "rel_entity_move",
+          "rel_entity_move",
+          "sync_entity_position",
+          "window_items",
+          "set_slot",
+          "set_slot"
+        ]
+      }
+    },
+    {
+      "id": "O28",
+      "name": "the replay lands a moved entity where the backend put it",
+      "ok": true,
+      "detail": {
+        "entityX": 10,
+        "backendX": 10,
+        "sectionOrderX": 13,
+        "parity": true
       }
     },
     {
@@ -141,6 +188,19 @@
         ],
         "keepAlives": [],
         "dropped": 3
+      }
+    },
+    {
+      "id": "O29",
+      "name": "the human chat and command reached the backend as the puppet, and their acks did not",
+      "ok": true,
+      "detail": {
+        "message": "hello from the human",
+        "command": "list",
+        "chatSent": 2,
+        "forwarded": 0,
+        "messageAcks": 0,
+        "chatSessionUpdates": 0
       }
     },
     {
@@ -196,6 +256,45 @@
       }
     },
     {
+      "id": "O30",
+      "name": "a dialog sent with no client attached waits, unclicked by the puppet, and is delivered to the reattaching client",
+      "ok": true,
+      "detail": {
+        "dialogs": 1,
+        "held": 1,
+        "resent": 1,
+        "puppetClicks": 0,
+        "waited": true
+      }
+    },
+    {
+      "id": "O31",
+      "name": "the client answer reaches the backend as the puppet dialog click",
+      "ok": true,
+      "detail": {
+        "clicks": [
+          "monoplayer:loopback_dialog"
+        ],
+        "answered": 1,
+        "pending": false
+      }
+    },
+    {
+      "id": "O32",
+      "name": "a configuration gate with no client attached is accepted by the puppet, logged, and not held for the next client",
+      "ok": true,
+      "detail": {
+        "sends": 1,
+        "accepts": 1,
+        "logged": true,
+        "heldLogged": false,
+        "queued": false,
+        "answeredByPuppet": 1,
+        "resent": 1,
+        "held": 1
+      }
+    },
+    {
       "id": "O15",
       "name": "one reconnect: two backend logins, no loop",
       "ok": true,
@@ -231,10 +330,10 @@
       "name": "late-attach replay sends the window 0 base before every later set_slot",
       "ok": true,
       "detail": {
-        "baseIndex": 7,
+        "baseIndex": 12,
         "slotIndexes": [
-          8,
-          9
+          13,
+          14
         ],
         "windowItems": 1,
         "setSlots": 2
@@ -297,21 +396,41 @@
     },
     {
       "id": "O21",
-      "name": "a followed transfer never reaches the client and detaches it with a moving reason",
+      "name": "a followed transfer never reaches the client and the client keeps its connection",
       "ok": true,
       "detail": {
         "frames": [
-          "kick_disconnect"
+          "start_configuration",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data"
         ],
-        "kick": "{\"reason\":{\"type\":\"compound\",\"value\":{\"text\":{\"type\":\"string\",\"value\":\"This session is moving. Reconnect in a few seconds to continue.\"}}}}",
-        "ended": "socketClosed",
+        "ended": null,
+        "kick": null,
         "blocked": 1,
-        "followed": 1
+        "followed": 1,
+        "seamless": 1,
+        "frontClientErrors": 0,
+        "reconfigurationAcks": [
+          {
+            "username": "Attach",
+            "flushedFrames": 29,
+            "droppedFrames": 0
+          }
+        ]
       }
     },
     {
       "id": "O22",
-      "name": "the puppet follows the target and re-warms there",
+      "name": "the same connection goes through the target configuration and play login",
       "ok": true,
       "detail": {
         "loginsBeforeTransfer": 2,
@@ -320,16 +439,49 @@
           3
         ],
         "backendLogins": 3,
-        "warmReady": true,
-        "state": "warm"
+        "configuration": [
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "registry_data",
+          "finish_configuration"
+        ],
+        "reconfigurationsCompleted": 1,
+        "frontPlayReady": true,
+        "state": "attached"
       }
     },
     {
       "id": "O23",
-      "name": "a fresh attach after the move replays the target server state",
+      "name": "the client that followed the move is in the target server state",
       "ok": true,
       "detail": {
         "entityId": 42,
+        "attaches": 3,
         "blocks": [
           {
             "x": 9,
@@ -352,6 +504,22 @@
             "value": "abc"
           }
         ]
+      }
+    },
+    {
+      "id": "O24b",
+      "name": "a proxy notice reaches the client complete as a toast and leaves no advancement behind",
+      "ok": true,
+      "detail": {
+        "notice": "monoplayer:notice/1",
+        "frames": 2,
+        "showToast": 1,
+        "complete": true,
+        "removed": [
+          "monoplayer:notice/1"
+        ],
+        "held": [],
+        "errors": 0
       }
     },
     {
@@ -410,15 +578,15 @@
     }
   ],
   "evidence": {
-    "frontPort": 38333,
-    "backendPort": 37039,
+    "frontPort": 37247,
+    "backendPort": 45843,
     "configReplayMode": "cached_replay",
     "wire": {
-      "checked": 75,
+      "checked": 86,
       "rejected": 0,
       "byState": {
         "configuration": 56,
-        "play": 19
+        "play": 30
       }
     },
     "backendLogins": 1,
@@ -441,8 +609,24 @@
       "leftovers": 0,
       "errors": 0
     },
-    "backend2Port": 42007,
-    "handshakeProxyPort": 38287,
+    "backend2Port": 45765,
+    "handshakeProxyPort": 39025,
+    "gate": {
+      "sends": 1,
+      "accepts": 1,
+      "logged": true,
+      "heldLogged": false,
+      "queued": false,
+      "answeredByPuppet": 1
+    },
+    "chat": {
+      "message": "hello from the human",
+      "command": "list",
+      "chatSent": 2,
+      "forwarded": 0,
+      "messageAcks": 0,
+      "chatSessionUpdates": 0
+    },
     "reconnect": {
       "loginsBeforeFault": 1,
       "fakeLogins": 2,
@@ -452,14 +636,46 @@
     "transfer": {
       "target": {
         "host": "127.0.0.1",
-        "port": 38287
+        "port": 39025
       },
       "handshakeIntents": [
         3
       ],
       "fake2Logins": 1,
       "backendLogins": 3,
-      "botEnded": "socketClosed"
+      "stayedConnected": true,
+      "configuration": [
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "registry_data",
+        "finish_configuration"
+      ],
+      "reconfigurations": 1
     }
   }
 }

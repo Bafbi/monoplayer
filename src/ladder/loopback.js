@@ -871,6 +871,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // configuration on the connection it holds, receives the target's
     // configuration, finishes, and lands in the target's play login and state.
     const transferMark = b3.names.length
+    const logMark = logs.length
     const loginsBeforeTransfer = core.session.backendLogins
     const target = { host: '127.0.0.1', port: handshakeProxy.port }
     fake.sendTransfer(target.host, target.port)
@@ -894,6 +895,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const targetConfigNames = afterTransfer
       .filter(frame => frame.state === 'configuration')
       .map(frame => frame.name)
+    // #22: the client's play-state configuration_acknowledged must be read in
+    // the play packet table. A client error here would mean the leg flipped
+    // its state before the ack arrived and misparsed it.
+    const moveLogs = logs.slice(logMark)
+    const frontClientErrors = moveLogs.filter(entry => entry.event === 'frontClientError')
+    const reconfigurationAcks = moveLogs.filter(entry => entry.event === 'frontReconfigurationAcknowledged')
     evidence.transfer = {
       target,
       handshakeIntents: [...handshakeProxy.nextStates],
@@ -911,14 +918,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         core.metrics.transfersFollowed === 1 &&
         core.metrics.transfersSeamless === 1 &&
         afterNames.includes('start_configuration') &&
-        b3.ended === null && b3.kick === null,
+        b3.ended === null && b3.kick === null &&
+        frontClientErrors.length === 0 &&
+        reconfigurationAcks.length === 1 &&
+        reconfigurationAcks[0].fields?.flushedFrames > 0,
       {
         frames: afterNames.slice(0, 12),
         ended: b3.ended,
         kick: b3.kick,
         blocked: core.metrics.transfersBlocked,
         followed: core.metrics.transfersFollowed,
-        seamless: core.metrics.transfersSeamless
+        seamless: core.metrics.transfersSeamless,
+        frontClientErrors: frontClientErrors.length,
+        reconfigurationAcks: reconfigurationAcks.map(entry => entry.fields)
       }
     )
     check(
@@ -939,7 +951,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         handshakeIntents: handshakeProxy.nextStates,
         backendLogins: core.session.backendLogins,
         configuration: targetConfigNames,
-        replayed: core.metrics.reconfigurationsCompleted,
+        reconfigurationsCompleted: core.metrics.reconfigurationsCompleted,
+        frontPlayReady: core.frontPlayReady,
         state: core.session.state
       }
     )

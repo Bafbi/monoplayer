@@ -59,9 +59,10 @@ expected result is `hub.entries=4`, `sky.entries=5`, `same=false`.
 
 - The puppet follows the transfer with handshake intent 3; `paper-sky` accepts
   it, and the hub session ends.
-- The attached client is detached with
-  `This session is moving. Reconnect in a few seconds to continue.` and can
-  reattach to the target through the proxy.
+- The attached client keeps its connection: Monoplayer serves the target's
+  configuration and play login on it, so the client shows the reconfiguration
+  loading screen and lands on the target (#22). Until the testbed run in #22's
+  slice 3 records it, this is proven offline only, by loopback `O21`-`O23`.
 - The target's configuration registries differ from the hub's.
 
 ## What it does not prove yet
