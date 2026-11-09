@@ -17,3 +17,4 @@ tools/mc-source/build/
 *_xbl-cache.json
 *_mca-cache.json
 .DS_Store
+.scratch/
