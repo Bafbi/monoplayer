@@ -187,7 +187,7 @@ It does not prove:
   decoded (`src/ladder/state-parity.js`, run with `mise run online`). The
   direct-versus-proxy comparison with the protocol bot is
   `mise run parity:run`
-  ([#13](https://github.com/Bafbi/monoplayer/issues/13)); it lists frame and
+  ([#13](https://github.com/Bafbi/monoplayer/issues/13)). It lists frame and
   decoded-state differences and separates the expected ones from the
   unexplained. The same comparison with the Fabric driver is
   [#62](https://github.com/Bafbi/monoplayer/issues/62) and is not built.

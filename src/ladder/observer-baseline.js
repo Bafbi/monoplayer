@@ -50,6 +50,9 @@ export function resolveBotIdentity ({ accountsDir = DEFAULT_ACCOUNTS_DIR, select
   })
   return {
     auth: 'microsoft',
+    // What the log calls the account: the alias or uuid, never the raw
+    // selector it was asked for.
+    account: picked.alias ?? picked.uuid,
     username: picked.name ?? picked.alias ?? picked.uuid,
     profilesFolder: custody.cacheFactory,
     authTitle: picked.profile?.authTitle ?? null,
@@ -72,7 +75,7 @@ export async function runBaseline ({
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('port must be an integer in 1..65535')
 
   const identity = resolveBotIdentity({ accountsDir, selector: account })
-  log('baselineStart', { host, port, account, name: identity.username })
+  log('baselineStart', { host, port, account: identity.account, name: identity.username })
 
   const bot = createBot({
     host,
