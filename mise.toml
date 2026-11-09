@@ -11,7 +11,7 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh) || node src/ladder/next-rung.js lint $?"
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh) || node src/ladder/next-rung.js lint $?"
 
 [tasks."secrets:link"]
 description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
@@ -98,6 +98,10 @@ run = "tools/driver/install.sh tools/driver/build/libs/monoplayer-driver-0.1.0.j
 description = "Build and push the Monoplayer image to the cluster Zot registry."
 wait_for = ["check"]
 run = "scripts/build-image.sh"
+
+[tasks."observer:protocollib"]
+description = "Build the pinned ProtocolLib jar the observer plugin links against (no release supports 26.x)."
+run = "scripts/build-protocollib.sh"
 
 [tasks."testbed:up"]
 description = "Take the live proxy offline, start the two-Paper transfer testbed, and compare registries."
