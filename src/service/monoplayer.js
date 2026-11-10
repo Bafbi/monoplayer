@@ -980,6 +980,7 @@ export function createMonoplayer ({
       frontPlayReady = false
       log('transferSeamless', { host, port, depth: transferChain.depth })
       emit('transfer_seamless', { host, port })
+      reconfigurationWaitingWorld = false
       // #87: the loading screen starts on the intent, not on the target's first
       // configuration frame. The client enters its own configuration phase now,
       // so it stops dropping serverbound frames into a play session that no
@@ -1161,8 +1162,9 @@ export function createMonoplayer ({
     if (moveKind === null || targetLoginReady !== true || clientReconfiguring || !attached) return null
     // #87: the target's login can land before a single chunk frame does, and a
     // client released there is handed an empty world. The replay waits for the
-    // first frame that carries terrain; noteTargetWorld retries this call for
-    // each one. The configuration deadline still bounds the wait.
+    // first frame that carries terrain; the map_chunk branch of backendPlayFrame
+    // retries this call for each one. The configuration deadline still bounds
+    // the wait.
     if (cache.stats().chunkFrames === 0) {
       if (!reconfigurationWaitingWorld) {
         reconfigurationWaitingWorld = true
@@ -1238,6 +1240,7 @@ export function createMonoplayer ({
       log('transferRestoreEndFailed', { error: String(error?.message ?? error).slice(0, 200) })
     }
     targetLoginReady = false
+    reconfigurationWaitingWorld = false
     clearReconfigurationTimer()
     // The reconnect this restore armed is a new backend session: its play
     // login is a real login and must re-send the human's client information.
@@ -1923,6 +1926,7 @@ export function createMonoplayer ({
         targetLoginReady = false
         restoreReplayPending = false
         frontPlayReady = false
+        reconfigurationWaitingWorld = false
         // #87: the same ordering as a followed transfer. The restarted phase is
         // a configuration round for the client, and it starts on the intent.
         startClientReconfiguration()
