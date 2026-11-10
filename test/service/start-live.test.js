@@ -40,9 +40,6 @@ test('#22 a value that is neither 1 nor 0 is refused and named', () => {
   assert.match(warnings[0], /must be 1 or 0/)
 })
 
-// #108: a config document's reconnect budget must survive the overlay. The
-// deployed default stays unlimited, so only an explicit file value, or an
-// explicit env value, may set a bound.
 // #134: the skin frame names the puppet's own entry, so a lane with no resolved
 // UUID writes none. The raw cacheDir override is the path that gets here, and it
 // is silent otherwise.
