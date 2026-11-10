@@ -317,7 +317,9 @@ first dial and its target warms in five seconds.
   sent while a client is attached, the client closes with it unanswered, and the
   next client receives it again: nothing pending is dropped, the backend records
   no `custom_click_action`, `controlDialogsAnsweredOnDetach` does not move, the
-  leg logs `dialogUnhandled` with `play_dialog_waits`, and one resend lands.
+  leg logs `dialogUnhandled` with `play_dialog_waits`, and one resend lands. This
+  is the behaviour that must not change, so the assertion is a guard: it holds
+  without #73 too, and it fails if the detach rule ever widens to play dialogs.
 
 ## The client parity rung
 
