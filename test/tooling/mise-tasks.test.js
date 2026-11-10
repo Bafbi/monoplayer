@@ -77,7 +77,7 @@ test('an expensive rung waits for the gate instead of racing it', () => {
     ['verify:relay', 'spike'],
     ['verify:custody', 'online'],
     ['verify:driver', 'driver:scenario'],
-    ['verify:deploy', 'image:build']
+    ['verify:deploy', 'image:build:no-push']
   ])
 
   // mise runs sibling depends concurrently, so the area task cannot order them.
@@ -89,6 +89,25 @@ test('an expensive rung waits for the gate instead of racing it', () => {
     tasks.get('driver:scenario').wait_for.includes('driver:build'),
     'driver:scenario waits for the driver build'
   )
+})
+
+test('verify:deploy builds the image without publishing it', () => {
+  // The push is not part of what a Dockerfile change needs proven, and the
+  // registry the script pushes to is one the manifests do not reference (#33).
+  const noPush = tasks.get('image:build:no-push')
+  const publish = tasks.get('image:build')
+  const deploy = tasks.get('verify:deploy')
+
+  assert.ok(noPush, 'mise.toml defines image:build:no-push')
+  assert.match(noPush.body, /run = "PUSH=0 scripts\/build-image\.sh"/, 'the no-push task sets PUSH=0')
+  assert.ok(noPush.wait_for.includes('check'), 'image:build:no-push waits for the gate')
+
+  assert.match(publish.body, /run = "scripts\/build-image\.sh"/, 'the debug publish path is unchanged')
+  assert.doesNotMatch(publish.body, /PUSH=0/, 'the publish path never sets PUSH=0')
+
+  assert.ok(deploy.depends.includes('image:build:no-push'), 'verify:deploy composes the no-push build')
+  assert.equal(deploy.depends.includes('image:build'), false, 'verify:deploy never publishes')
+  assert.doesNotMatch(deploy.body, /publishes to the/, 'the description stops warning about a publish')
 })
 
 test('the secrets link stays out of the gate and off the network', () => {
