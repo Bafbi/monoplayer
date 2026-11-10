@@ -239,7 +239,7 @@ The rewrite of secret-shaped strings to the sentinel before anything leaves the 
 _Avoid_: scrubbing, masking, sanitizing
 
 **Sentinel**:
-The fixed string `[REDACTED]` that replaces a secret.
+The fixed string `[REDACTED]` that replaces a secret. A report carries the shape beside it as `[REDACTED]<kind>`, such as `[REDACTED]<assignment>` or `[REDACTED]<jwt>`.
 _Avoid_: mask
 
 ## Proving it works
