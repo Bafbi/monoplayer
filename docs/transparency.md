@@ -109,13 +109,11 @@ relay path above. With nobody attached the leg sends the accept and logs
 `codeOfConductAccepted`, so a headless session is not left at a gate. The leg
 also reports that answer to the core, which therefore never holds a gate the
 server already considers closed. An attached player keeps the gate as long as it
-takes, and the last player detaching is the second way into that headless
-branch: the core asks the leg for the answer it would have given with nobody
-attached, and the plaintext promise still holds, because the gate is answered as
-the puppet and logged rather than by pretending a player clicked it
-([#73](https://github.com/Bafbi/monoplayer/issues/73)). Neither branch has a
-timeout. The relay and hold path this section
-describes is #16.
+takes. The last player detaching is the second way into that headless branch: the
+core asks the leg for the answer it would have given with nobody attached. The
+gate is answered as the puppet and logged, so no frame pretends a player clicked
+it ([#73](https://github.com/Bafbi/monoplayer/issues/73)). Neither branch has a
+timeout. The relay and hold path this section describes is #16.
 
 ## A followed transfer
 

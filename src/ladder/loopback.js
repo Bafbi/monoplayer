@@ -1268,7 +1268,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const seamlessReadiness = await waitForReady({ core: seamlessCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
     if (!seamlessReadiness.warm) throw new Error('the kept-connection rig did not warm')
     const seamlessBound = await seamlessFront.listen()
-    // #73: the library accepts the code of conduct on its own; O36 needs a
+    // #73: the library accepts the code of conduct on its own; O38 needs a
     // client that leaves the gate to the puppet, so this one does not answer.
     bot5 = createBot({
       port: seamlessBound.port ?? seamlessFront.port,
@@ -1611,7 +1611,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
     // The client is gone, so the session is detached: what proves the accept
     // arrived is that the puppet is warm on a backend that withholds
-    // finish_configuration until it does.
+    // finish_configuration until it does. No wait on the gated backend's own
+    // accept count: a followed transfer moves both rigs' puppets, so that count
+    // is shared.
     await waitFor(() => seamlessCore.session.warmReady === true,
       'the gated target warm with nobody attached', 20_000)
     const gateLogs = logs.slice(settledMark)
