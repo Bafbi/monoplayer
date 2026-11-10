@@ -50,7 +50,8 @@ metadata:
     app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
     app.kubernetes.io/part-of: monoplayer
 spec:
-  replicas: 1
+  # 0 at rest: `mise run gate:up` wakes this, and `gate:down` puts it back (#115).
+  replicas: 0
   strategy:
     type: Recreate
   selector:

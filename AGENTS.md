@@ -8,7 +8,7 @@ Three cluster lanes, and two rules that outrank a test.
 |---|---|---|---|
 | live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the puppet account GlowSquidye, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
-| gate Paper | `monoplayer-gate-b` | the Paper that the online rung, the driver lane, and the transfer testbed run against; `paper-conduct` is its gate-serving sibling, which the observer measures | anyone; it is disposable |
+| gate Paper | `monoplayer-gate-b` | the Paper that the online rung, the driver lane, and the transfer testbed run against; `paper-conduct` is its gate-serving sibling, which the observer measures. The lane rests at 0 replicas | anyone; it is disposable, and `mise run gate:up` and `mise run gate:down` are how it is woken and stopped |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
 That covers `kubectl -n monoplayer scale`, `patch`, `delete a workload`,
@@ -37,12 +37,20 @@ that leaves the deployment serving.
 | a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join` |
 | the online rung, with the deployment still serving | `mise run online:cluster` |
 | a clientbound comparison, direct against proxied | `mise run parity:run` |
-| the server's view of a join | `mise run observer:run` |
-| the real client | `mise run driver:scenario`, against the gate Paper |
+| the server's view of a join | `mise run gate:up`, then `mise run observer:run`, then `mise run gate:down` |
+| the real client | `mise run gate:up`, then `mise run driver:scenario`, against the gate Paper |
 | the transfer path | nothing: it takes the live front offline, so ask a human |
 
 `docs/testing-ladder.md` gives each run its cost and its blast radius.
-`deploy/dev/README.md` is the dev lane runbook.
+`deploy/dev/README.md` is the dev lane runbook, `deploy/driver/README.md` the gate's.
+
+**The gate lane sleeps.** Its five Deployments commit `replicas: 0`, so a bare
+`kubectl apply -k deploy/driver` changes nothing and wakes nothing. `mise run gate:up`
+applies the tree, wakes the rows a rung drives (`paper`, `paper-conduct`), and waits
+up to 900 s while saying so: a cold start is 240-310 s, because every gate world is an
+`emptyDir` that died with its pod. `mise run gate:down` puts it back to 0 and waits for
+the pods to go. No rung drives `velocity`, `paper-m4` or `toxiproxy`, so they stay off
+even after `gate:up`. `mise run gate:up -- velocity paper-m4 toxiproxy` wakes all three.
 
 ## Tools
 
