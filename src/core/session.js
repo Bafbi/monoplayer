@@ -263,7 +263,13 @@ export function createSession ({
   // the policy allows it; the G0 default fails closed after one attempt. A
   // retained client (#22) never fails closed: retryOrFail keeps the session.
   function fail () {
-    if (KEEPS_FRONT.has(state)) return retryOrFail('reconnect_failed')
+    if (KEEPS_FRONT.has(state)) {
+      // #87: a dial can refuse while the retained teardown already armed the
+      // retry. That is the same fault, so it must not spend the follow budget
+      // twice: the armed attempt owns the next dial.
+      if (pendingReconnect) return { scheduled: false, state, alreadyArmed: true }
+      return retryOrFail('reconnect_failed')
+    }
     if (state !== STATES.BOOT || backendLogins === 0) return { scheduled: false, state }
     return retryOrFail('reconnect_failed')
   }

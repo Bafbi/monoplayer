@@ -31,7 +31,17 @@
 //     write(name, packet, { synth })              // clientbound, packet level
 //     writeRaw(buffer, meta)                      // clientbound, frame level
 //     end(reason)                                 // kick/deny the client
+//     startReconfiguration({ reason }): { started, reason }  // optional (#22)
+//                                                 // the sampling client re-enters
+//                                                 // configuration on its own
+//                                                 // connection
+//     finishConfigurationFrame(): Buffer          // optional: the bytes that end
+//                                                 // a configuration round, for a
+//                                                 // restore with no cached finish
 //   }
+//
+// A hand-built harness may omit the last two; the core degrades to a state
+// replay at the target's login and logs reconfigurationRestoreNoFinish.
 
 import { createStateCache, WARM_MARKER } from '../core/state-cache.js'
 import {
@@ -1781,6 +1791,11 @@ export function createMonoplayer ({
   function backendPlayFrame ({ name, buffer, data }) {
     metrics.backendFrames++
     backendSessionOpen = true
+    // #87: the round's deadline covers the wait for the target's state, and a
+    // frame that arrives proves the target is alive: re-arm it, as the
+    // configuration branch does. A target that stops sending still ends the
+    // round.
+    if (moveKind !== null) armReconfigurationTimer()
 
     // #16: an early-attach client gets its replay as soon as the join prefix is
     // warm. The live path warms on the readiness fallback as well as on the
