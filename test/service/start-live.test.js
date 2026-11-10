@@ -54,8 +54,8 @@ test('#134 a resolved puppet UUID says nothing, and so does the switch being off
   assert.equal(unidentifiedSkinWarning({ skin: { showPuppetSkin: false }, puppet: { uuid: null } }), null)
 })
 
-// #108: a config document's reconnect budget must survive the overlay, and 0 or
-// unset must reach loadConfig as unlimited.
+// #108: a config document's reconnect budget must survive the overlay, and the
+// env var's 0 or absence must reach loadConfig as unlimited.
 test('#108 a config document\'s reconnect attempts reach loadConfig', () => {
   const out = envOverlay({ reconnect: { attempts: 2, maxDelayMs: 5000 } }, {})
   assert.equal(out.reconnect.attempts, 2)
