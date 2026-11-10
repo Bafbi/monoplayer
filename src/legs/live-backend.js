@@ -52,7 +52,6 @@ import { isLoopbackHost } from './offline-identity.js'
 // core (the core router would answer them a second time).
 export const LEG_SWALLOWED = new Set(['keep_alive'])
 
-
 // The most dialog answers one backend connection may attempt. A server that
 // keeps asking is a loop, not a gate.
 const DIALOG_ATTEMPT_LIMIT = 5

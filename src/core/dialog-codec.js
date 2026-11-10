@@ -13,6 +13,11 @@
 // attached player has the gate instead, and does the write. `answerBackendDialog`
 // in src/legs/live-backend.js is that side of it.
 //
+// Importing a leg was never the defect here. A rung builds one on purpose
+// (src/ladder/loopback.js): standing up a session is the ladder's job. What was
+// wrong was a protocol bot reaching through an adapter for a codec, which is
+// what put the bot's module graph on top of the token custody stack.
+//
 // Why src/core/ and not a new src/protocol/: the tree is named after a
 // domain, and a domain name comes from GLOSSARY.md. A `src/protocol/` would
 // hold this one file, and it would contest wire work that core already holds
@@ -25,7 +30,9 @@ import nbt from 'prismarine-nbt'
 
 // The one VarInt encoder in core. client-settings.js needs it for the brand
 // length prefix and this module needs it for the identifier and payload
-// lengths, so both call one function and the two encoders cannot drift.
+// lengths, so both call one function and the two encoders cannot drift. A codec
+// importing a client-settings function is the price of not adding a fourth
+// hand-rolled copy; moving the encoder into a module of its own is #143.
 import { encodeVarInt } from './client-settings.js'
 
 // Text component reader for a dialog label. The library decodes the dialog NBT
