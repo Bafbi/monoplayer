@@ -20,7 +20,8 @@
 // sign and send it as the puppet instead. The human's session key, its
 // acknowledgements, and its last-seen window stay on the front leg in every
 // mode. `read-only` drops the text too, and `off` drops clientbound chat as
-// well.
+// well. `commands` (#97) speaks the human's commands as the puppet, so /profil,
+// /msg, and /tp reach the server, and drops their open chat text.
 //
 // Client information (`settings`) is rewritten, not forwarded: the human's
 // locale, skin parts, main hand, and chat settings must reach the server, but
@@ -82,13 +83,40 @@ export const CHAT_SERVERBOUND = new Set([
   'chat_ack'
 ])
 
-// Chat frames whose text the proxy may speak as the puppet. Their signature
-// state never crosses; only the text does, and only when a human is attached.
-export const CHAT_SPEAK = new Set([
-  'chat_message',
+// Chat frames whose text the proxy may speak as the puppet, in two families.
+// Their signature state never crosses; only the text does, and only when a
+// human is attached. The modes differ by family, so the split is what lets
+// `commands` speak a command without speaking in open chat (#97).
+export const CHAT_SPEAK_MESSAGES = new Set([
+  'chat_message'
+])
+
+export const CHAT_SPEAK_COMMANDS = new Set([
   'chat_command',
   'chat_command_signed'
 ])
+
+// Every speakable frame whatever the mode: the word list the text extractor
+// asks about, and the family `full` speaks.
+export const CHAT_SPEAK = new Set([...CHAT_SPEAK_MESSAGES, ...CHAT_SPEAK_COMMANDS])
+
+// Which family each chat mode speaks. A mode absent from this map speaks
+// nothing, so a mode this file does not know drops the text rather than
+// speaking it by accident. This answers what a mode speaks, not which modes
+// exist: `CHAT_MODES` in src/service/monoplayer.js decides that. A Map, not an
+// object, so a prototype key such as `constructor` is a missing mode rather
+// than a lookup that throws.
+const CHAT_SPEAK_BY_MODE = new Map([
+  ['full', CHAT_SPEAK],
+  ['commands', CHAT_SPEAK_COMMANDS]
+])
+
+// The one function that turns a chat mode into a speak yes or no. Its
+// clientbound counterpart is `chatRelayAllowed` in
+// src/core/clientbound-policy.js; this one answers the serverbound direction.
+export function speaks (name, mode) {
+  return CHAT_SPEAK_BY_MODE.get(mode)?.has(name) === true
+}
 
 // The text a chat frame carries, in the form the backend leg sends it: a plain
 // message, or a command with its leading slash. Null when the frame carries no
@@ -104,9 +132,10 @@ export function chatText (name, data = null) {
 }
 
 // `mode` is the configured chat mode, and it defaults to the mode the config
-// defaults to. `full` speaks the human's chat as the puppet; `read-only` and
-// `off` drop it. `state` is the phase the client sent the frame in, so a
-// configuration answer is not mistaken for a play frame (#16).
+// defaults to. `full` speaks the human's chat and commands as the puppet;
+// `commands` speaks the command family alone (#97); `read-only` and `off` drop
+// it. `state` is the phase the client sent the frame in, so a configuration
+// answer is not mistaken for a play frame (#16).
 export function classifyServerbound (name, data = null, { mode = 'read-only', state = 'play' } = {}) {
   if (state === 'configuration' && CONFIG_SERVERBOUND_DROPS.has(name)) {
     return { action: 'drop', chat: false, reason: 'front_owned_config_handshake' }
@@ -114,7 +143,7 @@ export function classifyServerbound (name, data = null, { mode = 'read-only', st
   if (name === 'custom_payload' && CLIENT_IDENTITY_CHANNELS.has(data?.channel)) {
     return { action: 'drop', chat: false, reason: 'client_identity_channel' }
   }
-  if (mode === 'full' && CHAT_SPEAK.has(name)) {
+  if (speaks(name, mode)) {
     return { action: 'speak', chat: true, reason: 'human_chat' }
   }
   if (SERVERBOUND_DROPS.has(name)) {

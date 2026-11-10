@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O44 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O45 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -124,6 +124,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bot6 = null
   let bot7 = null
   let bot8 = null
+  // #97: the commands-mode rig, its own puppet, front, and backend.
+  let bot9 = null
+  let commandsFront = null
+  let commandsBackend = null
+  let commandsBase = null
+  let commandsCore = null
   let stranger = null
   let seamlessFront = null
   let seamlessBackend = null
@@ -688,6 +694,125 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         core.metrics.serverboundForwarded === chatBefore.forwarded &&
         fake.received.messageAcknowledgements.length === 0,
       evidence.chat
+    )
+
+    // --- O45: the commands mode speaks the command and keeps open chat off (#97) ---
+    // A rig of its own, in `commands`, for the reason the kept-connection rig
+    // has one: the main rig runs `full` for O29 and cannot be in two modes at
+    // once. It also has to be a separate client. O29 sends an acknowledgement
+    // the front leg's library rejects, so its client is ended a few
+    // milliseconds later (`chat_validation_failed`); a check that reused that
+    // client would race the end of its connection. This bot sends no
+    // acknowledgement, so nothing ends it before the two frames are read.
+    //
+    // The puppet leg here has no profile keys, so the command reaches the fake
+    // backend as `chat_command`, not `chat_command_signed`. The signed name is
+    // pinned by test/core/relay.test.js and test/service/chat-send.test.js; what
+    // this check proves is the mode decision on a protocol bot's frame.
+    commandsBase = await createFakeBackend({ port: 0, logStream: null })
+    commandsFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      offlineWhitelist,
+      getSnapshotConfig: () => commandsCore?.cache.snapshot().config ?? [],
+      wireCheck: payload => wire.check(payload),
+      wireMode: 'throw',
+      // No `chat` here: `createOfflineFrontLeg` does not forward it (#100), so
+      // passing it would claim the front leg backstop runs this mode. It does
+      // not, and `commands` relays clientbound as `read-only` does anyway.
+      log
+    })
+    commandsBackend = createOfflineBackendLeg({
+      host: '127.0.0.1',
+      port: commandsBase.port,
+      version: VERSION,
+      username: 'GlowSquidye',
+      dialogAction: 'last',
+      isHumanAttached: () => commandsCore?.attached === true,
+      onDialogAnswered: ({ state }) => commandsCore?.notePuppetDialogAnswer({ state }),
+      log
+    })
+    commandsCore = createMonoplayer({
+      config: loadConfig({ ...config, chat: 'commands' }),
+      backendLeg: commandsBackend,
+      frontLeg: commandsFront,
+      clock: {
+        now: Date.now,
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout
+      },
+      logStream: { write: line => log('commandsCore', { line }) }
+    })
+    commandsFront.setCoreAttachConfiguring(({ name, uuid }) => commandsCore.attachConfiguringPlayer({ name, uuid }))
+    commandsFront.setConfiguringHandler(({ name }) => commandsCore.configuringReady({ name }))
+    commandsFront.setClientSettingsHandler(settings => commandsCore.noteClientSettings(settings))
+    commandsFront.setCoreAttach(({ name, uuid }) =>
+      commandsCore.attachPlayer({ name, uuid, includeConfig: false })
+    )
+    commandsCore.start()
+    // One backend.connect() per reconnect_due, as the main rig does it, so a
+    // backend that ends fails as a dial rather than as a bot wait that blames
+    // the command.
+    let commandsReconnecting = false
+    commandsCore.on('reconnect_due', async ({ delayMs } = {}) => {
+      if (stopping || commandsReconnecting) return
+      commandsReconnecting = true
+      commandsCore.session.backendConnecting({ initial: false })
+      try {
+        await commandsBackend.connect()
+        log('commandsBackendReconnect', { delayMs, backendLogins: commandsCore.session.backendLogins })
+      } catch (error) {
+        commandsCore.session.fail()
+        log('commandsBackendReconnectFailed', {
+          delayMs,
+          error: String(error?.message ?? error).slice(0, 300)
+        })
+      } finally {
+        commandsReconnecting = false
+      }
+    })
+    await commandsBackend.connect()
+    const commandsReadiness = await waitForReady({ core: commandsCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+    if (!commandsReadiness.warm) throw new Error('the commands-mode rig did not warm')
+    const commandsBound = await commandsFront.listen()
+    bot9 = createBot({
+      port: commandsBound.port ?? commandsFront.port,
+      username: 'Second'
+    })
+    await bot9.ready()
+    if (commandsCore.metrics.attaches !== 1) {
+      throw new Error(`the commands-mode rig attached ${commandsCore.metrics.attaches} times, expected 1`)
+    }
+
+    const forwardedBefore = commandsCore.metrics.serverboundForwarded
+    bot9.sendCommand('profil')
+    bot9.sendChat('the account must not say this')
+    await bot9.waitFor(
+      () => commandsBase.received.chatCommands.length === 1 &&
+        commandsCore.metrics.chatBlocked === 1,
+      'the backend command, and no chat, in commands mode'
+    )
+    const spokenInCommands = commandsBase.received.chatCommands.at(-1)
+    evidence.commandsMode = {
+      command: spokenInCommands?.command ?? null,
+      commands: commandsBase.received.chatCommands.length,
+      messages: commandsBase.received.chats.length,
+      chatSent: commandsCore.metrics.chatSent,
+      chatBlocked: commandsCore.metrics.chatBlocked,
+      forwarded: commandsCore.metrics.serverboundForwarded - forwardedBefore,
+      attaches: commandsCore.metrics.attaches
+    }
+    check(
+      'O45',
+      'in commands mode the human command reached the backend as the puppet and the chat message did not',
+      spokenInCommands?.command === 'profil' &&
+        commandsBase.received.chats.length === 0 &&
+        commandsCore.metrics.chatSent === 1 &&
+        commandsCore.metrics.chatBlocked === 1 &&
+        commandsCore.metrics.serverboundForwarded === forwardedBefore &&
+        commandsCore.metrics.attaches === 1,
+      evidence.commandsMode
     )
 
     // --- O12: detach keeps the backend session and the pose ---
@@ -1693,11 +1818,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger]) {
+    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }
     try { await seamlessFront?.close?.() } catch { /* best effort */ }
+    try { await commandsFront?.close?.() } catch { /* best effort */ }
+    try { await commandsBackend?.close?.() } catch { /* best effort */ }
+    try { await commandsBase?.close?.() } catch { /* best effort */ }
     try { await backend?.close?.() } catch { /* best effort */ }
     try { await seamlessBackend?.close?.() } catch { /* best effort */ }
     try { fake?.close?.() } catch { /* best effort */ }
