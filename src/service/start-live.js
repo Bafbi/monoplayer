@@ -565,7 +565,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
     ...accountLogFields,
     whitelistCount: cfg.attachWhitelist.length,
     reconnect: {
-      attempts: cfg.reconnect.attempts === Infinity ? 'unlimited' : cfg.reconnect.attempts,
+      // A config document's 0 is how an operator writes "unlimited", so the
+      // record says what the lane will do, not what the document wrote. The
+      // predicate is the session's own (src/core/session.js:74).
+      attempts: Number.isFinite(cfg.reconnect.attempts) && cfg.reconnect.attempts > 0
+        ? Math.floor(cfg.reconnect.attempts)
+        : 'unlimited',
       maxDelayMs: cfg.reconnect.maxDelayMs
     }
   })
