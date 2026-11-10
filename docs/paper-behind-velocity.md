@@ -87,7 +87,8 @@ kubectl -n monoplayer-gate-b logs deploy/velocity --tail=50
 ```
 
 `mise run gate:down` puts them back to sleep. Every gate world is an `emptyDir`,
-so a `down` costs the next `up` a full cold start: 240-310 s.
+so a `down` costs the next `up` a full cold start: 90 s, measured on the 26.2 gate
+Paper.
 
 **Forwarding checkpoint (the one Paper-side risk):** the pre-seeded partial
 `paper-global.yml` only sets `proxies.velocity.enabled/online-mode`; the

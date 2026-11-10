@@ -166,7 +166,7 @@ description = "Report what the dev lane runs and how many replicas the live lane
 run = "scripts/dev-lane.sh status"
 
 [tasks."gate:up"]
-description = "Bring the gate lane up: apply deploy/driver, wake the rows a rung drives, and wait up to 900 s (cold start is 240-310 s). Name deployments after -- to wake the M4 rows too: mise run gate:up -- velocity paper-m4 toxiproxy."
+description = "Bring the gate lane up: apply deploy/driver, wake the rows a rung drives, and wait up to 900 s (a cold start is 90 s). Name deployments after -- to wake the M4 rows too: mise run gate:up -- velocity paper-m4 toxiproxy."
 run = "scripts/gate-lane.sh up"
 
 [tasks."gate:down"]

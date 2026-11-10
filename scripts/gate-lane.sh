@@ -15,11 +15,11 @@
 # deployments sit at 0, which is what the manifests commit, so a bare
 # kubectl apply -k deploy/driver cannot wake the lane by accident.
 #
-# A cold start is 240-310 s: Paper downloads its server and writes a flat world
-# into an emptyDir every time, because an emptyDir dies with its pod. up says how
-# long it will wait before it waits, so a five-minute silence is not read as a
-# hang. down leaves the Deployments, the Services, the ConfigMaps and the Secrets
-# in place, so the next up costs the same cold start and nothing else.
+# A cold start pays Paper's download and a flat-world write into a fresh emptyDir,
+# because every gate volume dies with its pod. Measured at 90 s on the 26.2 gate
+# Paper (#115). up says how long it will wait before it waits, so a long silence is
+# not read as a hang. down leaves the Deployments, the Services, the ConfigMaps and
+# the Secrets in place, so the next up costs the same cold start and nothing else.
 #
 # What it never does: touch the live lane (monoplayer) or the dev lane
 # (monoplayer-dev); delete anything; or scale paper-hub and paper-sky, which are
@@ -58,8 +58,11 @@ MANIFESTS=$ROOT/deploy/driver
 GATE_WORKLOADS="paper paper-conduct paper-m4 velocity toxiproxy"
 DRIVEN_WORKLOADS="paper paper-conduct"
 
-# Measured on the 26.2 gate Paper (scripts/observer-report.sh, docs/testing-ladder.md).
-COLD_START="240-310 s"
+# Measured on the 26.2 gate Paper (#115), from a scale to 0 until the pod reports
+# ready. The 240-310 s in the docs is a different wait: a Paper that is already up
+# and restarts with the observer plugin, counted until the plugin logs that its
+# packet listeners are live (scripts/observer-report.sh). Nothing here waits for that.
+COLD_START="90 s from 0 to ready"
 
 die () { printf 'gate-lane: %s\n' "$1" >&2; exit "${2:-2}"; }
 say () { printf 'gate-lane: %s\n' "$1"; }
@@ -123,7 +126,9 @@ up () {
   # shellcheck disable=SC2086
   kubectl -n "$GATE_NAMESPACE" scale deploy $names --replicas=1 >/dev/null
   say "woke $names"
-  say "waiting up to ${READY_TIMEOUT}s for $names to report ready (cold start is $COLD_START)"
+  say "waiting up to ${READY_TIMEOUT}s for $names to report ready"
+  say "cold start is $COLD_START (#115)"
+  say "a Paper restart that loads the observer takes 240-310 s, and observer:run waits for that itself"
 
   while : ; do
     pending=''
@@ -132,7 +137,7 @@ up () {
     done
     [ -z "$pending" ] && break
     if [ "$waited" -ge "$READY_TIMEOUT" ]; then
-      die "still not ready after ${waited}s:$pending. A cold start is $COLD_START; read what the pod is doing: kubectl -n $GATE_NAMESPACE get pods -o wide" 1
+      die "still not ready after ${waited}s:$pending. A cold start is $COLD_START, so this is not a slow boot; read what the pod is doing: kubectl -n $GATE_NAMESPACE get pods -o wide" 1
     fi
     sleep "$POLL"
     waited=$((waited + POLL))
