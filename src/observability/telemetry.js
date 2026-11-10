@@ -229,6 +229,7 @@ export function createTelemetry ({
               name: point.name,
               sum: {
                 dataPoints: [dataPoint],
+                // OTLP AggregationTemporality: 1 is delta, 2 is cumulative.
                 aggregationTemporality: 2,
                 isMonotonic: true
               }
