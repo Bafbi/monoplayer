@@ -207,7 +207,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       attachWhitelist: offlineWhitelist,
       front: { host: '127.0.0.1', port: 0 },
       backend: { host: '127.0.0.1', port: fake.port },
-      puppet: { username: 'GlowSquidye', uuid: null },
+      puppet: { username: 'GlowSquidye', uuid: puppetUuid },
       // O29 needs the speaking path. The default is read-only, and this rung is
       // the only place a real client-side frame meets the relay.
       chat: 'full',
