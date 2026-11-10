@@ -256,6 +256,16 @@ test('the plugin install only ever names the gate namespace', () => {
   assert.equal(installs.every(line => line.startsWith('-n monoplayer-gate-b ')), true, installs.join(' / '))
 })
 
+test('an asleep gate lane is named, with the task that wakes it', () => {
+  // #115: the lane rests at 0 replicas, so "no pod" is the normal state of a cold
+  // lane and not a broken deployment. The refusal sends a reader to gate:up.
+  const space = workspace()
+  const { status, output } = run(space, { KUBECTL_POD: '' })
+  assert.equal(status, 2, output)
+  assert.match(output, /the gate lane rests at 0 replicas/)
+  assert.match(output, /mise run gate:up/)
+})
+
 test('measuring the live lane is refused before anything runs', () => {
   const space = workspace()
   const { status, output, calls } = run(space, {}, ['--namespace', 'monoplayer'])

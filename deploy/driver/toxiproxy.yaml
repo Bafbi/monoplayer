@@ -1,14 +1,15 @@
 # Toxiproxy 2.13.0 — fault injection on the puppet leg.
 #
 #   Monoplayer back leg (later) -> Toxiproxy -> Velocity -> Paper-m4
-#   Monoplayer back leg (later) -> Toxiproxy -> Vanilla / Fabric direct
 #
 # A fault on the client leg tests the client's tolerance; a fault on the
-# puppet leg tests Monoplayer's session ownership. This is the latter. Only
-# the M4 listener (puppet-velocity) is enabled at bring-up; the vanilla and
-# fabric listeners flip enabled=true via the HTTP API when their rows and
-# backends exist (docs/paper-behind-velocity.md). F1/F4/F5 are not network toxics: detach
-# is client-side, backend death is a restart, kick is an RCON command.
+# puppet leg tests Monoplayer's session ownership. This is the latter. It
+# declares the two M4 listeners, because M4 is the only row with a backend in
+# this tree: the M1 vanilla and M3 fabric rows have no manifest yet, so their
+# listeners land with them rather than publishing two ports for nobody (#115).
+# A row that arrives adds its proxy, its containerPort and its Service port
+# together. F1/F4/F5 are not network toxics: detach is client-side, backend
+# death is a restart, kick is an RCON command.
 #
 # The HTTP API is ClusterIP-only — never expose it with the listeners; anyone
 # on the API can take the gate down.
@@ -34,18 +35,6 @@ data:
         "listen": "[::]:25573",
         "upstream": "paper-m4:25565",
         "enabled": false
-      },
-      {
-        "name": "puppet-vanilla",
-        "listen": "[::]:25571",
-        "upstream": "vanilla:25565",
-        "enabled": false
-      },
-      {
-        "name": "puppet-fabric",
-        "listen": "[::]:25572",
-        "upstream": "fabric:25565",
-        "enabled": false
       }
     ]
 ---
@@ -58,7 +47,8 @@ metadata:
     app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
     app.kubernetes.io/part-of: monoplayer
 spec:
-  replicas: 1
+  # 0 at rest: `mise run gate:up` wakes this, and `gate:down` puts it back (#115).
+  replicas: 0
   strategy:
     type: Recreate
   selector:
@@ -83,10 +73,6 @@ spec:
               containerPort: 8474
             - name: px-velocity
               containerPort: 25570
-            - name: px-vanilla
-              containerPort: 25571
-            - name: px-fabric
-              containerPort: 25572
             - name: px-paper-m4
               containerPort: 25573
           resources:
@@ -135,12 +121,6 @@ spec:
     - name: px-velocity
       port: 25570
       targetPort: px-velocity
-    - name: px-vanilla
-      port: 25571
-      targetPort: px-vanilla
-    - name: px-fabric
-      port: 25572
-      targetPort: px-fabric
     - name: px-paper-m4
       port: 25573
       targetPort: px-paper-m4
