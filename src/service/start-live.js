@@ -14,7 +14,8 @@
 //   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
-//   MONOPLAYER_CHAT                                     read-only (default), full, or off
+//   MONOPLAYER_CHAT                                     read-only (default),
+//                                                       commands, full, or off
 //   MONOPLAYER_TRANSFER_KEEP_CONNECTION                 1 keeps the client's
 //                                                       connection through a
 //                                                       transfer (#22); off by default

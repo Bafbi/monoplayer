@@ -91,6 +91,13 @@ test('the chat mode decides which chat frames cross', () => {
     assert.equal(chatRelayAllowed(name, 'full'), true, `full ${name}`)
     assert.equal(chatRelayAllowed(name, 'off'), false, `off ${name}`)
   }
+  // #97: the commands mode relays clientbound exactly as read-only does.
+  for (const name of ['system_chat', 'profileless_chat']) {
+    assert.equal(chatRelayAllowed(name, 'commands'), true, `commands ${name}`)
+  }
+  assert.equal(chatRelayAllowed('player_chat', 'commands'), false)
+  assert.equal(mayCrossToFront('play', 'player_chat', { chat: 'commands' }), false)
+  assert.equal(mayCrossToFront('play', 'system_chat', { chat: 'commands' }), true)
   assert.equal(chatRelayAllowed('system_chat', 'read-only'), true)
   assert.equal(chatRelayAllowed('profileless_chat', 'read-only'), true)
   assert.equal(chatRelayAllowed('player_chat', 'read-only'), false)
