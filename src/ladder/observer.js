@@ -46,8 +46,9 @@ export const KNOWN_DIFFERENCES = Object.freeze({
 // Measured on the gate Paper (2026-11-09): turning enable-code-of-conduct on does
 // not just add a gate, it stops the server. The start failure reads "Code of
 // Conduct folder does not exist: codeofconduct", from
-// DedicatedServer.readCodeOfConducts. So the lane keeps it off, and the observer
-// has no gate to witness.
+// DedicatedServer.readCodeOfConducts. So the G0 row keeps the gate off, and the
+// observer measures `paper-conduct`, which carries the folder. Point the run back
+// at a lane without it and these two reasons explain the fields again.
 export const ABSENT_FACTS = Object.freeze({
   codeOfConduct: {
     setting: 'codeOfConduct',

@@ -91,6 +91,25 @@ test('the observer rung speaks the version the gate Paper serves', () => {
     'the baseline bot joins the gate Paper with the version it serves')
 })
 
+test('the observer lane serves the same Paper build as the gate Paper', () => {
+  // #78: the observer measures `paper-conduct`, not the G0 `paper`, because only the
+  // first one can serve the code of conduct. The observer still reads the version
+  // from `deploy/driver/paper.yaml`, so the two must not drift apart.
+  for (const name of ['VERSION', 'PAPER_BUILD']) {
+    assert.equal(envValue('deploy/driver/paper-conduct.yaml', name), envValue('deploy/driver/paper.yaml', name),
+      'deploy/driver/paper-conduct.yaml must pin the same ' + name + ' as the gate Paper')
+  }
+})
+
+test('the observer lane is the one that serves the code of conduct', () => {
+  // The lane exists for the gate: if the setting or the document folder goes, the
+  // observer's two gate fields go back to being absent for no measured reason.
+  const lane = read('deploy/driver/paper-conduct.yaml')
+  assert.match(lane, /- name: CUSTOM_SERVER_PROPERTIES\n\s+value: enable-code-of-conduct=true/,
+    'the lane turns the gate on, through the image\'s custom-properties knob')
+  assert.match(lane, /codeofconduct\/terms\.txt/, 'the lane writes a document Paper will read')
+})
+
 test('the observer plugin compiles against the gate Paper build', () => {
   // docs/adr/pin-protocollib-for-the-observer.md: the plugin compiles against the
   // same Paper build the gate server runs, so the jar loads on the server it
