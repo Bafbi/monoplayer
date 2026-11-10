@@ -59,7 +59,7 @@ The running Monoplayer process: config, core, both legs, custody, and the CLI. I
 _Avoid_: app, daemon, the proxy, the bot
 
 **Testbed front**:
-The testbed's published endpoint: its front Service, the Tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the pod and the name go with it.
+The testbed's published endpoint: its front Service, the Tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the Tailscale operator then removes the pod and the tailnet name.
 _Avoid_: testbed Service, the front unqualified
 
 **Front Service**:

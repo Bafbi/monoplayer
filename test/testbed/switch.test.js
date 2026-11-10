@@ -296,8 +296,8 @@ test('up records the digest it ran, in the output and in the record', () => {
 
 test('up still records the digest when Argo had no policy to remove', () => {
   // disableAutoSync reports nothing to restore when Argo is already off, and
-  // saveState then keeps whatever record is on disk (#107). The digest is not
-  // part of that record, so it has to survive the write on its own.
+  // savePolicyRecord then keeps whatever record is on disk (#107). The digest is
+  // not part of that record, so it has to survive the write on its own.
   const space = workspace()
 
   const { status, output } = run(space, ['up'], { KUBECTL_APPLICATION: JSON.stringify({ spec: { syncPolicy: {} } }) })
