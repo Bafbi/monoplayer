@@ -30,7 +30,14 @@ export function shouldForceWarm (readiness, { requireChunks = true } = {}) {
   return Number(readiness.chunkFrames) > 0
 }
 
-export async function waitForReady ({ core, log, maxWarmMs = 60_000, maxTotalMs = 240_000 }) {
+// The wait between two reads of the cache. A caller may inject it, so a test can
+// take the loop's second pass, and the branch that re-polls, with no timer
+// (#110). Every caller today leaves it at the default, which is a real 1 s.
+const defaultPollSleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+export async function waitForReady ({
+  core, log, maxWarmMs = 60_000, maxTotalMs = 240_000, sleep = defaultPollSleep
+}) {
   const startedAt = Date.now()
   let warmMs = null
   for (;;) {
@@ -56,6 +63,6 @@ export async function waitForReady ({ core, log, maxWarmMs = 60_000, maxTotalMs 
         chunkFrames: stats.chunkFrames
       }
     }
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await sleep(1000)
   }
 }
