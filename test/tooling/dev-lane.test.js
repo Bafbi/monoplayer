@@ -117,11 +117,12 @@ const SHIM = [
   '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" rollout status "*) exit 0 ;;',
   '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
-  // The fixture is the cluster state: no fixture, no ConfigMap. The arm leaves
-  // cat's own status standing, so a missing object fails the way kubectl does.
+  // The fixture is the cluster state: a read of an object no fixture holds answers
+  // nothing and exits non-zero, the way kubectl fails a missing object. None of
+  // the three arms overrides cat's status.
   '  *" -n monoplayer-dev get configmap "*) cat "$fixtures/dev-whitelist.json" ;;',
-  '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json"; exit 0 ;;',
-  '  *" get configmap "*) cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
+  '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json" ;;',
+  '  *" get configmap "*) cat "$fixtures/dev-whitelist.json" ;;',
   // The dev proxy's account, read from its volume, and the dev Paper's player
   // list, read over RCON.
   '  *" exec "*"node -e"*) printf \'%s\' "$KUBECTL_ACCOUNT_NAME"; exit 0 ;;',
@@ -143,6 +144,13 @@ function workspace () {
   fs.writeFileSync(path.join(fixtures, 'dev-whitelist.json'), EMPTY_WHITELIST + '\n')
   fs.writeFileSync(path.join(fixtures, 'live-whitelist.json'), EMPTY_WHITELIST + '\n')
   return { dir, bin, fixtures, log: path.join(dir, 'kubectl.log'), marker: path.join(dir, 'applied') }
+}
+
+// The state after `down --purge` for the whitelist: no ConfigMap to read.
+function withoutWhitelist () {
+  const space = workspace()
+  fs.unlinkSync(path.join(space.fixtures, 'dev-whitelist.json'))
+  return space
 }
 
 function run (space, args, env = {}) {
@@ -169,6 +177,19 @@ function run (space, args, env = {}) {
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
 }
 
+// A call against the live namespace. The lookahead is required: the prefix test
+// alone also matches monoplayer-dev.
+const LIVE_CALL = /-n monoplayer(?![\w-])/
+// The script reads the live namespace, for one Secret, one ConfigMap, and the
+// replica count. Every live call it makes is a '-n monoplayer get'. Matching on
+// the namespace rather than on a list of verbs is what makes a write this file has
+// not thought of yet fail.
+//
+// What this cannot see: the script's writes go through 'apply -f -' with no -n
+// flag, so a live read piped into a live apply would pass. Reading the manifests
+// the apply carries is a different test.
+const liveWrites = calls => calls.filter(line => LIVE_CALL.test(line) && !/^-n monoplayer get /.test(line))
+
 test('up creates the RCON Secret before it applies the lane', () => {
   const space = workspace()
   const { status, output, calls } = run(space, ['up'])
@@ -177,7 +198,7 @@ test('up creates the RCON Secret before it applies the lane', () => {
   const apply = calls.findIndex(line => line.includes('apply -k'))
   assert.ok(create >= 0, 'the Secret is created')
   assert.ok(apply > create, 'the Secret exists before the lane is applied')
-  assert.equal(fs.readFileSync(space.log, 'utf8').includes('create secret generic monoplayer'), false, 'never the live Secret')
+  assert.deepEqual(liveWrites(calls), [], 'nothing is written to the live namespace')
 })
 
 test('no dev command changes the live deployment', () => {
@@ -185,25 +206,26 @@ test('no dev command changes the live deployment', () => {
   for (const args of [['up'], ['status'], ['down'], ['down', '--purge'], ['join']]) {
     const { status, output, calls } = run(space, args)
     assert.equal(status, 0, args.join(' ') + ': ' + output)
-    for (const verb of ['scale', 'patch', 'rollout restart', 'set image deploy/monoplayer -n monoplayer']) {
+    for (const verb of ['scale', 'patch', 'rollout restart']) {
       assert.equal(calls.some(line => line.includes(verb)), false, args.join(' ') + ' ran ' + verb)
     }
+    // The verb list above cannot cover every write: a live 'set image' reads
+    // '-n monoplayer set image', so a needle spelled the other way never matches.
+    assert.deepEqual(liveWrites(calls), [], args.join(' ') + ' wrote to the live namespace')
   }
 })
 
 test('status names an empty whitelist, and claims no state when the read fails', () => {
-  // The two halves are a pair, and each is what keeps the other honest: a shim
-  // that always answered would fail the second, and a shim that always failed
-  // would fail the first. The read failing is the state after `down --purge`,
-  // when the namespace is gone.
-  const present = workspace()
-  const empty = run(present, ['status'])
+  // The present half pins how status classifies an empty whitelist; the missing
+  // half pins that a read which yielded nothing is not classified at all. Neither
+  // half can tell a failed read from an empty one, because status discards the
+  // status and the output is the same either way: what the pair fixes is the
+  // classification, not the shim's exit status.
+  const empty = run(workspace(), ['status'])
   assert.equal(empty.status, 0, empty.output)
   assert.match(empty.output, /attach whitelist is empty: nobody can attach yet/)
 
-  const gone = workspace()
-  fs.unlinkSync(path.join(gone.fixtures, 'dev-whitelist.json'))
-  const missing = run(gone, ['status'])
+  const missing = run(withoutWhitelist(), ['status'])
   assert.equal(missing.status, 0, missing.output)
   assert.match(missing.output, /available replicas: 1/, 'the rest of the report still prints')
   assert.doesNotMatch(missing.output, /attach whitelist (is empty|has entries)/,
@@ -213,9 +235,7 @@ test('status names an empty whitelist, and claims no state when the read fails',
 test('down --purge exits 0 when the dev ConfigMap is missing', () => {
   // Reporting a lane that is already gone is not an error: `mise run dev:down --
   // --purge` must exit 0 when it has nothing left to report on.
-  const space = workspace()
-  fs.unlinkSync(path.join(space.fixtures, 'dev-whitelist.json'))
-  const { status, output } = run(space, ['down', '--purge'])
+  const { status, output } = run(withoutWhitelist(), ['down', '--purge'])
   assert.equal(status, 0, output)
   assert.match(output, /deleted monoplayer-dev/)
 })
@@ -229,8 +249,12 @@ test('down stops the workload and keeps the dev account', () => {
   const deletions = calls.filter(line => line.includes('delete'))
   assert.ok(deletions.length >= 2, 'the workload and the handle pod are deleted')
   assert.equal(deletions.every(line => line.includes(DEV_NAMESPACE)), true, deletions.join(' / '))
-  assert.equal(deletions.some(line => line.includes('namespace')), false, 'the namespace stays')
-  assert.equal(deletions.some(line => line.includes('persistentvolumeclaim')), false, 'the claim stays')
+  // The claim and the namespace stay, under either spelling kubectl accepts for
+  // each: 'delete pvc monoplayer-dev-custody' and 'delete ns monoplayer-dev' both
+  // take what a stop may not, and an allowlist of verbs would also reject
+  // 'delete deploy', which is the workload and is allowed.
+  assert.equal(deletions.some(line => /\bpvc\b|persistentvolumeclaim/.test(line)), false, 'the claim stays: ' + deletions.join(' / '))
+  assert.equal(deletions.some(line => /\bns\b|\bnamespace\b/.test(line)), false, 'the namespace stays: ' + deletions.join(' / '))
   assert.match(output, /the dev account stay/)
 })
 
