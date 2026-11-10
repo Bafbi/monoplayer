@@ -1268,7 +1268,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const seamlessReadiness = await waitForReady({ core: seamlessCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
     if (!seamlessReadiness.warm) throw new Error('the kept-connection rig did not warm')
     const seamlessBound = await seamlessFront.listen()
-    // #73: the library accepts the code of conduct on its own; O38 needs a
+    // #73: the library accepts the code of conduct on its own; O43 needs a
     // client that leaves the gate to the puppet, so this one does not answer.
     bot5 = createBot({
       port: seamlessBound.port ?? seamlessFront.port,
