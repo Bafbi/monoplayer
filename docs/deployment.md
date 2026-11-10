@@ -144,7 +144,8 @@ Common:
 - `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
 - `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT` (both default `25565`)
-- `MONOPLAYER_RECONNECT_ATTEMPTS` (0 or unset = unlimited) and
+- `MONOPLAYER_RECONNECT_ATTEMPTS` (`0` = unlimited; unset keeps a config
+  file's `reconnect.attempts`, which is unlimited when the file sets none) and
   `MONOPLAYER_RECONNECT_MAX_DELAY_MS` (default `60000`)
 
 Telemetry and journal:
