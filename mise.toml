@@ -170,7 +170,7 @@ description = "Bring the gate lane up: apply deploy/driver, wake the rows a rung
 run = "scripts/gate-lane.sh up"
 
 [tasks."gate:down"]
-description = "Stop the gate lane: scale every gate workload to 0 and wait for its pods. The objects and the hand-created Secrets stay; every world is emptyDir, so the next gate:up is a full cold start."
+description = "Stop the gate lane: scale every gate workload to 0, then wait for its pods to go. The objects and the hand-created Secrets stay; every world is emptyDir, so the next gate:up is a full cold start."
 run = "scripts/gate-lane.sh down"
 
 [tasks."gate:status"]

@@ -109,7 +109,9 @@ const SHIM = [
   'case " $* " in',
   '  *" apply -k "*) cat > /dev/null; printf \'configured\n\'; exit 0 ;;',
   '  *" scale "*) printf \'scaled\n\'; exit 0 ;;',
-  '  *" get secret "*) if [ "${KUBECTL_SECRET_MISSING:-0}" = 1 ]; then printf \'not found\n\' >&2; exit 1; fi; exit 0 ;;',
+  // One named Secret can be missing, so a case can prove which Deployment reads
+  // which, rather than only that the check exists.
+  '  *" get secret "*) if [ -n "${KUBECTL_SECRET_MISSING:-}" ]; then case " $* " in *" $KUBECTL_SECRET_MISSING "*) printf \'not found\n\' >&2; exit 1 ;; esac; fi; exit 0 ;;',
   // A readiness read answers empty until the case lets it answer 1. The counter
   // is per call, so "not ready yet" is a first read rather than a fixed answer.
   '  *"readyReplicas"*) if [ "$(count ready)" -lt "${KUBECTL_READY_AFTER:-0}" ]; then exit 0; fi; printf \'1\'; exit 0 ;;',
@@ -276,11 +278,39 @@ test('a missing hand-created Secret is named before the wait, not after it', () 
   // gate-b-rcon and gate-b-velocity are made by an operator, never by the tree.
   // Without them the pods sit in CreateContainerConfigError and gate:up would
   // spend its whole budget on a lane that cannot start.
-  const { status, output, calls } = run(space(), ['up'], { KUBECTL_SECRET_MISSING: '1' })
+  const { status, output, calls } = run(space(), ['up'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
   assert.equal(status, 2, output)
   assert.match(output, /gate-b-rcon/)
   assert.match(output, /deploy\/driver\/README\.md/)
   assert.equal(calls.some(line => / scale /.test(line)), false, 'nothing is woken: ' + calls.join(' | '))
+})
+
+test('the Secret check follows the Deployment that reads it', () => {
+  // deploy/driver is the map: the three Papers take RCON_PASSWORD from
+  // gate-b-rcon, velocity mounts gate-b-velocity, and paper-m4 reads it again for the
+  // forwarding override. Checking the wrong one either refuses a lane that would have
+  // started or spends the whole budget on a pod in CreateContainerConfigError.
+  const rcon = run(space(), ['up', 'paper', 'paper-conduct'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
+  assert.equal(rcon.status, 2, rcon.output)
+  assert.match(rcon.output, /gate-b-rcon/)
+
+  const velocity = run(space(), ['up', 'velocity'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
+  assert.equal(velocity.status, 2, velocity.output)
+  assert.match(velocity.output, /gate-b-velocity/)
+
+  // A Paper with no proxy in front of it never wants the forwarding secret.
+  const paper = run(space(), ['up', 'paper'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
+  assert.equal(paper.status, 0, paper.output)
+
+  // paper-m4 is behind Velocity, so it needs both, and the forwarding one is the
+  // binding constraint once RCON is there.
+  const m4 = run(space(), ['up', 'paper-m4'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
+  assert.equal(m4.status, 2, m4.output)
+  assert.match(m4.output, /gate-b-velocity/)
+
+  // Velocity reads no RCON.
+  const noRcon = run(space(), ['up', 'velocity'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
+  assert.equal(noRcon.status, 0, noRcon.output)
 })
 
 test('mise offers the lifecycle, and the lint rung sees the script', () => {
