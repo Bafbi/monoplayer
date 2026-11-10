@@ -101,20 +101,23 @@ const parse = text => JSON.parse(text)
 
 test('accounts --json reports the usable, broken, pending, and legacy entries of the tree it was given', (t) => {
   const h = harness(t)
-  seedAccounts(h.accountsDir)
+  // The account tree is not the one the custody root implies, so the report has
+  // to take the legacy target from the flag and not from the root.
+  const accountsDir = path.join(h.root, 'trees', 'accounts')
+  seedAccounts(accountsDir)
   seedLegacy(h.secretsDir)
 
-  const result = h.run('accounts', '--accounts-dir', h.accountsDir, '--secrets-dir', h.secretsDir, '--json')
+  const result = h.run('accounts', '--accounts-dir', accountsDir, '--secrets-dir', h.secretsDir, '--json')
   assert.equal(result.status, 0, result.stderr)
   const listing = parse(result.stdout)
 
-  assert.equal(listing.accountsDir, h.accountsDir)
+  assert.equal(listing.accountsDir, accountsDir)
   assert.deepEqual(
     listing.accounts.map(account => [account.uuid, account.name, account.alias]).sort(),
     [[A, 'GlowSquidye', 'main'], [B, 'AltOne', 'alt'], [C, 'TwinLeft', 'twin'], [D, 'TwinRight', 'twin'], [E, 'main', null]].sort()
   )
   for (const account of listing.accounts) {
-    assert.equal(account.dir, path.join(h.accountsDir, account.uuid))
+    assert.equal(account.dir, path.join(accountsDir, account.uuid))
   }
 
   // A broken account and an unmigrated directory are visible before an operator
@@ -124,10 +127,28 @@ test('accounts --json reports the usable, broken, pending, and legacy entries of
 
   assert.equal(listing.legacy.found, true)
   assert.equal(listing.legacy.dir, path.join(h.secretsDir, 'puppet'))
-  assert.equal(listing.legacy.target, path.join(h.accountsDir, LEGACY_UUID))
+  assert.equal(listing.legacy.target, path.join(accountsDir, LEGACY_UUID))
 
   // Nothing in the answer names this checkout's own custody directory.
   assert.ok(!result.stdout.includes(path.join(ROOT, '.secrets')), result.stdout)
+})
+
+test('--secrets-dir alone decides the account tree and the whitelist file', (t) => {
+  const h = harness(t)
+  seedAccounts(path.join(h.secretsDir, 'accounts'))
+
+  // No --accounts-dir: the tree is the one under the root, and nothing reaches
+  // the checkout's own .secrets.
+  const listing = parse(h.run('accounts', '--secrets-dir', h.secretsDir, '--json').stdout)
+  assert.equal(listing.accountsDir, path.join(h.secretsDir, 'accounts'))
+  assert.equal(listing.accounts.length, 5)
+
+  // No --file either: the attach whitelist is this root's file.
+  const player = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
+  const added = h.run('whitelist', 'attach', 'add', player, '--secrets-dir', h.secretsDir)
+  assert.equal(added.status, 0, added.stderr)
+  const file = path.join(h.secretsDir, 'attach-whitelist.json')
+  assert.deepEqual(parse(fs.readFileSync(file, 'utf8')).players.map(entry => entry.uuid), [player])
 })
 
 test('accounts reads a directory that does not exist and creates nothing', (t) => {
