@@ -10,10 +10,12 @@
 //   src/driver/scenario.js DEFAULT_PINS              what rung 4 says it drove
 //
 // The rung 4 target is the gate-B Paper, which is a separate deployment, so it
-// has its own manifest to agree with.
+// has its own manifest to agree with. Every Paper manifest under deploy/ that
+// pins a version is classified below, and each one either serves the gate
+// Paper's pin or says why it does not (#117).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,6 +35,64 @@ const envValue = (file, name) => {
   assert.ok(match, file + ' sets ' + name)
   return match[1].trim()
 }
+
+// The gate Paper is the reference for every other Paper manifest: the dev lane,
+// the observer lane, and both testbed servers are parity targets, so they serve
+// what it serves. `paper-m4` is the one exception, and it is pinned here rather
+// than compared to the gate.
+const GATE_PAPER = 'deploy/driver/paper.yaml'
+const M4_PAPER = 'deploy/driver/paper-m4.yaml'
+const M4_PINS = { VERSION: '26.1.2', PAPER_BUILD: '74' }
+
+const PARITY_PAPERS = [
+  'deploy/dev/paper.yaml',
+  'deploy/driver/paper-conduct.yaml',
+  'deploy/testbed/paper-hub.yaml',
+  'deploy/testbed/paper-sky.yaml'
+]
+
+// Every .yaml under deploy/, at any depth, that sets a Paper version through the
+// image's VERSION or PAPER_BUILD env pair. The name is anchored, so
+// MONOPLAYER_VERSION in the proxy manifests does not match.
+const pinnedPapers = () => {
+  const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) return walk(full)
+    if (!entry.name.endsWith('.yaml')) return []
+    const text = readFileSync(full, 'utf8')
+    return /- name: (?:VERSION|PAPER_BUILD)$/m.test(text)
+      ? [path.relative(root, full).split(path.sep).join('/')]
+      : []
+  })
+  return walk(path.join(root, 'deploy')).sort()
+}
+
+test('every Paper manifest that pins a version is classified in this file', () => {
+  // Without this the guard is only as complete as someone's memory of the deploy
+  // tree, which is how paper-sky went unchecked until #117: a version move that
+  // missed the transfer target passed the gate.
+  assert.deepEqual(pinnedPapers(), [GATE_PAPER, M4_PAPER, ...PARITY_PAPERS].sort(),
+    'classify a new Paper manifest here: it either serves the gate pin or declares its own')
+})
+
+test('every Paper parity lane serves the gate Paper\'s version and build', () => {
+  // Changing one manifest alone fails here, and so does changing the gate alone.
+  for (const file of PARITY_PAPERS) {
+    for (const name of ['VERSION', 'PAPER_BUILD']) {
+      assert.equal(envValue(file, name), envValue(GATE_PAPER, name),
+        file + ' must pin the same ' + name + ' as the gate Paper')
+    }
+  }
+})
+
+test('the M4 backend row keeps its older Paper pin', () => {
+  // Not drift: paper-m4 is the M4 row behind Velocity (src/driver/backends.js),
+  // and 26.1.2 build 74 is the compatibility target it was measured on. Moving it
+  // is a decision, so the manifest and this table move together.
+  for (const [name, value] of Object.entries(M4_PINS)) {
+    assert.equal(envValue(M4_PAPER, name), value, M4_PAPER + ' pins ' + name + ' ' + value)
+  }
+})
 
 test('the build pin and the mod metadata name the same Minecraft version', () => {
   const metadata = JSON.parse(read('tools/driver/src/main/resources/fabric.mod.json'))
