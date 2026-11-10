@@ -188,10 +188,13 @@ test('gate:up wakes the rows a rung drives and says how long it will wait', () =
   assert.equal(status, 0, output)
   assert.ok(calls.some(line => line.includes('apply -k ' + path.join(ROOT, 'deploy', 'driver'))),
     'the tree is applied: ' + calls.join(' | '))
-  // The cold start is 240-310 s (#115, scripts/observer-report.sh). A task that
-  // waits five minutes in silence reads as a hang.
+  // A cold start is 90 s (#115, measured on the 26.2 gate Paper). A task that waits
+  // in silence reads as a hang, so the budget and the cost both come first.
   assert.match(output, /waiting up to 900s/, 'the wait names its budget')
-  assert.match(output, /cold start is 240-310 s/, 'and the cost of a cold start')
+  assert.match(output, /cold start is 90 s from 0 to ready/, 'and the cost of a cold start')
+  // The 240-310 s in the docs is a Paper restart loading the observer, which is a
+  // different wait: saying so here stops a reader trusting the wrong number.
+  assert.match(output, /240-310 s/, 'the longer restart figure is placed, not confused')
   const printed = output.indexOf('waiting up to')
   const firstRead = output.indexOf('readyReplicas')
   assert.ok(printed >= 0 && firstRead >= 0 && printed < firstRead,
@@ -257,7 +260,7 @@ test('a lane that never gets ready is a start failure, not a silent success', ()
   const { status, output } = run(space(), ['up'], { KUBECTL_READY_AFTER: '99', MONOPLAYER_GATE_READY_TIMEOUT: '0' })
   assert.equal(status, 1, output)
   assert.match(output, /still not ready after 0s/)
-  assert.match(output, /cold start is 240-310 s/, 'the failure repeats the cost, so it is not read as a join failure')
+  assert.match(output, /cold start is 90 s from 0 to ready/, 'the failure repeats the cost, so it is not read as a join failure')
 })
 
 test('the live and dev namespaces are refused before kubectl runs', () => {

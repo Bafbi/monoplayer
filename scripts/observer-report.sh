@@ -165,7 +165,9 @@ run_join() {
 require_paper_pod() {
   local pod
   pod=$(paper_pod)
-  [ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE" 2
+  # The gate lane rests at 0 replicas (#115), so an empty answer is the lane being
+  # asleep far more often than it is a broken deployment. Name the way to wake it.
+  [ -n "$pod" ] || die "no $PAPER_DEPLOYMENT pod in $GATE_NAMESPACE: the gate lane rests at 0 replicas, so mise run gate:up wakes it" 2
   printf '%s' "$pod"
 }
 
