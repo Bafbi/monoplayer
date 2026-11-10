@@ -29,7 +29,10 @@
 # Environment:
 #   MONOPLAYER_GATE_NAMESPACE        the gate namespace        (default monoplayer-gate-b)
 #   MONOPLAYER_CLUSTER_NAMESPACE     the live namespace        (default monoplayer)
-#   MONOPLAYER_BACKEND_HOST          the Paper host            (default paper.<gate>.svc.cluster.local)
+#   MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT
+#                                    the Paper deployment measured
+#                                                              (default paper-conduct)
+#   MONOPLAYER_BACKEND_HOST          the Paper host            (default paper-conduct.<gate>.svc.cluster.local)
 #   MONOPLAYER_BACKEND_PORT          the Paper port            (default 25565)
 #   MONOPLAYER_OBSERVER_JAR          the built observer jar    (default tools/observer/build/libs)
 #   MONOPLAYER_PROTOCOLLIB_JAR       the ProtocolLib plugin    (default .cache/protocollib)
@@ -46,16 +49,20 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 GATE_NAMESPACE=${MONOPLAYER_GATE_NAMESPACE:-monoplayer-gate-b}
 LIVE_NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
-PAPER_DEPLOYMENT=${MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT:-paper}
-BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper.$GATE_NAMESPACE.svc.cluster.local}
+# The lane that serves the code of conduct (#78). `paper` is the G0 driver row and
+# a real client there would sit at the gate, so the observer measures its own Paper:
+# same image, version and build, the gate on, and nothing else different.
+PAPER_DEPLOYMENT=${MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT:-paper-conduct}
+BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper-conduct.$GATE_NAMESPACE.svc.cluster.local}
 BACKEND_PORT=${MONOPLAYER_BACKEND_PORT:-25565}
 REPORT=${MONOPLAYER_OBSERVER_REPORT:-.reports/observer-report.json}
 VIEWS=${MONOPLAYER_OBSERVER_VIEWS:-.reports/observer-views.jsonl}
 JAR=${MONOPLAYER_OBSERVER_JAR:-}
 PROTOCOLLIB=${MONOPLAYER_PROTOCOLLIB_JAR:-}
 # The gate Paper's restart is a start wait, not a join wait. Measured on the
-# 26.2 gate Paper: 240 to 310 seconds from `kill 1` to the plugin's own "wire
-# listeners registered" line, so the old 300 was already too tight.
+# 26.2 gate Paper: 240 s to 310 s from `kill 1` to the plugin's own "wire
+# listeners registered" line on a server that had been up, so the old 300 was
+# already too tight. A freshly created pod came back in 40 s.
 START_TIMEOUT=${MONOPLAYER_OBSERVER_START_TIMEOUT:-${MONOPLAYER_OBSERVER_TIMEOUT:-600}}
 WAIT_INTERVAL=5
 PLUGINS_DIR=/data/plugins
@@ -260,13 +267,14 @@ const settings = Object.fromEntries(
     .map(([key, value]) => [key.trim(), value.trim()])
 )
 process.stdout.write(JSON.stringify({
-  source: "server.properties on the gate Paper",
+  source: "server.properties on " + process.env.MONOPLAYER_OBSERVER_MEASURED,
   codeOfConduct: settings["enable-code-of-conduct"] === "true",
   resourcePack: (settings["resource-pack"] ?? "") !== ""
 }, null, 2) + "\n")
 ' > "$FACTS"
   say "server facts: $(tr -d '\n' < "$FACTS")"
 }
+export MONOPLAYER_OBSERVER_MEASURED=$PAPER_DEPLOYMENT
 read_server_facts
 
 set +e

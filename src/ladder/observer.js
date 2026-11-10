@@ -44,24 +44,26 @@ export const KNOWN_DIFFERENCES = Object.freeze({
 // one instead of being explained away.
 //
 // Measured on the gate Paper (2026-11-09): turning enable-code-of-conduct on does
-// not just add a gate, it stops the server — "Code of Conduct folder does not
-// exist: codeofconduct", from DedicatedServer.readCodeOfConducts — so the lane
-// keeps it off and the observer has no gate to witness.
+// not just add a gate, it stops the server. The start failure reads "Code of
+// Conduct folder does not exist: codeofconduct", from
+// DedicatedServer.readCodeOfConducts. So the G0 row keeps the gate off, and the
+// observer measures `paper-conduct`, which carries the folder. Point the run back
+// at a lane without it and these two reasons explain the fields again.
 export const ABSENT_FACTS = Object.freeze({
   codeOfConduct: {
     setting: 'codeOfConduct',
     value: false,
-    reason: 'the gate Paper reports enable-code-of-conduct=false, so the server never sends the gate'
+    reason: 'the measured server reports enable-code-of-conduct=false, so it never sends the gate'
   },
   codeOfConductAccepted: {
     setting: 'codeOfConduct',
     value: false,
-    reason: 'the gate Paper reports enable-code-of-conduct=false, so there is no gate to accept'
+    reason: 'the measured server reports enable-code-of-conduct=false, so there is no gate to accept'
   },
   resourcePack: {
     setting: 'resourcePack',
     value: false,
-    reason: 'the gate Paper reports no resource pack, so no status event ever fires'
+    reason: 'the measured server reports no resource pack, so no status event ever fires'
   }
 })
 
@@ -124,7 +126,8 @@ const observed = record => Object.fromEntries(
 )
 
 // One view per connection. A connection is written more than once: the join
-// record, then the resource-pack status, which always arrives afterwards. Two
+// record, then the session key, then the resource-pack status, because each of
+// those can only be observed after the join. Two
 // records that share an address describe the same connection, so the later one
 // fills in the fields the earlier one could not see. A reconnect gets a new
 // source port, so it starts a new view.
