@@ -56,9 +56,10 @@ the bare rung stays available because `verify:custody` composes it. `AGENTS.md`
 states the rule. `deploy/dev/README.md` is the dev lane runbook.
 
 The table covers the runs that leave this machine. `driver:g0` composes rung 4's
-two commands, the `testbed:*` tasks run inside the testbed's lane, `image:build`
-publishes to the Zot registry that the manifests do not reference, and
-`dev:prove-live` wraps whichever command you give it.
+two commands, the `testbed:*` tasks run inside the testbed's lane, and
+`dev:prove-live` wraps whichever command you give it. `image:build` publishes to
+the Zot registry that the manifests do not reference. `image:build:no-push`
+builds the same image and publishes nothing.
 
 The lane is a second table on purpose. `src/ladder/next-rung.js` reads the rungs
 table above as exactly six cells, so a seventh column would leave every failing
@@ -69,15 +70,15 @@ rung without a hint.
 Four tasks compose the gate and the check that covers their area through
 `depends`, so a rung command has one definition. Three of them add a task the
 table above does not list: `spike` sits beside the ladder, `driver:build`
-builds rung 4's driver, and `image:build` builds the deployment. Run the task
-that covers the area you changed.
+builds rung 4's driver, and `image:build:no-push` builds the deployment. Run
+the task that covers the area you changed.
 
 | Task | Composes | Run it after touching |
 |---|---|---|
 | `mise run verify:relay` | `check`, `spike`, `parity:run` | the relay, the legs, the join, the state cache, `src/core/clientbound-policy.js` |
 | `mise run verify:custody` | `check`, `online` (a repo-deployed backend, both custodians, this machine's copy of the chain) | `src/custody/`, the custody store, `hasJoined`, offline identity |
 | `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper) | `tools/driver/`, `src/driver/` |
-| `mise run verify:deploy` | `check`, `image:build` (publishes to the Zot registry) | `Dockerfile`, `deploy/` |
+| `mise run verify:deploy` | `check`, `image:build:no-push` (publishes nothing; `mise run image:build` is the publish path) | `Dockerfile`, `deploy/` |
 
 `verify:driver` does not compose `driver:parity`. The parity lane needs a target
 the operator stands up first, the dev lane through two port-forwards and a
@@ -92,8 +93,8 @@ before it starts, and a bare `mise run online` still runs alone, because
 
 Run one verify task at a time. The online rung holds the puppet's writer lock
 for its whole run, and two runs contend for the same two accounts. Run
-`verify:deploy` from a clean checkout: `image:build` publishes the working
-tree under the HEAD tag, so uncommitted bytes would carry a commit's name.
+`mise run image:build` from a clean checkout: it tags the working tree with
+HEAD's `sha-<7>`, so uncommitted bytes would carry a commit's name.
 
 `mise run check` stays the offline gate, unchanged: it runs rungs 0, 1, and 2,
 and CI runs it.

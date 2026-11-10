@@ -109,7 +109,9 @@ Actions settings are limited to read-only tokens, the push step fails; set
 Settings → Actions → General → Workflow permissions to "Read and write
 permissions".
 
-A local build is still possible for debugging, but it publishes to the
+A local build is still possible for debugging. `mise run image:build:no-push`
+(`PUSH=0 scripts/build-image.sh`) builds the image and prints its digest
+without publishing anything. `mise run image:build` also pushes to the
 cluster's Zot registry, which the manifests do not reference. If you use it,
 pin the digest in `deploy/manifests/kustomization.yaml` yourself.
 
