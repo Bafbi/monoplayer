@@ -60,16 +60,13 @@ import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
-import { clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
+import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // The configuration prefix the cache holds is bounded at 1024 frames, so a
 // reconfiguration cannot need more. The bound exists only so a client that
 // never acknowledges cannot grow the leg's memory without limit.
 const MAX_PENDING_RECONFIGURATION_FRAMES = 1024
-// The same four modes `loadConfig` accepts. The service hands the leg the
-// configured value, so a mode missing here stops the front from constructing.
-const CHAT_MODES = new Set(['full', 'commands', 'read-only', 'off'])
 
 // Pure configuration-phase interceptor (unit-testable without sockets):
 // wraps a client write so the library's generated configuration resolves to

@@ -31,7 +31,7 @@ const rules = [
   /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}(\.[A-Za-z0-9_-]{6,})?\b/g
 ]
 
-export function redact (text, { sentinel = SENTINEL } = {}) {
+export function redact (text) {
   if (text == null) return text
   let out = String(text)
   for (const re of rules) out = out.replace(re, keepLabel)

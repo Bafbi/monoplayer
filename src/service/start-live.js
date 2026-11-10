@@ -135,8 +135,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // an explicit act. Refuse a purely-default invocation (no backend host and
   // no config document) so `main(['--start'])` stays inert.
   const explicitBackend = process.env.MONOPLAYER_BACKEND_HOST ||
-    flag(argv, '--config') ||
-    process.env.MONOPLAYER_CONFIG
+    flag(argv, '--config')
   if (!explicitBackend) {
     stderr.write(
       'monoplayer --start: refusing the default config. Set MONOPLAYER_BACKEND_HOST ' +

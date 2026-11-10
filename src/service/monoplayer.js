@@ -60,11 +60,11 @@ import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
-import { CHAT_FRAMES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
+import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
 import { createSession, STATES } from '../core/session.js'
 import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
-import { redact, SENTINEL } from '../observability/redact.js'
+import { redact } from '../observability/redact.js'
 import { pathToFileURL } from 'node:url'
 
 // --- config ---
@@ -138,11 +138,8 @@ export const DEFAULT_CONFIG = Object.freeze({
     // connection on a loading screen. On expiry the move is restored. 0
     // disables it. Only read while `keepConnection` is on.
     reconfigureTimeoutMs: 30_000
-  }),
-  redaction: Object.freeze({ sentinel: SENTINEL })
+  })
 })
-
-const CHAT_MODES = new Set(['full', 'commands', 'read-only', 'off'])
 
 export function loadConfig (doc = {}) {
   const merged = {
