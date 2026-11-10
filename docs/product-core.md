@@ -2,7 +2,7 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 874 tests (`mise run test`), and `mise run check` also runs the
+The socket-free unit suite runs 929 tests (`mise run test`), and `mise run check` also runs the
 49-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
@@ -152,15 +152,14 @@ followed a move into configuration, the notice goes out after the restored
 snapshot puts it back in play, so the toast lands on a client that can read it.
 
 `start_configuration` from the backend never crosses: relaying it would hand the
-client a connection-control frame it must not act on by itself. The default
-answer is the one that shipped: end the puppet leg and let the normal
-backend-down path kick the client with
-`The server reconfigured this session. Reconnect in a few seconds.`. With
-`transfer.keepConnection` on, the core serves the phase on the client's own
-connection instead (#22): the front leg writes its own `start_configuration`,
+client a connection-control frame it must not act on by itself. The kept
+connection, which is the default, serves the phase on the client's own
+connection (#22): the front leg writes its own `start_configuration`,
 relays the restarted configuration frames, relays the `finish_configuration`,
 and the client's answer returns it to play. The same path serves a followed
-transfer's target.
+transfer's target. With `transfer.keepConnection` off, the core ends the puppet
+leg instead, and the normal backend-down path kicks the client with
+`The server reconfigured this session. Reconnect in a few seconds.`.
 
 ### Control dialogs (#16)
 
@@ -287,17 +286,17 @@ The loopback proves the intent on the wire with
 3, so the proxy records the real intent and rewrites it to 2 for the fake
 target.
 
-**Seamless switch (#22), built and off.** The hub and sky-2 differ in
+**Seamless switch (#22), built and on by default.** The hub and sky-2 differ in
 `dimension_type` (4 vs 9 entries) and `timeline` (4 vs 5), so a `respawn`
 alone would leave the client without the target's dimensions. The
 same-connection reconfiguration above replaces the registries, which is why it
 is a full configuration phase and not a synthetic respawn.
 
-It is on by default (`transfer.keepConnection`). The transfer testbed measured
-it with a real client on 2026-11-09: one socket through the move, no kick,
-`transfersSeamless 1`, `frontKicks 0`, and the target's play login on the same
-connection. `MONOPLAYER_TRANSFER_KEEP_CONNECTION=0` turns it off for a lane,
-which is the detach-and-rejoin path loopback `O21`-`O24` pin. The evidence run:
+The transfer testbed measured it with a real client on 2026-11-09: one socket
+through the move, no kick, `transfersSeamless 1`, `frontKicks 0`, and the
+target's play login on the same connection.
+`MONOPLAYER_TRANSFER_KEEP_CONNECTION=0` turns it off for a lane, which is the
+detach-and-rejoin path loopback `O21`-`O24` pin. The evidence run:
 
 ```bash
 mise run testbed:run      # takes the live front offline; the operator's run
@@ -337,10 +336,10 @@ second one. A kept client's configuration round has a deadline
 (`transfer.reconfigureTimeoutMs`, default 30 s); a restore round that never
 completes detaches the client with a reason.
 
-The loopback runs both paths: O21-O24 assert the default detach-and-rejoin, and
-O33-O35 assert the kept connection with the key on. O43 follows a second transfer
-from there to a gated target, where the kept client leaves its configuration gate
-to the puppet (#73), and O44 leaves a play dialog behind.
+The loopback runs both paths: O21-O24 assert the detach-and-rejoin with the key
+off, and O33-O35 assert the kept connection, which is the default. O43 follows a
+second transfer from there to a gated target, where the kept client leaves its
+configuration gate to the puppet (#73), and O44 leaves a play dialog behind.
 
 ### Chat and commands (`config.chat`)
 
