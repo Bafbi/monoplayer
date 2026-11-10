@@ -207,14 +207,19 @@ failure, an empty textures map, or a URL outside the allowed domains, and each o
 those logs a line the live client's log does not contain. The property is not the
 difference between the lanes.
 
-### The property was never the puppet's on a busy server
+### The property was usually another player's on a busy server
 
 The live backend's `player_info` traffic carries the whole tab list. The journal
 copy covers 12 minutes and holds 520 such frames, 519 of them decodable: one is
 past the journal's 8192-byte cap and is kept as a length only. Of the 519, 81
 carry a textures property, and their entries belong to **18 different players**.
 `texturesPropertyOf` took the first one, so what the proxy held changed 81
-times, and the puppet's own entry came first **twice**. Two consequences, both
+times, and the puppet's own entry came first **twice**. The one that mattered is
+the early one: the puppet's property, held at 20:43:49 for the first attach. The
+lane resolves `MONOPLAYER_PUPPET_UUID=73e0e19b-d4e4-4cc1-a553-a3952f0c1aed`, the
+journal's `startLive` names that as its `accountUuid`, and the entry Excalia lists
+for GlowSquidye carries the same UUID. The pick matches on this lane, so the stale
+UUID the config's limit allows for is not what happened here. Two consequences, both
 visible in the same journal:
 
 - at the second attach (20:45:11) the proxy held `Tutoriel`'s property. The

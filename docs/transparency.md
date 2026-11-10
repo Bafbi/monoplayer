@@ -93,7 +93,9 @@ A third limit is the config's. The frame names the puppet's own entry, chosen by
 the UUID the lane resolved for the account. A lane that resolves a UUID the
 backend never lists writes no frame at all, and the record is an absence:
 `puppetSkinKnown` never appears, and no event says the property is missing. A
-stale UUID therefore looks exactly like a backend that lists the puppet late.
+stale UUID therefore looks like a backend that lists the puppet late, until that
+listing arrives: a listed puppet writes `puppetSkinKnown`, and a stale UUID never
+does.
 
 What the proxy says about it, one event per thing that happened:
 
