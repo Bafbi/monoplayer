@@ -189,7 +189,7 @@ restart_count() {
 # kill. A run that never gets there says the server did not start, and the joins
 # never run.
 install_observer() {
-  local pod container before started now current waited=0
+  local pod container before started now current waited=0 nap
   pod=$(require_paper_pod)
   container=$(paper_container)
   kubectl -n "$GATE_NAMESPACE" exec "$pod" -- sh -c "mkdir -p $PLUGINS_DIR" >/dev/null
@@ -228,8 +228,16 @@ install_observer() {
       say "the observer is live on $pod after ${waited}s"
       return 0
     fi
-    sleep "$WAIT_INTERVAL"
-    waited=$((waited + WAIT_INTERVAL))
+    # The budget decides the last sleep too (#110). A caller may ask for a start
+    # timeout shorter than WAIT_INTERVAL, and sleeping a whole interval after the
+    # last check jumps the deadline that caller set: a 1 s timeout waited 5. The
+    # floor keeps the loop from spinning if `waited` ever reaches START_TIMEOUT,
+    # because the guard admits only a positive remainder today.
+    nap=$((START_TIMEOUT - waited))
+    if [ "$nap" -gt "$WAIT_INTERVAL" ]; then nap=$WAIT_INTERVAL; fi
+    if [ "$nap" -lt 1 ]; then nap=1; fi
+    sleep "$nap"
+    waited=$((waited + nap))
   done
   die "the gate Paper did not finish starting within ${START_TIMEOUT}s (container $container on $pod, restarts ${before} -> ${now:-unread}): this is a slow start, not a join failure, and the joins never ran. kubectl -n $GATE_NAMESPACE logs $pod -c $container" 2
 }
