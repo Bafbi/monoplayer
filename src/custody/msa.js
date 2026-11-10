@@ -22,7 +22,6 @@ import { redactSecrets } from '../observability/secrets.js'
 
 export const JAVA_AUTH_TITLE = '00000000402b5328'
 export const SWITCH_AUTH_TITLE = '00000000441cc96b'
-export const FALLBACK_AUTH_TITLES = [JAVA_AUTH_TITLE]
 export const DEFAULT_DEVICE_TYPE = 'Win32'
 
 // Live evidence on 2026-11-06: Titles.MinecraftJava + Win32 returns HTTP 403
