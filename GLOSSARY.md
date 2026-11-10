@@ -58,6 +58,14 @@ _Avoid_: hasJoined check, auth check
 The running Monoplayer process: config, core, both legs, custody, and the CLI. It holds one puppet session open and serves one attach at a time.
 _Avoid_: app, daemon, the proxy, the bot
 
+**Testbed front**:
+The testbed's published endpoint: its front Service, the Tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the Tailscale operator then removes the pod and the tailnet name.
+_Avoid_: testbed Service, the front unqualified
+
+**Front Service**:
+The Kubernetes Service `monoplayer-testbed`: the part of the testbed front that publishes it. Scaling the testbed deployment to zero leaves it published with no endpoints, which is why `down` deletes it.
+_Avoid_: testbed service, the front
+
 **Front leg**:
 Monoplayer's server-side connection: the socket an attaching player joins, authenticated as that player.
 _Avoid_: front, client leg, ingress

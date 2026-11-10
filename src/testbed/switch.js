@@ -3,7 +3,8 @@
 //   node src/testbed/switch.js up        apply the testbed, join the puppet to
 //                                        paper-hub, leave it running
 //   node src/testbed/switch.js transfer  RCON: transfer the puppet to paper-sky
-//   node src/testbed/switch.js down      stop the testbed, restore the live app
+//   node src/testbed/switch.js down      stop the testbed, restore the live app,
+//                                        then delete its front Service
 //   node src/testbed/switch.js run       up + transfer + down, always restoring
 //   node src/testbed/switch.js status    what is running now
 //
@@ -16,6 +17,13 @@
 // Paper runs in monoplayer-gate-b. The testbed Monoplayer runs in the
 // monoplayer namespace on the custody PVC and exposes
 // monoplayer-testbed.tail41e568.ts.net:25565.
+//
+// The published front is the testbed's front Service, not its deployment: a
+// deployment scaled to zero leaves that Service published with no endpoints and
+// its tailnet device registered. So `down` deletes it, and `up` recreates it
+// from deploy/testbed, whose tailscale.com/hostname annotation brings the same
+// name back. `up` also records the digest it ran, because the manifest pulls the
+// moving :main tag: without it two runs cannot be compared.
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,10 +39,20 @@ const ARGO_APP = 'monoplayer'
 const ARGO_NS = 'argocd'
 const FRONT_HOST = 'monoplayer-testbed.tail41e568.ts.net'
 const SKY_HOST = 'paper-sky.monoplayer-gate-b.svc.cluster.local'
-// The recovery record: what `up` removed, for `down` to put back. It is the
+const TAILSCALE_NS = 'tailscale'
+// The operator runs one proxy pod per Service, names it after that Service, and
+// labels it with the Service it came from. That label is how `status` finds the
+// pod, and one pod is one registered tailnet device.
+const TAILNET_PROXY_SELECTOR = `tailscale.com/parent-resource=${TEST_DEPLOY}`
+// The restore record: what `up` removed, for `down` to put back. It is the
 // only way the Argo policy comes back (AGENTS.md), so a test points it at its
 // own file instead of overwriting a live run's record.
-const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
+const RECORD_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
+// `down` clears the record once it has restored what it owes, so a run's digest
+// would go with it. One line per `up` here is what makes two finished runs
+// comparable. MONOPLAYER_TESTBED_DIGESTS moves it, so a test never writes the
+// operator's file.
+const DIGESTS_FILE = process.env.MONOPLAYER_TESTBED_DIGESTS || '.reports/testbed-digests.jsonl'
 
 // How long the two port-forwards get before the registry probe reads them. A
 // test answers the probe from a shim and sets this to 0, so the unit rung does
@@ -81,9 +99,13 @@ function scale (namespace, deploy, replicas) {
   log(`scale ${namespace}/${deploy} -> ${replicas}`)
 }
 
+function readJSON (args) {
+  const raw = kubectl(args, { allowFail: true })
+  return raw === null ? null : JSON.parse(raw)
+}
+
 function deployment (namespace, deploy) {
-  const raw = kubectl(['-n', namespace, 'get', 'deploy', deploy, '-o', 'json'], { allowFail: true })
-  return raw ? JSON.parse(raw) : null
+  return readJSON(['-n', namespace, 'get', 'deploy', deploy, '-o', 'json'])
 }
 
 async function waitDeployReady (namespace, deploy, timeoutMs = 240_000) {
@@ -105,6 +127,48 @@ async function waitDeployGone (namespace, deploy, timeoutMs = 180_000) {
 
 function pods (namespace, deploy) {
   return JSON.parse(kubectl(['-n', namespace, 'get', 'pods', '-l', `app.kubernetes.io/name=${deploy}`, '-o', 'json'])).items
+}
+
+// The digest the deployment actually ran. Its status carries no imageID, but its
+// pod does, and the manifest's :main tag makes the tag name useless for a
+// comparison between runs. Index 0 is the monoplayer container. The two init
+// containers only wait for the custody file and clear a stale lock, so this is
+// the image that decides what the run executed.
+//
+// A pod that is still terminating belongs to the last run and can be listed
+// first, so the pod that is not going away is the one to read.
+function testbedImage () {
+  const statuses = pods(TEST_NS, TEST_DEPLOY)
+    .filter(entry => !entry.metadata?.deletionTimestamp)
+    .map(entry => entry.status?.containerStatuses?.[0])
+  const imageID = statuses.find(status => status?.imageID)?.imageID ?? null
+  if (!imageID) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports no containerStatuses[0].imageID, so this run cannot name the build it ran`)
+  const digest = /@(sha256:[0-9a-f]{64})$/.exec(imageID)?.[1] ?? null
+  if (!digest) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports an imageID without a digest: ${imageID}`)
+  return { imageID, digest }
+}
+
+function recordDigest (image) {
+  fs.mkdirSync(path.dirname(DIGESTS_FILE), { recursive: true })
+  fs.appendFileSync(DIGESTS_FILE, JSON.stringify({ at: new Date().toISOString(), ...image }) + '\n')
+}
+
+// A Service that is gone answers with an empty list. A read that failed answers
+// with nothing. `status` is how the operator proves the testbed front is gone, so the
+// two must not look alike: null is unreadable, false is gone.
+function frontService () {
+  const list = readJSON(['-n', TEST_NS, 'get', 'svc', '-l', `app.kubernetes.io/name=${TEST_DEPLOY}`, '-o', 'json'])
+  return list === null ? null : list.items?.[0] ?? false
+}
+
+function frontFields (svc) {
+  if (svc === null) return { unreadable: true }
+  if (svc === false) return { missing: true }
+  return { hostname: svc.status?.loadBalancer?.ingress?.[0]?.hostname ?? '(pending)' }
+}
+
+function proxyPods () {
+  return readJSON(['-n', TAILSCALE_NS, 'get', 'pods', '-l', TAILNET_PROXY_SELECTOR, '-o', 'json'])?.items ?? null
 }
 
 function podLogs (namespace, deploy, tail = 400) {
@@ -162,25 +226,37 @@ function restoreAutoSync (saved) {
   log('Argo auto-sync restored')
 }
 
+function writeRecord (record) {
+  fs.mkdirSync(path.dirname(RECORD_FILE), { recursive: true })
+  fs.writeFileSync(RECORD_FILE, JSON.stringify(record) + '\n')
+}
+
 // A second `up` before a `down` must not forget the policy the first one
 // removed. `disableAutoSync` reports `disabledByUs: false` when Argo already has
 // no `automated` block, and that record restores nothing, so it must not
 // replace one that does. What this `up` removed wins: that is what is missing
 // now, and `down` puts back what is missing, not what was.
-function saveState (state) {
-  const previous = readState()
-  const kept = state.disabledByUs && state.automated ? state : previous ?? state
+function savePolicyRecord (record) {
+  const previous = readRecord()
+  const kept = record.disabledByUs && record.automated ? record : previous ?? record
   if (kept === previous) log('kept the Argo record an earlier up wrote', { automated: previous.automated })
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
-  fs.writeFileSync(STATE_FILE, JSON.stringify(kept) + '\n')
+  writeRecord(kept)
 }
 
-function readState () {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } catch { return null }
+function readRecord () {
+  try { return JSON.parse(fs.readFileSync(RECORD_FILE, 'utf8')) } catch { return null }
 }
 
-function clearState () {
-  try { fs.unlinkSync(STATE_FILE) } catch { /* no state */ }
+// `up` records the Argo policy first and the digest later, so a write must merge
+// into what is already there: `down` restores the policy from this file. It goes
+// straight to the file, not through savePolicyRecord: that keep rule belongs to
+// the policy, and it would drop a digest recorded beside a policy there is none of.
+function mergeRecord (patch) {
+  writeRecord({ ...(readRecord() ?? {}), ...patch })
+}
+
+function clearRecord () {
+  try { fs.unlinkSync(RECORD_FILE) } catch { /* no record */ }
 }
 
 function liveScale () {
@@ -224,7 +300,7 @@ async function up () {
   log(`live front ${FRONT_HOST}`, { liveReplicas: liveScale() })
   // Disable Argo self-heal before scaling the live deployment; otherwise it
   // scales back to one and fights the testbed for the RWO custody PVC.
-  saveState(disableAutoSync())
+  savePolicyRecord(disableAutoSync())
   scale(LIVE_NS, LIVE_DEPLOY, 0)
   await waitDeployGone(LIVE_NS, LIVE_DEPLOY)
 
@@ -246,9 +322,16 @@ async function up () {
   const hello = podLogs(TEST_NS, TEST_DEPLOY).split('\n').filter(line => line.includes('"event":"startLive"')).at(-1)
   log('testbed Monoplayer ready', { startLive: hello })
 
-  const svc = JSON.parse(kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json']))
-  const hostname = svc.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
-  log('testbed front', { hostname: hostname ?? '(pending)', port: 25565 })
+  // Record the build this run executed. The manifest pulls :main, so the digest
+  // is the only thing a later run can be compared against.
+  const image = testbedImage()
+  mergeRecord(image)
+  recordDigest(image)
+  log('testbed image', { ...image, recorded: DIGESTS_FILE })
+
+  // The same fields `status` prints, so a Service that is gone and a read that
+  // failed do not both read as a publisher that is still warming up.
+  log('testbed front', { ...frontFields(frontService()), port: 25565 })
   log(`attach the client to ${FRONT_HOST}:25565, then run: node src/testbed/switch.js transfer`)
 }
 
@@ -288,17 +371,51 @@ async function transfer () {
   log('testbed heartbeat', { heartbeat })
 }
 
+// Deleting the front Service is what unpublishes the testbed front. The tailnet device
+// and its proxy pod belong to that Service, so they go with it. The next
+// `apply -k` recreates it from the manifest's tailscale.com/hostname annotation.
+// A failed delete is logged and reported as a failed command, never thrown. The
+// live deployment is already back by then, and `status` shows what is left.
+function removeFront () {
+  try {
+    const result = kubectl(['-n', TEST_NS, 'delete', 'svc', TEST_DEPLOY, '--ignore-not-found', '--timeout=120s'])
+    log(`delete svc ${TEST_NS}/${TEST_DEPLOY}`, { result: result.replace(/\n/g, ' | ') })
+    return true
+  } catch (error) {
+    log(`delete svc ${TEST_NS}/${TEST_DEPLOY} failed`, { error: error.message })
+    return false
+  }
+}
+
 async function down () {
-  const saved = readState()
-  scale(TEST_NS, TEST_DEPLOY, 0)
-  await waitDeployGone(TEST_NS, TEST_DEPLOY)
-  scale(PAPER_NS, PAPER_HUB, 0)
-  scale(PAPER_NS, PAPER_SKY, 0)
-  scale(LIVE_NS, LIVE_DEPLOY, 1)
-  await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
-  restoreAutoSync(saved)
-  clearState()
+  const saved = readRecord()
+  // Any step here can fail: a scale, the ready wait, the policy patch. The front
+  // Service has to go either way, or the leak this change closes survives the
+  // failure path.
+  let frontRemoved
+  let restored = false
+  try {
+    scale(TEST_NS, TEST_DEPLOY, 0)
+    await waitDeployGone(TEST_NS, TEST_DEPLOY)
+    scale(PAPER_NS, PAPER_HUB, 0)
+    scale(PAPER_NS, PAPER_SKY, 0)
+    scale(LIVE_NS, LIVE_DEPLOY, 1)
+    await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
+    restoreAutoSync(saved)
+    restored = true
+  } finally {
+    frontRemoved = removeFront()
+    // The record is spent once the policy is back. A restore that failed has not
+    // spent it, and the next `down` still needs it.
+    if (restored) clearRecord()
+  }
   log('live deployment restored')
+  // The live lane is back either way, but a front Service that is still published
+  // is the defect this change exists to fix, so the command reports a failure.
+  if (!frontRemoved) {
+    log('the testbed front is still published')
+    process.exitCode = 1
+  }
 }
 
 async function status () {
@@ -307,6 +424,12 @@ async function status () {
     log(`${ns}/${deploy}`, d ? { replicas: d.spec?.replicas ?? null, ready: d.status?.readyReplicas ?? 0 } : { missing: true })
   }
   log('argo automated', { automated: appAutomated() })
+  log(`front ${TEST_NS}/${TEST_DEPLOY}`, frontFields(frontService()))
+  const proxies = proxyPods()
+  log('tailnet devices', proxies === null
+    ? { unreadable: true }
+    : { count: proxies.length, names: proxies.map(pod => pod.metadata?.name) })
+  log('restore record', readRecord() ?? { missing: true })
 }
 
 async function run () {
