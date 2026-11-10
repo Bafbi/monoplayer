@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 764 tests (`mise run test`), and `mise run check` also runs the
-38-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 774 tests (`mise run test`), and `mise run check` also runs the
+40-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -337,7 +337,9 @@ second one. A kept client's configuration round has a deadline
 completes detaches the client with a reason.
 
 The loopback runs both paths: O21-O24 assert the default detach-and-rejoin, and
-O33-O35 assert the kept connection with the key on.
+O33-O35 assert the kept connection with the key on. O36 follows a second transfer
+from there to a gated target, where the kept client leaves its configuration gate
+to the puppet (#73), and O37 leaves a play dialog behind.
 
 ### Chat and commands (`config.chat`)
 
