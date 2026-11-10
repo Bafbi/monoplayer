@@ -104,10 +104,12 @@ spec:
               value: /config/attach-whitelist.json
             - name: MONOPLAYER_VERSION
               value: "26.2"
-            # Read-only chat: the attached client reads server and plugin chat
-            # (system_chat) but its own messages are never forwarded.
+            # Commands-only chat (#97): the human's commands are spoken as the
+            # puppet, signed with its own keys, and their chat text is still
+            # dropped. /profil and every other permitted command work; the
+            # account does not speak in open chat.
             - name: MONOPLAYER_CHAT
-              value: read-only
+              value: commands
             # Configuration-phase gate only (#21). A play dialog is never
             # answered by the puppet: it waits for the human to attach and
             # answer it (#20).
