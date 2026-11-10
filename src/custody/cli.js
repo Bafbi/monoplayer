@@ -15,9 +15,10 @@
 // retired quarantine to its `retired/`, and the attach whitelist to its
 // `attach-whitelist.json`. `--accounts-dir` overrides only the account tree.
 //
-// Exit status: 0 done, 1 failed (an operation did not succeed), 2 refused (the
-// request cannot be honoured: no such account, an ambiguous selector, a usage
-// error). A caller must not retry a 2 blindly.
+// Exit status: 0 done, 1 failed (an operation did not succeed), 2 not honoured
+// (no such account, an ambiguous selector, a usage error, a held lock). A
+// caller must not retry a 2 blindly. `migrate --dry-run` is the one command
+// that always exits 0, because its report is the answer.
 //
 // Usage:
 //   node src/custody/cli.js accounts [--accounts-dir <dir>] [--secrets-dir <dir>] [--json]
@@ -26,7 +27,7 @@
 //   node src/custody/cli.js status [--account ...] [--json] [--refresh] [--secrets-dir <dir>]
 //   node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]
 //   node src/custody/cli.js whitelist <attach|backend> add|remove <name-or-uuid>
-//        [--file .secrets/attach-whitelist.json] [--namespace ... --deployment ...]
+//        [--file <secretsDir>/attach-whitelist.json] [--namespace ... --deployment ...]
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -34,7 +35,6 @@ import { createTokenCustody, readProfile } from './cache.js'
 import { createMsaAuth, describeIdentity } from './msa.js'
 import { createAuthStatus, stringifyForReport, redactForReport, scanForLeaks } from './status.js'
 import {
-  DEFAULT_ACCOUNTS_DIR,
   createStagingDir,
   detectLegacyLayout,
   finalizeStaging,
@@ -52,17 +52,31 @@ const ALIAS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/
 
 class UsageError extends Error {}
 
-function secretsDirFromArgs (args) {
-  return path.resolve(args['secrets-dir'] ?? SECRETS_DIR)
+// Everything that lives under the custody root, named once so no two commands
+// can disagree about where an account, a staging directory, or the whitelist is.
+function custodyPaths (secretsDir) {
+  const root = path.resolve(secretsDir)
+  return {
+    root,
+    accounts: path.join(root, 'accounts'),
+    staging: path.join(root, 'staging'),
+    retired: path.join(root, 'retired'),
+    attachWhitelist: path.join(root, 'attach-whitelist.json'),
+  }
 }
 
+function custodyPathsFromArgs (args) {
+  return custodyPaths(args['secrets-dir'] ?? SECRETS_DIR)
+}
+
+// --accounts-dir, or its environment twin, names the account tree explicitly;
+// without either, the tree is the one under the custody root.
 function accountsDirFromArgs (args) {
-  // --secrets-dir moves the account tree with it, so the two flags cannot
-  // disagree by accident.
-  const fallback = args['secrets-dir'] !== undefined
-    ? path.join(secretsDirFromArgs(args), 'accounts')
-    : path.join(REPO_ROOT, DEFAULT_ACCOUNTS_DIR)
-  return path.resolve(args['accounts-dir'] ?? process.env.GATEB_ACCOUNTS_DIR ?? fallback)
+  return path.resolve(
+    args['accounts-dir'] ??
+    process.env.GATEB_ACCOUNTS_DIR ??
+    custodyPathsFromArgs(args).accounts
+  )
 }
 
 function parseArgs (argv) {
@@ -107,7 +121,7 @@ const USAGE = [
   '  node src/custody/cli.js device-code --dir <accountDir>',
   '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--secrets-dir <dir>] [--json] [--refresh]',
   '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]',
-  '  node src/custody/cli.js whitelist attach|backend add|remove <name-or-uuid> [--file <path>] [--namespace <ns>] [--deployment <dep>]',
+  '  node src/custody/cli.js whitelist attach|backend add|remove <name-or-uuid> [--file <path>] [--secrets-dir <dir>] [--namespace <ns>] [--deployment <dep>]',
 ].join('\n')
 
 function fail (message, code = 1) {
@@ -229,7 +243,7 @@ async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
   if (args.alias !== undefined && !ALIAS_PATTERN.test(args.alias)) {
     refuse(`--alias ${JSON.stringify(args.alias)} does not match ${ALIAS_PATTERN}`)
   }
-  const stagingDir = createStagingDir({ stagingDir: path.join(secretsDirFromArgs(args), 'staging') })
+  const stagingDir = createStagingDir({ stagingDir: custodyPathsFromArgs(args).staging })
   const custody = createTokenCustody({ account: null, uuid, dir: stagingDir, create: false })
   const msa = createMsaAuth({
     account: null,
@@ -266,7 +280,7 @@ async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
   const finalized = finalizeStaging({
     stagingDir,
     accountsDir: accountsDirFromArgs(args),
-    secretsDir: secretsDirFromArgs(args),
+    secretsDir: custodyPathsFromArgs(args).root,
     profile: {
       uuid: result.identity.uuid,
       name: result.identity.name,
@@ -299,13 +313,13 @@ async function main () {
     throw error
   }
   const accountsDir = accountsDirFromArgs(args)
-  const secretsDir = secretsDirFromArgs(args)
+  const secretsDir = custodyPathsFromArgs(args).root
 
   switch (command) {
     case 'accounts': {
       // Read-only: no custody object, no directory creation.
       const listing = listAccounts({ accountsDir })
-      const legacy = detectLegacyLayout({ secretsDir, from: args.from ?? 'puppet' })
+      const legacy = detectLegacyLayout({ secretsDir, accountsDir, from: args.from ?? 'puppet' })
       if (args.json) {
         emitReport(stringifyForReport({
           accountsDir,
@@ -448,7 +462,7 @@ async function main () {
       const options = {
         secretsDir,
         accountsDir,
-        retiredDir: path.join(secretsDir, 'retired'),
+        retiredDir: custodyPathsFromArgs(args).retired,
         from: args.from ?? 'puppet',
       }
       const result = apply
@@ -470,7 +484,7 @@ async function main () {
 
       if (scope === 'attach') {
         const store = createWhitelistStore({
-          file: args.file ?? path.join(secretsDir, 'attach-whitelist.json'),
+          file: args.file ?? custodyPathsFromArgs(args).attachWhitelist,
           lookup: createNameLookup(),
         })
         if (action === 'add') {

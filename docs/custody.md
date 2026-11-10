@@ -178,16 +178,18 @@ node src/custody/cli.js migrate --apply --no-quarantine
 `accounts` is read-only: it never creates an account directory. `migrate`
 defaults to dry-run, prints the UUID, target, files by family/size,
 `sameFilesystem`, `targetExists`, the legacy lock, and the quarantine
-candidate. Exit codes: `0` ok or dry-run, `1` failed apply, `2` refused
-(lock held, cross-device, target conflict). Run the real migration only after
-taking the proxy down; it renames the legacy directory, so it cannot run while
-the old leg holds a lock.
+candidate. Run the real migration only after taking the proxy down; it renames
+the legacy directory, so it cannot run while the old leg holds a lock.
 
 Every command follows one exit-code rule: `0` done, `1` failed (an operation
-did not succeed), `2` refused (no such account, an ambiguous selector, a usage
-error, or a held lock). Do not retry a `2` blindly.
+did not succeed), `2` not honoured (no such account, an ambiguous selector, a
+usage error, a held lock, a cross-device or conflicting target). Do not retry a
+`2` blindly. `migrate --dry-run` is the exception: it always exits `0`,
+because its report is the answer, including when the report says the move
+cannot happen.
 
-`--accounts-dir` (or `GATEB_ACCOUNTS_DIR`) moves the account tree.
+`--accounts-dir` (or `GATEB_ACCOUNTS_DIR`) moves the account tree, and wins
+over the tree `--secrets-dir` implies.
 `--secrets-dir` moves the whole custody root that `.secrets` stands for: the
 account tree defaults to its `accounts/`, staging to its `staging/`, the
 retired quarantine to its `retired/`, and the attach whitelist to its
