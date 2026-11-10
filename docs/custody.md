@@ -183,8 +183,16 @@ candidate. Exit codes: `0` ok or dry-run, `1` failed apply, `2` refused
 taking the proxy down; it renames the legacy directory, so it cannot run while
 the old leg holds a lock.
 
-`--accounts-dir` (or `GATEB_ACCOUNTS_DIR`) moves the account tree. `--from`
-names the legacy directory under `.secrets/` (default `puppet`).
+Every command follows one exit-code rule: `0` done, `1` failed (an operation
+did not succeed), `2` refused (no such account, an ambiguous selector, a usage
+error, or a held lock). Do not retry a `2` blindly.
+
+`--accounts-dir` (or `GATEB_ACCOUNTS_DIR`) moves the account tree.
+`--secrets-dir` moves the whole custody root that `.secrets` stands for: the
+account tree defaults to its `accounts/`, staging to its `staging/`, the
+retired quarantine to its `retired/`, and the attach whitelist to its
+`attach-whitelist.json`. `--from` names the legacy directory under that root
+(default `puppet`).
 
 The real GlowSquidye tree was migrated on 2026-11-07 with `migrate --apply`.
 Every token file kept the same SHA-256 before and after, `profile.json` keeps
