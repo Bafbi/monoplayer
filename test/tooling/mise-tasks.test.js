@@ -21,8 +21,9 @@ test('the unit rung runs every test directory except the spike', () => {
     .map(entry => entry.name)
 
   // The spike opens real sockets, so it stays out of the unit rung and runs as
-  // its own rung. Every other directory is a src directory and must be listed,
-  // or a new test directory would silently never run.
+  // its own rung. Every other directory must be listed, or a new test directory
+  // would silently never run: one per src directory, plus support/ for the rig
+  // the fake-integration tests share.
   const brace = unit.body.match(/test\/\{([^}]+)\}/)
   assert.ok(brace, 'the unit rung lists its test directories in one brace glob')
   const listed = brace[1].split(',').map(name => name.trim())
