@@ -161,17 +161,19 @@ What the artifacts prove, and what they do not:
 The two logs, side by side:
 
 ```
-20:43:49.819  puppetSkinSent  {"name":"Bafbi","reason":"attach","signed":true}
-20:43:49.819  attach          replayed 667
-20:44:26.845  backendLogin    {"fromTransfer":true,"backendLogins":2}
-20:44:28.034  attach          {"reason":"transfer","replayed":319}   <- no skin frame
-20:44:28      [client]        Loaded 388 advancements                 <- a second world load
+20:43:49.819  {"event":"puppetSkinSent","name":"Bafbi","reason":"attach","signed":true}
+20:43:49.819  {"event":"attach","reason":"attach","replayed":667}
+20:44:26.845  {"event":"backendLogin","fromTransfer":true,"backendLogins":2}
+20:44:28.034  {"event":"attach","reason":"transfer","replayed":319}   <- no skin frame
+20:44:28      [client log] Loaded 388 advancements                    <- a second world load
 ```
 
-`skinFramesRefused: 0` is not evidence. The latch returns `already_sent`
+`skinFramesRefused: 0` is not evidence. The latch returned `already_sent`
 without counting a refusal, because no frame was attempted. The replay now clears
-the latch, so a reconfiguration gets the frame again, and a replay that writes no
-frame logs `puppetSkinWithheld` with the reason.
+the latch, so a reconfiguration gets the frame again. A replay that cannot write
+the frame at all, because the front gave no UUID, logs `puppetSkinWithheld`. One
+that has no property yet says nothing, because the property normally arrives a
+moment later and the frame then goes out under `property_arrived`.
 
 ### The two questions the ticket asked to settle first
 
@@ -181,7 +183,7 @@ arrives?** No, not on the first attach. No `player_info` frame in the journal's
 none is `6eb73524-ff88-4a62-a8d0-c63905e7afba`. There is no `player_info` frame
 at all in the 5 s before 20:43:49. `handlePlayerInfoUpdate` is the only writer of
 that map, with `putIfAbsent`, so the attach's own frame is what created the entry.
-That reading is proxy-side evidence plus the client's own code. It is not a
+That reading is proxy-side evidence plus the client's own code. It is not an
 observation of the live client's map.
 
 **What shape is Excalia's textures property?** The same as the dev lane's:
@@ -202,9 +204,9 @@ difference between the lanes.
 
 ### The property was never the puppet's on a busy server
 
-The live backend's `player_info` traffic carries the whole tab list. Over the
-12 minutes the journal copy covers it holds 520 such frames, and 81 of those
-carry a textures property. The entries belong to **18 different players**.
+The live backend's `player_info` traffic carries the whole tab list. The journal
+copy covers 12 minutes, and holds 520 such frames. Of those, 81 carry a textures
+property, and their entries belong to **18 different players**.
 `texturesPropertyOf` took the first one, so what the proxy held changed 80
 times, and the puppet's own property came up **twice**. Two consequences, both
 visible in the same journal:

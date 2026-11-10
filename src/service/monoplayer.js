@@ -194,12 +194,6 @@ export function loadConfig (doc = {}) {
 
 // --- core ---
 
-// The skin refusals a replay reports: a state no later frame repairs, and that
-// no other event names. `no_property` is the ordinary order on Paper, `disabled`
-// is the operator's own choice, and a packet or write failure already logs
-// `puppetSkinRefused` with the error.
-const SKIN_WITHHELD_IS_NEWS = new Set(['not_attached', 'no_identity'])
-
 // Telemetry and journal defaults: inert objects, so a core built without them
 // behaves exactly as before (no timers, no sockets, no files).
 const NOOP_TELEMETRY = Object.freeze({
@@ -421,7 +415,7 @@ export function createMonoplayer ({
   // it. Null until a relayed frame carries one; the proxy never invents a skin.
   let puppetSkinProperty = null
   // Set once, when a frame carried a skin the config could not attribute.
-  let puppetSkinUnidentified = false
+  let puppetSkinUnidentifiedLogged = false
   // Whether the client has received the skin frame since the last replay. A
   // client's entry for a UUID wins over a later add_player for it, so a second
   // frame for the same play state would be a write nobody sees.
@@ -1510,10 +1504,13 @@ export function createMonoplayer ({
     // goes on it. After the replay, because the frame is client state the replay
     // does not carry.
     // #134: the heartbeat counts no refusal for a frame that was never
-    // attempted, which is how a played body lost its skin without a trace. Only
-    // the states no other event names and no later frame repairs are news.
+    // attempted, which is how a played body lost its skin without a trace. A front
+    // that gave no UUID is the one refusal worth a line: no later frame repairs it,
+    // and no other event names it. A missing property arrives a moment later on
+    // Paper, a packet or write failure logs `puppetSkinRefused`, and a replay
+    // cannot find the client out of play because it sets `frontPlayReady` first.
     const skin = sendPuppetSkin({ reason })
-    if (skin.sent !== true && SKIN_WITHHELD_IS_NEWS.has(skin.reason)) {
+    if (skin.sent !== true && skin.reason === 'no_identity') {
       log('puppetSkinWithheld', { name, reason: skin.reason })
     }
 
@@ -2023,20 +2020,22 @@ export function createMonoplayer ({
       // #134: no UUID is no skin, and guessing by position is how a stranger's
       // skin reached the human's body. A config that names no puppet UUID takes
       // none, and says so once, on the first frame that did carry a skin.
-      if (property === null && puppetUuid === null && !puppetSkinUnidentified && carriesTextures(data)) {
-        puppetSkinUnidentified = true
+      if (property === null && puppetUuid === null && !puppetSkinUnidentifiedLogged && carriesTextures(data)) {
+        puppetSkinUnidentifiedLogged = true
         log('puppetSkinUnidentified', { reason: 'no_puppet_uuid' })
       }
       if (property !== null) {
         const changed = puppetSkinProperty === null || puppetSkinProperty.value !== property.value
+        // #134: both values, once, when they differ. The ticket could not tell
+        // whether a backend re-signs its property per login or whether the
+        // comparison was comparing the wrong things. The next reader can.
+        const was = puppetSkinProperty === null ? null : puppetSkinProperty.value
         puppetSkinProperty = property
         if (changed) {
-          // #134: the value itself, once per distinct property. The ticket could
-          // not tell whether a backend re-signs its property per login or whether
-          // the comparison was comparing the wrong things. The next reader can.
           log('puppetSkinKnown', {
             uuid: puppetUuid,
             signed: typeof property.signature === 'string',
+            was,
             value: property.value
           })
         }
