@@ -40,6 +40,24 @@ function attachConfiguring (rig, { name = 'Bafbi', uuid = PLAYER } = {}) {
 
 const gate = () => ({ state: 'configuration', name: 'code_of_conduct', buffer: Buffer.from('conduct') })
 
+// The warm join prefix, so a test can put the puppet in play with a dialog
+// still held from its configuration phase.
+function joinPrefix (rig) {
+  for (const frame of [
+    { name: 'login', data: { entityId: 42, viewDistance: 10 } },
+    { name: 'game_state_change', data: { reason: 13, gameMode: 0 } },
+    { name: 'position', data: { teleportId: 9, x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 } },
+    { name: 'chunk_batch_start', data: {} },
+    { name: 'map_chunk', data: { x: 0, z: 0 } },
+    { name: 'chunk_batch_finished', data: {} }
+  ]) rig.backendLeg.deliver({ state: 'play', ...frame })
+}
+
+function attach (rig, { name = 'Bafbi', uuid = PLAYER } = {}) {
+  rig.frontLeg.loginStart({ name, uuid })
+  return rig.core.attachPlayer({ name, uuid, includeConfig: false })
+}
+
 test('#21 a gate the puppet accepted itself is not held for a later client', () => {
   const rig = makeCore()
   // The leg's write wrapper accepted the gate on the puppet connection before
@@ -116,4 +134,60 @@ test('#21 a gate held for the human is not re-sent after the human answered it',
   assert.equal(rig.core.pendingDialog.held, false)
   assert.equal(rig.core.metrics.controlDialogsResent, 0)
   assert.equal(rig.frontLeg.frames().filter(frame => frame.name === 'code_of_conduct').length, 1)
+})
+
+test('#73 a configuration gate held when the last client detaches is answered as the puppet', () => {
+  const rig = makeCore()
+  // The real leg reports a written accept through \`onDialogAnswered\` (#21), the
+  // same way it does at connect. The fake leg only records the ask, so the test
+  // supplies that report: the marker it arms is the one the core must spend.
+  const asked = rig.backendLeg.answerHeldGate
+  rig.backendLeg.answerHeldGate = request => {
+    const outcome = asked(request)
+    if (outcome.answered === true) rig.core.notePuppetDialogAnswer({ state: 'configuration' })
+    return outcome
+  }
+
+  attachConfiguring(rig)
+  rig.backendLeg.deliver(gate())
+  assert.equal(rig.core.pendingDialog.held, true, 'the human has the gate, unanswered')
+
+  rig.core.detachPlayer({ reason: 'player_quit' })
+
+  assert.equal(rig.core.attached, false)
+  assert.deepEqual(rig.backendLeg.heldGateAnswers(), [{ state: 'configuration', name: 'code_of_conduct' }],
+    'the leg answers the gate the client left, as the puppet')
+  assert.equal(rig.core.pendingDialog.held, false, 'and it is no longer a question for the next client')
+  assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 1)
+  assert.equal(rig.core.logs().filter(line => line.includes('"event":"controlDialogAnsweredOnDetach"')).length, 1,
+    'the answer is logged, not silent')
+
+  // The next gate is a real question: the answer the leg reported belongs to
+  // the gate it just dropped, not to the next show.
+  rig.backendLeg.deliver({
+    state: 'configuration',
+    name: 'show_dialog',
+    buffer: Buffer.from('config-dialog'),
+    data: { dialog: {} }
+  })
+  assert.equal(rig.core.pendingDialog.peek()?.name, 'show_dialog', 'the next gate is held, not swallowed as answered')
+  assert.equal(rig.core.metrics.controlDialogsHeld, 1, 'it is a question with no client, so it is held')
+  assert.equal(rig.core.metrics.controlDialogsPuppetAnswered, 0, 'and it is not counted as answered by the puppet')
+})
+
+test('#73 a gate the puppet is no longer in configuration for is left held', () => {
+  // The backend asked the gate before the play login and never withdrew it, so
+  // the holder still has it while the puppet is in play. Answering it there
+  // would write a configuration frame into a play connection.
+  const rig = makeCore()
+  rig.backendLeg.deliver(gate())
+  joinPrefix(rig)
+  attach(rig)
+  assert.equal(rig.core.pendingDialog.peek()?.state, 'configuration')
+
+  rig.core.detachPlayer({ reason: 'player_quit' })
+
+  assert.deepEqual(rig.backendLeg.heldGateAnswers(), [], 'nothing is answered in the wrong phase')
+  assert.equal(rig.core.pendingDialog.held, true, 'it waits for a client that can answer it')
+  assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 0)
 })

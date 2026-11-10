@@ -77,6 +77,10 @@ export function createBot ({
   deviceType = null,
   flow = null,
   clientSettings = null,
+  // #73: a real client shows the code of conduct and waits for a click, while
+  // the protocol library accepts it on its own. A rung that needs a human who
+  // did not answer turns that off.
+  answerCodeOfConduct = true,
   logStream = null
 } = {}) {
   const received = {
@@ -95,6 +99,7 @@ export function createBot ({
     health: [], // decoded clientbound update_health frames
     systemChat: [], // decoded clientbound system_chat frames
     dialogs: [], // decoded clientbound show_dialog frames (#16)
+    gatesHeld: 0, // code-of-conduct accepts this bot refused to send (#73)
     advancements: [], // decoded clientbound advancements frames (a proxy notice toast, #15)
     kick: null, // decoded clientbound kick_disconnect, if one arrived
     ended: null,
@@ -120,6 +125,15 @@ export function createBot ({
   })
 
   const client = mc.createClient(options)
+  if (answerCodeOfConduct !== true) {
+    const answer = client.write.bind(client)
+    client.write = (name, params, ...rest) => {
+      if (name !== 'accept_code_of_conduct') return answer(name, params, ...rest)
+      received.gatesHeld++
+      log('botGateHeld', { username })
+      return false
+    }
+  }
 
   let resolveEnded = null
   const ended = new Promise(resolve => { resolveEnded = resolve })

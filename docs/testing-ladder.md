@@ -241,9 +241,11 @@ The runner builds:
   connection the client kept: the snapshot's configuration and finish stream
   into the open round, the previous play login replays, no kick, and no front
   client error (#87).
-- `O41` and `O41b` a target that sends no chunk frame never releases the client:
-  the move stays open with the client in play, and the recorded wait is
-  `reconfigurationWaitingWorld` on a cache holding zero chunk frames (#87).
+- `O41` a target that sends no chunk frame never releases the client: the move
+  stays open with the client in play (#87).
+- `O41b` the held release is the chunk gate, not a stalled client: the wait is
+  recorded as `reconfigurationWaitingWorld` on a cache holding zero chunk frames
+  (#87).
 - `O42` an error on the attaching client's connection ends it with a reason and
   not with a serialization failure: the client reads `front_error: <message>`
   from its kick, and no `Serialization error` line is logged (#87).
@@ -299,6 +301,23 @@ first dial and its target warms in five seconds.
   `codeOfConductAccepted` and not `codeOfConductHeld`, nothing is held, the
   router counts one puppet answer, and the one resend `O30` sees is the play
   dialog.
+- `O43` a configuration gate the last client left is answered as the puppet
+  (#73). A third fake backend runs with the code of conduct enabled and is the
+  target of a second followed transfer on the kept connection, so the gate
+  arrives while the client is attached: the leg logs `codeOfConductHeld`, the
+  core holds the gate, and the client then closes without answering. The leg
+  logs `codeOfConductAccepted` and the core `controlDialogAnsweredOnDetach`
+  (`controlDialogsAnsweredOnDetach` 1), nothing is left pending, and the puppet
+  warms on that backend: it withholds `finish_configuration` until the accept
+  arrives, so its own accept is the only way it reaches play. One bot option
+  makes this observable: the protocol library accepts the code of conduct on its
+  own, so the bot is told not to answer, the way a player who left the screen
+  would.
+- `O44` a play dialog the last client left stays held (#20). A play dialog is
+  sent while a client is attached, the client closes with it unanswered, and the
+  next client receives it again: nothing pending is dropped, the backend records
+  no `custom_click_action`, `controlDialogsAnsweredOnDetach` does not move, the
+  leg logs `dialogUnhandled` with `play_dialog_waits`, and one resend lands.
 
 ## The client parity rung
 

@@ -234,6 +234,66 @@ export function withCodeOfConductGate (originalWrite, {
   }
 }
 
+// #73: who answers a configuration gate the last player left open.
+//
+// A detach is "no player is attached" becoming true, which is exactly the
+// condition the gate fallback names (#21), so the core asks for that answer once
+// its last client is gone. The core holds the frame, because a dialog with no
+// client waits in its pending holder (#16); this decides what to send.
+//
+// The code of conduct is the accept the protocol library wrote and this leg
+// swallowed, so the answer goes back through the same write wrapper: it leaves
+// only while no player is attached, the wrapper logs it, and a player who
+// attached in the meantime keeps the gate as theirs. A gate with buttons takes
+// the configured action, the same policy a headless session uses (#20).
+//
+// IO is injected, like `answerBackendDialog`, so a test can prove the answer
+// without standing up a socket. Every answer is reported through `onAnswered`,
+// the way the wrapper reports an accept, so the core learns the gate is closed
+// through one call whatever the gate was. The core spends that marker: the
+// show it belongs to has already happened.
+export function answerHeldGate ({
+  state = null,
+  name = null,
+  data = null,
+  connectionState = null,
+  dialogAction = null,
+  // The answers this connection already made, so a detach cannot reset the
+  // click cap a looping server is held to.
+  responses = 0,
+  write = null,
+  writeRaw = null,
+  onAnswered = null,
+  log = () => {}
+} = {}) {
+  // Only a configuration gate is the fallback's: a play dialog is the human's
+  // (#20), answered by the client or held for the next one.
+  if (state !== 'configuration') return { answered: false, reason: 'not_a_gate', name, responses }
+  // The packet id is state-scoped, so an answer written into the wrong phase is
+  // a different packet, and the backend ends the session for it.
+  if (connectionState !== 'configuration') return { answered: false, reason: 'not_configuring', name, responses }
+  if (typeof write !== 'function') return { answered: false, reason: 'no_connection', name, responses }
+  if (name === 'code_of_conduct') {
+    // The wrapper holds a gate a client attached for, and reports a failed
+    // write, both as false. Its own log line says which, so this only reports
+    // that nothing was written.
+    return write('accept_code_of_conduct', {}) === false
+      ? { answered: false, reason: 'not_written', name, responses }
+      : { answered: true, reason: null, name, responses }
+  }
+  const outcome = answerBackendDialog({
+    state,
+    data,
+    dialogAction,
+    humanAttached: false,
+    responses,
+    writeRaw,
+    onAnswered,
+    log
+  })
+  return { answered: outcome.answered === true, reason: outcome.reason ?? null, name, responses: outcome.responses }
+}
+
 // VarInt encoder for the packet id, identifier length, and the payload length.
 function varint (value) {
   const out = []
@@ -409,6 +469,10 @@ function createBackendLeg ({
   let ended = false
   let forwarder = null
   let closePromise = null
+  // Dialog answers this connection made, against DIALOG_ATTEMPT_LIMIT. Per
+  // connection, and shared with the detach answer (#73) so that path cannot
+  // reset the cap a looping server is held to.
+  let dialogResponses = 0
   // Cookies are per backend chain: a transfer target is another front of the
   // same network and may need the cookie the previous front stored. The jar
   // clears only when the orchestrator returns to the configured base target.
@@ -559,7 +623,7 @@ function createBackendLeg ({
       // the configured action while no human can answer it (#21). Only
       // `custom_click_action` dialogs are handled; anything else is logged and
       // left alone.
-      let dialogResponses = 0
+      dialogResponses = 0
       socketClient.on('show_dialog', data => {
         const outcome = answerBackendDialog({
           state: socketClient.state,
@@ -631,6 +695,28 @@ function createBackendLeg ({
     writeRaw (buffer) {
       if (!client) throw new Error('backend leg not connected')
       client.writeRaw(buffer)
+    },
+    // #73: the last client left while a configuration gate was held. The core
+    // holds the frame, so it asks for the answer the gate fallback would have
+    // given had nobody been attached when the gate arrived. Answers through the
+    // same write wrapper, so who answers a code of conduct is decided in one
+    // place. The exported helper above, with this connection's IO.
+    answerHeldGate ({ state = null, name = null, data = null } = {}) {
+      if (!client || ended) return { answered: false, reason: 'no_connection', name }
+      const outcome = answerHeldGate({
+        state,
+        name,
+        data,
+        connectionState: client.state,
+        dialogAction,
+        responses: dialogResponses,
+        write: (packetName, params) => client.write(packetName, params),
+        writeRaw: body => client.writeRaw(body),
+        onAnswered: onDialogAnswered,
+        log
+      })
+      dialogResponses = outcome.responses
+      return outcome
     },
     // Point the next connect at another backend. The caller must have ended
     // the current connection first. `keepCookies` carries the session cookie
