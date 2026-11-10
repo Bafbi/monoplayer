@@ -3,7 +3,8 @@
 //   node src/testbed/switch.js up        apply the testbed, join the puppet to
 //                                        paper-hub, leave it running
 //   node src/testbed/switch.js transfer  RCON: transfer the puppet to paper-sky
-//   node src/testbed/switch.js down      stop the testbed, restore the live app
+//   node src/testbed/switch.js down      stop the testbed, delete its front,
+//                                        restore the live app
 //   node src/testbed/switch.js run       up + transfer + down, always restoring
 //   node src/testbed/switch.js status    what is running now
 //
@@ -16,6 +17,13 @@
 // Paper runs in monoplayer-gate-b. The testbed Monoplayer runs in the
 // monoplayer namespace on the custody PVC and exposes
 // monoplayer-testbed.tail41e568.ts.net:25565.
+//
+// The front is the Service, not the deployment: a deployment scaled to zero
+// leaves the Service published with no endpoints and its tailnet device
+// registered. So `down` deletes the Service, and `up` recreates it from
+// deploy/testbed, whose tailscale.com/hostname annotation brings the same name
+// back. `up` also records the digest it ran, because the manifest pulls the
+// moving :main tag: without it two runs cannot be compared.
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,6 +39,10 @@ const ARGO_APP = 'monoplayer'
 const ARGO_NS = 'argocd'
 const FRONT_HOST = 'monoplayer-testbed.tail41e568.ts.net'
 const SKY_HOST = 'paper-sky.monoplayer-gate-b.svc.cluster.local'
+const TAILSCALE_NS = 'tailscale'
+// The operator names its proxy pods after the Service they belong to and labels
+// them with the Service they came from, which is how `status` finds the device.
+const FRONT_DEVICE_LABEL = `tailscale.com/parent-resource=${TEST_DEPLOY}`
 // The recovery record: what `up` removed, for `down` to put back. It is the
 // only way the Argo policy comes back (AGENTS.md), so a test points it at its
 // own file instead of overwriting a live run's record.
@@ -107,6 +119,22 @@ function pods (namespace, deploy) {
   return JSON.parse(kubectl(['-n', namespace, 'get', 'pods', '-l', `app.kubernetes.io/name=${deploy}`, '-o', 'json'])).items
 }
 
+// The digest the deployment actually ran. Its status carries no imageID, but its
+// pod does, and the manifest's :main tag makes the tag name useless for a
+// comparison between runs.
+function testbedImage () {
+  const imageID = pods(TEST_NS, TEST_DEPLOY)[0]?.status?.containerStatuses?.[0]?.imageID ?? null
+  if (!imageID) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports no containerStatuses[0].imageID, so this run cannot name the build it ran`)
+  const digest = /@(sha256:[0-9a-f]{64})$/.exec(imageID)?.[1] ?? null
+  if (!digest) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports an imageID without a digest: ${imageID}`)
+  return { imageID, digest }
+}
+
+function frontDevices () {
+  const raw = kubectl(['-n', TAILSCALE_NS, 'get', 'pods', '-l', FRONT_DEVICE_LABEL, '-o', 'json'], { allowFail: true })
+  return raw === null ? null : JSON.parse(raw).items
+}
+
 function podLogs (namespace, deploy, tail = 400) {
   return kubectl(['-n', namespace, 'logs', `deploy/${deploy}`, `--tail=${tail}`], { allowFail: true }) ?? ''
 }
@@ -162,6 +190,11 @@ function restoreAutoSync (saved) {
   log('Argo auto-sync restored')
 }
 
+function writeState (state) {
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state) + '\n')
+}
+
 // A second `up` before a `down` must not forget the policy the first one
 // removed. `disableAutoSync` reports `disabledByUs: false` when Argo already has
 // no `automated` block, and that record restores nothing, so it must not
@@ -171,12 +204,19 @@ function saveState (state) {
   const previous = readState()
   const kept = state.disabledByUs && state.automated ? state : previous ?? state
   if (kept === previous) log('kept the Argo record an earlier up wrote', { automated: previous.automated })
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
-  fs.writeFileSync(STATE_FILE, JSON.stringify(kept) + '\n')
+  writeState(kept)
 }
 
 function readState () {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } catch { return null }
+}
+
+// `up` records the Argo policy first and the digest later, so a write must merge
+// into what is already there: `down` restores the policy from this file. It goes
+// straight to the file, not through saveState: that keep rule belongs to the
+// policy, and it would drop a digest recorded beside a policy there is none of.
+function updateState (patch) {
+  writeState({ ...(readState() ?? {}), ...patch })
 }
 
 function clearState () {
@@ -246,6 +286,12 @@ async function up () {
   const hello = podLogs(TEST_NS, TEST_DEPLOY).split('\n').filter(line => line.includes('"event":"startLive"')).at(-1)
   log('testbed Monoplayer ready', { startLive: hello })
 
+  // Record the build this run executed. The manifest pulls :main, so the digest
+  // is the only thing a later run can be compared against.
+  const image = testbedImage()
+  updateState(image)
+  log('testbed image', image)
+
   const svc = JSON.parse(kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json']))
   const hostname = svc.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
   log('testbed front', { hostname: hostname ?? '(pending)', port: 25565 })
@@ -288,6 +334,20 @@ async function transfer () {
   log('testbed heartbeat', { heartbeat })
 }
 
+// Deleting the Service is what unpublishes the front: the tailnet device and its
+// proxy pod belong to the Service, so they go with it, and the next `apply -k`
+// recreates the Service from the manifest's tailscale.com/hostname annotation.
+// A failed delete is logged, not thrown, so it can never keep the live
+// deployment down; `status` shows what is left.
+function removeFront () {
+  try {
+    const result = kubectl(['-n', TEST_NS, 'delete', 'svc', TEST_DEPLOY, '--ignore-not-found', '--timeout=120s'])
+    log(`delete svc ${TEST_NS}/${TEST_DEPLOY}`, { result: result.replace(/\n/g, ' | ') })
+  } catch (error) {
+    log(`delete svc ${TEST_NS}/${TEST_DEPLOY} failed`, { error: error.message })
+  }
+}
+
 async function down () {
   const saved = readState()
   scale(TEST_NS, TEST_DEPLOY, 0)
@@ -297,6 +357,7 @@ async function down () {
   scale(LIVE_NS, LIVE_DEPLOY, 1)
   await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
   restoreAutoSync(saved)
+  removeFront()
   clearState()
   log('live deployment restored')
 }
@@ -307,6 +368,15 @@ async function status () {
     log(`${ns}/${deploy}`, d ? { replicas: d.spec?.replicas ?? null, ready: d.status?.readyReplicas ?? 0 } : { missing: true })
   }
   log('argo automated', { automated: appAutomated() })
+  const svc = kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json'], { allowFail: true })
+  log(`front ${TEST_NS}/${TEST_DEPLOY}`, svc === null
+    ? { missing: true }
+    : { hostname: JSON.parse(svc).status?.loadBalancer?.ingress?.[0]?.hostname ?? '(pending)' })
+  const devices = frontDevices()
+  log('tailnet devices', devices === null
+    ? { unreadable: true }
+    : { count: devices.length, names: devices.map(pod => pod.metadata?.name) })
+  log('run state', readState() ?? { missing: true })
 }
 
 async function run () {
