@@ -124,6 +124,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bot6 = null
   let bot7 = null
   let bot8 = null
+  // #97: the commands-mode rig, its own puppet, front, and backend.
+  let bot9 = null
+  let commandsFront = null
+  let commandsBackend = null
+  let commandsBase = null
+  let commandsCore = null
   let stranger = null
   let seamlessFront = null
   let seamlessBackend = null
@@ -691,55 +697,99 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // --- O45: the commands mode speaks the command and keeps open chat off (#97) ---
-    // The rung runs `full` so O29 can prove the whole speaking path. The mode is
-    // read off the config for each frame (src/service/monoplayer.js:1705), so
-    // this holds the attached session in `commands` for two frames and restores
-    // it in a finally: a command must reach the backend as the puppet, and a
-    // chat message must not. The restore is not optional: the same config value
-    // drives the clientbound relay, so a leaked mode would change what the
-    // checks after this one see.
-    // This proves the core's serverbound rule through the real front leg. The
-    // front leg's clientbound backstop is not part of the proof:
-    // `createOfflineFrontLeg` does not forward its `chat` argument today, and
-    // `commands` relays clientbound exactly as `read-only` does either way.
-    const commandsBefore = {
-      messages: fake.received.chats.length,
-      commands: fake.received.chatCommands.length,
-      sent: core.metrics.chatSent,
-      blocked: core.metrics.chatBlocked,
-      forwarded: core.metrics.serverboundForwarded
+    // A rig of its own, in `commands`, for the reason the kept-connection rig
+    // has one: the main rig runs `full` for O29 and cannot be in two modes at
+    // once. It also has to be a separate client. O29 sends an acknowledgement
+    // the front leg's library rejects, so its client is ended a few
+    // milliseconds later (`chat_validation_failed`); a check that reused that
+    // client would race the end of its connection. This bot sends no
+    // acknowledgement, so nothing ends it before the two frames are read.
+    //
+    // The puppet leg here has no profile keys, so the command reaches the fake
+    // backend as `chat_command`, not `chat_command_signed`. The signed name is
+    // pinned by test/core/relay.test.js and test/service/chat-send.test.js; what
+    // this check proves is the mode decision on a real client's frame.
+    commandsBase = await createFakeBackend({ port: 0, logStream: null })
+    commandsFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      offlineWhitelist,
+      getSnapshotConfig: () => commandsCore?.cache.snapshot().config ?? [],
+      wireCheck: payload => wire.check(payload),
+      wireMode: 'throw',
+      chat: 'commands',
+      log
+    })
+    commandsBackend = createOfflineBackendLeg({
+      host: '127.0.0.1',
+      port: commandsBase.port,
+      version: VERSION,
+      username: 'GlowSquidye',
+      dialogAction: 'last',
+      isHumanAttached: () => commandsCore?.attached === true,
+      onDialogAnswered: ({ state }) => commandsCore?.notePuppetDialogAnswer({ state }),
+      log
+    })
+    commandsCore = createMonoplayer({
+      config: loadConfig({ ...config, chat: 'commands' }),
+      backendLeg: commandsBackend,
+      frontLeg: commandsFront,
+      clock: {
+        now: Date.now,
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout
+      },
+      logStream: { write: line => log('commandsCore', { line }) }
+    })
+    commandsFront.setCoreAttachConfiguring(({ name, uuid }) => commandsCore.attachConfiguringPlayer({ name, uuid }))
+    commandsFront.setConfiguringHandler(({ name }) => commandsCore.configuringReady({ name }))
+    commandsFront.setClientSettingsHandler(settings => commandsCore.noteClientSettings(settings))
+    commandsFront.setCoreAttach(({ name, uuid }) =>
+      commandsCore.attachPlayer({ name, uuid, includeConfig: false })
+    )
+    commandsCore.start()
+    await commandsBackend.connect()
+    const commandsReadiness = await waitForReady({ core: commandsCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+    if (!commandsReadiness.warm) throw new Error('the commands-mode rig did not warm')
+    const commandsBound = await commandsFront.listen()
+    bot9 = createBot({
+      port: commandsBound.port ?? commandsFront.port,
+      username: 'Second'
+    })
+    await bot9.ready()
+    if (commandsCore.metrics.attaches !== 1) {
+      throw new Error(`the commands-mode rig attached ${commandsCore.metrics.attaches} times, expected 1`)
     }
-    core.config.chat = 'commands'
-    try {
-      bot1.sendCommand('profil')
-      bot1.sendChat('the account must not say this')
-      await bot1.waitFor(
-        () => fake.received.chatCommands.length === commandsBefore.commands + 1 &&
-          core.metrics.chatBlocked === commandsBefore.blocked + 1,
-        'backend command, and no chat, in commands mode'
-      )
-      const spokenInCommands = fake.received.chatCommands.at(-1)
-      evidence.commandsMode = {
-        command: spokenInCommands?.command ?? null,
-        commands: fake.received.chatCommands.length - commandsBefore.commands,
-        messages: fake.received.chats.length - commandsBefore.messages,
-        chatSent: core.metrics.chatSent - commandsBefore.sent,
-        chatBlocked: core.metrics.chatBlocked - commandsBefore.blocked,
-        forwarded: core.metrics.serverboundForwarded - commandsBefore.forwarded
-      }
-      check(
-        'O45',
-        'in commands mode the human command reached the backend as the puppet and the chat message did not',
-        spokenInCommands?.command === 'profil' &&
-          fake.received.chats.length === commandsBefore.messages &&
-          core.metrics.chatSent === commandsBefore.sent + 1 &&
-          core.metrics.chatBlocked === commandsBefore.blocked + 1 &&
-          core.metrics.serverboundForwarded === commandsBefore.forwarded,
-        evidence.commandsMode
-      )
-    } finally {
-      core.config.chat = 'full'
+
+    bot9.sendCommand('profil')
+    bot9.sendChat('the account must not say this')
+    await bot9.waitFor(
+      () => commandsBase.received.chatCommands.length === 1 &&
+        commandsCore.metrics.chatBlocked === 1,
+      'the backend command, and no chat, in commands mode'
+    )
+    const spokenInCommands = commandsBase.received.chatCommands.at(-1)
+    evidence.commandsMode = {
+      command: spokenInCommands?.command ?? null,
+      commands: commandsBase.received.chatCommands.length,
+      messages: commandsBase.received.chats.length,
+      chatSent: commandsCore.metrics.chatSent,
+      chatBlocked: commandsCore.metrics.chatBlocked,
+      forwarded: commandsCore.metrics.serverboundForwarded,
+      attaches: commandsCore.metrics.attaches
     }
+    check(
+      'O45',
+      'in commands mode the human command reached the backend as the puppet and the chat message did not',
+      spokenInCommands?.command === 'profil' &&
+        commandsBase.received.chats.length === 0 &&
+        commandsCore.metrics.chatSent === 1 &&
+        commandsCore.metrics.chatBlocked === 1 &&
+        commandsCore.metrics.serverboundForwarded === 0 &&
+        commandsCore.metrics.attaches === 1,
+      evidence.commandsMode
+    )
 
     // --- O12: detach keeps the backend session and the pose ---
     // The front denies a second connection before the whitelist gate while a
@@ -1744,11 +1794,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger]) {
+    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }
     try { await seamlessFront?.close?.() } catch { /* best effort */ }
+    try { await commandsFront?.close?.() } catch { /* best effort */ }
+    try { await commandsBackend?.close?.() } catch { /* best effort */ }
+    try { await commandsBase?.close?.() } catch { /* best effort */ }
     try { await backend?.close?.() } catch { /* best effort */ }
     try { await seamlessBackend?.close?.() } catch { /* best effort */ }
     try { fake?.close?.() } catch { /* best effort */ }
