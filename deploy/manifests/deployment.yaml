@@ -120,10 +120,15 @@ spec:
               value: http://otel-collector.deepmine-shared.svc.cluster.local:4318
             - name: OTEL_SERVICE_NAME
               value: monoplayer
-            # Exact packet journal on the custody PVC: 128 MiB per file with one
-            # rotation, so at most 256 MiB of the 1 GiB volume.
+            # Exact packet journal, on the pod's own emptyDir rather than the
+            # custody PVC. The comment here used to promise "at most 256 MiB of
+            # the 1 GiB volume"; measured, one session writes ~5.6 GB a day and
+            # rotate() keeps every segment, so the volume filled and the front
+            # CrashLooped on ENOSPC twice on 2026-11-10 (#96). A diagnostic
+            # artifact must never be able to starve the account custody, and the
+            # journal is worth more than nothing while #96 builds the retention.
             - name: MONOPLAYER_JOURNAL_DIR
-              value: /data/journal
+              value: /tmp/journal
             - name: MONOPLAYER_JOURNAL_MAX_BYTES
               value: "134217728"
             - name: HOME
