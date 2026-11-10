@@ -71,8 +71,8 @@ These are the steps, and what each one prints.
    ```
 
    The same digest is appended to `.reports/testbed-digests.jsonl`, one line per
-   run, which is what lets two finished runs be compared: `down` clears the
-   record it restores from.
+   run. That file is what lets two finished runs be compared, because `down`
+   clears the record it restores from.
 
 2. `node src/testbed/switch.js status`. It reports the front Service and the
    tailnet device that belongs to it: `front monoplayer/monoplayer-testbed
