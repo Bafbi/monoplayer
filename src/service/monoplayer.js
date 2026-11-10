@@ -59,6 +59,7 @@ import {
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
+import { SKIN_FRAME, skinPlayerInfoPacket, texturesPropertyOf } from '../core/skin.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
@@ -114,6 +115,17 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxGeneric: 512
   }),
   reconnect: Object.freeze({ delayMs: 1000, attempts: 1, maxDelayMs: 60_000 }),
+  // #99: the human's own player wears the puppet's skin. One `player_info`
+  // entry for the human's UUID carrying the textures property the backend sent
+  // for the puppet; an entry the client holds already wins over it.
+  //
+  // On, because a real 26.2 client accepted the property: with no entry for its
+  // own UUID it drew a vanilla default skin, and with one it drew the puppet's.
+  // The ticket's open question was whether a client accepts a property Mojang
+  // signed for a different profile UUID; it does, and it accepts an unsigned copy
+  // as well, because it asks for a secure property only for players other than
+  // the one it controls. Measured through the dev lane: testdata/skin-verdict.md.
+  skin: Object.freeze({ showPuppetSkin: true }),
   transfer: Object.freeze({
     // Follow a backend transfer on the puppet leg. With a client attached the
     // front serves a same-connection reconfiguration, so the client keeps its
@@ -150,7 +162,8 @@ export function loadConfig (doc = {}) {
     transfer: { ...DEFAULT_CONFIG.transfer, ...(doc.transfer ?? {}) },
     front: { ...DEFAULT_CONFIG.front, ...(doc.front ?? {}) },
     backend: { ...DEFAULT_CONFIG.backend, ...(doc.backend ?? {}) },
-    puppet: { ...DEFAULT_CONFIG.puppet, ...(doc.puppet ?? {}) }
+    puppet: { ...DEFAULT_CONFIG.puppet, ...(doc.puppet ?? {}) },
+    skin: { ...DEFAULT_CONFIG.skin, ...(doc.skin ?? {}) }
   }
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
@@ -172,6 +185,9 @@ export function loadConfig (doc = {}) {
   }
   if (!Number.isFinite(merged.transfer.reconfigureTimeoutMs) || merged.transfer.reconfigureTimeoutMs < 0) {
     throw new TypeError('config.transfer.reconfigureTimeoutMs must be a non-negative number')
+  }
+  if (typeof merged.skin.showPuppetSkin !== 'boolean') {
+    throw new TypeError('config.skin.showPuppetSkin must be a boolean')
   }
   return merged
 }
@@ -264,6 +280,10 @@ export function createMonoplayer ({
     transfersRefused: 0,
     noticesSent: 0,
     noticeFallbacks: 0,
+    // #99: one `player_info` frame per attach that gives the human's own UUID
+    // the puppet's skin.
+    skinFramesWritten: 0,
+    skinFramesRefused: 0,
     // #22: same-connection reconfiguration.
     transfersSeamless: 0,
     reconfigurationsStarted: 0,
@@ -387,6 +407,17 @@ export function createMonoplayer ({
   // so the wait is logged once and not once per play frame.
   let reconfigurationWaitingWorld = false
   let attachedName = null
+  // #99: the human's UUID, which the front verified before it attached. It is
+  // the profile the skin frame names, and the attach path is the only place it
+  // is known.
+  let attachedUuid = null
+  // The skin the puppet wears, as the backend's own `player_info` frame states
+  // it. Null until a relayed frame carries one; the proxy never invents a skin.
+  let puppetSkinProperty = null
+  // Whether this attach already received the skin frame. A client's entry for a
+  // UUID wins over a later add_player for it, so a second frame for the same
+  // attach would be a write nobody sees.
+  let skinSent = false
   // A backend frame arriving proves the leg has a live session again; the
   // serverbound pipeline refuses to write into a leg that is between
   // connections (a transfer or a restore).
@@ -1338,6 +1369,8 @@ export function createMonoplayer ({
     }
     attached = true
     attachedName = name ?? null
+    attachedUuid = uuid ?? null
+    skinSent = false
     frontPlayReady = false
     earlyAttach = { name, uuid }
     transferNoticeSent = false
@@ -1368,6 +1401,62 @@ export function createMonoplayer ({
     return { attached: true, configuring: true, replayed: metrics.configFramesRelayed }
   }
 
+  // #99: the human's own body wears the puppet's skin.
+  //
+  // The front authenticates the client as the human, so the body it draws is the
+  // human's own, while the relayed `player_info` lists the puppet and never the
+  // human. A client resolves a player's skin from that player's `player_info`
+  // entry and falls back to a vanilla default when it holds none, so the human's
+  // own body renders steve, alex, or one of the 26.x defaults today.
+  //
+  // One `add_player` entry for the human's UUID carrying the puppet's textures
+  // property is the whole fix, and it is the property the backend sent: the proxy
+  // holds no skin of its own and invents none. The entry carries no
+  // `update_listed` action, so the tab list does not gain a second line beside
+  // the puppet's.
+  //
+  // The client needs no signature on this property: `PlayerInfo.createSkinLookup`
+  // asks for a secure property only for players other than the one it controls,
+  // which is why the human's own UUID accepts the puppet's signature as-is (and an
+  // unsigned copy of it too). Measured on a real 26.2 client through the dev lane:
+  // testdata/skin-verdict.md.
+  //
+  // Four refusals, each a state where the frame would be ignored or would claim a
+  // skin the backend never sent: the switch is off, no client is in play, the
+  // backend has sent no property, or this attach already received one.
+  function sendPuppetSkin ({ reason = 'attach' } = {}) {
+    if (!cfg.skin.showPuppetSkin) return { sent: false, reason: 'disabled' }
+    if (!isAttached() || !frontPlayReady) return { sent: false, reason: 'not_attached' }
+    if (puppetSkinProperty === null) return { sent: false, reason: 'no_property' }
+    if (attachedUuid === null || attachedName === null) return { sent: false, reason: 'no_identity' }
+    if (skinSent) return { sent: false, reason: 'already_sent' }
+    let packet
+    try {
+      packet = skinPlayerInfoPacket({ uuid: attachedUuid, name: attachedName, property: puppetSkinProperty })
+    } catch (error) {
+      metrics.skinFramesRefused++
+      log('puppetSkinRefused', { reason: 'packet', error: String(error?.message ?? error).slice(0, 200) })
+      return { sent: false, reason: 'packet' }
+    }
+    try {
+      frontLeg.write(SKIN_FRAME, packet, { synth: true })
+    } catch (error) {
+      metrics.skinFramesRefused++
+      log('puppetSkinRefused', { reason: 'write_failed', error: String(error?.message ?? error).slice(0, 200) })
+      return { sent: false, reason: 'write_failed' }
+    }
+    skinSent = true
+    metrics.skinFramesWritten++
+    telemetry.metric('monoplayer.skin.frames', 1, { player: attachedName })
+    log('puppetSkinSent', {
+      name: attachedName,
+      reason,
+      signed: typeof puppetSkinProperty.signature === 'string'
+    })
+    emit('puppet_skin', { name: attachedName, signed: typeof puppetSkinProperty.signature === 'string' })
+    return { sent: true }
+  }
+
   // The replay half of an attach: the join prefix and the warm state as they
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
@@ -1392,6 +1481,11 @@ export function createMonoplayer ({
     // #18: the human is now the one playing, so their client information goes
     // to the server with the backend cap this session already learned.
     sendClientSettings(reason === 'attach' ? 'attach' : 'early_attach')
+
+    // #99: and the client now draws the human's own body, so the puppet's skin
+    // goes on it. After the replay, because the frame is client state the replay
+    // does not carry.
+    sendPuppetSkin({ reason })
 
     // #16: a dialog that was waiting for a client goes after the replay, so the
     // client is in play when the screen opens.
@@ -1438,6 +1532,8 @@ export function createMonoplayer ({
     }
     attached = true
     attachedName = name ?? null
+    attachedUuid = uuid ?? null
+    skinSent = false
     frontPlayReady = true
     transferNoticeSent = false
     metrics.attaches++
@@ -1533,6 +1629,8 @@ export function createMonoplayer ({
   function detachedHandoff () {
     attached = false
     attachedName = null
+    attachedUuid = null
+    skinSent = false
     frontPlayReady = false
     earlyAttach = null
     pendingEarlyReplay = null
@@ -1878,6 +1976,26 @@ export function createMonoplayer ({
       // delimiter and relay the enclosed packets individually.
       metrics.bundleDelimitersDropped++
       return
+    }
+
+    if (name === 'player_info') {
+      // #99: the puppet's skin, as the server itself states it. A backend lists
+      // the puppet with its own textures property, and that property is the only
+      // skin the proxy will ever send. A later frame may carry a different skin
+      // (a server-side skin change); the client keeps the entry it holds, so the
+      // frame is recorded and the attach already served is left alone.
+      const property = texturesPropertyOf(data)
+      if (property !== null) {
+        const changed = puppetSkinProperty === null || puppetSkinProperty.value !== property.value
+        puppetSkinProperty = property
+        if (changed) {
+          log('puppetSkinKnown', { signed: typeof property.signature === 'string' })
+        }
+        // A backend that lists the puppet after its play login is the ordinary
+        // case on Paper, so the property often arrives after the attach replay
+        // and this call is what reaches the client that is already in play.
+        if (changed) sendPuppetSkin({ reason: 'property_arrived' })
+      }
     }
 
     if (name === 'login') {
