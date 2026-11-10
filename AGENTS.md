@@ -47,7 +47,7 @@ that leaves the deployment serving.
 **The gate lane sleeps.** Its five Deployments commit `replicas: 0`, so a bare
 `kubectl apply -k deploy/driver` changes nothing and wakes nothing. `mise run gate:up`
 applies the tree, wakes the rows a rung drives (`paper`, `paper-conduct`), and waits
-up to 900 s while saying so: a cold start is 240-310 s, because every gate world is an
+up to 900 s while saying so. A cold start is 90 s, because every gate world is an
 `emptyDir` that died with its pod. `mise run gate:down` puts it back to 0 and waits for
 the pods to go. No rung drives `velocity`, `paper-m4` or `toxiproxy`, so they stay off
 even after `gate:up`. `mise run gate:up -- velocity paper-m4 toxiproxy` wakes all three.
