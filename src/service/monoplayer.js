@@ -1418,8 +1418,7 @@ export function createMonoplayer ({
   //
   // #134: the property is the one the puppet's own entry carries, chosen by the
   // UUID the config resolved for the account. One frame can list the whole tab
-  // list, and on the live lane the first entry with a property was another
-  // player's in 79 of 81 frames.
+  // list, so an entry chosen by position is whoever the backend listed first.
   //
   // The client needs no signature on this property: `PlayerInfo.createSkinLookup`
   // asks for a secure property only for players other than the one it controls,
@@ -1470,7 +1469,7 @@ export function createMonoplayer ({
   // and a replay never finds the client out of play because it sets
   // `frontPlayReady` first.
   function logWithheldSkin (outcome, name) {
-    if (outcome?.sent !== true && outcome?.reason === 'no_identity') {
+    if (outcome.sent === false && outcome.reason === 'no_identity') {
       log('puppetSkinWithheld', { name, reason: outcome.reason })
     }
   }
@@ -2016,9 +2015,8 @@ export function createMonoplayer ({
       // frame is recorded and the replay already served is left alone.
       //
       // #134: the property is the one the puppet's own entry carries, and no
-      // other. One frame can list the whole tab list, so an entry chosen by
-      // position changed several times a second on the live lane and the frame
-      // that reached the human was a stranger's skin.
+      // other. See testdata/skin-verdict.md for what picking by position did on
+      // the live lane.
       const puppetUuid = cfg.puppet.uuid ?? null
       const property = texturesPropertyOf(data, { uuid: puppetUuid })
       // #134: no UUID is no skin, and guessing by position is how a stranger's

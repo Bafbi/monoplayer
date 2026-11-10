@@ -42,8 +42,8 @@ test('a frame with no textures property yields nothing to inject', () => {
 })
 
 // #134: the live lane's tab list arrived through this frame, and the first entry
-// that carried a property was a different player's in 79 of 81 frames. The
-// property the proxy holds is the puppet's, chosen by UUID.
+// that carried a property was usually a different player's (testdata/skin-verdict.md).
+// The property the proxy holds is the puppet's, chosen by UUID.
 test('the property is the one the named UUID carries, not the first one in the frame', () => {
   const frame = {
     action: { _value: 1, add_player: true },
