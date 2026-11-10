@@ -61,9 +61,10 @@ export function pickTextures (properties) {
   return null
 }
 
-// The UUID as a comparison key: case and hyphens are not a difference. Both
-// sides are canonical by construction, one from the resolved account and one from
-// the decoded packet, so this is a comparison and not a validator.
+// The UUID as a comparison key. A UUID reaches the pick from two places, the
+// resolved account and the decoded packet, and case and hyphens are not a
+// difference between them. A validator it is not: a malformed string compares
+// equal only to itself.
 function uuidKey (value) {
   return typeof value === 'string' ? value.replace(/-/g, '').toLowerCase() : null
 }

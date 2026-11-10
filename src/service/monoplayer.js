@@ -194,6 +194,12 @@ export function loadConfig (doc = {}) {
 
 // --- core ---
 
+// The skin refusals a replay reports: a state no later frame repairs, and that
+// no other event names. `no_property` is the ordinary order on Paper, `disabled`
+// is the operator's own choice, and a packet or write failure already logs
+// `puppetSkinRefused` with the error.
+const SKIN_WITHHELD_IS_NEWS = new Set(['not_attached', 'no_identity'])
+
 // Telemetry and journal defaults: inert objects, so a core built without them
 // behaves exactly as before (no timers, no sockets, no files).
 const NOOP_TELEMETRY = Object.freeze({
@@ -1372,7 +1378,6 @@ export function createMonoplayer ({
     attached = true
     attachedName = name ?? null
     attachedUuid = uuid ?? null
-    forgetPuppetSkin()
     frontPlayReady = false
     earlyAttach = { name, uuid }
     transferNoticeSent = false
@@ -1506,11 +1511,9 @@ export function createMonoplayer ({
     // does not carry.
     // #134: the heartbeat counts no refusal for a frame that was never
     // attempted, which is how a played body lost its skin without a trace. Only
-    // the states a later `player_info` cannot repair are news: no property yet
-    // is the ordinary order on Paper, and a switch the operator turned off is
-    // deliberate.
+    // the states no other event names and no later frame repairs are news.
     const skin = sendPuppetSkin({ reason })
-    if (skin.sent !== true && skin.reason !== 'disabled' && skin.reason !== 'no_property') {
+    if (skin.sent !== true && SKIN_WITHHELD_IS_NEWS.has(skin.reason)) {
       log('puppetSkinWithheld', { name, reason: skin.reason })
     }
 
@@ -1560,7 +1563,6 @@ export function createMonoplayer ({
     attached = true
     attachedName = name ?? null
     attachedUuid = uuid ?? null
-    forgetPuppetSkin()
     frontPlayReady = true
     transferNoticeSent = false
     metrics.attaches++
@@ -2029,10 +2031,9 @@ export function createMonoplayer ({
         const changed = puppetSkinProperty === null || puppetSkinProperty.value !== property.value
         puppetSkinProperty = property
         if (changed) {
-          // #134: the value itself, once per distinct property. The ticket had to
-          // guess whether a backend re-signs its property per login or whether
-          // the comparison was comparing the wrong things; the next reader does
-          // not.
+          // #134: the value itself, once per distinct property. The ticket could
+          // not tell whether a backend re-signs its property per login or whether
+          // the comparison was comparing the wrong things. The next reader can.
           log('puppetSkinKnown', {
             uuid: puppetUuid,
             signed: typeof property.signature === 'string',

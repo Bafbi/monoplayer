@@ -134,7 +134,7 @@ there), so a dev-lane measurement goes through the branch workflow's ghcr tag.
 `mise run dev:image` points the deployment at ghcr, and a tag that only Zot holds
 leaves the pod in `ImagePullBackOff`.
 
-## Live disagreed, and the reason is a reconfiguration (#134)
+## Live disagreed: a client's entry map belongs to one play state (#134)
 
 Date: 2026-11-10. Live lane, `monoplayer`: the human attached twice and their
 own body drew a vanilla default both times, while the proxy logged
@@ -224,8 +224,8 @@ data, the decoder `test/core/skin.test.js` uses. The frame count that the 520
 stands on is the one the repo's own tool reports:
 
 ```bash
-kubectl -n monoplayer exec <pod> -- ls /tmp/journal          # the journal to copy
-node tools/journal.mjs names player_info --path /data/journal # 520 s2c frames in the window
+kubectl -n monoplayer exec <pod> -- ls /tmp/journal     # the journal to copy out
+node tools/journal.mjs names player_info --dir s2c --path <copy>  # 520 frames, the count above
 ```
 
 The pick is now the entry whose UUID the config resolved for the puppet, so the
