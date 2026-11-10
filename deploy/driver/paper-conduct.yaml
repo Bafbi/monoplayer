@@ -1,4 +1,4 @@
-# Paper 26.2 b135 with the code-of-conduct gate ON — the observer's backend.
+# Paper 26.2 b135 with the code-of-conduct gate ON. The observer's backend.
 #
 # Why a second Paper. `paper.yaml` is the G0 driver row, and a real client that
 # lands on a code-of-conduct screen never finishes joining, so that lane cannot
@@ -17,10 +17,11 @@
 # The initContainer runs once per pod, and /data is an emptyDir, so the documents
 # survive the container restarts the observer install asks for.
 #
-# Everything else matches paper.yaml: same image, same version and build, online
-# mode, secure profile, a flat world, and no whitelist. The bots that join here
-# answer the gate themselves: minecraft-protocol writes accept_code_of_conduct as
-# soon as the gate arrives, which is the behaviour #21 wraps on the puppet leg.
+# Everything else matches paper.yaml key for key: same image, same version and
+# build, online mode, secure profile, a flat world, no whitelist, and RCON on the
+# same secret. The bots that join here answer the gate themselves:
+# minecraft-protocol writes accept_code_of_conduct as soon as the gate arrives,
+# which is the behaviour #21 wraps on the puppet leg.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -119,6 +120,13 @@ spec:
               value: creative
             - name: MAX_PLAYERS
               value: "4"
+            - name: ENABLE_RCON
+              value: "TRUE"
+            - name: RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gate-b-rcon
+                  key: password
             # The point of this lane. Without it Paper never sends the gate.
             # The image maps a fixed list of env names to server.properties keys
             # and this key is not on it, so it goes through CUSTOM_SERVER_PROPERTIES.
@@ -127,6 +135,8 @@ spec:
           ports:
             - name: minecraft
               containerPort: 25565
+            - name: rcon
+              containerPort: 25575
           resources:
             requests:
               cpu: 250m

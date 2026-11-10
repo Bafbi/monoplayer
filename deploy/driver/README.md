@@ -78,7 +78,7 @@ The Tailscale service should publish a hostname like
 - RCON is exposed only on the ClusterIP Service, never the Tailscale Service.
 - This namespace is not in ArgoCD. It is a test lane.
 
-## Observer lane — Paper 26.2 b135 with the code of conduct on
+## Observer lane: Paper 26.2 b135 with the code of conduct on
 
 `paper-conduct.yaml` is the backend `mise run observer:run` measures (#78). It
 runs the same image, version and build as `paper.yaml`, with
