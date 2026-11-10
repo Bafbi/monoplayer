@@ -284,11 +284,12 @@ first dial and its target warms in five seconds.
   signature state. The fake backend must record both texts from the puppet's
   connection while the core's forwarded-frame count does not move (#19).
 - `O45` in `commands` mode the human's command is spoken by the puppet leg
-  and their chat message is dropped (#97). The rung runs `full` for `O29`, so
-  the check sets the session's chat mode to `commands` for two frames and
-  restores it. The fake backend records the command's text from the puppet's
-  connection and no chat message, `chatSent` moves by one, `chatBlocked` moves
-  by one, and the core's forwarded-frame count does not move.
+  and their chat message is dropped (#97). The main rig runs `full` for `O29`
+  and its client is ended by O29's own acknowledgement, so this check has a rig
+  of its own: a fourth fake backend, its own puppet leg, its own core in
+  `commands`, and a bot that sends no acknowledgement. That backend records the
+  command's text from the puppet's connection and no chat message, `chatSent`
+  is 1, `chatBlocked` is 1, and the core's forwarded-frame count does not move.
 - `O30` a dialog sent while nobody is attached is held (`controlDialogsHeld`
   1) and re-sent to the reattaching client (`controlDialogsResent` 1, one
   `show_dialog` decoded by the second bot, a `controlDialogResent` log line).

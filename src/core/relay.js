@@ -101,20 +101,22 @@ export const CHAT_SPEAK_COMMANDS = new Set([
 // asks about, and the family `full` speaks.
 export const CHAT_SPEAK = new Set([...CHAT_SPEAK_MESSAGES, ...CHAT_SPEAK_COMMANDS])
 
-// Which family each chat mode speaks. A mode absent from this record speaks
+// Which family each chat mode speaks. A mode absent from this map speaks
 // nothing, so a mode this file does not know drops the text rather than
 // speaking it by accident. This answers what a mode speaks, not which modes
-// exist: `CHAT_MODES` decides that.
-const CHAT_SPEAK_BY_MODE = Object.freeze({
-  full: CHAT_SPEAK,
-  commands: CHAT_SPEAK_COMMANDS
-})
+// exist: `CHAT_MODES` in src/service/monoplayer.js decides that. A Map, not an
+// object, so a prototype key such as `constructor` is a missing mode rather
+// than a lookup that throws.
+const CHAT_SPEAK_BY_MODE = new Map([
+  ['full', CHAT_SPEAK],
+  ['commands', CHAT_SPEAK_COMMANDS]
+])
 
-// The one function that turns a chat mode into a speak yes or no, beside
-// `chatRelayAllowed` for the clientbound direction, so the two answers cannot
-// drift apart.
+// The one function that turns a chat mode into a speak yes or no. Its
+// clientbound counterpart is `chatRelayAllowed` in
+// src/core/clientbound-policy.js; this one answers the serverbound direction.
 export function speaks (name, mode) {
-  return CHAT_SPEAK_BY_MODE[mode]?.has(name) === true
+  return CHAT_SPEAK_BY_MODE.get(mode)?.has(name) === true
 }
 
 // The text a chat frame carries, in the form the backend leg sends it: a plain
