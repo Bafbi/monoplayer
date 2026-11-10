@@ -316,6 +316,10 @@ _Avoid_: production, prod, main lane
 The validation lane in namespace `monoplayer-dev`: its own Paper, its own proxy, its own account, and not in Argo CD.
 _Avoid_: staging, sandbox, dev environment
 
+**Gate lane**:
+The five gate workloads — `paper`, `paper-conduct`, `paper-m4`, `velocity`, `toxiproxy` — and their lifecycle. It rests at 0 replicas between runs: `mise run gate:up` wakes the rows a rung drives, and `mise run gate:down` stops all five. The transfer testbed's `paper-hub` and `paper-sky` share the namespace and are not part of it.
+_Avoid_: gate cluster, gate-b environment
+
 **Gate Paper**:
 The disposable Papers in namespace `monoplayer-gate-b` that the observer, the online rung, the driver lane, and the transfer testbed run against.
 _Avoid_: test server, gate-b backend

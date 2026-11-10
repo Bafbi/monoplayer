@@ -40,8 +40,9 @@ may change. The rung decides what it proves.
 | rungs 0-2 | `mise run check` | none: this machine | seconds | nothing outside the working copy |
 | client-parity rung, 2a | `mise run parity:run` | none: this machine, two bots and a fake backend | about 5 seconds | nothing outside the working copy |
 | observer, the server's view | `mise run observer:run` | `paper-conduct` in `monoplayer-gate-b`, the gate-serving sibling of the gate Paper, plus throwaway pods in `monoplayer` that mount the live claim read-only | minutes, and up to 10 minutes when the gate Paper's restart is slow: the container took 240 s to 310 s to come back on the gate Paper, 26.2 build 135, and 40 s from a freshly created pod; paper-conduct has not been timed on its own | installs the plugin into `paper-conduct` and restarts it, and runs two joins from pods in the live namespace. It refuses to measure the live lane itself. A restart that outlasts the start budget is reported as a start that did not finish, and the joins never run. The budget is `MONOPLAYER_OBSERVER_START_TIMEOUT`; `scripts/observer-report.sh` holds its default |
-| online rung, from a pod | `mise run online:cluster` | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart |
+| online rung, from a pod | `mise run online:cluster` (the gate lane must be awake: `mise run gate:up`) | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart |
 | online rung, bare | `mise run online` | this machine's copy of the account chain, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session. `mise run online:cluster` is the form that leaves the deployment serving |
+| the gate lane itself | `mise run gate:up`, `mise run gate:down` | `monoplayer-gate-b`, which is not in Argo CD | `up` waits up to 900 s and says so first; a cold start is 90 s | every gate workload's replica count. It applies the tree and scales; it deletes nothing, so the Secrets and the objects stay. The `emptyDir` worlds go with their pods |
 | driver lane, rung 4 | `mise run driver:scenario` | the gate Paper, on its Tailscale host, and the display host | tens of minutes | the gate Paper's world and a real client. The deployment keeps serving |
 | driver parity, rung 4 | `mise run driver:parity` | the dev lane, through the operator's port-forwards and reverse tunnel, and the display host | minutes | a join and a client launch as the attach account: it moves that account's player in the dev world, and nothing in `monoplayer`. It refuses the live fleet and the live front in front of it |
 | transfer testbed, rung 2b | `mise run testbed:run` | the live custody claim and the gate Paper | about 3 minutes | **the live front goes offline for the run**: it scales `monoplayer/monoplayer` to 0 and disables Argo auto-sync. `mise run testbed:down` restores the deployment, and the sync policy while the run's state file at `/tmp/opencode/monoplayer-testbed.json` survives |
@@ -54,6 +55,14 @@ that chain and needs a restart. An agent never runs `testbed:up` or `testbed:run
 and never passes `--rotate`. `mise run online:cluster` is the form to prefer, and
 the bare rung stays available because `verify:custody` composes it. `AGENTS.md`
 states the rule. `deploy/dev/README.md` is the dev lane runbook.
+
+The gate lane sleeps: its five Deployments commit `replicas: 0`, so an apply wakes
+nothing — and stops whatever was awake, since it reconciles every row to the tree.
+A run that needs `paper` or `paper-conduct` finds an empty namespace until
+`mise run gate:up` runs. `gate:up` wakes the two rows a rung drives and names
+the M4 rows only when told to; `gate:down` puts the lane back and waits for the pods
+to go, because a lane left up costs 6,214 MiB until someone notices. That is what
+`mise run gate:status` is for.
 
 The table covers the runs that leave this machine. `driver:g0` composes rung 4's
 two commands, the `testbed:*` tasks run inside the testbed's lane, and
