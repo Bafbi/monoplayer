@@ -7,7 +7,7 @@
 // report is gitignored, and the `loopback` task writes it. mise runs that task
 // beside `test` inside `mise run check` (mise.toml), so the file is absent on a
 // clean checkout, and reading it while the task runs would race the writer. The
-// ids in the report are the ids of these calls, and the calls are there first.
+// ids in the report are the ids of these calls, which are in the tree before any run.
 //
 // Nothing here opens a socket: both cases read a file.
 import { test } from 'node:test'
