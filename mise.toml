@@ -73,8 +73,8 @@ description = "Verify a driver change: the gate, the Fabric driver build, then t
 depends = ["check", "driver:build", "driver:scenario"]
 
 [tasks."verify:deploy"]
-description = "Verify a deploy change: the gate, then the image build (needs cluster access; it publishes to the Zot registry)."
-depends = ["check", "image:build"]
+description = "Verify a deploy change: the gate, then the image build (needs cluster access; it publishes nothing)."
+depends = ["check", "image:build:no-push"]
 
 [tasks."spike:report"]
 description = "Run the standalone spike scenario and write a report."
@@ -110,6 +110,11 @@ run = "tools/driver/install.sh tools/driver/build/libs/monoplayer-driver-0.1.0.j
 description = "Build and push the Monoplayer image to the cluster Zot registry."
 wait_for = ["check"]
 run = "scripts/build-image.sh"
+
+[tasks."image:build:no-push"]
+description = "Build the Monoplayer image and print its digest, publishing nothing (#33)."
+wait_for = ["check"]
+run = "PUSH=0 scripts/build-image.sh"
 
 [tasks."observer:build"]
 description = "Build the server transparency observer plugin (needs the pinned ProtocolLib)."
