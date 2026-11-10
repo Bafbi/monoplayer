@@ -8,7 +8,7 @@ Three cluster lanes, and two rules that outrank a test.
 |---|---|---|---|
 | live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the puppet account GlowSquidye, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
-| gate Paper | `monoplayer-gate-b` | the Paper that the observer, the online rung, the driver lane, and the transfer testbed run against; `paper-conduct` is its gate-serving sibling, which only the observer measures | anyone; it is disposable |
+| gate Paper | `monoplayer-gate-b` | the Paper that the online rung, the driver lane, and the transfer testbed run against; `paper-conduct` is its gate-serving sibling, which the observer measures | anyone; it is disposable |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
 That covers `kubectl -n monoplayer scale`, `patch`, `delete a workload`,
