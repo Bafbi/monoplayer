@@ -112,9 +112,13 @@ export function caseVerdict ({ caseName, before, after, injected }) {
     reason: null
   }
   if (caseName === 'control') {
+    // The control says what the client shows when this run injects nothing. It
+    // is the baseline for the ticket's question, and with the product switch on
+    // it is also the product's own reading: the proxy wrote the entry, not us.
     row.reason = isDefaultSkinBody(afterBody)
       ? 'no injection: the client draws a vanilla default skin on the body it controls'
-      : 'no injection: the client resolved a skin for the body it controls from somewhere other than a player_info entry'
+      : 'no injection: the client resolved ' + afterBody +
+        ' for the body it controls, so something other than this run gave it an entry (skin.showPuppetSkin is on)'
     row.accepted = !isDefaultSkinBody(afterBody)
     return row
   }

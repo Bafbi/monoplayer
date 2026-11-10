@@ -167,6 +167,15 @@ test('control records what the client shows with no injection, and does not clai
   assert.equal(row.beforeKind, 'default')
 })
 
+test('a control reading that is already a property skin names the product, not the run', () => {
+  // With skin.showPuppetSkin on, the proxy wrote the entry: the control case
+  // records it and must not read as if this runner had injected it.
+  const row = caseVerdict({ caseName: 'control', before: skinPayload(PROPERTY_BODY), after: skinPayload(PROPERTY_BODY), injected: false })
+  assert.equal(row.accepted, true)
+  assert.match(row.reason, /skin.showPuppetSkin is on/)
+  assert.equal(row.afterKind, 'property')
+})
+
 test('a signed property the client resolved is an acceptance', () => {
   const row = caseVerdict({ caseName: 'signed', before: skinPayload(DEFAULT_BODY), after: skinPayload(PROPERTY_BODY), injected: true })
   assert.equal(row.accepted, true)
