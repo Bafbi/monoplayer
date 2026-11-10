@@ -21,6 +21,9 @@ const SCRIPT = path.join(ROOT, 'src', 'testbed', 'switch.js')
 const POLICY = { prune: true, selfHeal: true }
 const APPLICATION = JSON.stringify({ spec: { syncPolicy: { automated: POLICY } } })
 const RECORDED = { automated: JSON.stringify(POLICY), disabledByUs: true }
+// A policy an earlier run recorded. A later `up` that removes a different policy
+// is the one `down` owes back.
+const STALE = { prune: false, selfHeal: false }
 
 // The shim answers every call the script makes, records every argv, and keeps
 // the two facts that move: the Application's policy, which the first `up`
@@ -103,7 +106,9 @@ function run (space, args) {
       KUBECTL_STATE: space.state,
       KUBECTL_APPLICATION: APPLICATION,
       KUBECTL_NODE: process.execPath,
-      MONOPLAYER_TESTBED_STATE: space.record
+      MONOPLAYER_TESTBED_STATE: space.record,
+      // The registry probe is the shim, so the port-forward settle buys nothing.
+      MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS: '0'
     }
   })
   const calls = fs.existsSync(log)
@@ -133,7 +138,7 @@ test('two ups and one down keep the record and put the policy back', () => {
   const second = run(space, ['up'])
   assert.equal(second.status, 0, second.output + '\ncalls: ' + second.calls.join(' | '))
   assert.deepEqual(record(space), RECORDED, 'the second up kept the record the first one wrote')
-  assert.match(second.output, /kept the Argo record the first up wrote/)
+  assert.match(second.output, /kept the Argo record an earlier up wrote/)
   assert.equal(second.calls.some(line => line.includes('--type=json')), false,
     'the second up finds no policy to remove: ' + second.calls.join(' | '))
 
@@ -172,6 +177,19 @@ test('a record with nothing to restore yields to the policy this up removed', ()
   assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
   assert.deepEqual(record(space), RECORDED, 'the record holds the policy this up removed')
   assert.equal(calls.some(line => line.includes('--type=json')), true, 'the policy was there to remove')
+})
+
+test('a later up replaces the policy an earlier run recorded', () => {
+  // `down` puts back what is missing when it runs, not what was missing after
+  // the first `up`. When auto-sync came back with another policy and this `up`
+  // removed that one, the newer record is the one to restore.
+  const space = workspace()
+  fs.writeFileSync(space.record, JSON.stringify({ automated: JSON.stringify(STALE), disabledByUs: true }) + '\n')
+
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.deepEqual(record(space), RECORDED, 'the record holds the policy this up removed')
+  assert.equal(output.includes('kept the Argo record'), false, 'nothing was kept from the earlier run')
 })
 
 test('the record path is an override, and its default is the one the runbook names', () => {
