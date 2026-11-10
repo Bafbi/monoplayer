@@ -177,10 +177,12 @@ frame logs `puppetSkinWithheld` with the reason.
 
 **Does the live client hold an entry for the human's UUID when the frame
 arrives?** No, not on the first attach. No `player_info` frame in the journal's
-12 minutes carries the human's UUID (207 distinct UUIDs, and none is
-`6eb73524-ff88-4a62-a8d0-c63905e7afba`), and there is no `player_info` frame at
-all in the 5 s before 20:43:49. `handlePlayerInfoUpdate` is the only writer of
-that map, with `putIfAbsent`, so the attach's own frame is what created it.
+12 minutes carries the human's UUID. The journal lists 207 distinct UUIDs, and
+none is `6eb73524-ff88-4a62-a8d0-c63905e7afba`. There is no `player_info` frame
+at all in the 5 s before 20:43:49. `handlePlayerInfoUpdate` is the only writer of
+that map, with `putIfAbsent`, so the attach's own frame is what created the entry.
+That reading is proxy-side evidence plus the client's own code. It is not a
+observation of the live client's map.
 
 **What shape is Excalia's textures property?** The same as the dev lane's:
 
@@ -201,25 +203,41 @@ difference between the lanes.
 ### The property was never the puppet's on a busy server
 
 The live backend's `player_info` traffic carries the whole tab list. Over the
-same 12 minutes the journal recorded 520 such frames, 81 of which carried any
-textures property, for **18 different players**. `texturesPropertyOf` took the
-first one, so what the proxy held changed 80 times, and the puppet's own property
-came up **twice**. Consequences, both measured in the same journal:
+12 minutes the journal copy covers it holds 520 such frames, and 81 of those
+carry a textures property. The entries belong to **18 different players**.
+`texturesPropertyOf` took the first one, so what the proxy held changed 80
+times, and the puppet's own property came up **twice**. Two consequences, both
+visible in the same journal:
 
-- at the second attach (20:45:11) the proxy held `Tutoriel`'s property, so the
-  frame put a lobby player's skin on the human's body;
-- `puppetSkinKnown` logged 83 times where two distinct properties existed.
+- at the second attach (20:45:11) the proxy held `Tutoriel`'s property. The
+  frame put a lobby player's skin on the human's body.
+- `puppetSkinKnown` logged 83 times, where two distinct properties existed.
+
+The 83 and the 80 are two windows. The pod's log kept running after the copy of
+the journal was taken, so it holds 83 lines for 80 changes plus the frames that
+arrived afterwards. The ticket's "dozens of times per second for minutes" is not
+what the journal holds either: the changes come in bursts, up to four in one
+millisecond when a tab list lands, and the rest of the 12 minutes is quiet.
+
+The counts come from decoding every `player_info` frame with the vendored 26.2
+data, the decoder `test/core/skin.test.js` uses. The frame count that the 520
+stands on is the one the repo's own tool reports:
+
+```bash
+kubectl -n monoplayer exec <pod> -- ls /tmp/journal          # the journal to copy
+node tools/journal.mjs names player_info --path /data/journal # 520 s2c frames in the window
+```
 
 The pick is now the entry whose UUID the config resolved for the puppet, so the
 log fires once per distinct property and the frame always carries the puppet's
-own skin. A config that names no puppet UUID takes no skin, and says so once with
-`puppetSkinUnidentified`.
+own skin. A config that names no puppet UUID takes no skin, and `start-live`
+warns about it once.
 
 ### What a lane can and cannot prove
 
-- `mise run check` pins the shipped rule: `test/service/skin.test.js` drives a
+- `mise run check` pins the shipped rule. `test/service/skin.test.js` drives a
   followed transfer and a restarted configuration round, and asserts a second
-  frame each time; `test/core/skin.test.js` asserts the pick is by UUID.
+  frame each time. `test/core/skin.test.js` asserts the pick is by UUID.
 - The dev lane has no transfer, which is why the three cases above passed there
   and live failed. A dev-lane run measures the frame's content, not its timing.
 - The live lane needs the human: no run in this repo joins Excalia. After this
