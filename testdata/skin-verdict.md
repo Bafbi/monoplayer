@@ -133,3 +133,65 @@ not reachable from the dev namespace (`zot.deepmine-core.svc` does not resolve
 there), so a dev-lane measurement goes through the branch workflow's ghcr tag.
 `mise run dev:image` points the deployment at ghcr, and a tag that only Zot holds
 leaves the pod in `ImagePullBackOff`.
+
+## Live disagreed, and the reason is a reconfiguration (#134)
+
+Date: 2026-11-10. Live lane, `monoplayer`: the human attached twice and their
+own body drew a vanilla default both times, while the proxy logged
+`puppetSkinSent reason:"attach" signed:true` twice, `skinFramesWritten: 2`,
+`skinFramesRefused: 0`.
+
+The frame was right and the property was the puppet's. Excalia moved the puppet
+37 s into the session, and a followed transfer takes the client through a
+configuration round on its own socket. Coming back to play the client builds a
+**new `ClientPacketListener`** (`ClientConfigurationPacketListenerImpl.handleConfigurationFinished`
+constructs one; `ClientPacketListener.handleConfigurationStart` calls
+`clearClientLevel`), and that listener's `playerInfoMap` starts empty. The entry
+the attach created was gone, and the proxy never wrote another one: the per-attach
+`skinSent` latch read the transfer's replay as a second frame for the same
+client.
+
+The two logs, side by side:
+
+```
+20:43:49.819  puppetSkinSent  {"name":"Bafbi","reason":"attach","signed":true}
+20:43:49.819  attach          replayed 667
+20:44:26.845  backendLogin    {"fromTransfer":true,"backendLogins":2}
+20:44:28.034  attach          {"reason":"transfer","replayed":319}   <- no skin frame
+20:44:28      [client]        Loaded 388 advancements                 <- a second world load
+```
+
+`skinFramesRefused: 0` is not evidence: the latch returns `already_sent`
+without counting a refusal, because no frame was attempted. The replay now clears
+the latch, so a reconfiguration gets the frame again, and a replay that writes no
+frame logs `puppetSkinWithheld` with the reason.
+
+### The property was never the puppet's on a busy server
+
+The live backend's `player_info` traffic carries the whole tab list. Over the
+same 12 minutes the journal recorded 520 such frames, 81 of which carried any
+textures property, for **18 different players**. `texturesPropertyOf` took the
+first one, so what the proxy held changed 80 times, and the puppet's own property
+came up **twice**. Consequences, both measured in the same journal:
+
+- at the second attach (20:45:11) the proxy held `Tutoriel`'s property, so the
+  frame put a lobby player's skin on the human's body;
+- `puppetSkinKnown` logged 83 times where two distinct properties existed.
+
+The pick is now the entry whose UUID the config resolved for the puppet, so the
+log fires once per distinct property and the frame always carries the puppet's
+own skin. A config that names no puppet UUID takes no skin, and says so once with
+`puppetSkinUnidentified`.
+
+### What a lane can and cannot prove
+
+- `mise run check` pins the shipped rule: `test/service/skin.test.js` drives a
+  followed transfer and a restarted configuration round, and asserts a second
+  frame each time; `test/core/skin.test.js` asserts the pick is by UUID.
+- The dev lane has no transfer, which is why the three cases above passed there
+  and live failed. A dev-lane run measures the frame's content, not its timing.
+- The live lane needs the human: no run in this repo joins Excalia. After this
+  lands, the check is one attach that lasts past Excalia's transfer:
+  `skinFramesWritten` should reach 2 for one connection, and the body should keep
+  the puppet's skin through the teleport.
+
