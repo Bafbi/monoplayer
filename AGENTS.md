@@ -71,7 +71,7 @@ Single-context: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`. See `docs/a
 
 `README.md` is the tour, `docs/architecture.html` the design, `GLOSSARY.md` the vocabulary. Use the glossary's terms.
 
-Where to look: a decision lives in `src/core/` (pure), the wiring in `src/service/monoplayer.js`, the real I/O in `src/legs/`. `src/service/monoplayer.js` is 933 lines and its header comment lists the adapter interfaces: read the header, then grep.
+Where to look: a decision lives in `src/core/` (pure), the wiring in `src/service/monoplayer.js`, the real I/O in `src/legs/`. The header comment of `src/service/monoplayer.js` lists the adapter interfaces: read the header, then grep.
 
 | Path | Holds |
 |---|---|
