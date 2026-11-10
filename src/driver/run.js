@@ -15,7 +15,7 @@
 //
 // Secrets: RCON lives inside the pod (rcon-cli), the driver token comes from
 // GATEB_DRIVER_TOKEN, and every report body is scanned with
-// checks.redactSecrets before it is written.
+// observability/secrets.redactSecrets before it is written.
 import { readFileSync } from 'node:fs'
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
@@ -25,7 +25,8 @@ import { createDriverClient, DriverError } from './client-driver.js'
 import { formatParityReport, parseParityEndpoint, runParity } from './parity.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
-import { redactSecrets, verifyG0Evidence, versionRefusal } from './checks.js'
+import { verifyG0Evidence, versionRefusal } from './checks.js'
+import { redactSecrets } from '../observability/secrets.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const TESTDATA = path.join(root, 'testdata')
