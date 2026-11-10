@@ -2,7 +2,7 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 804 tests (`mise run test`), and `mise run check` also runs the
+The socket-free unit suite runs 807 tests (`mise run test`), and `mise run check` also runs the
 42-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
@@ -429,7 +429,8 @@ backendLeg = {                    // = the GlowSquidye puppet session
   writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
   chat(text)                      // speak as the puppet: sign with this connection's keys (#19)
   answerHeldGate({ state, name, data })   // optional: answer a configuration gate the last client
-                                  // detached from (#73) -> { answered, reason, name }
+                                  // detached from (#73)
+                                  // -> { answered, reason, name, responses }
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
 

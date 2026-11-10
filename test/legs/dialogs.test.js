@@ -248,6 +248,15 @@ test('#73 a held button gate is clicked on detach with the configured action', (
   assert.equal(logs[0].event, 'dialogClicked')
 })
 
+test('#73 the detach click counts against the same cap as a live one', () => {
+  // A server that keeps asking is a loop, not a gate: the per-connection cap
+  // must not restart because the last player left.
+  const { outcome, written } = runHeldGate({ responses: 5 })
+
+  assert.deepEqual(outcome, { answered: false, reason: 'too_many', name: 'show_dialog', responses: 5 })
+  assert.equal(written.length, 0)
+})
+
 test('#73 without a policy a held button gate is not clicked on detach', () => {
   const { outcome, written, logs } = runHeldGate({ dialogAction: null })
 

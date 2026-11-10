@@ -16,6 +16,8 @@
 //     write(name, packet)                         // serverbound, packet level
 //     writeRaw(buffer, meta)                      // serverbound, frame level
 //     chat(text): void                            // sign and send as the puppet
+//     answerHeldGate({ state, name, data })        // optional: answer a configuration
+//                                                 // gate its last client left (#73)
 //     end(reason)                                 // deliberate close
 //   }
 //
@@ -1484,8 +1486,8 @@ export function createMonoplayer ({
   // client is not coming back on its connection.
   function answerHeldGateOnDetach ({ reason = 'client_disconnect', answerGate = true } = {}) {
     const held = pendingDialog.peek()
-    if (held === null || held.state !== 'configuration') return { answered: false, reason: 'no_gate_held' }
-    if (answerGate !== true) return { answered: false, reason: 'not_answering' }
+    if (held === null || held.state !== 'configuration') return
+    if (answerGate !== true) return
     if (!backendConfiguring || !backendSessionOpen) {
       log('controlDialogWithheld', {
         name: held.name,
@@ -1494,7 +1496,7 @@ export function createMonoplayer ({
         backendConfiguring,
         backendSessionOpen
       })
-      return { answered: false, reason: 'puppet_state' }
+      return
     }
     const frame = pendingDialog.forAttach(held.state)
     let outcome = { answered: false, reason: 'leg_cannot_answer' }
@@ -1510,14 +1512,14 @@ export function createMonoplayer ({
           detach: reason,
           error: String(error?.message ?? error).slice(0, 200)
         })
-        return { answered: false, reason: 'leg_error' }
+        return
       }
     }
     if (outcome?.answered !== true) {
       // Not answered is a real outcome: a client can attach between the detach
       // and the write, and then the gate is that client's. It stays held.
       log('controlDialogWithheld', { name: held.name, reason: outcome?.reason ?? 'not_answered', detach: reason })
-      return { answered: false, reason: outcome?.reason ?? 'not_answered' }
+      return
     }
     pendingDialog.clear()
     // The write reported the answer through the puppet-answered marker, and
@@ -1526,7 +1528,6 @@ export function createMonoplayer ({
     puppetAnsweredDialog = null
     metrics.controlDialogsAnsweredOnDetach++
     log('controlDialogAnsweredOnDetach', { name: held.name, state: held.state, detach: reason })
-    return { answered: true, name: held.name }
   }
 
   function detachedHandoff () {
