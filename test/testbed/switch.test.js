@@ -5,6 +5,11 @@
 // These cases replace kubectl, and the registry probe the script shells out to,
 // with shims: nothing here reaches a cluster, and the live deployment is never
 // scaled. The assertions are made of the recorded argv.
+//
+// The front Service is what publishes the testbed front, so `down` has to delete it:
+// scaling the deployment to zero leaves that Service with no endpoints and its
+// tailnet device registered (#116). And `up` has to record the digest it ran,
+// because the manifest pulls a moving tag.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,12 +20,20 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = path.join(ROOT, 'src', 'testbed', 'switch.js')
+const IMAGE = 'ghcr.io/bafbi/monoplayer'
+const SHA = 'ab'.repeat(32)
+const IMAGE_ID = IMAGE + '@sha256:' + SHA
+const DIGEST = 'sha256:' + SHA
+const TESTBED_POD = JSON.stringify({
+  items: [{ metadata: { name: 'monoplayer-testbed-6d9f' }, status: { containerStatuses: [{ image: IMAGE + ':main', imageID: IMAGE_ID }] } }]
+})
 
 // The Argo Application's policy in the shape the API serves it. The record has
 // to carry it back as JSON: a map printed by `jsonpath` is not a patch body.
 const POLICY = { prune: true, selfHeal: true }
 const APPLICATION = JSON.stringify({ spec: { syncPolicy: { automated: POLICY } } })
-const RECORDED = { automated: JSON.stringify(POLICY), disabledByUs: true }
+const RECORDED = { automated: JSON.stringify(POLICY), disabledByUs: true, imageID: IMAGE_ID, digest: DIGEST }
+const SERVICE = { status: { loadBalancer: { ingress: [{ hostname: 'monoplayer-testbed.example.invalid' }] } } }
 // A policy an earlier run recorded. A later `up` that removes a different policy
 // is the one `down` owes back.
 const STALE = { prune: false, selfHeal: false }
@@ -38,10 +51,15 @@ const SHIM = [
   // round-trip as JSON.
   '  *" get app "*"-o json"*) if [ -f "$state/policy-removed" ]; then printf \'{"spec":{"syncPolicy":{}}}\\n\'; else printf \'%s\\n\' "$KUBECTL_APPLICATION"; fi; exit 0 ;;',
   '  *" patch app "*) case "$*" in *"--type=json"*) touch "$state/policy-removed" ;; *"--type=merge"*) printf \'%s\\n\' "$last" >> "$state/merge-patches" ;; esac; printf \'app patched\\n\'; exit 0 ;;',
+  '  *" scale deploy/monoplayer-testbed --replicas=1 "*) touch "$state/testbed-up"; echo ok; exit 0 ;;',
+  '  *" scale deploy/monoplayer-testbed --replicas=0 "*) rm -f "$state/testbed-up"; echo ok; exit 0 ;;',
+  '  *" get pods -l app.kubernetes.io/name=monoplayer-testbed "*) if [ -f "$state/testbed-up" ]; then echo "$KUBECTL_TESTBED_PODS"; else echo "$KUBECTL_NO_PODS"; fi; exit 0 ;;',
+  '  *" delete svc "*) echo "$KUBECTL_DELETE_MESSAGE"; exit "$KUBECTL_DELETE_STATUS" ;;',
+  '  *" get pods -l tailscale.com/parent-resource=monoplayer-testbed "*) echo "$KUBECTL_FRONT_PODS"; exit 0 ;;',
   '  *" get pods "*) printf \'{"items":[]}\\n\'; exit 0 ;;',
   '  *" exec "*) printf \'There are 1 of a max of 8 players online: GlowSquidye\\n\'; exit 0 ;;',
   '  *" logs "*) printf \'%s\\n\' \'{"event":"startLive","front":"monoplayer-testbed.example.invalid"}\' \'{"event":"liveReady","backend":"paper-hub"}\'; exit 0 ;;',
-  '  *" get svc "*) printf \'{"status":{"loadBalancer":{"ingress":[{"hostname":"monoplayer-testbed.example.invalid"}]}}}\\n\'; exit 0 ;;',
+  '  *" get svc -l "*) if [ "$KUBECTL_SVC_STATUS" != "0" ]; then echo "forbidden" >&2; exit "$KUBECTL_SVC_STATUS"; fi; echo "$KUBECTL_FRONT_SERVICE_LIST"; exit 0 ;;',
   '  *" get deploy "*) printf \'{"spec":{"replicas":1},"status":{"readyReplicas":1}}\\n\'; exit 0 ;;',
   '  *) printf \'ok\\n\'; exit 0 ;;',
   'esac',
@@ -80,6 +98,7 @@ function workspace () {
     // what keeps a live run's record, the only way its `down` restores Argo,
     // out of this file's reach.
     record: path.join(root, 'testbed-state.json'),
+    digests: path.join(root, 'testbed-digests.jsonl'),
     runs: 0
   }
 }
@@ -94,7 +113,7 @@ function mergePatches (space) {
 // One process per command, the way mise runs it, with the shims first on PATH.
 // The script is spawned through `process.execPath`, so the `node` shim only
 // catches the registry probe.
-function run (space, args) {
+function run (space, args, env = {}) {
   const log = path.join(space.root, `kubectl-${++space.runs}.log`)
   const result = spawnSync(process.execPath, [SCRIPT, ...args], {
     cwd: ROOT,
@@ -107,8 +126,20 @@ function run (space, args) {
       KUBECTL_APPLICATION: APPLICATION,
       KUBECTL_NODE: process.execPath,
       MONOPLAYER_TESTBED_STATE: space.record,
+      MONOPLAYER_TESTBED_DIGESTS: space.digests,
       // The registry probe is the shim, so the port-forward settle buys nothing.
-      MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS: '0'
+      MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS: '0',
+      // The pod the testbed deployment reports while it is scaled up, and the
+      // empty answer it gives once the run scales it back down.
+      KUBECTL_TESTBED_PODS: TESTBED_POD,
+      KUBECTL_NO_PODS: JSON.stringify({ items: [] }),
+      KUBECTL_FRONT_PODS: JSON.stringify({ items: [] }),
+      KUBECTL_FRONT_SERVICE_LIST: JSON.stringify({ items: [SERVICE] }),
+      KUBECTL_SVC_STATUS: '0',
+      // kubectl quotes the object name: service "monoplayer-testbed" deleted.
+      KUBECTL_DELETE_MESSAGE: 'service "monoplayer-testbed" deleted',
+      KUBECTL_DELETE_STATUS: '0',
+      ...env
     }
   })
   const calls = fs.existsSync(log)
@@ -208,4 +239,112 @@ test('the record path is an override, and its default is the one the runbook nam
   const source = fs.readFileSync(SCRIPT, 'utf8')
   assert.match(source, /process\.env\.MONOPLAYER_TESTBED_STATE/, 'the record path is overridable')
   assert.match(source, /'\/tmp\/opencode\/monoplayer-testbed\.json'/, 'the default is /tmp/opencode/monoplayer-testbed.json')
+})
+
+test('down deletes the front Service, after the live restore', () => {
+  const space = workspace()
+
+  const { status, output, calls } = run(space, ['down'])
+  assert.equal(status, 0, output + ' calls: ' + calls.join(' | '))
+  const scaledAt = calls.findIndex(line => line.includes('scale deploy/monoplayer-testbed --replicas=0'))
+  const liveAt = calls.findIndex(line => line.includes('scale deploy/monoplayer --replicas=1'))
+  const deleteAt = calls.findIndex(line => line.includes('delete svc monoplayer-testbed'))
+  assert.ok(scaledAt >= 0, 'the testbed is scaled down: ' + calls.join(' | '))
+  assert.ok(deleteAt > scaledAt, 'the Service goes after the pods, not before')
+  // The delete can spend its whole timeout on the tailscale finalizer, so it
+  // must never sit in front of the live deployment coming back.
+  assert.ok(liveAt >= 0, 'the live deployment is scaled back up: ' + calls.join(' | '))
+  assert.ok(deleteAt > liveAt, 'the Service goes after the live restore, never before')
+  assert.ok(calls[deleteAt].includes('--ignore-not-found'), 'a delete of an absent Service still succeeds')
+
+  // down restores the live deployment and must never be the thing that takes it
+  // down, and it deletes nothing else from the tree.
+  assert.equal(calls.some(line => line.includes('scale deploy/monoplayer --replicas=0')), false, 'down never scales live to zero')
+  assert.equal(calls.some(line => line.includes('delete deploy')), false, 'the manifest tree survives')
+})
+
+test('a failed Service delete still restores the live deployment', () => {
+  const space = workspace()
+
+  const { status, output, calls } = run(space, ['down'], { KUBECTL_DELETE_STATUS: '1' })
+  assert.notEqual(status, 0, 'a front that is still published is a failed command: ' + output)
+  assert.ok(output.includes('delete svc monoplayer/monoplayer-testbed failed'), 'the failure is reported: ' + output)
+  assert.ok(output.includes('the testbed front is still published'), 'the leftover is named: ' + output)
+  assert.ok(calls.some(line => line.includes('scale deploy/monoplayer --replicas=1')), 'live came back anyway')
+})
+
+test('up records the digest it ran, in the output and in the record', () => {
+  const space = workspace()
+
+  const { status, output } = run(space, ['up'])
+  assert.equal(status, 0, output)
+  assert.match(output, /testbed image .*sha256:/, 'the run output has an image record: ' + output)
+  assert.ok(output.includes('"digest":"' + DIGEST + '"'), 'the run output names the digest field: ' + output)
+  const recorded = record(space)
+  assert.equal(recorded.digest, DIGEST, 'the record names the digest')
+  assert.equal(recorded.imageID, IMAGE_ID, 'the record names the image the digest belongs to')
+  // The digest is written after the policy, so the later write has to merge:
+  // down restores the policy from this same record.
+  assert.equal(recorded.automated, JSON.stringify(POLICY), 'recording the image keeps the policy down restores')
+  assert.equal(recorded.disabledByUs, true)
+
+  // down clears the record, so the digest a finished run executed survives in
+  // the digests file: that is what makes two runs comparable after the fact.
+  const logged = JSON.parse(fs.readFileSync(space.digests, 'utf8'))
+  assert.equal(logged.digest, DIGEST, 'the digests file names the digest')
+  assert.equal(logged.imageID, IMAGE_ID)
+  assert.equal(typeof logged.at, 'string', 'each line says when it ran')
+})
+
+test('up still records the digest when Argo had no policy to remove', () => {
+  // disableAutoSync reports nothing to restore when Argo is already off, and
+  // savePolicyRecord then keeps whatever record is on disk (#107). The digest is
+  // not part of that record, so it has to survive the write on its own.
+  const space = workspace()
+
+  const { status, output } = run(space, ['up'], { KUBECTL_APPLICATION: JSON.stringify({ spec: { syncPolicy: {} } }) })
+  assert.equal(status, 0, output)
+  const recorded = record(space)
+  assert.equal(recorded.disabledByUs, false, 'there was no policy to remove')
+  assert.equal(recorded.digest, DIGEST, 'the digest is recorded even with nothing to restore')
+  assert.equal(recorded.imageID, IMAGE_ID)
+})
+
+test('up reads the digest from the pod that is not going away', () => {
+  // A pod from the last run can still be terminating, and it is listed first.
+  // Its image is not the one this run executed.
+  const space = workspace()
+  const previous = {
+    metadata: { name: 'monoplayer-testbed-old', deletionTimestamp: '2026-01-01T00:00:00Z' },
+    status: { containerStatuses: [{ imageID: IMAGE + '@sha256:' + 'cd'.repeat(32) }] }
+  }
+  const current = { metadata: { name: 'monoplayer-testbed-6d9f' }, status: { containerStatuses: [{ imageID: IMAGE_ID }] } }
+
+  const { status, output } = run(space, ['up'], { KUBECTL_TESTBED_PODS: JSON.stringify({ items: [previous, current] }) })
+  assert.equal(status, 0, output)
+  assert.equal(record(space).digest, DIGEST, 'the run recorded the image it executed, not the one still terminating')
+})
+
+test('status reports the front, the tailnet proxy, and the recorded run', () => {
+  // status is how the operator proves the front is gone after down, so its
+  // lines are asserted here rather than in a transcript.
+  const space = workspace()
+  fs.writeFileSync(space.record, JSON.stringify(RECORDED))
+  const proxies = JSON.stringify({ items: [{ metadata: { name: 'ts-monoplayer-testbed-hqb5v-0' } }] })
+
+  const present = run(space, ['status'], { KUBECTL_FRONT_PODS: proxies })
+  assert.equal(present.status, 0, present.output)
+  assert.ok(present.output.includes('front monoplayer/monoplayer-testbed {"hostname":"monoplayer-testbed.example.invalid"}'), present.output)
+  assert.ok(present.output.includes('tailnet devices {"count":1,"names":["ts-monoplayer-testbed-hqb5v-0"]}'), present.output)
+  assert.ok(present.output.includes('"digest":"' + DIGEST + '"'), 'the recorded digest is reported: ' + present.output)
+
+  // A Service that is gone answers with an empty list, which is not the same as
+  // a read that failed. The operator reads this line as proof the front is gone.
+  const gone = run(space, ['status'], { KUBECTL_FRONT_SERVICE_LIST: JSON.stringify({ items: [] }) })
+  assert.equal(gone.status, 0, gone.output)
+  assert.ok(gone.output.includes('front monoplayer/monoplayer-testbed {"missing":true}'), gone.output)
+
+  const unreadable = run(space, ['status'], { KUBECTL_SVC_STATUS: '1' })
+  assert.equal(unreadable.status, 0, unreadable.output)
+  assert.ok(unreadable.output.includes('front monoplayer/monoplayer-testbed {"unreadable":true}'), unreadable.output)
 })

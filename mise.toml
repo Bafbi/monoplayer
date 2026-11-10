@@ -203,7 +203,7 @@ depends = ["install"]
 run = "node src/testbed/switch.js registry"
 
 [tasks."testbed:down"]
-description = "Stop the testbed and restore the live deployment."
+description = "Stop the testbed, restore the live deployment, then delete its front Service."
 depends = ["install"]
 run = "node src/testbed/switch.js down"
 
