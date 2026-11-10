@@ -221,3 +221,19 @@ test('#73 a leg that cannot answer leaves the gate held, and says so', () => {
   const withheld = rig.core.logs().filter(line => line.includes('leg_cannot_answer'))
   assert.equal(withheld.length, 1, 'and the refusal is logged, not silent')
 })
+
+test('#73 a leg that throws leaves the gate held instead of escaping the detach', () => {
+  // detachPlayer runs inside the front leg's socket event, so a throw here
+  // would leave the core half detached rather than refuse.
+  const rig = makeCore()
+  rig.backendLeg.answerHeldGate = () => { throw new Error('socket closed') }
+  attachConfiguring(rig)
+  rig.backendLeg.deliver(gate())
+
+  rig.core.detachPlayer({ reason: 'player_quit' })
+
+  assert.equal(rig.core.attached, false, 'the detach still completes')
+  assert.equal(rig.core.pendingDialog.held, true, 'the gate waits for a client that can answer it')
+  const refused = rig.core.logs().filter(line => line.includes('"reason":"leg_error"'))
+  assert.equal(refused.length, 1, 'and the failure is logged with its reason')
+})

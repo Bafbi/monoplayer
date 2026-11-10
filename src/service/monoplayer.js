@@ -1478,6 +1478,10 @@ export function createMonoplayer ({
   // A play dialog is never the fallback's (#20), and a gate the puppet has left
   // configuration for cannot be answered: the packet id is state-scoped, so it
   // stays held for a client that can answer it.
+  //
+  // A detach a timer caused is still a detach, not a clock: the restore deadline
+  // reaching detachPlayer answers the gate for the same reason, because that
+  // client is not coming back on its connection.
   function answerHeldGateOnDetach ({ reason = 'client_disconnect', answerGate = true } = {}) {
     const held = pendingDialog.peek()
     if (held === null || held.state !== 'configuration') return { answered: false, reason: 'no_gate_held' }
@@ -1493,9 +1497,22 @@ export function createMonoplayer ({
       return { answered: false, reason: 'puppet_state' }
     }
     const frame = pendingDialog.forAttach(held.state)
-    const outcome = typeof backendLeg.answerHeldGate === 'function'
-      ? backendLeg.answerHeldGate({ state: held.state, name: held.name, data: frame?.data ?? null })
-      : { answered: false, reason: 'leg_cannot_answer' }
+    let outcome = { answered: false, reason: 'leg_cannot_answer' }
+    if (typeof backendLeg.answerHeldGate === 'function') {
+      try {
+        outcome = backendLeg.answerHeldGate({ state: held.state, name: held.name, data: frame?.data ?? null })
+      } catch (error) {
+        // This runs inside the front leg's socket event: a throw here would
+        // escape into it, so a failing leg leaves the gate held instead.
+        log('controlDialogWithheld', {
+          name: held.name,
+          reason: 'leg_error',
+          detach: reason,
+          error: String(error?.message ?? error).slice(0, 200)
+        })
+        return { answered: false, reason: 'leg_error' }
+      }
+    }
     if (outcome?.answered !== true) {
       // Not answered is a real outcome: a client can attach between the detach
       // and the write, and then the gate is that client's. It stays held.
