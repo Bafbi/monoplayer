@@ -198,17 +198,16 @@ fetches the log, and compares the two views field by field. The result is
 unexplained. The field table and the expected differences are in
 [testbed-transfer.md](testbed-transfer.md#the-servers-view).
 
-The gate is not among the fields this run measures. The gate Paper runs with
-`enable-code-of-conduct=false`, so the server never sends a code of conduct and
-there is no accept for the observer to witness. The report marks both
-`codeOfConduct` fields absent, and prints that reason because it read it from the
-server. Turning the setting on is not enough: Paper 26.2 refuses to start without
-a `codeofconduct` folder, measured on this lane.
+The gate is measured on the observer's own Paper, `paper-conduct`, which serves
+it. Paper 26.2 refuses to start with `enable-code-of-conduct=true` unless a
+`codeofconduct` folder holds at least one document, so that lane carries one, and
+a real client there would sit at the screen. The G0 driver row therefore keeps the
+gate off, and the observer measures the sibling lane instead.
 
-The human-answer path in this section therefore rests on the loopback rung and
-the fake backend (`O32`), not on a real server's view. A lane that serves the
-gate has to answer the screen for its own real clients. The G0 driver lane cannot
-do that: its client is a human-witnessed run.
+The run reports `codeOfConduct` and `codeOfConductAccepted` as observed on both
+joins: the server sends the gate, and the accept arrives on the account's own
+connection when the puppet leg answers it. That is the server-side witness for the
+claim above, not only the loopback rung's.
 
 ## What the testbed does and does not prove
 

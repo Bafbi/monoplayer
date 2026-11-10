@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - paper.yaml
+  - paper-conduct.yaml
   - velocity.yaml
   - paper-m4.yaml
   - toxiproxy.yaml

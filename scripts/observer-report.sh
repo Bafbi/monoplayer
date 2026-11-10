@@ -29,7 +29,10 @@
 # Environment:
 #   MONOPLAYER_GATE_NAMESPACE        the gate namespace        (default monoplayer-gate-b)
 #   MONOPLAYER_CLUSTER_NAMESPACE     the live namespace        (default monoplayer)
-#   MONOPLAYER_BACKEND_HOST          the Paper host            (default paper.<gate>.svc.cluster.local)
+#   MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT
+#                                    the Paper deployment measured
+#                                                              (default paper-conduct)
+#   MONOPLAYER_BACKEND_HOST          the Paper host            (default paper-conduct.<gate>.svc.cluster.local)
 #   MONOPLAYER_BACKEND_PORT          the Paper port            (default 25565)
 #   MONOPLAYER_OBSERVER_JAR          the built observer jar    (default tools/observer/build/libs)
 #   MONOPLAYER_PROTOCOLLIB_JAR       the ProtocolLib plugin    (default .cache/protocollib)
@@ -46,8 +49,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 GATE_NAMESPACE=${MONOPLAYER_GATE_NAMESPACE:-monoplayer-gate-b}
 LIVE_NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
-PAPER_DEPLOYMENT=${MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT:-paper}
-BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper.$GATE_NAMESPACE.svc.cluster.local}
+# The lane that serves the code of conduct (#78). `paper` is the G0 driver row and
+# a real client there would sit at the gate, so the observer measures its own Paper:
+# same image, version and build, the gate on, and nothing else different.
+PAPER_DEPLOYMENT=${MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT:-paper-conduct}
+BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper-conduct.$GATE_NAMESPACE.svc.cluster.local}
 BACKEND_PORT=${MONOPLAYER_BACKEND_PORT:-25565}
 REPORT=${MONOPLAYER_OBSERVER_REPORT:-.reports/observer-report.json}
 VIEWS=${MONOPLAYER_OBSERVER_VIEWS:-.reports/observer-views.jsonl}
