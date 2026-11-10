@@ -4,45 +4,11 @@
 // pins (#19).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { loadConfig } from '../../src/service/monoplayer.js'
+import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const BUFFER = name => Buffer.from(`backend:${name}`)
-
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) { const t = { fn, fires: now + ms }; timers.push(t); return t },
-    clearTimeout (t) { timers = timers.filter(x => x !== t) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    }
-  }
-}
-
-function makeCore (config = {}) {
-  const backendLeg = createFakeBackendLeg()
-  const frontLeg = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: {
-      ...DEFAULT_CONFIG,
-      puppet: { username: 'GlowSquidye', uuid: null },
-      attachWhitelist: [PLAYER],
-      ...config
-    },
-    backendLeg,
-    frontLeg,
-    clock: fakeClock()
-  })
-  core.start()
-  return { backendLeg, frontLeg, core }
-}
 
 // Configuration prefix plus the play join prefix through the warm marker.
 function warmBackend ({ backendLeg, core }) {
@@ -73,7 +39,7 @@ const systemChat = (text = 'hello') => ({
 })
 
 test('read-only chat relays system_chat live and never caches it', () => {
-  const rig = makeCore({ chat: 'read-only' })
+  const rig = makeCore({ config: { chat: 'read-only' } })
   warmBackend(rig)
   attach(rig)
 
@@ -89,7 +55,7 @@ test('read-only chat relays system_chat live and never caches it', () => {
 })
 
 test('read-only chat relays profileless_chat (unsigned player chat)', () => {
-  const rig = makeCore({ chat: 'read-only' })
+  const rig = makeCore({ config: { chat: 'read-only' } })
   warmBackend(rig)
   attach(rig)
 
@@ -107,7 +73,7 @@ test('read-only chat relays profileless_chat (unsigned player chat)', () => {
 })
 
 test('signed player_chat stays blocked in read-only mode', () => {
-  const rig = makeCore({ chat: 'read-only' })
+  const rig = makeCore({ config: { chat: 'read-only' } })
   warmBackend(rig)
   attach(rig)
 
@@ -125,7 +91,7 @@ test('signed player_chat stays blocked in read-only mode', () => {
 })
 
 test('chat sent while detached is not replayed on the next attach', () => {
-  const rig = makeCore({ chat: 'read-only' })
+  const rig = makeCore({ config: { chat: 'read-only' } })
   warmBackend(rig)
 
   rig.backendLeg.deliver({ state: 'play', ...systemChat('while detached') })
@@ -139,7 +105,7 @@ test('chat sent while detached is not replayed on the next attach', () => {
 })
 
 test('serverbound chat and chat acknowledgements never reach the backend', () => {
-  const rig = makeCore({ chat: 'read-only' })
+  const rig = makeCore({ config: { chat: 'read-only' } })
   warmBackend(rig)
   attach(rig)
 
@@ -154,7 +120,7 @@ test('serverbound chat and chat acknowledgements never reach the backend', () =>
 })
 
 test('chat off drops clientbound chat as before', () => {
-  const rig = makeCore({ chat: 'off' })
+  const rig = makeCore({ config: { chat: 'off' } })
   warmBackend(rig)
   attach(rig)
 

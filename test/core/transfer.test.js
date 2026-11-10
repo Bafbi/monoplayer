@@ -5,26 +5,10 @@ import assert from 'node:assert/strict'
 import { createSession, STATES } from '../../src/core/session.js'
 import { createStateCache } from '../../src/core/state-cache.js'
 import { createTransfer, TRANSFER_KINDS } from '../../src/core/transfer.js'
+import { fakeClock } from '../support/harness.js'
 
 const PLAYER = 'player-uuid'
 const buf = label => Buffer.from(`cache:${label}`)
-
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) { const t = { fn, fires: now + ms }; timers.push(t); return t },
-    clearTimeout (t) { timers = timers.filter(x => x !== t) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    },
-    get pending () { return timers.length }
-  }
-}
 
 // A session with the one client attached and warm on the hub.
 function attachedSession (clock) {
