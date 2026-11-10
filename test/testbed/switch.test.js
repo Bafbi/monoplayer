@@ -6,8 +6,8 @@
 // with shims: nothing here reaches a cluster, and the live deployment is never
 // scaled. The assertions are made of the recorded argv.
 //
-// The Service is the thing that publishes the front, so `down` has to delete it:
-// scaling the deployment to zero leaves the Service with no endpoints and its
+// The front Service is what publishes the front, so `down` has to delete it:
+// scaling the deployment to zero leaves that Service with no endpoints and its
 // tailnet device registered (#116). And `up` has to record the digest it ran,
 // because the manifest pulls a moving tag.
 import { test } from 'node:test'
@@ -96,6 +96,7 @@ function workspace () {
     // what keeps a live run's record, the only way its `down` restores Argo,
     // out of this file's reach.
     record: path.join(root, 'testbed-state.json'),
+    digests: path.join(root, 'testbed-digests.jsonl'),
     runs: 0
   }
 }
@@ -123,6 +124,7 @@ function run (space, args, env = {}) {
       KUBECTL_APPLICATION: APPLICATION,
       KUBECTL_NODE: process.execPath,
       MONOPLAYER_TESTBED_STATE: space.record,
+      MONOPLAYER_TESTBED_DIGESTS: space.digests,
       // The registry probe is the shim, so the port-forward settle buys nothing.
       MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS: '0',
       // The pod the testbed deployment reports while it is scaled up, and the
@@ -277,6 +279,13 @@ test('up records the digest it ran, in the output and in the record', () => {
   // down restores the policy from this same record.
   assert.equal(recorded.automated, JSON.stringify(POLICY), 'recording the image keeps the policy down restores')
   assert.equal(recorded.disabledByUs, true)
+
+  // down clears the record, so the digest a finished run executed survives in
+  // the digests file: that is what makes two runs comparable after the fact.
+  const logged = JSON.parse(fs.readFileSync(space.digests, 'utf8'))
+  assert.equal(logged.digest, DIGEST, 'the digests file names the digest')
+  assert.equal(logged.imageID, IMAGE_ID)
+  assert.equal(typeof logged.at, 'string', 'each line says when it ran')
 })
 
 test('up still records the digest when Argo had no policy to remove', () => {
