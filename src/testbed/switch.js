@@ -44,7 +44,7 @@ const TAILSCALE_NS = 'tailscale'
 // labels it with the Service it came from. That label is how `status` finds the
 // pod, and one pod is one registered tailnet device.
 const TAILNET_PROXY_LABEL = `tailscale.com/parent-resource=${TEST_DEPLOY}`
-// The recovery record: what `up` removed, for `down` to put back. It is the
+// The restore record: what `up` removed, for `down` to put back. It is the
 // only way the Argo policy comes back (AGENTS.md), so a test points it at its
 // own file instead of overwriting a live run's record.
 const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
@@ -161,7 +161,7 @@ function frontService () {
   return list === null ? null : list.items?.[0] ?? false
 }
 
-function frontLine (svc) {
+function frontFields (svc) {
   if (svc === null) return { unreadable: true }
   if (svc === false) return { missing: true }
   return { hostname: frontHostname(svc) ?? '(pending)' }
@@ -333,8 +333,9 @@ async function up () {
   recordDigest(image)
   log('testbed image', { ...image, recorded: DIGESTS_FILE })
 
-  const svc = frontService()
-  log('testbed front', { hostname: svc ? frontHostname(svc) ?? '(pending)' : '(pending)', port: 25565 })
+  // The same fields `status` prints, so a Service that is gone and a read that
+  // failed do not both read as a publisher that is still warming up.
+  log('testbed front', { ...frontFields(frontService()), port: 25565 })
   log(`attach the client to ${FRONT_HOST}:25565, then run: node src/testbed/switch.js transfer`)
 }
 
@@ -395,7 +396,7 @@ async function down () {
   // Any step here can fail: a scale, the ready wait, the policy patch. The front
   // Service has to go either way, or the leak this change closes survives the
   // failure path.
-  let frontRemoved = true
+  let frontRemoved
   let restored = false
   try {
     scale(TEST_NS, TEST_DEPLOY, 0)
@@ -427,12 +428,12 @@ async function status () {
     log(`${ns}/${deploy}`, d ? { replicas: d.spec?.replicas ?? null, ready: d.status?.readyReplicas ?? 0 } : { missing: true })
   }
   log('argo automated', { automated: appAutomated() })
-  log(`front ${TEST_NS}/${TEST_DEPLOY}`, frontLine(frontService()))
+  log(`front ${TEST_NS}/${TEST_DEPLOY}`, frontFields(frontService()))
   const proxies = proxyPods()
   log('tailnet devices', proxies === null
     ? { unreadable: true }
     : { count: proxies.length, names: proxies.map(pod => pod.metadata?.name) })
-  log('run state', readState() ?? { missing: true })
+  log('restore record', readState() ?? { missing: true })
 }
 
 async function run () {

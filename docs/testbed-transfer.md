@@ -81,11 +81,11 @@ These are the steps, and what each one prints.
    [testbed] argo automated {"automated":null}
    [testbed] front monoplayer/monoplayer-testbed {"hostname":"monoplayer-testbed.tail41e568.ts.net"}
    [testbed] tailnet devices {"count":1,"names":["ts-monoplayer-testbed-hqb5v-0"]}
-   [testbed] run state {"automated":"{\"prune\":true,\"selfHeal\":true}","disabledByUs":true,"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…"}
+   [testbed] restore record {"automated":"{\"prune\":true,\"selfHeal\":true}","disabledByUs":true,"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…"}
    ```
 
-   `argo automated` reads null because `up` removed it, and `run state` carries
-   the digest this run recorded.
+   `argo automated` reads null because `up` removed it, and `restore record`
+   carries the digest this run recorded.
 
 3. `mise run testbed:down`. It restores the live deployment and the Argo policy
    first, then deletes the front Service:
@@ -96,14 +96,14 @@ These are the steps, and what each one prints.
    ```
 
 4. `node src/testbed/switch.js status` again. The front Service is gone, the
-   record is spent, and the live deployment is back:
+   restore record is spent, and the live deployment is back:
 
    ```
    [testbed] monoplayer/monoplayer {"replicas":1,"ready":1}
    [testbed] argo automated {"automated":"{\"prune\":true,\"selfHeal\":true}"}
    [testbed] front monoplayer/monoplayer-testbed {"missing":true}
    [testbed] tailnet devices {"count":0,"names":[]}
-   [testbed] run state {"missing":true}
+   [testbed] restore record {"missing":true}
    ```
 
    The testbed and Paper deployment lines come between these and are left out.
