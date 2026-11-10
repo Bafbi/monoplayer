@@ -185,7 +185,8 @@ the last unanswered dialog in `src/core/pending-dialog.js`.
   `core.configuringReady`). The attach call-in runs during login, before the
   protocol library writes Login Success, and a configuration frame written there
   would be read as a login packet.
-- A play dialog is never the puppet's (#20). `decideDialogAutoAnswer` returns
+- A play dialog is never the puppet's (#20). `decideDialogAutoAnswer` in
+  `src/core/dialog-codec.js` returns
   `play_dialog_waits` for every play dialog, attached or not, so the human
   answers it or it waits in the holder. `MONOPLAYER_DIALOG_ACTION` therefore
   covers a configuration-phase gate only, and stands down while a player is
