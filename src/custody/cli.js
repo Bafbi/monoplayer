@@ -45,6 +45,7 @@ import {
 } from './accounts.js'
 import { applyMigration, planMigration } from './migrate.js'
 import { createWhitelistStore, createBackendWhitelist, createNameLookup } from './store.js'
+import { candidateLines } from '../service/cli.js'
 import { createRcon } from '../driver/rcon.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -155,14 +156,6 @@ function emitReport (text) {
   if (leaks.length > 0) {
     process.stderr.write(`warning: ${leaks.length} secret-shaped string(s) were tagged in status output\n`)
   }
-}
-
-function candidateLines (candidates = []) {
-  if (candidates.length === 0) return '  candidates: (none)'
-  return candidates
-    .map(candidate =>
-      `  uuid=${candidate.uuid} name=${candidate.name ?? '?'} alias=${candidate.alias ?? '-'} dir=${candidate.dir}`)
-    .join('\n')
 }
 
 function accountHint () {

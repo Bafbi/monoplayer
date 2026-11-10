@@ -12,6 +12,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { flag } from '../service/cli.js'
+
 // The fields the observer records and the report compares. Order is the report
 // order: identity, then the client's own information, then the connection.
 export const VIEW_FIELDS = Object.freeze([
@@ -184,11 +186,6 @@ export function formatReport (report) {
       ` (${report.absent.length - bare.length} with a reason${bare.length > 0 ? `, ${bare.length} without: ${bare.map(entry => entry.field).join(', ')}` : ''})`
     : `observer: FAIL ${report.unexplained.length} unexplained: ${report.unexplained.map(entry => entry.field).join(', ')}`)
   return lines.join('\n')
-}
-
-const flag = (argv, name) => {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
 }
 
 export function main (argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
