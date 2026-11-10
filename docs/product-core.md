@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 834 tests (`mise run test`), and `mise run check` also runs the
-48-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 842 tests (`mise run test`), and `mise run check` also runs the
+49-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -362,16 +362,21 @@ not want the account speaking in open chat. The speak rule is per frame family
 (`CHAT_SPEAK_COMMANDS` beside `CHAT_SPEAK_MESSAGES` in `core/relay.js`), and
 one function, `speaks(name, mode)`, turns a mode into an answer.
 
-Command feedback arrives as `system_chat`, so the human sees it in `commands`
-mode: Paper writes a command's result through `CraftPlayer.sendMessage`, which
-is `ClientboundSystemChatPacket`, and the 50-minute Excalia session below carried
-zero `player_chat`.
+Command feedback is `system_chat`, and `system_chat` is relayed, so the human
+sees a command's result in `commands` mode. Two pieces of evidence, neither of
+them a run of this mode. Paper answers a command through `sendSuccess` on the
+command source, which calls `sendSystemMessage` and writes
+`ClientboundSystemChatPacket` (`CraftPlayer.sendMessage` in
+`PaperMC/Paper`, `paper-server`, at the 26.1 protocol). And the 50-minute
+Excalia session below carried 220 `system_chat` and zero `player_chat`, though
+nothing in that session recorded which command produced a frame.
 
 That is not true of every reply. A server that answers a command with signed
 player chat reaches the human as `player_chat`, which `commands` does not relay,
 so they will not see it. A whisper to another player is the case to check, and
-no run has settled which frame it takes. This is the cost of the mode, and it is
-why `full` exists.
+no run here has settled which frame it takes: the packet journal skips chat
+frames, and the observer does not watch them. A real client on a repo-deployed
+lane would answer it. This is the cost of the mode, and it is why `full` exists.
 
 `chat: 'full'` speaks the attached client's chat and commands on the backend
 leg as the puppet. The core takes the text out of the frame and calls the
@@ -403,7 +408,8 @@ never replayed.
   still displays and the client marks that sender's chain as broken, which only
   changes the acknowledgements the human's client would have sent. Those are
   dropped, because they describe the human's stream. No run has confirmed the
-  display behaviour yet. #62 is where a real client confirms it.
+  display behaviour yet, and the protocol bot cannot: it decodes frames, never
+  renders them.
   `profileless_chat` is the unsigned player variant and is relayed in every
   mode.
 - Serverbound `chat_session_update`, `chat_ack`, and

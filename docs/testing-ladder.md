@@ -286,7 +286,7 @@ first dial and its target warms in five seconds.
 - `O45` in `commands` mode the human's command is spoken by the puppet leg
   and their chat message is dropped (#97). The main rig runs `full` for `O29`
   and its client is ended by O29's own acknowledgement, so this check has a rig
-  of its own: a fourth fake backend, its own puppet leg, its own core in
+  of its own: its own fake backend, its own puppet leg, its own core in
   `commands`, and a bot that sends no acknowledgement. That backend records the
   command's text from the puppet's connection and no chat message, `chatSent`
   is 1, `chatBlocked` is 1, and the core's forwarded-frame count does not move.
