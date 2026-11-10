@@ -33,7 +33,7 @@ const TESTBED_POD = JSON.stringify({
 const POLICY = { prune: true, selfHeal: true }
 const APPLICATION = JSON.stringify({ spec: { syncPolicy: { automated: POLICY } } })
 const RECORDED = { automated: JSON.stringify(POLICY), disabledByUs: true, imageID: IMAGE_ID, digest: DIGEST }
-const FRONT_SERVICE = JSON.stringify({ status: { loadBalancer: { ingress: [{ hostname: 'monoplayer-testbed.example.invalid' }] } } })
+const SERVICE = { status: { loadBalancer: { ingress: [{ hostname: 'monoplayer-testbed.example.invalid' }] } } }
 // A policy an earlier run recorded. A later `up` that removes a different policy
 // is the one `down` owes back.
 const STALE = { prune: false, selfHeal: false }
@@ -59,7 +59,7 @@ const SHIM = [
   '  *" get pods "*) printf \'{"items":[]}\\n\'; exit 0 ;;',
   '  *" exec "*) printf \'There are 1 of a max of 8 players online: GlowSquidye\\n\'; exit 0 ;;',
   '  *" logs "*) printf \'%s\\n\' \'{"event":"startLive","front":"monoplayer-testbed.example.invalid"}\' \'{"event":"liveReady","backend":"paper-hub"}\'; exit 0 ;;',
-  '  *" get svc "*) if [ "$KUBECTL_SVC_MISSING" = "1" ]; then echo "service not found" >&2; exit 1; fi; echo "$KUBECTL_FRONT_SERVICE"; exit 0 ;;',
+  '  *" get svc -l "*) if [ "$KUBECTL_SVC_STATUS" != "0" ]; then echo "forbidden" >&2; exit "$KUBECTL_SVC_STATUS"; fi; echo "$KUBECTL_FRONT_SERVICE_LIST"; exit 0 ;;',
   '  *" get deploy "*) printf \'{"spec":{"replicas":1},"status":{"readyReplicas":1}}\\n\'; exit 0 ;;',
   '  *) printf \'ok\\n\'; exit 0 ;;',
   'esac',
@@ -134,8 +134,8 @@ function run (space, args, env = {}) {
       KUBECTL_TESTBED_PODS: TESTBED_POD,
       KUBECTL_NO_PODS: JSON.stringify({ items: [] }),
       KUBECTL_FRONT_PODS: JSON.stringify({ items: [] }),
-      KUBECTL_FRONT_SERVICE: FRONT_SERVICE,
-      KUBECTL_SVC_MISSING: '0',
+      KUBECTL_FRONT_SERVICE_LIST: JSON.stringify({ items: [SERVICE] }),
+      KUBECTL_SVC_STATUS: '0',
       KUBECTL_DELETE_STATUS: '0',
       ...env
     }
@@ -277,7 +277,7 @@ test('up records the digest it ran, in the output and in the record', () => {
   const { status, output } = run(space, ['up'])
   assert.equal(status, 0, output)
   assert.match(output, /testbed image .*sha256:/, 'the run output has an image record: ' + output)
-  assert.ok(output.includes(DIGEST), 'the run output names the digest: ' + output)
+  assert.ok(output.includes('"digest":"' + DIGEST + '"'), 'the run output names the digest field: ' + output)
   const recorded = record(space)
   assert.equal(recorded.digest, DIGEST, 'the record names the digest')
   assert.equal(recorded.imageID, IMAGE_ID, 'the record names the image the digest belongs to')
@@ -334,9 +334,15 @@ test('status reports the front, the tailnet proxy, and the recorded run', () => 
   assert.equal(present.status, 0, present.output)
   assert.ok(present.output.includes('front monoplayer/monoplayer-testbed {"hostname":"monoplayer-testbed.example.invalid"}'), present.output)
   assert.ok(present.output.includes('tailnet devices {"count":1,"names":["ts-monoplayer-testbed-hqb5v-0"]}'), present.output)
-  assert.ok(present.output.includes(DIGEST), 'the recorded digest is reported: ' + present.output)
+  assert.ok(present.output.includes('"digest":"' + DIGEST + '"'), 'the recorded digest is reported: ' + present.output)
 
-  const gone = run(space, ['status'], { KUBECTL_SVC_MISSING: '1' })
+  // A Service that is gone answers with an empty list, which is not the same as
+  // a read that failed. The operator reads this line as proof the front is gone.
+  const gone = run(space, ['status'], { KUBECTL_FRONT_SERVICE_LIST: JSON.stringify({ items: [] }) })
   assert.equal(gone.status, 0, gone.output)
   assert.ok(gone.output.includes('front monoplayer/monoplayer-testbed {"missing":true}'), gone.output)
+
+  const unreadable = run(space, ['status'], { KUBECTL_SVC_STATUS: '1' })
+  assert.equal(unreadable.status, 0, unreadable.output)
+  assert.ok(unreadable.output.includes('front monoplayer/monoplayer-testbed {"unreadable":true}'), unreadable.output)
 })
