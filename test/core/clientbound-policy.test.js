@@ -10,12 +10,6 @@ import {
   DECISION,
   clientboundPolicy,
   mayCrossToFront,
-  PLAY_BLOCK,
-  PLAY_LIVE_ONLY,
-  PLAY_PER_LEG,
-  PLAY_CACHE_ONLY,
-  CONFIG_BLOCK,
-  CONFIG_PER_LEG,
   CONTROL_FRAMES,
   NOT_REPLAYABLE
 } from '../../src/core/clientbound-policy.js'
@@ -161,11 +155,22 @@ test('unknown names and unknown states fail closed', () => {
   }
 })
 
-test('the derived replay set covers every blocked, live-only, and per-leg name', () => {
-  for (const name of [...PLAY_BLOCK, ...PLAY_LIVE_ONLY, ...PLAY_PER_LEG, ...CONFIG_BLOCK, ...CONFIG_PER_LEG]) {
-    assert.equal(NOT_REPLAYABLE.has(name), true, name)
-  }
-  for (const name of PLAY_CACHE_ONLY) {
-    assert.equal(NOT_REPLAYABLE.has(name), false, name)
+test('the never-replay set is exactly what the policy refuses to replay', () => {
+  // One side is the vendored protocol, the other is the table. Testing the set
+  // against the same sets it is built from proved nothing: a name deleted from
+  // the spread, or a replayable name added to it, used to pass. Two sources make
+  // either direction of drift fail.
+  //
+  // `pong` is not a clientbound name in 26.1 or 26.2, so this loop drops it.
+  // test/core/join-synth.test.js asserts it through LEG_OWNED, which spreads
+  // this set.
+  for (const state of ['play', 'configuration']) {
+    for (const name of names(state)) {
+      assert.equal(
+        NOT_REPLAYABLE.has(name),
+        clientboundPolicy(state, name).replay === false,
+        `${state}/${name}`
+      )
+    }
   }
 })
