@@ -664,8 +664,6 @@ async function startFakeLane ({ version, username, log = () => {} } = {}) {
       attachWhitelist: whitelist,
       front: { host: '127.0.0.1', port: 0 },
       backend: { host: '127.0.0.1', port: fake.port },
-      // #134: the skin frame names the puppet's own entry, so a rung that can
-      // place a skin names the UUID the fake backend uses for it.
       puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') }
     })
 

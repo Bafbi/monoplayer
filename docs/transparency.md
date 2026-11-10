@@ -22,7 +22,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human answers every play dialog, and the puppet never clicks one | built | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | built | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
-| A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
+| A followed transfer keeps the client connected | built, on by default | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
 | Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
 | The proxy's egress address is accepted as different | **accepted limit** | [#11](https://github.com/Bafbi/monoplayer/issues/11) |
 
@@ -96,7 +96,7 @@ What the proxy says about it, one event per thing that happened:
 | `puppetSkinKnown` | `uuid`, `signed`, `value` | A `player_info` frame carried the puppet's own textures property, and it differs from the one held: once per distinct property, not once per frame |
 | `puppetSkinSent` | `name`, `reason`, `signed` | The frame reached the attaching player. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, or `property_arrived` |
 | `puppetSkinRefused` | `reason`, `error` | The packet could not be built or written: `packet` or `write_failed` |
-| `puppetSkinWithheld` | `name`, `reason` | A replay wrote no frame in a state a later `player_info` cannot repair: `not_attached`, `no_identity`, or `already_sent`. A property that has not arrived yet is not reported, because it normally arrives a moment later and the frame then goes out under `property_arrived` |
+| `puppetSkinWithheld` | `name`, `reason` | A replay wrote no frame in a state no later frame repairs: `not_attached`, or `no_identity` when the front gave no UUID to name. No property yet is not reported, because it normally arrives a moment after the attach and the frame then goes out under `property_arrived`, and a packet or write failure is `puppetSkinRefused` |
 | `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process |
 
 ## Chat and commands
