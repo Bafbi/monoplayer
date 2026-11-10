@@ -1,5 +1,16 @@
 node_modules
 .git
+# Code the container never runs: the CMD runs only src/service/monoplayer.js,
+# and a rung runs from a pod that copies ./src (scripts/online-cluster.sh:196).
+# The fake legs go with the code that imports them: fake-backend.js with the
+# ladder and the spike, fake-legs.js with test/.
+# test/tooling/image-contents.test.js fails the gate if the service reaches one.
+src/ladder
+src/driver
+src/testbed
+src/spike
+src/legs/fake-legs.js
+src/legs/fake-backend.js
 .secrets
 .scratch
 .reports

@@ -12,6 +12,8 @@ COPY scripts ./scripts
 COPY vendor ./vendor
 RUN pnpm install --frozen-lockfile --prod
 
+# Narrowed by .dockerignore: the ladder, the driver, the testbed, the spike,
+# and the fake legs do not ship. The CMD never runs them.
 COPY src ./src
 
 USER node
