@@ -16,10 +16,14 @@
 //     write(name, packet)                         // serverbound, packet level
 //     writeRaw(buffer, meta)                      // serverbound, frame level
 //     chat(text): void                            // sign and send as the puppet
+//     answerHeldGate({ state, name, data })        // optional: answer a configuration
+//                                                 // gate its last client left (#73)
 //     end(reason)                                 // deliberate close
 //   }
 //
-// `chat` is optional: a leg without it drops the human's chat and counts it.
+// `chat` and `answerHeldGate` are optional: a leg without the first drops the
+// human's chat and counts it, and a leg without the second leaves a
+// configuration gate held when its last client detaches (#73).
 // The leg owns the signing, because the signature needs the puppet's profile
 // keys and the puppet connection's own last-seen window, and neither belongs to
 // the core.
@@ -283,6 +287,8 @@ export function createMonoplayer ({
     controlDialogsResent: 0,
     controlDialogsAnswered: 0,
     controlDialogsPuppetAnswered: 0,
+    // #73: a configuration gate answered because its last client detached.
+    controlDialogsAnsweredOnDetach: 0,
     clientSettingsSent: 0,
     clientSettingsRewritten: 0,
     clientSettingsFailed: 0,
@@ -1439,7 +1445,7 @@ export function createMonoplayer ({
     return replaySnapshot({ name, includeConfig, reason: 'attach' })
   }
 
-  function detachPlayer ({ reason = 'client_disconnect' } = {}) {
+  function detachPlayer ({ reason = 'client_disconnect', answerGate = true } = {}) {
     if (!isAttached()) return { detached: false, state: session.state }
     // #22: the client left mid-move. There is nobody left to restore, so the
     // move becomes the ordinary puppet-only transfer and the held snapshot is
@@ -1455,10 +1461,73 @@ export function createMonoplayer ({
       log('reconfigurationAbandoned', { reason })
     }
     detachedHandoff()
+    // #73: nobody is attached now, which is the gate fallback's own condition,
+    // so a configuration gate this client left unanswered is the puppet's. A
+    // play dialog stays held: it is the human's (#20).
+    answerHeldGateOnDetach({ reason, answerGate })
     const result = session.detach({ reason })
     log('detach', { reason, pose: result.pose })
     emit('detach', { reason, pose: result.pose })
     return result
+  }
+
+  // #73: a detach is a state change, not a clock. It makes "no client
+  // attached" true, and that is the condition the gate fallback names (#21), so
+  // the leg answers the gate as the puppet. The leg writes through the same
+  // wrapper a headless session uses, so a client that attached in the meantime
+  // keeps the gate as theirs.
+  //
+  // A play dialog is never the fallback's (#20), and a gate the puppet has left
+  // configuration for cannot be answered: the packet id is state-scoped, so it
+  // stays held for a client that can answer it.
+  //
+  // A detach a timer caused is still a detach, not a clock: the restore deadline
+  // reaching detachPlayer answers the gate for the same reason, because that
+  // client is not coming back on its connection.
+  function answerHeldGateOnDetach ({ reason = 'client_disconnect', answerGate = true } = {}) {
+    const held = pendingDialog.peek()
+    if (held === null || held.state !== 'configuration') return
+    if (answerGate !== true) return
+    if (!backendConfiguring || !backendSessionOpen) {
+      log('controlDialogWithheld', {
+        name: held.name,
+        reason: 'puppet_state',
+        detach: reason,
+        backendConfiguring,
+        backendSessionOpen
+      })
+      return
+    }
+    const frame = pendingDialog.forAttach(held.state)
+    let outcome = { answered: false, reason: 'leg_cannot_answer' }
+    if (typeof backendLeg.answerHeldGate === 'function') {
+      try {
+        outcome = backendLeg.answerHeldGate({ state: held.state, name: held.name, data: frame?.data ?? null })
+      } catch (error) {
+        // This runs inside the front leg's socket event: a throw here would
+        // escape into it, so a failing leg leaves the gate held instead.
+        log('controlDialogWithheld', {
+          name: held.name,
+          reason: 'leg_error',
+          detach: reason,
+          error: String(error?.message ?? error).slice(0, 200)
+        })
+        return
+      }
+    }
+    if (outcome?.answered !== true) {
+      // Not answered is a real outcome: a client can attach between the detach
+      // and the write, and then the gate is that client's. It stays held.
+      log('controlDialogWithheld', { name: held.name, reason: outcome?.reason ?? 'not_answered', detach: reason })
+      return
+    }
+    pendingDialog.clear()
+    // The write reported the answer through the puppet-answered marker, and
+    // that marker belongs to the gate just dropped: no show follows it to spend
+    // it, and a later one is the next client's question.
+    puppetAnsweredDialog = null
+    metrics.controlDialogsAnsweredOnDetach++
+    log('controlDialogAnsweredOnDetach', { name: held.name, state: held.state, detach: reason })
   }
 
   function detachedHandoff () {
@@ -1992,7 +2061,9 @@ export function createMonoplayer ({
   }
 
   async function stop ({ reason = 'stopped' } = {}) {
-    if (isAttached()) detachPlayer({ reason: `stopping:${reason}` })
+    // No gate answer on the way out: the backend socket closes on the next
+    // statement, so the answer would be a frame nobody receives.
+    if (isAttached()) detachPlayer({ reason: `stopping:${reason}`, answerGate: false })
     try { backendLeg.end(reason) } catch {}
     log('stop', { reason })
   }

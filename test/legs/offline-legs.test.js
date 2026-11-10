@@ -381,3 +381,13 @@ test('online attach decision fails closed on a thrown or non-allow core decision
   assert.equal(checkThrew.ok, false)
   assert.equal(checkThrew.reason, 'check_error')
 })
+
+test('#73 a leg with no connection refuses the held gate instead of throwing', () => {
+  // The core asks for this answer from inside a socket event, so an unconnected
+  // leg has to report, not throw.
+  const leg = createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, log: noop })
+  assert.deepEqual(
+    leg.answerHeldGate({ state: 'configuration', name: 'code_of_conduct' }),
+    { answered: false, reason: 'no_connection', name: 'code_of_conduct' }
+  )
+})
