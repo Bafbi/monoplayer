@@ -16,6 +16,7 @@ import { pathToFileURL } from 'node:url'
 
 import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js'
 import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
+import { detail, flag, withTimeout } from '../service/cli.js'
 import { createOfflineBackendLeg } from '../legs/live-backend.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { waitForReady } from '../service/readiness.js'
@@ -28,22 +29,6 @@ import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-par
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
-
-function flag (argv, name) {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
-}
-
-function withTimeout (promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms)
-    timer.unref?.()
-    promise.then(
-      value => { clearTimeout(timer); resolve(value) },
-      error => { clearTimeout(timer); reject(error) }
-    )
-  })
-}
 
 function waitFor (pred, label, ms = 10_000) {
   return new Promise((resolve, reject) => {
@@ -70,12 +55,6 @@ async function freePort () {
   const port = probe.address().port
   await new Promise(resolve => probe.close(resolve))
   return port
-}
-
-function detail (value) {
-  if (value === undefined) return ''
-  const json = JSON.stringify(value, (key, inner) => typeof inner === 'bigint' ? String(inner) : inner)
-  return json === undefined ? String(value) : json
 }
 
 export async function runLoopback (argv = process.argv.slice(2)) {

@@ -39,6 +39,7 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 | `src/observability/secrets.js` | Secret scanner for reports: findings with index and kind, spans rewritten to `[REDACTED]<kind>`. Custody and the driver lane both import it here | pure |
 | `src/legs/fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
 | `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
+| `src/service/cli.js` | CLI plumbing every entry point shares: `flag`, `detail`, `candidateLines`, `withTimeout` | pure; one timer, no sockets |
 
 ### Cache domains and bounds (`state-cache`)
 

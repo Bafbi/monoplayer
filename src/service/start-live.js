@@ -42,6 +42,7 @@
 import fs from 'node:fs'
 
 import { createMonoplayer, loadConfig } from './monoplayer.js'
+import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { resolveAccount } from '../custody/accounts.js'
@@ -53,11 +54,6 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
-
-const flag = (argv, name) => {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
-}
 
 // #134: the skin frame names the puppet's own `player_info` entry, so a lane that
 // cannot name the puppet's UUID writes no frame. The raw cacheDir override
@@ -131,14 +127,6 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   }
   out.reconnect = reconnect
   return out
-}
-
-function candidateLines (candidates = []) {
-  if (candidates.length === 0) return '  candidates: (none)'
-  return candidates
-    .map(candidate =>
-      `  uuid=${candidate.uuid} name=${candidate.name ?? '?'} alias=${candidate.alias ?? '-'} dir=${candidate.dir}`)
-    .join('\n')
 }
 
 function accountHint () {
@@ -647,16 +635,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
 
   await runForever({ core, backend, front, log, sink, telemetry, journal })
   return 0
-}
-
-function withTimeout (promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms)
-    promise.then(
-      value => { clearTimeout(timer); resolve(value) },
-      error => { clearTimeout(timer); reject(error) }
-    )
-  })
 }
 
 async function runForever ({ core, backend, front, log, sink, telemetry, journal }) {
