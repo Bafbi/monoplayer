@@ -39,6 +39,7 @@ test('#22 a value that is neither 1 nor 0 is refused and named', () => {
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /must be 1 or 0/)
 })
+
 // #108: a config document's reconnect budget must survive the overlay. The
 // deployed default stays unlimited, so only an explicit file value, or an
 // explicit env value, may set a bound.
@@ -61,5 +62,8 @@ test('#108 the env var overrides the document, and 0 or unset means unlimited', 
     Infinity
   )
   assert.equal(envOverlay({}, {}).reconnect.attempts, Infinity)
+  // A document's own 0 survives the overlay too. The session reads a
+  // non-positive attempts as unlimited (src/core/session.js:74), which is how
+  // the file's 0 means the same as the env var's 0.
+  assert.equal(envOverlay({ reconnect: { attempts: 0 } }, {}).reconnect.attempts, 0)
 })
-
