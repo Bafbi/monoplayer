@@ -59,6 +59,19 @@ const flag = (argv, name) => {
   return i >= 0 ? argv[i + 1] : undefined
 }
 
+// #134: the skin frame names the puppet's own `player_info` entry, so a lane that
+// cannot name the puppet's UUID writes no frame. The raw cacheDir override
+// resolves no account and reaches this with no UUID unless the operator supplied
+// one.
+export function unidentifiedSkinWarning ({ skin, puppet } = {}) {
+  if (skin?.showPuppetSkin !== true) return null
+  if ((puppet?.uuid ?? null) !== null) return null
+  return 'skin.showPuppetSkin is on and no puppet UUID is known, so no skin frame is written ' +
+    'and the human keeps a default skin. Prefer selecting the account with ' +
+    'MONOPLAYER_PUPPET_ACCOUNT, which resolves the UUID. On the raw cacheDir override there is ' +
+    'no account to check against, and MONOPLAYER_PUPPET_UUID is taken as given.'
+}
+
 export function envOverlay (doc, env = process.env, warn = () => {}) {
   const out = { ...doc }
   const front = { ...doc.front }
@@ -217,15 +230,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // that cannot name the puppet's UUID writes no frame. The raw cacheDir
   // override resolves no account, so it reaches here with no UUID unless the
   // operator asserted one.
-  if (cfg.skin.showPuppetSkin && (cfg.puppet.uuid ?? null) === null) {
-    stderr.write(
-      'monoplayer --start: warning: skin.showPuppetSkin is on and no puppet UUID is known, ' +
-      'so no skin frame is written and the human keeps a default skin. Prefer selecting the ' +
-      'account with MONOPLAYER_PUPPET_ACCOUNT, which resolves the UUID. On the raw cacheDir ' +
-      'override there is no account to check against, and MONOPLAYER_PUPPET_UUID is taken ' +
-      'as given.\n'
-    )
-  }
+  const skinWarning = unidentifiedSkinWarning(cfg)
+  if (skinWarning !== null) stderr.write(`monoplayer --start: warning: ${skinWarning}\n`)
 
   if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
     const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
