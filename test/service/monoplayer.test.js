@@ -4,7 +4,7 @@
 // one backend login across attach/detach, and the redaction sentinel.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG, USAGE } from '../../src/service/monoplayer.js'
+import { createMonoplayer, DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
 import { SENTINEL, redact } from '../../src/observability/redact.js'
 
@@ -261,8 +261,6 @@ test('legal-but-attached: second account is rejected with already_attached (sing
   const rig = makeCore()
   warmBackend(rig)
   attach(rig, PLAYER)
-  // allow-list a second UUID so this is purely the attach-surfaces rule
-  rig.core.identity.includes // (not needed; whitelist untouched)
 
   const second = rig.frontLeg.loginStart({ name: 'Second', uuid: PLAYER })
   assert.equal(second.allowed, true) // whitelisted UUID passes the identity gate
@@ -423,7 +421,6 @@ test('CLI guardrails: default is inert (no sockets), --start needs explicit live
   let out = ''
   const io = { stdout: { write (s) { out += s } }, stderr: { write (s) { out += s } } }
 
-  assert.equal(USAGE.length > 0, true)
   // (main() with no args prints usage)
   const { main } = await import('../../src/service/monoplayer.js')
   const codeHelp = await main([], io)
