@@ -10,7 +10,7 @@ import mc from 'minecraft-protocol'
 
 import {
   ADD_PLAYER_ONLY, TEXTURES_PROPERTY,
-  pickTextures, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
+  carriesTextures, pickTextures, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
 } from '../../src/core/skin.js'
 
 const HUMAN = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
@@ -59,6 +59,14 @@ test('the property is the one the named UUID carries, not the first one in the f
 test('a UUID is compared without its hyphens or case', () => {
   assert.deepEqual(texturesPropertyOf(relayed([PROPERTY]), { uuid: PUPPET.replace(/-/g, '').toUpperCase() }),
     { value: PROPERTY.value, signature: PROPERTY.signature })
+})
+
+test('a frame says whether it carried a skin at all, for any player', () => {
+  assert.equal(carriesTextures(relayed([PROPERTY])), true)
+  assert.equal(carriesTextures(relayed([{ name: TEXTURES_PROPERTY, value: 'v' }])), true)
+  assert.equal(carriesTextures(relayed([{ name: 'other', value: 'v' }])), false)
+  assert.equal(carriesTextures(relayed([])), false)
+  assert.equal(carriesTextures(null), false)
 })
 
 test('no UUID is no property: the frame never stands in for one', () => {
