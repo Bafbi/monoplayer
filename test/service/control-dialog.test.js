@@ -318,3 +318,22 @@ test('#20 a play dialog that arrives before the cache is warm is delivered throu
   assert.equal(rig.frontLeg.frames().at(-1).name, 'show_dialog',
     'and it arrives after the replay, with the client in play')
 })
+
+test('#73 a play dialog held when the last client detaches stays held and unanswered', () => {
+  const rig = warmBackend()
+  attach(rig)
+  rig.backendLeg.deliver({ state: 'play', name: 'show_dialog', buffer: Buffer.from('play-dialog') })
+  assert.equal(relayedNames(rig, 'show_dialog').length, 1)
+
+  rig.core.detachPlayer({ reason: 'player_quit' })
+
+  assert.equal(rig.core.pendingDialog.held, true, 'a play dialog is the human\'s, so a detach does not answer it')
+  assert.deepEqual(rig.backendLeg.heldGateAnswers(), [], 'the puppet answered nothing')
+  assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 0)
+
+  const before = relayedNames(rig, 'show_dialog').length
+  attach(rig, { name: 'Bafbi', uuid: PLAYER })
+  const after = relayedNames(rig, 'show_dialog')
+  assert.equal(after.length, before + 1, 'the reattach gets the dialog again')
+  assert.equal(after.at(-1).buffer.toString(), 'play-dialog')
+})

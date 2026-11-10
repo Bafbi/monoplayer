@@ -157,7 +157,7 @@ A server question that a player answers: `show_dialog` and `clear_dialog` in pla
 _Avoid_: prompt, popup, form, UI
 
 **Pending dialog**:
-The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog` or on the player's answer, and re-sends it when a player attaches in its phase.
+The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog`, on the player's answer, or when the puppet answers a configuration gate the last player left, and re-sends it when a player attaches in its phase.
 _Avoid_: dialog queue, dialog cache
 
 **Play dialog**:
@@ -169,7 +169,7 @@ A control dialog the backend asks in the configuration phase, including the code
 _Avoid_: config dialog, join gate
 
 **Gate fallback**:
-The puppet's own answer to a configuration gate while no player is attached: it accepts the gate and logs `codeOfConductAccepted`. A gate the protocol library answers itself, the code of conduct, always takes this path when no player holds the slot; a gate with buttons is `MONOPLAYER_DIALOG_ACTION`'s. While a player is attached the gate is theirs and there is no timeout, so the fallback never fires under a human.
+The puppet's own answer to a configuration gate while no player is attached: it accepts the gate and logs `codeOfConductAccepted`. A gate the protocol library answers itself, the code of conduct, always takes this path when no player holds the slot; a gate with buttons is `MONOPLAYER_DIALOG_ACTION`'s. While a player is attached the gate is theirs and there is no timeout. The fallback also applies when the last player detaches with the gate still open and the puppet still in configuration, because that is the same condition becoming true.
 _Avoid_: auto-accept, gate timeout
 
 **Per-leg frame**:
