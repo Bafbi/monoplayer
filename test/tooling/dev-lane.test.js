@@ -117,7 +117,9 @@ const SHIM = [
   '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" rollout status "*) exit 0 ;;',
   '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
-  '  *" -n monoplayer-dev get configmap "*) if [ "@@{KUBECTL_CONFIGMAP_MISSING:-0}" = 1 ]; then exit 1; fi; cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
+  // The fixture is the cluster state: no fixture, no ConfigMap. The arm leaves
+  // cat's own status standing, so a missing object fails the way kubectl does.
+  '  *" -n monoplayer-dev get configmap "*) cat "$fixtures/dev-whitelist.json" ;;',
   '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json"; exit 0 ;;',
   '  *" get configmap "*) cat "$fixtures/dev-whitelist.json"; exit 0 ;;',
   // The dev proxy's account, read from its volume, and the dev Paper's player
@@ -189,11 +191,31 @@ test('no dev command changes the live deployment', () => {
   }
 })
 
-test('status survives a namespace that has no ConfigMap', () => {
-  // After `down` the namespace is gone, so the whitelist read fails. Reporting
-  // that is not an error: `mise run dev:down` must exit 0 on a clean lane.
+test('status names an empty whitelist, and claims no state when the read fails', () => {
+  // The two halves are a pair, and each is what keeps the other honest: a shim
+  // that always answered would fail the second, and a shim that always failed
+  // would fail the first. The read failing is the state after `down --purge`,
+  // when the namespace is gone.
+  const present = workspace()
+  const empty = run(present, ['status'])
+  assert.equal(empty.status, 0, empty.output)
+  assert.match(empty.output, /attach whitelist is empty: nobody can attach yet/)
+
+  const gone = workspace()
+  fs.unlinkSync(path.join(gone.fixtures, 'dev-whitelist.json'))
+  const missing = run(gone, ['status'])
+  assert.equal(missing.status, 0, missing.output)
+  assert.match(missing.output, /available replicas: 1/, 'the rest of the report still prints')
+  assert.doesNotMatch(missing.output, /attach whitelist (is empty|has entries)/,
+    'a read that yielded nothing is not a report about the whitelist')
+})
+
+test('down --purge exits 0 when the dev ConfigMap is missing', () => {
+  // Reporting a lane that is already gone is not an error: `mise run dev:down --
+  // --purge` must exit 0 when it has nothing left to report on.
   const space = workspace()
-  const { status, output } = run(space, ['down', '--purge'], { KUBECTL_CONFIGMAP_MISSING: '1' })
+  fs.unlinkSync(path.join(space.fixtures, 'dev-whitelist.json'))
+  const { status, output } = run(space, ['down', '--purge'])
   assert.equal(status, 0, output)
   assert.match(output, /deleted monoplayer-dev/)
 })
