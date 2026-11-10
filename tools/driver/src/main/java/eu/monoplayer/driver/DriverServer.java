@@ -4,8 +4,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.ConnectScreen;
@@ -17,10 +20,17 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
+import net.minecraft.world.entity.player.PlayerSkin;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+
+import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.properties.Property;
+import io.netty.buffer.Unpooled;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -167,6 +177,25 @@ public final class DriverServer {
             }
             case "screenshot":
                 return ok(takeScreenshot());
+            // Research instrumentation (#99): what skin the client resolved for
+            // the player it controls and for every entry it holds, the camera
+            // mode a screenshot would be taken from, and the second-person view
+            // switch itself.
+            case "skin":
+                return ok(mc.submit(this::skinInfo).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            case "perspective": {
+                String mode = request.has("mode") ? request.get("mode").getAsString() : "third_back";
+                return ok(mc.submit(() -> setPerspective(mode)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            }
+            // Delivers one clientbound player_info frame the caller encoded, by
+            // decoding it with the client's own codec and handing it to the
+            // client's own packet listener. The client validates it exactly as
+            // it validates a frame from a server, so what it renders afterwards
+            // is evidence about the client and not about this mod.
+            case "inject_player_info": {
+                String hex = request.has("hex") ? request.get("hex").getAsString() : "";
+                return ok(mc.submit(() -> injectPlayerInfo(hex)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            }
             case "respawn":
                 return ok(mc.submit(() -> {
                     JsonObject result = new JsonObject();
@@ -462,6 +491,156 @@ public final class DriverServer {
         });
         JsonObject out = new JsonObject();
         out.addProperty("path", future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        return out;
+    }
+
+
+    // --- skin and packet injection (#99) ---
+
+    /**
+     * The client's own view of the skin question: which texture the player it
+     * controls renders, which texture every player_info entry resolves to, and
+     * the textures properties those entries carry. A skin the client accepted
+     * reports a skin texture path; one it rejected reports the default
+     * (steve/alex) path, so the two are distinguishable without a screenshot.
+     */
+    private JsonObject skinInfo() {
+        JsonObject out = new JsonObject();
+        ClientPacketListener conn = mc.getConnection();
+        out.addProperty("connected", conn != null);
+        out.addProperty("camera", mc.options.getCameraType().name());
+        if (mc.getUser() != null) {
+            out.addProperty("sessionName", mc.getUser().getName());
+            out.addProperty("sessionUuid", String.valueOf(mc.getUser().getProfileId()));
+        }
+        if (mc.player != null) {
+            JsonObject self = new JsonObject();
+            self.addProperty("uuid", mc.player.getUUID().toString());
+            self.addProperty("name", mc.player.getName().getString());
+            self.add("skin", describeSkin(mc.player.getSkin()));
+            out.add("self", self);
+        }
+        JsonArray players = new JsonArray();
+        if (conn != null) {
+            List<String> listed = new ArrayList<>();
+            for (PlayerInfo info : conn.getListedOnlinePlayers()) {
+                listed.add(info.getProfile().id().toString());
+            }
+            for (PlayerInfo info : conn.getOnlinePlayers()) {
+                GameProfile profile = info.getProfile();
+                JsonObject row = new JsonObject();
+                row.addProperty("uuid", profile.id().toString());
+                row.addProperty("name", profile.name());
+                row.addProperty("listed", listed.contains(profile.id().toString()));
+                row.add("skin", describeSkin(info.getSkin()));
+                row.add("textures", describeTextures(profile));
+                players.add(row);
+            }
+        }
+        out.add("players", players);
+        return out;
+    }
+
+    private static JsonObject describeSkin(PlayerSkin skin) {
+        if (skin == null) {
+            return null;
+        }
+        JsonObject row = new JsonObject();
+        row.addProperty("body", skin.body() == null ? null : skin.body().texturePath().toString());
+        row.addProperty("cape", skin.cape() == null ? null : skin.cape().texturePath().toString());
+        row.addProperty("model", skin.model() == null ? null : skin.model().getSerializedName());
+        row.addProperty("secure", skin.secure());
+        return row;
+    }
+
+    private static JsonArray describeTextures(GameProfile profile) {
+        JsonArray rows = new JsonArray();
+        for (Property property : profile.properties().get("textures")) {
+            JsonObject row = new JsonObject();
+            row.addProperty("name", property.name());
+            row.addProperty("value", property.value());
+            row.addProperty("signature", property.signature());
+            row.addProperty("signed", property.hasSignature());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private JsonObject setPerspective(String mode) {
+        CameraType type = switch (mode) {
+            case "first" -> CameraType.FIRST_PERSON;
+            case "third_front" -> CameraType.THIRD_PERSON_FRONT;
+            default -> CameraType.THIRD_PERSON_BACK;
+        };
+        mc.options.setCameraType(type);
+        JsonObject out = new JsonObject();
+        out.addProperty("camera", mc.options.getCameraType().name());
+        return out;
+    }
+
+    /**
+     * One clientbound player_info frame, as bytes, through the client's decoder
+     * and its player_info handler. The caller builds the bytes with the same
+     * protocol data the proxy uses, so the frame is the frame a server sends.
+     *
+     * An entry is only created when the client holds none for that UUID
+     * (ClientPacketListener.handlePlayerInfoUpdate uses putIfAbsent), so an
+     * injection for a player the client already knows changes nothing. The
+     * response reports that case rather than pretending the frame did
+     * something.
+     */
+    private JsonObject injectPlayerInfo(String hex) {
+        requireWorld();
+        ClientPacketListener conn = mc.getConnection();
+        if (conn == null) {
+            throw new IllegalStateException("not connected");
+        }
+        byte[] bytes = hexToBytes(hex);
+        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(
+            Unpooled.wrappedBuffer(bytes), mc.level.registryAccess());
+        ClientboundPlayerInfoUpdatePacket packet = ClientboundPlayerInfoUpdatePacket.STREAM_CODEC.decode(buf);
+        if (buf.readableBytes() != 0) {
+            throw new IllegalStateException("frame has " + buf.readableBytes() + " trailing bytes");
+        }
+        JsonObject out = new JsonObject();
+        JsonArray actions = new JsonArray();
+        for (ClientboundPlayerInfoUpdatePacket.Action action : packet.actions()) {
+            actions.add(action.name());
+        }
+        out.add("actions", actions);
+        JsonArray entries = new JsonArray();
+        for (ClientboundPlayerInfoUpdatePacket.Entry entry : packet.entries()) {
+            JsonObject row = new JsonObject();
+            row.addProperty("uuid", entry.profileId().toString());
+            row.addProperty("name", entry.profile() == null ? null : entry.profile().name());
+            row.addProperty("listed", entry.listed());
+            row.addProperty("entryExistedBefore", conn.getPlayerInfo(entry.profileId()) != null);
+            if (entry.profile() != null) {
+                row.add("textures", describeTextures(entry.profile()));
+            }
+            entries.add(row);
+        }
+        out.add("entries", entries);
+        out.addProperty("bytes", bytes.length);
+        packet.handle(conn);
+        out.addProperty("delivered", true);
+        return out;
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        String clean = hex == null ? "" : hex.trim();
+        if (clean.isEmpty() || clean.length() % 2 != 0) {
+            throw new IllegalArgumentException("hex must be an even-length string, got " + clean.length() + " chars");
+        }
+        byte[] out = new byte[clean.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int high = Character.digit(clean.charAt(i * 2), 16);
+            int low = Character.digit(clean.charAt(i * 2 + 1), 16);
+            if (high < 0 || low < 0) {
+                throw new IllegalArgumentException("hex has a non-hex digit at index " + (i * 2));
+            }
+            out[i] = (byte) ((high << 4) | low);
+        }
         return out;
     }
 
