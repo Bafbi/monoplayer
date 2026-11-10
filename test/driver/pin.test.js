@@ -11,14 +11,15 @@
 //
 // The rung 4 target is the gate-B Paper, which is a separate deployment, so it
 // has its own manifest to agree with. Every Paper manifest under deploy/ that
-// pins a version is classified below, and each one either serves the gate
-// Paper's pin or says why it does not (#117).
+// pins a build is classified below, and each one either serves the gate Paper's
+// pin or names the pin it serves (#117).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { getBackend } from '../../src/driver/backends.js'
 import { DEFAULT_PINS } from '../../src/driver/scenario.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -36,61 +37,69 @@ const envValue = (file, name) => {
   return match[1].trim()
 }
 
-// The gate Paper is the reference for every other Paper manifest: the dev lane,
-// the observer lane, and both testbed servers are parity targets, so they serve
-// what it serves. `paper-m4` is the one exception, and it is pinned here rather
-// than compared to the gate.
+// The gate Paper leads: the dev lane and the transfer testbed are what the driver
+// and the client are measured against, so they run what it runs (#117).
+// `paper-conduct` is the gate lane's sibling (#78) and the observer test below
+// holds it to the gate Paper, so it is classified here and compared there.
 const GATE_PAPER = 'deploy/driver/paper.yaml'
-const M4_PAPER = 'deploy/driver/paper-m4.yaml'
-const M4_PINS = { VERSION: '26.1.2', PAPER_BUILD: '74' }
-
-const PARITY_PAPERS = [
+const GATE_SIBLING = 'deploy/driver/paper-conduct.yaml'
+const FOLLOWERS = [
   'deploy/dev/paper.yaml',
-  'deploy/driver/paper-conduct.yaml',
   'deploy/testbed/paper-hub.yaml',
   'deploy/testbed/paper-sky.yaml'
 ]
 
-// Every .yaml under deploy/, at any depth, that sets a Paper version through the
-// image's VERSION or PAPER_BUILD env pair. The name is anchored, so
-// MONOPLAYER_VERSION in the proxy manifests does not match.
-const pinnedPapers = () => {
+// `paper-m4` is not a gate Paper: it is the M4 backend row behind Velocity, and
+// its own row in src/driver/backends.js is the pin it serves.
+const M4_PAPER = 'deploy/driver/paper-m4.yaml'
+const M4_PINS = {
+  VERSION: getBackend('paper-m4').pins.version,
+  PAPER_BUILD: String(getBackend('paper-m4').pins.paperBuild)
+}
+
+// Every .yaml under deploy/, at any depth, that pins a Paper build. PAPER_BUILD is
+// Paper's own env name, so the walk asks for it rather than guessing at the
+// image, and MONOPLAYER_VERSION or VELOCITY_VERSION cannot drag a file in.
+const papersPinningABuild = () => {
   const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) return walk(full)
     if (!entry.name.endsWith('.yaml')) return []
+    const file = path.relative(root, full).split(path.sep).join('/')
     const text = readFileSync(full, 'utf8')
-    return /- name: (?:VERSION|PAPER_BUILD)$/m.test(text)
-      ? [path.relative(root, full).split(path.sep).join('/')]
-      : []
+    if (!/- name: PAPER_BUILD$/m.test(text)) return []
+    // One pin per name: a second container's pair must not slip past unread.
+    assert.equal(text.match(/- name: VERSION$/gm)?.length, 1, file + ' sets VERSION once')
+    return [file]
   })
   return walk(path.join(root, 'deploy')).sort()
 }
 
-test('every Paper manifest that pins a version is classified in this file', () => {
+test('every Paper manifest that pins a build is classified in this file', () => {
   // Without this the guard is only as complete as someone's memory of the deploy
   // tree, which is how paper-sky went unchecked until #117: a version move that
   // missed the transfer target passed the gate.
-  assert.deepEqual(pinnedPapers(), [GATE_PAPER, M4_PAPER, ...PARITY_PAPERS].sort(),
-    'classify a new Paper manifest here: it either serves the gate pin or declares its own')
+  assert.deepEqual(papersPinningABuild(), [GATE_PAPER, GATE_SIBLING, ...FOLLOWERS, M4_PAPER].sort(),
+    'classify a new Paper manifest here: it serves the gate pin, or it names the pin it serves')
 })
 
-test('every Paper parity lane serves the gate Paper\'s version and build', () => {
-  // Changing one manifest alone fails here, and so does changing the gate alone.
-  for (const file of PARITY_PAPERS) {
+test('the dev lane and the transfer testbed run the gate Paper\'s version and build', () => {
+  // Editing one manifest alone fails here, and so does editing the gate alone.
+  for (const file of FOLLOWERS) {
     for (const name of ['VERSION', 'PAPER_BUILD']) {
       assert.equal(envValue(file, name), envValue(GATE_PAPER, name),
-        file + ' must pin the same ' + name + ' as the gate Paper')
+        file + ' must serve the same ' + name + ' as the gate Paper')
     }
   }
 })
 
-test('the M4 backend row keeps its older Paper pin', () => {
-  // Not drift: paper-m4 is the M4 row behind Velocity (src/driver/backends.js),
-  // and 26.1.2 build 74 is the compatibility target it was measured on. Moving it
-  // is a decision, so the manifest and this table move together.
+test('the M4 backend row runs the Paper pin its row declares', () => {
+  // Deliberately older, and not drift: paper-m4 is the M4 row behind Velocity,
+  // measured on its own build. The manifest and src/driver/backends.js move
+  // together, and either one alone fails here.
   for (const [name, value] of Object.entries(M4_PINS)) {
-    assert.equal(envValue(M4_PAPER, name), value, M4_PAPER + ' pins ' + name + ' ' + value)
+    assert.equal(envValue(M4_PAPER, name), value,
+      M4_PAPER + ' must serve the ' + name + ' src/driver/backends.js declares for paper-m4')
   }
 })
 
@@ -106,16 +115,11 @@ test('the driver pin follows the deployed proxy', () => {
     'tools/driver/build.gradle must target the version the deployed proxy serves')
 })
 
-test('the dev lane and the transfer testbed serve the same version the driver builds for', () => {
-  // Both are parity targets, so a lane a version behind would be unmeasurable.
-  const targets = [
-    ['deploy/dev/monoplayer.yaml', 'MONOPLAYER_VERSION'],
-    ['deploy/dev/paper.yaml', 'VERSION'],
-    ['deploy/testbed/paper-hub.yaml', 'VERSION']
-  ]
-  for (const [file, name] of targets) {
-    assert.equal(envValue(file, name), buildPin(), file + ' serves the version the driver builds for')
-  }
+test('the dev lane serves the version the driver builds for', () => {
+  // The dev lane is where a branch image is measured, so a lane a version behind
+  // would be unmeasurable. Its Paper's version is the test above.
+  assert.equal(envValue('deploy/dev/monoplayer.yaml', 'MONOPLAYER_VERSION'), buildPin(),
+    'deploy/dev/monoplayer.yaml serves the version the driver builds for')
 })
 
 test('the installer reads the version from the base instance instead of naming one', () => {
