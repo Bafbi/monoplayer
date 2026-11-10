@@ -35,7 +35,7 @@ that leaves the deployment serving.
 | The test needs | Run |
 |---|---|
 | the gate, offline, seconds | `mise run check` |
-| a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join` |
+| a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join`. The tag must come from the branch workflow's GHCR build: `mise run image:build` publishes to Zot, whose host the dev namespace cannot resolve. |
 | the online rung, with the deployment still serving | `mise run gate:up`, then `mise run online:cluster` |
 | a clientbound comparison, direct against proxied | `mise run parity:run` |
 | the server's view of a join | `mise run gate:up`, then `mise run observer:run`, then `mise run gate:down` |
@@ -79,7 +79,7 @@ Single-context: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`. See `docs/a
 
 ## Repo map
 
-`README.md` is the tour, `docs/architecture.html` the design, `GLOSSARY.md` the vocabulary. Use the glossary's terms.
+`README.md` is the tour, `docs/product-core.md` the shipped design, `GLOSSARY.md` the vocabulary. Use the glossary's terms. `docs/architecture.md` is a proposal, not the built design.
 
 Where to look: a decision lives in `src/core/` (pure), the wiring in `src/service/monoplayer.js`, the real I/O in `src/legs/`. The header comment of `src/service/monoplayer.js` lists the adapter interfaces: read the header, then grep.
 
@@ -100,11 +100,19 @@ Where to look: a decision lives in `src/core/` (pure), the wiring in `src/servic
 Facts an agent cannot look up:
 
 - **The gate**: before you report a change done, run `mise run check`. It runs lint, the unit tests, and the offline loopback, and it writes `.reports/loopback-report.json`. Quote that path and its assertion count.
+- **A loopback assertion is numbered above the current highest, and its bullet lands in `docs/testing-ladder.md` in the same commit.** `test/ladder/loopback-contract.test.js` compares the two lists and fails otherwise. An undocumented assertion that reaches `main` breaks the image build, not just the gate.
+- **The effective config**: `node src/service/monoplayer.js --print-config` prints the resolved document and exits. Do not reconstruct it from manifests by hand.
+- **The config surface is one function.** Every `MONOPLAYER_*` variable is enumerated in `envOverlay` in `src/service/start-live.js`, and nothing else reads `process.env`. A name that appears in a guard message but not in that function looks wired and is not.
+- **The switches are config, not flags.** They are read once at startup and validated by `loadConfig`, which throws on a bad value rather than starting misconfigured. A feature-flag system was considered and declined: one service, one language, eight keys, and a compiled default for each. Do not propose one again without saying what changed.
 - **The install**: a fresh checkout has no `node_modules`. `mise run check` depends on `install`, so let it install; do not check first.
 - **Task list**: run `mise tasks ls --local` to see what this repo defines; `mise.toml` holds the definitions. Run the task, never the command behind it. Each `verify:<area>` task names the extra rung an area needs; `docs/testing-ladder.md` says which area maps to which.
 - **Dependency paths**: pnpm keeps packages in `node_modules/.pnpm`. `node_modules/<name>` is a symlink and exists for direct dependencies only, so do not type a `node_modules/...` path. Ask the resolver instead: `node -p "require.resolve('minecraft-data')"`.
 - **Throwaway scripts and artifacts**: put them in `.scratch/` and run them from the repo root. It is gitignored and may not exist yet, so create it. A script in `/tmp` cannot import the repo's dependencies.
-- **Reports**: a task run writes to `.reports/`, which is gitignored. `testdata/` holds the committed rung reports, such as `testdata/spike-report.json`.
+- **Reports**: a task run writes to `.reports/`, which is gitignored. `testdata/` holds the committed *verdict pages*, such as `testdata/spike-verdict.md`; the run reports they quote are gitignored. A verdict page is dated evidence, so leave its old numbers alone.
+- **Contention**: `src/service/monoplayer.js`, `src/ladder/loopback.js`, `docs/testing-ladder.md`, `GLOSSARY.md`, `deploy/manifests/deployment.yaml` and `mise.toml` are the files parallel agents collide in. Keep the diff small there and expect a rebase.
+- **A failed review is not a review.** If a review or council delegate fails, say so in the PR. Do not describe the work as reviewed.
+- **Merging to `main` is a deploy.** `image.yaml` re-runs `check` on the merged commit, then rewrites the `deploy` branch as `main` plus one digest commit, which Argo syncs. A red `check` there freezes the lane on the last good image. `deploy` is bot-owned: never commit to it, the workflow force-pushes over you.
+- **The custody volume is not disposable.** `deploy/manifests/pvc.yaml` carries `Delete=false, Prune=false` because it holds the account chain. Do not strip that, and do not prune it.
 - **The shell starts at the repo root**: run the command bare, never `cd <repo> && <command>`.
 - **Exit status**: run the interesting command bare. A trailing `| tail -N` or a follow-on `; ...` replaces the exit status with its own. If you must pipe, use `set -o pipefail`.
 - **Further reading**: `docs/testing-ladder.md` (rungs and cost), `docs/deployment.md`, `docs/telemetry.md`, `docs/product-core.md`, `docs/custody.md`.
