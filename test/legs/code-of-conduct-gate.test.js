@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { withCodeOfConductGate, withTransferIntent } from '../../src/legs/live-backend.js'
+import { answerHeldGate, withCodeOfConductGate, withTransferIntent } from '../../src/legs/live-backend.js'
 
 function rig ({ attached = false, writeThrows = false } = {}) {
   const writes = []
@@ -104,4 +104,91 @@ test('#21 the gate wrapper composes with the transfer-intent wrapper', () => {
 test('#21 the wrapper rejects a caller that cannot answer', () => {
   assert.throws(() => withCodeOfConductGate(null), TypeError)
   assert.throws(() => withCodeOfConductGate(() => {}, { isHumanAttached: 'yes' }), TypeError)
+})
+
+// #73: the detach answer, at the same seam.
+//
+// A detach is "no player attached" becoming true, so a configuration gate the
+// last player left unanswered is the gate fallback's case. The core holds the
+// frame and asks the leg for that answer. The leg writes it through the same
+// wrapper, so who answers a code-of-conduct gate is still decided in one place.
+function detachedRig ({ connectionState = 'configuration', attached = false } = {}) {
+  const writes = []
+  const rawWrites = []
+  const logs = []
+  const markers = []
+  let human = attached
+  const record = (event, fields = {}) => logs.push({ event, fields })
+  const write = withCodeOfConductGate(
+    (name, params) => { writes.push({ name, params }); return true },
+    { isHumanAttached: () => human, log: record, onDialogAnswered: marker => markers.push(marker) }
+  )
+  return {
+    answer (request = {}) {
+      return answerHeldGate({
+        connectionState,
+        write,
+        writeRaw: body => rawWrites.push(body),
+        onAnswered: marker => markers.push(marker),
+        log: record,
+        ...request
+      })
+    },
+    writes,
+    rawWrites,
+    logs,
+    markers,
+    attach: () => { human = true }
+  }
+}
+
+test('#73 a held code-of-conduct gate is answered with the accept the wrapper swallowed', () => {
+  const r = detachedRig()
+  assert.deepEqual(
+    r.answer({ state: 'configuration', name: 'code_of_conduct' }),
+    { answered: true, reason: null, name: 'code_of_conduct', responses: 0 }
+  )
+  assert.deepEqual(r.writes, [{ name: 'accept_code_of_conduct', params: {} }],
+    'the accept the wrapper swallowed goes out as the puppet')
+  assert.deepEqual(r.logs, [{ event: 'codeOfConductAccepted', fields: { reason: 'no_client' } }])
+  assert.deepEqual(r.markers, [{ state: 'configuration', name: 'code_of_conduct' }])
+})
+
+test('#73 a client that reattaches before the answer keeps the gate', () => {
+  const r = detachedRig({ attached: true })
+  assert.deepEqual(
+    r.answer({ state: 'configuration', name: 'code_of_conduct' }),
+    { answered: false, reason: 'not_written', name: 'code_of_conduct', responses: 0 }
+  )
+  assert.deepEqual(r.writes, [], 'the answer is not taken from the client that just arrived')
+  assert.deepEqual(r.logs, [{ event: 'codeOfConductHeld', fields: { reason: 'human_attached' } }])
+  assert.deepEqual(r.markers, [])
+})
+
+test('#73 a play dialog is never answered by the puppet', () => {
+  const r = detachedRig()
+  assert.deepEqual(
+    r.answer({ state: 'play', name: 'show_dialog' }),
+    { answered: false, reason: 'not_a_gate', name: 'show_dialog', responses: 0 }
+  )
+  assert.deepEqual(r.writes, [])
+  assert.deepEqual(r.logs, [], 'nothing is written and nothing is logged')
+})
+
+test('#73 a gate is not answered on a connection that left configuration', () => {
+  const r = detachedRig({ connectionState: 'play' })
+  assert.deepEqual(
+    r.answer({ state: 'configuration', name: 'code_of_conduct' }),
+    { answered: false, reason: 'not_configuring', name: 'code_of_conduct', responses: 0 }
+  )
+  assert.deepEqual(r.writes, [], 'a configuration frame in a play connection is a different packet id')
+})
+
+test('#73 a held gate with no connection to answer on reports that it could not', () => {
+  const r = detachedRig()
+  assert.deepEqual(
+    answerHeldGate({ state: 'configuration', name: 'code_of_conduct', connectionState: 'configuration' }),
+    { answered: false, reason: 'no_connection', name: 'code_of_conduct', responses: 0 }
+  )
+  assert.deepEqual(r.writes, [])
 })
