@@ -123,8 +123,10 @@ live lane once this ships.
 
 ## The dev lane afterwards
 
-The dev deployment runs `ghcr.io/bafbi/monoplayer:sha-f648676`, this branch's
-image. Restore it with `mise run dev:image main`, or `mise run dev:down`.
+The run used `ghcr.io/bafbi/monoplayer:sha-f648676`, this branch's image before
+it was rebased onto `main`. The lane runs `ghcr.io/bafbi/monoplayer:main` again,
+because a stale branch image is the next agent's confusion: `mise run dev:image
+main` is the way back, and `mise run dev:down` stops the lane.
 
 One note for the next run: the Zot image `scripts/build-image.sh` publishes is
 not reachable from the dev namespace (`zot.deepmine-core.svc` does not resolve
