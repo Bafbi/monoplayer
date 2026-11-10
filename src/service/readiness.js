@@ -14,6 +14,20 @@ export function cacheStatsLine (stats, elapsedMs) {
 // after maxWarmMs the prefix is declared settled at its current edge, because
 // some backends never batch and a growing prefix would eventually evict the
 // login frame. The caller owns the forceWarm fallback.
+//
+// #87: a followed transfer releases a client on this decision, and a cache with
+// no chunk data cannot back one: the human would land in an empty world and
+// fall. `shouldForceWarm` refuses the fallback there, so the caller's failure
+// path (retry, then revert to the configured backend) owns the move instead.
+// The startup call passes `requireChunks: false`: it releases nobody, and
+// refusing it would leave a lane whose backend streams no chunks unattachable.
+export function shouldForceWarm (readiness, { requireChunks = true } = {}) {
+  if (readiness?.hasConfig !== true || readiness?.hasPrefix !== true) return false
+  if (readiness.warm === true) return false
+  if (!requireChunks) return true
+  return Number(readiness.chunkFrames) > 0
+}
+
 export async function waitForReady ({ core, log, maxWarmMs = 60_000, maxTotalMs = 240_000 }) {
   const startedAt = Date.now()
   let warmMs = null
@@ -36,7 +50,8 @@ export async function waitForReady ({ core, log, maxWarmMs = 60_000, maxTotalMs 
         warmMs,
         elapsedMs: elapsed,
         configFrames: stats.sizes.config,
-        prefixFrames: stats.sizes.prefix
+        prefixFrames: stats.sizes.prefix,
+        chunkFrames: stats.chunkFrames ?? stats.sizes.chunks
       }
     }
     await new Promise(resolve => setTimeout(resolve, 1000))

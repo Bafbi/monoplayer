@@ -141,6 +141,11 @@ export function createStateCache (overrides = {}) {
 
   let warm = false
   let frameSeq = 0
+  // #87: the chunk data this session's cache holds, counted where it lands.
+  // Before warm a chunk frame joins the join prefix and after warm the chunk
+  // ring, so the ring's size alone says nothing about whether a client released
+  // on this cache gets terrain.
+  let chunkFrames = 0
 
   function ringPush (domain, entry) {
     const ring = rings[domain]
@@ -203,6 +208,8 @@ export function createStateCache (overrides = {}) {
     }
 
     metrics.framesCached++
+    // An unload removes terrain and adds none, so only the set op counts.
+    if (classification.domain === 'chunk' && classification.op === 'set') chunkFrames++
 
     if (classification.domain === 'prefix') {
       // Join prefix: captured verbatim until warm. Bounded; an oversized join
@@ -338,6 +345,7 @@ export function createStateCache (overrides = {}) {
     return {
       warm: warm,
       frameSeq: frameSeq,
+      chunkFrames: chunkFrames,
       config: [...config],
       prefix: [...prefix],
       chunks: [...chunks.values()],
@@ -358,6 +366,9 @@ export function createStateCache (overrides = {}) {
       warm,
       chunkBound: opts.maxChunks,
       chunkBytes,
+      // The chunk data a client released on this cache would receive: the ring
+      // plus the chunk frames the join prefix still holds (#87).
+      chunkFrames,
       sizes: {
         prefix: prefix.length,
         config: config.length,
@@ -431,6 +442,7 @@ export function createStateCache (overrides = {}) {
 
     // A snapshot taken before warm restores as unwarm, so the join prefix
     // stays pinned exactly where it was.
+    chunkFrames = Number.isFinite(snapshot.chunkFrames) ? snapshot.chunkFrames : 0
     warm = snapshot.warm !== false
     frameSeq = Number.isFinite(snapshot.frameSeq) && snapshot.frameSeq > maxSeq
       ? snapshot.frameSeq
@@ -451,6 +463,7 @@ export function createStateCache (overrides = {}) {
     rings.generic.length = 0
     warm = false
     frameSeq = 0
+    chunkFrames = 0
   }
 
   return { push, snapshot, restore, stats, reset, forceWarm, raiseChunkBound, get warm () { return warm } }

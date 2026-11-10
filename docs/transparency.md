@@ -120,15 +120,13 @@ a moving notice, and the human rejoins the proxy once the puppet is warm on the
 target.
 
 The kept connection is on (`transfer.keepConnection`, default `true`). The
-human keeps the socket: once the target sends its first configuration
-frame, the proxy writes `start_configuration` on the human's own connection,
-relays the target's configuration frames and its `finish_configuration`, and
-then the target's play login and join state. The client shows the
-reconfiguration loading screen and lands on the new server without rejoining
-([#22](https://github.com/Bafbi/monoplayer/issues/22)). A failed target restores
-the pre-transfer state on that same connection. It stays off until the transfer
-testbed run proves it against a real Paper and a real client: `mise run
-testbed:run` takes the live front offline, so the operator runs it.
+human keeps the socket: on the transfer intent, before the target is dialled,
+the proxy writes `start_configuration` on the human's own connection, so the
+loading screen replaces a frozen world immediately. The proxy then relays the
+target's configuration frames and its `finish_configuration`, and then the
+target's play login and join state. The client lands on the new server without
+rejoining ([#22](https://github.com/Bafbi/monoplayer/issues/22)). A target the
+proxy gives up on restores the pre-transfer state on that same connection.
 
 The notice is the proxy's own: a synthetic advancement with a visible toast,
 removed in the same call so the client keeps no ghost advancement, with a local

@@ -238,22 +238,27 @@ leg. The frame still never reaches the front. The sequence:
    warm fallback pins it after 5 s if the backend never sends the batch
    marker.
 4. With a kept connection, the client follows on the connection it holds. The
-   target's first configuration frame starts a same-connection reconfiguration:
-   the front leg writes `start_configuration`, relays the target's
-   configuration frames and its `finish_configuration`, and the client's
-   `finish_configuration` answer returns it to play. The target's play login and
-   join state follow on the same socket, so the client sees a reconfiguration
-   loading screen and lands in the new server's state. Position, inventory, and
-   chat are the new server's; chat history is never replayed.
+   transfer intent starts a same-connection reconfiguration at once, before the
+   target is dialled: the front leg writes `start_configuration`, and the
+   client's own configuration phase begins while the puppet connects. The
+   relayed frames are the target's configuration and its
+   `finish_configuration`, and the client's `finish_configuration` answer
+   returns it to play. The target's play login and join state follow on the same
+   socket, so the client sees a loading screen instead of a frozen world, and
+   its serverbound frames are not dropped into a play session that no longer
+   exists. Position, inventory, and chat are the new server's; chat history is
+   never replayed. The move completes only once the target's cache holds chunk
+   data, because a client released earlier lands in an empty world.
 5. If the target fails, a kept client is restored from the pre-transfer
-   snapshot instead of being detached. A target that never sent a configuration
-   frame leaves the client in the previous server's state untouched. A target
-   that died mid-reconfiguration completes the aborted round from the snapshot:
-   the previous configuration frames, the finish, then the previous join state.
-   The proxy notice `The new server could not be reached. You are still on the
-   previous server.` explains it, and one reconnect returns the puppet to the
-   configured backend. Without a kept connection the client is detached with
-   the moving reason and rejoins the puppet on the base backend.
+   snapshot instead of being detached. A dial the target closes before its
+   first frame is not a failure: the snapshot stays held and the follow budget
+   retries. When the budget runs out, the client is restored onto the snapshot
+   the move kept: the previous configuration frames, the finish, then the
+   previous join state, on the socket it never left. The proxy notice
+   `The new server could not be reached. You are still on the previous server.`
+   explains it, and one reconnect returns the puppet to the configured backend.
+   Without a kept connection the client is detached with the moving reason and
+   rejoins the puppet on the base backend.
 
 A followed target that cannot connect is retried 3 times. Then the controller
 reverts to the configured base backend and the puppet is never left offline.
@@ -308,13 +313,15 @@ The reconfiguration is composed of four pieces:
   client's play-state `configuration_acknowledged` arrives (the ack exists in
   the play packet table only), flips the leg's client to the configuration
   state, and reports the client's `finish_configuration` back as
-  `reconfigured`.
+  `reconfigured`. The end frame a restore synthesizes when the snapshot holds
+  no cached `finish_configuration` is built by the leg
+  (`finishConfigurationFrame()`), so it is written as a configuration frame like
+  every other one rather than as a packet against the client's current state.
 
-Limits of this path: the client is only asked to reconfigure once the target
-has sent its first configuration frame, so a target that never answers costs
-no loading screen. A front leg without `startReconfiguration` (only a hand-built
-harness) degrades to a state replay at the target's login, which rebuilds the
-world without a configuration phase. The puppet's own connection keeps one
+Limits of this path: the loading screen starts on the transfer intent, so a
+target that never answers does cost one. A front leg without
+`startReconfiguration` (only a hand-built harness) degrades to a state replay at
+the target's login, which rebuilds the world without a configuration phase. The puppet's own connection keeps one
 keep-alive interval per connection: the front leg drops the library's state
 listener after the first play transition so a reconfiguration cannot start a
 second one. A kept client's configuration round has a deadline
