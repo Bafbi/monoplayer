@@ -71,12 +71,21 @@ These are the steps, and what each one prints.
    ```
 
    The same digest is appended to `.reports/testbed-digests.jsonl`, one line per
-   run. That file is what lets two finished runs be compared, because `down`
-   clears the record it restores from.
+   run, so two finished runs can be compared.
 
 2. `node src/testbed/switch.js status`. It reports the front Service and the
-   tailnet device that belongs to it: `front monoplayer/monoplayer-testbed
-   {"hostname": …}` and `tailnet devices {"count":1,…}`.
+   tailnet proxy that belongs to it. These are the lines that matter, in the
+   order it prints them:
+
+   ```
+   [testbed] argo automated {"automated":null}
+   [testbed] front monoplayer/monoplayer-testbed {"hostname":"monoplayer-testbed.tail41e568.ts.net"}
+   [testbed] tailnet devices {"count":1,"names":["ts-monoplayer-testbed-hqb5v-0"]}
+   [testbed] run state {"automated":"{\"prune\":true,\"selfHeal\":true}","disabledByUs":true,"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…"}
+   ```
+
+   `argo automated` reads null because `up` removed it, and `run state` carries
+   the digest this run recorded.
 
 3. `mise run testbed:down`. It restores the live deployment and the Argo policy
    first, then deletes the front:
@@ -86,14 +95,18 @@ These are the steps, and what each one prints.
    [testbed] live deployment restored
    ```
 
-4. `node src/testbed/switch.js status` again. The front is gone and the live
-   deployment is back:
+4. `node src/testbed/switch.js status` again. The front is gone, the record is
+   spent, and the live deployment is back:
 
    ```
+   [testbed] monoplayer/monoplayer {"replicas":1,"ready":1}
+   [testbed] argo automated {"automated":"{\"prune\":true,\"selfHeal\":true}"}
    [testbed] front monoplayer/monoplayer-testbed {"missing":true}
    [testbed] tailnet devices {"count":0,"names":[]}
-   [testbed] monoplayer/monoplayer {"replicas":1,"ready":1}
+   [testbed] run state {"missing":true}
    ```
+
+   The testbed and Paper deployment lines come between these and are left out.
 
    The tailscale operator removes the proxy pod on its own clock. Rerun `status`
    until the device count is 0: the delete waits for the Service, not for the
