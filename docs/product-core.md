@@ -2,7 +2,7 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 843 tests (`mise run test`), and `mise run check` also runs the
+The socket-free unit suite runs 874 tests (`mise run test`), and `mise run check` also runs the
 49-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
