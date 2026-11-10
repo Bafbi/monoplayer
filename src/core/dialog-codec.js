@@ -1,15 +1,19 @@
 // Dialog codec: the read and write halves of the `show_dialog` /
-// `custom_click_action` pair, and the policy that decides whether the puppet
-// answers one at all.
+// `custom_click_action` pair, and the per-dialog rule that says whether the
+// puppet may answer one at all (#105).
 //
 // Two callers sit in two directories: the backend leg answers configuration
 // gates with it (#20, #21, #73), and the protocol bot builds the same click to
 // prove a real client reaches the same gate (src/ladder/bot.js). What the
-// answer is and how it is framed is nobody's socket, so it lives here; who
-// answers and when is the leg's, and `answerBackendDialog` stays in
-// src/legs/live-backend.js beside the two write wrappers it works with.
+// answer is and how it is framed is nobody's socket, so it lives here.
 //
-// Why src/core/ and not a new src/protocol/ (#105): the tree is named after a
+// The split with the leg is about the write, not the rule. This module holds
+// `decideDialogAutoAnswer` and the bytes. The leg asks it once per dialog,
+// holds the per-connection attempt cap and its counter, decides whether an
+// attached player has the gate instead, and does the write. `answerBackendDialog`
+// in src/legs/live-backend.js is that side of it.
+//
+// Why src/core/ and not a new src/protocol/: the tree is named after a
 // domain, and a domain name comes from GLOSSARY.md. A `src/protocol/` would
 // hold this one file, and it would contest wire work that core already holds
 // under domain names: client-settings.js encodes the VarInt used below,
@@ -41,11 +45,12 @@ function dialogText (node) {
   return ''
 }
 
-// Choose one action from a `show_dialog` packet. `policy` is `first`, `last`,
-// or a case-insensitive label substring. Default is the last action, which is
-// the current season on the Excalia selection dialog. Which dialogs this runs
-// for is `decideDialogAutoAnswer`'s decision, not this function's.
-export function chooseDialogAction (data, policy = 'last') {
+// Choose one action from a `show_dialog` packet. `dialogAction` is `first`,
+// `last`, or a case-insensitive label substring, the value of
+// `MONOPLAYER_DIALOG_ACTION`. Default is the last action, which is the current
+// season on the Excalia selection dialog. Which dialogs this runs for is
+// `decideDialogAutoAnswer`'s decision, not this function's.
+export function chooseDialogAction (data, dialogAction = 'last') {
   const dialog = data?.dialog?.value ?? data?.dialog ?? data
   const entries = dialog?.actions?.value?.value
   if (!Array.isArray(entries) || entries.length === 0) return null
@@ -64,7 +69,7 @@ export function chooseDialogAction (data, policy = 'last') {
   if (actions.length === 0) return null
 
   let index = actions.length - 1
-  const wanted = String(policy ?? '').toLowerCase()
+  const wanted = String(dialogAction ?? '').toLowerCase()
   if (wanted === 'first') {
     index = 0
   } else if (wanted !== '' && wanted !== 'last') {

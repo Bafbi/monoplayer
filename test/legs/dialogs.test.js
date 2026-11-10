@@ -1,8 +1,8 @@
 // Configuration gates: who answers, and when the puppet clicks nothing.
 //
-// This is the leg's own policy, so the tests live beside it. The cases for the
-// codec left with it when it moved to src/core/dialog-codec.js (#105); what
-// remains here drives the two wrappers through their injected IO.
+// This is the leg's side of a gate, so the tests live beside it: the attempt
+// cap, the hold while a player is attached, and the injected write. The cases
+// for the codec left with it when it moved to src/core/dialog-codec.js (#105).
 //
 // The fixture mirrors the decoded `show_dialog` shape: every NBT node is a
 // { type, value } wrapper, and `actions` is a list of compounds. The real
