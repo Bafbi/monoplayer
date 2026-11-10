@@ -2022,7 +2022,7 @@ export function createMonoplayer ({
       // #134: no UUID is no skin, and guessing by position is how a stranger's
       // skin reached the human's body. A config that names no puppet UUID takes
       // none, and says so once, on the first frame that did carry a skin.
-      if (property === null && puppetUuid === null && !puppetSkinUnidentifiedLogged && carriesTextures(data)) {
+      if (property === null && puppetUuid === null && cfg.skin.showPuppetSkin && !puppetSkinUnidentifiedLogged && carriesTextures(data)) {
         puppetSkinUnidentifiedLogged = true
         log('puppetSkinUnidentified', { reason: 'no_puppet_uuid' })
       }
