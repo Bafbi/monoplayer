@@ -202,6 +202,13 @@ the last unanswered dialog in `src/core/pending-dialog.js`.
   the accept goes out, the leg logs `codeOfConductAccepted`, and it reports the
   answer to the core, so nothing waits for a client that is not there. Neither
   branch has a timeout.
+- The last client detaching is the second way into that no-player branch (#73).
+  The core holds a configuration gate the client left unanswered, and
+  `backendLeg.answerHeldGate` answers it as the puppet: the code of conduct with
+  the accept the wrapper swallowed, a gate with buttons with the configured
+  action. A play dialog is the player's and stays held, and a gate the puppet has
+  already left configuration for is not answered at all: the packet id is
+  state-scoped. No timeout anywhere.
 
 Serverbound frames carry their state (#16). The packet id is state-scoped, so
 the frame must be written into the state the puppet is in: a configuration
@@ -419,6 +426,8 @@ backendLeg = {                    // = the GlowSquidye puppet session
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
   writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
   chat(text)                      // speak as the puppet: sign with this connection's keys (#19)
+  answerHeldGate({ state, name, data })   // optional: answer a configuration gate the last client
+                                  // detached from (#73) -> { answered, reason, name }
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
 
