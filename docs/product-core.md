@@ -60,9 +60,10 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
   entries would reorder the entity/generic merge join-synth builds.
 - Not cacheable (from `clientbound-policy.js`): per-leg mechanics
   (`keep_alive`, `position`, `ping`, bundle delimiters), live-only chat and
-  per-request answers (`system_chat`, `profileless_chat`, `ping_response`,
-  `nbt_query_response`), and every blocked connection-control frame. Chat is
-  relayed live read-only, never replayed.
+  per-request answers (`system_chat`, `profileless_chat`, `player_chat`,
+  `ping_response`, `nbt_query_response`), and every blocked connection-control
+  frame. Chat is relayed live, never replayed; the chat mode decides which of
+  the three frames crosses.
 
 ### Attach stream order (`join-synth.synthAttach`)
 
@@ -343,9 +344,28 @@ to the puppet (#73), and O44 leaves a play dialog behind.
 
 ### Chat and commands (`config.chat`)
 
-Three modes. `read-only` is the default. `full` adds the speaking path from
-#19 and stays opt-in until a live run proves the signed path on the deployed
-backend. `off` blocks both directions.
+Four modes. `read-only` is the default. `commands` adds the speaking path for
+commands alone (#97). `full` adds the speaking path from #19 and stays opt-in
+until a live run proves the signed path on the deployed backend. `off` blocks
+both directions.
+
+| mode | the human's commands | the human's chat text | clientbound |
+|---|---|---|---|
+| `off` | dropped | dropped | no chat |
+| `read-only` (default) | dropped | dropped | `system_chat`, `profileless_chat` |
+| `commands` | spoken as the puppet | dropped | `system_chat`, `profileless_chat` |
+| `full` | spoken as the puppet | spoken as the puppet | all three |
+
+`chat: 'commands'` is for a human who needs `/profil`, `/msg`, `/tp`, and the
+rest of the server's commands to work against their own account, and who does
+not want the account speaking in open chat. The speak rule is per frame family
+(`CHAT_SPEAK_COMMANDS` beside `CHAT_SPEAK_MESSAGES` in `core/relay.js`), and
+one function, `speaks(name, mode)`, turns a mode into an answer.
+
+A command's own reply arrives as `system_chat`, so the human sees it in
+`commands` mode. A reply the server sends as `player_chat` does not display,
+because `commands` relays clientbound exactly as `read-only` does. That is the
+documented cost of the mode, and it is why `full` exists.
 
 `chat: 'full'` speaks the attached client's chat and commands on the backend
 leg as the puppet. The core takes the text out of the frame and calls the
@@ -370,7 +390,7 @@ never replayed.
 - `system_chat` carries no signature state. It is what Excalia sends: 220
   frames and zero `player_chat` in a 50-minute live session (backend
   forwarder counters in the heartbeat).
-- `player_chat` is relayed live in `full` mode and blocked in the other two.
+- `player_chat` is relayed live in `full` mode and blocked in the other three.
   Its global index and previous-messages window belong to the puppet's
   connection, not the human's, so the human's client will see a per-sender
   signature chain that is out of order. The expectation is that the message
@@ -385,6 +405,7 @@ never replayed.
   human's session state, and the last describes the human's stream, not the
   puppet's.
 - `chat: 'read-only'` drops the human's text and keeps the relay.
+  `chat: 'commands'` speaks the human's commands and drops their chat text.
   `chat: 'off'` blocks both directions. `MONOPLAYER_CHAT` overrides the config.
 
 ### Session invariants (`session.js`)

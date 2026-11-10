@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O44 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O45 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -689,6 +689,57 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         fake.received.messageAcknowledgements.length === 0,
       evidence.chat
     )
+
+    // --- O45: the commands mode speaks the command and keeps open chat off (#97) ---
+    // The rung runs `full` so O29 can prove the whole speaking path. The mode is
+    // read off the config for each frame (src/service/monoplayer.js:1705), so
+    // this holds the attached session in `commands` for two frames and restores
+    // it in a finally: a command must reach the backend as the puppet, and a
+    // chat message must not. The restore is not optional: the same config value
+    // drives the clientbound relay, so a leaked mode would change what the
+    // checks after this one see.
+    // This proves the core's serverbound rule through the real front leg. The
+    // front leg's clientbound backstop is not part of the proof:
+    // `createOfflineFrontLeg` does not forward its `chat` argument today, and
+    // `commands` relays clientbound exactly as `read-only` does either way.
+    const commandsBefore = {
+      messages: fake.received.chats.length,
+      commands: fake.received.chatCommands.length,
+      sent: core.metrics.chatSent,
+      blocked: core.metrics.chatBlocked,
+      forwarded: core.metrics.serverboundForwarded
+    }
+    core.config.chat = 'commands'
+    try {
+      bot1.sendCommand('profil')
+      bot1.sendChat('the account must not say this')
+      await bot1.waitFor(
+        () => fake.received.chatCommands.length === commandsBefore.commands + 1 &&
+          core.metrics.chatBlocked === commandsBefore.blocked + 1,
+        'backend command, and no chat, in commands mode'
+      )
+      const spokenInCommands = fake.received.chatCommands.at(-1)
+      evidence.commandsMode = {
+        command: spokenInCommands?.command ?? null,
+        commands: fake.received.chatCommands.length - commandsBefore.commands,
+        messages: fake.received.chats.length - commandsBefore.messages,
+        chatSent: core.metrics.chatSent - commandsBefore.sent,
+        chatBlocked: core.metrics.chatBlocked - commandsBefore.blocked,
+        forwarded: core.metrics.serverboundForwarded - commandsBefore.forwarded
+      }
+      check(
+        'O45',
+        'in commands mode the human command reached the backend as the puppet and the chat message did not',
+        spokenInCommands?.command === 'profil' &&
+          fake.received.chats.length === commandsBefore.messages &&
+          core.metrics.chatSent === commandsBefore.sent + 1 &&
+          core.metrics.chatBlocked === commandsBefore.blocked + 1 &&
+          core.metrics.serverboundForwarded === commandsBefore.forwarded,
+        evidence.commandsMode
+      )
+    } finally {
+      core.config.chat = 'full'
+    }
 
     // --- O12: detach keeps the backend session and the pose ---
     // The front denies a second connection before the whitelist gate while a

@@ -6,6 +6,7 @@ import {
   capturePose,
   chatText,
   CHAT_SERVERBOUND,
+  speaks,
   CLIENT_IDENTITY_CHANNELS,
   CONFIG_SERVERBOUND_DROPS,
   SERVERBOUND_DROPS,
@@ -54,8 +55,37 @@ test('the read-only and off modes drop the chat text and count it as chat', () =
   }
 })
 
+test('#97 the commands mode speaks the command frames and drops the chat message', () => {
+  // The human can run /profil, /msg, /tp without the account speaking in open
+  // chat. The command family crosses; the plain message does not.
+  for (const name of ['chat_command', 'chat_command_signed']) {
+    assert.equal(CHAT_SERVERBOUND.has(name), true, name)
+    const d = classifyServerbound(name, null, { mode: 'commands' })
+    assert.equal(d.action, 'speak', name)
+    assert.equal(d.chat, true, name)
+    assert.equal(d.reason, 'human_chat', name)
+  }
+  const message = classifyServerbound('chat_message', null, { mode: 'commands' })
+  assert.equal(message.action, 'drop', 'chat_message')
+  assert.equal(message.chat, true, 'chat_message')
+  // The full mode keeps speaking all three: the fourth mode sits beside it.
+  assert.equal(classifyServerbound('chat_message', null, { mode: 'full' }).action, 'speak')
+})
+
+test('#97 speaks answers by mode and fails closed on a mode it does not know', () => {
+  assert.equal(speaks('chat_message', 'full'), true)
+  assert.equal(speaks('chat_command', 'full'), true)
+  assert.equal(speaks('chat_command', 'commands'), true)
+  assert.equal(speaks('chat_command_signed', 'commands'), true)
+  assert.equal(speaks('chat_message', 'commands'), false, 'the command mode never speaks open chat')
+  for (const mode of ['read-only', 'off', undefined, 'write']) {
+    assert.equal(speaks('chat_command', mode), false, String(mode))
+  }
+  assert.equal(speaks('keep_alive', 'full'), false, 'only chat frames speak')
+})
+
 test('the session key and the chat ack drop in every mode', () => {
-  for (const mode of ['full', 'read-only', 'off']) {
+  for (const mode of ['full', 'commands', 'read-only', 'off']) {
     for (const name of ['chat_session_update', 'chat_ack']) {
       const d = classifyServerbound(name, null, { mode })
       assert.equal(d.action, 'drop', `${mode} ${name}`)
