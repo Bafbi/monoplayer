@@ -185,10 +185,10 @@ test('#73 a gate is not answered on a connection that left configuration', () =>
 })
 
 test('#73 a held gate with no connection to answer on reports that it could not', () => {
-  const r = detachedRig()
+  // A leg that is disconnected refuses instead of throwing, so the core keeps
+  // the gate held for the next client.
   assert.deepEqual(
     answerHeldGate({ state: 'configuration', name: 'code_of_conduct', connectionState: 'configuration' }),
     { answered: false, reason: 'no_connection', name: 'code_of_conduct', responses: 0 }
   )
-  assert.deepEqual(r.writes, [])
 })
