@@ -67,7 +67,7 @@ const papersPinningABuild = () => {
     if (!entry.name.endsWith('.yaml')) return []
     const file = path.relative(root, full).split(path.sep).join('/')
     const text = readFileSync(full, 'utf8')
-    if (!/- name: PAPER_BUILD$/m.test(text)) return []
+    if (!/- name: PAPER_BUILD\b/m.test(text)) return []
     return [file]
   })
   return walk(path.join(root, 'deploy')).sort()
