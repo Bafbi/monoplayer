@@ -22,7 +22,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human answers every play dialog, and the puppet never clicks one | built | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | built | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
-| A followed transfer keeps the client connected | **not built** | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
+| A followed transfer keeps the client connected | built, on by default | [#22](https://github.com/Bafbi/monoplayer/issues/22) |
 | Proxy notices reach the human as a toast | built, real-client display unverified | [#15](https://github.com/Bafbi/monoplayer/issues/15), [#62](https://github.com/Bafbi/monoplayer/issues/62) |
 | The proxy's egress address is accepted as different | **accepted limit** | [#11](https://github.com/Bafbi/monoplayer/issues/11) |
 
@@ -74,9 +74,9 @@ carrying the textures property the backend sent for the puppet:
 
 | Fact | Why |
 |---|---|
-| The property is the server's own | The proxy holds no skin. A proxy that saw no `player_info` from the backend writes no frame, and a property it cannot read is not a property it has |
+| The property is the server's own | The proxy holds no skin. A proxy that saw no `player_info` from the backend writes no frame, and a property it cannot read is not a property it has. The property is the one the puppet's own entry carries, chosen by the UUID the config resolved for the account, so a frame that also lists other players never donates their skins |
 | The entry carries no `update_listed` action | The client's tab list is its own listed set, which only that action fills, so the human's UUID gains no line beside the puppet's |
-| One frame per attach | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame would be a write nobody sees |
+| One frame per play state, not per attach | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame for one play state would be a write nobody sees. A reconfiguration is a new play state: the client builds a new `ClientPacketListener`, whose entry map starts empty, so the frame goes out again after a transfer ([#134](https://github.com/Bafbi/monoplayer/issues/134)) |
 | An unsigned property would work too | The client asks for a secure property only for players other than the one it controls. The frame carries the property as it arrived, so the proxy adds no signature and strips none |
 
 The measured answer to the ticket's open question — does a 26.x client accept a
@@ -88,6 +88,24 @@ Two limits follow from the same client code. A skin change the server sends late
 in the session does not reach the human, because the client keeps the entry it
 holds. And a client that already holds an entry for the human's UUID would keep
 that entry's skin: the proxy never lists the human, so this has not been seen.
+
+A third limit is the config's. The frame names the puppet's own entry, chosen by
+the UUID the lane resolved for the account. A lane that resolves a UUID the
+backend never lists writes no frame at all, and the record is an absence:
+`puppetSkinKnown` never appears, and no event says the property is missing. A
+stale UUID therefore looks like a backend that lists the puppet late, until that
+listing arrives: a listed puppet writes `puppetSkinKnown`, and a stale UUID never
+does.
+
+What the proxy says about it, one event per thing that happened:
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `puppetSkinKnown` | `uuid`, `signed`, `was`, `value` | A `player_info` frame carried the puppet's own textures property whose value differs from the one held. `was` is the value it replaced, and null the first time. Once per change, not once per frame, so a value the backend repeats after another logs again |
+| `puppetSkinSent` | `name`, `reason`, `signed` | The frame was written to the attaching player's connection. Whether the client applied it is the client's business, and only a client reading says. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, or `property_arrived` |
+| `puppetSkinRefused` | `reason`, `error` | The packet could not be built or written: `packet` or `write_failed` |
+| `puppetSkinWithheld` | `name`, `reason` | A frame could not be written because the front gave no UUID to name (`no_identity`), at the replay or when the property arrived. No later frame repairs that. A missing property is not reported: it normally arrives a moment after the attach, and the frame then goes out under `property_arrived`. A packet or write failure is `puppetSkinRefused` |
+| `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process, and only while `skin.showPuppetSkin` is on, because with it off no frame would be written either |
 
 ## Chat and commands
 

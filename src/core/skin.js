@@ -18,9 +18,13 @@
 // 26.2):
 //
 //   add_player only   an entry is created only by ADD_PLAYER, and an existing
-//                     entry wins (`putIfAbsent`), so the frame is written once
-//                     per attach and never after the client already knows the
-//                     UUID.
+//                     entry wins (`putIfAbsent`). The map holding those entries
+//                     belongs to one `ClientPacketListener`. A fresh connection
+//                     creates one, and so does a reconfiguration: the client
+//                     builds a new listener in
+//                     `ClientConfigurationPacketListenerImpl.handleConfigurationFinished`.
+//                     Both start with no entry, so a frame written for one play
+//                     state does not reach the next (#134).
 //   no update_listed  the tab list is the client's own `listedPlayers` set,
 //                     which only UPDATE_LISTED fills. Without that action the
 //                     entry carries a skin and adds no tab list line beside the
@@ -57,16 +61,48 @@ export function pickTextures (properties) {
   return null
 }
 
-// The textures property a relayed `player_info` frame carries. The first entry
-// with one wins: a backend lists the puppet with its own property, and a later
-// entry with a different skin is not the puppet's.
-export function texturesPropertyOf (packet) {
-  const entries = Array.isArray(packet?.data) ? packet.data : []
-  for (const entry of entries) {
+// The entries a `player_info` frame lists, whichever shape the caller holds.
+function entriesOf (packet) {
+  return Array.isArray(packet?.data) ? packet.data : []
+}
+
+// The UUID as a comparison key. A UUID reaches the pick from two places, the
+// resolved account and the decoded packet, and case and hyphens are not a
+// difference between them. A validator it is not: a malformed string compares
+// equal only to itself.
+function uuidKey (value) {
+  return typeof value === 'string' ? value.replace(/-/g, '').toLowerCase() : null
+}
+
+// The textures property a relayed `player_info` frame states for one UUID.
+//
+// The entry is chosen by UUID, never by position. A busy backend sends the whole
+// tab list through this frame, so the first entry with a property is usually
+// another player's (#134). Picking by position put a stranger's skin on the
+// human's body, and it made the known-property comparison change on every frame
+// that carried one. The measurement is in testdata/skin-verdict.md.
+//
+// No UUID is no answer. A caller that cannot name the player's UUID takes no
+// property, rather than whichever one arrived first.
+export function texturesPropertyOf (packet, { uuid = null } = {}) {
+  const wanted = uuidKey(uuid)
+  if (wanted === null || wanted === '') return null
+  for (const entry of entriesOf(packet)) {
+    if (uuidKey(entry?.uuid) !== wanted) continue
     const picked = pickTextures(entry?.player?.properties)
     if (picked !== null) return picked
   }
   return null
+}
+
+// Whether any entry in the frame states a textures property, whoever's it is.
+// A config that names no puppet UUID takes no skin, and this is how the core
+// tells a frame that carried one from a frame that carried none.
+export function carriesTextures (packet) {
+  for (const entry of entriesOf(packet)) {
+    if (pickTextures(entry?.player?.properties) !== null) return true
+  }
+  return false
 }
 
 // One `player_info` frame that gives `uuid` the skin of `property`. The name is

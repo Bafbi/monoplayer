@@ -10,7 +10,7 @@ import mc from 'minecraft-protocol'
 
 import {
   ADD_PLAYER_ONLY, TEXTURES_PROPERTY,
-  pickTextures, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
+  carriesTextures, pickTextures, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
 } from '../../src/core/skin.js'
 
 const HUMAN = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
@@ -24,19 +24,66 @@ const relayed = (properties, uuid = PUPPET) => ({
 })
 
 test('the textures property comes out of a relayed player_info frame as it stated itself', () => {
-  const picked = texturesPropertyOf(relayed([PROPERTY]))
+  const picked = texturesPropertyOf(relayed([PROPERTY]), { uuid: PUPPET })
   assert.deepEqual(picked, { value: PROPERTY.value, signature: PROPERTY.signature })
 })
 
 test('a property without a signature is picked up without one', () => {
-  assert.deepEqual(texturesPropertyOf(relayed([{ name: TEXTURES_PROPERTY, value: 'v' }])), { value: 'v' })
+  assert.deepEqual(
+    texturesPropertyOf(relayed([{ name: TEXTURES_PROPERTY, value: 'v' }]), { uuid: PUPPET }),
+    { value: 'v' })
 })
 
 test('a frame with no textures property yields nothing to inject', () => {
-  assert.equal(texturesPropertyOf(relayed([])), null)
-  assert.equal(texturesPropertyOf(relayed([{ name: 'other', value: 'v' }])), null)
-  assert.equal(texturesPropertyOf({}), null)
-  assert.equal(texturesPropertyOf(null), null)
+  assert.equal(texturesPropertyOf(relayed([]), { uuid: PUPPET }), null)
+  assert.equal(texturesPropertyOf(relayed([{ name: 'other', value: 'v' }]), { uuid: PUPPET }), null)
+  assert.equal(texturesPropertyOf({}, { uuid: PUPPET }), null)
+  assert.equal(texturesPropertyOf(null, { uuid: PUPPET }), null)
+})
+
+// #134: the live lane's tab list arrived through this frame, and the first entry
+// that carried a property was usually a different player's (testdata/skin-verdict.md).
+// The property the proxy holds is the puppet's, chosen by UUID.
+test('the property is the one the named UUID carries, not the first one in the frame', () => {
+  const frame = {
+    action: { _value: 1, add_player: true },
+    data: [
+      { uuid: 'e9baf8e7-4a9a-27e4-ae35-2a9566110634', player: { name: 'Tutoriel', properties: [{ name: TEXTURES_PROPERTY, value: 'stranger', signature: 's' }] } },
+      { uuid: PUPPET, player: { name: 'Wiriaw', properties: [PROPERTY] } }
+    ]
+  }
+  assert.deepEqual(texturesPropertyOf(frame, { uuid: PUPPET }), { value: PROPERTY.value, signature: PROPERTY.signature })
+  assert.equal(texturesPropertyOf(frame, { uuid: HUMAN }), null, 'a UUID the frame does not list has no property')
+})
+
+test('a frame that lists the UUID twice takes the property it carries', () => {
+  const frame = {
+    action: { _value: 14, add_player: true, update_latency: true },
+    data: [
+      { uuid: PUPPET, latency: 42 },
+      { uuid: PUPPET, player: { name: 'Wiriaw', properties: [PROPERTY] } }
+    ]
+  }
+  assert.deepEqual(texturesPropertyOf(frame, { uuid: PUPPET }), { value: PROPERTY.value, signature: PROPERTY.signature })
+})
+
+test('a UUID is compared without its hyphens or case', () => {
+  assert.deepEqual(texturesPropertyOf(relayed([PROPERTY]), { uuid: PUPPET.replace(/-/g, '').toUpperCase() }),
+    { value: PROPERTY.value, signature: PROPERTY.signature })
+})
+
+test('a frame says whether it carried a skin at all, for any player', () => {
+  assert.equal(carriesTextures(relayed([PROPERTY])), true)
+  assert.equal(carriesTextures(relayed([{ name: TEXTURES_PROPERTY, value: 'v' }])), true)
+  assert.equal(carriesTextures(relayed([{ name: 'other', value: 'v' }])), false)
+  assert.equal(carriesTextures(relayed([])), false)
+  assert.equal(carriesTextures(null), false)
+})
+
+test('no UUID is no property: the frame never stands in for one', () => {
+  assert.equal(texturesPropertyOf(relayed([PROPERTY])), null, 'an unnamed player takes no skin')
+  assert.equal(texturesPropertyOf(relayed([PROPERTY]), { uuid: null }), null)
+  assert.equal(texturesPropertyOf(relayed([PROPERTY]), { uuid: '' }), null)
 })
 
 test('an empty value is not a skin: it is reported as no property at all', () => {

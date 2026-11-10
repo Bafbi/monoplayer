@@ -664,7 +664,7 @@ async function startFakeLane ({ version, username, log = () => {} } = {}) {
       attachWhitelist: whitelist,
       front: { host: '127.0.0.1', port: 0 },
       backend: { host: '127.0.0.1', port: fake.port },
-      puppet: { username: 'GlowSquidye', uuid: null }
+      puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') }
     })
 
     backendLeg = createOfflineBackendLeg({

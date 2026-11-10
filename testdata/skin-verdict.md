@@ -133,3 +133,177 @@ not reachable from the dev namespace (`zot.deepmine-core.svc` does not resolve
 there), so a dev-lane measurement goes through the branch workflow's ghcr tag.
 `mise run dev:image` points the deployment at ghcr, and a tag that only Zot holds
 leaves the pod in `ImagePullBackOff`.
+
+## Live disagreed: a client's entry map belongs to one play state (#134)
+
+Date: 2026-11-10. Live lane, `monoplayer`. The human attached twice, and reported
+a vanilla default on their own body. Which attach that sighting followed is not
+in the record. The proxy logged `puppetSkinSent reason:"attach" signed:true`
+twice, `skinFramesWritten: 2`, and `skinFramesRefused: 0`.
+
+What the artifacts prove, and what they do not:
+
+- **Proved from the proxy's side.** From 20:44:28 the client held no entry the
+  proxy could still add to, and the proxy wrote no second frame. Excalia moved the puppet
+  37 s into the session, and a followed transfer takes the client through a
+  configuration round on its own socket. Coming back to play the client builds a
+  **new `ClientPacketListener`** (`ClientConfigurationPacketListenerImpl.handleConfigurationFinished`
+  constructs one, and `ClientPacketListener.handleConfigurationStart` calls
+  `clearClientLevel`). That listener's `playerInfoMap` starts empty. The entry the
+  attach created was gone, and the per-attach `skinSent` latch read the transfer's
+  replay as a second frame for the same client.
+- **Not proved.** Whether the client applied the 20:43:49 frame during the 37 s
+  before that round. No reading of the live client exists for that window, so the
+  human's report of a default skin at the first attach is unexplained by itself.
+  The second attach is not: at 20:45:11 the proxy held `Tutoriel`'s property, so
+  that frame put a lobby player's skin on the human's body.
+
+The pod's stdout log and the client's log, side by side. The three proxy lines
+are JSONL records from `kubectl -n monoplayer logs`, and the last is the client's
+own:
+
+```
+20:43:49.819  {"event":"puppetSkinSent","name":"Bafbi","reason":"attach","signed":true}
+20:43:49.819  {"event":"attach","reason":"attach","replayed":667}
+20:44:26.845  {"event":"backendLogin","fromTransfer":true,"backendLogins":2}
+20:44:28.034  {"event":"attach","reason":"transfer","replayed":319}   <- no skin frame
+20:44:28      [client log] Loaded 388 advancements                    <- a second world load
+```
+
+`skinFramesRefused: 0` is not evidence. The latch returned `already_sent`
+without counting a refusal, because no frame was attempted. The replay now clears
+the latch, so a reconfiguration gets the frame again. A replay that cannot write
+the frame at all, because the front gave no UUID, logs `puppetSkinWithheld`. One
+that has no property yet says nothing, because the property normally arrives a
+moment later and the frame then goes out under `property_arrived`.
+
+### The ticket's questions 1 and 3
+
+Question 2, why the held property kept changing, is answered above: the proxy was
+holding whichever entry came first in the frame.
+
+**Does the live client hold an entry for the human's UUID when the frame
+arrives?** No, not on the first attach. No `player_info` frame among the 519 the
+journal copy can decode carries the human's UUID, and the one it cannot is from
+20:44:27, after that attach. The journal lists 207 distinct UUIDs, and
+none is `6eb73524-ff88-4a62-a8d0-c63905e7afba`. There is no `player_info` frame
+at all in the 5 s before 20:43:49. `handlePlayerInfoUpdate` is the only writer of
+that map, with `putIfAbsent`, so the attach's own frame is what created the entry.
+That reading is proxy-side evidence plus the client's own code. It is not an
+observation of the live client's map.
+
+**What shape is Excalia's textures property?** The dev lane's, field for
+field, and its texture loads:
+
+| Field | Live (`GlowSquidye`) | Dev (`Wiriaw`) |
+|---|---|---|
+| `value` | 488 chars | 408 chars |
+| `signature` | 684 chars | 684 chars |
+| `signatureRequired` in the payload | `true` | `true` |
+| `textures.SKIN.url` | `http://textures.minecraft.net/texture/6a135ebe…` | `http://textures.minecraft.net/texture/6523b6e2…` |
+| `textures.SKIN.metadata.model` | `slim` | none |
+
+The live URL fetches a 64x64 PNG with HTTP 200. `YggdrasilMinecraftSessionService.unpackTextures`
+(authlib 9.0.75, the client's own) turns a payload into no skin only on a decode
+failure, an empty textures map, or a URL outside the allowed domains, and each of
+those logs a line the live client's log does not contain. The property is not the
+difference between the lanes.
+
+### The property was usually another player's on a busy server
+
+The live backend's `player_info` traffic carries the whole tab list. The journal
+copy covers 12 minutes and holds 520 such frames, 519 of them decodable: one is
+past the journal's 8192-byte cap and is kept as a length only. Of the 519, 81
+carry a textures property, and their entries belong to **18 different players**.
+`texturesPropertyOf` took the first one, so what the proxy held changed 81
+times, and the puppet's own entry came first **twice**. The one that mattered is
+the early one: the puppet's property, held at 20:43:49 for the first attach. The
+lane resolves `MONOPLAYER_PUPPET_UUID=73e0e19b-d4e4-4cc1-a553-a3952f0c1aed`, the
+journal's `startLive` names that as its `accountUuid`, and the entry Excalia lists
+for GlowSquidye carries the same UUID. The pick matches on this lane, so the stale
+UUID the config's limit allows for is not what happened here. Two consequences, both
+visible in the same journal:
+
+- at the second attach (20:45:11) the proxy held `Tutoriel`'s property. The
+  frame put a lobby player's skin on the human's body.
+- `puppetSkinKnown` logged 83 times, where the puppet had two distinct values.
+  That count comes from the lane's stdout, not the journal copy:
+  `kubectl -n monoplayer logs deploy/monoplayer --since 30m | grep -c puppetSkinKnown`
+
+The 83 and the 81 are two windows. The pod's log kept running after the copy of
+the journal was taken, so it holds 83 lines for 81 changes plus the frames that
+arrived afterwards. The ticket's "dozens of times per second for minutes" is not
+what the journal holds either: the changes come in bursts, up to four in one
+millisecond when a tab list lands, and the rest of the 12 minutes is quiet.
+
+The counts come from decoding the copied journal's `player_info` frames with the
+vendored 26.2 data, the decoder `test/core/skin.test.js` uses. Copy the journal
+out, then run the repo's tool and this script:
+
+```bash
+kubectl -n monoplayer exec <pod> -- ls /tmp/journal     # the journal to copy out
+node tools/journal.mjs names player_info --dir s2c --path <copy>   # the 520 frames
+```
+
+```js
+// The counts recorded above, from a copy of the live lane's journal.
+// Run from the repo root.
+import fs from 'node:fs'
+import readline from 'node:readline'
+import mc from 'minecraft-protocol'
+
+const des = mc.createDeserializer({ state: 'play', isServer: false, version: '26.2', noErrorLogging: true })
+const rows = []
+const rl = readline.createInterface({ input: fs.createReadStream(process.argv[2]) })
+for await (const line of rl) {
+	if (!line.includes('"player_info"')) continue
+	const rec = JSON.parse(line)
+	if (rec.dir !== 's2c' || rec.name !== 'player_info' || rec.truncated) continue
+	const parsed = des.parsePacketBuffer(Buffer.from(rec.b64, 'base64'))
+	const entries = parsed.data.params?.data ?? []
+	const carried = entries.flatMap(entry => (entry.player?.properties ?? [])
+		.filter(property => property.name === 'textures')
+		.map(property => ({ uuid: entry.uuid, name: entry.player?.name ?? null, value: property.value })))
+	rows.push({ carried })
+}
+
+let changes = 0
+let held = null
+for (const row of rows) {
+	for (const carried of row.carried) {
+		if (carried.value === held) continue
+		held = carried.value
+		changes++
+	}
+}
+console.log({
+	frames: rows.length,
+	withTextures: rows.filter(row => row.carried.length > 0).length,
+	owners: new Set(rows.flatMap(row => row.carried.map(carried => carried.uuid))).size,
+	changes, // a change of the value the by-position pick would have held
+	firstEntryIsThePuppet: rows.filter(row => row.carried[0]?.name === 'GlowSquidye').length
+})
+```
+
+```bash
+node .scratch/skin-counts.mjs <copy>
+  # { frames: 519, withTextures: 81, owners: 18, changes: 81, firstEntryIsThePuppet: 2 }
+```
+
+The pick is now the entry whose UUID the config resolved for the puppet, so the
+log fires once per distinct property and the frame always carries the puppet's
+own skin. A config that names no puppet UUID takes no skin, and `start-live`
+warns about it once.
+
+### What a lane can and cannot prove
+
+- `mise run check` pins the shipped rule. `test/service/skin.test.js` drives a
+  followed transfer and a restarted configuration round, and asserts a second
+  frame each time. `test/core/skin.test.js` asserts the pick is by UUID.
+- The dev lane has no transfer, which is why the three cases above passed there
+  and live failed. A dev-lane run measures the frame's content, not its timing.
+- The live lane needs the human: no run in this repo joins Excalia. After this
+  lands, the check is one attach that lasts past Excalia's transfer:
+  `skinFramesWritten` should reach 2 for one connection, and the body should keep
+  the puppet's skin through the teleport.
+
