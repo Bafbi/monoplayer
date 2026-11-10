@@ -3,13 +3,13 @@
 #   Monoplayer back leg (later) -> Toxiproxy -> Velocity -> Paper-m4
 #
 # A fault on the client leg tests the client's tolerance; a fault on the
-# puppet leg tests Monoplayer's session ownership. This is the latter. Only
-# puppet-velocity is configured, because it is the only row with a backend in
+# puppet leg tests Monoplayer's session ownership. This is the latter. It
+# declares the two M4 listeners, because M4 is the only row with a backend in
 # this tree: the M1 vanilla and M3 fabric rows have no manifest yet, so their
 # listeners land with them rather than publishing two ports for nobody (#115).
-# The listener is per row, and a row that arrives adds its proxy, its
-# containerPort and its Service port together. F1/F4/F5 are not network toxics:
-# detach is client-side, backend death is a restart, kick is an RCON command.
+# A row that arrives adds its proxy, its containerPort and its Service port
+# together. F1/F4/F5 are not network toxics: detach is client-side, backend
+# death is a restart, kick is an RCON command.
 #
 # The HTTP API is ClusterIP-only — never expose it with the listeners; anyone
 # on the API can take the gate down.

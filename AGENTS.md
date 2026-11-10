@@ -35,7 +35,7 @@ that leaves the deployment serving.
 |---|---|
 | the gate, offline, seconds | `mise run check` |
 | a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join` |
-| the online rung, with the deployment still serving | `mise run online:cluster` |
+| the online rung, with the deployment still serving | `mise run gate:up`, then `mise run online:cluster` |
 | a clientbound comparison, direct against proxied | `mise run parity:run` |
 | the server's view of a join | `mise run gate:up`, then `mise run observer:run`, then `mise run gate:down` |
 | the real client | `mise run gate:up`, then `mise run driver:scenario`, against the gate Paper |
