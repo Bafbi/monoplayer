@@ -105,8 +105,8 @@ spec:
             # the human to attach and answer it (#20).
             - name: MONOPLAYER_DIALOG_ACTION
               value: last
-            # The testbed is where the kept connection (#22) is measured before
-            # its default flips. Off everywhere else.
+            # The kept connection (#22), on by default. This lane names it
+            # because the testbed measures the move with a real client.
             - name: MONOPLAYER_TRANSFER_KEEP_CONNECTION
               value: "1"
             - name: HOME

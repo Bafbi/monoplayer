@@ -178,9 +178,7 @@ timeout. The relay and hold path this section describes is #16.
 ## A followed transfer
 
 The proxy follows the transfer on the puppet leg with handshake intent 3, so the
-server sees a normal accepting client. The default still detaches the human with
-a moving notice, and the human rejoins the proxy once the puppet is warm on the
-target.
+server sees a normal accepting client.
 
 The kept connection is on (`transfer.keepConnection`, default `true`). The
 human keeps the socket: on the transfer intent, before the target is dialled,
@@ -189,7 +187,9 @@ loading screen replaces a frozen world immediately. The proxy then relays the
 target's configuration frames and its `finish_configuration`, and then the
 target's play login and join state. The client lands on the new server without
 rejoining ([#22](https://github.com/Bafbi/monoplayer/issues/22)). A target the
-proxy gives up on restores the pre-transfer state on that same connection.
+proxy gives up on restores the pre-transfer state on that same connection. With
+`transfer.keepConnection: false` the human is detached with a moving reason
+instead, and rejoins the proxy once the puppet is warm on the target.
 
 The notice is the proxy's own: a synthetic advancement with a visible toast,
 removed in the same call so the client keeps no ghost advancement, with a local
