@@ -110,7 +110,7 @@ function assertNotice (frontLeg, pattern) {
   assert.deepEqual(remove.packet.identifiers, [add.packet.advancementMapping[0].key])
 }
 
-test('a followed transfer keeps the client and waits for the target before any loading screen', () => {
+test('a followed transfer starts the client\'s configuration on the intent, before any dial', () => {
   const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
@@ -127,22 +127,62 @@ test('a followed transfer keeps the client and waits for the target before any l
   assert.equal(rig.core.attached, true, 'the client keeps its connection')
   assert.deepEqual(rig.frontLeg.endReasons(), [], 'no kick for a move the client can follow')
   assert.equal(rig.core.cache.warm, false, 'the old session cache is gone')
-  assert.equal(rig.clock.pending, 1, 'exactly one reconnect')
+  assert.equal(rig.clock.pending, 2, 'one reconnect and one configuration deadline')
+
+  // #87: the loading screen starts on the intent, not on the target's first
+  // configuration frame. The human sees it before the dial, and the serverbound
+  // frames of a dead play session stop being dropped.
+  assert.deepEqual(rig.frontLeg.reconfigurations(), [{ reason: 'transfer' }])
+  assert.equal(rig.core.metrics.reconfigurationsStarted, 1)
+  assert.equal(rig.core.clientReconfiguring, true)
+  assert.equal(rig.core.frontPlayReady, false)
 
   rig.clock.tick(1000)
   assert.equal(rig.events.length, 1)
   assert.deepEqual(rig.events[0].target, { host: 'sky-2.excalia.fr', port: 25565 })
-  assert.deepEqual(rig.frontLeg.reconfigurations(), [], 'no configuration before the target answers')
 
-  // The target's first configuration frame is what starts the loading screen:
-  // the client re-enters configuration on its own connection and the frame is
-  // relayed in that state.
+  // The target's first configuration frame is relayed in the client's own
+  // configuration state; the round already started, so this is not a second one.
   rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
   assert.deepEqual(rig.frontLeg.reconfigurations(), [{ reason: 'transfer' }])
   assert.equal(rig.core.metrics.reconfigurationsStarted, 1)
   const relayed = rig.frontLeg.frames().slice(framesBefore)
   assert.deepEqual(relayed.map(frame => frame.name), ['registry_data'])
   assert.equal(relayed[0].meta.state, 'configuration')
+})
+
+test('a dial the target closes before its first frame is retried, not read as the target dying', () => {
+  const rig = makeSeamless()
+  warmBackend(rig)
+  attach(rig)
+  const before = rig.core.cache.snapshot()
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  assert.equal(rig.events.length, 1, 'the target is dialled')
+
+  // #87: the target accepted the socket and closed it without sending a frame —
+  // the race a transfer intent from the same account makes. The move is not
+  // over: the follow budget owns the give-up, and the client keeps the round it
+  // already started.
+  rig.backendLeg.deliverEnd({ reason: 'socketClosed' })
+
+  assert.equal(rig.core.moveKind, 'transfer', 'the move survives the closed dial')
+  assert.equal(rig.core.clientReconfiguring, true, 'the client stays in its round')
+  assert.equal(rig.core.session.state, 'transferring')
+  assert.equal(rig.core.metrics.reconfigurationsRestored, 0, 'nothing to restore yet')
+  assert.equal(rig.core.metrics.reconfigurationsStarted, 1, 'no second round')
+  assert.deepEqual(rig.core.move.snapshot.prefix.map(f => f.name), before.prefix.map(f => f.name),
+    'the held snapshot is untouched')
+
+  // The next dial answers, and the move lands on the same round. The retry
+  // backs off (1000 ms, then 2000 ms), so the second dial is one tick later.
+  rig.clock.tick(2000)
+  assert.equal(rig.events.length, 2, 'a second dial')
+  landOnTarget(rig)
+  assert.equal(rig.core.metrics.reconfigurationsCompleted, 1)
+  assert.deepEqual(rig.frontLeg.reconfigurations(), [{ reason: 'transfer' }])
+  assert.equal(rig.core.session.detachCount, 0)
 })
 
 test('the same connection lands on the target: configuration, finish, login, state', () => {
@@ -174,28 +214,54 @@ test('the same connection lands on the target: configuration, finish, login, sta
   assert.deepEqual(rig.frontLeg.endReasons(), [])
 })
 
-test('a target that never answers restores the client without a loading screen', () => {
+test('a target that never answers is restored on the round the intent opened', () => {
   const rig = makeSeamless()
   warmBackend(rig)
   attach(rig)
   const before = rig.core.cache.snapshot()
+  const mark = rig.frontLeg.frames().length
 
   rig.backendLeg.deliver({ state: 'play', ...transfer() })
   rig.clock.tick(1000)
+  // The first dial is closed by the target before any frame, which is the case
+  // the testbed cannot produce. The move survives it (see the dial test above).
+  rig.backendLeg.deliverEnd({ reason: 'socketClosed' })
+  assert.equal(rig.core.moveKind, 'transfer', 'the closed dial did not end the move')
+
+  // The follow budget runs out: start-live aborts the target and no dial is
+  // left, so the client is restored onto the snapshot the move kept.
   const outcome = rig.core.abortTransfer('target_unreachable')
 
   assert.equal(outcome.restored, true)
   assert.equal(rig.core.session.state, 'attached')
-  assert.equal(rig.core.attached, true)
-  assert.deepEqual(rig.frontLeg.reconfigurations(), [], 'the client never left play')
+  assert.equal(rig.core.attached, true, 'the connection survived the move')
+  // #87: the round opened on the intent, so the restore finishes it from the
+  // pre-transfer snapshot instead of trusting a play state the client left.
+  assert.deepEqual(rig.frontLeg.reconfigurations(), [{ reason: 'transfer' }])
   assert.equal(rig.core.metrics.reconfigurationsRestored, 1)
+  assert.equal(rig.core.restoring, true, 'the aborted round is served from the snapshot')
+  const restoredFrames = rig.frontLeg.frames().slice(mark)
+  const restored = restoredFrames.map(frame => frame.name)
+  assert.ok(restored.includes('registry_data'))
+  assert.equal(restored.at(-1), 'finish_configuration')
+  // #87: the finish is a configuration frame. Written as a packet it would be
+  // serialized against the client's current state, where the name is a
+  // different packet (play packet 0x00, bundle_delimiter) and never the end of
+  // the round.
+  assert.equal(restoredFrames.at(-1).kind, 'raw')
+  assert.equal(restoredFrames.at(-1).meta.state, 'configuration')
 
-  // The pre-transfer state is back in the cache, and the notice explains why.
+  // The pre-transfer state is back in the cache, entry for entry, and nothing
+  // tells the human about a failure while the client is still in configuration.
   assert.deepEqual(
     rig.core.cache.snapshot().prefix.map(frame => frame.name),
     before.prefix.map(frame => frame.name)
   )
   assert.equal(rig.core.cache.warm, true)
+  assert.equal(rig.core.metrics.noticesSent, 0)
+
+  rig.frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.restoring, false)
   assertNotice(rig.frontLeg, /could not be reached/i)
   assert.equal(rig.core.metrics.noticesSent, 1)
 })
@@ -233,6 +299,60 @@ test('a target that dies mid-reconfiguration restores the previous configuration
   assert.equal(rig.core.metrics.reconfigurationsRestored, 1)
 })
 
+test('a move does not release the client into a target cache with no chunk data', () => {
+  const rig = makeSeamless()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  // The target answers its configuration and its play login, and sends no
+  // terrain — the case the testbed cannot produce, because its target warms in
+  // five seconds. A client released here falls through an empty world.
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  rig.backendLeg.deliver({ state: 'configuration', name: 'finish_configuration', data: {} })
+  rig.frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.clientReconfiguring, false)
+  const mark = rig.frontLeg.frames().length
+  rig.backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 7 } })
+  rig.backendLeg.deliver({ state: 'play', name: 'game_state_change', data: { reason: 13, gameMode: 0 } })
+
+  assert.equal(rig.core.targetLoginReady, true)
+  assert.equal(rig.core.moveKind, 'transfer', 'a cache with no chunk is not a world')
+  assert.equal(rig.core.metrics.reconfigurationsCompleted, 0)
+  assert.deepEqual(rig.frontLeg.frames().slice(mark), [], 'nothing is released to the client')
+  assert.equal(rig.core.session.detachCount, 0, 'the client keeps its connection while it waits')
+
+  // The first terrain frame releases it, with the state the cache holds.
+  rig.backendLeg.deliver({ state: 'play', name: 'map_chunk', data: { x: 0, z: 0 } })
+  assert.equal(rig.core.metrics.reconfigurationsCompleted, 1)
+  assert.equal(rig.core.moveKind, null)
+  assert.ok(rig.frontLeg.frames().slice(mark).some(frame => frame.name === 'login'),
+    'the release replays the target login')
+})
+
+test('the restored cache is released once, on the dial that follows the restore', () => {
+  const rig = makeSeamless()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  rig.core.abortTransfer('target_unreachable')
+  assert.equal(rig.core.restoring, true)
+  rig.frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(rig.core.cache.stats().chunkFrames, 1, 'the snapshot is back in the cache')
+  assert.equal(rig.core.move.restored, true)
+
+  // The dial after a restore starts a fresh backend session: the cache it will
+  // fill must not append to the snapshot the client is holding. That release
+  // happens once, not on every later reconnect.
+  rig.clock.tick(2000) // the retry backs off: 1000 ms, then 2000 ms
+  assert.equal(rig.events.length, 2)
+  assert.equal(rig.core.cache.stats().chunkFrames, 0, 'the snapshot was released for the new session')
+  assert.equal(rig.core.move.restored, false, 'the restored phase is consumed, not sticky')
+})
+
 test('start_configuration re-enters configuration on the same connection', () => {
   const rig = makeSeamless()
   warmBackend(rig)
@@ -246,6 +366,9 @@ test('start_configuration re-enters configuration on the same connection', () =>
   assert.equal(rig.core.attached, true)
   assert.equal(rig.core.cache.warm, false, 'the restarted phase is a new session state')
   assert.deepEqual(rig.frontLeg.endReasons(), [])
+  // #87: the round starts on the intent here too.
+  assert.deepEqual(rig.frontLeg.reconfigurations(), [{ reason: 'reconfigure' }])
+  assert.equal(rig.core.metrics.reconfigurationsStarted, 1)
 
   // The restarted phase arrives on the same leg; the client follows it.
   landOnTarget(rig)

@@ -57,7 +57,19 @@ export function itemStack (itemId, itemCount = 1) {
 // withholds `finish_configuration` until the puppet answers it (#21). Off by
 // default, so the spike and the other rungs keep the configuration sequence the
 // library writes.
-export async function createFakeBackend ({ port = 0, logStream = process.stdout, viewDistance = null, codeOfConduct = false } = {}) {
+//
+// `chunks` (default true) makes this server behave like a target that never
+// sends terrain: the join still completes, and no chunk batch or chunk frame
+// follows. Off-line transfers cannot produce that from a real server on demand,
+// and it is the case #87 needs: a client released on such a cache lands in an
+// empty world.
+export async function createFakeBackend ({
+  port = 0,
+  logStream = process.stdout,
+  viewDistance = null,
+  codeOfConduct = false,
+  chunks = true
+} = {}) {
   const mcData = minecraftData(VERSION)
   const Chunk = prismarineChunk(VERSION)
   const grassState = mcData.blocksByName.grass_block.defaultState
@@ -187,27 +199,28 @@ export async function createFakeBackend ({ port = 0, logStream = process.stdout,
     received.logins++
     log('playerJoin', { address: client.socket.remoteAddress })
 
-    const chunk = makeFlatChunk()
-    const light = chunk.dumpLight()
-
     client.write('login', { ...mcData.loginPacket, entityId: 42, viewDistance: join.viewDistance })
     client.write('game_state_change', { reason: 'level_chunks_load_start', gameMode: 0 })
     client.write('position', { teleportId: ++teleportSeq, ...join.position, dx: 0, dy: 0, dz: 0, flags: 0 })
-    client.write('chunk_batch_start', {})
-    client.write('map_chunk', {
-      x: 0,
-      z: 0,
-      heightmaps: [],
-      chunkData: chunk.dump(),
-      blockEntities: [],
-      skyLightMask: light.skyLightMask,
-      blockLightMask: light.blockLightMask,
-      emptySkyLightMask: light.emptySkyLightMask,
-      emptyBlockLightMask: light.emptyBlockLightMask,
-      skyLight: light.skyLight,
-      blockLight: light.blockLight
-    })
-    client.write('chunk_batch_finished', { batchSize: 1 })
+    if (chunks) {
+      const chunk = makeFlatChunk()
+      const light = chunk.dumpLight()
+      client.write('chunk_batch_start', {})
+      client.write('map_chunk', {
+        x: 0,
+        z: 0,
+        heightmaps: [],
+        chunkData: chunk.dump(),
+        blockEntities: [],
+        skyLightMask: light.skyLightMask,
+        blockLightMask: light.blockLightMask,
+        emptySkyLightMask: light.emptySkyLightMask,
+        emptyBlockLightMask: light.emptyBlockLightMask,
+        skyLight: light.skyLight,
+        blockLight: light.blockLight
+      })
+      client.write('chunk_batch_finished', { batchSize: 1 })
+    }
 
     // A real backend sends the player inventory after the join settles. One
     // sentinel slot makes a later full frame detectable: if the cache layered

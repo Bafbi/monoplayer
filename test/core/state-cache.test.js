@@ -171,7 +171,7 @@ test('snapshot exposes every domain and metrics count cached vs dropped', () => 
   const snapBefore = cache.snapshot()
   assert.deepEqual(
     Object.keys(snapBefore).sort(),
-    ['blocks', 'chunks', 'config', 'entities', 'frameSeq', 'generic', 'inventories', 'latest', 'prefix', 'warm'].sort()
+    ['blocks', 'chunkFrames', 'chunks', 'config', 'entities', 'frameSeq', 'generic', 'inventories', 'latest', 'prefix', 'warm'].sort()
   )
   cache.push('play', 'login', buf('login'))
   cache.push('play', 'keep_alive', buf('ka'))
@@ -181,6 +181,35 @@ test('snapshot exposes every domain and metrics count cached vs dropped', () => 
   assert.deepEqual(cache.snapshot().prefix.map(f => f.name), ['login'])
   assert.equal(s.metrics.framesCached, 1)
   assert.equal(s.metrics.framesDropped, 2)
+})
+
+test('the cache counts the chunk frames it holds, in the prefix and in the chunk ring', () => {
+  const cache = createStateCache()
+  assert.equal(cache.stats().chunkFrames, 0, 'an empty cache holds no chunk')
+
+  // Before warm every play frame joins the prefix, chunk frames included. A
+  // client released on this cache still gets terrain, so the count is the chunk
+  // data the cache holds, not the chunk ring's size (#87).
+  cache.push('play', 'map_chunk', buf('c0'), { x: 0, z: 0 })
+  assert.equal(cache.stats().chunkFrames, 1)
+  assert.equal(cache.stats().sizes.chunks, 0, 'pre-warm chunks live in the prefix')
+
+  cache.push('play', 'chunk_batch_finished', buf('marker'), {})
+  cache.push('play', 'map_chunk', buf('c1'), { x: 1, z: 0 })
+  assert.equal(cache.stats().chunkFrames, 2)
+  assert.equal(cache.stats().sizes.chunks, 1, 'after warm they live in the chunk ring')
+
+  // The count travels with the snapshot, so a restore puts it back, and a reset
+  // starts the next session at zero.
+  const snapshot = cache.snapshot()
+  cache.reset()
+  assert.equal(cache.stats().chunkFrames, 0)
+  cache.restore(snapshot)
+  assert.equal(cache.stats().chunkFrames, 2)
+
+  // An unload is not chunk data: it removes terrain and never adds it.
+  cache.push('play', 'unload_chunk', buf('u'), { chunkX: 0, chunkZ: 0 })
+  assert.equal(cache.stats().chunkFrames, 2)
 })
 
 test('restore puts a snapshot back exactly, warm and sequence numbers included', () => {

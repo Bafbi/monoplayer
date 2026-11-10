@@ -11,6 +11,7 @@
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -59,6 +60,19 @@ function waitFor (pred, label, ms = 10_000) {
   })
 }
 
+// A port nothing listens on: the cheapest dial a target refuses. The socket is
+// bound and closed again, so the number is real and the refusal is the kernel's.
+async function freePort () {
+  const probe = net.createServer()
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject)
+    probe.listen(0, '127.0.0.1', resolve)
+  })
+  const port = probe.address().port
+  await new Promise(resolve => probe.close(resolve))
+  return port
+}
+
 function detail (value) {
   if (value === undefined) return ''
   const json = JSON.stringify(value, (key, inner) => typeof inner === 'bigint' ? String(inner) : inner)
@@ -89,6 +103,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
   let fake = null
   let fake2 = null
+  // #87: the kept-connection rig gets its own backend as the configured base.
+  // The hub fake runs a code-of-conduct gate, and a restored client sits in play
+  // where nobody can answer it, so the base reconnect would stall on a gate this
+  // rung is not about.
+  let seamlessBase = null
+  let fakeCold = null
+  let coldProxy = null
   let handshakeProxy = null
   let front = null
   let backend = null
@@ -102,6 +123,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let seamlessFront = null
   let seamlessBackend = null
   let seamlessCore = null
+  // #87: the kept-connection rig's dial bookkeeping. A failed dial under a move
+  // leaves the move in flight; the rung records that state and decides when the
+  // follow budget runs out.
+  let dialFailureState = null
+  let giveUpOnFailedDial = false
 
   const evidence = {
     frontPort: null,
@@ -119,6 +145,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     logs.push({ event, fields })
     if (verbose) process.stderr.write(`[log] ${event} ${detail(fields)}\n`)
   }
+
+  // The core's lifecycle records arrive as one JSON line inside a
+  // `seamlessCore` entry, because the rig hands it a logStream. This reads
+  // them back so a check can assert on what the core decided.
+  const coreLogEvents = (from = 0) => logs.slice(from)
+    .filter(entry => entry.event === 'seamlessCore')
+    .map(entry => {
+      try { return JSON.parse(entry.fields?.line ?? '') } catch { return null }
+    })
+    .filter(entry => entry !== null)
 
   function check (id, name, ok, info = null) {
     const record = { id, name, ok: ok === true, detail: info }
@@ -1153,9 +1189,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       chat: 'full',
       log
     })
+    seamlessBase = await createFakeBackend({ port: 0, logStream: null })
     seamlessBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
-      port: fake.port,
+      port: seamlessBase.port,
       version: VERSION,
       username: 'GlowSquidye',
       dialogAction: 'last',
@@ -1190,14 +1227,33 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       seamlessReconnecting = true
       seamlessCore.session.backendConnecting({ initial: false })
       try {
-        seamlessBackend.setTarget(dueTarget ?? { host: '127.0.0.1', port: fake.port }, {
+        seamlessBackend.setTarget(dueTarget ?? { host: '127.0.0.1', port: seamlessBase.port }, {
           keepCookies: dueTarget !== undefined && dueTarget !== null,
           transfer: dueTarget !== undefined && dueTarget !== null
         })
         await seamlessBackend.connect()
       } catch (error) {
+        log('seamlessBackendReconnectFailed', {
+          error: String(error?.message ?? error).slice(0, 300),
+          state: seamlessCore.session.state
+        })
+        // #87: a dial the target refused is not the target dying. The move is
+        // still in flight; the rung records that, then decides whether to
+        // retry (the rig has one dial per reconnect) or to spend the follow
+        // budget on it, which is what start-live does after its failures.
+        dialFailureState = {
+          moveKind: seamlessCore.moveKind,
+          state: seamlessCore.session.state,
+          clientReconfiguring: seamlessCore.clientReconfiguring,
+          restored: seamlessCore.metrics.reconfigurationsRestored
+        }
+        if (giveUpOnFailedDial) {
+          giveUpOnFailedDial = false
+          seamlessCore.abortTransfer('target_unreachable')
+          seamlessBackend.setTarget({ host: '127.0.0.1', port: seamlessBase.port }, { keepCookies: false })
+          return
+        }
         seamlessCore.session.fail()
-        log('seamlessBackendReconnectFailed', { error: String(error?.message ?? error).slice(0, 300) })
       } finally {
         seamlessReconnecting = false
       }
@@ -1213,10 +1269,171 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (seamlessCore.metrics.attaches !== 1) {
       throw new Error(`the kept-connection rig attached ${seamlessCore.metrics.attaches} times, expected 1`)
     }
+    // The puppet is settled on its base and no move is in flight: every check
+    // below starts a move from here.
+    const waitForBaseWarm = label => waitFor(
+      () => !seamlessReconnecting &&
+        seamlessCore.session.state === 'attached' &&
+        seamlessCore.session.warmReady === true &&
+        seamlessCore.moveKind === null,
+      label,
+      20_000
+    )
 
+    // --- O38-O41: the cases the testbed cannot produce (#87) ---
+    // `mise run testbed:run` passes because its transfer succeeds on the first
+    // dial and its target warms in five seconds. A cold target, a refused dial,
+    // and a restore never happen there, so they are proved here first, on a real
+    // front leg and a real client, before the happy path below.
+    //
+    // O38: the round starts on the intent.
+    // O39: a refused dial leaves the move in flight instead of failing it.
+    // O40: the follow budget's give-up restores the previous state.
+    // O41: a target that sent no chunk frame never releases the client.
+    const roundsBeforeCold = seamlessCore.metrics.reconfigurationsStarted
+    fakeCold = await createFakeBackend({ port: 0, logStream: null, chunks: false })
+    coldProxy = await createHandshakeProxy({ targetPort: fakeCold.port, log })
+    const coldMark = b5.names.length
+    const coldLogMark = logs.length
+    seamlessBase.sendTransfer('127.0.0.1', coldProxy.port)
+    // The frame crosses asynchronously; the round is due before the puppet's
+    // dial to the cold target has produced anything.
+    await waitFor(
+      () => seamlessCore.session.state === 'transferring',
+      'the cold target transfer intent',
+      10_000
+    )
+    const coldIntent = {
+      rounds: seamlessCore.metrics.reconfigurationsStarted - roundsBeforeCold,
+      clientReconfiguring: seamlessCore.clientReconfiguring,
+      state: seamlessCore.session.state,
+      targetLogins: fakeCold.received.logins
+    }
+    await waitFor(
+      () => seamlessCore.targetLoginReady === true && seamlessCore.clientReconfiguring === false,
+      'the cold target configuration and its play login',
+      25_000
+    )
+    const coldCoreEvents = coreLogEvents(coldLogMark)
+    await settleUntil(
+      () => coreLogEvents(coldLogMark).some(entry => entry.event === 'reconfigurationWaitingWorld'),
+      5_000
+    )
+    const coldFrames = b5.names.slice(coldMark).map(frame => ({ state: frame.state, name: frame.name }))
+    check(
+      'O38',
+      "a followed transfer starts the client's configuration on the intent",
+      coldIntent.rounds === 1 &&
+        coldIntent.clientReconfiguring === true &&
+        coldIntent.state === 'transferring' &&
+        coldIntent.targetLogins === 0 &&
+        coldFrames.some(frame => frame.name === 'start_configuration'),
+      { ...coldIntent, firstFrames: coldFrames.slice(0, 4).map(frame => frame.name) }
+    )
+    check(
+      'O41',
+      'a target whose cache holds no chunk never releases the client',
+      seamlessCore.metrics.reconfigurationsCompleted === 0 &&
+        seamlessCore.moveKind === 'transfer' &&
+        coldFrames.every(frame => frame.name !== 'login') &&
+        b5.ended === null,
+      {
+        completed: seamlessCore.metrics.reconfigurationsCompleted,
+        moveKind: seamlessCore.moveKind,
+        chunkFrames: seamlessCore.cache.stats().chunkFrames,
+        frames: coldFrames.map(frame => frame.name).slice(-6),
+        waitingWorld: coldCoreEvents.some(entry => entry.event === 'reconfigurationWaitingWorld'),
+        ended: b5.ended
+      }
+    )
+    check(
+      'O41b',
+      'the held release is the chunk gate, not a stalled client',
+      coldCoreEvents.some(entry => entry.event === 'reconfigurationWaitingWorld') &&
+        seamlessCore.cache.stats().chunkFrames === 0,
+      {
+        waitingWorld: coldCoreEvents.filter(entry => entry.event === 'reconfigurationWaitingWorld'),
+        chunkFrames: seamlessCore.cache.stats().chunkFrames
+      }
+    )
+    // The client finished the cold target's round, so giving the target up opens
+    // one more round and serves the previous server's configuration through it.
+    const coldRestoreMark = b5.names.length
+    seamlessCore.abortTransfer('target_unreachable')
+    await bot5.waitFor(
+      () => b5.names.slice(coldRestoreMark).filter(frame => frame.name === 'login').length >= 1,
+      'the restored play state after the cold target',
+      20_000
+    )
+    await waitForBaseWarm('the puppet back on the configured backend')
+
+    // --- O39-O40: a refused dial, and the give-up that restores the session ---
+    // A port that nothing listens on: the dial is refused as surely as a target
+    // that closes a transfer intent from the same account.
+    const deadPort = await freePort()
+    const dialMark = b5.names.length
+    const dialLogMark = logs.length
+    giveUpOnFailedDial = true
+    seamlessBase.sendTransfer('127.0.0.1', deadPort)
+    await waitFor(
+      () => dialFailureState !== null,
+      'the refused dial on the followed target',
+      20_000
+    )
+    check(
+      'O39',
+      'a dial the target refuses before its first frame leaves the move in flight',
+      dialFailureState.moveKind === 'transfer' &&
+        dialFailureState.state === 'transferring' &&
+        dialFailureState.clientReconfiguring === true &&
+        dialFailureState.restored === 1,
+      dialFailureState
+    )
+    await bot5.waitFor(
+      () => b5.names.slice(dialMark).filter(frame => frame.name === 'login').length >= 1,
+      'the restored play state on the kept connection',
+      20_000
+    )
+    await waitFor(
+      () => seamlessCore.metrics.reconfigurationsRestored === 2 &&
+        seamlessCore.session.state === 'attached',
+      'the restore to settle on the kept connection',
+      20_000
+    )
+    const restoreLogs = logs.slice(dialLogMark)
+    const restoreFrames = b5.names.slice(dialMark).map(frame => ({ state: frame.state, name: frame.name }))
+    check(
+      'O40',
+      'a target given up on restores the previous state on the connection the client kept',
+      seamlessCore.metrics.reconfigurationsRestored === 2 &&
+        b5.ended === null &&
+        b5.kick === null &&
+        restoreFrames.some(frame => frame.state === 'configuration' && frame.name === 'finish_configuration') &&
+        restoreFrames.some(frame => frame.name === 'login') &&
+        restoreLogs.filter(entry => entry.event === 'frontClientError').length === 0,
+      {
+        restored: seamlessCore.metrics.reconfigurationsRestored,
+        ended: b5.ended,
+        kick: b5.kick,
+        configuration: restoreFrames.filter(frame => frame.state === 'configuration').map(frame => frame.name),
+        play: restoreFrames.filter(frame => frame.state === 'play').map(frame => frame.name).slice(0, 6),
+        frontClientErrors: restoreLogs
+          .filter(entry => entry.event === 'frontClientError')
+          .map(entry => entry.fields)
+      }
+    )
+    await waitForBaseWarm('the puppet warm on the configured backend again')
+
+    // --- O33-O35: the kept connection survives a real followed transfer ---
+    // The counts below are this hop's, so the rung's earlier moves do not count.
+    const baseline = {
+      seamless: seamlessCore.metrics.transfersSeamless,
+      completed: seamlessCore.metrics.reconfigurationsCompleted,
+      restored: seamlessCore.metrics.reconfigurationsRestored
+    }
     const seamlessMark = b5.names.length
     const seamlessLogMark = logs.length
-    fake.sendTransfer(target.host, target.port)
+    seamlessBase.sendTransfer(target.host, target.port)
     await waitFor(
       () => seamlessCore.metrics.reconfigurationsCompleted === 1,
       'the kept connection lands on the target',
@@ -1240,7 +1457,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const seamlessAcks = seamlessLogs.filter(entry => entry.event === 'frontReconfigurationAcknowledged')
     evidence.seamless = {
       target,
-      reconfigurations: seamlessCore.metrics.reconfigurationsCompleted,
+      moves: seamlessCore.metrics.reconfigurationsCompleted,
+      restores: seamlessCore.metrics.reconfigurationsRestored,
       attaches: seamlessCore.metrics.attaches,
       configuration: seamlessConfig.length,
       frontClientErrors: seamlessClientErrors.length,
@@ -1250,17 +1468,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O33',
       'with transfer.keepConnection on, a followed transfer keeps the client\'s connection',
       !seamlessNames.includes('transfer') &&
-        seamlessCore.metrics.transfersSeamless === 1 &&
+        seamlessCore.metrics.transfersSeamless - baseline.seamless === 1 &&
         seamlessNames.includes('start_configuration') &&
         b5.ended === null && b5.kick === null &&
         seamlessClientErrors.length === 0 &&
         seamlessAcks.length === 1 &&
-        seamlessAcks[0].fields?.flushedFrames > 0,
+        // #87: the round starts on the intent, so it is on the client's wire
+        // before the target's configuration is relayed (the round's own ordering
+        // against the dial is O38's check).
+        seamlessNames.includes('start_configuration') &&
+        seamlessNames.indexOf('start_configuration') < seamlessNames.indexOf('registry_data'),
       {
         frames: seamlessNames.slice(0, 10),
         ended: b5.ended,
         kick: b5.kick,
-        seamless: seamlessCore.metrics.transfersSeamless,
+        seamless: seamlessCore.metrics.transfersSeamless - baseline.seamless,
         frontClientErrors: seamlessClientErrors.length,
         acks: seamlessAcks.map(entry => entry.fields)
       }
@@ -1271,13 +1493,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       seamlessConfig.includes('registry_data') &&
         seamlessConfig.includes('finish_configuration') &&
         seamlessNames.includes('login') &&
-        seamlessCore.metrics.reconfigurationsCompleted === 1 &&
-        seamlessCore.metrics.reconfigurationsRestored === 0 &&
+        seamlessCore.metrics.reconfigurationsCompleted - baseline.completed === 1 &&
+        seamlessCore.metrics.reconfigurationsRestored - baseline.restored === 0 &&
         seamlessCore.session.state === 'attached',
       {
         configuration: seamlessConfig.length,
         names: seamlessNames.slice(-6),
-        reconfigurations: seamlessCore.metrics.reconfigurationsCompleted,
+        reconfigurations: seamlessCore.metrics.reconfigurationsCompleted - baseline.completed,
+        restored: seamlessCore.metrics.reconfigurationsRestored - baseline.restored,
         state: seamlessCore.session.state
       }
     )
@@ -1290,6 +1513,39 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         change.location?.z === SEAMLESS_BLOCK.z),
       'the target block on the kept connection'
     )
+    // --- O42: an error on the client's connection ends it with a reason (#87) ---
+    // The library's default handler ended the client with the Error object, and
+    // the failed kick became the end reason 30 s later. The leg owns that policy
+    // now, so the same error produces one line of text and no serialization
+    // failure. This runs last because it ends the client.
+    const probeMark = logs.length
+    const errorClient = seamlessFront.attached
+    errorClient?.emit('error', new Error('loopback_probe'))
+    await waitFor(
+      () => b5.ended !== null || b5.kick !== null,
+      'the client to be ended by the leg error policy',
+      10_000
+    )
+    const probeLogs = logs.slice(probeMark)
+    const probeSerialization = probeLogs.filter(entry =>
+      entry.event === 'frontClientError' && String(entry.fields?.error ?? '').startsWith('Serialization error'))
+    // The kick's reason is an anonymous NBT compound carrying one text string
+    // (`node tools/protocol.mjs frame 26.1 play toClient kick_disconnect`).
+    const probeKickText = b5.kick?.reason?.value?.text?.value ?? null
+    check(
+      'O42',
+      "an error on the client's connection ends it with a reason, not a serialization failure",
+      Boolean(errorClient) &&
+        probeKickText === 'front_error: loopback_probe' &&
+        probeSerialization.length === 0,
+      {
+        kickText: probeKickText,
+        ended: b5.ended,
+        serializationErrors: probeSerialization.map(entry => entry.fields),
+        frontClientErrors: probeLogs.filter(entry => entry.event === 'frontClientError').map(entry => entry.fields)
+      }
+    )
+
     check(
       'O35',
       'the client on the kept connection is in the target state without rejoining',
@@ -1320,8 +1576,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await backend?.close?.() } catch { /* best effort */ }
     try { await seamlessBackend?.close?.() } catch { /* best effort */ }
     try { fake?.close?.() } catch { /* best effort */ }
+    try { seamlessBase?.close?.() } catch { /* best effort */ }
     try { handshakeProxy?.close?.() } catch { /* best effort */ }
     try { fake2?.close?.() } catch { /* best effort */ }
+    try { fakeCold?.close?.() } catch { /* best effort */ }
+    try { coldProxy?.close?.() } catch { /* best effort */ }
 
     if (failed && exitCode === 0) exitCode = 1
     if (runError && exitCode === 0) exitCode = 1

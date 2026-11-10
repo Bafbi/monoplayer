@@ -141,6 +141,13 @@ export function createStateCache (overrides = {}) {
 
   let warm = false
   let frameSeq = 0
+  // #87: how many chunk frames this session's cache accepted, whichever domain
+  // they landed in. Before warm a chunk frame joins the join prefix and after
+  // warm the chunk ring, so the ring's size alone says nothing about whether the
+  // target ever sent terrain. This is a "did the target send any" count, not a
+  // measure of what the cache still holds: an unload or an eviction does not
+  // decrement it, and a caller that needs deliverable state reads sizes.chunks.
+  let chunkFrames = 0
 
   function ringPush (domain, entry) {
     const ring = rings[domain]
@@ -203,6 +210,8 @@ export function createStateCache (overrides = {}) {
     }
 
     metrics.framesCached++
+    // An unload removes terrain and adds none, so only the set op counts.
+    if (classification.domain === 'chunk' && classification.op === 'set') chunkFrames++
 
     if (classification.domain === 'prefix') {
       // Join prefix: captured verbatim until warm. Bounded; an oversized join
@@ -338,6 +347,7 @@ export function createStateCache (overrides = {}) {
     return {
       warm: warm,
       frameSeq: frameSeq,
+      chunkFrames: chunkFrames,
       config: [...config],
       prefix: [...prefix],
       chunks: [...chunks.values()],
@@ -358,6 +368,9 @@ export function createStateCache (overrides = {}) {
       warm,
       chunkBound: opts.maxChunks,
       chunkBytes,
+      // Chunk frames this session's cache accepted, in the prefix or the ring
+      // (#87). Zero means the target has sent no terrain at all.
+      chunkFrames,
       sizes: {
         prefix: prefix.length,
         config: config.length,
@@ -431,6 +444,7 @@ export function createStateCache (overrides = {}) {
 
     // A snapshot taken before warm restores as unwarm, so the join prefix
     // stays pinned exactly where it was.
+    chunkFrames = Number.isFinite(snapshot.chunkFrames) ? snapshot.chunkFrames : 0
     warm = snapshot.warm !== false
     frameSeq = Number.isFinite(snapshot.frameSeq) && snapshot.frameSeq > maxSeq
       ? snapshot.frameSeq
@@ -451,6 +465,7 @@ export function createStateCache (overrides = {}) {
     rings.generic.length = 0
     warm = false
     frameSeq = 0
+    chunkFrames = 0
   }
 
   return { push, snapshot, restore, stats, reset, forceWarm, raiseChunkBound, get warm () { return warm } }
