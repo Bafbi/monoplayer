@@ -41,7 +41,7 @@ hand-created Secrets survive. The next `up` costs the same cold start and nothin
 `gate:up` wakes `paper` and `paper-conduct`, the two rows a rung drives. Name the
 others to wake them: `mise run gate:up -- velocity paper-m4 toxiproxy`. A row that
 was already awake is woken again after the apply, so a second `up` for a different
-row never stops the first. `gate:down` stops all five, and rows wake by name. No rung drives
+row does not leave the first stopped. `gate:down` stops all five, and rows wake by name. No rung drives
 those three, which is why they stay off.
 
 `scripts/gate-lane.sh` is the script behind the tasks. `MONOPLAYER_GATE_POLL` sets the

@@ -12,8 +12,10 @@
 #
 # Why: the lane used to run 24/7 for runs that last minutes — 6,214 MiB of Paper,
 # Velocity and toxiproxy, two of which no rung drives. At rest the five
-# deployments sit at 0, which is what the manifests commit, so a bare
-# kubectl apply -k deploy/driver cannot wake the lane by accident.
+# deployments sit at 0, which is what the manifests commit. A bare
+# `kubectl apply -k deploy/driver` wakes nothing, and it stops whatever was awake,
+# because an apply reconciles every field in the tree. That is why only this
+# script applies, and why up wakes the awake rows again after its own apply.
 #
 # A cold start pays Paper's download and a flat-world write into a fresh emptyDir,
 # because every gate volume dies with its pod. Measured at 90 s on the 26.2 gate
@@ -48,7 +50,9 @@ POLL=${MONOPLAYER_GATE_POLL:-5}
 MANIFESTS=$ROOT/deploy/driver
 # Every manifest in the tree pins its namespace, so the apply target and the scale
 # target have to be the same namespace or the two halves of a command disagree.
-MANIFEST_NAMESPACE=$(sed -n 's/^  name: \(.*\)$/\1/p' "$MANIFESTS/namespace.yaml" | head -1)
+# awk with an exit reads one line and no more: a piped head would let sed take a
+# SIGPIPE, and pipefail would turn that into a silent death.
+MANIFEST_NAMESPACE=$(awk '/^  name: /{print $2; exit}' "$MANIFESTS/namespace.yaml")
 
 # Every Deployment deploy/driver declares. down covers all five; up wakes the two
 # a rung drives unless it is told which ones it needs.
@@ -120,15 +124,20 @@ pods_of () {
   kubectl -n "$GATE_NAMESPACE" get pods -l "app.kubernetes.io/name=monoplayer-gate-b-$1" -o name || true
 }
 
+# The tree pins its namespace in every manifest, so an apply target and a scale
+# target that disagree would split one command across two lanes.
+require_manifest_namespace () {
+  [ "$GATE_NAMESPACE" = "$MANIFEST_NAMESPACE" ] \
+    || die "deploy/driver applies to $MANIFEST_NAMESPACE and this run would scale $GATE_NAMESPACE: they are one lane, so name the same namespace"
+}
+
 up () {
   guard
+  require_manifest_namespace
   local names="${*:-$DRIVEN_WORKLOADS}" name pending start deadline awake='' wake
   for name in $names; do
     known "$name" || die "unknown gate deployment \"$name\": the gate workloads are $GATE_WORKLOADS"
   done
-  [ "$GATE_NAMESPACE" = "$MANIFEST_NAMESPACE" ] \
-    || die "deploy/driver applies to $MANIFEST_NAMESPACE and this run would scale $GATE_NAMESPACE: they are one lane, so name the same namespace"
-
   # The apply is a full reconcile to the tree, and the tree says 0, so it stops a
   # row another up woke. Those rows are woken again below: waking a row must never
   # stop the one beside it.
@@ -160,7 +169,7 @@ up () {
   kubectl -n "$GATE_NAMESPACE" scale deploy $wake --replicas=1 >/dev/null
   say "woke $names"
   if [ -n "$awake" ]; then
-    say "kept $awake awake: the apply puts every row back to the tree's 0"
+    say "woke $awake again after the apply, which puts every row back to the tree's 0"
   fi
   say "waiting up to ${READY_TIMEOUT}s for $names to report ready"
   say "cold start is $COLD_START (#115)"
@@ -187,6 +196,7 @@ up () {
 
 down () {
   guard
+  require_manifest_namespace
   local name left start deadline
   # By name, never by app.kubernetes.io/part-of: paper-hub and paper-sky carry
   # that label too, and they are the transfer testbed's.

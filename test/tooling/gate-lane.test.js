@@ -107,7 +107,9 @@ const SHIM = [
   'state="$KUBECTL_STATE"',
   'count () { n=0; [ -f "$state/$1" ] && n=$(cat "$state/$1"); echo $((n+1)) > "$state/$1"; printf \'%s\' "$n"; }',
   'case " $* " in',
-  '  *" apply -k "*) cat > /dev/null; printf \'configured\n\'; exit 0 ;;',
+  // An apply reconciles the tree, so a case's awake row only reads as awake before one.
+  // Removing that marker makes the read-after-apply ordering fail, which is the point.
+  '  *" apply -k "*) cat > /dev/null; touch "$state/applied"; printf \'configured\n\'; exit 0 ;;',
   '  *" scale "*) printf \'scaled\n\'; exit 0 ;;',
   // One named Secret can be missing, so a case can prove which Deployment reads
   // which, rather than only that the check exists.
@@ -117,7 +119,7 @@ const SHIM = [
   // The two replica reads, answered apart: spec.replicas is what the lane claims, and
   // KUBECTL_AWAKE names one row a case leaves running, so a second up can be shown to
   // keep it running.
-  '  *".spec.replicas"*) awake="${KUBECTL_AWAKE:-none}"; case " $* " in *" $awake "*) printf \'1\' ;; *) printf \'0\' ;; esac; exit 0 ;;',
+  '  *".spec.replicas"*) awake="${KUBECTL_AWAKE:-none}"; if [ -f "$state/applied" ]; then printf \'0\'; exit 0; fi; case " $* " in *" $awake "*) printf \'1\' ;; *) printf \'0\' ;; esac; exit 0 ;;',
   '  *"readyReplicas"*) if [ "$(count ready)" -lt "${KUBECTL_READY_AFTER:-0}" ]; then exit 0; fi; printf \'1\'; exit 0 ;;',
   // The pod listing a stop waits on: a pod on the first listing, none after.
   '  *" get pods "*) if [ "${KUBECTL_PODS_STUCK:-0}" = 1 ]; then printf \'pod/gate-stuck\n\'; exit 0; fi; if [ "$(count pods)" -lt 1 ]; then printf \'pod/gate-abc\n\'; fi; exit 0 ;;',
@@ -297,18 +299,40 @@ test('a second up does not stop the row the first one woke', () => {
   assert.equal(status, 0, output)
   assert.deepEqual(scaled(calls), [{ names: ['paper-conduct', 'velocity'], replicas: 1 }],
     'the woken rows are re-woken after the apply: ' + calls.join(' | '))
-  assert.match(output, /kept velocity awake/, 'and the task says it did that')
+  assert.match(output, /woke velocity again after the apply/, 'and the task says it did that')
+  // The read has to be before the apply: after it, the tree has the row at 0 and there
+  // is nothing to notice. The shim stops answering 1 once it sees an apply.
+  const applied = calls.findIndex(line => line.includes('apply -k '))
+  const read = calls.findIndex(line => line.includes('velocity') && line.includes('.spec.replicas'))
+  assert.ok(read >= 0 && read < applied, 'the awake rows are read before the apply: ' + calls.join(' | '))
   // The wait still covers only the rows this run asked for.
   assert.match(output, /ready after \d+s: paper-conduct$/m, 'only paper-conduct is waited on')
+
+  // A row that is both awake and asked for is woken once, not twice.
+  const both = run(space(), ['up', 'paper-conduct'], { KUBECTL_AWAKE: 'paper-conduct' })
+  assert.equal(both.status, 0, both.output)
+  assert.deepEqual(scaled(both.calls), [{ names: ['paper-conduct'], replicas: 1 }],
+    'one scale call, one name: ' + both.calls.join(' | '))
+})
+
+test('status is read-only, and it is refused the live lane too', () => {
+  // The header says the script never touches the live lane. status writes nothing, but
+  // a read aimed at monoplayer is still a read of the product, so it is refused as well.
+  const { status, output, calls } = run(space(), ['status'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer' })
+  assert.equal(status, 2, output)
+  assert.match(output, /refusing/)
+  assert.deepEqual(calls, [], 'nothing was read')
 })
 
 test('a namespace the tree does not apply to is refused', () => {
   // The manifests pin their namespace, so an override would apply to gate-b and
   // scale somewhere else. Half-applied lanes are how a test lane grows an owner.
-  const { status, output, calls } = run(space(), ['up'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-c' })
-  assert.equal(status, 2, output)
-  assert.match(output, /applies to monoplayer-gate-b/)
-  assert.deepEqual(calls, [], 'nothing was applied or scaled')
+  for (const verb of ['up', 'down']) {
+    const { status, output, calls } = run(space(), [verb], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-c' })
+    assert.equal(status, 2, output)
+    assert.match(output, /applies to monoplayer-gate-b/)
+    assert.deepEqual(calls, [], verb + ' applied or scaled nothing')
+  }
 })
 
 test('the Secret check follows the Deployment that reads it', () => {
