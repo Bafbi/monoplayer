@@ -234,6 +234,11 @@ set_image() {
   local ref="$IMAGE_REPO:$1"
   kubectl -n "$DEV_NAMESPACE" set image deploy/monoplayer "monoplayer=$ref" >/dev/null
   say "dev monoplayer now runs $ref"
+  # No manifest records this pin, so the image retention job cannot see it: it
+  # keeps the last 20 sha-* tags and a one-day grace, nothing more (#118). The
+  # reminder is part of the command because that is the moment the operator knows
+  # which tag the lane is on.
+  say "if this pin must outlive the next 20 builds, register it: echo '$1  # dev' >> deploy/pins.txt"
   kubectl -n "$DEV_NAMESPACE" rollout status deploy/monoplayer --timeout="$READY_TIMEOUT" >/dev/null \
     || die "the dev proxy did not become ready on $ref" 1
 }

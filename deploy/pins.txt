@@ -1,0 +1,20 @@
+# Image retention pin list (#118).
+#
+# The retention job keeps a tag or digest named by a manifest under deploy/ on
+# its own. This file is for a pin no manifest carries: the dev lane's
+# 'mise run dev:image sha-<7>' sets the image with kubectl at run time, so
+# nothing in Git records it.
+#
+# One pin per line, '#' starts a comment. Either a tag (sha-1a2b3c4) or a digest
+# (sha256:...). A line here is an allowlist entry, not a deletion request: the
+# job keeps what this file names.
+#
+# Add a line when you point a lane at an image by hand, and drop it when the lane
+# moves on. A forgotten line is a tag that is never deleted, which is the safe
+# failure.
+
+# No pin is registered today: every lane manifest says ghcr.io/bafbi/monoplayer:main,
+# and the dev lane runs :main again since #134. Add a line below when
+# 'mise run dev:image <sha-tag>' names a commit and the lane must keep it.
+#
+# sha-1a2b3c4    # dev, until the next merge
