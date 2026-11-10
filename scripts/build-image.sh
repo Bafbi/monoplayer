@@ -1,7 +1,10 @@
 #!/bin/sh
-# Build the Monoplayer image and push it to the cluster Zot registry.
+# Build the Monoplayer image and push it to the cluster Zot registry. PUSH=0
+# builds it and publishes nothing: a Dockerfile or deploy/ change needs the
+# build, not the push.
 #
 #   scripts/build-image.sh
+#   PUSH=0 scripts/build-image.sh
 #   REGISTRY=zot.deepmine-core.svc:5000 scripts/build-image.sh
 #
 # Prints `<image> <tag> <digest>`. Pin the deployment to that digest.
@@ -17,6 +20,16 @@ SHA=$(git -C "$ROOT" rev-parse --short=7 HEAD)
 CREATED=$(git -C "$ROOT" log -1 --format=%cI)
 IMAGE="$REGISTRY/deepmine/monoplayer"
 TAG="sha-$SHA"
+# Anything but 0 or 1 is a typo, and a typo must not publish.
+PUSH=${PUSH:-1}
+case "$PUSH" in
+	0) PUSH_ATTR=false ;;
+	1) PUSH_ATTR=true ;;
+	*)
+		echo "PUSH must be 0 or 1, not '$PUSH'" >&2
+		exit 1
+		;;
+esac
 # Bind the forwarder to the loopback alias. This dev environment probes
 # 127.0.0.1 and a probe's connection reset tears down kubectl's forwarder
 # mid-build; 127.0.0.2 is the same loopback interface and stays up.
@@ -65,7 +78,7 @@ buildctl --addr "$BUILDKIT_ADDR" build \
 	--opt filename=Dockerfile \
 	--opt "label:org.opencontainers.image.revision=$SHA" \
 	--opt "label:org.opencontainers.image.created=$CREATED" \
-	--output "type=image,name=$IMAGE:$TAG,push=true,registry.insecure=true" \
+	--output "type=image,name=$IMAGE:$TAG,push=$PUSH_ATTR,registry.insecure=true" \
 	--metadata-file "$METADATA"
 
 # buildctl writes formatted JSON, so key and value are never on one line.
@@ -73,7 +86,7 @@ buildctl --addr "$BUILDKIT_ADDR" build \
 digest=$(tr -d ' \t\n' < "$METADATA" |
 	sed -n 's/.*"containerimage.digest":"\([^"]*\)".*/\1/p')
 if [ -z "$digest" ]; then
-	echo "no digest for $IMAGE:$TAG; the build did not push" >&2
+	echo "no digest for $IMAGE:$TAG; the build wrote none" >&2
 	exit 1
 fi
 
