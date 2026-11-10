@@ -23,6 +23,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDriverClient, DriverError } from './client-driver.js'
 import { formatParityReport, parseParityEndpoint, runParity } from './parity.js'
+import { formatSkinReport, runSkinLane, SKIN_CASES } from './skin.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
 import { verifyG0Evidence, versionRefusal } from './checks.js'
@@ -53,14 +54,21 @@ Options:
                      parity: join the backend directly, then the same backend
                      through the proxy, and compare the two clients' state
                      (#62). One command, two runs, no RCON.
+                     skin: run the skin cases on the client joined through the
+                     proxy (#99): control, signed, unsigned, one fresh client
+                     each, with the texture the client resolved and a
+                     third-person screenshot per case.
   --direct HOST:PORT The backend the first parity run joins, as the client
                      reaches it (default 127.0.0.1:25565, the dev-lane tunnel).
   --proxied HOST:PORT The proxy front the second parity run joins, as the client
                      reaches it (default 127.0.0.1:25566). Both parity endpoints
                      are refused when they name the live Excalia fleet or the live
                      deployment in front of it.
-  --report PATH      Where the parity report goes
-                     (default .reports/driver-parity-report.json).
+  --report PATH      Where the parity or skin report goes
+                     (default .reports/driver-parity-report.json, or
+                     .reports/skin-report.json for --lane skin).
+  --case NAME        The skin case to run: control, signed, unsigned, or all
+                     (default all). --lane skin only.
   --verbose          Log every lane event to stderr.
   --tunnel           Spawn 'ssh -N -L <driver-port>:127.0.0.1:25599 <host>'
                      for the driver socket and clean it up on exit. Unit tests
@@ -109,6 +117,8 @@ const DEFAULTS = {
   direct: '127.0.0.1:25565',
   proxied: '127.0.0.1:25566',
   parityReport: '.reports/driver-parity-report.json',
+  skinReport: '.reports/skin-report.json',
+  skinCase: 'all',
 }
 
 // Module-level tunnel handle so any exit path (success, error, unhandled)
@@ -203,6 +213,64 @@ async function runParityLane (opts) {
   return report.setupFailed ? 2 : 1
 }
 
+// #99's lane: what the client resolves for the body it controls, with no
+// injection, with the puppet's signed property, and with that property unsigned.
+// The client joins the proxy (--proxied), because the puppet's property is what
+// the client sees only through a backend session.
+async function runSkinLaneCli (opts) {
+  let proxied
+  try {
+    proxied = parseParityEndpoint(opts.proxied, '--proxied')
+  } catch (error) {
+    console.error('driver skin: ' + String(error?.message ?? error))
+    return 2
+  }
+
+  installSignalHandlers()
+  startTunnel(opts)
+
+  const driver = createDriverFromOptions(opts)
+  const relaunch = createSshRelaunch({
+    host: opts.host, instance: opts.instance, server: proxied.endpoint, account: opts.account,
+  })
+  const screenshotFetch = createScpFetch({ host: opts.host })
+  const verbose = Boolean(opts.verbose)
+  const log = verbose ? (event, fields = {}) => console.error('[driver-skin] ' + event + ' ' + JSON.stringify(fields)) : () => {}
+
+  let report
+  try {
+    report = await runSkinLane({
+      driver, relaunch, screenshotFetch,
+      endpoint: proxied.endpoint,
+      cases: opts.skinCase === 'all' ? SKIN_CASES : [opts.skinCase],
+      version: driverMinecraftVersion(),
+      log
+    })
+  } catch (error) {
+    console.error('driver skin: ' + (error instanceof DriverError ? error.message : String(error?.stack ?? error)))
+    cleanupTunnel()
+    return 2
+  }
+  console.log(formatSkinReport(report))
+
+  try {
+    await mkdir(path.dirname(path.resolve(root, opts.skinReport)), { recursive: true })
+    const { text, findings } = writeJsonRedacted(report)
+    if (findings.length > 0) {
+      console.error(`warning: ${findings.length} secret-shaped string(s) redacted from the skin report`)
+    }
+    await writeFile(path.resolve(root, opts.skinReport), text)
+    console.log('driver skin: report written to ' + opts.skinReport)
+  } catch (error) {
+    console.error('driver skin: could not write ' + opts.skinReport + ': ' + String(error?.message ?? error))
+    cleanupTunnel()
+    return 2
+  }
+
+  cleanupTunnel()
+  return report.passed ? 0 : 1
+}
+
 function parseArgs (argv) {
   const opts = { ...DEFAULTS }
   for (let i = 0; i < argv.length; i++) {
@@ -222,7 +290,8 @@ function parseArgs (argv) {
       case '--driver-host': opts.driverHost = argv[++i]; break
       case '--direct': opts.direct = argv[++i]; break
       case '--proxied': opts.proxied = argv[++i]; break
-      case '--report': opts.parityReport = argv[++i]; break
+      case '--report': opts.parityReport = argv[++i]; opts.skinReport = argv[i]; break
+      case '--case': opts.skinCase = argv[++i]; break
       case '--driver-port': opts.driverPort = Number(argv[++i]); break
       case '--rcon-namespace': opts.rconNamespace = argv[++i]; break
       case '--rcon-deployment': opts.rconDeployment = argv[++i]; break
@@ -233,8 +302,11 @@ function parseArgs (argv) {
   if (!Number.isInteger(opts.runs) || opts.runs < 1) {
     throw new Error(`--runs must be a positive integer (got ${opts.runs})`)
   }
-  if (!['driver', 'unmodded', 'parity'].includes(opts.lane)) {
-    throw new Error(`--lane must be 'driver', 'unmodded', or 'parity' (got ${opts.lane})`)
+  if (!['driver', 'unmodded', 'parity', 'skin'].includes(opts.lane)) {
+    throw new Error(`--lane must be 'driver', 'unmodded', 'parity', or 'skin' (got ${opts.lane})`)
+  }
+  if (![...SKIN_CASES, 'all'].includes(opts.skinCase)) {
+    throw new Error(`--case must be control, signed, unsigned, or all (got ${opts.skinCase})`)
   }
   if (!(opts.maxAgeHours > 0)) {
     throw new Error(`--max-age-hours must be a positive number (got ${opts.maxAgeHours})`)
@@ -409,6 +481,11 @@ async function main () {
 
   if (opts.lane === 'parity') {
     process.exitCode = await runParityLane(opts)
+    return
+  }
+
+  if (opts.lane === 'skin') {
+    process.exitCode = await runSkinLaneCli(opts)
     return
   }
 
