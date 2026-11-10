@@ -53,17 +53,17 @@ export const ABSENT_FACTS = Object.freeze({
   codeOfConduct: {
     setting: 'codeOfConduct',
     value: false,
-    reason: 'the gate Paper reports enable-code-of-conduct=false, so the server never sends the gate'
+    reason: 'the measured server reports enable-code-of-conduct=false, so it never sends the gate'
   },
   codeOfConductAccepted: {
     setting: 'codeOfConduct',
     value: false,
-    reason: 'the gate Paper reports enable-code-of-conduct=false, so there is no gate to accept'
+    reason: 'the measured server reports enable-code-of-conduct=false, so there is no gate to accept'
   },
   resourcePack: {
     setting: 'resourcePack',
     value: false,
-    reason: 'the gate Paper reports no resource pack, so no status event ever fires'
+    reason: 'the measured server reports no resource pack, so no status event ever fires'
   }
 })
 

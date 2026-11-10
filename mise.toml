@@ -166,7 +166,7 @@ description = "Report what the dev lane runs and how many replicas the live lane
 run = "scripts/dev-lane.sh status"
 
 [tasks."observer:run"]
-description = "Run the server-view report: the direct baseline join and the puppet join on the gate Paper, compared (#12)."
+description = "Run the server-view report: the direct baseline join and the puppet join on paper-conduct, the gate-serving Paper, compared (#12)."
 depends = ["install", "observer:build"]
 run = "scripts/observer-report.sh"
 

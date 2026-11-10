@@ -267,13 +267,14 @@ const settings = Object.fromEntries(
     .map(([key, value]) => [key.trim(), value.trim()])
 )
 process.stdout.write(JSON.stringify({
-  source: "server.properties on the gate Paper",
+  source: "server.properties on " + process.env.MONOPLAYER_OBSERVER_MEASURED,
   codeOfConduct: settings["enable-code-of-conduct"] === "true",
   resourcePack: (settings["resource-pack"] ?? "") !== ""
 }, null, 2) + "\n")
 ' > "$FACTS"
   say "server facts: $(tr -d '\n' < "$FACTS")"
 }
+export MONOPLAYER_OBSERVER_MEASURED=$PAPER_DEPLOYMENT
 read_server_facts
 
 set +e
