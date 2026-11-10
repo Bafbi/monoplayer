@@ -165,7 +165,7 @@ A server question that a player answers: `show_dialog` and `clear_dialog` in pla
 _Avoid_: prompt, popup, form, UI
 
 **Dialog codec**:
-The two halves of a control dialog's wire form: the reader that lists a `show_dialog`'s actions and chooses one, and the encoder that builds the `custom_click_action` body that answers it. It decides what the answer is. Who answers, and when the puppet clicks nothing, is the leg's policy.
+The two halves of a control dialog's wire form, and the rule that decides whether the puppet may answer one: the reader that lists a `show_dialog`'s actions and chooses one, the encoder that builds the `custom_click_action` body, and the per-dialog decision that refuses a play dialog and stands down while a player is attached. The leg asks that question once per dialog, counts the answers against its cap, and writes the frame.
 _Avoid_: dialog helper, dialog utils
 
 **Pending dialog**:
