@@ -84,8 +84,9 @@ These are the steps, and what each one prints.
    [testbed] restore record {"automated":"{\"prune\":true,\"selfHeal\":true}","disabledByUs":true,"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…"}
    ```
 
-   `argo automated` reads null because `up` removed it, and `restore record`
-   carries the digest this run recorded.
+   The four deployment rows come around those and are left out. `argo automated`
+   reads null because `up` removed it, and `restore record` carries the digest
+   this run recorded.
 
 3. `mise run testbed:down`. It restores the live deployment and the Argo policy
    first, then deletes the front Service:
@@ -108,9 +109,20 @@ These are the steps, and what each one prints.
 
    The testbed and Paper deployment lines come between these and are left out.
 
-   The tailscale operator removes the proxy pod on its own clock. Rerun `status`
+   The Tailscale operator removes the proxy pod on its own clock. Rerun `status`
    until the device count is 0: the delete waits for the Service, not for the
    operator.
+
+5. Optional, and the only proof of the second acceptance criterion:
+   `mise run testbed:up` again. The Service must come back under the same name:
+
+   ```
+   [testbed] testbed front {"hostname":"monoplayer-testbed.tail41e568.ts.net","port":25565}
+   ```
+
+   A different name, such as `monoplayer-testbed-1`, means Tailscale had not
+   released the old device when the Service was recreated. This step takes the
+   live lane down again, so finish with `mise run testbed:down`.
 
 A bare `testbed:down` restores the policy recorded in
 `/tmp/opencode/monoplayer-testbed.json`, and that record can be older than the
