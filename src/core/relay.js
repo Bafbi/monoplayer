@@ -103,7 +103,7 @@ export const CHAT_SPEAK = new Set([...CHAT_SPEAK_MESSAGES, ...CHAT_SPEAK_COMMAND
 // Which family each chat mode speaks. A mode absent from this map speaks
 // nothing, so a mode this file does not know drops the text rather than
 // speaking it by accident. This answers what a mode speaks, not which modes
-// exist: `CHAT_MODES` in src/service/monoplayer.js decides that. A Map, not an
+// exist: `CHAT_MODES` in src/core/clientbound-policy.js decides that. A Map, not an
 // object, so a prototype key such as `constructor` is a missing mode rather
 // than a lookup that throws.
 const CHAT_SPEAK_BY_MODE = new Map([
