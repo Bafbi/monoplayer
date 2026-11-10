@@ -50,7 +50,7 @@ mise run testbed:up        # live off, testbed up (leaves it running)
 mise run testbed:client    # Bafbi headless client through the testbed front
 mise run testbed:transfer  # RCON transfer the puppet to paper-sky
 mise run testbed:registry  # compare hub/target dimension_type registries
-mise run testbed:down      # stop testbed, delete its front, restore the live proxy
+mise run testbed:down      # stop testbed, restore the live proxy, then delete its front Service
 mise run testbed:run       # up + transfer + down, always restoring
 ```
 
@@ -88,15 +88,15 @@ These are the steps, and what each one prints.
    the digest this run recorded.
 
 3. `mise run testbed:down`. It restores the live deployment and the Argo policy
-   first, then deletes the front:
+   first, then deletes the front Service:
 
    ```
    [testbed] delete svc monoplayer/monoplayer-testbed {"result":"service monoplayer-testbed deleted"}
    [testbed] live deployment restored
    ```
 
-4. `node src/testbed/switch.js status` again. The front is gone, the record is
-   spent, and the live deployment is back:
+4. `node src/testbed/switch.js status` again. The front Service is gone, the
+   record is spent, and the live deployment is back:
 
    ```
    [testbed] monoplayer/monoplayer {"replicas":1,"ready":1}

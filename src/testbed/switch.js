@@ -3,8 +3,8 @@
 //   node src/testbed/switch.js up        apply the testbed, join the puppet to
 //                                        paper-hub, leave it running
 //   node src/testbed/switch.js transfer  RCON: transfer the puppet to paper-sky
-//   node src/testbed/switch.js down      stop the testbed, delete its front,
-//                                        restore the live app
+//   node src/testbed/switch.js down      stop the testbed, restore the live app,
+//                                        then delete its front Service
 //   node src/testbed/switch.js run       up + transfer + down, always restoring
 //   node src/testbed/switch.js status    what is running now
 //
@@ -153,8 +153,18 @@ function recordDigest (image) {
   fs.appendFileSync(DIGESTS_FILE, JSON.stringify({ at: new Date().toISOString(), ...image }) + '\n')
 }
 
+// A Service that is gone answers with an empty list. A read that failed answers
+// with nothing. `status` is how the operator proves the front is gone, so the
+// two must not look alike: null is unreadable, false is gone.
 function frontService () {
-  return readJSON(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json'])
+  const list = readJSON(['-n', TEST_NS, 'get', 'svc', '-l', `app.kubernetes.io/name=${TEST_DEPLOY}`, '-o', 'json'])
+  return list === null ? null : list.items?.[0] ?? false
+}
+
+function frontLine (svc) {
+  if (svc === null) return { unreadable: true }
+  if (svc === false) return { missing: true }
+  return { hostname: frontHostname(svc) ?? '(pending)' }
 }
 
 function frontHostname (svc) {
@@ -323,7 +333,8 @@ async function up () {
   recordDigest(image)
   log('testbed image', { ...image, recorded: DIGESTS_FILE })
 
-  log('testbed front', { hostname: frontHostname(frontService()) ?? '(pending)', port: 25565 })
+  const svc = frontService()
+  log('testbed front', { hostname: svc ? frontHostname(svc) ?? '(pending)' : '(pending)', port: 25565 })
   log(`attach the client to ${FRONT_HOST}:25565, then run: node src/testbed/switch.js transfer`)
 }
 
@@ -381,16 +392,17 @@ function removeFront () {
 
 async function down () {
   const saved = readState()
-  scale(TEST_NS, TEST_DEPLOY, 0)
-  await waitDeployGone(TEST_NS, TEST_DEPLOY)
-  scale(PAPER_NS, PAPER_HUB, 0)
-  scale(PAPER_NS, PAPER_SKY, 0)
-  scale(LIVE_NS, LIVE_DEPLOY, 1)
-  // The live restore can fail on its own wait. The front has to go either way,
-  // or the leak this change closes survives the failure path.
+  // Any step here can fail: a scale, the ready wait, the policy patch. The front
+  // Service has to go either way, or the leak this change closes survives the
+  // failure path.
   let frontRemoved = true
   let restored = false
   try {
+    scale(TEST_NS, TEST_DEPLOY, 0)
+    await waitDeployGone(TEST_NS, TEST_DEPLOY)
+    scale(PAPER_NS, PAPER_HUB, 0)
+    scale(PAPER_NS, PAPER_SKY, 0)
+    scale(LIVE_NS, LIVE_DEPLOY, 1)
     await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
     restoreAutoSync(saved)
     restored = true
@@ -401,8 +413,8 @@ async function down () {
     if (restored) clearState()
   }
   log('live deployment restored')
-  // The live lane is back either way, but a front that is still published is the
-  // defect this change exists to fix, so the command reports it as a failure.
+  // The live lane is back either way, but a front Service that is still published
+  // is the defect this change exists to fix, so the command reports a failure.
   if (!frontRemoved) {
     log('the testbed front is still published')
     process.exitCode = 1
@@ -415,10 +427,7 @@ async function status () {
     log(`${ns}/${deploy}`, d ? { replicas: d.spec?.replicas ?? null, ready: d.status?.readyReplicas ?? 0 } : { missing: true })
   }
   log('argo automated', { automated: appAutomated() })
-  const svc = frontService()
-  log(`front ${TEST_NS}/${TEST_DEPLOY}`, svc === null
-    ? { missing: true }
-    : { hostname: frontHostname(svc) ?? '(pending)' })
+  log(`front ${TEST_NS}/${TEST_DEPLOY}`, frontLine(frontService()))
   const proxies = proxyPods()
   log('tailnet devices', proxies === null
     ? { unreadable: true }
