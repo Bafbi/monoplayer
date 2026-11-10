@@ -46,6 +46,9 @@ READY_TIMEOUT=${MONOPLAYER_GATE_READY_TIMEOUT:-900}
 STOP_TIMEOUT=${MONOPLAYER_GATE_STOP_TIMEOUT:-180}
 POLL=${MONOPLAYER_GATE_POLL:-5}
 MANIFESTS=$ROOT/deploy/driver
+# Every manifest in the tree pins its namespace, so the apply target and the scale
+# target have to be the same namespace or the two halves of a command disagree.
+MANIFEST_NAMESPACE=$(sed -n 's/^  name: \(.*\)$/\1/p' "$MANIFESTS/namespace.yaml" | head -1)
 
 # Every Deployment deploy/driver declares. down covers all five; up wakes the two
 # a rung drives unless it is told which ones it needs.
@@ -104,19 +107,43 @@ ready_replicas () {
   printf '%s' "$value"
 }
 
+# What a row runs now. kubectl apply resets every Deployment to the tree's 0,
+# so up reads this before it applies and wakes those rows again afterwards.
+current_replicas () {
+  local value
+  value=$(kubectl -n "$GATE_NAMESPACE" get deploy "$1" -o jsonpath='{.spec.replicas}') || value=''
+  case "$value" in ''|*[!0-9]*) value=0 ;; esac
+  printf '%s' "$value"
+}
+
 pods_of () {
   kubectl -n "$GATE_NAMESPACE" get pods -l "app.kubernetes.io/name=monoplayer-gate-b-$1" -o name || true
 }
 
 up () {
   guard
-  local names="${*:-$DRIVEN_WORKLOADS}" name pending start deadline
+  local names="${*:-$DRIVEN_WORKLOADS}" name pending start deadline awake='' wake
   for name in $names; do
     known "$name" || die "unknown gate deployment \"$name\": the gate workloads are $GATE_WORKLOADS"
   done
+  [ "$GATE_NAMESPACE" = "$MANIFEST_NAMESPACE" ] \
+    || die "deploy/driver applies to $MANIFEST_NAMESPACE and this run would scale $GATE_NAMESPACE: they are one lane, so name the same namespace"
+
+  # The apply is a full reconcile to the tree, and the tree says 0, so it stops a
+  # row another up woke. Those rows are woken again below: waking a row must never
+  # stop the one beside it.
+  for name in $GATE_WORKLOADS; do
+    [ "$(current_replicas "$name")" -ge 1 ] && awake="$awake $name"
+  done
+  awake=${awake# }
 
   kubectl apply -k "$MANIFESTS" >/dev/null
   say "applied deploy/driver to $GATE_NAMESPACE"
+
+  wake=$names
+  for name in $awake; do
+    case " $wake " in *" $name "*) : ;; *) wake="$wake $name" ;; esac
+  done
 
   # Checked after the apply, because the apply is what creates the namespace on a
   # fresh cluster, and before the scale, so a lane that cannot start fails now.
@@ -130,8 +157,11 @@ up () {
   esac
 
   # shellcheck disable=SC2086
-  kubectl -n "$GATE_NAMESPACE" scale deploy $names --replicas=1 >/dev/null
+  kubectl -n "$GATE_NAMESPACE" scale deploy $wake --replicas=1 >/dev/null
   say "woke $names"
+  if [ -n "$awake" ]; then
+    say "kept $awake awake: the apply puts every row back to the tree's 0"
+  fi
   say "waiting up to ${READY_TIMEOUT}s for $names to report ready"
   say "cold start is $COLD_START (#115)"
   say "a Paper restart that loads the observer takes 240-310 s, and observer:run waits for that itself"
@@ -147,7 +177,7 @@ up () {
     done
     if [ -z "$pending" ]; then break; fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      die "still not ready after ${READY_TIMEOUT}s:$pending. A cold start is $COLD_START, so this is not a slow boot; read what the pod is doing: kubectl -n $GATE_NAMESPACE get pods -o wide" 1
+      die "still not ready after ${READY_TIMEOUT}s:$pending. A cold start is $COLD_START; read what the pod is doing: kubectl -n $GATE_NAMESPACE get pods -o wide" 1
     fi
     sleep "$POLL"
   done
@@ -198,7 +228,7 @@ status () {
 case "${1:-}" in
   up) shift; up "$@" ;;
   down) down ;;
-  status) status ;;
+  status) guard; status ;;
   # The whole comment block, whatever its length, so a new header line cannot
   # silently push the exit codes out of the help.
   -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;

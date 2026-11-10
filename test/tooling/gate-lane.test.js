@@ -114,6 +114,10 @@ const SHIM = [
   '  *" get secret "*) if [ -n "${KUBECTL_SECRET_MISSING:-}" ]; then case " $* " in *" $KUBECTL_SECRET_MISSING "*) printf \'not found\n\' >&2; exit 1 ;; esac; fi; exit 0 ;;',
   // A readiness read answers empty until the case lets it answer 1. The counter
   // is per call, so "not ready yet" is a first read rather than a fixed answer.
+  // The two replica reads, answered apart: spec.replicas is what the lane claims, and
+  // KUBECTL_AWAKE names one row a case leaves running, so a second up can be shown to
+  // keep it running.
+  '  *".spec.replicas"*) awake="${KUBECTL_AWAKE:-none}"; case " $* " in *" $awake "*) printf \'1\' ;; *) printf \'0\' ;; esac; exit 0 ;;',
   '  *"readyReplicas"*) if [ "$(count ready)" -lt "${KUBECTL_READY_AFTER:-0}" ]; then exit 0; fi; printf \'1\'; exit 0 ;;',
   // The pod listing a stop waits on: a pod on the first listing, none after.
   '  *" get pods "*) if [ "${KUBECTL_PODS_STUCK:-0}" = 1 ]; then printf \'pod/gate-stuck\n\'; exit 0; fi; if [ "$(count pods)" -lt 1 ]; then printf \'pod/gate-abc\n\'; fi; exit 0 ;;',
@@ -285,6 +289,28 @@ test('a missing hand-created Secret is named before the wait, not after it', () 
   assert.equal(calls.some(line => / scale /.test(line)), false, 'nothing is woken: ' + calls.join(' | '))
 })
 
+test('a second up does not stop the row the first one woke', () => {
+  // kubectl apply is a full reconcile: the tree says 0, so every apply stops a running
+  // lane. The documented sequence is an observer run after an M4 fault row
+  // (AGENTS.md), so waking paper-conduct must not take Velocity down underneath it.
+  const { status, output, calls } = run(space(), ['up', 'paper-conduct'], { KUBECTL_AWAKE: 'velocity' })
+  assert.equal(status, 0, output)
+  assert.deepEqual(scaled(calls), [{ names: ['paper-conduct', 'velocity'], replicas: 1 }],
+    'the woken rows are re-woken after the apply: ' + calls.join(' | '))
+  assert.match(output, /kept velocity awake/, 'and the task says it did that')
+  // The wait still covers only the rows this run asked for.
+  assert.match(output, /ready after \d+s: paper-conduct$/m, 'only paper-conduct is waited on')
+})
+
+test('a namespace the tree does not apply to is refused', () => {
+  // The manifests pin their namespace, so an override would apply to gate-b and
+  // scale somewhere else. Half-applied lanes are how a test lane grows an owner.
+  const { status, output, calls } = run(space(), ['up'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-c' })
+  assert.equal(status, 2, output)
+  assert.match(output, /applies to monoplayer-gate-b/)
+  assert.deepEqual(calls, [], 'nothing was applied or scaled')
+})
+
 test('the Secret check follows the Deployment that reads it', () => {
   // deploy/driver is the map: the three Papers take RCON_PASSWORD from
   // gate-b-rcon, velocity mounts gate-b-velocity, and paper-m4 reads it again for the
@@ -307,6 +333,11 @@ test('the Secret check follows the Deployment that reads it', () => {
   const m4 = run(space(), ['up', 'paper-m4'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
   assert.equal(m4.status, 2, m4.output)
   assert.match(m4.output, /gate-b-velocity/)
+
+  // paper-m4 is a Paper, so it reads RCON as well as the forwarding secret.
+  const m4Rcon = run(space(), ['up', 'paper-m4'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
+  assert.equal(m4Rcon.status, 2, m4Rcon.output)
+  assert.match(m4Rcon.output, /gate-b-rcon/)
 
   // Velocity reads no RCON.
   const noRcon = run(space(), ['up', 'velocity'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
