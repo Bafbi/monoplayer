@@ -126,13 +126,15 @@ function eventsNamed (logLines, name) {
   return logLines.filter(line => line.event === name)
 }
 
-test('with the switch off, the attach writes no skin frame', () => {
-  const rig = makeCore({ skin: { showPuppetSkin: false } })
+test('with the switch off, the attach writes no skin frame and says nothing', () => {
+  const logLines = []
+  const rig = makeCore({ skin: { showPuppetSkin: false }, logLines })
   warmBackend(rig)
   attach(rig)
 
   assert.equal(skinFrames(rig.frontLeg).length, 0, 'off is today: nothing about the attach changes')
   assert.equal(rig.core.metrics.skinFramesWritten, 0)
+  assert.equal(eventsNamed(logLines, 'puppetSkinWithheld').length, 0, 'a switch the operator turned off is not news')
 })
 
 test('with the switch on, one frame gives the human UUID the puppet property', () => {
@@ -244,15 +246,15 @@ test('a replay that writes no frame says why, so a default skin is not silent', 
   assert.equal(skinFrames(rig.frontLeg).length, 0)
   const withheld = eventsNamed(logLines, 'puppetSkinWithheld')
   assert.equal(withheld.length, 1)
-  assert.equal(withheld[0].why, 'no_property')
-  assert.equal(withheld[0].reason, 'attach')
+  assert.equal(withheld[0].reason, 'no_property', 'the reason no frame was written')
+  assert.equal(withheld[0].replay, 'attach', 'the replay that asked for one')
 })
 
 // #134: the live tab list arrived through the same frame, and the first entry
 // that carried a property was a different player's in 79 of 81 frames. The
 // frame the human gets is the puppet's skin, and the known-property log fires on
 // the puppet's property only.
-test('another player\'s skin is never the frame, and the known log settles', () => {
+test('another player\'s skin is never the frame, and the known log fires once per distinct property', () => {
   const logLines = []
   const rig = makeCore({ skin: { showPuppetSkin: true }, logLines })
   warmBackend(rig, { playerInfo: false })
@@ -276,7 +278,8 @@ test('another player\'s skin is never the frame, and the known log settles', () 
     deliverPlayerInfo(rig, [{ uuid: STRANGER, player: { name: 'Tutoriel', properties: [STRANGER_TEXTURES] } }])
     deliverPlayerInfo(rig)
   }
-  assert.equal(eventsNamed(logLines, 'puppetSkinKnown').length, 1, 'once per distinct property, not once per frame')
+  assert.equal(eventsNamed(logLines, 'puppetSkinKnown').length, 1,
+    'once per distinct property, not once per player_info frame')
   assert.equal(skinFrames(rig.frontLeg).length, 1)
 })
 

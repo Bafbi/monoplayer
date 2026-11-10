@@ -141,15 +141,22 @@ own body drew a vanilla default both times, while the proxy logged
 `puppetSkinSent reason:"attach" signed:true` twice, `skinFramesWritten: 2`,
 `skinFramesRefused: 0`.
 
-The frame was right and the property was the puppet's. Excalia moved the puppet
-37 s into the session, and a followed transfer takes the client through a
-configuration round on its own socket. Coming back to play the client builds a
-**new `ClientPacketListener`** (`ClientConfigurationPacketListenerImpl.handleConfigurationFinished`
-constructs one; `ClientPacketListener.handleConfigurationStart` calls
-`clearClientLevel`), and that listener's `playerInfoMap` starts empty. The entry
-the attach created was gone, and the proxy never wrote another one: the per-attach
-`skinSent` latch read the transfer's replay as a second frame for the same
-client.
+What the artifacts prove, and what they do not:
+
+- **Proved.** From 20:44:28 the client held no `player_info` entry for the
+  human's UUID, and the proxy wrote no second frame. Excalia moved the puppet
+  37 s into the session, and a followed transfer takes the client through a
+  configuration round on its own socket. Coming back to play the client builds a
+  **new `ClientPacketListener`** (`ClientConfigurationPacketListenerImpl.handleConfigurationFinished`
+  constructs one, and `ClientPacketListener.handleConfigurationStart` calls
+  `clearClientLevel`). That listener's `playerInfoMap` starts empty. The entry the
+  attach created was gone, and the per-attach `skinSent` latch read the transfer's
+  replay as a second frame for the same client.
+- **Not proved.** Whether the client applied the 20:43:49 frame during the 37 s
+  before that round. No reading of the live client exists for that window, so the
+  human's report of a default skin at the first attach is unexplained by itself.
+  The second attach is not: at 20:45:11 the proxy held `Tutoriel`'s property, so
+  that frame put a lobby player's skin on the human's body.
 
 The two logs, side by side:
 
@@ -161,10 +168,35 @@ The two logs, side by side:
 20:44:28      [client]        Loaded 388 advancements                 <- a second world load
 ```
 
-`skinFramesRefused: 0` is not evidence: the latch returns `already_sent`
+`skinFramesRefused: 0` is not evidence. The latch returns `already_sent`
 without counting a refusal, because no frame was attempted. The replay now clears
 the latch, so a reconfiguration gets the frame again, and a replay that writes no
 frame logs `puppetSkinWithheld` with the reason.
+
+### The two questions the ticket asked to settle first
+
+**Does the live client hold an entry for the human's UUID when the frame
+arrives?** No, not on the first attach. No `player_info` frame in the journal's
+12 minutes carries the human's UUID (207 distinct UUIDs, and none is
+`6eb73524-ff88-4a62-a8d0-c63905e7afba`), and there is no `player_info` frame at
+all in the 5 s before 20:43:49. `handlePlayerInfoUpdate` is the only writer of
+that map, with `putIfAbsent`, so the attach's own frame is what created it.
+
+**What shape is Excalia's textures property?** The same as the dev lane's:
+
+| Field | Live (`GlowSquidye`) | Dev (`Wiriaw`) |
+|---|---|---|
+| `value` | 488 chars | 408 chars |
+| `signature` | 684 chars | 684 chars |
+| `signatureRequired` in the payload | `true` | `true` |
+| `textures.SKIN.url` | `http://textures.minecraft.net/texture/6a135ebe…` | `http://textures.minecraft.net/texture/6523b6e2…` |
+| `textures.SKIN.metadata.model` | `slim` | none |
+
+The live URL fetches a 64x64 PNG with HTTP 200. `YggdrasilMinecraftSessionService.unpackTextures`
+(authlib 9.0.75, the client's own) turns a payload into no skin only on a decode
+failure, an empty textures map, or a URL outside the allowed domains, and each of
+those logs a line the live client's log does not contain. The property is not the
+difference between the lanes.
 
 ### The property was never the puppet's on a busy server
 
