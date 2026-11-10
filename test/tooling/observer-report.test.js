@@ -170,6 +170,21 @@ test('the install finds the gate Paper by the label its deployment carries', () 
     'the pod lookup uses the selector the deployment carries: ' + podLookup)
 })
 
+test('the run measures the gate-serving Paper by default', () => {
+  // #78: the observer's lane is `paper-conduct`, because the G0 Paper cannot serve
+  // the code of conduct. Both the plugin install and the join backend have to name
+  // it, or the report measures one server and installs into another.
+  const space = workspace()
+  const { status, output, calls } = run(space, { MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT: '', MONOPLAYER_BACKEND_HOST: '' })
+  assert.equal(status, 0, output)
+  const deployment = calls.find(line => line.includes('matchLabels'))
+  assert.ok(deployment.includes('get deploy paper-conduct'), 'the install targets the conduct lane: ' + deployment)
+  const joins = calls.filter(line => line.includes(' /work && node '))
+  assert.equal(joins.length, 2, 'both joins run: ' + calls.join(' / '))
+  assert.equal(joins.every(line => line.includes('paper-conduct.monoplayer-gate-b.svc.cluster.local')), true,
+    'both joins speak to the conduct lane: ' + joins.join(' / '))
+})
+
 test('the run never changes the live deployment', () => {
   const space = workspace()
   const { status, output, calls } = run(space)

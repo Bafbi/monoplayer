@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { announceBrand, runBaseline } from '../../src/ladder/observer-baseline.js'
+import { announceBrand, phaseOf, runBaseline } from '../../src/ladder/observer-baseline.js'
 import { BRAND_CHANNEL, decodeBrand, FABRIC_BRAND } from '../../src/core/client-settings.js'
 
 const UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
@@ -91,8 +91,23 @@ test('announceBrand refuses something that is not a client', () => {
 test('an account that does not resolve fails before any socket opens', async () => {
   await assert.rejects(
     () => runBaseline({ host: '127.0.0.1', port: 25565, accountsDir: accountsDir(), account: 'nosuchpuppet' }),
-    /cannot resolve the account/
+    error => {
+      assert.match(error.message, /cannot resolve the account/)
+      // #79: the script reads the rung's exit status to tell a setup it refused
+      // from a join the server refused, so this one has to say which it is.
+      assert.equal(phaseOf(error), 'setup')
+      return true
+    }
   )
+})
+
+test('a join that the server refuses is not reported as a refused setup', async () => {
+  // The other half of the same split. Anything the rung did not refuse before
+  // opening a socket is a join, so an untagged failure reads as one.
+  assert.equal(phaseOf(new Error('bot GlowSquidye: ended before play')), 'join')
+  assert.equal(phaseOf(undefined), 'join')
+  const refused = await runBaseline({ host: '', port: 25565, accountsDir: accountsDir() }).catch(error => error)
+  assert.equal(phaseOf(refused), 'setup', 'a bad host is refused before any socket opens')
 })
 
 test('an empty accounts directory is reported, not guessed at', async () => {
