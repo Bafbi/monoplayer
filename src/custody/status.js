@@ -11,7 +11,7 @@
 // pasted into a field, a JWT in a message) is tagged, not emitted.
 import fs from 'node:fs'
 
-import { scanSecrets, redactSecrets, REDACTION_TAG } from '../driver/checks.js'
+import { scanSecrets, redactSecrets, REDACTION_TAG } from '../observability/secrets.js'
 import { createTokenCustody } from './cache.js'
 import { createMsaAuth, describeIdentity } from './msa.js'
 

@@ -18,7 +18,7 @@ import prismarineAuth from 'prismarine-auth'
 
 import { createTokenCustody } from './cache.js'
 import { normalizeUuid } from './util.js'
-import { redactSecrets } from '../driver/checks.js'
+import { redactSecrets } from '../observability/secrets.js'
 
 export const JAVA_AUTH_TITLE = '00000000402b5328'
 export const SWITCH_AUTH_TITLE = '00000000441cc96b'
