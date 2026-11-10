@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 807 tests (`mise run test`), and `mise run check` also runs the
-42-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 834 tests (`mise run test`), and `mise run check` also runs the
+48-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
