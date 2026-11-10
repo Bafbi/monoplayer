@@ -222,6 +222,12 @@ export function clientboundPolicy (state, name) {
   }
 }
 
+// The chat modes `loadConfig` accepts. The config validator and the front leg's
+// own check both read this set, so the service that hands the leg a mode and the
+// leg that refuses an unknown one cannot disagree about which modes exist (#97,
+// #103).
+export const CHAT_MODES = new Set(['full', 'commands', 'read-only', 'off'])
+
 // The three chat frames, and whether a chat mode relays each one. The chat mode
 // is session configuration rather than frame structure, so it is not a table
 // entry; this is the one function that turns a mode into a yes or no, so the

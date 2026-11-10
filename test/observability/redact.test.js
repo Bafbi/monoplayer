@@ -1,0 +1,41 @@
+// The redaction sentinel is fixed, and the option that pretended to set it is
+// gone (#103).
+//
+// `redact()` destructured `{ sentinel = SENTINEL }` and never read it, so a
+// caller that passed its own sentinel was silently ignored. Removing every
+// secret shape from the output is what the function promises; choosing the
+// sentinel was never part of it. The removal changes no output, so the shape of
+// the declaration is what there is to test, beside the behaviour it delivers.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+
+import { redact, SENTINEL } from '../../src/observability/redact.js'
+
+const SOURCE = fs.readFileSync(new URL('../../src/observability/redact.js', import.meta.url), 'utf8')
+
+test('redact() declares no sentinel option', () => {
+  // Either declaration form counts: what the test refuses is a sentinel in the
+  // parameter list, not the syntax the function is written in.
+  const signature = SOURCE.match(/^export (?:function|const) redact[^\n]*/m)?.[0]
+
+  assert.ok(signature, 'redact() is exported as a named declaration')
+  assert.doesNotMatch(
+    signature,
+    /sentinel/,
+    'redact() takes the text, not a sentinel: a parameter it does not read is how the sentinel got ignored'
+  )
+})
+
+test('a caller cannot choose the sentinel, and nothing survives the fixed one', () => {
+  assert.equal(SENTINEL, '[REDACTED]')
+  assert.equal(redact('password=hunter2'), 'password=' + SENTINEL)
+  // The option this change removed: a caller that still passes it gets the fixed
+  // sentinel, not a surprise. That is the no-behaviour-change claim for them.
+  assert.equal(redact('password=hunter2', { sentinel: '[GONE]' }), 'password=' + SENTINEL)
+  // The quoted field name survives as a bare label, so a redacted line still
+  // says which shape leaked.
+  assert.equal(redact('{"access_token":"abc123"}'), '{access_token=' + SENTINEL + '}')
+  assert.equal(redact('nothing secret here'), 'nothing secret here')
+  assert.equal(redact(null), null)
+})
