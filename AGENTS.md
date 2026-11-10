@@ -19,8 +19,9 @@ the refreshed token chain into the live custody and asks you to restart the
 deployment. An interrupted testbed run leaves the live front offline, so
 `mise run testbed:down` is the way back. It restores the deployment, and it
 restores the Argo sync policy only while the run's state file at
-`/tmp/opencode/monoplayer-testbed.json` survives. `node src/testbed/switch.js
-status` reports both.
+`/tmp/opencode/monoplayer-testbed.json` survives. It also deletes the testbed's
+front Service, which is what unpublishes the tailnet name. `node
+src/testbed/switch.js status` reports all three.
 
 **No automated join runs against Excalia.** `play.excalia.fr` and
 `play2.excalia.fr` are the live servers, and no run in this repo joins them on

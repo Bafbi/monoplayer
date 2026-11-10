@@ -126,11 +126,16 @@ function pods (namespace, deploy) {
 
 // The digest the deployment actually ran. Its status carries no imageID, but its
 // pod does, and the manifest's :main tag makes the tag name useless for a
-// comparison between runs. Index 0 is the monoplayer container; the two init
-// containers only wait for the custody file and clear a stale lock, so the image
-// that decides what the run executed is this one.
+// comparison between runs. Index 0 is the monoplayer container. The two init
+// containers only wait for the custody file and clear a stale lock, so this is
+// the image that decides what the run executed.
+//
+// A pod that is still terminating belongs to the last run and can be listed
+// first, so the pod that is not going away is the one to read.
 function testbedImage () {
-  const imageID = pods(TEST_NS, TEST_DEPLOY)[0]?.status?.containerStatuses?.[0]?.imageID ?? null
+  const pod = pods(TEST_NS, TEST_DEPLOY)
+    .find(entry => !entry.metadata?.deletionTimestamp && entry.status?.containerStatuses?.[0]?.imageID)
+  const imageID = pod?.status?.containerStatuses?.[0]?.imageID ?? null
   if (!imageID) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports no containerStatuses[0].imageID, so this run cannot name the build it ran`)
   const digest = /@(sha256:[0-9a-f]{64})$/.exec(imageID)?.[1] ?? null
   if (!digest) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports an imageID without a digest: ${imageID}`)
@@ -151,7 +156,7 @@ function frontHostname (svc) {
   return svc?.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
 }
 
-function frontDevices () {
+function frontPods () {
   const raw = kubectl(['-n', TAILSCALE_NS, 'get', 'pods', '-l', FRONT_DEVICE_LABEL, '-o', 'json'], { allowFail: true })
   return raw === null ? null : JSON.parse(raw).items
 }
@@ -221,7 +226,7 @@ function writeState (state) {
 // no `automated` block, and that record restores nothing, so it must not
 // replace one that does. What this `up` removed wins: that is what is missing
 // now, and `down` puts back what is missing, not what was.
-function saveState (state) {
+function savePolicyState (state) {
   const previous = readState()
   const kept = state.disabledByUs && state.automated ? state : previous ?? state
   if (kept === previous) log('kept the Argo record an earlier up wrote', { automated: previous.automated })
@@ -234,9 +239,9 @@ function readState () {
 
 // `up` records the Argo policy first and the digest later, so a write must merge
 // into what is already there: `down` restores the policy from this file. It goes
-// straight to the file, not through saveState: that keep rule belongs to the
-// policy, and it would drop a digest recorded beside a policy there is none of.
-function updateState (patch) {
+// straight to the file, not through savePolicyState: that keep rule belongs to
+// the policy, and it would drop a digest recorded beside a policy there is none of.
+function mergeState (patch) {
   writeState({ ...(readState() ?? {}), ...patch })
 }
 
@@ -285,7 +290,7 @@ async function up () {
   log(`live front ${FRONT_HOST}`, { liveReplicas: liveScale() })
   // Disable Argo self-heal before scaling the live deployment; otherwise it
   // scales back to one and fights the testbed for the RWO custody PVC.
-  saveState(disableAutoSync())
+  savePolicyState(disableAutoSync())
   scale(LIVE_NS, LIVE_DEPLOY, 0)
   await waitDeployGone(LIVE_NS, LIVE_DEPLOY)
 
@@ -310,7 +315,7 @@ async function up () {
   // Record the build this run executed. The manifest pulls :main, so the digest
   // is the only thing a later run can be compared against.
   const image = testbedImage()
-  updateState(image)
+  mergeState(image)
   recordDigest(image)
   log('testbed image', { ...image, recorded: DIGESTS_FILE })
 
@@ -363,8 +368,10 @@ function removeFront () {
   try {
     const result = kubectl(['-n', TEST_NS, 'delete', 'svc', TEST_DEPLOY, '--ignore-not-found', '--timeout=120s'])
     log(`delete svc ${TEST_NS}/${TEST_DEPLOY}`, { result: result.replace(/\n/g, ' | ') })
+    return true
   } catch (error) {
     log(`delete svc ${TEST_NS}/${TEST_DEPLOY} failed`, { error: error.message })
+    return false
   }
 }
 
@@ -377,9 +384,15 @@ async function down () {
   scale(LIVE_NS, LIVE_DEPLOY, 1)
   await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
   restoreAutoSync(saved)
-  removeFront()
+  const frontRemoved = removeFront()
   clearState()
   log('live deployment restored')
+  // The live lane is back either way, but a front that is still published is the
+  // defect this change exists to fix, so the command reports it as a failure.
+  if (!frontRemoved) {
+    log('the testbed front is still published')
+    process.exitCode = 1
+  }
 }
 
 async function status () {
@@ -392,10 +405,10 @@ async function status () {
   log(`front ${TEST_NS}/${TEST_DEPLOY}`, svc === null
     ? { missing: true }
     : { hostname: frontHostname(svc) ?? '(pending)' })
-  const devices = frontDevices()
-  log('tailnet devices', devices === null
+  const proxies = frontPods()
+  log('tailnet devices', proxies === null
     ? { unreadable: true }
-    : { count: devices.length, names: devices.map(pod => pod.metadata?.name) })
+    : { count: proxies.length, names: proxies.map(pod => pod.metadata?.name) })
   log('run state', readState() ?? { missing: true })
 }
 
