@@ -10,12 +10,21 @@
 // writer.lock). A selector is a UUID, alias, or profile name. `--dir` is the
 // raw-directory escape hatch and must already hold a profile.json.
 //
+// `--secrets-dir <dir>` replaces `<repo>/.secrets` as the custody root: the
+// account tree defaults to its `accounts/`, staging to its `staging/`, the
+// retired quarantine to its `retired/`, and the attach whitelist to its
+// `attach-whitelist.json`. `--accounts-dir` overrides only the account tree.
+//
+// Exit status: 0 done, 1 failed (an operation did not succeed), 2 refused (the
+// request cannot be honoured: no such account, an ambiguous selector, a usage
+// error). A caller must not retry a 2 blindly.
+//
 // Usage:
-//   node src/custody/cli.js accounts [--accounts-dir <dir>] [--json]
+//   node src/custody/cli.js accounts [--accounts-dir <dir>] [--secrets-dir <dir>] [--json]
 //   node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]
 //   node src/custody/cli.js device-code --dir <accountDir>
-//   node src/custody/cli.js status [--account ...] [--json] [--refresh]
-//   node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine]
+//   node src/custody/cli.js status [--account ...] [--json] [--refresh] [--secrets-dir <dir>]
+//   node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]
 //   node src/custody/cli.js whitelist <attach|backend> add|remove <name-or-uuid>
 //        [--file .secrets/attach-whitelist.json] [--namespace ... --deployment ...]
 import path from 'node:path'
@@ -26,7 +35,6 @@ import { createMsaAuth, describeIdentity } from './msa.js'
 import { createAuthStatus, stringifyForReport, redactForReport, scanForLeaks } from './status.js'
 import {
   DEFAULT_ACCOUNTS_DIR,
-  DEFAULT_RETIRED_DIR,
   createStagingDir,
   detectLegacyLayout,
   finalizeStaging,
@@ -40,15 +48,21 @@ import { createRcon } from '../driver/rcon.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SECRETS_DIR = path.join(REPO_ROOT, '.secrets')
-const STAGING_DIR = path.join(SECRETS_DIR, 'staging')
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/
 
+class UsageError extends Error {}
+
+function secretsDirFromArgs (args) {
+  return path.resolve(args['secrets-dir'] ?? SECRETS_DIR)
+}
+
 function accountsDirFromArgs (args) {
-  return path.resolve(
-    args['accounts-dir'] ??
-    process.env.GATEB_ACCOUNTS_DIR ??
-    path.join(REPO_ROOT, DEFAULT_ACCOUNTS_DIR)
-  )
+  // --secrets-dir moves the account tree with it, so the two flags cannot
+  // disagree by accident.
+  const fallback = args['secrets-dir'] !== undefined
+    ? path.join(secretsDirFromArgs(args), 'accounts')
+    : path.join(REPO_ROOT, DEFAULT_ACCOUNTS_DIR)
+  return path.resolve(args['accounts-dir'] ?? process.env.GATEB_ACCOUNTS_DIR ?? fallback)
 }
 
 function parseArgs (argv) {
@@ -57,10 +71,10 @@ function parseArgs (argv) {
     const arg = argv[i]
     if (!arg.startsWith('--')) { args.positional.push(arg); continue }
     switch (arg) {
-      case '--account': case '--accounts-dir': case '--dir': case '--alias':
-      case '--file': case '--namespace': case '--deployment': case '--from': {
+      case '--account': case '--accounts-dir': case '--secrets-dir': case '--dir':
+      case '--alias': case '--file': case '--namespace': case '--deployment': case '--from': {
         const value = argv[++i]
-        if (value === undefined) throw new Error(`${arg} needs a value`)
+        if (value === undefined) throw new UsageError(`${arg} needs a value`)
         args[arg.slice(2)] = value
         break
       }
@@ -80,7 +94,7 @@ function parseArgs (argv) {
         args['no-quarantine'] = true
         break
       default:
-        throw new Error(`unknown option: ${arg}`)
+        throw new UsageError(`unknown option: ${arg}`)
     }
   }
   return args
@@ -88,17 +102,22 @@ function parseArgs (argv) {
 
 const USAGE = [
   'usage:',
-  '  node src/custody/cli.js accounts [--accounts-dir <dir>] [--json]',
-  '  node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]',
+  '  node src/custody/cli.js accounts [--accounts-dir <dir>] [--secrets-dir <dir>] [--json]',
+  '  node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>] [--secrets-dir <dir>]',
   '  node src/custody/cli.js device-code --dir <accountDir>',
-  '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--json] [--refresh]',
-  '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine]',
+  '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--secrets-dir <dir>] [--json] [--refresh]',
+  '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]',
   '  node src/custody/cli.js whitelist attach|backend add|remove <name-or-uuid> [--file <path>] [--namespace <ns>] [--deployment <dep>]',
 ].join('\n')
 
 function fail (message, code = 1) {
   process.stderr.write(`error: ${message}\n${USAGE}\n`)
   process.exit(code)
+}
+
+// A usage error is a refusal, not a failed operation: exit 2, with the usage.
+function usageFail (message) {
+  fail(message, 2)
 }
 
 function refuse (message, code = 2) {
@@ -210,7 +229,7 @@ async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
   if (args.alias !== undefined && !ALIAS_PATTERN.test(args.alias)) {
     refuse(`--alias ${JSON.stringify(args.alias)} does not match ${ALIAS_PATTERN}`)
   }
-  const stagingDir = createStagingDir({ stagingDir: STAGING_DIR })
+  const stagingDir = createStagingDir({ stagingDir: path.join(secretsDirFromArgs(args), 'staging') })
   const custody = createTokenCustody({ account: null, uuid, dir: stagingDir, create: false })
   const msa = createMsaAuth({
     account: null,
@@ -247,7 +266,7 @@ async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
   const finalized = finalizeStaging({
     stagingDir,
     accountsDir: accountsDirFromArgs(args),
-    secretsDir: SECRETS_DIR,
+    secretsDir: secretsDirFromArgs(args),
     profile: {
       uuid: result.identity.uuid,
       name: result.identity.name,
@@ -272,14 +291,21 @@ async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
 
 async function main () {
   const [command = '', ...rest] = process.argv.slice(2)
-  const args = parseArgs(rest)
+  let args
+  try {
+    args = parseArgs(rest)
+  } catch (error) {
+    if (error instanceof UsageError) usageFail(error.message)
+    throw error
+  }
   const accountsDir = accountsDirFromArgs(args)
+  const secretsDir = secretsDirFromArgs(args)
 
   switch (command) {
     case 'accounts': {
       // Read-only: no custody object, no directory creation.
       const listing = listAccounts({ accountsDir })
-      const legacy = detectLegacyLayout({ secretsDir: SECRETS_DIR, from: args.from ?? 'puppet' })
+      const legacy = detectLegacyLayout({ secretsDir, from: args.from ?? 'puppet' })
       if (args.json) {
         emitReport(stringifyForReport({
           accountsDir,
@@ -420,9 +446,9 @@ async function main () {
     case 'migrate': {
       const apply = Boolean(args.apply) && !args['dry-run']
       const options = {
-        secretsDir: SECRETS_DIR,
+        secretsDir,
         accountsDir,
-        retiredDir: path.resolve(path.join(REPO_ROOT, DEFAULT_RETIRED_DIR)),
+        retiredDir: path.join(secretsDir, 'retired'),
         from: args.from ?? 'puppet',
       }
       const result = apply
@@ -438,13 +464,13 @@ async function main () {
 
     case 'whitelist': {
       const [scope = '', action = '', identifier = ''] = args.positional
-      if (scope !== 'attach' && scope !== 'backend') fail(`whitelist scope must be attach or backend`)
-      if (action !== 'add' && action !== 'remove') fail(`whitelist action must be add or remove`)
-      if (!identifier) fail(`whitelist ${action} needs a name or UUID`)
+      if (scope !== 'attach' && scope !== 'backend') usageFail('whitelist scope must be attach or backend')
+      if (action !== 'add' && action !== 'remove') usageFail('whitelist action must be add or remove')
+      if (!identifier) usageFail(`whitelist ${action} needs a name or UUID`)
 
       if (scope === 'attach') {
         const store = createWhitelistStore({
-          file: args.file ?? path.join(REPO_ROOT, '.secrets', 'attach-whitelist.json'),
+          file: args.file ?? path.join(secretsDir, 'attach-whitelist.json'),
           lookup: createNameLookup(),
         })
         if (action === 'add') {
@@ -480,7 +506,7 @@ async function main () {
     }
 
     default:
-      fail(`unknown command '${command}'`)
+      usageFail(`unknown command '${command}'`)
   }
 }
 
