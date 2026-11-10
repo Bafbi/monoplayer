@@ -136,10 +136,10 @@ leaves the pod in `ImagePullBackOff`.
 
 ## Live disagreed: a client's entry map belongs to one play state (#134)
 
-Date: 2026-11-10. Live lane, `monoplayer`: the human attached twice and their
-own body drew a vanilla default both times, while the proxy logged
-`puppetSkinSent reason:"attach" signed:true` twice, `skinFramesWritten: 2`,
-`skinFramesRefused: 0`.
+Date: 2026-11-10. Live lane, `monoplayer`. The human attached twice, and reported
+a vanilla default on their own body. Which attach that sighting followed is not
+in the record. The proxy logged `puppetSkinSent reason:"attach" signed:true`
+twice, `skinFramesWritten: 2`, and `skinFramesRefused: 0`.
 
 What the artifacts prove, and what they do not:
 
@@ -181,8 +181,9 @@ Question 2, why the held property kept changing, is answered above: the proxy wa
 holding whichever entry came first in the frame.
 
 **Does the live client hold an entry for the human's UUID when the frame
-arrives?** No, not on the first attach. No `player_info` frame in the journal's
-12 minutes carries the human's UUID. The journal lists 207 distinct UUIDs, and
+arrives?** No, not on the first attach. No `player_info` frame among the 519 the
+journal copy can decode carries the human's UUID, and the one it cannot is from
+20:44:27, after that attach. The journal lists 207 distinct UUIDs, and
 none is `6eb73524-ff88-4a62-a8d0-c63905e7afba`. There is no `player_info` frame
 at all in the 5 s before 20:43:49. `handlePlayerInfoUpdate` is the only writer of
 that map, with `putIfAbsent`, so the attach's own frame is what created the entry.
@@ -219,6 +220,8 @@ visible in the same journal:
 - at the second attach (20:45:11) the proxy held `Tutoriel`'s property. The
   frame put a lobby player's skin on the human's body.
 - `puppetSkinKnown` logged 83 times, where the puppet had two distinct values.
+  That count comes from the lane's stdout, not the journal copy:
+  `kubectl -n monoplayer logs deploy/monoplayer --since 30m | grep -c puppetSkinKnown`
 
 The 83 and the 81 are two windows. The pod's log kept running after the copy of
 the journal was taken, so it holds 83 lines for 81 changes plus the frames that
@@ -246,32 +249,32 @@ const des = mc.createDeserializer({ state: 'play', isServer: false, version: '26
 const rows = []
 const rl = readline.createInterface({ input: fs.createReadStream(process.argv[2]) })
 for await (const line of rl) {
-  if (!line.includes('"player_info"')) continue
-  const rec = JSON.parse(line)
-  if (rec.dir !== 's2c' || rec.name !== 'player_info' || rec.truncated) continue
-  const parsed = des.parsePacketBuffer(Buffer.from(rec.b64, 'base64'))
-  const entries = parsed.data.params?.data ?? []
-  const carried = entries.flatMap(entry => (entry.player?.properties ?? [])
-    .filter(property => property.name === 'textures')
-    .map(property => ({ uuid: entry.uuid, name: entry.player?.name ?? null, value: property.value })))
-  rows.push({ carried })
+	if (!line.includes('"player_info"')) continue
+	const rec = JSON.parse(line)
+	if (rec.dir !== 's2c' || rec.name !== 'player_info' || rec.truncated) continue
+	const parsed = des.parsePacketBuffer(Buffer.from(rec.b64, 'base64'))
+	const entries = parsed.data.params?.data ?? []
+	const carried = entries.flatMap(entry => (entry.player?.properties ?? [])
+		.filter(property => property.name === 'textures')
+		.map(property => ({ uuid: entry.uuid, name: entry.player?.name ?? null, value: property.value })))
+	rows.push({ carried })
 }
 
 let changes = 0
 let held = null
 for (const row of rows) {
-  for (const carried of row.carried) {
-    if (carried.value === held) continue
-    held = carried.value
-    changes++
-  }
+	for (const carried of row.carried) {
+		if (carried.value === held) continue
+		held = carried.value
+		changes++
+	}
 }
 console.log({
-  frames: rows.length,
-  withTextures: rows.filter(row => row.carried.length > 0).length,
-  owners: new Set(rows.flatMap(row => row.carried.map(carried => carried.uuid))).size,
-  changes, // each change of the first entry's value, as the by-position pick saw it
-  firstEntryIsThePuppet: rows.filter(row => row.carried[0]?.name === 'GlowSquidye').length
+	frames: rows.length,
+	withTextures: rows.filter(row => row.carried.length > 0).length,
+	owners: new Set(rows.flatMap(row => row.carried.map(carried => carried.uuid))).size,
+	changes, // a change of the value the by-position pick would have held
+	firstEntryIsThePuppet: rows.filter(row => row.carried[0]?.name === 'GlowSquidye').length
 })
 ```
 
