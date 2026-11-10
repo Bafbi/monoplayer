@@ -69,8 +69,18 @@ instead: the puppet re-signs it with its own profile keys and window, and the
 server's signed `player_chat` is relayed back
 ([#19](https://github.com/Bafbi/monoplayer/issues/19)).
 
-The default stays `read-only` because the signed path has been proven offline
-only. Three consequences once it is on: the human's own signature and session
+`MONOPLAYER_CHAT=commands` speaks the human's commands and keeps their chat
+text dropped. It exists because a human attaching to their own account needs
+`/profil`, `/msg`, and `/tp` to reach the server, and it is the mode for a
+human who does not want the account talking in open chat
+([#97](https://github.com/Bafbi/monoplayer/issues/97)). Its clientbound side is
+`read-only`, so the human reads exactly what that mode shows: command feedback
+arrives as `system_chat` and displays, and a reply the server sends as signed
+player chat does not. Which frame a whisper takes is not settled here: no run
+has shown it, and a real client on a repo-deployed lane is what would.
+
+The default stays `read-only` because `full`'s signed path has been proven
+offline only. Three consequences once `full` is on: the human's own signature and session
 key never reach the server; a message the server rejects arrives back as a
 rejection on GlowSquidye; and the human's client receives `player_chat` from
 another connection, so its per-sender signature chain is out of order. The

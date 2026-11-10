@@ -209,12 +209,16 @@ To send the attaching player's message or command text on the backend leg as the
 _Avoid_: forward chat, proxy chat, relay chat
 
 **Chat mode**:
-The `config.chat` setting. `read-only` (the default) relays the server's chat and drops the player's text; `full` also speaks the player's text and relays the server's signed player chat; `off` blocks both directions.
+The `config.chat` setting. `read-only` (the default) relays the server's chat and drops the player's text; `commands` speaks the player's commands and still drops their chat text; `full` also speaks the player's chat text and relays the server's signed player chat; `off` blocks both directions.
 _Avoid_: mute, disable chat
 
 **Read-only chat**:
 The `read-only` chat mode: the attaching player sees the server's chat and cannot speak. `system_chat` and `profileless_chat` are relayed; the player's own chat text and the server's signed `player_chat` stay off.
 _Avoid_: muted chat, one-way chat
+
+**Commands chat**:
+The `commands` chat mode: the attaching player's commands are spoken as the puppet, so `/profil`, `/msg`, and `/tp` reach the server, and their open chat text is dropped. Its clientbound side is read-only chat, so a reply the server sends as `player_chat` does not reach them.
+_Avoid_: command-only chat, slash mode
 
 **Proxy notice**:
 A message Monoplayer writes to the attaching player in its own voice, such as a refused transfer. It rides a synthetic advancement built to show a toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
