@@ -105,7 +105,7 @@ What the proxy says about it, one event per thing that happened:
 | `puppetSkinSent` | `name`, `reason`, `signed` | The frame was written to the attaching player's connection. Whether the client applied it is the client's business, and only a client reading says. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, or `property_arrived` |
 | `puppetSkinRefused` | `reason`, `error` | The packet could not be built or written: `packet` or `write_failed` |
 | `puppetSkinWithheld` | `name`, `reason` | A frame could not be written because the front gave no UUID to name (`no_identity`), at the replay or when the property arrived. No later frame repairs that. A missing property is not reported: it normally arrives a moment after the attach, and the frame then goes out under `property_arrived`. A packet or write failure is `puppetSkinRefused` |
-| `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process |
+| `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process, and only while `skin.showPuppetSkin` is on, because with it off no frame would be written either |
 
 ## Chat and commands
 
