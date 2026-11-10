@@ -337,9 +337,9 @@ second one. A kept client's configuration round has a deadline
 completes detaches the client with a reason.
 
 The loopback runs both paths: O21-O24 assert the default detach-and-rejoin, and
-O33-O35 assert the kept connection with the key on. O38 follows a second transfer
+O33-O35 assert the kept connection with the key on. O43 follows a second transfer
 from there to a gated target, where the kept client leaves its configuration gate
-to the puppet (#73), and O39 leaves a play dialog behind.
+to the puppet (#73), and O44 leaves a play dialog behind.
 
 ### Chat and commands (`config.chat`)
 
