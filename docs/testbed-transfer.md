@@ -92,7 +92,7 @@ These are the steps, and what each one prints.
    first, then deletes the front Service:
 
    ```
-   [testbed] delete svc monoplayer/monoplayer-testbed {"result":"service monoplayer-testbed deleted"}
+   [testbed] delete svc monoplayer/monoplayer-testbed {"result":"service \"monoplayer-testbed\" deleted"}
    [testbed] live deployment restored
    ```
 

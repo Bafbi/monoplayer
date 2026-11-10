@@ -54,7 +54,7 @@ const SHIM = [
   '  *" scale deploy/monoplayer-testbed --replicas=1 "*) touch "$state/testbed-up"; echo ok; exit 0 ;;',
   '  *" scale deploy/monoplayer-testbed --replicas=0 "*) rm -f "$state/testbed-up"; echo ok; exit 0 ;;',
   '  *" get pods -l app.kubernetes.io/name=monoplayer-testbed "*) if [ -f "$state/testbed-up" ]; then echo "$KUBECTL_TESTBED_PODS"; else echo "$KUBECTL_NO_PODS"; fi; exit 0 ;;',
-  '  *" delete svc "*) echo "service monoplayer-testbed deleted"; exit "$KUBECTL_DELETE_STATUS" ;;',
+  '  *" delete svc "*) echo "$KUBECTL_DELETE_MESSAGE"; exit "$KUBECTL_DELETE_STATUS" ;;',
   '  *" get pods -l tailscale.com/parent-resource=monoplayer-testbed "*) echo "$KUBECTL_FRONT_PODS"; exit 0 ;;',
   '  *" get pods "*) printf \'{"items":[]}\\n\'; exit 0 ;;',
   '  *" exec "*) printf \'There are 1 of a max of 8 players online: GlowSquidye\\n\'; exit 0 ;;',
@@ -136,6 +136,8 @@ function run (space, args, env = {}) {
       KUBECTL_FRONT_PODS: JSON.stringify({ items: [] }),
       KUBECTL_FRONT_SERVICE_LIST: JSON.stringify({ items: [SERVICE] }),
       KUBECTL_SVC_STATUS: '0',
+      // kubectl quotes the object name: service "monoplayer-testbed" deleted.
+      KUBECTL_DELETE_MESSAGE: 'service "monoplayer-testbed" deleted',
       KUBECTL_DELETE_STATUS: '0',
       ...env
     }
