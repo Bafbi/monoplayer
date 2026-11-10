@@ -362,10 +362,16 @@ not want the account speaking in open chat. The speak rule is per frame family
 (`CHAT_SPEAK_COMMANDS` beside `CHAT_SPEAK_MESSAGES` in `core/relay.js`), and
 one function, `speaks(name, mode)`, turns a mode into an answer.
 
-A command's own reply arrives as `system_chat`, so the human sees it in
-`commands` mode. A reply the server sends as `player_chat` does not display,
-because `commands` relays clientbound exactly as `read-only` does. That is the
-documented cost of the mode, and it is why `full` exists.
+Command feedback arrives as `system_chat`, so the human sees it in `commands`
+mode: Paper writes a command's result through `CraftPlayer.sendMessage`, which
+is `ClientboundSystemChatPacket`, and the 50-minute Excalia session below carried
+zero `player_chat`.
+
+That is not true of every reply. A server that answers a command with signed
+player chat reaches the human as `player_chat`, which `commands` does not relay,
+so they will not see it. A whisper to another player is the case to check, and
+no run has settled which frame it takes. This is the cost of the mode, and it is
+why `full` exists.
 
 `chat: 'full'` speaks the attached client's chat and commands on the backend
 leg as the puppet. The core takes the text out of the frame and calls the

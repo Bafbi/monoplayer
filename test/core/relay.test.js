@@ -81,6 +81,10 @@ test('#97 speaks answers by mode and fails closed on a mode it does not know', (
   for (const mode of ['read-only', 'off', undefined, 'write']) {
     assert.equal(speaks('chat_command', mode), false, String(mode))
   }
+  // A prototype key is a missing mode, not a lookup that throws.
+  for (const mode of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.equal(speaks('chat_command', mode), false, mode)
+  }
   assert.equal(speaks('keep_alive', 'full'), false, 'only chat frames speak')
 })
 
