@@ -190,4 +190,34 @@ test('#73 a gate the puppet is no longer in configuration for is left held', () 
   assert.deepEqual(rig.backendLeg.heldGateAnswers(), [], 'nothing is answered in the wrong phase')
   assert.equal(rig.core.pendingDialog.held, true, 'it waits for a client that can answer it')
   assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 0)
+  assert.equal(rig.core.logs().filter(line => line.includes('"reason":"puppet_state"')).length, 1,
+    'the withholding is logged with the phase it failed')
+})
+
+test('#73 a shutdown detaches without answering the held gate', async () => {
+  // The backend socket closes on the next statement, so the answer would be a
+  // frame nobody receives.
+  const rig = makeCore()
+  attachConfiguring(rig)
+  rig.backendLeg.deliver(gate())
+  assert.equal(rig.core.pendingDialog.held, true)
+
+  await rig.core.stop({ reason: 'test_stop' })
+
+  assert.deepEqual(rig.backendLeg.heldGateAnswers(), [])
+  assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 0)
+})
+
+test('#73 a leg that cannot answer leaves the gate held, and says so', () => {
+  const rig = makeCore()
+  delete rig.backendLeg.answerHeldGate
+  attachConfiguring(rig)
+  rig.backendLeg.deliver(gate())
+
+  rig.core.detachPlayer({ reason: 'player_quit' })
+
+  assert.equal(rig.core.pendingDialog.held, true, 'it waits for a client that can answer it')
+  assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 0)
+  const withheld = rig.core.logs().filter(line => line.includes('leg_cannot_answer'))
+  assert.equal(withheld.length, 1, 'and the refusal is logged, not silent')
 })
