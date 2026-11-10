@@ -143,8 +143,8 @@ own body drew a vanilla default both times, while the proxy logged
 
 What the artifacts prove, and what they do not:
 
-- **Proved.** From 20:44:28 the client held no `player_info` entry for the
-  human's UUID, and the proxy wrote no second frame. Excalia moved the puppet
+- **Proved from the proxy's side.** From 20:44:28 the client held no entry the
+  proxy could still add to, and the proxy wrote no second frame. Excalia moved the puppet
   37 s into the session, and a followed transfer takes the client through a
   configuration round on its own socket. Coming back to play the client builds a
   **new `ClientPacketListener`** (`ClientConfigurationPacketListenerImpl.handleConfigurationFinished`
@@ -175,7 +175,10 @@ the frame at all, because the front gave no UUID, logs `puppetSkinWithheld`. One
 that has no property yet says nothing, because the property normally arrives a
 moment later and the frame then goes out under `property_arrived`.
 
-### The two questions the ticket asked to settle first
+### The ticket's questions 1 and 3
+
+Question 2, why the held property kept changing, is answered above: the proxy was
+holding whichever entry came first in the frame.
 
 **Does the live client hold an entry for the human's UUID when the frame
 arrives?** No, not on the first attach. No `player_info` frame in the journal's
@@ -186,7 +189,8 @@ that map, with `putIfAbsent`, so the attach's own frame is what created the entr
 That reading is proxy-side evidence plus the client's own code. It is not an
 observation of the live client's map.
 
-**What shape is Excalia's textures property?** The same as the dev lane's:
+**What shape is Excalia's textures property?** The dev lane's, field for
+field, and its texture loads:
 
 | Field | Live (`GlowSquidye`) | Dev (`Wiriaw`) |
 |---|---|---|

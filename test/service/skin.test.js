@@ -111,8 +111,9 @@ function transfer (host = 'sky-2.excalia.fr', port = 25565) {
   return { name: 'transfer', buffer: BUFFER('transfer'), data: { host, port } }
 }
 
-// The moved-to server answered: its configuration round, the client's finish,
-// then its play login and join state. The client keeps the socket it had.
+// The configuration round that follows a followable move or a restarted phase:
+// the server's configuration, the client's finish, then its play login and join
+// state. The client keeps the socket it had.
 function landOnTarget ({ backendLeg, frontLeg, core }) {
   backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
   backendLeg.deliver({ state: 'configuration', name: 'select_known_packs', data: {} })
@@ -270,6 +271,21 @@ test('a replay that cannot write the frame at all says why, because no later fra
   const withheld = eventsNamed(logLines, 'puppetSkinWithheld')
   assert.equal(withheld.length, 1)
   assert.equal(withheld[0].reason, 'no_identity')
+})
+
+test('a front with no UUID is named in the ordinary order too, where the property lands later', () => {
+  const logLines = []
+  const rig = makeCore({ skin: { showPuppetSkin: true }, logLines })
+  warmBackend(rig, { playerInfo: false })
+  rig.frontLeg.loginStart({ name: 'Bafbi' })
+  rig.core.attachPlayer({ name: 'Bafbi' })
+  assert.equal(eventsNamed(logLines, 'puppetSkinWithheld').length, 0, 'no property yet is not news')
+
+  deliverPlayerInfo(rig)
+  const withheld = eventsNamed(logLines, 'puppetSkinWithheld')
+  assert.equal(withheld.length, 1, 'the frame that arrives cannot be written either')
+  assert.equal(withheld[0].reason, 'no_identity')
+  assert.equal(skinFrames(rig.frontLeg).length, 0)
 })
 
 // #134: the live tab list arrived through the same frame, and the first entry

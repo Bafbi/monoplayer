@@ -1464,6 +1464,17 @@ export function createMonoplayer ({
     return { sent: true }
   }
 
+  // #134: one refusal is worth a line. A front that gave no UUID cannot be named
+  // by any later frame, and no other event reports it. A missing property arrives
+  // a moment later on Paper, a packet or write failure logs `puppetSkinRefused`,
+  // and a replay never finds the client out of play because it sets
+  // `frontPlayReady` first.
+  function logWithheldSkin (outcome, name) {
+    if (outcome?.sent !== true && outcome?.reason === 'no_identity') {
+      log('puppetSkinWithheld', { name, reason: outcome.reason })
+    }
+  }
+
   // The next play state holds no `player_info` entry, so it is owed the skin
   // frame again. An attach is a fresh connection. A reconfiguration is a new
   // `ClientPacketListener`, whose entry map starts empty. Either way the entry
@@ -1503,16 +1514,9 @@ export function createMonoplayer ({
     // #99: and the client now draws the human's own body, so the puppet's skin
     // goes on it. After the replay, because the frame is client state the replay
     // does not carry.
-    // #134: the heartbeat counts no refusal for a frame that was never
-    // attempted, which is how a played body lost its skin without a trace. A front
-    // that gave no UUID is the one refusal worth a line: no later frame repairs it,
-    // and no other event names it. A missing property arrives a moment later on
-    // Paper, a packet or write failure logs `puppetSkinRefused`, and a replay
-    // cannot find the client out of play because it sets `frontPlayReady` first.
-    const skin = sendPuppetSkin({ reason })
-    if (skin.sent !== true && skin.reason === 'no_identity') {
-      log('puppetSkinWithheld', { name, reason: skin.reason })
-    }
+    // #134: the heartbeat counts no refusal for a frame that was never attempted,
+    // which is how a played body lost its skin without a trace.
+    logWithheldSkin(sendPuppetSkin({ reason }), name)
 
     // #16: a dialog that was waiting for a client goes after the replay, so the
     // client is in play when the screen opens.
@@ -2042,7 +2046,7 @@ export function createMonoplayer ({
         // A backend that lists the puppet after its play login is the ordinary
         // case on Paper, so the property often arrives after the attach replay
         // and this call is what reaches the client that is already in play.
-        if (changed) sendPuppetSkin({ reason: 'property_arrived' })
+        if (changed) logWithheldSkin(sendPuppetSkin({ reason: 'property_arrived' }), attachedName)
       }
     }
 

@@ -61,6 +61,11 @@ export function pickTextures (properties) {
   return null
 }
 
+// The entries a `player_info` frame lists, whichever shape the caller holds.
+function entriesOf (packet) {
+  return Array.isArray(packet?.data) ? packet.data : []
+}
+
 // The UUID as a comparison key. A UUID reaches the pick from two places, the
 // resolved account and the decoded packet, and case and hyphens are not a
 // difference between them. A validator it is not: a malformed string compares
@@ -82,8 +87,7 @@ function uuidKey (value) {
 export function texturesPropertyOf (packet, { uuid = null } = {}) {
   const wanted = uuidKey(uuid)
   if (wanted === null || wanted === '') return null
-  const entries = Array.isArray(packet?.data) ? packet.data : []
-  for (const entry of entries) {
+  for (const entry of entriesOf(packet)) {
     if (uuidKey(entry?.uuid) !== wanted) continue
     const picked = pickTextures(entry?.player?.properties)
     if (picked !== null) return picked
@@ -95,8 +99,7 @@ export function texturesPropertyOf (packet, { uuid = null } = {}) {
 // A config that names no puppet UUID takes no skin, and this is how the core
 // tells a frame that carried one from a frame that carried none.
 export function carriesTextures (packet) {
-  const entries = Array.isArray(packet?.data) ? packet.data : []
-  for (const entry of entries) {
+  for (const entry of entriesOf(packet)) {
     if (pickTextures(entry?.player?.properties) !== null) return true
   }
   return false
