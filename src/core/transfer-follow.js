@@ -3,8 +3,8 @@
 //
 // The core emits `reconnect_due` with a `target` only on the hop that follows a
 // transfer. Later retries of the same target arrive with `target: null`, so the
-// controller must remember the target until a connect succeeds or the target
-// failure budget runs out.
+// controller must remember the target until a connect succeeds or the follow
+// budget runs out.
 //
 // Pure: no timers, no sockets. Used by start-live and the offline loopback, and
 // unit-tested on its own.

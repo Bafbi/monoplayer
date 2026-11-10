@@ -45,7 +45,7 @@ import { resolveAccount } from '../custody/accounts.js'
 import { normalizeUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../legs/live-backend.js'
 import { createLiveFrontLeg } from '../legs/live-front.js'
-import { waitForReady } from './readiness.js'
+import { shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
@@ -80,9 +80,9 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   if (env.MONOPLAYER_CHAT) out.chat = env.MONOPLAYER_CHAT
-  // The kept connection (#22) is off in the defaults, and one lane turns it on
-  // without moving that default. Only "1" and "0" are read, so a typo cannot
-  // silently change what a deployed lane does with a transfer.
+  // The kept connection (#22) is on in the defaults; this switch lets a lane
+  // turn it off without moving that default. Only "1" and "0" are read, so a
+  // typo cannot silently change what a deployed lane does with a transfer.
   const keepRaw = env.MONOPLAYER_TRANSFER_KEEP_CONNECTION
   if (keepRaw === '1' || keepRaw === '0') {
     out.transfer = { ...doc.transfer, keepConnection: keepRaw === '1' }
@@ -358,13 +358,29 @@ export async function startLive ({ argv = [], io = process } = {}) {
     const readiness = await waitForReady({ core, log, maxWarmMs })
     if (!readiness.hasConfig || !readiness.hasPrefix) return readiness
     if (!readiness.warm) {
+      // #87: the transfer stage's fallback releases a client onto this cache, so
+      // a target that has sent no chunk frame yet is not warm, however many join
+      // frames it queued. Startup and reconnect release nobody and keep the old
+      // behaviour. A refusal is a failed dial for the caller below: the follow
+      // budget retries it and then reverts.
+      if (!shouldForceWarm(readiness, { requireChunks: stage === 'transfer' })) {
+        log('warmFallbackRefused', {
+          stage,
+          reason: 'no_chunks',
+          chunkFrames: readiness.chunkFrames,
+          prefixFrames: readiness.prefixFrames,
+          configFrames: readiness.configFrames
+        })
+        return { ...readiness, warmRefused: true }
+      }
       const forced = core.cache.forceWarm()
       core.session.warmComplete({ marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished' })
       log('warmFallback', {
         stage,
         forced: forced.forced,
         prefixFrames: readiness.prefixFrames,
-        configFrames: readiness.configFrames
+        configFrames: readiness.configFrames,
+        chunkFrames: readiness.chunkFrames
       })
     }
     log('readiness', { stage, ...readiness })
@@ -374,10 +390,27 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const baseTarget = { host: cfg.backend.host, port: cfg.backend.port }
   const follow = createTransferFollowController()
   // The server the puppet is on now. A plain backend fault reconnects here,
-  // not always to the configured base; only a failed transfer reverts.
+  // not always to the configured base.
   let currentTarget = { ...baseTarget }
+  // The server the session last warmed on, which is the one whose state a
+  // restored client holds. A given-up target reverts here, not to the base: on a
+  // chain A->B->C a failed C restores the client into B's world (#87).
+  let settledTarget = { ...baseTarget }
   const isBase = target =>
     target.host === baseTarget.host && target.port === baseTarget.port
+
+  // Point the next dial at the settled server and drop any followed target that
+  // is still in the controller.
+  function revertToSettled (reason) {
+    const abandoned = follow.abort(reason).abandoned ?? null
+    currentTarget = { ...settledTarget }
+    try {
+      backend.setTarget(settledTarget, { keepCookies: !isBase(settledTarget) })
+    } catch (error) {
+      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    return { abandoned }
+  }
 
   // One backend.connect() per reconnect_due: the guard refuses a second
   // attempt while one is in flight, so the reconnect can never loop.
@@ -406,9 +439,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     } catch (error) {
       log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
       core.abortTransfer('invalid_target')
-      follow.abort('invalid_target')
-      currentTarget = { ...baseTarget }
-      backend.setTarget(baseTarget, { keepCookies: false })
+      revertToSettled('invalid_target')
     }
 
     try {
@@ -417,10 +448,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
         stage: due.target ? 'transfer' : 'reconnect',
         maxWarmMs: 5000
       })
-      if (!readiness.hasConfig || !readiness.hasPrefix) {
-        throw new Error('backend reconnect did not produce configuration and join frames')
+      if (!readiness.hasConfig || !readiness.hasPrefix || readiness.warmRefused === true) {
+        throw new Error(readiness.warmRefused === true
+          ? 'backend reconnect produced no chunk frame, so no client can be released on it'
+          : 'backend reconnect did not produce configuration and join frames')
       }
       const outcome = follow.onSuccess()
+      settledTarget = { ...dialTarget }
       log('backendReconnect', {
         delayMs,
         attempt,
@@ -442,10 +476,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
       })
       if (failure.reverted) {
         // The followed target is unreachable; the next reconnect goes back to
-        // the configured backend so the puppet is never stranded.
+        // the server the client was restored onto so the puppet is never
+        // stranded and never lands where the client is not.
         core.abortTransfer('target_unreachable')
-        currentTarget = { ...baseTarget }
-        backend.setTarget(baseTarget, { keepCookies: false })
+        revertToSettled('target_unreachable')
         log('transferFollowReverted', {
           host: failure.abandoned?.host ?? null,
           port: failure.abandoned?.port ?? null
@@ -459,6 +493,25 @@ export async function startLive ({ argv = [], io = process } = {}) {
     } finally {
       reconnecting = false
     }
+  })
+
+  // #87: a restored move sends the puppet back to the server the client was
+  // restored onto. Without this the follow controller keeps a target the core
+  // has already given up on, and the next dial lands the puppet on the server
+  // the human was just moved off.
+  core.on('transfer_restored', ({ reason = null, kind = null } = {}) => {
+    // A reconfigure is the same server restarting its configuration phase, so
+    // there is no target to abandon: the puppet stays where it is.
+    if (kind !== 'transfer') {
+      log('transferRestoreKeptTarget', { reason, kind })
+      return
+    }
+    const { abandoned } = revertToSettled('restored')
+    log('transferFollowAbandoned', {
+      reason,
+      host: abandoned?.host ?? null,
+      port: abandoned?.port ?? null
+    })
   })
 
   // Every failure after this point owns a live backend client and (online) the
