@@ -46,6 +46,10 @@ test('the G0 paper row describes the lane rung 4 drives', () => {
 test('M4 pins carry the plan pins: Paper b74, Velocity 4.3.1 b45 with sha256, modern forwarding', () => {
   const m4 = getBackend('paper-m4')
   assert.equal(m4.pins.paperBuild, 74)
+  // Paper 26.1.2 build 74 is what testdata/m4-verdict.md recorded for this row,
+  // and test/driver/pin.test.js holds deploy/driver/paper-m4.yaml to these two
+  // values, so the row needs an absolute anchor of its own (#117).
+  assert.equal(m4.pins.version, '26.1.2')
   assert.equal(m4.pins.velocity, '4.3.1 build 45')
   assert.match(m4.pins.velocitySha256, /^[0-9a-f]{64}$/,
     'velocity jar pin must be a full sha256 (fill-data object id)')
