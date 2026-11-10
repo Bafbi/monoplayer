@@ -18,11 +18,11 @@
 // monoplayer namespace on the custody PVC and exposes
 // monoplayer-testbed.tail41e568.ts.net:25565.
 //
-// The front is the Service, not the deployment: a deployment scaled to zero
-// leaves the Service published with no endpoints and its tailnet device
-// registered. So `down` deletes the Service, and `up` recreates it from
-// deploy/testbed, whose tailscale.com/hostname annotation brings the same name
-// back. `up` also records the digest it ran, because the manifest pulls the
+// The published front is the testbed's front Service, not its deployment: a
+// deployment scaled to zero leaves that Service published with no endpoints and
+// its tailnet device registered. So `down` deletes it, and `up` recreates it
+// from deploy/testbed, whose tailscale.com/hostname annotation brings the same
+// name back. `up` also records the digest it ran, because the manifest pulls the
 // moving :main tag: without it two runs cannot be compared.
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -47,6 +47,11 @@ const FRONT_DEVICE_LABEL = `tailscale.com/parent-resource=${TEST_DEPLOY}`
 // only way the Argo policy comes back (AGENTS.md), so a test points it at its
 // own file instead of overwriting a live run's record.
 const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
+// `down` clears the record once it has restored what it owes, so a run's digest
+// would go with it. One line per `up` here is what makes two finished runs
+// comparable. MONOPLAYER_TESTBED_DIGESTS moves it, so a test never writes the
+// operator's file.
+const DIGESTS_FILE = process.env.MONOPLAYER_TESTBED_DIGESTS || '.reports/testbed-digests.jsonl'
 
 // How long the two port-forwards get before the registry probe reads them. A
 // test answers the probe from a shim and sets this to 0, so the unit rung does
@@ -121,13 +126,29 @@ function pods (namespace, deploy) {
 
 // The digest the deployment actually ran. Its status carries no imageID, but its
 // pod does, and the manifest's :main tag makes the tag name useless for a
-// comparison between runs.
+// comparison between runs. Index 0 is the monoplayer container; the two init
+// containers only wait for the custody file and clear a stale lock, so the image
+// that decides what the run executed is this one.
 function testbedImage () {
   const imageID = pods(TEST_NS, TEST_DEPLOY)[0]?.status?.containerStatuses?.[0]?.imageID ?? null
   if (!imageID) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports no containerStatuses[0].imageID, so this run cannot name the build it ran`)
   const digest = /@(sha256:[0-9a-f]{64})$/.exec(imageID)?.[1] ?? null
   if (!digest) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports an imageID without a digest: ${imageID}`)
   return { imageID, digest }
+}
+
+function recordDigest (image) {
+  fs.mkdirSync(path.dirname(DIGESTS_FILE), { recursive: true })
+  fs.appendFileSync(DIGESTS_FILE, JSON.stringify({ at: new Date().toISOString(), ...image }) + '\n')
+}
+
+function frontService () {
+  const raw = kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json'], { allowFail: true })
+  return raw === null ? null : JSON.parse(raw)
+}
+
+function frontHostname (svc) {
+  return svc?.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
 }
 
 function frontDevices () {
@@ -290,11 +311,10 @@ async function up () {
   // is the only thing a later run can be compared against.
   const image = testbedImage()
   updateState(image)
-  log('testbed image', image)
+  recordDigest(image)
+  log('testbed image', { ...image, recorded: DIGESTS_FILE })
 
-  const svc = JSON.parse(kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json']))
-  const hostname = svc.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
-  log('testbed front', { hostname: hostname ?? '(pending)', port: 25565 })
+  log('testbed front', { hostname: frontHostname(frontService()) ?? '(pending)', port: 25565 })
   log(`attach the client to ${FRONT_HOST}:25565, then run: node src/testbed/switch.js transfer`)
 }
 
@@ -334,9 +354,9 @@ async function transfer () {
   log('testbed heartbeat', { heartbeat })
 }
 
-// Deleting the Service is what unpublishes the front: the tailnet device and its
-// proxy pod belong to the Service, so they go with it, and the next `apply -k`
-// recreates the Service from the manifest's tailscale.com/hostname annotation.
+// Deleting the front Service is what unpublishes the front: the tailnet device
+// and its proxy pod belong to that Service, so they go with it, and the next
+// `apply -k` recreates it from the manifest's tailscale.com/hostname annotation.
 // A failed delete is logged, not thrown, so it can never keep the live
 // deployment down; `status` shows what is left.
 function removeFront () {
@@ -368,10 +388,10 @@ async function status () {
     log(`${ns}/${deploy}`, d ? { replicas: d.spec?.replicas ?? null, ready: d.status?.readyReplicas ?? 0 } : { missing: true })
   }
   log('argo automated', { automated: appAutomated() })
-  const svc = kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json'], { allowFail: true })
+  const svc = frontService()
   log(`front ${TEST_NS}/${TEST_DEPLOY}`, svc === null
     ? { missing: true }
-    : { hostname: JSON.parse(svc).status?.loadBalancer?.ingress?.[0]?.hostname ?? '(pending)' })
+    : { hostname: frontHostname(svc) ?? '(pending)' })
   const devices = frontDevices()
   log('tailnet devices', devices === null
     ? { unreadable: true }
