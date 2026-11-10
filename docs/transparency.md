@@ -220,9 +220,14 @@ removed in the same call so the client keeps no ghost advancement, with a local
   `signed: true` or `signed: false`, so a live run answers the question before
   the default is flipped.
 - **The proxy answers some connection mechanics itself.** Keep-alives, teleport
-  ids, chunk-batch acknowledgements, cookies, and the resource-pack status are
-  per-connection, so the puppet answers its own. The server sees a client that
-  behaves normally. It does not see the human's timings.
+  ids, chunk-batch acknowledgements, and cookies are per-connection, so the
+  puppet answers its own. The server sees a client that behaves normally. It
+  does not see the human's timings.
+- **The resource pack is the human's answer.** While a client is attached the
+  puppet says nothing about the pack, and the status the human's client sends
+  reaches the server as the puppet's own frame. With no client to answer, the
+  puppet accepts and loads, and the held copy is offered to the next client
+  (#98).
 
 ## What proves it
 

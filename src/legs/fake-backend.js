@@ -454,6 +454,16 @@ export async function createFakeBackend ({
     log('sendShowDialog', { id, state })
   }
 
+  // #98: the pack a server pushes on join. A play-state frame on this version,
+  // which is where the live server sends it: one per connection, then never
+  // again, because the puppet's accept closes the round.
+  function sendResourcePack ({ uuid, url = 'https://example.invalid/loopback-pack.zip', hash = '', forced = false } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('add_resource_pack', { uuid, url, hash, forced })
+    }
+    log('sendResourcePack', { uuid, forced })
+  }
+
   function sendClearDialog () {
     for (const client of Object.values(server.clients)) {
       client.write('clear_dialog', {})
@@ -523,6 +533,7 @@ export async function createFakeBackend ({
     sendCookieRequest,
     sendShowDialog,
     sendClearDialog,
+    sendResourcePack,
     close
   }
 }

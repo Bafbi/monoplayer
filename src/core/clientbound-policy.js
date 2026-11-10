@@ -16,7 +16,8 @@
 //   live_only   relay it while attached, never cache or replay it (chat,
 //               per-request responses such as ping/nbt query answers)
 //   control     relay it to the human that answers it, never cache or replay
-//               it (control dialogs; the pending holder keeps the one copy, #16)
+//               it (control dialogs and the resource pack; a pending holder
+//               keeps the one copy, #16, #98)
 //   per_leg     owned by each connection, never crosses (keep-alive, position,
 //               ping, bundle delimiters)
 //   block       never crosses, never cached, never replayed
@@ -50,6 +51,22 @@ export const CONTROL_FRAMES = new Set([
   'clear_dialog',
   'code_of_conduct'
 ])
+
+// The resource pack is a control frame the human answers with
+// `resource_pack_receive`, in play or in configuration (#98). The server sends
+// the pack once and the puppet's own accept closes the round, so the copy the
+// holder keeps is the only one a later client can receive. Ordinary state
+// cannot carry it: a play-state pack lands in the 512-entry generic ring and is
+// evicted about 90 s into a live session, which is the reported "no pack after
+// a reattach". `remove_resource_pack` is the withdrawal, so it follows the same
+// path and the two cannot disagree.
+export const RESOURCE_PACK_FRAMES = new Set([
+  'add_resource_pack',
+  'remove_resource_pack'
+])
+
+// Every control frame, whichever holder owns it.
+const CONTROL_ANY = [...CONTROL_FRAMES, ...RESOURCE_PACK_FRAMES]
 
 // Never relayed to the front client. `hide_message` carries the puppet
 // connection's message index, so relaying it would hide the wrong message.
@@ -94,7 +111,7 @@ export const PLAY_CACHE_ONLY = new Set(['login'])
 // Everything else is ordinary state: cached and relayed. Kept explicit so the
 // coverage test can prove the table is complete.
 export const PLAY_ORDINARY = new Set([
-  'abilities', 'acknowledge_player_digging', 'action_bar', 'add_resource_pack',
+  'abilities', 'acknowledge_player_digging', 'action_bar',
   'advancements', 'animation', 'attach_entity', 'block_action',
   'block_break_animation', 'block_change', 'boss_bar', 'camera',
   'chat_suggestions', 'chunk_batch_finished', 'chunk_batch_start',
@@ -114,7 +131,7 @@ export const PLAY_ORDINARY = new Set([
   'open_sign_entity', 'open_window', 'player_info', 'player_remove',
   'player_rotation', 'playerlist_header', 'recipe_book_add',
   'recipe_book_remove', 'recipe_book_settings', 'rel_entity_move',
-  'remove_entity_effect', 'remove_resource_pack', 'reset_score', 'respawn',
+  'remove_entity_effect', 'reset_score', 'respawn',
   'scoreboard_display_objective', 'scoreboard_objective', 'scoreboard_score',
   'select_advancement_tab', 'server_data', 'server_links', 'set_cooldown',
   'set_cursor_item', 'set_passengers', 'set_player_inventory',
@@ -155,13 +172,11 @@ export const CONFIG_BLOCK = new Set([
 export const CONFIG_PER_LEG = new Set(['keep_alive', 'ping'])
 
 export const CONFIG_ORDINARY = new Set([
-  'add_resource_pack',
   'custom_payload',
   'custom_report_details',
   'feature_flags',
   'finish_configuration',
   'registry_data',
-  'remove_resource_pack',
   'reset_chat',
   'select_known_packs',
   'server_links',
@@ -174,14 +189,14 @@ export const NOT_REPLAYABLE = new Set([
   ...PLAY_BLOCK,
   ...PLAY_LIVE_ONLY,
   ...PLAY_PER_LEG,
-  ...CONTROL_FRAMES,
+  ...CONTROL_ANY,
   ...CONFIG_BLOCK,
   ...CONFIG_PER_LEG,
   'pong'
 ])
 
-// A control dialog exists in both states, so the control set is added to each
-// table rather than repeated per state.
+// A control dialog and a resource pack exist in both states, so the control
+// frames are added to each table rather than repeated per state.
 function buildTable (ordinary, cacheOnly, liveOnly, perLeg, block) {
   const table = new Map()
   for (const name of ordinary) table.set(name, DECISION.STATE)
@@ -189,7 +204,7 @@ function buildTable (ordinary, cacheOnly, liveOnly, perLeg, block) {
   for (const name of liveOnly) table.set(name, DECISION.LIVE_ONLY)
   for (const name of perLeg) table.set(name, DECISION.PER_LEG)
   for (const name of block) table.set(name, DECISION.BLOCK)
-  for (const name of CONTROL_FRAMES) table.set(name, DECISION.CONTROL)
+  for (const name of CONTROL_ANY) table.set(name, DECISION.CONTROL)
   return table
 }
 

@@ -63,6 +63,7 @@ import { SKIN_FRAME, carriesTextures, skinPlayerInfoPacket, texturesPropertyOf }
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
+import { createPendingResourcePacks } from '../core/pending-resource-pack.js'
 import { createSession, STATES } from '../core/session.js'
 import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact } from '../observability/redact.js'
@@ -297,6 +298,14 @@ export function createMonoplayer ({
     nonPlayFramesIgnored: 0,
     resourcePackAcks: 0,
     resourcePackAckFailures: 0,
+    // #98: the pack a client answers, and the one a client has not answered.
+    resourcePacksHeld: 0,
+    resourcePacksRelayed: 0,
+    resourcePacksResent: 0,
+    resourcePacksAnswered: 0,
+    resourcePacksRemoved: 0,
+    resourcePacksAnsweredOnDetach: 0,
+    resourcePacksWithheld: 0,
     brandAnnounced: 0,
     attachesConfiguring: 0,
     configFramesRelayed: 0,
@@ -434,6 +443,7 @@ export function createMonoplayer ({
   // detach and is re-sent on attach. A control dialog is neither cached nor
   // replayed, so this is the one copy and a replay cannot deliver a stale one.
   const pendingDialog = createPendingDialog()
+  const pendingPacks = createPendingResourcePacks()
   // #16: the state of a dialog the puppet answered itself (the configuration
   // gate click, #21) on this connection. The leg answers the frame before the
   // core sees it, so the core consumes this marker instead of holding a
@@ -545,21 +555,125 @@ export function createMonoplayer ({
     return decision
   }
 
-  // The puppet never renders a resource pack, but the backend keeps a
-  // per-player pack status, and server logic that ships a custom UI inside the
-  // pack can read it. Answer as a client that accepted the pack and finished
-  // loading it (3 = accepted, 0 = successfully loaded). The attaching client
-  // gets the same request in the replay and downloads the pack for real.
+  // #98: the pack is the puppet's installation and the human's answer.
+  //
+  // The backend keeps a per-player pack status, and server logic that ships a
+  // custom UI inside the pack reads it. The puppet never renders one, so two
+  // cases, and only two:
+  //
+  //   a client can answer in this state — hold the frame and relay it. The
+  //     human's own `resource_pack_receive` (accepted, downloaded, declined,
+  //     failed) is forwarded to the backend as the puppet's, so the server hears
+  //     the result the human's client actually produced. The puppet says nothing.
+  //
+  //   nothing can answer — hold the frame for the next client, and accept and
+  //     load as the puppet (3 = accepted, 0 = successfully loaded), so a required
+  //     pack never keeps a headless lane out.
+  //
+  // The held copy is what a later client receives. It lives outside the state
+  // cache: as ordinary state a play-state pack sat in the 512-entry generic ring
+  // and was evicted about 90 s into the live session, which is the reattach that
+  // had no pack at all.
+  function handleResourcePack ({ state, name, buffer, data = {} }) {
+    const uuid = data.uuid ?? data.id ?? null
+    if (name === 'remove_resource_pack') {
+      const dropped = pendingPacks.remove({ uuid })
+      metrics.resourcePacksRemoved++
+      log('resourcePackRemoved', { state, uuid, held: dropped.dropped, attached: isAttached() })
+      if (!canReceiveControl(state)) return { relayed: false, dropped: dropped.dropped }
+      frontLeg.writeRaw(buffer, { state, name })
+      metrics.resourcePacksRelayed++
+      return { relayed: true, dropped: dropped.dropped }
+    }
+    const added = pendingPacks.add({ state, name, buffer, data })
+    metrics.resourcePacksHeld++
+    log('resourcePackHeld', { state, uuid, attached: isAttached(), replaced: added.replaced })
+    if (canReceiveControl(state)) {
+      frontLeg.writeRaw(buffer, { state, name })
+      metrics.resourcePacksRelayed++
+      log('resourcePackRelayed', { state, uuid })
+      emit('resource_pack', { state, uuid, attached: true })
+      return { relayed: true, answered: false }
+    }
+    answerResourcePack(data)
+    return { relayed: false, answered: true }
+  }
+
+  // The puppet's own answer, for a pack no client could take. The three stages
+  // a real client sends are accepted, downloaded, successfully loaded; the
+  // server acts on the last two, and a leg with no download to point at cannot
+  // honestly claim stage 4, so this writes the two the product has always sent.
   function answerResourcePack (data = {}) {
     metrics.resourcePackAcks++
     const uuid = data.uuid ?? data.id
     try {
       backendLeg.write('resource_pack_receive', { uuid, result: 3 })
       backendLeg.write('resource_pack_receive', { uuid, result: 0 })
+      pendingPacks.answered({ uuid, result: 0 })
       log('resourcePackAck', { uuid, result: 'accepted+loaded' })
     } catch (error) {
       metrics.resourcePackAckFailures++
       log('resourcePackAckFailed', { error: String(error?.message ?? error) })
+    }
+  }
+
+  // A client that just arrived in `state` receives the packs of that state,
+  // in the order the backend sent them. A pack of the other state waits: the
+  // client would parse it in a phase where the name is a different packet id.
+  //
+  // `clientPhase` says the client is in `state` right now, whatever the puppet
+  // is doing. The front reports that moment from its own configuration phase,
+  // where the client parses configuration frames although the core's attach has
+  // not run yet: a warm attach is in play, not CONFIGURING.
+  function resendPendingPacks (state, { clientPhase = false } = {}) {
+    const frames = pendingPacks.list(state)
+    if (frames.length === 0) return { sent: 0 }
+    if (!clientPhase && !canReceiveControl(state)) {
+      metrics.resourcePacksWithheld += frames.length
+      log('resourcePacksWithheld', { state, count: frames.length, backendConfiguring })
+      return { sent: 0 }
+    }
+    let sent = 0
+    for (const frame of frames) {
+      try {
+        if (frontLeg.writeRaw(frame.buffer, { state: frame.state, name: frame.name }) !== false) sent++
+      } catch (error) {
+        log('resourcePackResendFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      }
+    }
+    metrics.resourcePacksResent += sent
+    log('resourcePacksResent', { state, count: sent })
+    return { sent }
+  }
+
+  // #98, #73's shape: a client that leaves without answering does not leave the
+  // server without an answer. The pack it never answered becomes the puppet's,
+  // because a required pack the server hears nothing about can end the session.
+  // A pack the puppet can no longer write in its state (configuration, already
+  // left) stays held for a client that can answer it.
+  function answerPendingPacksOnDetach ({ reason = 'client_disconnect' } = {}) {
+    const puppetState = backendConfiguring ? 'configuration' : 'play'
+    for (const entry of pendingPacks.unanswered()) {
+      if (!backendSessionOpen) {
+        metrics.resourcePacksWithheld++
+        log('resourcePackWithheld', { state: entry.state, uuid: entry.uuid, reason: 'no_backend_session', detach: reason })
+        continue
+      }
+      // The packet id is state-scoped: a pack asked for in a phase the puppet
+      // has left cannot be answered in this one.
+      if (entry.state !== puppetState) {
+        metrics.resourcePacksWithheld++
+        log('resourcePackWithheld', {
+          state: entry.state,
+          uuid: entry.uuid,
+          reason: 'puppet_state',
+          detach: reason
+        })
+        continue
+      }
+      answerResourcePack(entry.data ?? {})
+      metrics.resourcePacksAnsweredOnDetach++
+      log('resourcePackAnsweredOnDetach', { state: entry.state, uuid: entry.uuid, detach: reason })
     }
   }
 
@@ -882,8 +996,10 @@ export function createMonoplayer ({
     backendSessionOpen = false
     awaitingBackendLogin = true
     // A dialog belongs to the backend session that asked it; the next session
-    // asks its own.
+    // asks its own. A pack is the same: the next session pushes its own, and a
+    // copy from the dead one would be offered beside it.
     pendingDialog.clear()
+    pendingPacks.clear()
     puppetAnsweredDialog = null
     // A move that reaches an ordinary teardown has already lost its client:
     // the snapshot is no longer a state anyone holds. A retained teardown is
@@ -1520,6 +1636,9 @@ export function createMonoplayer ({
     // #16: a dialog that was waiting for a client goes after the replay, so the
     // client is in play when the screen opens.
     resendPendingDialog('play')
+    // #98: and the packs this connection holds go right beside it, so a
+    // reattaching client gets the pack the backend sent once and never repeats.
+    resendPendingPacks('play')
 
     log('attach', {
       name,
@@ -1590,6 +1709,10 @@ export function createMonoplayer ({
     // so a configuration gate this client left unanswered is the puppet's. A
     // play dialog stays held: it is the human's (#20).
     answerHeldGateOnDetach({ reason, answerGate })
+    // #98: a pack nobody answered is the same condition. A required pack the
+    // server hears nothing about can end the session, so the puppet answers it
+    // and the held copy stays for the next client.
+    if (answerGate === true) answerPendingPacksOnDetach({ reason })
     const result = session.detach({ reason })
     log('detach', { reason, pose: result.pose })
     emit('detach', { reason, pose: result.pose })
@@ -1754,7 +1877,6 @@ export function createMonoplayer ({
         if (moveKind !== null && !clientReconfiguring) startClientReconfiguration()
         announceBrand()
         const policy = clientboundPolicy('configuration', name)
-        if (name === 'add_resource_pack') answerResourcePack(data)
         if (name === 'ping') {
           // Per-leg latency ping: answer on the puppet leg, never replay.
           backendLeg.write('pong', { id: data.id })
@@ -1779,6 +1901,12 @@ export function createMonoplayer ({
         if (!backendConfiguring) {
           backendConfiguring = true
           log('backendConfiguring', { state: session.state })
+        }
+        // #98: a configuration-phase pack is the human's to answer, like a gate,
+        // and the held copy is what a client arriving later receives.
+        if (name === 'add_resource_pack' || name === 'remove_resource_pack') {
+          handleResourcePack({ state: 'configuration', name, buffer, data })
+          return
         }
         if (policy.decision === DECISION.CONTROL) {
           // #16: a configuration gate is the human's to answer. The holder keeps
@@ -1911,6 +2039,12 @@ export function createMonoplayer ({
         metrics.serverboundDropped++
         bumpName(metrics.serverboundDroppedByName, name)
         log('serverboundDropped', { name, state, reason: 'puppet_state_mismatch' })
+        // #98: a client that replayed a configuration-phase pack after the
+        // puppet left configuration can still load it; its answer has no packet
+        // id to travel under, and the puppet already said accepted and loaded.
+        if (name === 'resource_pack_receive') {
+          log('resourcePackAnswerUnforwardable', { state, uuid: serverbound.data?.uuid ?? null })
+        }
         return
       }
       if (state === 'play') {
@@ -1928,6 +2062,22 @@ export function createMonoplayer ({
       if (answered.answered) {
         metrics.controlDialogsAnswered++
         log('controlDialogAnswered', { name: serverbound.name, state: answered.state, dialog: answered.name })
+      }
+      // #98: the human's own pack status reached the backend. The held copy is
+      // not released: the pack stays installed for the next client.
+      if (name === 'resource_pack_receive') {
+        const packUuid = serverbound.data?.uuid ?? null
+        const result = serverbound.data?.result ?? null
+        const noted = pendingPacks.answered({ uuid: packUuid, result })
+        metrics.resourcePacksAnswered++
+        log('resourcePackAnswered', {
+          state,
+          uuid: packUuid,
+          result,
+          terminal: noted.terminal === true,
+          held: pendingPacks.held
+        })
+        emit('resource_pack_answer', { state, uuid: packUuid, result })
       }
       metrics.serverboundForwarded++
       bumpName(metrics.serverboundByName, serverbound.name)
@@ -1965,13 +2115,17 @@ export function createMonoplayer ({
   // configuration phase. This is the first moment a configuration frame reaches
   // it in a state it parses, so a held configuration gate goes out here.
   function configuringReady ({ name = null } = {}) {
+    // #98: the client is in its own configuration phase now, which is the one
+    // moment a configuration-phase pack can reach it. The attach call-in runs
+    // later, at play login, so a warm attach has nothing else to hang this on.
+    const packs = resendPendingPacks('configuration', { clientPhase: true })
     if (!attached || session.state !== STATES.CONFIGURING) {
-      log('configuringReadyIgnored', { reason: 'not_configuring', state: session.state })
-      return { attached: false, sent: false }
+      log('configuringReadyIgnored', { reason: 'not_configuring', state: session.state, packs: packs.sent })
+      return { attached: false, sent: false, packs: packs.sent }
     }
     const outcome = resendPendingDialog('configuration')
-    log('configuringReady', { name, sent: outcome.sent === true })
-    return { attached: true, sent: outcome.sent === true }
+    log('configuringReady', { name, sent: outcome.sent === true, packs: packs.sent })
+    return { attached: true, sent: outcome.sent === true, packs: packs.sent }
   }
 
   // The replay a pre-warm client still owes: sent once, when the join prefix
@@ -1997,6 +2151,13 @@ export function createMonoplayer ({
     // warm. The live path warms on the readiness fallback as well as on the
     // marker, so this is checked per frame as well as at the marker below.
     replayPendingEarly()
+
+    // #98: the resource pack is a control frame the human answers, so it never
+    // reaches the cache: the pending holder keeps the one copy.
+    if (name === 'add_resource_pack' || name === 'remove_resource_pack') {
+      handleResourcePack({ state: 'play', name, buffer, data })
+      return
+    }
 
     if (name === 'bundle_delimiter') {
       // Bundle delimiters are a transport grouping, not state. Replaying them
@@ -2135,8 +2296,6 @@ export function createMonoplayer ({
       if (cache.push('play', name, buffer, data).cached) metrics.framesCached++
       return
     }
-    if (name === 'add_resource_pack') answerResourcePack(data)
-
     if (name === 'transfer') {
       handleTransfer(data)
       return
@@ -2187,6 +2346,7 @@ export function createMonoplayer ({
       // replay and join prefix would otherwise sit beside it.
       cache.reset()
       pendingDialog.clear()
+      pendingPacks.clear()
       awaitingBackendLogin = true
       backendConfiguring = false
       log('backendReconfigure', {
@@ -2268,6 +2428,7 @@ export function createMonoplayer ({
     get backendViewDistance () { return backendViewDistance },
     get backendConfiguring () { return backendConfiguring },
     get pendingDialog () { return pendingDialog },
+    get pendingPacks () { return pendingPacks },
     get frontPlayReady () { return frontPlayReady },
     // #22: the move in flight, the client's own configuration phase, and the
     // target's play login. The rungs read these instead of inferring them.
