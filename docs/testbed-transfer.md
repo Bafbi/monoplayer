@@ -36,7 +36,9 @@ token has one writer. The orchestrator therefore:
 2. scales the live deployment to zero and waits for its pod to be gone;
 3. starts the testbed;
 4. on `down`, scales the testbed and Paper to zero, restores the live
-   deployment, waits for it to be ready, and restores the Argo sync policy.
+   deployment, waits for it to be ready, restores the Argo sync policy, then
+   deletes the testbed's front Service, which is what unpublishes the tailnet
+   name.
 
 If a run is interrupted, run `mise run testbed:down` or restore the policy by
 hand. The live front is offline while the testbed is up.
@@ -48,12 +50,84 @@ mise run testbed:up        # live off, testbed up (leaves it running)
 mise run testbed:client    # Bafbi headless client through the testbed front
 mise run testbed:transfer  # RCON transfer the puppet to paper-sky
 mise run testbed:registry  # compare hub/target dimension_type registries
-mise run testbed:down      # stop testbed, restore the live proxy
+mise run testbed:down      # stop testbed, restore the live proxy, then delete the testbed's front Service
 mise run testbed:run       # up + transfer + down, always restoring
 ```
 
 `testbed:up` runs the registry comparison before the client attaches. The
 expected result is `hub.entries=4`, `sky.entries=5`, `same=false`.
+
+## Verifying a cycle
+
+`down` writes to the live deployment, so a cycle here is the human's to run.
+These are the steps, and what each one prints.
+
+1. `mise run testbed:up`. The log names the build it ran and the name it
+   published:
+
+   ```
+   [testbed] testbed image {"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…","recorded":".reports/testbed-digests.jsonl"}
+   [testbed] testbed front {"hostname":"monoplayer-testbed.tail41e568.ts.net","port":25565}
+   ```
+
+   The same digest is appended to `.reports/testbed-digests.jsonl`, one line per
+   run, so two finished runs can be compared.
+
+2. `node src/testbed/switch.js status`. It reports the front Service and the
+   tailnet proxy that belongs to it. These are the lines that matter, in the
+   order it prints them:
+
+   ```
+   [testbed] argo automated {"automated":null}
+   [testbed] front monoplayer/monoplayer-testbed {"hostname":"monoplayer-testbed.tail41e568.ts.net"}
+   [testbed] tailnet devices {"count":1,"names":["ts-monoplayer-testbed-hqb5v-0"]}
+   [testbed] restore record {"automated":"{\"prune\":true,\"selfHeal\":true}","disabledByUs":true,"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…"}
+   ```
+
+   The four deployment rows come around those and are left out. `argo automated`
+   reads null because `up` removed it, and `restore record` carries the digest
+   this run recorded.
+
+3. `mise run testbed:down`. It restores the live deployment and the Argo policy
+   first, then deletes the front Service:
+
+   ```
+   [testbed] delete svc monoplayer/monoplayer-testbed {"result":"service \"monoplayer-testbed\" deleted"}
+   [testbed] live deployment restored
+   ```
+
+4. `node src/testbed/switch.js status` again. The front Service is gone, the
+   restore record is spent, and the live deployment is back:
+
+   ```
+   [testbed] monoplayer/monoplayer {"replicas":1,"ready":1}
+   [testbed] argo automated {"automated":"{\"prune\":true,\"selfHeal\":true}"}
+   [testbed] front monoplayer/monoplayer-testbed {"missing":true}
+   [testbed] tailnet devices {"count":0,"names":[]}
+   [testbed] restore record {"missing":true}
+   ```
+
+   The testbed and Paper deployment lines come between these and are left out.
+
+   The Tailscale operator removes the proxy pod on its own clock. Rerun `status`
+   until the device count is 0: the delete waits for the Service, not for the
+   operator.
+
+5. `mise run testbed:up` again. This is the only proof of the second acceptance
+   criterion, that `up` recreates the Service under the same name:
+
+   ```
+   [testbed] testbed front {"hostname":"monoplayer-testbed.tail41e568.ts.net","port":25565}
+   ```
+
+   A different name, such as `monoplayer-testbed-1`, means Tailscale had not
+   released the old device when the Service was recreated. This step takes the
+   live lane down again, so finish with `mise run testbed:down`.
+
+A bare `testbed:down` restores the policy recorded in
+`/tmp/opencode/monoplayer-testbed.json`, and that record can be older than the
+policy Argo holds now. Run `testbed:up` first, which overwrites it, and read the
+`argo automated` line `status` prints before and after.
 
 ## What it proves today
 
