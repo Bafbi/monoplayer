@@ -51,7 +51,30 @@ test('waitForReady reports the chunk data the cache holds', async () => {
   assert.equal(shouldForceWarm(outcome), false)
 
   const withChunks = { cache: { stats: () => stats({ warm: false, chunkFrames: 3 }) } }
-  const second = await waitForReady({ core: withChunks, log: () => {}, maxWarmMs: 1 })
+  // #110: a cold cache with a zero warm budget is settled at once, so this read
+  // costs no poll. The re-poll has its own case below.
+  const second = await waitForReady({ core: withChunks, log: () => {}, maxWarmMs: 0 })
   assert.equal(second.chunkFrames, 3)
   assert.equal(shouldForceWarm(second), true)
+})
+
+test('the poll loop re-reads the cache until the cache turns warm', async () => {
+  // #110: this case carries the re-poll branch, so the calls above answer from a
+  // cold cache without sleeping. The wait is injected, so the loop takes its
+  // second pass with no timer.
+  let polls = 0
+  const core = { cache: { stats: () => stats({ warm: polls++ > 0, chunkFrames: 4 }) } }
+  const events = []
+  const sleeps = []
+  const outcome = await waitForReady({
+    core,
+    log: name => events.push(name),
+    maxWarmMs: 5000,
+    sleep: async ms => { sleeps.push(ms) }
+  })
+  assert.equal(polls, 2, 'the loop read the cache a second time')
+  assert.deepEqual(sleeps, [1000], 'one poll interval between the two reads')
+  assert.equal(outcome.warm, true)
+  assert.equal(outcome.chunkFrames, 4, 'the second read is what the outcome reports')
+  assert.equal(events.filter(name => name === 'cacheStats').length, 2, 'both reads are logged')
 })
