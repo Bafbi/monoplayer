@@ -27,6 +27,10 @@
 //   - the library's own code-of-conduct accept is a leg decision, not a library
 //     one: `withCodeOfConductGate` holds it while a client is attached and sends
 //     it with a log line when none is (#21).
+//   - `answerBackendDialog` and `answerHeldGate` decide WHO answers a
+//     configuration gate and when, which is this adapter's business. What the
+//     answer is and how the click is framed is a codec shared with the protocol
+//     bot, so it lives in src/core/dialog-codec.js (#105).
 //
 // Token custody (live only): the Microsoft auth MUST reuse the G1 custody
 // caches in the account's directory (`.secrets/accounts/<uuid>/`), never mint
@@ -40,8 +44,7 @@
 // objects, or session secrets. Errors are logged name-only.
 import mc from 'minecraft-protocol'
 
-import nbt from 'prismarine-nbt'
-
+import { buildCustomClickAction, chooseDialogAction, decideDialogAutoAnswer } from '../core/dialog-codec.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { isLoopbackHost } from './offline-identity.js'
 
@@ -49,84 +52,6 @@ import { isLoopbackHost } from './offline-identity.js'
 // core (the core router would answer them a second time).
 export const LEG_SWALLOWED = new Set(['keep_alive'])
 
-// Text component reader for a dialog label. The library decodes the dialog NBT
-// into { type, value } wrappers; a label is a compound whose `text` and `extra`
-// fields carry the visible string.
-function dialogText (node) {
-  const value = node?.value ?? node
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.map(dialogText).join('')
-  if (value && typeof value === 'object') {
-    const text = typeof value.text?.value === 'string'
-      ? value.text.value
-      : (typeof value.text === 'string' ? value.text : '')
-    const extra = value.extra?.value ?? value.extra
-    return `${text}${Array.isArray(extra) ? extra.map(dialogText).join('') : ''}`
-  }
-  return ''
-}
-
-// Choose one action from a `show_dialog` packet. `policy` is `first`, `last`,
-// or a case-insensitive label substring. Default is the last action, which is
-// the current season on the Excalia selection dialog. Exported for tests; the
-// backend leg sends the matching `custom_click_action`. Which dialogs this
-// runs for is `decideDialogAutoAnswer`'s decision, not this function's.
-export function chooseDialogAction (data, policy = 'last') {
-  const dialog = data?.dialog?.value ?? data?.dialog ?? data
-  const entries = dialog?.actions?.value?.value
-  if (!Array.isArray(entries) || entries.length === 0) return null
-
-  const actions = entries.map((entry, index) => {
-    const action = entry?.action?.value ?? entry?.action ?? {}
-    return {
-      index,
-      id: action.id?.value ?? action.id ?? null,
-      additions: action.additions ?? null,
-      type: action.type?.value ?? action.type ?? null,
-      label: dialogText(entry?.label)
-    }
-  }).filter(action => typeof action.id === 'string')
-
-  if (actions.length === 0) return null
-
-  let index = actions.length - 1
-  const wanted = String(policy ?? '').toLowerCase()
-  if (wanted === 'first') {
-    index = 0
-  } else if (wanted !== '' && wanted !== 'last') {
-    const found = actions.findIndex(action => action.label.toLowerCase().includes(wanted))
-    if (found >= 0) index = found
-  }
-
-  return {
-    ...actions[index],
-    total: actions.length,
-    dialogType: dialog?.type?.value ?? dialog?.type ?? null
-  }
-}
-
-// #16/#20: who answers a control dialog.
-//
-// A play dialog is the human's, always: the attached client answers it, or it
-// waits in the core's pending holder until one attaches. The puppet never
-// clicks one, attached or not, so `MONOPLAYER_DIALOG_ACTION` covers the
-// configuration phase only (#20). What a headless puppet does with a
-// configuration gate is #21's decision; this function keeps the fallback that
-// ticket needs.
-//
-// One decision, consulted per dialog, so a client that attaches mid-session
-// changes the answer without rebuilding the leg.
-export function decideDialogAutoAnswer ({ dialogAction, humanAttached, state }) {
-  // The phase is checked first, so a play dialog always reports the same reason
-  // whether or not a policy is configured. An allow-list, so a state nobody
-  // named fails closed and waits for a human instead of clicking.
-  if (state !== 'configuration') {
-    return { auto: false, reason: state === 'play' ? 'play_dialog_waits' : 'unsupported_state' }
-  }
-  if (!dialogAction) return { auto: false, reason: 'no_policy' }
-  if (humanAttached) return { auto: false, reason: 'human_attached' }
-  return { auto: true, reason: null }
-}
 
 // The most dialog answers one backend connection may attempt. A server that
 // keeps asking is a loop, not a gate.
@@ -292,43 +217,6 @@ export function answerHeldGate ({
     log
   })
   return { answered: outcome.answered === true, reason: outcome.reason ?? null, name, responses: outcome.responses }
-}
-
-// VarInt encoder for the packet id, identifier length, and the payload length.
-function varint (value) {
-  const out = []
-  let n = value
-  while (n >= 0x80) {
-    out.push((n & 0x7f) | 0x80)
-    n >>>= 7
-  }
-  out.push(n)
-  return Buffer.from(out)
-}
-
-// The vanilla `ServerboundCustomClickActionPacket` codec is
-//   Identifier id, lengthPrefixed(optional anonymous NBT) payload
-// (see the 26.1.2 client: UNTRUSTED_TAG_CODEC = optionalTagCodec.apply(
-// lengthPrefixed(65536))). minecraft-data's packet shape omits the length
-// prefix, so the library's `write` produces a frame the server rejects. Build
-// the body from the dialog's action and send it with writeRaw.
-export function buildCustomClickAction ({ state, id, additions }) {
-  const packetId = state === 'play' ? 0x44 : state === 'configuration' ? 0x08 : null
-  if (packetId === null) return null
-  if (typeof id !== 'string' || id.length === 0) return null
-
-  const identifier = Buffer.from(id, 'utf8')
-  const tag = additions && additions.value
-    ? Buffer.concat([Buffer.from([1]), nbt.writeUncompressed({ type: 'compound', name: '', value: additions.value })])
-    : Buffer.from([0])
-
-  return Buffer.concat([
-    Buffer.from([packetId]),
-    varint(identifier.length),
-    identifier,
-    varint(tag.length),
-    tag
-  ])
 }
 
 // The library's reader for the `topBitSetTerminatedArray` protocol type clears
