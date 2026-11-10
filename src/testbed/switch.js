@@ -18,6 +18,7 @@
 // monoplayer-testbed.tail41e568.ts.net:25565.
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 
 const LIVE_NS = 'monoplayer'
 const LIVE_DEPLOY = 'monoplayer'
@@ -30,7 +31,17 @@ const ARGO_APP = 'monoplayer'
 const ARGO_NS = 'argocd'
 const FRONT_HOST = 'monoplayer-testbed.tail41e568.ts.net'
 const SKY_HOST = 'paper-sky.monoplayer-gate-b.svc.cluster.local'
-const STATE_FILE = '/tmp/opencode/monoplayer-testbed.json'
+// The recovery record: what `up` removed, for `down` to put back. It is the
+// only way the Argo policy comes back (AGENTS.md), so a test points it at its
+// own file instead of overwriting a live run's record.
+const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
+
+// How long the two port-forwards get before the registry probe reads them. A
+// test answers the probe from a shim and sets this to 0, so the unit rung does
+// not pay a settle it cannot use. An empty or nonsense value is the default, not
+// an immediate probe: `Number('')` is 0, and a real run's probe needs the wait.
+const SETTLE_MS = Number(process.env.MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS ?? 5000)
+const REGISTRY_SETTLE_MS = Number.isFinite(SETTLE_MS) && SETTLE_MS >= 0 ? SETTLE_MS : 5000
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -117,9 +128,15 @@ async function waitRcon (namespace, deploy, timeoutMs = 240_000) {
   }, { timeoutMs, intervalMs: 3000 })
 }
 
+// The sync policy, read as the object it is and kept as JSON: `jsonpath`
+// prints a map as `map[prune:true selfHeal:true]`, which cannot be patched back
+// into the Application when `down` restores it.
 function appAutomated () {
-  const raw = kubectl(['-n', ARGO_NS, 'get', 'app', ARGO_APP, '-o', 'jsonpath={.spec.syncPolicy.automated}'], { allowFail: true })
-  return raw && raw.length > 0 ? raw : null
+  const raw = kubectl(['-n', ARGO_NS, 'get', 'app', ARGO_APP, '-o', 'json'], { allowFail: true })
+  if (!raw) return null
+  let automated
+  try { automated = JSON.parse(raw).spec?.syncPolicy?.automated } catch { return null }
+  return automated ? JSON.stringify(automated) : null
 }
 
 function disableAutoSync () {
@@ -145,9 +162,17 @@ function restoreAutoSync (saved) {
   log('Argo auto-sync restored')
 }
 
+// A second `up` before a `down` must not forget the policy the first one
+// removed. `disableAutoSync` reports `disabledByUs: false` when Argo already has
+// no `automated` block, and that record restores nothing, so it must not
+// replace one that does. What this `up` removed wins: that is what is missing
+// now, and `down` puts back what is missing, not what was.
 function saveState (state) {
-  fs.mkdirSync('/tmp/opencode', { recursive: true })
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state) + '\n')
+  const previous = readState()
+  const kept = state.disabledByUs && state.automated ? state : previous ?? state
+  if (kept === previous) log('kept the Argo record an earlier up wrote', { automated: previous.automated })
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
+  fs.writeFileSync(STATE_FILE, JSON.stringify(kept) + '\n')
 }
 
 function readState () {
@@ -179,7 +204,7 @@ async function registry () {
   const skyPf = spawn('kubectl', ['-n', PAPER_NS, 'port-forward', 'svc/paper-sky', '25765:25565'], { stdio: 'ignore' })
   const hubPf = spawn('kubectl', ['-n', PAPER_NS, 'port-forward', 'svc/paper-hub', '25766:25565'], { stdio: 'ignore' })
   try {
-    await sleep(5000)
+    await sleep(REGISTRY_SETTLE_MS)
     const sky = probeRegistry('127.0.0.1', 3, 25765)
     const hub = probeRegistry('127.0.0.1', 2, 25766)
     const pick = list => list.find(entry => entry.id === 'minecraft:dimension_type') ?? null
