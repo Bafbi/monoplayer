@@ -11,7 +11,7 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/observer-report.sh) || node src/ladder/next-rung.js lint $?"
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh) || node src/ladder/next-rung.js lint $?"
 
 [tasks."secrets:link"]
 description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
@@ -164,6 +164,18 @@ run = "scripts/dev-lane.sh down"
 [tasks."dev:status"]
 description = "Report what the dev lane runs and how many replicas the live lane serves."
 run = "scripts/dev-lane.sh status"
+
+[tasks."gate:up"]
+description = "Bring the gate lane up: apply deploy/driver, wake the rows a rung drives, and wait up to 900 s (a cold start is 90 s). Name deployments after -- to wake the M4 rows too: mise run gate:up -- velocity paper-m4 toxiproxy."
+run = "scripts/gate-lane.sh up"
+
+[tasks."gate:down"]
+description = "Stop the gate lane: scale every gate workload to 0, then wait for its pods to go. The objects and the hand-created Secrets stay; every world is emptyDir, so the next gate:up is a full cold start."
+run = "scripts/gate-lane.sh down"
+
+[tasks."gate:status"]
+description = "Report what the gate lane runs and what is ready, so a reader can see whether the lane was left up."
+run = "scripts/gate-lane.sh status"
 
 [tasks."observer:run"]
 description = "Run the server-view report: the direct baseline join and the puppet join on paper-conduct, the gate-serving Paper, compared (#12)."

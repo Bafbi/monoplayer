@@ -16,6 +16,38 @@ and [docs/driver-validation.md](../../docs/driver-validation.md).
 The `monoplayer-gate-b` namespace holds the real-backend matrix. It is not the
 product namespace; do not point the product at it.
 
+## Lifecycle: the lane rests at 0
+
+Every Deployment here commits `replicas: 0`, so the tree describes a lane that is
+off. A bare `kubectl apply -k deploy/driver` wakes nothing, and it stops whatever was
+awake, because an apply reconciles every row to the tree (#115). `gate:up` is the only
+command that should apply. These tasks own the count:
+
+```bash
+mise run gate:up      # apply, wake paper and paper-conduct, wait for ready
+mise run gate:down    # scale all five to 0, wait for their pods to go
+mise run gate:status  # what the lane runs, and what is ready
+```
+
+`gate:up` waits up to 900 s and says so before it waits. A cold start is 90 s, measured
+on the 26.2 gate Paper: every gate world is an `emptyDir`, so the world died with its
+pod, and Paper downloads its server and writes a flat one again. The 240-310 s in
+[docs/testing-ladder.md](../../docs/testing-ladder.md) is the other wait, a Paper that
+is already up and restarts with the observer plugin, and `observer:run` owns it.
+
+`gate:down` deletes nothing, so the Deployments, the Services, the ConfigMaps and the
+hand-created Secrets survive. The next `up` costs the same cold start and nothing else.
+
+`gate:up` wakes `paper` and `paper-conduct`, the two rows a rung drives. Name the
+others to wake them: `mise run gate:up -- velocity paper-m4 toxiproxy`. A row that
+was already awake is woken again after the apply, so a second `up` for a different
+row does not leave the first stopped. `gate:down` stops all five, and rows wake by name. No rung drives
+those three, which is why they stay off.
+
+`scripts/gate-lane.sh` is the script behind the tasks. `MONOPLAYER_GATE_POLL` sets the
+interval between checks, and the two waits are `MONOPLAYER_GATE_READY_TIMEOUT` and
+`MONOPLAYER_GATE_STOP_TIMEOUT`.
+
 ## Names this tree does not rename
 
 Renaming these would recreate live cluster objects or break the display host,
@@ -52,11 +84,11 @@ kubectl -n monoplayer-gate-b create secret generic gate-b-rcon \
 # step 2, or the velocity/paper-m4 pods will fail with
 # CreateContainerConfigError.
 
-# 2. Apply the backend.
-kubectl apply -k deploy/driver
+# 2. Apply the tree and wake the backend. The task says what it waits for, and a
+#    cold start is 90 s.
+mise run gate:up
 
 # 3. Watch it download Paper 26.2 and boot.
-kubectl -n monoplayer-gate-b rollout status deploy/paper --timeout=10m
 kubectl -n monoplayer-gate-b logs deploy/paper --tail=100
 
 # 4. Tailscale endpoint for the display host.
@@ -73,8 +105,9 @@ The Tailscale service should publish a hostname like
   throwaway test backend.
 - `ENFORCE_WHITELIST=FALSE` is only for the host-readiness row. G0's real
   rows use the puppet-only backend whitelist and the separate attach whitelist.
-- The world is `emptyDir`; deleting the pod resets it. Restart/persistence rows
-  will need a StatefulSet + PVC before they are meaningful.
+- The world is `emptyDir`; deleting the pod resets it, and `gate:down` deletes every
+  pod. Restart/persistence rows will need a StatefulSet + PVC before they are
+  meaningful.
 - RCON is exposed only on the ClusterIP Service, never the Tailscale Service.
 - This namespace is not in ArgoCD. It is a test lane.
 
@@ -90,8 +123,8 @@ human-witnessed run. Paper refuses to start with the gate on and no document, so
 the folder is part of the lane, written by an initContainer.
 
 ```bash
-kubectl apply -f deploy/driver/paper-conduct.yaml
-kubectl -n monoplayer-gate-b rollout status deploy/paper-conduct --timeout=10m
+mise run gate:up paper-conduct
+kubectl -n monoplayer-gate-b logs deploy/paper-conduct --tail=100
 ```
 
 ## M4 lane — Paper behind Velocity 4.3.1 (+ toxiproxy)
@@ -110,6 +143,9 @@ by `kubectl` and never committed) are in the M4 runbook:
 kubectl -n monoplayer-gate-b create secret generic gate-b-velocity \
   --from-literal=forwarding-secret="$(openssl rand -hex 16)" \
   --dry-run=client -o yaml | kubectl apply -f -
+
+# The three M4 rows, awake together. `mise run gate:down` puts them back.
+mise run gate:up -- velocity paper-m4 toxiproxy
 ```
 
 Offline validation of the manifests without touching the cluster:
