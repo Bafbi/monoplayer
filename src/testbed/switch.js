@@ -36,6 +36,11 @@ const SKY_HOST = 'paper-sky.monoplayer-gate-b.svc.cluster.local'
 // own file instead of overwriting a live run's record.
 const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
 
+// How long the two port-forwards get before the registry probe reads them. A
+// test answers the probe from a shim and sets this to 0, so the unit rung does
+// not pay a settle it cannot use.
+const REGISTRY_SETTLE_MS = Number(process.env.MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS ?? 5000)
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function kubectl (args, { allowFail = false } = {}) {
@@ -157,13 +162,13 @@ function restoreAutoSync (saved) {
 
 // A second `up` before a `down` must not forget the policy the first one
 // removed. `disableAutoSync` reports `disabledByUs: false` when Argo already has
-// no `automated` block, and that record restores nothing. Keep the earlier
-// record while it holds a policy to restore; otherwise record what this `up`
-// removed, so a policy re-enabled between two runs is still put back.
+// no `automated` block, and that record restores nothing, so it must not
+// replace one that does. What this `up` removed wins: that is what is missing
+// now, and `down` puts back what is missing, not what was.
 function saveState (state) {
   const previous = readState()
-  const kept = previous?.disabledByUs && previous.automated ? previous : state
-  if (kept === previous) log('kept the Argo record the first up wrote', { automated: previous.automated })
+  const kept = state.disabledByUs && state.automated ? state : previous ?? state
+  if (kept === previous) log('kept the Argo record an earlier up wrote', { automated: previous.automated })
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
   fs.writeFileSync(STATE_FILE, JSON.stringify(kept) + '\n')
 }
@@ -197,7 +202,7 @@ async function registry () {
   const skyPf = spawn('kubectl', ['-n', PAPER_NS, 'port-forward', 'svc/paper-sky', '25765:25565'], { stdio: 'ignore' })
   const hubPf = spawn('kubectl', ['-n', PAPER_NS, 'port-forward', 'svc/paper-hub', '25766:25565'], { stdio: 'ignore' })
   try {
-    await sleep(5000)
+    await sleep(REGISTRY_SETTLE_MS)
     const sky = probeRegistry('127.0.0.1', 3, 25765)
     const hub = probeRegistry('127.0.0.1', 2, 25766)
     const pick = list => list.find(entry => entry.id === 'minecraft:dimension_type') ?? null
