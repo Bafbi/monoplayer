@@ -18,6 +18,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The server sees the human's locale, skin parts, main hand, chat settings | done | [#18](https://github.com/Bafbi/monoplayer/issues/18) |
 | A client can attach while the puppet is still configuring | done | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human's chat and commands are spoken as the account | built, off by default | [#19](https://github.com/Bafbi/monoplayer/issues/19) |
+| The human's own player wears the puppet's skin | built, on by default | [#99](https://github.com/Bafbi/monoplayer/issues/99) |
 | A dialog reaches the human, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The human answers every play dialog, and the puppet never clicks one | built | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The human answers configuration gates, including the code of conduct | built | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
@@ -56,6 +57,37 @@ reports `chunkBound` and `chunkBytes` (the measured bytes the ring holds), and
 the core logs both under `backendViewDistance` on every backend login, so the
 number comes from the running proxy rather than from a table. Optimising that
 memory is a later task.
+
+## The human's own player
+
+The front leg authenticates the human's client as the human, so the body that
+client draws is the human's own. The relayed `player_info` lists the puppet and
+never the human, and a client resolves a player's skin from that player's
+`player_info` entry. With no entry for its own UUID it falls back to a vanilla
+default, so before [#99](https://github.com/Bafbi/monoplayer/issues/99) the human
+saw steve, alex, or one of the 26.x defaults on their own body rather than their
+own skin.
+
+`skin.showPuppetSkin` (on by default, `MONOPLAYER_SKIN_SHOW_PUPPET=0` to turn
+it off) writes one `player_info` `add_player` entry for the human's UUID,
+carrying the textures property the backend sent for the puppet:
+
+| Fact | Why |
+|---|---|
+| The property is the server's own | The proxy holds no skin. A proxy that saw no `player_info` from the backend writes no frame, and a property it cannot read is not a property it has |
+| The entry carries no `update_listed` action | The client's tab list is its own listed set, which only that action fills, so the human's UUID gains no line beside the puppet's |
+| One frame per attach | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame would be a write nobody sees |
+| An unsigned property would work too | The client asks for a secure property only for players other than the one it controls. The frame carries the property as it arrived, so the proxy adds no signature and strips none |
+
+The measured answer to the ticket's open question — does a 26.x client accept a
+`textures` property signed for a different profile UUID — is yes. Three runs on
+a real 26.2 client through the dev lane, with the texture the client resolved in
+each case, are in [skin-verdict.md](../testdata/skin-verdict.md).
+
+Two limits follow from the same client code. A skin change the server sends later
+in the session does not reach the human, because the client keeps the entry it
+holds. And a client that already holds an entry for the human's UUID would keep
+that entry's skin: the proxy never lists the human, so this has not been seen.
 
 ## Chat and commands
 
