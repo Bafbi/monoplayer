@@ -7,9 +7,11 @@
 // test/tooling/mise-tasks.test.js requires every directory under test/ to be
 // listed; a `test()` in this file would not run either.
 //
-// The two documented exceptions stay local: `test/driver/parity.test.js` and
-// `test/driver/skin.test.js` name their `fakeClock` after a step counter, which
-// is not this clock.
+// Two `fakeClock` names stay local: `test/driver/parity.test.js` and
+// `test/driver/skin.test.js` call a step counter by that name, which is not this
+// clock. Everything else that built a core on the fake legs calls makeCore here,
+// `test/service/transfer.test.js` included: the `reconnect_due` listener it used
+// to register itself is this rig's, and start() emits only 'start'.
 import { createMonoplayer, loadConfig } from '../../src/service/monoplayer.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
 
