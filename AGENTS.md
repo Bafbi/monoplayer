@@ -45,7 +45,8 @@ that leaves the deployment serving.
 `deploy/dev/README.md` is the dev lane runbook, `deploy/driver/README.md` the gate's.
 
 **The gate lane sleeps.** Its five Deployments commit `replicas: 0`, so a bare
-`kubectl apply -k deploy/driver` changes nothing and wakes nothing. `mise run gate:up`
+`kubectl apply -k deploy/driver` wakes nothing and stops whatever was awake, because
+apply reconciles every row to the tree. Only `mise run gate:up` should apply. It
 applies the tree, wakes the rows a rung drives (`paper`, `paper-conduct`), and waits
 up to 900 s while saying so. A cold start is 90 s, because every gate world is an
 `emptyDir` that died with its pod. `mise run gate:down` puts it back to 0 and waits for

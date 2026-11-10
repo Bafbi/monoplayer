@@ -19,8 +19,9 @@ product namespace; do not point the product at it.
 ## Lifecycle: the lane rests at 0
 
 Every Deployment here commits `replicas: 0`, so the tree describes a lane that is
-off, and a bare `kubectl apply -k deploy/driver` wakes nothing (#115). These tasks own
-the count:
+off. A bare `kubectl apply -k deploy/driver` wakes nothing, and it stops whatever was
+awake, because an apply reconciles every row to the tree (#115). `gate:up` is the only
+command that should apply. These tasks own the count:
 
 ```bash
 mise run gate:up      # apply, wake paper and paper-conduct, wait for ready
@@ -38,7 +39,9 @@ is already up and restarts with the observer plugin, and `observer:run` owns it.
 hand-created Secrets survive. The next `up` costs the same cold start and nothing else.
 
 `gate:up` wakes `paper` and `paper-conduct`, the two rows a rung drives. Name the
-others to wake them: `mise run gate:up -- velocity paper-m4 toxiproxy`. No rung drives
+others to wake them: `mise run gate:up -- velocity paper-m4 toxiproxy`. A row that
+was already awake is woken again after the apply, so a second `up` for a different
+row never stops the first. `gate:down` stops all five, and rows wake by name. No rung drives
 those three, which is why they stay off.
 
 `scripts/gate-lane.sh` is the script behind the tasks. `MONOPLAYER_GATE_POLL` sets the

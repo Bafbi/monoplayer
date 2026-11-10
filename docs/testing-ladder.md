@@ -57,8 +57,9 @@ the bare rung stays available because `verify:custody` composes it. `AGENTS.md`
 states the rule. `deploy/dev/README.md` is the dev lane runbook.
 
 The gate lane sleeps: its five Deployments commit `replicas: 0`, so an apply wakes
-nothing, and a run that needs `paper` or `paper-conduct` finds an empty namespace
-until `mise run gate:up` runs. `gate:up` wakes the two rows a rung drives and names
+nothing — and stops whatever was awake, since it reconciles every row to the tree.
+A run that needs `paper` or `paper-conduct` finds an empty namespace until
+`mise run gate:up` runs. `gate:up` wakes the two rows a rung drives and names
 the M4 rows only when told to; `gate:down` puts the lane back and waits for the pods
 to go, because a lane left up costs 6,214 MiB until someone notices. That is what
 `mise run gate:status` is for.
