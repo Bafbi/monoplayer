@@ -1,13 +1,13 @@
 // The loopback assertion contract (#49). `src/ladder/loopback.js` declares every
 // assertion by id, and `docs/testing-ladder.md` documents each one. Nothing tied
 // the two together, so a check added to the run and not to the doc went
-// unnoticed. `test/ladder/next-rung.test.js` reads the same doc the same way.
+// unnoticed. `test/ladder/next-rung.test.js` reads the rungs table of the same doc.
 //
 // The guard reads the run's declaration, not `.reports/loopback-report.json`. The
-// report is gitignored and written by the `loopback` task, which mise runs beside
-// `test` inside `mise run check` (mise.toml), so the file is absent on a clean
-// checkout and may be mid-write while this file runs. The ids in the report are
-// the ids of these calls, and the calls are there before the run.
+// report is gitignored, and the `loopback` task writes it. mise runs that task
+// beside `test` inside `mise run check` (mise.toml), so the file is absent on a
+// clean checkout, and reading it while the task runs would race the writer. The
+// ids in the report are the ids of these calls, and the calls are there first.
 //
 // Nothing here opens a socket: both cases read a file.
 import { test } from 'node:test'
@@ -58,31 +58,47 @@ function docIds (text) {
 }
 
 const unique = ids => new Set(ids).size === ids.length
-const only = (ids, other) => ids.filter(id => !other.includes(id))
+const missingFrom = (ids, other) => ids.filter(id => !other.includes(id))
 
 function drift (source, doc) {
   const declared = runIds(source)
   const documented = docIds(doc)
-  return { declared, documented, undocumented: only(declared, documented), undeclared: only(documented, declared) }
+  return {
+    declared,
+    documented,
+    undocumented: missingFrom(declared, documented),
+    undeclared: missingFrom(documented, declared)
+  }
+}
+
+// Both directions in one message: a rename in the source drifts twice, and only
+// a report of both tells a reader what to fix on each side.
+function disagreement ({ undocumented, undeclared }) {
+  return [
+    undocumented.length === 0
+      ? null
+      : 'docs/testing-ladder.md does not document ' + undocumented.join(', ') +
+        ', which src/ladder/loopback.js declares: add a bullet for ' +
+        (undocumented.length === 1 ? 'it' : 'each') + ' under "Loopback assertion contract"',
+    undeclared.length === 0
+      ? null
+      : 'src/ladder/loopback.js declares no ' + undeclared.join(', ') +
+        ', which docs/testing-ladder.md documents: add the check, or remove the bullet'
+  ].filter(Boolean)
 }
 
 test('every assertion the loopback declares is documented, and the reverse', () => {
-  const { declared, documented, undocumented, undeclared } = drift(RUN, LADDER)
+  const drifted = drift(RUN, LADDER)
 
   // Both sides have to be read, or a reformat that matches nothing would pass.
-  assert.ok(declared.length > 0, 'src/ladder/loopback.js declares its assertions with check()')
-  assert.ok(documented.length > 0, 'docs/testing-ladder.md documents the contract as bullets')
-  assert.equal(declared.length, callSites(RUN),
+  assert.ok(drifted.declared.length > 0, 'src/ladder/loopback.js declares its assertions with check()')
+  assert.ok(drifted.documented.length > 0, 'docs/testing-ladder.md documents the contract as bullets')
+  assert.equal(drifted.declared.length, callSites(RUN),
     'every check() call names its assertion id as a literal, so the guard can read it')
-  assert.equal(unique(declared), true, 'no assertion id is declared twice: ' + declared.join(', '))
-  assert.equal(unique(documented), true, 'no assertion id is documented twice: ' + documented.join(', '))
+  assert.equal(unique(drifted.declared), true, 'no assertion id is declared twice: ' + drifted.declared.join(', '))
+  assert.equal(unique(drifted.documented), true, 'no assertion id is documented twice: ' + drifted.documented.join(', '))
 
-  assert.deepEqual(undocumented, [], 'docs/testing-ladder.md does not document ' +
-    undocumented.join(', ') + ', which src/ladder/loopback.js declares: add a bullet for ' +
-    (undocumented.length === 1 ? 'it' : 'each') + ' under "Loopback assertion contract"')
-  assert.deepEqual(undeclared, [], 'src/ladder/loopback.js declares no ' +
-    undeclared.join(', ') + ', which docs/testing-ladder.md documents: add the check, ' +
-    'or remove the bullet under "Loopback assertion contract"')
+  assert.deepEqual(disagreement(drifted), [], 'the run and its document disagree')
 })
 
 test('the guard notices an id that only one side holds', () => {
@@ -101,14 +117,16 @@ test('the guard notices an id that only one side holds', () => {
   const doc = [
     '### Loopback assertion contract',
     '',
-    '- \`O1\` the first check.',
-    '- \`O2\` the second check.',
+    '- `O1` the first check.',
+    '- `O2` the second check.',
     '',
     '## The next rung',
     '',
-    '- \`O3\` a bullet outside the contract, which does not document it.',
+    '- `O3` a bullet outside the contract, which does not document it.',
     ''
   ].join('\n')
+  const withId = (id) => source.replace("'O1'", "'" + id + "'")
+  const inSection = bullet => doc.replace('## The next rung', bullet + '\n\n## The next rung')
 
   assert.deepEqual(drift(source, doc), {
     declared: ['O1', 'O2'],
@@ -117,12 +135,18 @@ test('the guard notices an id that only one side holds', () => {
     undeclared: []
   }, 'the guard reads the check() ids and the contract bullets, and nothing else')
 
-  assert.deepEqual(drift(source.replace("'O1'", "'O1b'"), doc).undocumented, ['O1b'],
-    'a check the doc does not document is reported')
-  assert.deepEqual(drift(source.replace("'O1'", "'O1b'"), doc).undeclared, ['O1'],
-    'and the id the doc documents but the run dropped is reported')
-  assert.deepEqual(drift(source, doc.replace(/^- \`O2\`.*\n/m, '')).undocumented, ['O2'],
+  const renamed = drift(withId('O1b'), doc)
+  assert.deepEqual(renamed.undocumented, ['O1b'], 'a check the doc does not document is reported')
+  assert.deepEqual(renamed.undeclared, ['O1'], 'and the id the doc documents but the run dropped is reported')
+  assert.deepEqual(disagreement(renamed), [
+    'docs/testing-ladder.md does not document O1b, which src/ladder/loopback.js declares: ' +
+      'add a bullet for it under "Loopback assertion contract"',
+    'src/ladder/loopback.js declares no O1, which docs/testing-ladder.md documents: ' +
+      'add the check, or remove the bullet'
+  ], 'one failure names both sides')
+
+  assert.deepEqual(drift(source, doc.replace(/^- `O2`.*\n/m, '')).undocumented, ['O2'],
     'a bullet removed from the doc is reported')
-  assert.deepEqual(drift(source, doc.replace('## The next rung', '- \`O99\` an assertion nobody runs.\n\n## The next rung')).undeclared, ['O99'],
+  assert.deepEqual(drift(source, inSection('- `O99` an assertion nobody runs.')).undeclared, ['O99'],
     'a bullet the run does not declare is reported')
-});
+})
