@@ -76,17 +76,18 @@ kubectl apply -k deploy/driver --dry-run=client
 kubectl apply -k deploy/driver --dry-run=client --validate=false   # schema-free pass
 ```
 
-Operator applies and waits:
+Operator wakes the three rows and waits. The task applies the tree, scales these
+three to 1, and says how long it waits before it waits (#115):
 
 ```bash
-kubectl apply -k deploy/driver
-kubectl -n monoplayer-gate-b rollout status deploy/paper-m4 --timeout=10m
-kubectl -n monoplayer-gate-b rollout status deploy/velocity  --timeout=10m
-kubectl -n monoplayer-gate-b rollout status deploy/toxiproxy --timeout=5m
+mise run gate:up -- velocity paper-m4 toxiproxy
 
 kubectl -n monoplayer-gate-b logs deploy/paper-m4 --tail=100 | grep -E "proxies.velocity|Done"
 kubectl -n monoplayer-gate-b logs deploy/velocity --tail=50
 ```
+
+`mise run gate:down` puts them back to sleep. Every gate world is an `emptyDir`,
+so a `down` costs the next `up` a full cold start: 240-310 s.
 
 **Forwarding checkpoint (the one Paper-side risk):** the pre-seeded partial
 `paper-global.yml` only sets `proxies.velocity.enabled/online-mode`; the
@@ -146,28 +147,31 @@ Vanilla 26.1.2 direct row (parity backend). Its manifests and its
 `vanilla:25565` Service belong to the M1 workstream; this namespace and the
 whitelist/world pins (flat, seed 775, RD/SD 4, offline for the
 Monoplayer lane) are already the contract in `src/driver/backends.js`
-(`vanilla`, status `planned`). After it deploys, enable the toxiproxy route
-(Stage 4) and run the same SLP + login smoke against `vanilla:25565` via the
-listener `puppet-vanilla` on `toxiproxy:25571`.
+(`vanilla`, status `planned`). When it deploys, its listener lands with it: add
+`puppet-vanilla` on 25571 to `deploy/driver/toxiproxy.yaml`, together with
+its containerPort and its Service port (#115), then run the same SLP + login
+smoke against `vanilla:25565` through that listener.
 
 ### Stage 3 — M3 Fabric (other workstream)
 
 Fabric 26.1.2 + API 0.155.3 + Carpet 26.1 compatibility row. Same pattern:
-its manifest owner ships `fabric:25565`; enable `puppet-fabric` via the API;
-smoke, **report-only** (a Fabric failure is a compatibility finding, not a
-gate failure).
+its manifest owner ships `fabric:25565` and adds the `puppet-fabric` listener
+on 25572 with it; smoke, **report-only** (a Fabric failure is a compatibility
+finding, not a gate failure).
 
 ### Stage 4 — Toxiproxy fault rig (this slice, wire-up)
 
-The listeners exist from the start; only `puppet-velocity` is enabled by
-default. The image has no enable verb in `toxiproxy-cli`; flip listeners via
-the HTTP API (ClusterIP-only, reachable from inside the namespace):
+`puppet-velocity` is the only listener the ConfigMap declares, and it is on
+from the pod start. `puppet-paper-m4` ships with it, disabled, for the direct
+row. A row with no backend in this tree has no listener (#115). The image has
+no enable verb in `toxiproxy-cli`; flip listeners via the HTTP API
+(ClusterIP-only, reachable from inside the namespace):
 
 ```bash
 kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \
   --image=curlimages/curl:8.11.1 \
   -- -s -X POST -H 'content-type: application/json' \
-       -d '{"enabled":true}' http://toxiproxy-api:8474/proxies/puppet-vanilla
+       -d '{"enabled":true}' http://toxiproxy-api:8474/proxies/puppet-paper-m4
 
 # state (jq-free; the API answers JSON):
 kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \
@@ -181,10 +185,10 @@ kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \
   -- -s -X POST -d '{}' http://toxiproxy-api:8474/reset
 ```
 
-`/reset` also **enables every proxy**, including the placeholder vanilla,
-fabric, and paper-m4 listeners. After a reset, re-disable the listeners that
-are not part of the current row (the B-lane runner should call
-`setProxyEnabled`/`assertProxyEnabled`) before continuing.
+`/reset` also **enables every proxy**, including `puppet-paper-m4`. After a
+reset, re-disable the listeners that are not part of the current row (the
+B-lane runner should call `setProxyEnabled`/`assertProxyEnabled`) before
+continuing.
 
 The B-lane runner uses `src/driver/toxiproxy.js` for the same three verbs plus
 toxic add/remove with injected fetch; runbook curls are the human fallback.
@@ -280,6 +284,10 @@ and what each leaves open.
 The F1-F6 fault rows remain pending; that is the B3 lane.
 
 ## Teardown (operator; never leaves secrets behind casually)
+
+`mise run gate:down` is the resting state: every workload at 0 replicas, and the
+objects, the ConfigMaps and the Secrets still there, so the next `mise run gate:up`
+is one command. Removing the lane for good is a separate, destructive run:
 
 ```bash
 kubectl -n monoplayer-gate-b get svc velocity-m4        # capture hostname first
