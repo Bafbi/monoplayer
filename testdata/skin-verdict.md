@@ -209,29 +209,75 @@ difference between the lanes.
 ### The property was never the puppet's on a busy server
 
 The live backend's `player_info` traffic carries the whole tab list. The journal
-copy covers 12 minutes, and holds 520 such frames. Of those, 81 carry a textures
-property, and their entries belong to **18 different players**.
-`texturesPropertyOf` took the first one, so what the proxy held changed 80
-times, and the puppet's own property came up **twice**. Two consequences, both
+copy covers 12 minutes and holds 520 such frames, 519 of them decodable: one is
+past the journal's 8192-byte cap and is kept as a length only. Of the 519, 81
+carry a textures property, and their entries belong to **18 different players**.
+`texturesPropertyOf` took the first one, so what the proxy held changed 81
+times, and the puppet's own entry came first **twice**. Two consequences, both
 visible in the same journal:
 
 - at the second attach (20:45:11) the proxy held `Tutoriel`'s property. The
   frame put a lobby player's skin on the human's body.
-- `puppetSkinKnown` logged 83 times, where two distinct properties existed.
+- `puppetSkinKnown` logged 83 times, where the puppet had two distinct values.
 
-The 83 and the 80 are two windows. The pod's log kept running after the copy of
-the journal was taken, so it holds 83 lines for 80 changes plus the frames that
+The 83 and the 81 are two windows. The pod's log kept running after the copy of
+the journal was taken, so it holds 83 lines for 81 changes plus the frames that
 arrived afterwards. The ticket's "dozens of times per second for minutes" is not
 what the journal holds either: the changes come in bursts, up to four in one
 millisecond when a tab list lands, and the rest of the 12 minutes is quiet.
 
-The counts come from decoding every `player_info` frame with the vendored 26.2
-data, the decoder `test/core/skin.test.js` uses. The frame count that the 520
-stands on is the one the repo's own tool reports:
+The counts come from decoding the copied journal's `player_info` frames with the
+vendored 26.2 data, the decoder `test/core/skin.test.js` uses. Copy the journal
+out, then run the repo's tool and this script:
 
 ```bash
 kubectl -n monoplayer exec <pod> -- ls /tmp/journal     # the journal to copy out
-node tools/journal.mjs names player_info --dir s2c --path <copy>  # 520 frames, the count above
+node tools/journal.mjs names player_info --dir s2c --path <copy>   # the 520 frames
+```
+
+```js
+// The counts recorded above, from a copy of the live lane's journal.
+// Run from the repo root.
+import fs from 'node:fs'
+import readline from 'node:readline'
+import mc from 'minecraft-protocol'
+
+const des = mc.createDeserializer({ state: 'play', isServer: false, version: '26.2', noErrorLogging: true })
+const rows = []
+const rl = readline.createInterface({ input: fs.createReadStream(process.argv[2]) })
+for await (const line of rl) {
+  if (!line.includes('"player_info"')) continue
+  const rec = JSON.parse(line)
+  if (rec.dir !== 's2c' || rec.name !== 'player_info' || rec.truncated) continue
+  const parsed = des.parsePacketBuffer(Buffer.from(rec.b64, 'base64'))
+  const entries = parsed.data.params?.data ?? []
+  const carried = entries.flatMap(entry => (entry.player?.properties ?? [])
+    .filter(property => property.name === 'textures')
+    .map(property => ({ uuid: entry.uuid, name: entry.player?.name ?? null, value: property.value })))
+  rows.push({ carried })
+}
+
+let changes = 0
+let held = null
+for (const row of rows) {
+  for (const carried of row.carried) {
+    if (carried.value === held) continue
+    held = carried.value
+    changes++
+  }
+}
+console.log({
+  frames: rows.length,
+  withTextures: rows.filter(row => row.carried.length > 0).length,
+  owners: new Set(rows.flatMap(row => row.carried.map(carried => carried.uuid))).size,
+  changes, // each change of the first entry's value, as the by-position pick saw it
+  firstEntryIsThePuppet: rows.filter(row => row.carried[0]?.name === 'GlowSquidye').length
+})
+```
+
+```bash
+node .scratch/skin-counts.mjs <copy>
+  # { frames: 519, withTextures: 81, owners: 18, changes: 81, firstEntryIsThePuppet: 2 }
 ```
 
 The pick is now the entry whose UUID the config resolved for the puppet, so the

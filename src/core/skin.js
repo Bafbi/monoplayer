@@ -77,10 +77,10 @@ function uuidKey (value) {
 // The textures property a relayed `player_info` frame states for one UUID.
 //
 // The entry is chosen by UUID, never by position. A busy backend sends the whole
-// tab list through this frame. On the live lane the first entry that carried a
-// property was a different player's in 79 of the 81 frames that carried one
-// (#134). Picking by position put a stranger's skin on the human's body, and it
-// made the known-property comparison change on every frame.
+// tab list through this frame, so the first entry with a property is another
+// player's as often as not (#134). Picking by position put a stranger's skin on
+// the human's body, and it made the known-property comparison change on every
+// frame. The measurement is in testdata/skin-verdict.md.
 //
 // No UUID is no answer. A caller that cannot name the player's UUID takes no
 // property, rather than whichever one arrived first.

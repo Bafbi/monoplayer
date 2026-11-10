@@ -289,9 +289,9 @@ test('a front with no UUID is named in the ordinary order too, where the propert
 })
 
 // #134: the live tab list arrived through the same frame, and the first entry
-// that carried a property was a different player's in 79 of 81 frames. The
-// frame the human gets is the puppet's skin, and the known-property log fires on
-// the puppet's property only.
+// that carried a property was usually a different player's. The frame the human
+// gets is the puppet's skin, and the known-property log fires on the puppet's
+// property only.
 test('another player\'s skin is never the frame, and the known log fires once per distinct property', () => {
   const logLines = []
   const rig = makeCore({ skin: { showPuppetSkin: true }, logLines })
