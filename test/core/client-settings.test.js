@@ -12,8 +12,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createMonoplayer, DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
 import { createStateCache } from '../../src/core/state-cache.js'
 import {
   FABRIC_BRAND,
@@ -24,45 +22,9 @@ import {
   mergeClientSettings,
   normalizeClientSettings
 } from '../../src/core/client-settings.js'
+import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
-
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) { const t = { fn, fires: now + ms }; timers.push(t); return t },
-    clearTimeout (t) { timers = timers.filter(x => x !== t) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    },
-    get pending () { return timers.length }
-  }
-}
-
-function makeCore (overrides = {}) {
-  const clock = overrides.clock ?? fakeClock()
-  const backendLeg = createFakeBackendLeg()
-  const frontLeg = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: {
-      ...DEFAULT_CONFIG,
-      puppet: { username: 'GlowSquidye', uuid: null },
-      attachWhitelist: [PLAYER],
-      ...(overrides.config ?? {})
-    },
-    backendLeg,
-    frontLeg,
-    clock,
-    logStream: overrides.logStream ?? null
-  })
-  core.start()
-  return { clock, backendLeg, frontLeg, core }
-}
 
 // Scripted warmup: configuration frames, then the play join prefix ending at
 // the warm marker. `viewDistance` is the backend's advertised cap.
