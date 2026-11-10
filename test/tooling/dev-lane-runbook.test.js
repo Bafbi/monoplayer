@@ -68,9 +68,9 @@ test('AGENTS.md carries the rule, because that is what an agent reads', () => {
   assert.match(lanes, /mise run testbed:run/, 'and its one-shot form')
   assert.match(lanes, /online-cluster\.sh --rotate/, 'and the flag that writes the live chain')
   assert.match(lanes, /mise run testbed:down/, 'restoring an interrupted testbed run is allowed')
-  // switch.js restores the Argo policy only from the run's state file.
-  assert.match(lanes, /state file/, 'the way back says what it can restore')
-  assert.match(lanes, /survives/, 'and that the Argo policy depends on the state file')
+  // switch.js restores the Argo policy only from the run's restore record.
+  assert.match(lanes, /restore record/, 'the way back says what it can restore')
+  assert.match(lanes, /survives/, 'and that the Argo policy depends on the restore record')
 
   // What to run instead.
   assert.match(lanes, /mise run dev:up/, 'the dev lane is the answer for a real Paper and a real proxy')

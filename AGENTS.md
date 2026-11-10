@@ -18,7 +18,7 @@ zero and disable Argo auto-sync, and `scripts/online-cluster.sh --rotate` writes
 the refreshed token chain into the live custody and asks you to restart the
 deployment. An interrupted testbed run leaves the live front offline, so
 `mise run testbed:down` is the way back. It restores the deployment, and it
-restores the Argo sync policy only while the run's state file at
+restores the Argo sync policy only while the run's restore record at
 `/tmp/opencode/monoplayer-testbed.json` survives. It also deletes the testbed's
 front Service, which is what unpublishes the tailnet name. `node
 src/testbed/switch.js status` reports all three.

@@ -154,7 +154,7 @@ function recordDigest (image) {
 }
 
 // A Service that is gone answers with an empty list. A read that failed answers
-// with nothing. `status` is how the operator proves the front is gone, so the
+// with nothing. `status` is how the operator proves the testbed front is gone, so the
 // two must not look alike: null is unreadable, false is gone.
 function frontService () {
   const list = readJSON(['-n', TEST_NS, 'get', 'svc', '-l', `app.kubernetes.io/name=${TEST_DEPLOY}`, '-o', 'json'])
@@ -164,11 +164,7 @@ function frontService () {
 function frontFields (svc) {
   if (svc === null) return { unreadable: true }
   if (svc === false) return { missing: true }
-  return { hostname: frontHostname(svc) ?? '(pending)' }
-}
-
-function frontHostname (svc) {
-  return svc?.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
+  return { hostname: svc.status?.loadBalancer?.ingress?.[0]?.hostname ?? '(pending)' }
 }
 
 function proxyPods () {
@@ -375,7 +371,7 @@ async function transfer () {
   log('testbed heartbeat', { heartbeat })
 }
 
-// Deleting the front Service is what unpublishes the front. The tailnet device
+// Deleting the front Service is what unpublishes the testbed front. The tailnet device
 // and its proxy pod belong to that Service, so they go with it. The next
 // `apply -k` recreates it from the manifest's tailscale.com/hostname annotation.
 // A failed delete is logged and reported as a failed command, never thrown. The
