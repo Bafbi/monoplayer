@@ -59,8 +59,12 @@ The running Monoplayer process: config, core, both legs, custody, and the CLI. I
 _Avoid_: app, daemon, the proxy, the bot
 
 **Testbed front**:
-The testbed's published endpoint: the Kubernetes Service `monoplayer-testbed`, the tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the Service, and the pod and the name go with it.
-_Avoid_: testbed Service on its own, the front unqualified
+The testbed's published endpoint: its front Service, the tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the pod and the name go with it.
+_Avoid_: testbed Service, the front unqualified
+
+**Front Service**:
+The Kubernetes Service `monoplayer-testbed`: the part of the testbed front that publishes it. Scaling the testbed deployment to zero leaves it published with no endpoints, which is why `down` deletes it.
+_Avoid_: testbed service, the front
 
 **Front leg**:
 Monoplayer's server-side connection: the socket an attaching player joins, authenticated as that player.
