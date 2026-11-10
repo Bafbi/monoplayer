@@ -480,7 +480,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // restored onto. Without this the follow controller keeps a target the core
   // has already given up on, and the next dial lands the puppet on the server
   // the human was just moved off.
-  core.on('transfer_restored', ({ reason = null } = {}) => {
+  core.on('transfer_restored', ({ reason = null, kind = null } = {}) => {
+    // A reconfigure is the same server restarting its configuration phase, so
+    // there is no target to abandon: the puppet stays where it is.
+    if (kind !== 'transfer') {
+      log('transferRestoreKeptTarget', { reason, kind })
+      return
+    }
     const abandoned = follow.abort('restored')
     currentTarget = { ...baseTarget }
     try {
