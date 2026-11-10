@@ -6,7 +6,7 @@
 // with shims: nothing here reaches a cluster, and the live deployment is never
 // scaled. The assertions are made of the recorded argv.
 //
-// The front Service is what publishes the front, so `down` has to delete it:
+// The front Service is what publishes the testbed front, so `down` has to delete it:
 // scaling the deployment to zero leaves that Service with no endpoints and its
 // tailnet device registered (#116). And `up` has to record the digest it ran,
 // because the manifest pulls a moving tag.
@@ -241,7 +241,7 @@ test('the record path is an override, and its default is the one the runbook nam
   assert.match(source, /'\/tmp\/opencode\/monoplayer-testbed\.json'/, 'the default is /tmp/opencode/monoplayer-testbed.json')
 })
 
-test('down deletes the Service that published the front, after the live restore', () => {
+test('down deletes the front Service, after the live restore', () => {
   const space = workspace()
 
   const { status, output, calls } = run(space, ['down'])
