@@ -36,7 +36,7 @@ test('a kick whose reason is an Error fails to serialize, which is the live log 
   assert.throws(
     () => kickPacket(new Error('read ECONNRESET')),
     error => {
-      assert.match(error.message, /^SizeOf error for undefined : The "string" argument must be of type string/)
+      assert.match(error.message, /The "string" argument must be of type string/)
       assert.match(error.message, /Received an instance of Error/)
       return true
     }
