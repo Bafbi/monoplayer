@@ -302,8 +302,53 @@ warns about it once.
   frame each time. `test/core/skin.test.js` asserts the pick is by UUID.
 - The dev lane has no transfer, which is why the three cases above passed there
   and live failed. A dev-lane run measures the frame's content, not its timing.
-- The live lane needs the human: no run in this repo joins Excalia. After this
-  lands, the check is one attach that lasts past Excalia's transfer:
-  `skinFramesWritten` should reach 2 for one connection, and the body should keep
-  the puppet's skin through the teleport.
+- The live lane needs the human: no run in this repo joins Excalia. That check
+  ran on 2026-11-10 after the merge, and it passed: see the section below.
 
+
+## The live lane agrees, after the merge (#134)
+
+Date: 2026-11-10, 22:47 to 22:50Z. The lane runs the merged fix (`starts` with
+`chat: commands`, so it is `main` after #135, and it logs `puppetSkinKnown` with
+`uuid`, `was` and `value`, which only the fix writes). One human session, two
+attaches and one transfer:
+
+```
+22:47:07  puppetSkinKnown  uuid 73e0e19b…, was null, signed true
+22:47:45  puppetSkinSent   attach
+22:48:41  transferFollow   sky-2.excalia.fr, depth 1
+22:48:41  frontReconfiguration reason transfer
+22:48:45  puppetSkinKnown  was the first value, value the target's re-signed one
+22:48:45  puppetSkinSent   transfer          <- the line that never existed before
+22:48:45  attach           reason transfer, replayed 288
+22:50:41  detach           socketClosed
+22:50:48  puppetSkinSent   attach
+```
+
+Heartbeat at the end of the session:
+
+```
+attaches 2   skinFramesWritten 3   skinFramesRefused 0
+transfersFollowed 1   reconfigurationsCompleted 1   attached true
+```
+
+Three frames for two attaches and one transfer. The old code wrote two, and the
+replay after the transfer wrote none: that is the whole defect, and the count now
+moves when the client's play state does. `puppetSkinKnown` logged twice, for the two
+distinct values the backend sent, which is the second defect closed on the lane
+rather than in a test.
+
+The human's own reading closes the ticket's second acceptance criterion: they saw
+the puppet's skin on their own body during that session, and still saw it after
+re-attaching. What this does not measure: a client-side reading of the entry at
+22:48:45, and whether the body showed a default during the four seconds between the
+transfer intent and the frame. Only the proxy's counters and the human's eye cover
+that window.
+
+### What this says about the first attach of the 20:43 session
+
+The frame at a fresh attach works on the live lane, with Excalia's own property, on
+the same client. So the old session's vanilla default is not evidence about the
+attach path. Of its two attaches, the one whose window fits a default is the one
+after the 20:44:26 transfer, where the old code wrote no frame. That reading stays
+an inference: no client-side record dates the sighting.
