@@ -89,14 +89,20 @@ in the session does not reach the human, because the client keeps the entry it
 holds. And a client that already holds an entry for the human's UUID would keep
 that entry's skin: the proxy never lists the human, so this has not been seen.
 
+A third limit is the config's. The frame names the puppet's own entry, chosen by
+the UUID the lane resolved for the account. A lane that resolves a UUID the
+backend never lists writes no frame at all, and the record is an absence:
+`puppetSkinKnown` never appears, and no event says the property is missing. A
+stale UUID therefore looks exactly like a backend that lists the puppet late.
+
 What the proxy says about it, one event per thing that happened:
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `puppetSkinKnown` | `uuid`, `signed`, `value` | A `player_info` frame carried the puppet's own textures property, and it differs from the one held: once per distinct property, not once per frame |
+| `puppetSkinKnown` | `uuid`, `signed`, `was`, `value` | A `player_info` frame carried the puppet's own textures property whose value differs from the one held. `was` is the value it replaced, and null the first time. Once per distinct value, not once per frame |
 | `puppetSkinSent` | `name`, `reason`, `signed` | The frame reached the attaching player. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, or `property_arrived` |
 | `puppetSkinRefused` | `reason`, `error` | The packet could not be built or written: `packet` or `write_failed` |
-| `puppetSkinWithheld` | `name`, `reason` | A replay wrote no frame in a state no later frame repairs: `not_attached`, or `no_identity` when the front gave no UUID to name. No property yet is not reported, because it normally arrives a moment after the attach and the frame then goes out under `property_arrived`, and a packet or write failure is `puppetSkinRefused` |
+| `puppetSkinWithheld` | `name`, `reason` | A replay wrote no frame because the front gave no UUID to name (`no_identity`). No later frame repairs that. A missing property is not reported: it normally arrives a moment after the attach, and the frame then goes out under `property_arrived`. A packet or write failure is `puppetSkinRefused` |
 | `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process |
 
 ## Chat and commands

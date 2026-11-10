@@ -1,6 +1,6 @@
 // #99: the human's own player wears the puppet's skin, behind a switch.
 //
-// Four properties of the change are asserted here, at the composition root:
+// Five properties of the change are asserted here, at the composition root:
 //
 //   off is today     with the switch off nothing is written, so the human sees
 //                    what they see now
@@ -11,6 +11,9 @@
 //                    names the UUID the front verified
 //   with the replay  the frame goes out with every replay of play state, because
 //                    a reconfiguration builds a new player-info map (#134)
+//   and it reports  the property log fires once per distinct value, a stranger's
+//                    skin is never the frame, and a refusal no later frame repairs
+//                    is named (#134)
 //
 // The packet shape itself is proved in test/core/skin.test.js.
 import { test } from 'node:test'
@@ -115,6 +118,7 @@ function landOnTarget ({ backendLeg, frontLeg, core }) {
   backendLeg.deliver({ state: 'configuration', name: 'select_known_packs', data: {} })
   backendLeg.deliver({ state: 'configuration', name: 'finish_configuration', data: {} })
   frontLeg.clientReconfigured({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(core.clientReconfiguring, false, 'the client is back in play')
   backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 7 } })
   backendLeg.deliver({ state: 'play', name: 'game_state_change', data: { reason: 13, gameMode: 0 } })
   backendLeg.deliver({ state: 'play', name: 'map_chunk', data: { x: 0, z: 0 } })
@@ -292,6 +296,7 @@ test('another player\'s skin is never the frame, and the known log fires once pe
   assert.equal(known.length, 1)
   assert.equal(known[0].uuid, PUPPET, 'the property is the puppet\'s own entry')
   assert.equal(known[0].value, TEXTURES.value, 'and the log carries the value it saw')
+  assert.equal(known[0].was, null, 'the first property has nothing behind it')
 
   // The backend keeps relisting the same property, and one of the frames leads
   // with another player: nothing new is known and nothing new is written.
