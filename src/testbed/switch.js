@@ -43,11 +43,11 @@ const TAILSCALE_NS = 'tailscale'
 // The operator runs one proxy pod per Service, names it after that Service, and
 // labels it with the Service it came from. That label is how `status` finds the
 // pod, and one pod is one registered tailnet device.
-const TAILNET_PROXY_LABEL = `tailscale.com/parent-resource=${TEST_DEPLOY}`
+const TAILNET_PROXY_SELECTOR = `tailscale.com/parent-resource=${TEST_DEPLOY}`
 // The restore record: what `up` removed, for `down` to put back. It is the
 // only way the Argo policy comes back (AGENTS.md), so a test points it at its
 // own file instead of overwriting a live run's record.
-const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
+const RECORD_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
 // `down` clears the record once it has restored what it owes, so a run's digest
 // would go with it. One line per `up` here is what makes two finished runs
 // comparable. MONOPLAYER_TESTBED_DIGESTS moves it, so a test never writes the
@@ -168,7 +168,7 @@ function frontFields (svc) {
 }
 
 function proxyPods () {
-  return readJSON(['-n', TAILSCALE_NS, 'get', 'pods', '-l', TAILNET_PROXY_LABEL, '-o', 'json'])?.items ?? null
+  return readJSON(['-n', TAILSCALE_NS, 'get', 'pods', '-l', TAILNET_PROXY_SELECTOR, '-o', 'json'])?.items ?? null
 }
 
 function podLogs (namespace, deploy, tail = 400) {
@@ -226,9 +226,9 @@ function restoreAutoSync (saved) {
   log('Argo auto-sync restored')
 }
 
-function writeState (state) {
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state) + '\n')
+function writeRecord (record) {
+  fs.mkdirSync(path.dirname(RECORD_FILE), { recursive: true })
+  fs.writeFileSync(RECORD_FILE, JSON.stringify(record) + '\n')
 }
 
 // A second `up` before a `down` must not forget the policy the first one
@@ -236,27 +236,27 @@ function writeState (state) {
 // no `automated` block, and that record restores nothing, so it must not
 // replace one that does. What this `up` removed wins: that is what is missing
 // now, and `down` puts back what is missing, not what was.
-function savePolicyState (state) {
-  const previous = readState()
-  const kept = state.disabledByUs && state.automated ? state : previous ?? state
+function savePolicyRecord (record) {
+  const previous = readRecord()
+  const kept = record.disabledByUs && record.automated ? record : previous ?? record
   if (kept === previous) log('kept the Argo record an earlier up wrote', { automated: previous.automated })
-  writeState(kept)
+  writeRecord(kept)
 }
 
-function readState () {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } catch { return null }
+function readRecord () {
+  try { return JSON.parse(fs.readFileSync(RECORD_FILE, 'utf8')) } catch { return null }
 }
 
 // `up` records the Argo policy first and the digest later, so a write must merge
 // into what is already there: `down` restores the policy from this file. It goes
-// straight to the file, not through savePolicyState: that keep rule belongs to
+// straight to the file, not through savePolicyRecord: that keep rule belongs to
 // the policy, and it would drop a digest recorded beside a policy there is none of.
-function mergeState (patch) {
-  writeState({ ...(readState() ?? {}), ...patch })
+function mergeRecord (patch) {
+  writeRecord({ ...(readRecord() ?? {}), ...patch })
 }
 
-function clearState () {
-  try { fs.unlinkSync(STATE_FILE) } catch { /* no state */ }
+function clearRecord () {
+  try { fs.unlinkSync(RECORD_FILE) } catch { /* no record */ }
 }
 
 function liveScale () {
@@ -300,7 +300,7 @@ async function up () {
   log(`live front ${FRONT_HOST}`, { liveReplicas: liveScale() })
   // Disable Argo self-heal before scaling the live deployment; otherwise it
   // scales back to one and fights the testbed for the RWO custody PVC.
-  savePolicyState(disableAutoSync())
+  savePolicyRecord(disableAutoSync())
   scale(LIVE_NS, LIVE_DEPLOY, 0)
   await waitDeployGone(LIVE_NS, LIVE_DEPLOY)
 
@@ -325,7 +325,7 @@ async function up () {
   // Record the build this run executed. The manifest pulls :main, so the digest
   // is the only thing a later run can be compared against.
   const image = testbedImage()
-  mergeState(image)
+  mergeRecord(image)
   recordDigest(image)
   log('testbed image', { ...image, recorded: DIGESTS_FILE })
 
@@ -388,7 +388,7 @@ function removeFront () {
 }
 
 async function down () {
-  const saved = readState()
+  const saved = readRecord()
   // Any step here can fail: a scale, the ready wait, the policy patch. The front
   // Service has to go either way, or the leak this change closes survives the
   // failure path.
@@ -407,7 +407,7 @@ async function down () {
     frontRemoved = removeFront()
     // The record is spent once the policy is back. A restore that failed has not
     // spent it, and the next `down` still needs it.
-    if (restored) clearState()
+    if (restored) clearRecord()
   }
   log('live deployment restored')
   // The live lane is back either way, but a front Service that is still published
@@ -429,7 +429,7 @@ async function status () {
   log('tailnet devices', proxies === null
     ? { unreadable: true }
     : { count: proxies.length, names: proxies.map(pod => pod.metadata?.name) })
-  log('restore record', readState() ?? { missing: true })
+  log('restore record', readRecord() ?? { missing: true })
 }
 
 async function run () {
