@@ -119,8 +119,6 @@ spec:
               value: /config/attach-whitelist.json
             - name: MONOPLAYER_CHAT
               value: read-only
-            - name: MONOPLAYER_HOME
-              value: /tmp
             - name: HOME
               value: /tmp
           ports:
