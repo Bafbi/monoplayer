@@ -17,10 +17,12 @@ export function cacheStatsLine (stats, elapsedMs) {
 //
 // #87: a followed transfer releases a client on this decision, and a cache with
 // no chunk data cannot back one: the human would land in an empty world and
-// fall. `shouldForceWarm` refuses the fallback there, so the caller's failure
-// path (retry, then revert to the configured backend) owns the move instead.
-// The startup call passes `requireChunks: false`: it releases nobody, and
-// refusing it would leave a lane whose backend streams no chunks unattachable.
+// fall. `shouldForceWarm` refuses the fallback on the transfer stage, and the
+// live caller turns a refusal into a failed dial, so the follow budget (retry,
+// then revert to the server the client was restored onto) owns the move.
+// Startup and reconnect pass `requireChunks: false`: neither releases a client
+// mid-move, and refusing them would leave a lane whose backend streams no
+// chunks unattachable.
 export function shouldForceWarm (readiness, { requireChunks = true } = {}) {
   if (readiness?.hasConfig !== true || readiness?.hasPrefix !== true) return false
   if (readiness.warm === true) return false
@@ -51,7 +53,7 @@ export async function waitForReady ({ core, log, maxWarmMs = 60_000, maxTotalMs 
         elapsedMs: elapsed,
         configFrames: stats.sizes.config,
         prefixFrames: stats.sizes.prefix,
-        chunkFrames: stats.chunkFrames ?? stats.sizes.chunks
+        chunkFrames: stats.chunkFrames
       }
     }
     await new Promise(resolve => setTimeout(resolve, 1000))

@@ -130,6 +130,10 @@ _Avoid_: redirect, handoff, switch
 Monoplayer's decision to move the puppet to a transfer's target rather than pass the transfer to the attaching player. With a client attached, the client follows on its own connection (see seamless transfer); with nobody attached, the puppet moves alone.
 _Avoid_: redirect follow, migration
 
+**Follow budget**:
+How many failed dials a followed transfer survives before the controller gives up and sends the puppet back to the server the restored client holds state for. Three by default.
+_Avoid_: retry budget, failure budget
+
 **Transfer chain**:
 The targets a session has been moved to in a row. A repeated target, or a chain past the limit, is refused.
 _Avoid_: redirect chain, hop history

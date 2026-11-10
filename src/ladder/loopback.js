@@ -1269,6 +1269,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (seamlessCore.metrics.attaches !== 1) {
       throw new Error(`the kept-connection rig attached ${seamlessCore.metrics.attaches} times, expected 1`)
     }
+    // The puppet is settled on its base and no move is in flight: every check
+    // below starts a move from here.
+    const waitForBaseWarm = label => waitFor(
+      () => !seamlessReconnecting &&
+        seamlessCore.session.state === 'attached' &&
+        seamlessCore.session.warmReady === true &&
+        seamlessCore.moveKind === null,
+      label,
+      20_000
+    )
 
     // --- O38-O41: the cases the testbed cannot produce (#87) ---
     // `mise run testbed:run` passes because its transfer succeeds on the first
@@ -1355,18 +1365,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the restored play state after the cold target',
       20_000
     )
-    await waitFor(
-      () => !seamlessReconnecting &&
-        seamlessCore.session.state === 'attached' &&
-        seamlessCore.session.warmReady === true &&
-        seamlessCore.moveKind === null,
-      'the puppet back on the configured backend',
-      20_000
-    )
+    await waitForBaseWarm('the puppet back on the configured backend')
 
     // --- O39-O40: a refused dial, and the give-up that restores the session ---
-    // Port 1 is bound by nothing: the dial is refused as surely as a target that
-    // drops a transfer intent from the same account closes it.
+    // A port that nothing listens on: the dial is refused as surely as a target
+    // that closes a transfer intent from the same account.
     const deadPort = await freePort()
     const dialMark = b5.names.length
     const dialLogMark = logs.length
@@ -1419,14 +1422,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
           .map(entry => entry.fields)
       }
     )
-    await waitFor(
-      () => !seamlessReconnecting &&
-        seamlessCore.session.state === 'attached' &&
-        seamlessCore.session.warmReady === true &&
-        seamlessCore.moveKind === null,
-      'the puppet warm on the configured backend again',
-      20_000
-    )
+    await waitForBaseWarm('the puppet warm on the configured backend again')
 
     // --- O33-O35: the kept connection survives a real followed transfer ---
     // The counts below are this hop's, so the rung's earlier moves do not count.
@@ -1477,11 +1473,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         b5.ended === null && b5.kick === null &&
         seamlessClientErrors.length === 0 &&
         seamlessAcks.length === 1 &&
-        // #87: the round starts on the intent, so the client acknowledges it
-        // before the target sends anything and its configuration streams live
-        // instead of waiting in the leg's hold.
-        seamlessNames.indexOf('start_configuration') === 0 &&
-        seamlessNames.indexOf('registry_data') > seamlessNames.indexOf('start_configuration'),
+        // #87: the round starts on the intent, so it is on the client's wire
+        // before the target's configuration is relayed (the round's own ordering
+        // against the dial is O38's check).
+        seamlessNames.includes('start_configuration') &&
+        seamlessNames.indexOf('start_configuration') < seamlessNames.indexOf('registry_data'),
       {
         frames: seamlessNames.slice(0, 10),
         ended: b5.ended,
@@ -1517,6 +1513,39 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         change.location?.z === SEAMLESS_BLOCK.z),
       'the target block on the kept connection'
     )
+    // --- O42: an error on the client's connection ends it with a reason (#87) ---
+    // The library's default handler ended the client with the Error object, and
+    // the failed kick became the end reason 30 s later. The leg owns that policy
+    // now, so the same error produces one line of text and no serialization
+    // failure. This runs last because it ends the client.
+    const probeMark = logs.length
+    const errorClient = seamlessFront.attached
+    errorClient?.emit('error', new Error('loopback_probe'))
+    await waitFor(
+      () => b5.ended !== null || b5.kick !== null,
+      'the client to be ended by the leg error policy',
+      10_000
+    )
+    const probeLogs = logs.slice(probeMark)
+    const probeSerialization = probeLogs.filter(entry =>
+      entry.event === 'frontClientError' && String(entry.fields?.error ?? '').startsWith('Serialization error'))
+    // The kick's reason is an anonymous NBT compound carrying one text string
+    // (`node tools/protocol.mjs frame 26.1 play toClient kick_disconnect`).
+    const probeKickText = b5.kick?.reason?.value?.text?.value ?? null
+    check(
+      'O42',
+      "an error on the client's connection ends it with a reason, not a serialization failure",
+      Boolean(errorClient) &&
+        probeKickText === 'front_error: loopback_probe' &&
+        probeSerialization.length === 0,
+      {
+        kickText: probeKickText,
+        ended: b5.ended,
+        serializationErrors: probeSerialization.map(entry => entry.fields),
+        frontClientErrors: probeLogs.filter(entry => entry.event === 'frontClientError').map(entry => entry.fields)
+      }
+    )
+
     check(
       'O35',
       'the client on the kept connection is in the target state without rejoining',
