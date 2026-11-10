@@ -1,0 +1,175 @@
+# Paper 26.2 b135 with the code-of-conduct gate ON — the observer's backend.
+#
+# Why a second Paper. `paper.yaml` is the G0 driver row, and a real client that
+# lands on a code-of-conduct screen never finishes joining, so that lane cannot
+# serve the gate (#78). The observer's question is the gate itself: does the
+# server send it, and does the accept come back as the puppet? That needs a
+# server that serves it, and this is that server. Rung 4 keeps `paper.yaml`.
+#
+# What Paper requires, read out of `DedicatedServer.readCodeOfConducts` in the
+# 26.2 jar rather than guessed:
+#   - a directory named `codeofconduct` in the server's working directory;
+#   - one `.txt` file per document, UTF-8, the file body is the text;
+#   - the document id is the file name without `.txt`, lowercased;
+#   - every file must live in that directory (a symlink out of it is refused).
+# The files are written by an initContainer, because a ConfigMap volume is a
+# symlink farm and Paper refuses a document whose real parent is not the folder.
+# The initContainer runs once per pod, and /data is an emptyDir, so the documents
+# survive the container restarts the observer install asks for.
+#
+# Everything else matches paper.yaml: same image, same version and build, online
+# mode, secure profile, a flat world, and no whitelist. The bots that join here
+# answer the gate themselves: minecraft-protocol writes accept_code_of_conduct as
+# soon as the gate arrives, which is the behaviour #21 wraps on the puppet leg.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gate-b-paper-conduct-files
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
+    app.kubernetes.io/part-of: monoplayer
+data:
+  # The id the client sees is the file name without .txt, lowercased: "terms".
+  terms.txt: |
+    Monoplayer gate lane
+
+    This server exists to measure one thing: whether a proxy can put a human's
+    answer to a configuration gate on the account's own connection.
+
+    Nothing here is a real agreement. No account, world, or token outlives the
+    run, and the server is disposable.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper-conduct
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      initContainers:
+        # The gate's documents. Real files in the folder Paper reads, written with
+        # the image's own user so the server can read them.
+        - name: conduct-documents
+          image: itzg/minecraft-server:2026.10.1-java25
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - mkdir -p /data/codeofconduct && cp /conduct/terms.txt /data/codeofconduct/terms.txt && ls -l /data/codeofconduct
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: conduct-files
+              mountPath: /conduct
+              readOnly: true
+      containers:
+        - name: paper
+          image: itzg/minecraft-server:2026.10.1-java25
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: EULA
+              value: "TRUE"
+            - name: TYPE
+              value: PAPER
+            - name: VERSION
+              value: "26.2"
+            - name: PAPER_BUILD
+              value: "135"
+            - name: MEMORY
+              value: 2G
+            - name: ONLINE_MODE
+              value: "TRUE"
+            - name: ENFORCE_SECURE_PROFILE
+              value: "TRUE"
+            - name: ENFORCE_WHITELIST
+              value: "FALSE"
+            - name: LEVEL_TYPE
+              value: minecraft:flat
+            - name: GENERATE_STRUCTURES
+              value: "false"
+            - name: LEVEL_SEED
+              value: "775"
+            - name: VIEW_DISTANCE
+              value: "4"
+            - name: SIMULATION_DISTANCE
+              value: "4"
+            - name: SPAWN_PROTECTION
+              value: "0"
+            - name: DIFFICULTY
+              value: peaceful
+            - name: MODE
+              value: creative
+            - name: MAX_PLAYERS
+              value: "4"
+            # The point of this lane. Without it Paper never sends the gate.
+            # The image maps a fixed list of env names to server.properties keys
+            # and this key is not on it, so it goes through CUSTOM_SERVER_PROPERTIES.
+            - name: CUSTOM_SERVER_PROPERTIES
+              value: enable-code-of-conduct=true
+          ports:
+            - name: minecraft
+              containerPort: 25565
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          startupProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: minecraft
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: conduct-files
+          configMap:
+            name: gate-b-paper-conduct-files
+            items:
+              - key: terms.txt
+                path: terms.txt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-conduct
+  namespace: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer-gate-b-paper-conduct
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
