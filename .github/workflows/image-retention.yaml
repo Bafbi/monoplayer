@@ -1,0 +1,204 @@
+# Image tag retention (#118).
+#
+# image.yaml pushes one sha-<7> tag per merge and image-branch.yaml one per branch
+# build, and nothing removed them. This workflow deletes the ones no lane can name.
+#
+# The allowlist is the mechanism; the count is only the bisect window. Deleting a
+# tag can garbage-collect a digest a lane is running, so the plan keeps:
+#
+#   main                    the moving tag every manifest on main references, so
+#                           a pod that pulls by tag never finds it missing.
+#   the deploy digest       deploy/manifests/kustomization.yaml on the DEPLOY
+#                           branch pins the image Argo runs; a restart pulls it.
+#   any manifest pin        every :tag and @sha256: under deploy/, read on both
+#                           refs, so a lane that pins by digest is protected the
+#                           moment its manifest lands.
+#   any pin-list entry      deploy/pins.txt, for a pin no manifest can carry: the
+#                           dev lane's 'mise run dev:image sha-<7>' only exists at
+#                           run time, so whoever sets it writes a line there.
+#   the last 20 sha-*       KEEP_LAST below, so a bisect can pull a recent image.
+#                           That is about a day of builds: docs/deployment.md holds
+#                           the count and the command that measures the rate.
+#   anything younger than   MIN_AGE_DAYS below. A grace day, not a retention rule:
+#   one day                 a build that landed today may already be running in a
+#                           lane, and no pin file names it yet. A pin that must
+#                           outlive the window belongs in deploy/pins.txt.
+#   any other tag           retention deletes only tags it can account for, so a
+#                           hand-made tag or a v1.2.3 stays. Fail closed.
+#
+# Untagged versions stay: buildx attaches provenance, and some of them are
+# children of a tagged index, so deleting one would break the tag beside it. The
+# tag count falls; the version count may not. The plan reports both.
+#
+# The first run is a dry run, on purpose. The plan job holds packages: read, so it
+# cannot delete, and its list goes to the job summary and the retention-plan
+# artifact. Read that list once, then set the repository variable
+# IMAGE_RETENTION_APPLY to true. From then on each nightly run plans and deletes in
+# one run; the review gate is that variable, not a read of every night's list.
+# To skip one night while the variable stays true, dispatch with apply off.
+#
+# To run the same plan on a workstation: `mise run image:retention`. It fetches
+# the deploy pin, and it needs a token with read:packages in GH_TOKEN. These jobs
+# call the tool rather than that task because they already hold the deploy branch
+# as a checkout, and the task would fetch it again.
+#
+# GHCR_RETENTION_TOKEN is tried first, and GITHUB_TOKEN is the fallback. A package
+# owned by a user account may refuse the workflow token, and a classic PAT with
+# read:packages and delete:packages settles it. If the token cannot read the
+# package, the plan fails loudly: exit 1, a red job, no deletions.
+
+name: image-retention
+
+# Nightly. The first runs are dry runs whatever a dispatch asks for, because the
+# apply job is gated on the repository variable.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Delete the reviewed plan. Also needs IMAGE_RETENTION_APPLY=true.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One run at a time, and never cancel one midway through a deletion list.
+concurrency:
+  group: image-retention
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    # A hung registry call would hold the concurrency group and queue tomorrow's
+    # run behind it, so both jobs are bounded the way ci.yaml is.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The pin the live lane runs is on the deploy branch, never on main. Read it
+      # from its own checkout rather than assuming the default refspec.
+      - uses: actions/checkout@v4
+        with:
+          ref: deploy
+          path: .deploy
+          persist-credentials: false
+
+      # mise pins the node version this repo builds with, so the plan runs on the
+      # same one a workstation does.
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: node
+
+      - name: Plan
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_RETENTION_TOKEN || secrets.GITHUB_TOKEN }}
+          PAT_PRESENT: ${{ secrets.GHCR_RETENTION_TOKEN != '' }}
+          KEEP_LAST: '20'
+          MIN_AGE_DAYS: '1'
+        run: |
+          # pipefail or nothing here fails loudly: the tool is piped into tee, so
+          # without it the step reports tee's status and a red plan reads as green.
+          set -euo pipefail
+          # Name the credential in the run log: a fallback that hides which token
+          # read the package turns a 404 into a mystery.
+          if [ "$PAT_PRESENT" = "true" ]; then
+            echo "token: GHCR_RETENTION_TOKEN"
+          else
+            echo "token: GITHUB_TOKEN (GHCR_RETENTION_TOKEN is unset)"
+          fi
+          node tools/image-retention.mjs plan \
+            --deploy .deploy/deploy/manifests/kustomization.yaml \
+            --manifests deploy \
+            --pins deploy/pins.txt \
+            --keep "$KEEP_LAST" \
+            --min-age-days "$MIN_AGE_DAYS" \
+            --out retention-plan.json | tee plan.txt
+
+      - name: Publish the plan
+        run: |
+          {
+            echo '### Image tag retention: what this run would delete'
+            echo
+            echo 'Read this list before enabling deletion (IMAGE_RETENTION_APPLY).'
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The list, kept as an artifact: the first one is what a human reads before
+      # setting the variable, and every later one is the record of a run.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retention-plan
+          path: retention-plan.json
+          retention-days: 30
+
+  apply:
+    needs: plan
+    # Both gates: the repository variable enables the job, and a scheduled run is
+    # the only trigger that deletes without a dispatch asking for it.
+    if: vars.IMAGE_RETENTION_APPLY == 'true' && (github.event_name == 'schedule' || inputs.apply)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: deploy
+          path: .deploy
+          persist-credentials: false
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: node
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: retention-plan
+
+      # apply deletes exactly the ids this run's plan wrote, and refuses if one is
+      # pinned now or is not a sha-* tag. It never re-plans, so the two jobs cannot
+      # disagree about the list.
+      - name: Delete the reviewed list
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_RETENTION_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          # pipefail: a delete that fails on the third of twenty must not report a
+          # tidy success through tee.
+          set -euo pipefail
+          node tools/image-retention.mjs apply \
+            --plan retention-plan.json \
+            --deploy .deploy/deploy/manifests/kustomization.yaml \
+            --manifests deploy \
+            --pins deploy/pins.txt | tee deleted.txt
+          {
+            echo '### Image tag retention: deleted'
+            echo
+            echo '```'
+            cat deleted.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The deletion log outlives the run: it names the id and the sha-* tag, which
+      # is what a rebuild or a restore needs.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retention-deleted
+          path: deleted.txt
+          retention-days: 30
