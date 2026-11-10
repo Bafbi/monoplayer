@@ -323,6 +323,19 @@ test('another player\'s skin is never the frame, and the known log fires once pe
   assert.equal(eventsNamed(logLines, 'puppetSkinKnown').length, 1,
     'once per distinct property, not once per player_info frame')
   assert.equal(skinFrames(rig.frontLeg).length, 1)
+
+  // A property re-signed with a new value, then the first value again. The
+  // comparison is by value, so each change logs, and the later frame carries a
+  // value the proxy has seen before.
+  const reSigned = { name: 'textures', value: 'cmVzaWduZWQ=', signature: 'c2lnbmF0dXJl' }
+  deliverPlayerInfo(rig, [{ uuid: PUPPET, player: { name: 'Wiriaw', properties: [reSigned] } }])
+  deliverPlayerInfo(rig)
+  const changes = eventsNamed(logLines, 'puppetSkinKnown')
+  assert.equal(changes.length, 3, 'a change logs each time, including back to a value it held before')
+  assert.equal(changes[1].was, TEXTURES.value, 'the value it replaced')
+  assert.equal(changes[1].value, reSigned.value)
+  assert.equal(changes[2].was, reSigned.value)
+  assert.equal(changes[2].value, TEXTURES.value)
 })
 
 test('a config that names no puppet UUID writes no frame, and says so once', () => {

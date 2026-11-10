@@ -71,7 +71,7 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.denials` | sum | `reason`, `phase` | Login-start and verify-session denials. |
 | `monoplayer.backend.logins` | sum | `entityId` | Backend logins counted by the session. |
 | `monoplayer.replay.frames` | sum | `player` | Frames written by the join replay per attach. |
-| `monoplayer.skin.frames` | sum | `player` | `player_info` skin frames written to the attaching player, one per play state that is owed one. |
+| `monoplayer.skin.frames` | sum | `player` | `player_info` skin frames written to the attaching player: one per play state that is owed one, plus one whenever the puppet's property changes while attached. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
 | `monoplayer.attached` | gauge | none | `1` while a client is attached. |
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |

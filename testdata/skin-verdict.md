@@ -158,7 +158,9 @@ What the artifacts prove, and what they do not:
   The second attach is not: at 20:45:11 the proxy held `Tutoriel`'s property, so
   that frame put a lobby player's skin on the human's body.
 
-The two logs, side by side:
+The pod's stdout log and the client's log, side by side. The three proxy lines
+are JSONL records from `kubectl -n monoplayer logs`, and the last is the client's
+own:
 
 ```
 20:43:49.819  {"event":"puppetSkinSent","name":"Bafbi","reason":"attach","signed":true}
