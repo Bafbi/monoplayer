@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { envOverlay } from '../../src/service/start-live.js'
+import { loadConfig } from '../../src/service/monoplayer.js'
 
 const base = () => ({ transfer: { follow: true, chainLimit: 8 } })
 
@@ -38,3 +39,27 @@ test('#22 a value that is neither 1 nor 0 is refused and named', () => {
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /must be 1 or 0/)
 })
+// #108: a config document's reconnect budget must survive the overlay. The
+// deployed default stays unlimited, so only an explicit file value, or an
+// explicit env value, may set a bound.
+test('#108 a config document\'s reconnect attempts reach loadConfig', () => {
+  const out = envOverlay({ reconnect: { attempts: 2, maxDelayMs: 5000 } }, {})
+  assert.equal(out.reconnect.attempts, 2)
+  assert.equal(out.reconnect.maxDelayMs, 5000)
+  const cfg = loadConfig(out)
+  assert.equal(cfg.reconnect.attempts, 2)
+  assert.equal(cfg.reconnect.maxDelayMs, 5000)
+})
+
+test('#108 the env var overrides the document, and 0 or unset means unlimited', () => {
+  assert.equal(
+    envOverlay({ reconnect: { attempts: 2 } }, { MONOPLAYER_RECONNECT_ATTEMPTS: '3' }).reconnect.attempts,
+    3
+  )
+  assert.equal(
+    envOverlay({ reconnect: { attempts: 2 } }, { MONOPLAYER_RECONNECT_ATTEMPTS: '0' }).reconnect.attempts,
+    Infinity
+  )
+  assert.equal(envOverlay({}, {}).reconnect.attempts, Infinity)
+})
+

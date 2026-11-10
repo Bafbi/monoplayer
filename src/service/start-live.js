@@ -90,10 +90,12 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   } else if (keepRaw !== undefined && keepRaw !== '') {
     warn('MONOPLAYER_TRANSFER_KEEP_CONNECTION must be 1 or 0; ignoring ' + keepRaw)
   }
-  // A deployed puppet must keep retrying: the backend can restart, and giving
-  // up after one attempt leaves the front alive with no session. Attempts: 0
-  // or unset means unlimited; the delay caps at MONOPLAYER_RECONNECT_MAX_DELAY_MS.
-  const reconnect = { ...doc.reconnect, attempts: Infinity }
+  // A deployed puppet keeps retrying by default: the backend can restart, and
+  // giving up after one attempt leaves the front alive with no session. A
+  // config document may set a budget, and this env var may override it. Either
+  // way, 0 or unset means unlimited, and the delay caps at
+  // MONOPLAYER_RECONNECT_MAX_DELAY_MS.
+  const reconnect = { ...doc.reconnect, attempts: doc.reconnect?.attempts ?? Infinity }
   const attemptsRaw = env.MONOPLAYER_RECONNECT_ATTEMPTS
   if (attemptsRaw !== undefined && attemptsRaw !== '') {
     const parsed = Number(attemptsRaw)
