@@ -20,9 +20,8 @@
 // sign and send it as the puppet instead. The human's session key, its
 // acknowledgements, and its last-seen window stay on the front leg in every
 // mode. `read-only` drops the text too, and `off` drops clientbound chat as
-// well. `commands` is the middle ground (#97): the human's commands are spoken
-// as the puppet, so /profil, /msg, and /tp work, and their open chat text is
-// dropped.
+// well. `commands` (#97) speaks the human's commands as the puppet, so /profil,
+// /msg, and /tp reach the server, and drops their open chat text.
 //
 // Client information (`settings`) is rewritten, not forwarded: the human's
 // locale, skin parts, main hand, and chat settings must reach the server, but
