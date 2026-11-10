@@ -68,6 +68,9 @@ node tools/driver/driver-client.mjs status
 | `break [x y z] [ms]` | break the block at the position; defaults to the ground block in front (never directly under the player) |
 | `place [x y z] [ms]` | use the selected hotbar item on top of the support block; defaults to the block in front |
 | `screenshot` | save a PNG under `minecraft/screenshots/` and return its path |
+| `skin` | the body texture the client resolved for the player it controls, the same for every `player_info` entry it holds, those entries' textures properties, and the camera mode |
+| `perspective [first\|third_back\|third_front]` | set the camera mode, so a screenshot shows the body rather than a hand |
+| `inject_player_info` | deliver one clientbound `player_info` frame the caller encoded as hex: the driver decodes it with the client's own stream codec and hands it to the client's own packet listener, so the client validates it as it validates a frame from a server |
 | `respawn` | send the client respawn command (use after a death screen) |
 | `disconnect` | invoke the vanilla disconnect path |
 | `quit` | stop the client process |
@@ -79,6 +82,27 @@ node tools/driver/driver-client.mjs status
 sees the action, not just a client-side prediction. On void or thin maps, pass
 explicit coordinates for the target/support block; the default break target is
 the ground block in front, never the block underfoot.
+
+## Skin and packet injection (#99)
+
+`skin`, `perspective`, and `inject_player_info` exist for one measurement: what
+skin a real client resolves for the body it controls. They are not cosmetic
+helpers, and the injection is the only op that reaches the client's packet
+handling, so it is bounded on purpose:
+
+- it takes a frame someone else built, decodes it with
+  `ClientboundPlayerInfoUpdatePacket.STREAM_CODEC`, and refuses a frame with
+  trailing bytes;
+- the bytes come from `src/core/skin.js` through the same protocol data the
+  proxy serializes with, so the frame a run delivers is the frame a server sends;
+- it reports what it delivered: the actions, every entry, whether the client
+  already held that UUID, and whether the write happened at all.
+
+`node src/driver/run.js --lane skin` drives the three cases (control, signed,
+unsigned), one fresh client each, and writes `.reports/skin-report.json` with the
+texture each case resolved and a third-person screenshot. `--lane skin --case
+signed` runs one of them. The measurement and its answer are in
+[testdata/skin-verdict.md](../../testdata/skin-verdict.md).
 
 ## Menus and screenshots
 
@@ -126,6 +150,10 @@ See [docs/driver-validation.md](../../docs/driver-validation.md).
 - Binds `127.0.0.1` only.
 - One mixin (`Minecraft.createTitle`) only changes the window title.
 - No mixins into `Connection`, login/play handlers, packet codecs, or Netty.
+  `inject_player_info` reads no socket and swaps no handler: it decodes one
+  caller-built frame with the client's own stream codec and hands the packet to
+  the client's own listener, on the client thread. The mod still opens no
+  outbound connection and changes nothing the client would otherwise do.
 - No outbound network from the mod.
 - Optional token: set `-Dgateb.driver.token=...` on the client JVM and
   `GATEB_DRIVER_TOKEN` on the client.
