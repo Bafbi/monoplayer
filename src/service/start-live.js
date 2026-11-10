@@ -24,7 +24,9 @@
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
 //   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory
 //   MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 256 MiB)
-//   MONOPLAYER_RECONNECT_ATTEMPTS                       backend retries (0/unset = unlimited)
+//   MONOPLAYER_RECONNECT_ATTEMPTS                       backend reconnect attempts
+//                                                       (0 = unlimited; unset keeps the
+//                                                       config file's value, else unlimited)
 //   MONOPLAYER_RECONNECT_MAX_DELAY_MS                   backoff cap (default 60000)
 //
 // Sequence (simplicity rules; one client, one backend leg, direct Paper):
@@ -90,10 +92,12 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   } else if (keepRaw !== undefined && keepRaw !== '') {
     warn('MONOPLAYER_TRANSFER_KEEP_CONNECTION must be 1 or 0; ignoring ' + keepRaw)
   }
-  // A deployed puppet must keep retrying: the backend can restart, and giving
-  // up after one attempt leaves the front alive with no session. Attempts: 0
-  // or unset means unlimited; the delay caps at MONOPLAYER_RECONNECT_MAX_DELAY_MS.
-  const reconnect = { ...doc.reconnect, attempts: Infinity }
+  // A deployed puppet keeps reconnecting by default: the backend can restart,
+  // and giving up after one attempt leaves the front alive with no session. A
+  // config document may set a budget, and this env var may override it. Either
+  // way, 0 or unset means unlimited, and the delay caps at
+  // MONOPLAYER_RECONNECT_MAX_DELAY_MS.
+  const reconnect = { ...doc.reconnect, attempts: doc.reconnect?.attempts ?? Infinity }
   const attemptsRaw = env.MONOPLAYER_RECONNECT_ATTEMPTS
   if (attemptsRaw !== undefined && attemptsRaw !== '') {
     const parsed = Number(attemptsRaw)
@@ -561,7 +565,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
     ...accountLogFields,
     whitelistCount: cfg.attachWhitelist.length,
     reconnect: {
-      attempts: cfg.reconnect.attempts === Infinity ? 'unlimited' : cfg.reconnect.attempts,
+      // A config document's 0 is how an operator writes "unlimited", so the
+      // record says what the lane will do, not what the document wrote. The
+      // predicate is the session's own (src/core/session.js:74).
+      attempts: Number.isFinite(cfg.reconnect.attempts) && cfg.reconnect.attempts > 0
+        ? Math.floor(cfg.reconnect.attempts)
+        : 'unlimited',
       maxDelayMs: cfg.reconnect.maxDelayMs
     }
   })
