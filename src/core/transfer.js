@@ -89,6 +89,16 @@ export function createTransfer ({ session, cache } = {}) {
     }
   }
 
+  // The reconnect that follows a restore starts a fresh backend session: the
+  // frames it caches must not append to the snapshot the client was put back
+  // on. The caller resets the cache on that dial, and this call makes it once
+  // per restore, so a later reconnect does not wipe a warm cache (issue #87).
+  function claimRestore () {
+    if (phase !== 'restored') return false
+    phase = 'idle'
+    return true
+  }
+
   // Release the held snapshot without changing the session (a second move
   // replaced this one, or the process is stopping).
   function discard () {
@@ -102,6 +112,7 @@ export function createTransfer ({ session, cache } = {}) {
     begin,
     commit,
     fail,
+    claimRestore,
     discard,
     get phase () { return phase },
     get inFlight () { return phase === 'in_flight' },

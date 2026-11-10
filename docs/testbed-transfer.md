@@ -68,6 +68,11 @@ expected result is `hub.entries=4`, `sky.entries=5`, `same=false`.
   moving reason and rejoins the proxy; loopback `O21`-`O24` pin that path.
 - The target's configuration registries differ from the hub's.
 
+One thing this run cannot produce: a failure. Its transfer succeeds on the
+first dial and its target warms in five seconds, so a refused dial, a cold
+target, and a restore never happen here. Loopback `O38`-`O41b` cover those, on
+a real front leg and a real client.
+
 ## What it does not prove yet
 
 The two acceptance criteria are wider than the transfer itself:

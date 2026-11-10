@@ -10,7 +10,7 @@ cheapest rung that can fail for the defect you are chasing.
 |---|---|---|---|---|---|
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers; no sockets, no auth | socket framing, leg wiring, real timers, backend behavior |
-| 2 loopback | `mise run loopback` | about 8 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the default detach-and-rejoin move, and the opt-in kept connection (#22); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2 loopback | `mise run loopback` | about 17 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the default detach-and-rejoin move, and the opt-in kept connection (#22); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, the same-connection reconfiguration, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering and vanilla acceptance of the reconfiguration; the run takes the live front offline, so the operator starts it |
 | 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
@@ -223,13 +223,30 @@ The runner builds:
 - `O24` the puppet leg answers a stored cookie request.
 - `O33` with `transfer.keepConnection` on, which is the default, a followed
   transfer never reaches the client and the client keeps its connection: no kick, the proxy's own
-  `start_configuration`, one acknowledged configuration round with frames
-  flushed, and no front client error.
+  `start_configuration` first, one acknowledged configuration round, the
+  target's configuration after that round started, and no front client error.
 - `O34` the kept connection goes through the target's configuration (including
   its `finish_configuration`) and its play login, and the session is `attached`.
 - `O35` the client that followed the move is in the target server state: it
   receives the target's block change, keeps the one attach (no rejoin), and
   records no leftover bytes or errors.
+- `O38` the transfer intent starts the client's configuration round before the
+  target is reached: one round counted, the client in configuration, the
+  session `transferring`, and the cold target has accepted no login yet (#87).
+- `O39` a dial the target refuses before its first frame leaves the move in
+  flight: the move is still a transfer, the client is still in its round, and
+  nothing was restored (#87).
+- `O40` the follow budget's give-up restores the previous server's state on the
+  connection the client kept: the snapshot's configuration and finish stream
+  into the open round, the previous play login replays, no kick, and no front
+  client error (#87).
+- `O41` and `O41b` a target that sends no chunk frame never releases the client:
+  the move stays open with the client in play, and the recorded wait is
+  `reconfigurationWaitingWorld` on a cache holding zero chunk frames (#87).
+
+The kept-connection rig runs these four cases before its happy path because
+`mise run testbed:run` cannot produce any of them: its transfer succeeds on the
+first dial and its target warms in five seconds.
 - `O24b` a proxy notice reaches the client complete as a toast and leaves no
   advancement behind: an invalid-target refusal sends two `advancements`
   frames, the bot decodes both, the first carries a `monoplayer:notice/` id with
