@@ -244,6 +244,28 @@ test('the client may still leave during a transfer', () => {
   assert.equal(s.state, STATES.DETACHED)
 })
 
+test('a refused dial does not arm a second reconnect while one is pending', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000, reconnectPolicy: { attempts: 3 } })
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+  s.transferStart({ target: { host: 'sky-2.excalia.fr', port: 25565 } })
+  s.backendDown({ reason: 'backend_transfer', retainFront: true })
+  clock.tick(1000)
+
+  // #87: the dial opened and closed before its first frame. The core keeps the
+  // move and arms one retry; the connect rejection that follows is the same
+  // fault, not a second one.
+  s.backendDown({ reason: 'socketClosed', retainFront: true })
+  assert.equal(s.pendingReconnect, true)
+  const duplicate = s.fail()
+  assert.equal(duplicate.scheduled, false)
+  assert.equal(duplicate.alreadyArmed, true)
+  assert.equal(s.state, STATES.TRANSFERRING)
+  assert.equal(s.detachCount, 0)
+  assert.equal(clock.pending, 1, 'one retry armed, not two')
+})
+
 test('a retained transfer never fails closed on a retry budget', () => {
   const clock = fakeClock()
   const s = createSession({ clock, reconnectDelayMs: 1000, reconnectPolicy: { attempts: 1 } })
@@ -254,10 +276,11 @@ test('a retained transfer never fails closed on a retry budget', () => {
   clock.tick(1000)
 
   // Two failed dials in a row, past the one-attempt budget: the session keeps
-  // the client and keeps retrying; the follow controller owns the give-up.
+  // the client and keeps retrying; the follow controller owns the give-up. Each
+  // dial waits for the retry the previous one armed (1000 ms, then 2000 ms).
   assert.equal(s.fail().scheduled, true)
   assert.equal(s.state, STATES.TRANSFERRING)
-  clock.tick(1000)
+  clock.tick(2000)
   assert.equal(s.fail().scheduled, true)
   assert.equal(s.state, STATES.TRANSFERRING)
   assert.equal(s.detachCount, 0)

@@ -96,6 +96,9 @@ export function createFakeFrontLeg () {
       reconfiguredCalls.push({ reason })
       return { started: true, reason }
     },
+    // #87: the frame bytes that end a configuration round, for a restore with
+    // no cached finish. The fake records it as a raw frame like the real leg.
+    finishConfigurationFrame () { return Buffer.from('fake:finish_configuration') },
     writeRaw (buffer, meta) { sent.push({ kind: 'raw', name: meta?.name, buffer, meta }) },
     write (name, packet, { synth = false, meta } = {}) {
       sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta })

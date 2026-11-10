@@ -115,11 +115,11 @@ Re-establishing the backend session after a fault, with at most one attempt pend
 _Avoid_: retry, reconnect loop
 
 **Reconfiguration**:
-The client's own configuration phase restarting on the connection it holds, served by Monoplayer with the target's or the same server's configuration frames. The player sees a loading screen and keeps the connection. Opt-in through `transfer.keepConnection`, which is off until the transfer testbed run proves it.
+The client's own configuration phase restarting on the connection it holds, served by Monoplayer with the target's or the same server's configuration frames. The player sees a loading screen and keeps the connection. On by default through `transfer.keepConnection`.
 _Avoid_: config reload, rejoin, reconnect
 
 **Seamless transfer**:
-A followed transfer that keeps the attaching client's connection and lands it in the target's play state through a reconfiguration. Built and off (`transfer.keepConnection: false`) until the transfer testbed run proves it.
+A followed transfer that keeps the attaching client's connection and lands it in the target's play state through a reconfiguration. On by default (`transfer.keepConnection: true`).
 _Avoid_: hot swap, live migration
 
 **Transfer**:
@@ -129,6 +129,10 @@ _Avoid_: redirect, handoff, switch
 **Transfer follow**:
 Monoplayer's decision to move the puppet to a transfer's target rather than pass the transfer to the attaching player. With a client attached, the client follows on its own connection (see seamless transfer); with nobody attached, the puppet moves alone.
 _Avoid_: redirect follow, migration
+
+**Follow budget**:
+How many failed dials a followed transfer survives before the controller gives up and sends the puppet back to the server the restored client holds state for. Three by default.
+_Avoid_: retry budget, failure budget
 
 **Transfer chain**:
 The targets a session has been moved to in a row. A repeated target, or a chain past the limit, is refused.

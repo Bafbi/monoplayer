@@ -31,7 +31,17 @@
 //     write(name, packet, { synth })              // clientbound, packet level
 //     writeRaw(buffer, meta)                      // clientbound, frame level
 //     end(reason)                                 // kick/deny the client
+//     startReconfiguration({ reason }): { started, reason }  // optional (#22)
+//                                                 // the sampling client re-enters
+//                                                 // configuration on its own
+//                                                 // connection
+//     finishConfigurationFrame(): Buffer          // optional: the bytes that end
+//                                                 // a configuration round, for a
+//                                                 // restore with no cached finish
 //   }
+//
+// A hand-built harness may omit the last two; the core degrades to a state
+// replay at the target's login and logs reconfigurationRestoreNoFinish.
 
 import { createStateCache, WARM_MARKER } from '../core/state-cache.js'
 import {
@@ -220,7 +230,7 @@ export function createMonoplayer ({
       // back on. The returning backend is a fresh session, and its frames must
       // not append to that snapshot: the client already has it, and a later
       // attach would replay a doubled login and configuration.
-      if (move.restored) {
+      if (move.claimRestore()) {
         cache.reset()
         log('cacheReset', { reason: 'transfer_restored' })
       }
@@ -367,6 +377,9 @@ export function createMonoplayer ({
   // The deadline for a client's configuration round: a server that restarts
   // configuration and sends nothing must not freeze the human forever.
   let reconfigurationTimer = null
+  // #87: the move's completion is waiting for the target's first terrain frame,
+  // so the wait is logged once and not once per play frame.
+  let reconfigurationWaitingWorld = false
   let attachedName = null
   // A backend frame arriving proves the leg has a live session again; the
   // serverbound pipeline refuses to write into a leg that is between
@@ -977,6 +990,14 @@ export function createMonoplayer ({
       frontPlayReady = false
       log('transferSeamless', { host, port, depth: transferChain.depth })
       emit('transfer_seamless', { host, port })
+      reconfigurationWaitingWorld = false
+      // #87: the loading screen starts on the intent, not on the target's first
+      // configuration frame. The client enters its own configuration phase now,
+      // so it stops dropping serverbound frames into a play session that no
+      // longer exists, and the human sees the move begin instead of a frozen
+      // world for the length of the dial. A leg that cannot serve the round
+      // reports it here; the first configuration frame tries again below.
+      startClientReconfiguration()
     }
 
     teardownBackend({
@@ -1100,8 +1121,19 @@ export function createMonoplayer ({
         frontLeg.writeRaw(finish.buffer, { state: 'configuration', name: 'finish_configuration' })
       } else {
         // A session whose finish frame was never cached still has to end the
-        // phase the client is in. The frame carries no fields.
-        frontLeg.write('finish_configuration', {})
+        // phase the client is in. The frame carries no fields, but it must go
+        // out as the configuration packet: the leg builds the bytes because a
+        // packet-object write is serialized against the client's current state,
+        // and the play table's finish_configuration is a different packet
+        // entirely (#87).
+        const synthesized = typeof frontLeg.finishConfigurationFrame === 'function'
+          ? frontLeg.finishConfigurationFrame()
+          : null
+        if (Buffer.isBuffer(synthesized)) {
+          frontLeg.writeRaw(synthesized, { state: 'configuration', name: 'finish_configuration' })
+        } else {
+          log('reconfigurationRestoreNoFinish', {})
+        }
       }
     } catch (error) {
       log('reconfigurationRestoreFinishFailed', { error: String(error?.message ?? error).slice(0, 200) })
@@ -1138,11 +1170,24 @@ export function createMonoplayer ({
   // state, then the move is committed.
   function maybeCompleteReconfiguration ({ reason = null } = {}) {
     if (moveKind === null || targetLoginReady !== true || clientReconfiguring || !attached) return null
+    // #87: the target's login can land before a single chunk frame does, and a
+    // client released there is handed an empty world. The replay waits for the
+    // first frame that carries terrain; the map_chunk branch of backendPlayFrame
+    // retries this call for each one. The configuration deadline still bounds
+    // the wait.
+    if (cache.stats().chunkFrames === 0) {
+      if (!reconfigurationWaitingWorld) {
+        reconfigurationWaitingWorld = true
+        log('reconfigurationWaitingWorld', { kind: moveKind, state: session.state })
+      }
+      return null
+    }
     const kind = moveKind
     const name = attachedName ?? 'player'
     moveKind = null
     targetLoginReady = false
     clientLeftPlay = false
+    reconfigurationWaitingWorld = false
     clearReconfigurationTimer()
     frontPlayReady = true
     const outcome = replaySnapshot({ name, includeConfig: false, reason: reason ?? kind })
@@ -1193,7 +1238,19 @@ export function createMonoplayer ({
     const outcome = move.fail({ reason })
     if (outcome.failed !== true) return { restored: false, state: session.state }
     moveKind = null
+    // #87: the move owns no backend session past this point. The target's leg is
+    // ended here so the reconnect back to the configured backend can dial — a
+    // leg keeps its client until it is ended, and a connected leg refuses a new
+    // target. The handover flag keeps its own end event from reading as the
+    // next session faulting.
+    legHandover = true
+    try {
+      backendLeg.end(`transfer_restored:${kind}`)
+    } catch (error) {
+      log('transferRestoreEndFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
     targetLoginReady = false
+    reconfigurationWaitingWorld = false
     clearReconfigurationTimer()
     // The reconnect this restore armed is a new backend session: its play
     // login is a real login and must re-send the human's client information.
@@ -1430,6 +1487,16 @@ export function createMonoplayer ({
       // play login. The client is restored from the pre-transfer snapshot on
       // the connection it kept; it is never kicked for a move it can survive.
       if (moveKind !== null) {
+        // #87: a dial that never opened a session is not the target dying. The
+        // target closed the socket before its first frame — the race a transfer
+        // intent from the same account makes — so the move waits for the next
+        // dial and the follow budget owns the give-up. Failing here restores a
+        // client the target may still accept.
+        if (!backendSessionOpen) {
+          log('backendDialClosed', { reason, kind: moveKind, state: session.state })
+          teardownBackend({ reason, retainFront: true })
+          return
+        }
         log('backendEndDuringMove', { reason, kind: moveKind, state: session.state })
         failTransfer({ reason: `target_lost:${reason}` })
         return
@@ -1536,6 +1603,10 @@ export function createMonoplayer ({
             if (clientReconfiguring) metrics.configFramesReconfigured++
           }
         }
+        // #87: the round now covers the dial as well, so a target that is
+        // configuring is not a target that stalled. Each frame the target sends
+        // re-arms the deadline; one that stops sending still ends the round.
+        if (clientReconfiguring) armReconfigurationTimer()
         return
       }
       if (state !== 'play') {
@@ -1720,6 +1791,11 @@ export function createMonoplayer ({
   function backendPlayFrame ({ name, buffer, data }) {
     metrics.backendFrames++
     backendSessionOpen = true
+    // #87: the round's deadline covers the wait for the target's state, and a
+    // frame that arrives proves the target is alive: re-arm it, as the
+    // configuration branch does. A target that stops sending still ends the
+    // round.
+    if (moveKind !== null) armReconfigurationTimer()
 
     // #16: an early-attach client gets its replay as soon as the join prefix is
     // warm. The live path warms on the readiness fallback as well as on the
@@ -1865,6 +1941,10 @@ export function createMonoplayer ({
         targetLoginReady = false
         restoreReplayPending = false
         frontPlayReady = false
+        reconfigurationWaitingWorld = false
+        // #87: the same ordering as a followed transfer. The restarted phase is
+        // a configuration round for the client, and it starts on the intent.
+        startClientReconfiguration()
       }
       // The restarted phase is a new session state: the old configuration
       // replay and join prefix would otherwise sit beside it.
@@ -1906,6 +1986,8 @@ export function createMonoplayer ({
 
     const pushed = cache.push('play', name, buffer, data)
     if (pushed.cached) metrics.framesCached++
+    // #87: the first terrain frame is what lets a held move release its client.
+    if (name === 'map_chunk') maybeCompleteReconfiguration()
     if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
   }
 

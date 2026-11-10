@@ -182,6 +182,43 @@ export function createConfigPathInterceptor ({
   }
 }
 
+// #87: the front client's error policy. minecraft-protocol's default handler
+// ends the connection with the Error object itself, and in play that writes
+// `kick_disconnect`, whose reason is an NBT string: the serializer fails
+// ("SizeOf error for undefined ... Received an instance of Error"), its failure
+// becomes the end reason, and the socket is destroyed 30 s later
+// (`closeTimeout`) with that TypeError. The connection still ends — an error on
+// the attaching client's connection is not survivable — but with one line of
+// text, so nothing carries an Error into a packet field.
+export function frontErrorKickReason (error) {
+  const message = typeof error === 'string' ? error : String(error?.message ?? error)
+  return `front_error: ${message}`.slice(0, 200)
+}
+
+export function createFrontErrorHandler ({ log = () => {} } = {}) {
+  return function frontErrorHandler (client, error) {
+    const reason = frontErrorKickReason(error)
+    log('frontError', {
+      reason,
+      username: client?.username ?? null,
+      state: client?.state ?? null
+    })
+    try { client.end(reason) } catch { /* the client is already gone */ }
+  }
+}
+
+// #87: the configuration round's end frame, as the wire carries it. A restore
+// with no cached finish_configuration still has to end the phase the client is
+// in. Written as a packet object it would be serialized against whatever state
+// the client holds at that moment — play, before it answers the round's
+// acknowledgement, where finish_configuration has no packet id at all — so the
+// leg builds the bytes and the core writes them through writeRaw with the
+// configuration state, like every other configuration frame.
+export function configurationFinishFrame ({ version = '26.1' } = {}) {
+  const serializer = mc.createSerializer({ state: 'configuration', isServer: true, version })
+  return serializer.createPacketBuffer({ name: 'finish_configuration', params: {} })
+}
+
 // One client-facing raw frame, with the optional strict wire check applied.
 // `wireCheck` is ({ state, name, buffer }) => { ok, code, ... }. Returns true
 // when the frame reached writeRaw, false when mode 'throw' suppressed it.
@@ -396,6 +433,10 @@ function createFrontLeg ({
         keepAlive: true, // the library answers per-connection keep-alives for the client
         hideErrors: true, // errors surface through our own server/client error log lines
         versionChecking: false,
+        // #87: without this the library kicks the client with the Error object
+        // and the kick fails to serialize. The leg's own handler puts a string
+        // in that field.
+        errorHandler: createFrontErrorHandler({ log }),
         beforeLogin: client => { handleBeforeLogin(client) }
       })
 
@@ -785,6 +826,9 @@ function createFrontLeg ({
     setConfiguringHandler (fn) { configuringHandler = fn },
     setReconfiguredHandler (fn) { reconfiguredHandler = fn },
     startReconfiguration,
+    // #87: the frame bytes that end a configuration round, for a restore whose
+    // snapshot carries no cached finish frame.
+    finishConfigurationFrame () { return configurationFinishFrame({ version }) },
     setCoreAttach,
     setCoreAttachConfiguring,
     write (name, packet) {
