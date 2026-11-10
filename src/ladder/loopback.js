@@ -708,7 +708,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The puppet leg here has no profile keys, so the command reaches the fake
     // backend as `chat_command`, not `chat_command_signed`. The signed name is
     // pinned by test/core/relay.test.js and test/service/chat-send.test.js; what
-    // this check proves is the mode decision on a real client's frame.
+    // this check proves is the mode decision on a protocol bot's frame.
     commandsBase = await createFakeBackend({ port: 0, logStream: null })
     commandsFront = createOfflineFrontLeg({
       host: '127.0.0.1',
@@ -718,7 +718,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       getSnapshotConfig: () => commandsCore?.cache.snapshot().config ?? [],
       wireCheck: payload => wire.check(payload),
       wireMode: 'throw',
-      chat: 'commands',
+      // No `chat` here: `createOfflineFrontLeg` does not forward it (#100), so
+      // passing it would claim the front leg backstop runs this mode. It does
+      // not, and `commands` relays clientbound as `read-only` does anyway.
       log
     })
     commandsBackend = createOfflineBackendLeg({
@@ -749,6 +751,27 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       commandsCore.attachPlayer({ name, uuid, includeConfig: false })
     )
     commandsCore.start()
+    // One backend.connect() per reconnect_due, as the main rig does it, so a
+    // backend that ends fails as a dial rather than as a bot wait that blames
+    // the command.
+    let commandsReconnecting = false
+    commandsCore.on('reconnect_due', async ({ delayMs } = {}) => {
+      if (stopping || commandsReconnecting) return
+      commandsReconnecting = true
+      commandsCore.session.backendConnecting({ initial: false })
+      try {
+        await commandsBackend.connect()
+        log('commandsBackendReconnect', { delayMs, backendLogins: commandsCore.session.backendLogins })
+      } catch (error) {
+        commandsCore.session.fail()
+        log('commandsBackendReconnectFailed', {
+          delayMs,
+          error: String(error?.message ?? error).slice(0, 300)
+        })
+      } finally {
+        commandsReconnecting = false
+      }
+    })
     await commandsBackend.connect()
     const commandsReadiness = await waitForReady({ core: commandsCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
     if (!commandsReadiness.warm) throw new Error('the commands-mode rig did not warm')
@@ -762,6 +785,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       throw new Error(`the commands-mode rig attached ${commandsCore.metrics.attaches} times, expected 1`)
     }
 
+    const forwardedBefore = commandsCore.metrics.serverboundForwarded
     bot9.sendCommand('profil')
     bot9.sendChat('the account must not say this')
     await bot9.waitFor(
@@ -776,7 +800,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       messages: commandsBase.received.chats.length,
       chatSent: commandsCore.metrics.chatSent,
       chatBlocked: commandsCore.metrics.chatBlocked,
-      forwarded: commandsCore.metrics.serverboundForwarded,
+      forwarded: commandsCore.metrics.serverboundForwarded - forwardedBefore,
       attaches: commandsCore.metrics.attaches
     }
     check(
@@ -786,7 +810,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         commandsBase.received.chats.length === 0 &&
         commandsCore.metrics.chatSent === 1 &&
         commandsCore.metrics.chatBlocked === 1 &&
-        commandsCore.metrics.serverboundForwarded === 0 &&
+        commandsCore.metrics.serverboundForwarded === forwardedBefore &&
         commandsCore.metrics.attaches === 1,
       evidence.commandsMode
     )
