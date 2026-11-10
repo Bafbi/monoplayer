@@ -213,6 +213,18 @@ export async function startLive ({ argv = [], io = process } = {}) {
     cfg.puppet.username = account.profile?.name ?? cfg.puppet.username ?? null
   }
 
+  // #134: the skin frame names the puppet's own `player_info` entry, so a lane
+  // that cannot name the puppet's UUID writes no frame. The raw cacheDir
+  // override resolves no account, so it reaches here with no UUID unless the
+  // operator asserted one.
+  if (cfg.skin.showPuppetSkin && (cfg.puppet.uuid ?? null) === null) {
+    stderr.write(
+      'monoplayer --start: warning: skin.showPuppetSkin is on and no puppet UUID is known, ' +
+      'so the human keeps a default skin. Set MONOPLAYER_PUPPET_UUID, or select the account ' +
+      'with MONOPLAYER_PUPPET_ACCOUNT instead of the raw cacheDir override.\n'
+    )
+  }
+
   if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
     const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
     cfg.attachWhitelist = store.list().map(player => player.uuid)

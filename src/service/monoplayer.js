@@ -418,8 +418,7 @@ export function createMonoplayer ({
   let puppetSkinUnidentified = false
   // Whether the client has received the skin frame since the last replay. A
   // client's entry for a UUID wins over a later add_player for it, so a second
-  // frame for the same play state would be a write nobody sees. Every replay
-  // clears it: a replay is a client whose entry map is empty (#134).
+  // frame for the same play state would be a write nobody sees.
   let skinSent = false
   // A backend frame arriving proves the leg has a live session again; the
   // serverbound pipeline refuses to write into a leg that is between
@@ -1373,7 +1372,7 @@ export function createMonoplayer ({
     attached = true
     attachedName = name ?? null
     attachedUuid = uuid ?? null
-    skinSent = false
+    forgetPuppetSkin()
     frontPlayReady = false
     earlyAttach = { name, uuid }
     transferNoticeSent = false
@@ -1466,17 +1465,22 @@ export function createMonoplayer ({
     return { sent: true }
   }
 
+  // The next play state holds no `player_info` entry, so it is owed the skin
+  // frame again. An attach is a fresh connection. A reconfiguration is a new
+  // `ClientPacketListener`, whose entry map starts empty. Either way the entry
+  // the last frame created is gone, and `putIfAbsent` will not restore it.
+  function forgetPuppetSkin () {
+    skinSent = false
+  }
+
   // The replay half of an attach: the join prefix and the warm state as they
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
   function replaySnapshot ({ name, includeConfig = true, reason = 'attach', snapshot = null } = {}) {
-    // #134: every replay lands on a client that holds no `player_info` entry. An
-    // attach is a fresh connection; a reconfiguration is a new
-    // `ClientPacketListener`, whose `playerInfoMap` starts empty. The skin frame
-    // is client state the replay does not carry, so it goes out with each replay
-    // and not once per attach: Excalia transfers the puppet mid-session, and the
-    // entry the first attach created is gone after the round.
-    skinSent = false
+    // #134: the frame is client state the replay does not carry. Excalia moves
+    // the puppet mid-session, so a client that re-entered play arrives here with
+    // no entry for its own UUID.
+    forgetPuppetSkin()
     const source = snapshot ?? cache.snapshot()
     const synthesized = synthAttach({
       snapshot: source,
@@ -1502,11 +1506,11 @@ export function createMonoplayer ({
     // goes on it. After the replay, because the frame is client state the replay
     // does not carry.
     const skin = sendPuppetSkin({ reason })
-    if (skin.sent !== true) {
-      // #134: a replay that wrote no skin frame leaves the human on a default
-      // skin. Say why: the latch above hid exactly this after a transfer, and the
-      // heartbeat counted no refusal because the frame was never attempted.
-      log('puppetSkinWithheld', { name, reason, why: skin.reason })
+    // #134: a replay that writes no frame leaves the human on a default skin, and
+    // the heartbeat counts no refusal because no frame was attempted. The switch
+    // being off is the one refusal that is not news.
+    if (skin.sent !== true && skin.reason !== 'disabled') {
+      log('puppetSkinWithheld', { name, replay: reason, reason: skin.reason })
     }
 
     // #16: a dialog that was waiting for a client goes after the replay, so the
@@ -1555,7 +1559,7 @@ export function createMonoplayer ({
     attached = true
     attachedName = name ?? null
     attachedUuid = uuid ?? null
-    skinSent = false
+    forgetPuppetSkin()
     frontPlayReady = true
     transferNoticeSent = false
     metrics.attaches++
@@ -1652,7 +1656,7 @@ export function createMonoplayer ({
     attached = false
     attachedName = null
     attachedUuid = null
-    skinSent = false
+    forgetPuppetSkin()
     frontPlayReady = false
     earlyAttach = null
     pendingEarlyReplay = null

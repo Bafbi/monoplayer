@@ -56,6 +56,17 @@ test('the property is the one the named UUID carries, not the first one in the f
   assert.equal(texturesPropertyOf(frame, { uuid: HUMAN }), null, 'a UUID the frame does not list has no property')
 })
 
+test('a frame that lists the UUID twice takes the property it carries', () => {
+  const frame = {
+    action: { _value: 14, add_player: true, update_latency: true },
+    data: [
+      { uuid: PUPPET, latency: 42 },
+      { uuid: PUPPET, player: { name: 'Wiriaw', properties: [PROPERTY] } }
+    ]
+  }
+  assert.deepEqual(texturesPropertyOf(frame, { uuid: PUPPET }), { value: PROPERTY.value, signature: PROPERTY.signature })
+})
+
 test('a UUID is compared without its hyphens or case', () => {
   assert.deepEqual(texturesPropertyOf(relayed([PROPERTY]), { uuid: PUPPET.replace(/-/g, '').toUpperCase() }),
     { value: PROPERTY.value, signature: PROPERTY.signature })

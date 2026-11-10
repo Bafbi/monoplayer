@@ -18,13 +18,13 @@
 // 26.2):
 //
 //   add_player only   an entry is created only by ADD_PLAYER, and an existing
-//                     entry wins (`putIfAbsent`). The map behind that rule is
-//                     the `ClientPacketListener`'s own `playerInfoMap`, so it
-//                     is empty on a fresh connection and empty again after a
-//                     reconfiguration: the client builds a new listener in
+//                     entry wins (`putIfAbsent`). The map holding those entries
+//                     belongs to one `ClientPacketListener`. A fresh connection
+//                     creates one, and so does a reconfiguration: the client
+//                     builds a new listener in
 //                     `ClientConfigurationPacketListenerImpl.handleConfigurationFinished`.
-//                     The frame therefore goes with every replay of play state,
-//                     not once per attach (#134).
+//                     Both start with no entry, so a frame written for one play
+//                     state does not reach the next (#134).
 //   no update_listed  the tab list is the client's own `listedPlayers` set,
 //                     which only UPDATE_LISTED fills. Without that action the
 //                     entry carries a skin and adds no tab list line beside the
@@ -61,7 +61,9 @@ export function pickTextures (properties) {
   return null
 }
 
-// The UUID as a comparison key: case and hyphens are not a difference.
+// The UUID as a comparison key: case and hyphens are not a difference. Both
+// sides are canonical by construction, one from the resolved account and one from
+// the decoded packet, so this is a comparison and not a validator.
 function uuidKey (value) {
   return typeof value === 'string' ? value.replace(/-/g, '').toLowerCase() : null
 }
@@ -69,20 +71,21 @@ function uuidKey (value) {
 // The textures property a relayed `player_info` frame states for one UUID.
 //
 // The entry is chosen by UUID, never by position. A busy backend sends the whole
-// tab list through this frame, and on the live lane the first entry that carried
-// a property was a different player's in 79 of the 81 frames that carried one
-// (#134). Picking by position put a stranger's skin on the human's body and made
-// the known-property comparison change on every frame.
+// tab list through this frame. On the live lane the first entry that carried a
+// property was a different player's in 79 of the 81 frames that carried one
+// (#134). Picking by position put a stranger's skin on the human's body, and it
+// made the known-property comparison change on every frame.
 //
-// No UUID is no answer: a caller that cannot name the player's UUID takes no
-// property rather than whichever one arrived first.
+// No UUID is no answer. A caller that cannot name the player's UUID takes no
+// property, rather than whichever one arrived first.
 export function texturesPropertyOf (packet, { uuid = null } = {}) {
   const wanted = uuidKey(uuid)
   if (wanted === null || wanted === '') return null
   const entries = Array.isArray(packet?.data) ? packet.data : []
   for (const entry of entries) {
     if (uuidKey(entry?.uuid) !== wanted) continue
-    return pickTextures(entry?.player?.properties)
+    const picked = pickTextures(entry?.player?.properties)
+    if (picked !== null) return picked
   }
   return null
 }

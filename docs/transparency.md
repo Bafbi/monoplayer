@@ -74,9 +74,9 @@ carrying the textures property the backend sent for the puppet:
 
 | Fact | Why |
 |---|---|
-| The property is the server's own | The proxy holds no skin. A proxy that saw no `player_info` from the backend writes no frame, and a property it cannot read is not a property it has |
+| The property is the server's own | The proxy holds no skin. A proxy that saw no `player_info` from the backend writes no frame, and a property it cannot read is not a property it has. The property is the one the puppet's own entry carries, chosen by the UUID the config resolved for the account, so a frame that also lists other players never donates their skins |
 | The entry carries no `update_listed` action | The client's tab list is its own listed set, which only that action fills, so the human's UUID gains no line beside the puppet's |
-| One frame per attach | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame would be a write nobody sees |
+| One frame per play state, not per attach | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame for one play state would be a write nobody sees. A reconfiguration is a new play state: the client builds a new `ClientPacketListener`, whose entry map starts empty, so the frame goes out again after a transfer ([#134](https://github.com/Bafbi/monoplayer/issues/134)) |
 | An unsigned property would work too | The client asks for a secure property only for players other than the one it controls. The frame carries the property as it arrived, so the proxy adds no signature and strips none |
 
 The measured answer to the ticket's open question — does a 26.x client accept a
