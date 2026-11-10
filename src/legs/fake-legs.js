@@ -9,6 +9,8 @@
 // (#19). The real leg signs that text; the fake only records it.
 export function createFakeBackendLeg () {
   const written = { raw: [], packets: [], spoken: [] }
+  // #73: the gate answers this leg gave on its own, one per detach.
+  const gateAnswers = []
   let frameHandler = null
   let endHandler = null
   let errorHandler = null
@@ -28,6 +30,14 @@ export function createFakeBackendLeg () {
     setErrorHandler (fn) { errorHandler = fn },
     writeRaw (buffer, meta) { written.raw.push({ buffer, meta }) },
     write (name, packet, meta) { written.packets.push({ name, packet, meta }) },
+    // #73: the core asks for the answer a configuration gate the last client
+    // left would have had from a headless session. The fake records the ask;
+    // the real leg's policy is what decides, and the leg unit tests cover it.
+    answerHeldGate ({ state = null, name = null } = {}) {
+      if (state !== 'configuration') return { answered: false, reason: 'not_a_gate', name }
+      gateAnswers.push({ state, name })
+      return { answered: true, reason: null, name }
+    },
     chat (text) {
       if (typeof text !== 'string' || text.length === 0) throw new TypeError('chat text is required')
       written.spoken.push({ text, command: text.startsWith('/') })
@@ -41,6 +51,7 @@ export function createFakeBackendLeg () {
     rawWrites: () => [...written.raw],
     packetWrites: () => [...written.packets],
     spoken: () => [...written.spoken],
+    heldGateAnswers: () => [...gateAnswers],
 
     // Scripted delivery: pretend the backend sent this frame.
     deliver ({ state = 'play', name, buffer, data = {} }) {

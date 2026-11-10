@@ -6,8 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0, O32, O33-O35, and O1-O31 (including O11b and O24b) are the
-// contract
+// Assertions R0 and O1-O44 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -110,6 +109,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let seamlessBase = null
   let fakeCold = null
   let coldProxy = null
+  // #73: a third backend that gates its configuration, for the detach answer.
+  let gatedFake = null
+  let gatedProxy = null
   let handshakeProxy = null
   let front = null
   let backend = null
@@ -119,6 +121,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bot3 = null
   let bot4 = null
   let bot5 = null
+  let bot6 = null
+  let bot7 = null
+  let bot8 = null
   let stranger = null
   let seamlessFront = null
   let seamlessBackend = null
@@ -1263,7 +1268,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const seamlessReadiness = await waitForReady({ core: seamlessCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
     if (!seamlessReadiness.warm) throw new Error('the kept-connection rig did not warm')
     const seamlessBound = await seamlessFront.listen()
-    bot5 = createBot({ port: seamlessBound.port ?? seamlessFront.port, username: 'Attach' })
+    // #73: the library accepts the code of conduct on its own; O43 needs a
+    // client that leaves the gate to the puppet, so this one does not answer.
+    bot5 = createBot({
+      port: seamlessBound.port ?? seamlessFront.port,
+      username: 'Attach',
+      answerCodeOfConduct: false
+    })
     await bot5.ready()
     const b5 = bot5.received
     if (seamlessCore.metrics.attaches !== 1) {
@@ -1562,13 +1573,127 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
+    // --- O43-O44: a dialog the last client left (#73) ---
+    // A third backend gates its configuration, so a followed transfer to it puts
+    // the puppet at a gate with the client still attached on its kept
+    // connection: the leg holds the accept, the core holds the gate, and the
+    // client then leaves without answering. "No client attached" is exactly the
+    // condition the gate fallback names (#21), so the gate is the puppet's.
+    //
+    // O42 ended the client it probed, so this starts with a client of its own:
+    // a detach is the trigger, and there has to be something to detach.
+    gatedFake = await createFakeBackend({ port: 0, logStream: null, codeOfConduct: true })
+    gatedProxy = await createHandshakeProxy({ targetPort: gatedFake.port, log })
+    bot6 = createBot({
+      port: seamlessBound.port ?? seamlessFront.port,
+      username: 'Second',
+      answerCodeOfConduct: false
+    })
+    await bot6.ready()
+    const b6 = bot6.received
+    const settledMark = logs.length
+    const detachAnswers = seamlessCore.metrics.controlDialogsAnsweredOnDetach
+    fake2.sendTransfer('127.0.0.1', gatedProxy.port)
+    await bot6.waitFor(
+      () => b6.names.some(frame => frame.state === 'configuration' && frame.name === 'code_of_conduct'),
+      'the gated target code of conduct on the kept connection',
+      20_000
+    )
+    await waitFor(() => seamlessCore.pendingDialog.held === true, 'the gate held for the attached client', 20_000)
+    // The bot was built not to answer, so the gate it holds is the client's
+    // refusal rather than an inference.
+    const gatesHeld = b6.gatesHeld
+    await bot6.close()
+    await waitFor(
+      () => seamlessCore.metrics.controlDialogsAnsweredOnDetach === detachAnswers + 1,
+      'the detach answered the held gate',
+      20_000
+    )
+    // The client is gone, so the session is detached: what proves the accept
+    // arrived is that the puppet is warm on a backend that withholds
+    // finish_configuration until it does. No wait on the gated backend's own
+    // accept count: a followed transfer moves both rigs' puppets, so that count
+    // is shared.
+    await waitFor(() => seamlessCore.session.warmReady === true,
+      'the gated target warm with nobody attached', 20_000)
+    const gateLogs = logs.slice(settledMark)
+    const gateHeldLogged = gateLogs.some(entry => entry.event === 'codeOfConductHeld')
+    const gateAcceptedLogged = gateLogs.some(entry => entry.event === 'codeOfConductAccepted')
+    // The gated backend counts every puppet that reaches it, and the transfer
+    // moves both rigs' puppets, so the counts are shared and are evidence, not
+    // the assertion. What proves this rig's gate is closed is that the gated
+    // backend withholds finish_configuration until it receives the accept: this
+    // puppet is warm on it, so its own accept arrived.
+    evidence.gateOnDetach = {
+      sends: gatedFake.received.codeOfConductSends,
+      accepts: gatedFake.received.codeOfConductAccepts,
+      gateHeldLogged,
+      gateAcceptedLogged,
+      answeredOnDetach: seamlessCore.metrics.controlDialogsAnsweredOnDetach - detachAnswers,
+      held: seamlessCore.pendingDialog.held,
+      warm: seamlessCore.session.warmReady,
+      gatesHeld,
+      backendLogins: seamlessCore.session.backendLogins
+    }
+    check(
+      'O43',
+      'a configuration gate the last client left is answered as the puppet, and logged',
+      gatedFake.received.codeOfConductAccepts >= 1 &&
+        gatesHeld >= 1 &&
+        gateHeldLogged &&
+        gateAcceptedLogged &&
+        seamlessCore.metrics.controlDialogsAnsweredOnDetach === detachAnswers + 1 &&
+        seamlessCore.pendingDialog.held === false &&
+        seamlessCore.session.warmReady === true &&
+        seamlessCore.logs().some(line => line.includes('"event":"controlDialogAnsweredOnDetach"')),
+      evidence.gateOnDetach
+    )
+
+    // --- O44: a play dialog the last client left stays held (#20) ---
+    bot7 = createBot({ port: seamlessBound.port ?? seamlessFront.port, username: 'Attach' })
+    await bot7.ready()
+    const b7 = bot7.received
+    const PLAY_ID = 'monoplayer:left_behind'
+    const playMark = logs.length
+    gatedFake.sendShowDialog({ id: PLAY_ID })
+    await bot7.waitFor(() => b7.dialogs.length === 1, 'the play dialog at the attached client')
+    await waitFor(() => seamlessCore.pendingDialog.held === true, 'the play dialog held')
+    await bot7.close()
+
+    const clicksBefore = gatedFake.received.customClickActions.length
+    const answersBefore = seamlessCore.metrics.controlDialogsAnsweredOnDetach
+    const resentBefore = seamlessCore.metrics.controlDialogsResent
+    bot8 = createBot({ port: seamlessBound.port ?? seamlessFront.port, username: 'Second' })
+    await bot8.ready()
+    const b8 = bot8.received
+    await bot8.waitFor(() => b8.dialogs.length === 1, 'the held play dialog re-sent to the reattaching client')
+    evidence.playHeldOnDetach = {
+      heldAfterDetach: seamlessCore.pendingDialog.held,
+      puppetClicks: gatedFake.received.customClickActions.length - clicksBefore,
+      answeredOnDetach: seamlessCore.metrics.controlDialogsAnsweredOnDetach - answersBefore,
+      resent: seamlessCore.metrics.controlDialogsResent - resentBefore,
+      waited: logs.slice(playMark).some(entry =>
+        entry.event === 'dialogUnhandled' && entry.fields?.reason === 'play_dialog_waits')
+    }
+    check(
+      'O44',
+      'a play dialog the last client left stays held, unclicked, and is re-sent on reattach',
+      evidence.playHeldOnDetach.heldAfterDetach === true &&
+        evidence.playHeldOnDetach.puppetClicks === 0 &&
+        evidence.playHeldOnDetach.answeredOnDetach === 0 &&
+        evidence.playHeldOnDetach.resent === 1 &&
+        b8.dialogs.length === 1 &&
+        evidence.playHeldOnDetach.waited,
+      evidence.playHeldOnDetach
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot5, bot4, bot3, bot2, bot1, stranger]) {
+    for (const bot of [bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { await front?.close?.() } catch { /* best effort */ }
@@ -1581,6 +1706,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { fake2?.close?.() } catch { /* best effort */ }
     try { fakeCold?.close?.() } catch { /* best effort */ }
     try { coldProxy?.close?.() } catch { /* best effort */ }
+    try { gatedFake?.close?.() } catch { /* best effort */ }
+    try { gatedProxy?.close?.() } catch { /* best effort */ }
 
     if (failed && exitCode === 0) exitCode = 1
     if (runError && exitCode === 0) exitCode = 1

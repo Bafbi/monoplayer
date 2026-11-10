@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 
 import {
   answerBackendDialog,
+  answerHeldGate,
   chooseDialogAction,
   buildCustomClickAction,
   decideDialogAutoAnswer
@@ -213,4 +214,53 @@ test('play uses the play packet id and a missing NBT is optional-absent', () => 
 
   assert.equal(buildCustomClickAction({ state: 'login', id: 'x' }), null)
   assert.equal(buildCustomClickAction({ state: 'configuration', id: '' }), null)
+})
+
+// #73: a detach answers the gate the last player left, with the same policy the
+// headless fallback uses. Covered here because the button gate is this file's
+// subject; the code-of-conduct half is in code-of-conduct-gate.test.js.
+function runHeldGate (options) {
+  const written = []
+  const logs = []
+  const answers = []
+  const outcome = answerHeldGate({
+    state: 'configuration',
+    name: 'show_dialog',
+    data: TWO_SEASONS,
+    connectionState: 'configuration',
+    dialogAction: 'last',
+    write: () => { throw new Error('a button gate is a raw write') },
+    writeRaw: body => written.push(body),
+    onAnswered: payload => answers.push(payload),
+    log: (event, fields) => logs.push({ event, fields }),
+    ...options
+  })
+  return { outcome, written, logs, answers }
+}
+
+test('#73 a held button gate is clicked on detach with the configured action', () => {
+  const { outcome, written, logs, answers } = runHeldGate()
+
+  assert.deepEqual(outcome, { answered: true, reason: null, name: 'show_dialog', responses: 1 })
+  assert.equal(written.length, 1)
+  assert.equal(written[0][0], 0x08, 'the click carries the configuration packet id')
+  assert.deepEqual(answers, [{ state: 'configuration', name: 'show_dialog' }])
+  assert.equal(logs[0].event, 'dialogClicked')
+})
+
+test('#73 the detach click counts against the same cap as a live one', () => {
+  // A server that keeps asking is a loop, not a gate: the per-connection cap
+  // must not restart because the last player left.
+  const { outcome, written } = runHeldGate({ responses: 5 })
+
+  assert.deepEqual(outcome, { answered: false, reason: 'too_many', name: 'show_dialog', responses: 5 })
+  assert.equal(written.length, 0)
+})
+
+test('#73 without a policy a held button gate is not clicked on detach', () => {
+  const { outcome, written, logs } = runHeldGate({ dialogAction: null })
+
+  assert.deepEqual(outcome, { answered: false, reason: 'no_policy', name: 'show_dialog', responses: 0 })
+  assert.equal(written.length, 0, 'a gate nobody configured an answer for waits')
+  assert.deepEqual(logs.map(entry => entry.event), ['dialogUnhandled'])
 })
