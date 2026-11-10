@@ -2,7 +2,7 @@
 // guard for #62's second decision: the driver can never drift a version behind
 // the thing it validates.
 //
-// Four files carry the pin, and none of them may disagree:
+// Four files carry the driver's pin, and none of them may disagree:
 //
 //   tools/driver/build.gradle                        the build target
 //   tools/driver/src/main/resources/fabric.mod.json  what Fabric accepts at load
@@ -39,7 +39,7 @@ const envValue = (file, name) => {
 
 // The gate Paper leads: the dev lane and the transfer testbed are what the driver
 // and the client are measured against, so they run what it runs (#117).
-// `paper-conduct` is the gate lane's sibling (#78) and the observer test below
+// `paper-conduct` is the gate-serving sibling (#78) and the observer test below
 // holds it to the gate Paper, so it is classified here and compared there.
 const GATE_PAPER = 'deploy/driver/paper.yaml'
 const GATE_SIBLING = 'deploy/driver/paper-conduct.yaml'
@@ -68,19 +68,30 @@ const papersPinningABuild = () => {
     const file = path.relative(root, full).split(path.sep).join('/')
     const text = readFileSync(full, 'utf8')
     if (!/- name: PAPER_BUILD$/m.test(text)) return []
-    // One pin per name: a second container's pair must not slip past unread.
-    assert.equal(text.match(/- name: VERSION$/gm)?.length, 1, file + ' sets VERSION once')
     return [file]
   })
   return walk(path.join(root, 'deploy')).sort()
 }
 
+const CLASSIFIED = [GATE_PAPER, GATE_SIBLING, ...FOLLOWERS, M4_PAPER].sort()
+
 test('every Paper manifest that pins a build is classified in this file', () => {
   // Without this the guard is only as complete as someone's memory of the deploy
   // tree, which is how paper-sky went unchecked until #117: a version move that
   // missed the transfer target passed the gate.
-  assert.deepEqual(papersPinningABuild(), [GATE_PAPER, GATE_SIBLING, ...FOLLOWERS, M4_PAPER].sort(),
+  assert.deepEqual(papersPinningABuild(), CLASSIFIED,
     'classify a new Paper manifest here: it serves the gate pin, or it names the pin it serves')
+})
+
+test('each Paper manifest pins its version and build once', () => {
+  // envValue reads the first pair it finds, so a second container's pair would
+  // pass unread.
+  for (const file of CLASSIFIED) {
+    for (const name of ['VERSION', 'PAPER_BUILD']) {
+      assert.equal(read(file).match(new RegExp('- name: ' + name + '$', 'gm'))?.length, 1,
+        file + ' sets ' + name + ' once')
+    }
+  }
 })
 
 test('the dev lane and the transfer testbed run the gate Paper\'s version and build', () => {
