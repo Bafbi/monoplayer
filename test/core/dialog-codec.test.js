@@ -1,8 +1,9 @@
 // The dialog codec: which action of a `show_dialog` is clicked, and the
 // `custom_click_action` body that answers it.
 //
-// Who answers, and when the puppet clicks nothing, is the leg's policy and is
-// tested in test/legs/dialogs.test.js.
+// These cases moved here with the codec when it left the leg (#105). The
+// assertions are the ones that lived in test/legs/dialogs.test.js, which keeps
+// the leg's own cases: who answers, and when the puppet clicks nothing.
 //
 // The fixture mirrors the decoded `show_dialog` shape: every NBT node is a
 // { type, value } wrapper, and `actions` is a list of compounds. The real
