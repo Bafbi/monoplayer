@@ -162,11 +162,11 @@ finding, not a gate failure).
 
 ### Stage 4 — Toxiproxy fault rig (this slice, wire-up)
 
-`puppet-velocity` is the only listener the ConfigMap declares, and it is on
-from the pod start. `puppet-paper-m4` ships with it, disabled, for the direct
-row. A row with no backend in this tree has no listener (#115). The image has
-no enable verb in `toxiproxy-cli`; flip listeners via the HTTP API
-(ClusterIP-only, reachable from inside the namespace):
+The ConfigMap declares the two M4 listeners. `puppet-velocity` is on from the pod
+start, and `puppet-paper-m4` ships beside it, disabled, for the direct row. A row
+with no backend in this tree has no listener at all (#115). The image has no
+enable verb in `toxiproxy-cli`; flip listeners via the HTTP API (ClusterIP-only,
+reachable from inside the namespace):
 
 ```bash
 kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \

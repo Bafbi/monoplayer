@@ -8,8 +8,10 @@
 export const NAMESPACE = 'monoplayer-gate-b'
 
 // Toxiproxy listeners ("puppet leg" per the plan: Monoplayer back leg ->
-// Toxiproxy -> Velocity/Vanilla/Fabric). Only the M4 lane is enabled at
-// bring-up; vanilla/fabric flip enabled=true via the API when their rows land.
+// Toxiproxy -> Velocity/Vanilla/Fabric). The M1 vanilla and M3 fabric rows are
+// planned: `deploy/driver/toxiproxy.yaml` carries only the listeners whose row has a
+// backend, so their proxy, containerPort and Service port land together with the row
+// (#115). Until then these entries are the plan, not a running listener.
 export const PROXY_PLAN = Object.freeze([
   Object.freeze({
     name: 'puppet-velocity',

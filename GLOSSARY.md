@@ -317,7 +317,7 @@ The validation lane in namespace `monoplayer-dev`: its own Paper, its own proxy,
 _Avoid_: staging, sandbox, dev environment
 
 **Gate lane**:
-The five workloads in `monoplayer-gate-b` and their lifecycle. It rests at 0 replicas between runs: `mise run gate:up` wakes the rows a rung drives, and `mise run gate:down` stops all five.
+The five gate workloads — `paper`, `paper-conduct`, `paper-m4`, `velocity`, `toxiproxy` — and their lifecycle. It rests at 0 replicas between runs: `mise run gate:up` wakes the rows a rung drives, and `mise run gate:down` stops all five. The transfer testbed's `paper-hub` and `paper-sky` share the namespace and are not part of it.
 _Avoid_: gate cluster, gate-b environment
 
 **Gate Paper**:

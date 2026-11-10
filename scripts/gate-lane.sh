@@ -110,7 +110,7 @@ pods_of () {
 
 up () {
   guard
-  local names="${*:-$DRIVEN_WORKLOADS}" name pending waited=0
+  local names="${*:-$DRIVEN_WORKLOADS}" name pending start deadline
   for name in $names; do
     known "$name" || die "unknown gate deployment \"$name\": the gate workloads are $GATE_WORKLOADS"
   done
@@ -120,8 +120,14 @@ up () {
 
   # Checked after the apply, because the apply is what creates the namespace on a
   # fresh cluster, and before the scale, so a lane that cannot start fails now.
-  case " $names " in *" paper "*|*" paper-conduct "*|*" paper-m4 "*) require_secret gate-b-rcon ;; esac
-  case " $names " in *" velocity "*) require_secret gate-b-velocity ;; esac
+  # The Secret each Deployment reads: RCON on the three Papers, and the forwarding
+  # secret on Velocity and on the Paper behind it (paper-m4).
+  case " $names " in
+    *" paper "*|*" paper-conduct "*|*" paper-m4 "*) require_secret gate-b-rcon ;;
+  esac
+  case " $names " in
+    *" velocity "*|*" paper-m4 "*) require_secret gate-b-velocity ;;
+  esac
 
   # shellcheck disable=SC2086
   kubectl -n "$GATE_NAMESPACE" scale deploy $names --replicas=1 >/dev/null
@@ -130,25 +136,28 @@ up () {
   say "cold start is $COLD_START (#115)"
   say "a Paper restart that loads the observer takes 240-310 s, and observer:run waits for that itself"
 
+  # The budget is a deadline on the clock, not a sum of sleeps, so a poll interval
+  # of 0 still reaches it instead of spinning for ever.
+  start=$(date +%s)
+  deadline=$((start + READY_TIMEOUT))
   while : ; do
     pending=''
     for name in $names; do
       [ "$(ready_replicas "$name")" -ge 1 ] || pending="$pending $name"
     done
-    [ -z "$pending" ] && break
-    if [ "$waited" -ge "$READY_TIMEOUT" ]; then
-      die "still not ready after ${waited}s:$pending. A cold start is $COLD_START, so this is not a slow boot; read what the pod is doing: kubectl -n $GATE_NAMESPACE get pods -o wide" 1
+    if [ -z "$pending" ]; then break; fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      die "still not ready after ${READY_TIMEOUT}s:$pending. A cold start is $COLD_START, so this is not a slow boot; read what the pod is doing: kubectl -n $GATE_NAMESPACE get pods -o wide" 1
     fi
     sleep "$POLL"
-    waited=$((waited + POLL))
   done
-  say "ready after ${waited}s: $names"
+  say "ready after $(( $(date +%s) - start ))s: $names"
   status
 }
 
 down () {
   guard
-  local name left waited=0
+  local name left start deadline
   # By name, never by app.kubernetes.io/part-of: paper-hub and paper-sky carry
   # that label too, and they are the transfer testbed's.
   # shellcheck disable=SC2086
@@ -156,20 +165,21 @@ down () {
   say "scaled $GATE_WORKLOADS to 0"
   say "waiting up to ${STOP_TIMEOUT}s for their pods to go"
 
+  start=$(date +%s)
+  deadline=$((start + STOP_TIMEOUT))
   while : ; do
     left=''
     for name in $GATE_WORKLOADS; do
       [ -z "$(pods_of "$name")" ] || left="$left $name"
     done
-    [ -z "$left" ] && break
-    if [ "$waited" -ge "$STOP_TIMEOUT" ]; then
-      die "pods still running after ${waited}s:$left. kubectl -n $GATE_NAMESPACE get pods" 1
+    if [ -z "$left" ]; then break; fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      die "pods still running after ${STOP_TIMEOUT}s:$left. kubectl -n $GATE_NAMESPACE get pods" 1
     fi
     sleep "$POLL"
-    waited=$((waited + POLL))
   done
 
-  say "the lane is off after ${waited}s: the Deployments, Services, ConfigMaps and Secrets stay"
+  say "the lane is off after $(( $(date +%s) - start ))s: the Deployments, Services, ConfigMaps and Secrets stay"
   # The fact a reader needs before the next up. Every gate volume is an emptyDir.
   say "every gate world is emptyDir and went with its pod: the next up pays the full cold start ($COLD_START)"
 }

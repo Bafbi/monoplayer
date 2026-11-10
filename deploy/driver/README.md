@@ -19,7 +19,7 @@ product namespace; do not point the product at it.
 ## Lifecycle: the lane rests at 0
 
 Every Deployment here commits `replicas: 0`, so the tree describes a lane that is
-off, and a bare `kubectl apply -k deploy/driver` wakes nothing (#115). Two tasks own
+off, and a bare `kubectl apply -k deploy/driver` wakes nothing (#115). These tasks own
 the count:
 
 ```bash
@@ -32,9 +32,10 @@ mise run gate:status  # what the lane runs, and what is ready
 on the 26.2 gate Paper: every gate world is an `emptyDir`, so the world died with its
 pod, and Paper downloads its server and writes a flat one again. The 240-310 s in
 [docs/testing-ladder.md](../../docs/testing-ladder.md) is the other wait, a Paper that
-is already up and restarts with the observer plugin, and `observer:run` owns it. `gate:down` deletes nothing, so the
-Deployments, the Services, the ConfigMaps and the hand-created Secrets survive and
-the next `up` costs the same cold start and nothing else.
+is already up and restarts with the observer plugin, and `observer:run` owns it.
+
+`gate:down` deletes nothing, so the Deployments, the Services, the ConfigMaps and the
+hand-created Secrets survive. The next `up` costs the same cold start and nothing else.
 
 `gate:up` wakes `paper` and `paper-conduct`, the two rows a rung drives. Name the
 others to wake them: `mise run gate:up -- velocity paper-m4 toxiproxy`. No rung drives
@@ -80,8 +81,8 @@ kubectl -n monoplayer-gate-b create secret generic gate-b-rcon \
 # step 2, or the velocity/paper-m4 pods will fail with
 # CreateContainerConfigError.
 
-# 2. Apply the tree and wake the backend. The task says what it waits for,
-#    and it is a cold start: 240-310 s.
+# 2. Apply the tree and wake the backend. The task says what it waits for, and a
+#    cold start is 90 s.
 mise run gate:up
 
 # 3. Watch it download Paper 26.2 and boot.
