@@ -16,7 +16,7 @@
 // truncated buffer, so leftover accounting happens here.
 import mc from 'minecraft-protocol'
 
-import { buildCustomClickAction } from '../legs/live-backend.js'
+import { buildCustomClickAction } from '../core/dialog-codec.js'
 
 const VERSION = '26.1'
 
@@ -296,8 +296,8 @@ export function createBot ({
       client.write('message_acknowledgement', { count })
     },
     // #16: answer a dialog the way a client does. The library's own writer for
-    // this packet omits the payload's length prefix, so the body is built by
-    // the same helper the puppet leg uses and written raw.
+    // this packet omits the payload's length prefix, so the body comes from the
+    // dialog codec both this bot and the puppet leg use, and is written raw.
     answerDialog (id, additions = null) {
       const body = buildCustomClickAction({ state: 'play', id, additions })
       if (body === null) throw new Error(`cannot build a dialog answer for ${JSON.stringify(id)}`)

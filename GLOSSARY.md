@@ -164,6 +164,10 @@ _Avoid_: action, verdict
 A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the player who answers it, and their answer goes back to the server as the puppet's own frame.
 _Avoid_: prompt, popup, form, UI
 
+**Dialog codec**:
+The two halves of a control dialog's wire form: the reader that lists a `show_dialog`'s actions and chooses one, and the encoder that builds the `custom_click_action` body that answers it. It decides what the answer is. Who answers, and when the puppet clicks nothing, is the leg's policy.
+_Avoid_: dialog helper, dialog utils
+
 **Pending dialog**:
 The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog`, on the player's answer, or when the puppet answers a configuration gate the last player left, and re-sends it when a player attaches in its phase.
 _Avoid_: dialog queue, dialog cache
