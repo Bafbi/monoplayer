@@ -43,9 +43,9 @@ test('#22 a value that is neither 1 nor 0 is refused and named', () => {
 // #108: a config document's reconnect budget must survive the overlay. The
 // deployed default stays unlimited, so only an explicit file value, or an
 // explicit env value, may set a bound.
-// #134: the skin frame names the puppet's own `player_info` entry, so a lane with
-// no resolved UUID writes none. The raw cacheDir override is the path that gets
-// here, and it is silent otherwise.
+// #134: the skin frame names the puppet's own entry, so a lane with no resolved
+// UUID writes none. The raw cacheDir override is the path that gets here, and it
+// is silent otherwise.
 test('#134 a lane with no puppet UUID is told its skin frame will not be written', () => {
   const warning = unidentifiedSkinWarning({ skin: { showPuppetSkin: true }, puppet: { uuid: null } })
   assert.match(warning, /no puppet UUID is known/)
@@ -57,6 +57,8 @@ test('#134 a resolved puppet UUID says nothing, and so does the switch being off
   assert.equal(unidentifiedSkinWarning({ skin: { showPuppetSkin: false }, puppet: { uuid: null } }), null)
 })
 
+// #108: a config document's reconnect budget must survive the overlay, and 0 or
+// unset must reach loadConfig as unlimited.
 test('#108 a config document\'s reconnect attempts reach loadConfig', () => {
   const out = envOverlay({ reconnect: { attempts: 2, maxDelayMs: 5000 } }, {})
   assert.equal(out.reconnect.attempts, 2)
