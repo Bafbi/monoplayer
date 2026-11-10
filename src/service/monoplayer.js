@@ -71,10 +71,13 @@ import { pathToFileURL } from 'node:url'
 
 export const DEFAULT_CONFIG = Object.freeze({
   version: '26.1',
-  // 'read-only': relay clientbound chat to the attached client, drop the
-  // client's own text.
-  // 'full' (#19): also speak the client's chat and commands on the backend leg
-  // as the puppet, with the puppet's own profile keys and window, and relay the
+  // 'read-only' (the default): relay clientbound chat to the attached client,
+  // drop the client's own text.
+  // 'commands' (#97): speak the client's commands as the puppet, so /profil,
+  // /msg, and /tp reach the server while the account stays silent in open chat.
+  // Clientbound chat relays exactly as 'read-only' does.
+  // 'full' (#19): also speak the client's open chat on the backend leg as the
+  // puppet, with the puppet's own profile keys and window, and relay the
   // server's signed player chat back. Not the default: the signed path needs a
   // live run on the deployed backend to prove it, because a leg without profile
   // keys sends an unsigned frame that a secure-profile server rejects by
@@ -139,7 +142,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   redaction: Object.freeze({ sentinel: SENTINEL })
 })
 
-const CHAT_MODES = new Set(['full', 'read-only', 'off'])
+const CHAT_MODES = new Set(['full', 'commands', 'read-only', 'off'])
 
 export function loadConfig (doc = {}) {
   const merged = {
@@ -156,7 +159,7 @@ export function loadConfig (doc = {}) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
   }
   if (!CHAT_MODES.has(merged.chat)) {
-    throw new TypeError("config.chat must be 'full', 'read-only', or 'off'")
+    throw new TypeError("config.chat must be 'full', 'commands', 'read-only', or 'off'")
   }
   if (typeof merged.transfer.follow !== 'boolean') {
     throw new TypeError('config.transfer.follow must be a boolean')
@@ -2138,7 +2141,7 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_DIALOG_ACTION                            configuration-gate answer: first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
-  MONOPLAYER_CHAT                                     read-only (default), full, or off
+  MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity

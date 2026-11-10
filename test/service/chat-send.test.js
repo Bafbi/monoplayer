@@ -136,6 +136,20 @@ test('the read-only and off modes never speak for the client', () => {
   }
 })
 
+test('#97 the commands mode speaks the client command and drops the chat message', () => {
+  const rig = makeCore({ chat: 'commands' })
+  warmBackend(rig)
+  attach(rig)
+
+  rig.frontLeg.serverbound({ name: 'chat_command_signed', data: { command: 'profil' } })
+  rig.frontLeg.serverbound({ name: 'chat_message', data: { message: 'hello everyone' } })
+
+  assert.deepEqual(rig.backendLeg.spoken(), [{ text: '/profil', command: true }])
+  assert.equal(rig.core.metrics.chatSent, 1)
+  assert.equal(rig.core.metrics.chatBlocked, 1, 'the dropped chat message is still counted as chat')
+  assert.deepEqual(rig.backendLeg.rawWrites(), [], 'neither client frame crosses to the backend')
+})
+
 test('session keys and acknowledgements stay on the front connection', () => {
   const rig = makeCore({ chat: 'full' })
   warmBackend(rig)
@@ -175,5 +189,6 @@ test('full is an available mode and read-only stays the default', () => {
   assert.equal(loadConfig().chat, 'read-only')
   assert.equal(loadConfig({ chat: 'full' }).chat, 'full')
   assert.equal(loadConfig({ chat: 'off' }).chat, 'off')
+  assert.equal(loadConfig({ chat: 'commands' }).chat, 'commands')
   assert.throws(() => loadConfig({ chat: 'write' }), /config\.chat/)
 })
