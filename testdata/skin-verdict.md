@@ -308,21 +308,21 @@ warns about it once.
 
 ## The live lane agrees, after the merge (#134)
 
-Date: 2026-11-10, 22:47 to 22:50Z. The lane runs the merged fix (`starts` with
-`chat: commands`, so it is `main` after #135, and it logs `puppetSkinKnown` with
-`uuid`, `was` and `value`, which only the fix writes). One human session, two
-attaches and one transfer:
+Date: 2026-11-10, 22:47 to 22:50Z. The lane runs the merged fix. Its `startLive`
+record says `chat: commands`, so the build carries #135, and its
+`puppetSkinKnown` records carry `uuid`, `was` and `value`, which only this fix
+writes. One human session, two attaches and one transfer:
 
 ```
-22:47:07  puppetSkinKnown  uuid 73e0e19b…, was null, signed true
-22:47:45  puppetSkinSent   attach
-22:48:41  transferFollow   sky-2.excalia.fr, depth 1
-22:48:41  frontReconfiguration reason transfer
-22:48:45  puppetSkinKnown  was the first value, value the target's re-signed one
-22:48:45  puppetSkinSent   transfer          <- the line that never existed before
-22:48:45  attach           reason transfer, replayed 288
-22:50:41  detach           socketClosed
-22:50:48  puppetSkinSent   attach
+22:47:07  {"event":"puppetSkinKnown","uuid":"73e0e19b-…","was":null,"signed":true}
+22:47:45  {"event":"puppetSkinSent","name":"Bafbi","reason":"attach","signed":true}
+22:48:41  {"event":"transferFollow","host":"sky-2.excalia.fr","port":25565,"depth":1}
+22:48:41  {"event":"frontReconfiguration","reason":"transfer","username":"Bafbi"}
+22:48:45  {"event":"puppetSkinKnown","uuid":"73e0e19b-…","was":"the attach value"}
+22:48:45  {"event":"puppetSkinSent","name":"Bafbi","reason":"transfer"}   <- new
+22:48:45  {"event":"attach","reason":"transfer","replayed":288,"backendLogins":2}
+22:50:41  {"event":"detach","reason":"socketClosed"}
+22:50:48  {"event":"puppetSkinSent","name":"Bafbi","reason":"attach","signed":true}
 ```
 
 Heartbeat at the end of the session:
@@ -333,7 +333,7 @@ transfersFollowed 1   reconfigurationsCompleted 1   attached true
 ```
 
 Three frames for two attaches and one transfer. The old code wrote two, and the
-replay after the transfer wrote none: that is the whole defect, and the count now
+replay after the transfer wrote none. That is the whole defect, and the count now
 moves when the client's play state does. `puppetSkinKnown` logged twice, for the two
 distinct values the backend sent, which is the second defect closed on the lane
 rather than in a test.
