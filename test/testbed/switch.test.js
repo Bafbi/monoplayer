@@ -1,5 +1,5 @@
 // src/testbed/switch.js is the one script that scales the live deployment to
-// zero and disables Argo's auto-sync for the transfer run; `down` puts both back
+// zero and disables Argo's auto-sync for the transfer run. `down` puts both back
 // from a record in a state file (#107). A second `up` before a `down` used to
 // overwrite that record with the empty one, so the policy was lost for good.
 // These cases replace kubectl, and the registry probe the script shells out to,
@@ -123,6 +123,11 @@ test('two ups and one down keep the record and put the policy back', () => {
   const first = run(space, ['up'])
   assert.equal(first.status, 0, first.output + '\ncalls: ' + first.calls.join(' | '))
   assert.deepEqual(record(space), RECORDED, 'the first up records the policy it removed')
+  assert.match(
+    first.calls.find(line => line.includes('--type=json')),
+    /^-n argocd patch app monoplayer --type=json -p /,
+    'the removal names the live Application: ' + first.calls.join(' | ')
+  )
   assert.deepEqual(
     first.calls.filter(line => line.includes(' scale ')),
     [
@@ -157,6 +162,11 @@ test('two ups and one down keep the record and put the policy back', () => {
 
   // The policy comes back as one merge patch, and the body has to parse: a
   // record that cannot be patched back is not a way back.
+  assert.match(
+    down.calls.find(line => line.includes('--type=merge')),
+    /^-n argocd patch app monoplayer --type=merge -p /,
+    'the restore names the live Application: ' + down.calls.join(' | ')
+  )
   const patches = mergePatches(space)
   assert.equal(patches.length, 1, 'down issues one merge patch: ' + patches.join(' | '))
   assert.deepEqual(JSON.parse(patches[0]), { spec: { syncPolicy: { automated: POLICY } } },

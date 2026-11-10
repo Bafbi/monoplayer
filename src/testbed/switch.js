@@ -38,8 +38,10 @@ const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monopl
 
 // How long the two port-forwards get before the registry probe reads them. A
 // test answers the probe from a shim and sets this to 0, so the unit rung does
-// not pay a settle it cannot use.
-const REGISTRY_SETTLE_MS = Number(process.env.MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS ?? 5000)
+// not pay a settle it cannot use. An empty or nonsense value is the default, not
+// an immediate probe: `Number('')` is 0, and a real run's probe needs the wait.
+const SETTLE_MS = Number(process.env.MONOPLAYER_TESTBED_REGISTRY_SETTLE_MS ?? 5000)
+const REGISTRY_SETTLE_MS = Number.isFinite(SETTLE_MS) && SETTLE_MS >= 0 ? SETTLE_MS : 5000
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
