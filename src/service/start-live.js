@@ -92,6 +92,15 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   } else if (keepRaw !== undefined && keepRaw !== '') {
     warn('MONOPLAYER_TRANSFER_KEEP_CONNECTION must be 1 or 0; ignoring ' + keepRaw)
   }
+  // #99: the human's own player wears the puppet's skin. On in the defaults;
+  // this switch turns it off for a lane without moving that default. Only "1" and
+  // "0" are read, so a typo cannot silently change what a lane shows the human.
+  const skinRaw = env.MONOPLAYER_SKIN_SHOW_PUPPET
+  if (skinRaw === '1' || skinRaw === '0') {
+    out.skin = { ...doc.skin, showPuppetSkin: skinRaw === '1' }
+  } else if (skinRaw !== undefined && skinRaw !== '') {
+    warn('MONOPLAYER_SKIN_SHOW_PUPPET must be 1 or 0; ignoring ' + skinRaw)
+  }
   // A deployed puppet keeps reconnecting by default: the backend can restart,
   // and giving up after one attempt leaves the front alive with no session. A
   // config document may set a budget, and this env var may override it. Either
