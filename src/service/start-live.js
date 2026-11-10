@@ -45,7 +45,7 @@ import { resolveAccount } from '../custody/accounts.js'
 import { normalizeUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../legs/live-backend.js'
 import { createLiveFrontLeg } from '../legs/live-front.js'
-import { waitForReady } from './readiness.js'
+import { shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
@@ -358,13 +358,28 @@ export async function startLive ({ argv = [], io = process } = {}) {
     const readiness = await waitForReady({ core, log, maxWarmMs })
     if (!readiness.hasConfig || !readiness.hasPrefix) return readiness
     if (!readiness.warm) {
+      // #87: a move stage's fallback releases a client onto this cache, so a
+      // target that has sent no chunk frame yet is not warm, however many join
+      // frames it queued. Startup keeps the old behaviour: it releases nobody.
+      const requireChunks = stage !== 'startup'
+      if (!shouldForceWarm(readiness, { requireChunks })) {
+        log('warmFallbackRefused', {
+          stage,
+          reason: Number(readiness.chunkFrames) > 0 ? 'not_warm' : 'no_chunks',
+          chunkFrames: readiness.chunkFrames,
+          prefixFrames: readiness.prefixFrames,
+          configFrames: readiness.configFrames
+        })
+        return readiness
+      }
       const forced = core.cache.forceWarm()
       core.session.warmComplete({ marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished' })
       log('warmFallback', {
         stage,
         forced: forced.forced,
         prefixFrames: readiness.prefixFrames,
-        configFrames: readiness.configFrames
+        configFrames: readiness.configFrames,
+        chunkFrames: readiness.chunkFrames
       })
     }
     log('readiness', { stage, ...readiness })
@@ -459,6 +474,25 @@ export async function startLive ({ argv = [], io = process } = {}) {
     } finally {
       reconnecting = false
     }
+  })
+
+  // #87: a restored move sends the puppet back to the server the client was
+  // restored onto. Without this the follow controller keeps a target the core
+  // has already given up on, and the next dial lands the puppet on the server
+  // the human was just moved off.
+  core.on('transfer_restored', ({ reason = null } = {}) => {
+    const abandoned = follow.abort('restored')
+    currentTarget = { ...baseTarget }
+    try {
+      backend.setTarget(baseTarget, { keepCookies: false })
+    } catch (error) {
+      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    log('transferFollowAbandoned', {
+      reason,
+      host: abandoned.abandoned?.host ?? null,
+      port: abandoned.abandoned?.port ?? null
+    })
   })
 
   // Every failure after this point owns a live backend client and (online) the
