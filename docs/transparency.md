@@ -89,6 +89,16 @@ in the session does not reach the human, because the client keeps the entry it
 holds. And a client that already holds an entry for the human's UUID would keep
 that entry's skin: the proxy never lists the human, so this has not been seen.
 
+What the proxy says about it, one event per thing that happened:
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `puppetSkinKnown` | `uuid`, `signed`, `value` | A `player_info` frame carried the puppet's own textures property, and it differs from the one held: once per distinct property, not once per frame |
+| `puppetSkinSent` | `name`, `reason`, `signed` | The frame reached the attaching player. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, or `property_arrived` |
+| `puppetSkinRefused` | `reason`, `error` | The packet could not be built or written: `packet` or `write_failed` |
+| `puppetSkinWithheld` | `name`, `reason` | A replay wrote no frame in a state a later `player_info` cannot repair: `not_attached`, `no_identity`, or `already_sent`. A property that has not arrived yet is not reported, because it normally arrives a moment later and the frame then goes out under `property_arrived` |
+| `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process |
+
 ## Chat and commands
 
 Clientbound `system_chat` and `profileless_chat` reach the attached client live

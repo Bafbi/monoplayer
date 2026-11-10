@@ -220,8 +220,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
   if (cfg.skin.showPuppetSkin && (cfg.puppet.uuid ?? null) === null) {
     stderr.write(
       'monoplayer --start: warning: skin.showPuppetSkin is on and no puppet UUID is known, ' +
-      'so the human keeps a default skin. Set MONOPLAYER_PUPPET_UUID, or select the account ' +
-      'with MONOPLAYER_PUPPET_ACCOUNT instead of the raw cacheDir override.\n'
+      'so no skin frame is written and the human keeps a default skin. Prefer selecting the ' +
+      'account with MONOPLAYER_PUPPET_ACCOUNT, which resolves the UUID. On the raw cacheDir ' +
+      'override there is no account to check against, and MONOPLAYER_PUPPET_UUID is taken ' +
+      'as given.\n'
     )
   }
 

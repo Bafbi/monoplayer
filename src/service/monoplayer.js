@@ -1477,9 +1477,8 @@ export function createMonoplayer ({
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
   function replaySnapshot ({ name, includeConfig = true, reason = 'attach', snapshot = null } = {}) {
-    // #134: the frame is client state the replay does not carry. Excalia moves
-    // the puppet mid-session, so a client that re-entered play arrives here with
-    // no entry for its own UUID.
+    // #134: Excalia moves the puppet mid-session, so a client that re-entered
+    // play arrives here owed the frame again.
     forgetPuppetSkin()
     const source = snapshot ?? cache.snapshot()
     const synthesized = synthAttach({
@@ -1505,12 +1504,14 @@ export function createMonoplayer ({
     // #99: and the client now draws the human's own body, so the puppet's skin
     // goes on it. After the replay, because the frame is client state the replay
     // does not carry.
+    // #134: the heartbeat counts no refusal for a frame that was never
+    // attempted, which is how a played body lost its skin without a trace. Only
+    // the states a later `player_info` cannot repair are news: no property yet
+    // is the ordinary order on Paper, and a switch the operator turned off is
+    // deliberate.
     const skin = sendPuppetSkin({ reason })
-    // #134: a replay that writes no frame leaves the human on a default skin, and
-    // the heartbeat counts no refusal because no frame was attempted. The switch
-    // being off is the one refusal that is not news.
-    if (skin.sent !== true && skin.reason !== 'disabled') {
-      log('puppetSkinWithheld', { name, replay: reason, reason: skin.reason })
+    if (skin.sent !== true && skin.reason !== 'disabled' && skin.reason !== 'no_property') {
+      log('puppetSkinWithheld', { name, reason: skin.reason })
     }
 
     // #16: a dialog that was waiting for a client goes after the replay, so the
@@ -2028,7 +2029,15 @@ export function createMonoplayer ({
         const changed = puppetSkinProperty === null || puppetSkinProperty.value !== property.value
         puppetSkinProperty = property
         if (changed) {
-          log('puppetSkinKnown', { signed: typeof property.signature === 'string' })
+          // #134: the value itself, once per distinct property. The ticket had to
+          // guess whether a backend re-signs its property per login or whether
+          // the comparison was comparing the wrong things; the next reader does
+          // not.
+          log('puppetSkinKnown', {
+            uuid: puppetUuid,
+            signed: typeof property.signature === 'string',
+            value: property.value
+          })
         }
         // A backend that lists the puppet after its play login is the ordinary
         // case on Paper, so the property often arrives after the attach replay

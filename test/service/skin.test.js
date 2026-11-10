@@ -237,17 +237,35 @@ test('a backend that restarts its configuration round gets the frame again too',
   assert.equal(skinFrames(rig.frontLeg).length, 2, 'the same client-side rule, whatever moved the puppet')
 })
 
-test('a replay that writes no frame says why, so a default skin is not silent', () => {
+test('a property that arrives after the attach is not reported as a withheld skin', () => {
   const logLines = []
   const rig = makeCore({ skin: { showPuppetSkin: true }, logLines })
+  // The ordinary order on Paper: the attach replay finds no property yet, and
+  // the backend lists the puppet a moment later.
   warmBackend(rig, { playerInfo: false })
   attach(rig)
+  assert.equal(eventsNamed(logLines, 'puppetSkinWithheld').length, 0,
+    'no property yet is the ordinary order, and property_arrived writes the frame')
+
+  deliverPlayerInfo(rig)
+  assert.equal(skinFrames(rig.frontLeg).length, 1)
+  assert.equal(eventsNamed(logLines, 'puppetSkinWithheld').length, 0)
+})
+
+test('a replay that cannot write the frame at all says why, because no later frame repairs it', () => {
+  const logLines = []
+  const rig = makeCore({ skin: { showPuppetSkin: true }, logLines })
+  warmBackend(rig)
+  // No UUID from the front: the frame has no profile to name, and no later
+  // `player_info` can give it one.
+  rig.frontLeg.loginStart({ name: 'Bafbi' })
+  const result = rig.core.attachPlayer({ name: 'Bafbi' })
+  assert.equal(result.attached, true)
 
   assert.equal(skinFrames(rig.frontLeg).length, 0)
   const withheld = eventsNamed(logLines, 'puppetSkinWithheld')
   assert.equal(withheld.length, 1)
-  assert.equal(withheld[0].reason, 'no_property', 'the reason no frame was written')
-  assert.equal(withheld[0].replay, 'attach', 'the replay that asked for one')
+  assert.equal(withheld[0].reason, 'no_identity')
 })
 
 // #134: the live tab list arrived through the same frame, and the first entry
@@ -270,7 +288,10 @@ test('another player\'s skin is never the frame, and the known log fires once pe
   const frames = skinFrames(rig.frontLeg)
   assert.equal(frames.length, 1)
   assert.deepEqual(frames[0].packet.data[0].player.properties, [TEXTURES])
-  assert.equal(eventsNamed(logLines, 'puppetSkinKnown').length, 1)
+  const known = eventsNamed(logLines, 'puppetSkinKnown')
+  assert.equal(known.length, 1)
+  assert.equal(known[0].uuid, PUPPET, 'the property is the puppet\'s own entry')
+  assert.equal(known[0].value, TEXTURES.value, 'and the log carries the value it saw')
 
   // The backend keeps relisting the same property, and one of the frames leads
   // with another player: nothing new is known and nothing new is written.
