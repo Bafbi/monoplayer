@@ -105,6 +105,7 @@ change what the server or the client does.
 | `chatSession` | the session key registration | none: both joins register the account's own key, so the field matches. The human's key never crosses |
 | `resourcePack` | the resource-pack status | none: the puppet answers its own pack |
 | `transferred` | the transfer intent | none |
+| `codeOfConduct`, `codeOfConductAccepted` | the configuration gate and its accept | none: the puppet answers the gate on its own connection |
 
 Anything not in that table is a finding, and the comparison fails the run for
 it.
@@ -120,26 +121,35 @@ from. An index read is kept as the fallback for a packet shape that still carrie
 flat fields, and a member that is not there leaves its field absent rather than
 guessed.
 
-**Three fields this gate Paper cannot show.** The reason is the server's
-configuration, not the client version. The gate Paper runs with
-`enable-code-of-conduct=false` in its `server.properties`, so the server never
-sends the gate and no accept can arrive. It also serves no resource pack, so no
-status event fires. The report marks those three fields absent.
+**The lane that serves the gate is its own Paper.** `mise run observer:run`
+measures `paper-conduct` (`deploy/driver/paper-conduct.yaml`), not the G0
+`paper`. The G0 row cannot carry the gate: a real client that lands on a
+code-of-conduct screen never finishes joining, and rung 4 is a human-witnessed
+run. `paper-conduct` is the same image, version and build with the gate on, and
+nothing else different. `MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT` and
+`MONOPLAYER_BACKEND_HOST` point the run back at `paper` for a comparison.
 
-Turning the gate on is not a one-line change. Paper 26.2 refuses to start when
-`enable-code-of-conduct=true` and no `codeofconduct` folder exists:
-`Failed to start the minecraft server: java.lang.IllegalArgumentException: Code of
-Conduct folder does not exist: codeofconduct`. A lane that serves the gate owes
-that folder, and every real client it admits then owes the screen an answer.
+What Paper requires for the gate, read out of
+`DedicatedServer.readCodeOfConducts` in the 26.2 jar rather than guessed: a
+directory named `codeofconduct` in the server's working directory, one UTF-8
+`.txt` file per document, the document id being the file name without `.txt`
+lowercased, and every file living in that directory (a symlink out of it is
+refused). Without the directory the server does not start at all. The lane
+writes its one document with an initContainer, because a ConfigMap volume is a
+symlink farm and Paper refuses those.
 
-The run reads both facts from the server that it measured, with
-`--server` on `src/ladder/observer.js`. A reason is attached only when the read
-agrees with it (see `ABSENT_FACTS`). So a server that starts serving the gate
-stops excusing the field, and the report says the absence is unexplained.
+Both bots answer the gate themselves: `minecraft-protocol` writes
+`accept_code_of_conduct` as soon as the gate arrives, which is the behaviour
+#21 wraps on the puppet leg. So the puppet join measures what the server sees
+when the accept comes from the account's own connection.
 
-Observing the gate needs a Paper that serves it. The G0 driver lane cannot be
-that Paper: a real client sitting at a code-of-conduct screen never finishes
-joining, and that lane is a human-witnessed run.
+**One field the lane cannot show.** The reason is the server's configuration, not
+the client version. The lane serves no resource pack, so no status event fires,
+and the report marks `resourcePack` absent. The run reads that fact from the
+server it measured, with `--server` on `src/ladder/observer.js`, and attaches a
+reason only when the read agrees with it (see `ABSENT_FACTS`). A lane that starts
+serving a pack stops excusing the field, and the absence is reported as
+unexplained.
 
 **Not recorded yet:** dialog interactions. The plugin has no dialog field, so a
 dialog and its click are invisible to this report. The human-answer path is

@@ -78,6 +78,22 @@ The Tailscale service should publish a hostname like
 - RCON is exposed only on the ClusterIP Service, never the Tailscale Service.
 - This namespace is not in ArgoCD. It is a test lane.
 
+## Observer lane: Paper 26.2 b135 with the code of conduct on
+
+`paper-conduct.yaml` is the backend `mise run observer:run` measures (#78). It
+runs the same image, version and build as `paper.yaml`, with
+`enable-code-of-conduct=true` and one document in a `codeofconduct` folder, so
+the server sends the gate and the observer can see the accept arrive on the
+account's own connection. The G0 row cannot carry the gate: a real client that
+lands on a code-of-conduct screen never finishes joining, and rung 4 is a
+human-witnessed run. Paper refuses to start with the gate on and no document, so
+the folder is part of the lane, written by an initContainer.
+
+```bash
+kubectl apply -f deploy/driver/paper-conduct.yaml
+kubectl -n monoplayer-gate-b rollout status deploy/paper-conduct --timeout=10m
+```
+
 ## M4 lane — Paper behind Velocity 4.3.1 (+ toxiproxy)
 
 Second backend row per [docs/paper-behind-velocity.md](../../docs/paper-behind-velocity.md).
