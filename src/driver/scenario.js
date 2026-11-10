@@ -23,8 +23,9 @@
 import { buildRunPlan, planSafetyIssues, ARENA, runCenter } from './plan.js'
 import {
   isSettled, isDisconnected, describeStatus, parseEntityPos, parseEntityRotation,
-  parsePlayerList, positionsWithin, rotationsWithin, parseBlockTest, redactSecrets,
+  parsePlayerList, positionsWithin, rotationsWithin, parseBlockTest,
 } from './checks.js'
+import { redactSecrets } from '../observability/secrets.js'
 import { DriverError } from './client-driver.js'
 
 const SETTLE_POLL_MS = 1000

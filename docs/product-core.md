@@ -36,6 +36,7 @@ connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
 | `src/core/session.js` | `boot → warm → attached ⇄ detached`, `transferring` for a client that follows a move, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
 | `src/core/transfer.js` | The pre-transfer snapshot and the move's commit/rollback, on top of the session's `transferring` state and the cache's `restore` | pure |
 | `src/observability/redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
+| `src/observability/secrets.js` | Secret scanner for reports: findings with index and kind, spans rewritten to `[REDACTED]<kind>`. Custody and the driver lane both import it here | pure |
 | `src/legs/fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
 | `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
 
