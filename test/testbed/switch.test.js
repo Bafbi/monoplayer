@@ -1,0 +1,183 @@
+// src/testbed/switch.js is the one script that scales the live deployment to
+// zero and disables Argo's auto-sync for the transfer run; `down` puts both back
+// from a record in a state file (#107). A second `up` before a `down` used to
+// overwrite that record with the empty one, so the policy was lost for good.
+// These cases replace kubectl, and the registry probe the script shells out to,
+// with shims: nothing here reaches a cluster, and the live deployment is never
+// scaled. The assertions are made of the recorded argv.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const SCRIPT = path.join(ROOT, 'src', 'testbed', 'switch.js')
+
+// The Argo Application's policy in the shape the API serves it. The record has
+// to carry it back as JSON: a map printed by `jsonpath` is not a patch body.
+const POLICY = { prune: true, selfHeal: true }
+const APPLICATION = JSON.stringify({ spec: { syncPolicy: { automated: POLICY } } })
+const RECORDED = { automated: JSON.stringify(POLICY), disabledByUs: true }
+
+// The shim answers every call the script makes, records every argv, and keeps
+// the two facts that move: the Application's policy, which the first `up`
+// removes, and the patch body `down` sends to put it back.
+const SHIM = [
+  '#!/usr/bin/env bash',
+  'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
+  'state="$KUBECTL_STATE"',
+  'last="${@: -1}"',
+  'case " $* " in',
+  // The live Application, read as JSON because a recorded policy has to
+  // round-trip as JSON.
+  '  *" get app "*"-o json"*) if [ -f "$state/policy-removed" ]; then printf \'{"spec":{"syncPolicy":{}}}\\n\'; else printf \'%s\\n\' "$KUBECTL_APPLICATION"; fi; exit 0 ;;',
+  '  *" patch app "*) case "$*" in *"--type=json"*) touch "$state/policy-removed" ;; *"--type=merge"*) printf \'%s\\n\' "$last" >> "$state/merge-patches" ;; esac; printf \'app patched\\n\'; exit 0 ;;',
+  '  *" get pods "*) printf \'{"items":[]}\\n\'; exit 0 ;;',
+  '  *" exec "*) printf \'There are 1 of a max of 8 players online: GlowSquidye\\n\'; exit 0 ;;',
+  '  *" logs "*) printf \'%s\\n\' \'{"event":"startLive","front":"monoplayer-testbed.example.invalid"}\' \'{"event":"liveReady","backend":"paper-hub"}\'; exit 0 ;;',
+  '  *" get svc "*) printf \'{"status":{"loadBalancer":{"ingress":[{"hostname":"monoplayer-testbed.example.invalid"}]}}}\\n\'; exit 0 ;;',
+  '  *" get deploy "*) printf \'{"spec":{"replicas":1},"status":{"readyReplicas":1}}\\n\'; exit 0 ;;',
+  '  *) printf \'ok\\n\'; exit 0 ;;',
+  'esac',
+  ''
+].join('\n')
+
+// `up` compares the registry of the two Papers through
+// `node src/testbed/registry.js`, which opens real sockets to two port-forwards.
+// The probe answers from the argv it is given: switch.js forwards the sky to
+// 25765 and the hub to 25766, and the two hashes have to differ or the run would
+// prove nothing.
+const NODE_SHIM = [
+  '#!/usr/bin/env bash',
+  'if [ "$1" = "src/testbed/registry.js" ]; then',
+  '  if [ "$4" = "25766" ]; then hash=hub; else hash=sky; fi',
+  '  printf \'REGISTRIES [{"id":"minecraft:dimension_type","entries":5,"hash":"%s"}]\\n\' "$hash"',
+  '  exit 0',
+  'fi',
+  'exec "$KUBECTL_NODE" "$@"',
+  ''
+].join('\n')
+
+function workspace () {
+  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-switch-'))
+  const bin = path.join(root, 'bin')
+  const state = path.join(root, 'kubectl-state')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.mkdirSync(state, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
+  fs.writeFileSync(path.join(bin, 'node'), NODE_SHIM, { mode: 0o755 })
+  return {
+    root,
+    bin,
+    state,
+    // The record the script reads and writes. Pointing it at the test space is
+    // what keeps a live run's record, the only way its `down` restores Argo,
+    // out of this file's reach.
+    record: path.join(root, 'testbed-state.json'),
+    runs: 0
+  }
+}
+
+const record = space => JSON.parse(fs.readFileSync(space.record, 'utf8'))
+
+function mergePatches (space) {
+  const file = path.join(space.state, 'merge-patches')
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean) : []
+}
+
+// One process per command, the way mise runs it, with the shims first on PATH.
+// The script is spawned through `process.execPath`, so the `node` shim only
+// catches the registry probe.
+function run (space, args) {
+  const log = path.join(space.root, `kubectl-${++space.runs}.log`)
+  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${space.bin}:${process.env.PATH}`,
+      KUBECTL_LOG: log,
+      KUBECTL_STATE: space.state,
+      KUBECTL_APPLICATION: APPLICATION,
+      KUBECTL_NODE: process.execPath,
+      MONOPLAYER_TESTBED_STATE: space.record
+    }
+  })
+  const calls = fs.existsSync(log)
+    ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean)
+    : []
+  return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
+}
+
+test('two ups and one down keep the record and put the policy back', () => {
+  const space = workspace()
+
+  const first = run(space, ['up'])
+  assert.equal(first.status, 0, first.output + '\ncalls: ' + first.calls.join(' | '))
+  assert.deepEqual(record(space), RECORDED, 'the first up records the policy it removed')
+  assert.deepEqual(
+    first.calls.filter(line => line.includes(' scale ')),
+    [
+      '-n monoplayer scale deploy/monoplayer --replicas=0',
+      '-n monoplayer scale deploy/monoplayer-testbed --replicas=1'
+    ],
+    'up takes the live deployment down and starts the testbed: ' + first.calls.join(' | ')
+  )
+
+  // The block is gone now, so the second `up` finds nothing to remove and
+  // reports nothing to restore. The record has to hold on to what the first one
+  // saw, or `down` never restores auto-sync (#107).
+  const second = run(space, ['up'])
+  assert.equal(second.status, 0, second.output + '\ncalls: ' + second.calls.join(' | '))
+  assert.deepEqual(record(space), RECORDED, 'the second up kept the record the first one wrote')
+  assert.match(second.output, /kept the Argo record the first up wrote/)
+  assert.equal(second.calls.some(line => line.includes('--type=json')), false,
+    'the second up finds no policy to remove: ' + second.calls.join(' | '))
+
+  const down = run(space, ['down'])
+  assert.equal(down.status, 0, down.output + '\ncalls: ' + down.calls.join(' | '))
+  assert.deepEqual(
+    down.calls.filter(line => line.includes(' scale ')).map(line => line.replace(/^-n \S+ /, '')),
+    [
+      'scale deploy/monoplayer-testbed --replicas=0',
+      'scale deploy/paper-hub --replicas=0',
+      'scale deploy/paper-sky --replicas=0',
+      'scale deploy/monoplayer --replicas=1'
+    ],
+    'down stops the testbed, then the Papers, then restores the live deployment'
+  )
+
+  // The policy comes back as one merge patch, and the body has to parse: a
+  // record that cannot be patched back is not a way back.
+  const patches = mergePatches(space)
+  assert.equal(patches.length, 1, 'down issues one merge patch: ' + patches.join(' | '))
+  assert.deepEqual(JSON.parse(patches[0]), { spec: { syncPolicy: { automated: POLICY } } },
+    'the patch carries the policy the first up removed')
+  assert.match(down.output, /Argo auto-sync restored/)
+  assert.equal(fs.existsSync(space.record), false, 'the record is cleared once the policy is back')
+})
+
+test('a record with nothing to restore yields to the policy this up removed', () => {
+  // A first `up` run while auto-sync was already off records an empty record.
+  // If auto-sync came back before the next `up`, that run removed the policy
+  // itself, so `down` owes it back: keeping the empty record would leave Argo
+  // syncing nothing until a human noticed.
+  const space = workspace()
+  fs.writeFileSync(space.record, JSON.stringify({ automated: null, disabledByUs: false }) + '\n')
+
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.deepEqual(record(space), RECORDED, 'the record holds the policy this up removed')
+  assert.equal(calls.some(line => line.includes('--type=json')), true, 'the policy was there to remove')
+})
+
+test('the record path is an override, and its default is the one the runbook names', () => {
+  // The default is what AGENTS.md and docs/testing-ladder.md tell an operator to
+  // find, and the override is what keeps this test off it.
+  const source = fs.readFileSync(SCRIPT, 'utf8')
+  assert.match(source, /process\.env\.MONOPLAYER_TESTBED_STATE/, 'the record path is overridable')
+  assert.match(source, /'\/tmp\/opencode\/monoplayer-testbed\.json'/, 'the default is /tmp/opencode/monoplayer-testbed.json')
+})
