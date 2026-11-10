@@ -113,8 +113,8 @@ These are the steps, and what each one prints.
    until the device count is 0: the delete waits for the Service, not for the
    operator.
 
-5. Optional, and the only proof of the second acceptance criterion:
-   `mise run testbed:up` again. The Service must come back under the same name:
+5. `mise run testbed:up` again. This is the only proof of the second acceptance
+   criterion, that `up` recreates the Service under the same name:
 
    ```
    [testbed] testbed front {"hostname":"monoplayer-testbed.tail41e568.ts.net","port":25565}
