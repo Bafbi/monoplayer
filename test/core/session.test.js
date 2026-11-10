@@ -2,27 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createSession, STATES } from '../../src/core/session.js'
-
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) {
-      const timer = { fn, fires: now + ms }
-      timers.push(timer)
-      return timer
-    },
-    clearTimeout (timer) { timers = timers.filter(t => t !== timer) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    },
-    get pending () { return timers.length }
-  }
-}
+import { fakeClock } from '../support/harness.js'
 
 const PLAYER = 'player-uuid'
 

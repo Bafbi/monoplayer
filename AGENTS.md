@@ -95,7 +95,7 @@ Where to look: a decision lives in `src/core/` (pure), the wiring in `src/servic
 | `src/driver/`, `tools/driver/` | Fabric client driver, and the scenario runner `src/driver/run.js`. A G0 pass needs two passed reports and the human unmodded witness, so `--verify-g0` is not the whole check. |
 | `src/testbed/`, `deploy/testbed/` | The two-Paper transfer testbed. |
 | `deploy/` | Manifests and Argo CD. `scripts/build-image.sh` publishes the image. |
-| `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` covers `tools/` and `mise.toml`. |
+| `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` covers `tools/` and `mise.toml`; `test/support/` holds the shared fake-integration rig, `harness.js`, and no test of its own. |
 
 Facts an agent cannot look up:
 
