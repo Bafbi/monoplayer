@@ -138,7 +138,7 @@ test('#21 a gate held for the human is not re-sent after the human answered it',
 
 test('#73 a configuration gate held when the last client detaches is answered as the puppet', () => {
   const rig = makeCore()
-  // The real leg reports a written accept through \`onDialogAnswered\` (#21), the
+  // The real leg reports a written accept through `onDialogAnswered` (#21), the
   // same way it does at connect. The fake leg only records the ask, so the test
   // supplies that report: the marker it arms is the one the core must spend.
   const asked = rig.backendLeg.answerHeldGate
@@ -236,4 +236,20 @@ test('#73 a leg that throws leaves the gate held instead of escaping the detach'
   assert.equal(rig.core.pendingDialog.held, true, 'the gate waits for a client that can answer it')
   const refused = rig.core.logs().filter(line => line.includes('"reason":"leg_error"'))
   assert.equal(refused.length, 1, 'and the failure is logged with its reason')
+})
+
+test('#73 a leg that refuses leaves the gate held, and logs the reason it gave', () => {
+  // The wrapper answers false when a client attached in the meantime and when
+  // the accept could not be written: the gate is still open either way.
+  const rig = makeCore()
+  rig.backendLeg.answerHeldGate = () => ({ answered: false, reason: 'not_written' })
+  attachConfiguring(rig)
+  rig.backendLeg.deliver(gate())
+
+  rig.core.detachPlayer({ reason: 'player_quit' })
+
+  assert.equal(rig.core.pendingDialog.held, true, 'a refused answer is not an answer')
+  assert.equal(rig.core.metrics.controlDialogsAnsweredOnDetach, 0)
+  const refused = rig.core.logs().filter(line => line.includes('"reason":"not_written"'))
+  assert.equal(refused.length, 1, 'the leg\'s own reason reaches the log')
 })
