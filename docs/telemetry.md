@@ -62,7 +62,7 @@ Attribute values are strings, booleans, or integers (`intValue` is a decimal str
 
 ## Metrics
 
-Every metric uses delta temporality (`aggregationTemporality: 2`) within one export batch; values for the same name and attributes are summed before export. Gauges keep the last value in the batch and carry no temporality or monotonicity fields.
+Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series keeps the start time it was first seen at, and each export re-sends its running total. Values for the same name and attributes are summed before export. Gauges keep the last value in the batch and carry no temporality or monotonicity fields.
 
 | Name | Type | Attributes | Meaning |
 | --- | --- | --- | --- |
