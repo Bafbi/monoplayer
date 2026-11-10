@@ -141,10 +141,12 @@ export function createStateCache (overrides = {}) {
 
   let warm = false
   let frameSeq = 0
-  // #87: the chunk data this session's cache holds, counted where it lands.
-  // Before warm a chunk frame joins the join prefix and after warm the chunk
-  // ring, so the ring's size alone says nothing about whether a client released
-  // on this cache gets terrain.
+  // #87: how many chunk frames this session's cache accepted, whichever domain
+  // they landed in. Before warm a chunk frame joins the join prefix and after
+  // warm the chunk ring, so the ring's size alone says nothing about whether the
+  // target ever sent terrain. This is a "did the target send any" count, not a
+  // measure of what the cache still holds: an unload or an eviction does not
+  // decrement it, and a caller that needs deliverable state reads sizes.chunks.
   let chunkFrames = 0
 
   function ringPush (domain, entry) {
@@ -366,8 +368,8 @@ export function createStateCache (overrides = {}) {
       warm,
       chunkBound: opts.maxChunks,
       chunkBytes,
-      // The chunk data a client released on this cache would receive: the ring
-      // plus the chunk frames the join prefix still holds (#87).
+      // Chunk frames this session's cache accepted, in the prefix or the ring
+      // (#87). Zero means the target has sent no terrain at all.
       chunkFrames,
       sizes: {
         prefix: prefix.length,

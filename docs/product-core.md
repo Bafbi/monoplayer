@@ -302,7 +302,7 @@ The reconfiguration is composed of four pieces:
   `transferring` state keeps the client attached, arms one reconnect with
   `backendDown({ retainFront: true })`, and lands back in `attached` at the
   target's play login or on the restored snapshot. A retained client never
-  trips the retry budget: the transfer-follow controller owns the give-up.
+  trips the follow budget: the transfer-follow controller owns the give-up.
 - `state-cache.restore(snapshot)`: the pre-transfer state, entry order and
   capture sequence intact.
 - `src/core/transfer.js`: the snapshot's owner. It is taken before the cache
