@@ -40,9 +40,10 @@ const ARGO_NS = 'argocd'
 const FRONT_HOST = 'monoplayer-testbed.tail41e568.ts.net'
 const SKY_HOST = 'paper-sky.monoplayer-gate-b.svc.cluster.local'
 const TAILSCALE_NS = 'tailscale'
-// The operator names its proxy pods after the Service they belong to and labels
-// them with the Service they came from, which is how `status` finds the device.
-const FRONT_DEVICE_LABEL = `tailscale.com/parent-resource=${TEST_DEPLOY}`
+// The operator runs one proxy pod per Service, names it after that Service, and
+// labels it with the Service it came from. That label is how `status` finds the
+// pod, and one pod is one registered tailnet device.
+const TAILNET_PROXY_LABEL = `tailscale.com/parent-resource=${TEST_DEPLOY}`
 // The recovery record: what `up` removed, for `down` to put back. It is the
 // only way the Argo policy comes back (AGENTS.md), so a test points it at its
 // own file instead of overwriting a live run's record.
@@ -98,9 +99,13 @@ function scale (namespace, deploy, replicas) {
   log(`scale ${namespace}/${deploy} -> ${replicas}`)
 }
 
+function readJSON (args) {
+  const raw = kubectl(args, { allowFail: true })
+  return raw === null ? null : JSON.parse(raw)
+}
+
 function deployment (namespace, deploy) {
-  const raw = kubectl(['-n', namespace, 'get', 'deploy', deploy, '-o', 'json'], { allowFail: true })
-  return raw ? JSON.parse(raw) : null
+  return readJSON(['-n', namespace, 'get', 'deploy', deploy, '-o', 'json'])
 }
 
 async function waitDeployReady (namespace, deploy, timeoutMs = 240_000) {
@@ -133,9 +138,10 @@ function pods (namespace, deploy) {
 // A pod that is still terminating belongs to the last run and can be listed
 // first, so the pod that is not going away is the one to read.
 function testbedImage () {
-  const pod = pods(TEST_NS, TEST_DEPLOY)
-    .find(entry => !entry.metadata?.deletionTimestamp && entry.status?.containerStatuses?.[0]?.imageID)
-  const imageID = pod?.status?.containerStatuses?.[0]?.imageID ?? null
+  const statuses = pods(TEST_NS, TEST_DEPLOY)
+    .filter(entry => !entry.metadata?.deletionTimestamp)
+    .map(entry => entry.status?.containerStatuses?.[0])
+  const imageID = statuses.find(status => status?.imageID)?.imageID ?? null
   if (!imageID) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports no containerStatuses[0].imageID, so this run cannot name the build it ran`)
   const digest = /@(sha256:[0-9a-f]{64})$/.exec(imageID)?.[1] ?? null
   if (!digest) throw new Error(`${TEST_NS}/${TEST_DEPLOY} reports an imageID without a digest: ${imageID}`)
@@ -148,17 +154,15 @@ function recordDigest (image) {
 }
 
 function frontService () {
-  const raw = kubectl(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json'], { allowFail: true })
-  return raw === null ? null : JSON.parse(raw)
+  return readJSON(['-n', TEST_NS, 'get', 'svc', TEST_DEPLOY, '-o', 'json'])
 }
 
 function frontHostname (svc) {
   return svc?.status?.loadBalancer?.ingress?.[0]?.hostname ?? null
 }
 
-function frontPods () {
-  const raw = kubectl(['-n', TAILSCALE_NS, 'get', 'pods', '-l', FRONT_DEVICE_LABEL, '-o', 'json'], { allowFail: true })
-  return raw === null ? null : JSON.parse(raw).items
+function proxyPods () {
+  return readJSON(['-n', TAILSCALE_NS, 'get', 'pods', '-l', TAILNET_PROXY_LABEL, '-o', 'json'])?.items ?? null
 }
 
 function podLogs (namespace, deploy, tail = 400) {
@@ -359,11 +363,11 @@ async function transfer () {
   log('testbed heartbeat', { heartbeat })
 }
 
-// Deleting the front Service is what unpublishes the front: the tailnet device
-// and its proxy pod belong to that Service, so they go with it, and the next
+// Deleting the front Service is what unpublishes the front. The tailnet device
+// and its proxy pod belong to that Service, so they go with it. The next
 // `apply -k` recreates it from the manifest's tailscale.com/hostname annotation.
-// A failed delete is logged, not thrown, so it can never keep the live
-// deployment down; `status` shows what is left.
+// A failed delete is logged and reported as a failed command, never thrown. The
+// live deployment is already back by then, and `status` shows what is left.
 function removeFront () {
   try {
     const result = kubectl(['-n', TEST_NS, 'delete', 'svc', TEST_DEPLOY, '--ignore-not-found', '--timeout=120s'])
@@ -382,10 +386,20 @@ async function down () {
   scale(PAPER_NS, PAPER_HUB, 0)
   scale(PAPER_NS, PAPER_SKY, 0)
   scale(LIVE_NS, LIVE_DEPLOY, 1)
-  await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
-  restoreAutoSync(saved)
-  const frontRemoved = removeFront()
-  clearState()
+  // The live restore can fail on its own wait. The front has to go either way,
+  // or the leak this change closes survives the failure path.
+  let frontRemoved = true
+  let restored = false
+  try {
+    await waitDeployReady(LIVE_NS, LIVE_DEPLOY)
+    restoreAutoSync(saved)
+    restored = true
+  } finally {
+    frontRemoved = removeFront()
+    // The record is spent once the policy is back. A restore that failed has not
+    // spent it, and the next `down` still needs it.
+    if (restored) clearState()
+  }
   log('live deployment restored')
   // The live lane is back either way, but a front that is still published is the
   // defect this change exists to fix, so the command reports it as a failure.
@@ -405,7 +419,7 @@ async function status () {
   log(`front ${TEST_NS}/${TEST_DEPLOY}`, svc === null
     ? { missing: true }
     : { hostname: frontHostname(svc) ?? '(pending)' })
-  const proxies = frontPods()
+  const proxies = proxyPods()
   log('tailnet devices', proxies === null
     ? { unreadable: true }
     : { count: proxies.length, names: proxies.map(pod => pod.metadata?.name) })
