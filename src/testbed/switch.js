@@ -18,6 +18,7 @@
 // monoplayer-testbed.tail41e568.ts.net:25565.
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 
 const LIVE_NS = 'monoplayer'
 const LIVE_DEPLOY = 'monoplayer'
@@ -30,7 +31,10 @@ const ARGO_APP = 'monoplayer'
 const ARGO_NS = 'argocd'
 const FRONT_HOST = 'monoplayer-testbed.tail41e568.ts.net'
 const SKY_HOST = 'paper-sky.monoplayer-gate-b.svc.cluster.local'
-const STATE_FILE = '/tmp/opencode/monoplayer-testbed.json'
+// The recovery record: what `up` removed, for `down` to put back. It is the
+// only way the Argo policy comes back (AGENTS.md), so a test points it at its
+// own file instead of overwriting a live run's record.
+const STATE_FILE = process.env.MONOPLAYER_TESTBED_STATE || '/tmp/opencode/monoplayer-testbed.json'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -117,9 +121,15 @@ async function waitRcon (namespace, deploy, timeoutMs = 240_000) {
   }, { timeoutMs, intervalMs: 3000 })
 }
 
+// The sync policy, read as the object it is and kept as JSON: `jsonpath`
+// prints a map as `map[prune:true selfHeal:true]`, which cannot be patched back
+// into the Application when `down` restores it.
 function appAutomated () {
-  const raw = kubectl(['-n', ARGO_NS, 'get', 'app', ARGO_APP, '-o', 'jsonpath={.spec.syncPolicy.automated}'], { allowFail: true })
-  return raw && raw.length > 0 ? raw : null
+  const raw = kubectl(['-n', ARGO_NS, 'get', 'app', ARGO_APP, '-o', 'json'], { allowFail: true })
+  if (!raw) return null
+  let automated
+  try { automated = JSON.parse(raw).spec?.syncPolicy?.automated } catch { return null }
+  return automated ? JSON.stringify(automated) : null
 }
 
 function disableAutoSync () {
@@ -145,9 +155,17 @@ function restoreAutoSync (saved) {
   log('Argo auto-sync restored')
 }
 
+// A second `up` before a `down` must not forget the policy the first one
+// removed. `disableAutoSync` reports `disabledByUs: false` when Argo already has
+// no `automated` block, and that record restores nothing. Keep the earlier
+// record while it holds a policy to restore; otherwise record what this `up`
+// removed, so a policy re-enabled between two runs is still put back.
 function saveState (state) {
-  fs.mkdirSync('/tmp/opencode', { recursive: true })
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state) + '\n')
+  const previous = readState()
+  const kept = previous?.disabledByUs && previous.automated ? previous : state
+  if (kept === previous) log('kept the Argo record the first up wrote', { automated: previous.automated })
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
+  fs.writeFileSync(STATE_FILE, JSON.stringify(kept) + '\n')
 }
 
 function readState () {

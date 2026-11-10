@@ -20,7 +20,7 @@ run = "scripts/link-secrets.sh"
 [tasks.test]
 description = "Run the pure unit/fake tests (no sockets, no auth)."
 depends = ["install"]
-run = "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling}/*.test.js' || node src/ladder/next-rung.js test $?"
+run = "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling,testbed}/*.test.js' || node src/ladder/next-rung.js test $?"
 
 [tasks.spike]
 description = "Run the frozen protocol spike test (real sockets, offline protocol)."
