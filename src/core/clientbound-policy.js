@@ -230,9 +230,11 @@ export const CHAT_FRAMES = new Set(['system_chat', 'profileless_chat', 'player_c
 
 export function chatRelayAllowed (name, mode) {
   if (!CHAT_FRAMES.has(name)) return true
-  // `full` relays all three. `read-only` relays the server's chat but not the
-  // signed player chat, which only makes sense beside a human speaking as the
-  // account (#19). `off` relays none of them.
+  // `full` relays all three. `read-only` and `commands` relay the server's chat
+  // but not the signed player chat, which only makes sense beside a human
+  // speaking in open chat as the account (#19, #97). `off` relays none of them.
+  // A mode this function does not know answers like `read-only`, which keeps
+  // the signed frame off.
   if (mode === 'full') return true
   if (mode === 'off') return false
   return name !== 'player_chat'

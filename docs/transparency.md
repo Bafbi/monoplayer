@@ -69,6 +69,14 @@ instead: the puppet re-signs it with its own profile keys and window, and the
 server's signed `player_chat` is relayed back
 ([#19](https://github.com/Bafbi/monoplayer/issues/19)).
 
+`MONOPLAYER_CHAT=commands` speaks the human's commands and keeps their chat
+text dropped. It exists because a human attaching to their own account needs
+`/profil`, `/msg`, and `/tp` to reach the server, and it is the mode for a
+human who does not want the account talking in open chat
+([#97](https://github.com/Bafbi/monoplayer/issues/97)). Its clientbound side is
+`read-only`: a command's own reply arrives as `system_chat` and displays, but a
+reply the server sends as `player_chat` does not.
+
 The default stays `read-only` because the signed path has been proven offline
 only. Three consequences once it is on: the human's own signature and session
 key never reach the server; a message the server rejects arrives back as a
