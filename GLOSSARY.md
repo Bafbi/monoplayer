@@ -188,6 +188,10 @@ _Avoid_: login prefix, join sequence
 The cached configuration-phase frames replayed to a new attaching player in place of the server's own configuration phase.
 _Avoid_: config replay, registry replay
 
+**Play state**:
+The protocol phase after configuration, where the world and its players exist. A client's `player_info` entries belong to one play state. A new play state starts with none, and both a fresh connection and a reconfiguration create one.
+_Avoid_: world state, in-game
+
 **Attach stream**:
 The ordered clientbound frames Monoplayer sends for one attach: configuration replay, join prefix, one synthesized position, then the rest of the cached state.
 _Avoid_: replay, join packet, attach payload
