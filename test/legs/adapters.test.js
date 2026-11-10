@@ -298,10 +298,10 @@ test('attach check + whitelist store (public APIs embedded by the live front leg
   assert.equal(store.has('73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'), false)
 })
 
-// #97: the front leg keeps its own copy of the accepted chat modes, and the
-// service hands it whatever loadConfig returned. If the two lists drift the
-// service refuses to start on a mode the config accepts, which is what would
-// have happened to `commands` without the leg's copy growing the value.
+// #97: the front leg checks the configured chat mode before it constructs, and
+// the service hands it whatever loadConfig returned. Both read `CHAT_MODES` from
+// src/core/clientbound-policy.js (#103), so the two cannot drift apart. The test
+// stays as the tripwire for a local copy coming back.
 test('the live front leg accepts every chat mode the config accepts', () => {
   const build = chat => createLiveFrontLeg({
     host: '127.0.0.1',

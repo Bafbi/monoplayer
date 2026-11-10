@@ -178,10 +178,3 @@ export function rconTarget (id) {
   const backend = getBackend(id)
   return backend ? { ...backend.rcon } : null
 }
-
-// Service address a Monoplayer-style client would dial for row id. The M2 row
-// has no puppet leg and dials the backend directly; M1/M3/M4 dial the
-// toxiproxy listener that forwards to their backends.
-export function puppetRouteFor (upstreamHost) {
-  return PROXY_PLAN.find(p => p.upstreamHost === upstreamHost) ?? null
-}

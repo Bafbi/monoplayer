@@ -13,8 +13,6 @@
 // verifier is provided: the caller injects the live session-mo lookup
 // (G1) or a stub.
 
-export const ATTACK_SURFACE_NAMES = ['login_start']
-
 export const DENY_REASONS = Object.freeze({
   NOT_WHITELISTED: 'not_whitelisted',
   MALFORMED_UUID: 'malformed_uuid', // shape failure, distinct from a valid-but-unlisted UUID
