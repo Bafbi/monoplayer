@@ -9,9 +9,15 @@
 //
 // Frames that must never reach the backend untouched: per-leg connection
 // mechanics (keep-alive, teleport confirm, chunk batch acks, configuration ack,
-// cookie responses), fresh-client-only answers (resource pack, ping/pong — a
-// replayed ping must not be answered with the fresh client's pong), and the
-// chat frames that carry the human's own signature state.
+// cookie responses), fresh-client-only answers (a replayed ping must not be
+// answered with the fresh client's pong), and the chat frames that carry the
+// human's own signature state.
+//
+// The resource pack's answer is the exception the pack itself creates: the
+// server sends one pack per connection, the human's client is the one that
+// accepted, downloaded, and loaded it, so its `resource_pack_receive` is
+// forwarded as the puppet's own frame (#98). Dropping it told the server a
+// story about a client it never had.
 //
 // Chat text is spoken, not forwarded (#19). A `chat_message` or
 // `chat_command` from the human carries a signature made with the human's
@@ -56,7 +62,6 @@ export const SERVERBOUND_DROPS = new Set([
   'configuration_acknowledged',
   'chunk_batch_received', // legs ack their own batch ends
   'cookie_response', // replayed cookie answers are the proxy's
-  'resource_pack_receive', // no required resource pack in MVP
   'pong' // never answer a replayed ping with the fresh client's pong
 ])
 

@@ -426,8 +426,10 @@ bypasses 2FA for its lifetime. Treat it as the account password.
 >   no anti-cheat evasion.
 > - **Your own backend, or explicit permission.** Public servers and
 >   anti-cheat are the immediate risk.
-> - **No required resource pack.** A client that declines a pack the backend
->   already applied cannot be silently faked into acceptance.
+> - **No faked pack acceptance.** A pack the human's client declines is forwarded
+>   as the decline it is, and the server decides what that means. With no client
+>   attached the puppet accepts and loads, so a headless lane joins a server that
+>   requires one (#98).
 
 ### Legal / acceptable-use position
 
