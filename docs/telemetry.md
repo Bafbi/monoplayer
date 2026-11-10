@@ -6,7 +6,7 @@ Monoplayer exports OpenTelemetry logs and metrics over OTLP/HTTP JSON, and write
 
 | Signal | Transport | Content |
 | --- | --- | --- |
-| Logs | OTLP/HTTP JSON, `POST <endpoint>/v1/logs` | Lifecycle events (`start`, `attach`, `detach`, `backendLogin`, denials, shutdown). Never one record per frame. The skin reports through `puppetSkinKnown`, `puppetSkinSent`, `puppetSkinRefused`, `puppetSkinWithheld`, and `puppetSkinUnidentified`; `docs/transparency.md` says what each means. |
+| Logs | OTLP/HTTP JSON, `POST <endpoint>/v1/logs` | Lifecycle events (`start`, `attach`, `detach`, `backendLogin`, denials, shutdown). Never one record per frame. The skin reports through five events: `puppetSkinKnown`, `puppetSkinSent`, `puppetSkinRefused`, `puppetSkinWithheld`, and `puppetSkinUnidentified`. `docs/transparency.md` gives each one's fields. |
 | Metrics | OTLP/HTTP JSON, `POST <endpoint>/v1/metrics` | Frame counters, attach and denial counters, replay and wire counters, heartbeat gauges. |
 | Journal | Local NDJSON | Every backend and front frame, plus lifecycle events. |
 
@@ -71,6 +71,7 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.denials` | sum | `reason`, `phase` | Login-start and verify-session denials. |
 | `monoplayer.backend.logins` | sum | `entityId` | Backend logins counted by the session. |
 | `monoplayer.replay.frames` | sum | `player` | Frames written by the join replay per attach. |
+| `monoplayer.skin.frames` | sum | `player` | `player_info` skin frames written to the attaching player, one per play state that is owed one. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
 | `monoplayer.attached` | gauge | none | `1` while a client is attached. |
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |
