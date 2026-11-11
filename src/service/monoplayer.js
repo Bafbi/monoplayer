@@ -253,6 +253,10 @@ export function createMonoplayer ({
       // attach would replay a doubled login and configuration.
       if (move.claimRestore()) {
         cache.reset()
+        // #98: the packs held under a failed target die with it. The base server
+        // this reconnect dials never sent them, and answering it for their UUIDs
+        // would be an invented status.
+        pendingPacks.clear()
         log('cacheReset', { reason: 'transfer_restored' })
       }
       emit('reconnect_due', { delayMs, attempt, target })
@@ -577,23 +581,46 @@ export function createMonoplayer ({
   function handleResourcePack ({ state, name, buffer, data = {} }) {
     const uuid = data.uuid ?? data.id ?? null
     if (name === 'remove_resource_pack') {
+      // The UUID is optional on the wire: absent means every pack of this
+      // connection, so an absent one clears the holder.
       const dropped = pendingPacks.remove({ uuid })
       metrics.resourcePacksRemoved++
-      log('resourcePackRemoved', { state, uuid, held: dropped.dropped, attached: isAttached() })
+      log('resourcePackRemoved', {
+        state,
+        uuid,
+        all: dropped.all === true,
+        held: dropped.dropped,
+        attached: isAttached()
+      })
       if (!canReceiveControl(state)) return { relayed: false, dropped: dropped.dropped }
-      frontLeg.writeRaw(buffer, { state, name })
-      metrics.resourcePacksRelayed++
-      return { relayed: true, dropped: dropped.dropped }
+      const relayed = frontLeg.writeRaw(buffer, { state, name }) !== false
+      if (relayed) metrics.resourcePacksRelayed++
+      return { relayed, dropped: dropped.dropped }
     }
     const added = pendingPacks.add({ state, name, buffer, data })
     metrics.resourcePacksHeld++
     log('resourcePackHeld', { state, uuid, attached: isAttached(), replaced: added.replaced })
     if (canReceiveControl(state)) {
-      frontLeg.writeRaw(buffer, { state, name })
+      if (frontLeg.writeRaw(buffer, { state, name }) === false) {
+        // The front refused the state it was written in. The pack stays held,
+        // so the client's own configuration phase or its replay offers it
+        // again; counting it as relayed here would say a client saw it.
+        log('resourcePackRelayRefused', { state, uuid })
+        return { relayed: false, answered: false }
+      }
       metrics.resourcePacksRelayed++
       log('resourcePackRelayed', { state, uuid })
       emit('resource_pack', { state, uuid, attached: true })
       return { relayed: true, answered: false }
+    }
+    // A client is attached but cannot take the frame in this state yet: an
+    // early-attach client still in its own configuration when a play-state pack
+    // arrives. It is offered the pack at its replay, so the puppet says nothing:
+    // a second, invented answer beside the human's is the whole defect.
+    if (isAttached()) {
+      metrics.resourcePacksWithheld++
+      log('resourcePackWithheld', { state, uuid, reason: 'client_attached', attachedState: session.state })
+      return { relayed: false, answered: false }
     }
     answerResourcePack(data)
     return { relayed: false, answered: true }
@@ -621,18 +648,12 @@ export function createMonoplayer ({
   // in the order the backend sent them. A pack of the other state waits: the
   // client would parse it in a phase where the name is a different packet id.
   //
-  // `clientPhase` says the client is in `state` right now, whatever the puppet
-  // is doing. The front reports that moment from its own configuration phase,
-  // where the client parses configuration frames although the core's attach has
-  // not run yet: a warm attach is in play, not CONFIGURING.
-  function resendPendingPacks (state, { clientPhase = false } = {}) {
+  // Both callers state the client's phase, because the core's own attach has not
+  // run at the configuration one: a warm attach is in play, not CONFIGURING, and
+  // only the front knows the client is in its configuration round.
+  function resendPendingPacks (state) {
     const frames = pendingPacks.list(state)
     if (frames.length === 0) return { sent: 0 }
-    if (!clientPhase && !canReceiveControl(state)) {
-      metrics.resourcePacksWithheld += frames.length
-      log('resourcePacksWithheld', { state, count: frames.length, backendConfiguring })
-      return { sent: 0 }
-    }
     let sent = 0
     for (const frame of frames) {
       try {
@@ -1407,6 +1428,10 @@ export function createMonoplayer ({
     targetLoginReady = false
     reconfigurationWaitingWorld = false
     clearReconfigurationTimer()
+    // #98: a pack the failed target pushed is not the server the client is
+    // restored onto. The snapshot the client is put back on is a different
+    // server's state, and the held pack dies with the target that sent it.
+    pendingPacks.clear()
     // The reconnect this restore armed is a new backend session: its play
     // login is a real login and must re-send the human's client information.
     awaitingBackendLogin = true
@@ -2118,7 +2143,7 @@ export function createMonoplayer ({
     // #98: the client is in its own configuration phase now, which is the one
     // moment a configuration-phase pack can reach it. The attach call-in runs
     // later, at play login, so a warm attach has nothing else to hang this on.
-    const packs = resendPendingPacks('configuration', { clientPhase: true })
+    const packs = resendPendingPacks('configuration')
     if (!attached || session.state !== STATES.CONFIGURING) {
       log('configuringReadyIgnored', { reason: 'not_configuring', state: session.state, packs: packs.sent })
       return { attached: false, sent: false, packs: packs.sent }
