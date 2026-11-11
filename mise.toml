@@ -116,6 +116,20 @@ description = "Build the Monoplayer image and print its digest, publishing nothi
 wait_for = ["check"]
 run = "PUSH=0 scripts/build-image.sh"
 
+[tasks."image:retention"]
+description = "List the image tags retention would delete, and delete nothing (#118). Fetches the deploy pin first, because a stale origin/deploy would call the live digest a deletion candidate. Needs a token with read:packages in GH_TOKEN."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+pin=$(mktemp)
+trap 'rm -f "$pin"' EXIT
+# The pin is the running image. An unfetched origin/deploy names the previous one,
+# so the plan a human reviews would be wrong about the one pin that matters most.
+git fetch --quiet --no-tags origin deploy
+git show origin/deploy:deploy/manifests/kustomization.yaml > "$pin"
+node tools/image-retention.mjs plan --deploy "$pin"
+"""
+
 [tasks."observer:build"]
 description = "Build the server transparency observer plugin (needs the pinned ProtocolLib)."
 depends = ["observer:protocollib"]

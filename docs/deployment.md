@@ -27,6 +27,8 @@ digest, never by a moving tag.
 | `deploy/argocd/project.yaml` | AppProject `monoplayer`: one source repo, one destination namespace |
 | `deploy/argocd/application.yaml` | Application `monoplayer` |
 | `.github/workflows/image.yaml` | Build, push to GHCR, commit the digest |
+| `.github/workflows/image-retention.yaml` | Delete the image tags no lane can name |
+| `deploy/pins.txt` | Image pins no manifest carries, kept by the retention job |
 | `Dockerfile` | The runtime image: Node, the proxy, the 26.2 data patch |
 
 ## One-time cluster bootstrap
@@ -108,6 +110,71 @@ The workflow authenticates to GHCR with its own `GITHUB_TOKEN`
 Actions settings are limited to read-only tokens, the push step fails; set
 Settings → Actions → General → Workflow permissions to "Read and write
 permissions".
+
+## Image tag retention
+
+Each merge pushes `sha-<7>` and `:main`. Each branch build pushes `sha-<7>`.
+`.github/workflows/image-retention.yaml` deletes the tags no lane can name, on a
+nightly schedule, by allowlist. It never decides by count: deleting a tag can
+garbage-collect a digest a lane is running, and the next pod start then fails to
+pull.
+
+| Kept | Why |
+|---|---|
+| `:main` | every manifest on `main` references the moving tag |
+| the digest the `deploy` branch pins | that is the image Argo runs, and a restart pulls it |
+| every `:tag` and `@sha256:` a manifest under `deploy/` names | a lane that pins by digest is protected the moment its manifest lands |
+| every line of `deploy/pins.txt` | for a pin no manifest carries |
+| the last 20 `sha-*` tags | so a bisect can pull a recent image, and a tag outside the window is one branch dispatch away (`image-branch.yaml`). That is about a day: 72 image-building commits landed on `main` in the 2.5 days to `2026-11-10`, which `git log origin/main --first-parent --since=2026-11-08 -- . ':(exclude)docs/**' ':(exclude)**/*.md' ':(exclude)testdata/**' ':(exclude)src/testbed/**' ':(exclude)deploy/testbed/**' ':(exclude).scratch/**' ':(exclude)mise.toml' | wc -l` recounts |
+| anything younger than one day | a grace day, not a retention rule: a build that landed today may already be running in a lane |
+| any tag it does not model | it deletes only tags it can account for |
+
+Untagged versions stay. buildx attaches provenance, and some untagged versions are
+children of a tagged index, so deleting one breaks the tag beside it. The tag
+count falls. The version count may not.
+
+### Register a lane's pin
+
+A lane that pins an image in a manifest needs no work: the job reads
+`deploy/` every run. A lane that pins at run time must write a line in
+`deploy/pins.txt`, because no manifest records it. `mise run dev:image <sha-tag>`
+is that case:
+
+```
+sha-1a2b3c4    # dev, until the next merge
+```
+
+Delete the line when the lane moves on. A forgotten line leaves one tag undeleted,
+which is the safe failure.
+
+### Turn deletion on
+
+The first runs are dry runs. The plan job holds `packages: read`, so it cannot
+delete, and it writes the list to the job summary and the `retention-plan`
+artifact.
+
+1. Run **Actions → image-retention → Run workflow**, with `apply` off.
+2. Read the list in the job summary. Each line names a tag, a digest, and the
+   reason the version is not on the allowlist.
+3. Set the repository variable `IMAGE_RETENTION_APPLY` to `true`. From then on
+   each nightly run plans and deletes in one run. The variable is the review gate,
+   not a read of every night's list.
+4. To skip one night while the variable stays `true`, dispatch with `apply` off.
+
+`apply` deletes exactly the ids its own run's plan wrote. It refuses with exit 2
+when a planned id is pinned now, carries `main`, or carries a tag retention does
+not model. It never re-plans, so the two jobs cannot disagree about the list.
+
+To see the plan on a workstation, run `mise run image:retention`. It reads the pin
+from `origin/deploy` and needs a token with `read:packages` in `GH_TOKEN`.
+
+The workflow tries `GHCR_RETENTION_TOKEN` first and `GITHUB_TOKEN` second. A
+package owned by a user account may refuse the workflow token, and a classic PAT
+with `read:packages` and `delete:packages` in that secret settles it. When no
+token can read the package, the plan exits 1 and the job is red, so no deletion
+happens on a guess.
+
+## A local build
 
 A local build is still possible for debugging. `mise run image:build:no-push`
 (`PUSH=0 scripts/build-image.sh`) builds the image and prints its digest
