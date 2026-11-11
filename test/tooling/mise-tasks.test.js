@@ -128,6 +128,47 @@ test('the secrets link stays out of the gate and off the network', () => {
   }
 })
 
+// A task description is the promise a reader acts on (#123). Two of them
+// overpromised: one said the testbed run always restores the live deployment,
+// and one installed the driver into the pair the 26.2 client cannot join.
+test('testbed:run names the restore it performs and the recovery it leaves to an operator', () => {
+  const run = tasks.get('testbed:run')
+  const down = tasks.get('testbed:down')
+
+  assert.ok(run, 'mise.toml defines testbed:run')
+  // The three halves the description has to carry: what the run restores, the
+  // case the promise does not cover, and the command that recovers it. The old
+  // text, "always restoring the live deployment", matched none of them.
+  assert.match(run.description, /restores the live deployment/, 'the promise names what it restores')
+  assert.match(run.description, /interrupt/, 'and the case the promise does not cover')
+  assert.match(run.description, /mise run testbed:down/, 'with the command that recovers an interrupted run')
+  assert.match(down.description, /restore the live deployment/, 'the recovery the run names is a real task')
+})
+
+// The driver install path is tools/driver/README.md, not a task (#123). The task
+// that used to sit here ran install.sh with no environment, so it cloned the
+// 26.1.2 record pair (docs/driver-lane.md): gate-b-player and
+// gate-b-player-fabric, the client the 26.2 jar refuses to load. Retargeting it
+// did not save it. gate-b-player-262-fabric already exists on the display host,
+// install.sh exits 1 when the instance exists, and that host has no checkout for
+// mise to run in, so no form of the task worked where the Prism root lives.
+// Nothing referenced it, so it is gone. A task that installs the driver again
+// has to name the 26.2 pair, because install.sh defaults to the record pair.
+test('the driver install path is a script, not a mise task', () => {
+  assert.equal(
+    tasks.has('driver:install'),
+    false,
+    'tools/driver/README.md carries the install, and only it'
+  )
+  // A task that runs the installer with a jar, not the lint rung that
+  // syntax-checks the script.
+  for (const [name, task] of tasks) {
+    if (!/tools\/driver\/install\.sh [^ ]*\.jar/.test(task.body)) continue
+    assert.match(task.body, /BASE=gate-b-player-262(?![-\w])/, name + ' names the 26.2 base instance')
+    assert.match(task.body, /INSTANCE=gate-b-player-262-fabric(?![-\w])/, name + ' names the 26.2 driver instance')
+  }
+})
+
 test('every rung task names the next rung when it fails', () => {
   for (const rung of loadLadder()) {
     for (const name of rung.tasks) {
