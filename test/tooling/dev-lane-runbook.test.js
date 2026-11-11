@@ -10,6 +10,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseLadder } from '../../src/ladder/next-rung.js'
+import { STATES } from '../../src/core/session.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -160,6 +161,16 @@ test('the dev account section states the limit the lane honors', () => {
   assert.match(account, /one account, one writer, one replica/i, 'the limit is stated once, in one phrase')
   assert.match(account, /ReadWriteOnce/, 'the claim that enforces it is named')
   assert.match(account, /devpuppet/, 'the account is named by its alias')
+})
+
+test('the glossary defines every session stage the core exports', () => {
+  // The glossary is the vocabulary an agent writes with, so a stage the core
+  // exports and the glossary omits is a term a reader meets undefined (#122).
+  const entry = read('GLOSSARY.md').match(/^\*\*Session state\*\*:\n(.+)$/m)
+  assert.ok(entry, 'GLOSSARY.md defines Session state')
+  for (const stage of Object.values(STATES)) {
+    assert.match(entry[1], new RegExp('\\b' + stage + '\\b'), 'the Session state entry names ' + stage)
+  }
 })
 
 test('the glossary names the lanes the docs use', () => {
