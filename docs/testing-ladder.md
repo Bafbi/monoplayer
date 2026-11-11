@@ -317,6 +317,20 @@ first dial and its target warms in five seconds.
   `codeOfConductAccepted` and not `codeOfConductHeld`, nothing is held, the
   router counts one puppet answer, and the one resend `O30` sees is the play
   dialog.
+- `O46` a pack sent while a client is attached is the human's answer
+  (#98). The fake backend sends one play-state `add_resource_pack` with
+  `forced` set. The first bot decodes it, the backend records no status before
+  the bot answers, and the three statuses the bot sends (accepted 3, downloaded
+  4, successfully loaded 0) are the ones the backend records, with the pack's
+  UUID, `resourcePackAcks` 0, and `resourcePacksAnswered` 3.
+- `O47` a pack sent while nobody is attached is accepted by the puppet, held,
+  and delivered to the next client (#98). The backend records accepted then
+  loaded from the puppet's connection while the lane is headless. The
+  reattaching client receives the held `add_resource_pack` from the holder, not
+  from the state cache, and the three statuses it sends reach the backend after
+  the puppet's two. It receives O46's pack as well, in send order, because a
+  pack stays installed on the puppet's connection until the server withdraws it:
+  `resourcePacksResent` 2, `resourcePackAcks` 1.
 - `O43` a configuration gate the last client left is answered as the puppet
   (#73). A third fake backend runs with the code of conduct enabled and is the
   target of a second followed transfer on the kept connection, so the gate
@@ -360,6 +374,7 @@ A row that contradicts its prediction is a finding, in either direction.
 | `cache_only` | both, one live and one replayed | either client without a login |
 | `per_leg` | both, each from its own leg | either client without one |
 | `live_only` | both, when the traffic happened in both runs | either client without it, on a deterministic lane |
+| `control` | both, the frame relayed to whoever answers it | either client without it, on a deterministic lane |
 | `block` | the direct client only | the proxied client saw it, which is a frame that crossed when it must not |
 | `kick_disconnect` | both | the proxied client never received the kick as a frame |
 

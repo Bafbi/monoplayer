@@ -156,6 +156,10 @@ const PREDICTIONS = Object.freeze({
   // Relayed while attached and never cached: both clients see the traffic that
   // happened while they were attached.
   [DECISION.LIVE_ONLY]: 'both',
+  // Relayed to the client that answers it, and never cached: the same shape, so
+  // the same prediction. A control frame that reaches only one side is a finding
+  // (#16's dialogs, #98's resource pack).
+  [DECISION.CONTROL]: 'both',
   // The proxy takes the action on its own connection and never relays it, so
   // only the direct client sees the frame.
   [DECISION.BLOCK]: 'direct'
