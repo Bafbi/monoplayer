@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url'
 
 import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js'
 import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
-import { detail, flag, withTimeout } from '../service/cli.js'
+import { detail, flag, waitFor, withTimeout } from '../service/cli.js'
 import { createOfflineBackendLeg } from '../legs/live-backend.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { waitForReady } from '../service/readiness.js'
@@ -29,20 +29,6 @@ import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-par
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
-
-function waitFor (pred, label, ms = 10_000) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + ms
-    const tick = () => {
-      let ok = false
-      try { ok = pred() } catch { /* treat a throwing predicate as not ready */ }
-      if (ok) return resolve()
-      if (Date.now() >= deadline) return reject(new Error(`timed out after ${ms} ms waiting for ${label}`))
-      setTimeout(tick, 10)
-    }
-    tick()
-  })
-}
 
 // A port nothing listens on: the cheapest dial a target refuses. The socket is
 // bound and closed again, so the number is real and the refusal is the kernel's.

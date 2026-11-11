@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { candidateLines, detail, flag, withTimeout } from '../../src/service/cli.js'
+import { candidateLines, detail, flag, waitFor, withTimeout } from '../../src/service/cli.js'
 
 test('flag reads the value that follows its name', () => {
   assert.equal(flag(['--report', 'out.json', '--verbose'], '--report'), 'out.json')
@@ -95,4 +95,30 @@ test('withTimeout arms a timer that does not hold the process open', async () =>
   assert.ok(armed, 'a deadline timer was armed')
   assert.equal(armed.hasRef(), false, 'and it does not keep the event loop alive')
   real(() => {}, 0)
+})
+
+test('waitFor resolves at once when the predicate already holds', async () => {
+  await waitFor(() => true, 'already there')
+})
+
+test('waitFor polls until the predicate holds', async () => {
+  let calls = 0
+  await waitFor(() => ++calls >= 3, 'the third poll')
+  assert.equal(calls, 3)
+})
+
+test('waitFor treats a throwing predicate as not ready, and keeps waiting', async () => {
+  let calls = 0
+  await waitFor(() => {
+    calls++
+    if (calls < 3) throw new Error('the leg is still closing')
+    return true
+  }, 'a predicate that settles down')
+  assert.equal(calls, 3, 'the throw is a wait, never a rejection')
+})
+
+test('waitFor rejects with the label and the budget when the deadline passes', async () => {
+  await assert.rejects(waitFor(() => false, 'the dialog held', 20), {
+    message: 'timed out after 20 ms waiting for the dialog held'
+  })
 })
