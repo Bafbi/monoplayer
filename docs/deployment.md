@@ -220,8 +220,12 @@ Telemetry and journal:
 - `OTEL_EXPORTER_OTLP_ENDPOINT`, for example
   `http://otel-collector.deepmine-shared.svc.cluster.local:4318`
 - `OTEL_SERVICE_NAME=monoplayer`
-- `MONOPLAYER_JOURNAL_DIR=/data/journal`
-- `MONOPLAYER_JOURNAL_MAX_BYTES` (default `268435456`)
+- `MONOPLAYER_JOURNAL_DIR=/tmp/journal`, on the pod's own `journal`
+  `emptyDir` with `sizeLimit: 512Mi`, never on the custody volume
+- `MONOPLAYER_JOURNAL_MAX_BYTES` (default `268435456`), the rotation size
+- `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` (default `268435456`), the directory
+  budget, pruned on start and on every rotation
+- `MONOPLAYER_JOURNAL_MAX_AGE_MS` (default `604800000`), the age cap
 
 See `docs/telemetry.md` for the signals and the journal layout.
 
@@ -246,5 +250,8 @@ See `docs/telemetry.md` for the signals and the journal layout.
   state on that same connection. With the key off the client is detached with a
   moving reason and rejoins the proxy once the puppet is warm on the target. See
   `docs/product-core.md`.
-- **The journal lives on the custody volume.** 128 MiB per file, one rotation,
-  at most 256 MiB of the 1 GiB claim.
+- **The journal never lives on the custody volume.** It has its own `emptyDir`
+  with `sizeLimit: 512Mi`, and retention keeps it to a 256 MiB budget plus one
+  128 MiB rotating file on start and on every rotation. Two days of play once
+  filled the custody volume with journal segments and the front CrashLooped on
+  ENOSPC (#96). Frames do not survive a restart.

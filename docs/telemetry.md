@@ -23,6 +23,8 @@ Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch a
 | `HOSTNAME` | `service.instance.id`. Falls back to the process id. |
 | `MONOPLAYER_JOURNAL_DIR` | Journal directory. The journal is off when unset. The directory is created if missing. |
 | `MONOPLAYER_JOURNAL_MAX_BYTES` | Rotation threshold for one journal file. Defaults to `268435456` (256 MiB). |
+| `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` | Byte budget for the journal directory, pruned on start and after every rotation. Defaults to `268435456` (256 MiB), and must be at least `MONOPLAYER_JOURNAL_MAX_BYTES`. |
+| `MONOPLAYER_JOURNAL_MAX_AGE_MS` | Age cap for a journal file, pruned the same way. `0` leaves the byte budget as the only rule. Defaults to `604800000` (7 days). |
 
 `MONOPLAYER_ACCOUNT_ALIAS` is set internally from the resolved puppet alias; it becomes the resource attribute `monoplayer.account.alias`.
 
@@ -119,7 +121,24 @@ Because `t` is captured when the frame reaches the core, a client action (`c2s`)
 
 ### Rotation and retention
 
-A file rotates when the next record would push it past `MONOPLAYER_JOURNAL_MAX_BYTES`. Rotation closes the current file, renames it to `<same>.1`, replacing an older `<same>.1`, and continues in a new file with a `-2`, `-3`, ... suffix. The journal does not delete old session files; disk retention is the operator's job. A single record larger than the threshold is written to an empty file and rotates on the next record.
+A file rotates when the next record would push it past `MONOPLAYER_JOURNAL_MAX_BYTES`. Rotation closes the current file, renames it to `<same>.1`, replacing an older `<same>.1`, and continues in a new file with a `-2`, `-3`, ... suffix. A single record larger than the threshold is written to an empty file and rotates on the next record.
+
+The directory also has a budget, enforced on start and after every rotation (#96):
+
+- The oldest files go first, in the reader's rotation order.
+- A file older than `MONOPLAYER_JOURNAL_MAX_AGE_MS` goes even when the directory is under its byte budget.
+- `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` bounds the directory. The segment being written is never pruned, because `MONOPLAYER_JOURNAL_MAX_BYTES` bounds it, so the directory holds at most the budget plus one rotating file.
+- A name that is not a journal name is never deleted.
+
+The journal prunes itself because nothing else can see it: on the deployed lane it lives on the pod's own `emptyDir`, which dies with the pod. No CronJob or node janitor can reach it.
+
+A rotation size alone deletes nothing. One measured session wrote 393.5 MB in 96.5 minutes, and journal segments filled the 1 GiB custody volume until the front CrashLooped on ENOSPC (#96). At that rate, the 256 MiB budget the deployment sets keeps about an hour of frames.
+
+The journal never shares the custody volume. It lives at `MONOPLAYER_JOURNAL_DIR`, `/tmp/journal` on the deployed lane, on its own `emptyDir` with a `sizeLimit` of `512Mi`. The directory holds at most the budget plus one rotating file, and the limit sits above both.
+
+When its volume has no room for the budget, the journal opens no file and the service logs `journalVolumeFull` with the path, then starts the front anyway: a diagnostic artifact does not take the service down with it. A write that hits a full volume stops the journal the same way.
+
+The heartbeat's `journal` object reports `disabledReason` when the journal is off, and `dirBytes`, the directory's own footprint.
 
 ### Privacy
 
@@ -141,11 +160,11 @@ log. The path defaults to `MONOPLAYER_JOURNAL_DIR`, and to `MONOPLAYER_LOG` for
 `heartbeat`.
 
 ```bash
-node tools/journal.mjs tail 20 --path /data/journal
+node tools/journal.mjs tail 20 --path /tmp/journal
 node tools/journal.mjs heartbeat --path monoplayer.jsonl
-node tools/journal.mjs names map_chunk --path /data/journal
-node tools/journal.mjs tail 1 --name map_chunk --path /data/journal
-node tools/journal.mjs window 60 --dir s2c --path /data/journal
+node tools/journal.mjs names map_chunk --path /tmp/journal
+node tools/journal.mjs tail 1 --name map_chunk --path /tmp/journal
+node tools/journal.mjs window 60 --dir s2c --path /tmp/journal
 ```
 
 - `tail [n]` prints the last n records, one JSON per line. The default is 10.
