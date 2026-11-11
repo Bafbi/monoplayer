@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O45 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O47 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -535,6 +535,53 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
+    // --- O46: while a client is attached, the pack is the human's answer (#98) ---
+    // The backend sends one pack and never repeats it. The puppet's own accept
+    // would close the round before the human saw anything, so the proxy must
+    // relay the frame and say nothing on the backend leg; the status the client
+    // sends is the answer the server hears, with the human's own results.
+    const LIVE_PACK = '11111111-1111-4111-8111-111111111111'
+    // Counters, not totals: any earlier rig that touched a pack would otherwise
+    // break this check for a reason that has nothing to do with it.
+    const answeredBefore = core.metrics.resourcePacksAnswered
+    const acksBefore = core.metrics.resourcePackAcks
+    const livePackStatuses = fake.received.resourcePackResponses.length
+    fake.sendResourcePack({
+      uuid: LIVE_PACK,
+      url: 'https://example.invalid/loopback-live.zip',
+      hash: '',
+      forced: true
+    })
+    await settleUntil(() => b1.resourcePacks.length === 1, 5_000)
+    const puppetAnsweredWhileAttached = fake.received.resourcePackResponses.length - livePackStatuses
+    bot1.sendResourcePackStatus(LIVE_PACK, 3)
+    bot1.sendResourcePackStatus(LIVE_PACK, 4)
+    bot1.sendResourcePackStatus(LIVE_PACK, 0)
+    await settleUntil(
+      () => fake.received.resourcePackResponses.length >= livePackStatuses + 3,
+      5_000
+    )
+    const liveStatuses = fake.received.resourcePackResponses.slice(livePackStatuses)
+    check(
+      'O46',
+      'a pack reaches the attached client, the puppet stays silent, and the human status is the answer the backend hears',
+      b1.resourcePacks.length === 1 &&
+        b1.resourcePacks[0]?.uuid === LIVE_PACK &&
+        puppetAnsweredWhileAttached === 0 &&
+        liveStatuses.length === 3 &&
+        liveStatuses.every(entry => entry.uuid === LIVE_PACK) &&
+        JSON.stringify(liveStatuses.map(entry => Number(entry.result))) === JSON.stringify([3, 4, 0]) &&
+        core.metrics.resourcePacksAnswered === answeredBefore + 3 &&
+        core.metrics.resourcePackAcks === acksBefore &&
+        b1.leftovers.every(entry => entry.name !== 'add_resource_pack'),
+      {
+        onClient: b1.resourcePacks.map(pack => pack.uuid),
+        puppetAcks: puppetAnsweredWhileAttached,
+        statuses: liveStatuses.map(entry => Number(entry.result)),
+        answered: core.metrics.resourcePacksAnswered - answeredBefore
+      }
+    )
+
     // --- O27: the N13 frame cut is aligned on a real client ---
     // N13 compares the attach snapshot with the FIRST K captured play frames,
     // where K is the number of parity frames the replay sent. The assumption is
@@ -883,6 +930,25 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     fake.sendShowDialog({ id: DIALOG_ID })
     await waitFor(() => core.pendingDialog.held === true, 'the dialog held while detached')
 
+    // --- O47, headless half: a pack nobody can answer is the puppet's ---
+    // A required pack the server hears nothing about can end the session, so a
+    // headless lane accepts and loads it. The copy stays held, because the next
+    // client still needs the pack installed on its own client.
+    const HELD_PACK = '22222222-2222-4222-8222-222222222222'
+    const heldPackStatuses = fake.received.resourcePackResponses.length
+    const packsResentBefore = core.metrics.resourcePacksResent
+    fake.sendResourcePack({
+      uuid: HELD_PACK,
+      url: 'https://example.invalid/loopback-held.zip',
+      hash: '',
+      forced: true
+    })
+    await waitFor(
+      () => fake.received.resourcePackResponses.length >= heldPackStatuses + 2,
+      'the puppet pack accept while nobody is attached'
+    )
+    const headlessStatuses = fake.received.resourcePackResponses.slice(heldPackStatuses)
+
     // --- O13-O14: reattach replays the new pose + cached block ---
     bot2 = createBot({ port: evidence.frontPort, username: 'Second' })
     await bot2.ready()
@@ -975,6 +1041,49 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         clicks: fake.received.customClickActions.map(click => click.id),
         answered: core.metrics.controlDialogsAnswered,
         pending: core.pendingDialog.held
+      }
+    )
+
+    // --- O47, attached half: the held pack reaches the next client, and its
+    // answer reaches the backend ---
+    // The reattaching client was not there when the backend sent the pack, so it
+    // has no copy but the held one (#98). The eviction that made this the defect
+    // needs 512 generic frames, which this rung does not push: the unit lane
+    // pins that half ("600 generic frames" in test/service/monoplayer.test.js),
+    // and this check pins that the frame comes from the holder rather than from
+    // the cache, which never held it.
+    await settleUntil(() => b2.resourcePacks.length >= 1, 5_000)
+    const heldBeforeAnswer = fake.received.resourcePackResponses.slice(heldPackStatuses + 2)
+    bot2.sendResourcePackStatus(HELD_PACK, 3)
+    bot2.sendResourcePackStatus(HELD_PACK, 4)
+    bot2.sendResourcePackStatus(HELD_PACK, 0)
+    await settleUntil(
+      () => fake.received.resourcePackResponses.length >= heldPackStatuses + 5,
+      5_000
+    )
+    const humanStatuses = fake.received.resourcePackResponses.slice(heldPackStatuses + 2)
+    check(
+      'O47',
+      'a pack sent while nobody was attached is accepted by the puppet, delivered to the next client, and its answer reaches the backend',
+      headlessStatuses.length === 2 &&
+        JSON.stringify(headlessStatuses.map(entry => [entry.uuid, Number(entry.result)])) ===
+          JSON.stringify([[HELD_PACK, 3], [HELD_PACK, 0]]) &&
+        // The holder keeps one copy per pack, so the next client receives both
+        // this one and the one O46's client already answered: a pack stays
+        // installed on the puppet's connection until the server withdraws it.
+        JSON.stringify(b2.resourcePacks.map(pack => pack.uuid)) === JSON.stringify([LIVE_PACK, HELD_PACK]) &&
+        humanStatuses.length === 3 &&
+        humanStatuses.every(entry => entry.uuid === HELD_PACK) &&
+        JSON.stringify(humanStatuses.map(entry => Number(entry.result))) === JSON.stringify([3, 4, 0]) &&
+        heldBeforeAnswer.length === 0 &&
+        core.metrics.resourcePacksResent === packsResentBefore + 2 &&
+        core.metrics.resourcePackAcks === acksBefore + 1,
+      {
+        headless: headlessStatuses.map(entry => [entry.uuid, Number(entry.result)]),
+        onClient: b2.resourcePacks.map(pack => pack.uuid),
+        human: humanStatuses.map(entry => Number(entry.result)),
+        resent: core.metrics.resourcePacksResent - packsResentBefore,
+        acks: core.metrics.resourcePackAcks - acksBefore
       }
     )
 

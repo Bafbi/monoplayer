@@ -168,6 +168,14 @@ _Avoid_: prompt, popup, form, UI
 The two halves of a control dialog's wire form, and the rule that decides whether the puppet may answer one: the reader that lists a `show_dialog`'s actions and chooses one, the encoder that builds the `custom_click_action` body, and the per-dialog decision that refuses a play dialog and stands down while a player is attached. The leg asks that question once per dialog, counts the answers against its cap, and writes the frame.
 _Avoid_: dialog helper, dialog utils
 
+**Resource pack**:
+A control frame the server pushes once per connection with `add_resource_pack` and withdraws with `remove_resource_pack` — one pack by UUID, or every pack when the UUID is absent. It is the player's to accept or decline, and their `resource_pack_receive` reaches the server as the puppet's own frame, in each stage the client sends, while the puppet is in the state that frame was sent in. With no player attached, the puppet accepts and loads.
+_Avoid_: texture pack, pack request, pack push
+
+**Pending resource pack**:
+A pack the backend sent that a client can still be shown. Monoplayer holds one copy per pack UUID outside the state cache, because the server sends a pack once and a later player would otherwise get nothing. `remove_resource_pack` drops it, a backend teardown or a failed transfer drops it, and a player's answer never does.
+_Avoid_: pack cache, pack queue
+
 **Pending dialog**:
 The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog`, on the player's answer, or when the puppet answers a configuration gate the last player left, and re-sends it when a player attaches in its phase.
 _Avoid_: dialog queue, dialog cache

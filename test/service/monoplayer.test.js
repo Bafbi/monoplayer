@@ -82,34 +82,151 @@ function attach ({ frontLeg, core }, uuid = PLAYER) {
   return { denied: false, ...core.attachPlayer({ name: 'Bafbi', uuid }) }
 }
 
-test('a backend resource pack request is answered on the puppet leg', () => {
+const PACK = uuid => ({
+  state: 'play',
+  name: 'add_resource_pack',
+  data: { uuid, url: `https://example.invalid/${uuid}.zip`, hash: '', forced: false, prompt: null }
+})
+
+// #98: the pack is the human's answer, and the held copy is what a later client
+// receives. Nothing about the pack goes through the state cache.
+test('a resource pack reaches an attached client and the puppet does not answer it', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver(PACK(PLAYER))
+
+  assert.equal(rig.frontLeg.namesOf().includes('add_resource_pack'), true, 'the client got the pack')
+  const acks = rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive')
+  assert.equal(acks.length, 0, 'the puppet said nothing: one answer, from the human')
+  assert.equal(rig.core.metrics.resourcePackAcks, 0)
+  assert.equal(rig.core.metrics.resourcePacksRelayed, 1)
+  assert.equal(rig.core.pendingPacks.held, true, 'held for the next client')
+  assert.equal(
+    rig.core.cache.snapshot().generic.some(f => f.name === 'add_resource_pack'),
+    false,
+    'a control frame is never cached'
+  )
+
+  // The human's own result crosses as the puppet's frame: declined here, so a
+  // proxy that turned it into an accept would be visible.
+  rig.frontLeg.serverbound({ state: 'play', name: 'resource_pack_receive', data: { uuid: PLAYER, result: 1 } })
+  const forwarded = rig.backendLeg.rawWrites().filter(w => w.meta?.name === 'resource_pack_receive')
+  assert.equal(forwarded.length, 1, 'exactly one answer reached the backend')
+  assert.equal(forwarded[0].buffer.toString(), 'client:resource_pack_receive')
+  assert.equal(rig.core.metrics.resourcePacksAnswered, 1)
+  assert.equal(rig.core.pendingPacks.held, true, 'the pack stays installed for the next client')
+})
+
+test('a resource pack with nobody attached is accepted by the puppet and delivered to the next client', () => {
   const rig = makeCore()
   warmBackend(rig)
 
-  rig.backendLeg.deliver({
-    state: 'play',
-    name: 'add_resource_pack',
-    data: { uuid: PLAYER, url: 'https://example.invalid/pack.zip', hash: '', forced: false, prompt: null }
-  })
+  rig.backendLeg.deliver(PACK(PLAYER))
   const acks = rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive')
-  assert.equal(acks.length, 2, 'accepted then loaded')
+  assert.equal(acks.length, 2, 'accepted then loaded, headless')
   assert.deepEqual(acks.map(p => p.packet.result), [3, 0])
   assert.equal(acks[0].packet.uuid, PLAYER)
   assert.equal(rig.core.metrics.resourcePackAcks, 1)
+
+  attach(rig)
+  assert.equal(rig.frontLeg.namesOf().includes('add_resource_pack'), true, 'the held pack reaches the next client')
+  assert.equal(rig.core.metrics.resourcePacksResent, 1)
+
+  rig.frontLeg.serverbound({ state: 'play', name: 'resource_pack_receive', data: { uuid: PLAYER, result: 3 } })
+  assert.equal(rig.core.metrics.resourcePacksAnswered, 1)
+})
+
+// The reported symptom: the pack is not in the replay any more. Ordinary state
+// would put it in the 512-entry generic ring, where a live session evicts it in
+// about 90 seconds. The held copy does not care how much traffic went by.
+test('a resource pack survives 600 generic frames and still reaches a later client', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  rig.backendLeg.deliver(PACK(PLAYER))
+  for (let i = 0; i < 600; i++) {
+    rig.backendLeg.deliver({ state: 'play', name: 'sound_effect', data: { soundId: i } })
+  }
   assert.equal(
     rig.core.cache.snapshot().generic.some(f => f.name === 'add_resource_pack'),
-    true,
-    'the request is still cached for the attaching client'
+    false,
+    'the cache ring no longer holds it, which is why the holder exists'
   )
 
-  rig.backendLeg.deliver({
-    state: 'configuration',
-    name: 'add_resource_pack',
-    data: { uuid: OTHER, url: 'https://example.invalid/pack2.zip', hash: '', forced: false, prompt: null }
-  })
-  const configAcks = rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive').slice(2)
-  assert.deepEqual(configAcks.map(p => p.packet.result), [3, 0])
-  assert.equal(rig.core.metrics.resourcePackAcks, 2)
+  attach(rig)
+  assert.equal(rig.frontLeg.namesOf().includes('add_resource_pack'), true, 'the held pack still reaches the client')
+})
+
+test('a configuration-phase pack is delivered in the client configuration phase, and remove withdraws it', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+
+  rig.backendLeg.deliver({ ...PACK(OTHER), state: 'configuration' })
+  assert.equal(rig.core.pendingPacks.held, true)
+  // A client in play cannot parse a configuration frame, so the pack waits.
+  assert.equal(rig.core.metrics.resourcePacksRelayed, 0)
+
+  // The live leg's order: the client's own configuration phase comes first
+  // (configuringReady), the play attach at playerJoin after it. A configuration
+  // pack reaches the client in that phase and nowhere else.
+  rig.core.configuringReady({ name: 'Bafbi' })
+  const delivered = rig.frontLeg.frames().filter(f => f.name === 'add_resource_pack')
+  assert.equal(delivered.length, 1, 'delivered in the client configuration phase')
+  assert.deepEqual(delivered[0].meta, { state: 'configuration', name: 'add_resource_pack' })
+
+  attach(rig)
+  assert.equal(
+    rig.frontLeg.frames().filter(f => f.name === 'add_resource_pack').length,
+    1,
+    'a configuration pack is not written into the play replay'
+  )
+
+  rig.backendLeg.deliver({ state: 'configuration', name: 'remove_resource_pack', data: { uuid: OTHER } })
+  assert.equal(rig.core.pendingPacks.held, false, 'remove drops the held copy')
+  assert.equal(rig.core.metrics.resourcePacksRemoved, 1)
+})
+
+// #98: a client that is attached but cannot take the frame yet is still a client.
+// An early-attach client is in its own configuration when a play-state pack
+// arrives; it is offered the pack at its replay, so the puppet must not invent
+// an answer beside the human's.
+test('a pack that arrives while a client is attached but not in play waits, unanswered', () => {
+  // #16's early attach: the client follows the puppet's configuration, so the
+  // core is attached while the client is still in its own configuration round.
+  // A play-state pack now cannot be written to the client yet; it is offered at
+  // the play replay, and the puppet must not answer in the meantime.
+  const rig = makeCore()
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  const decision = rig.frontLeg.loginStart({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(decision.allowed, true)
+  const early = rig.core.attachConfiguringPlayer({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(early.attached, true)
+
+  rig.backendLeg.deliver({ ...PACK(PLAYER), state: 'play' })
+  assert.equal(
+    rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive').length,
+    0,
+    'the puppet said nothing: a client is attached'
+  )
+  assert.equal(rig.core.metrics.resourcePacksWithheld, 1)
+  assert.equal(rig.core.pendingPacks.held, true)
+  assert.equal(rig.core.metrics.resourcePacksRelayed, 0, 'the client is not in play yet, so nothing was written')
+})
+
+test('a pack a client never answered becomes the puppet answer on detach', () => {
+  const rig = makeCore()
+  warmBackend(rig)
+  attach(rig)
+
+  rig.backendLeg.deliver(PACK(PLAYER))
+  assert.equal(rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive').length, 0)
+
+  rig.frontLeg.clientDisconnect({ reason: 'player_quit' })
+  const acks = rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive')
+  assert.deepEqual(acks.map(p => p.packet.result), [3, 0], 'the server hears an answer for its required pack')
+  assert.equal(rig.core.metrics.resourcePacksAnsweredOnDetach, 1)
+  assert.equal(rig.core.pendingPacks.held, true, 'the held copy stays for the next client')
 })
 
 test('an attach before the backend is ready is denied before configuration', () => {

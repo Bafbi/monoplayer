@@ -116,9 +116,10 @@ configuration-state `transfer`, `disconnect`, and cookies. Unknown names and
 unknown states fail closed (`block`, `unknown: true`) and log once.
 
 `control` is the sixth decision (#16): `show_dialog` and `clear_dialog` in
-both states, and `code_of_conduct` in configuration. A control frame relays to
-the player who answers it, and never caches or replays, because the pending
-holder keeps the one copy.
+both states, `code_of_conduct` in configuration, and `add_resource_pack` and
+`remove_resource_pack` in both (#98). A control frame relays to the player who
+answers it, and never caches or replays, because a pending holder keeps the one
+copy.
 
 The router, `state-cache` (`classifyPlay`/`classifyConfig`), `join-synth`
 (`LEG_OWNED`), and the front leg's configuration replay read the same policy.
@@ -217,7 +218,10 @@ answer after the play login, or a play frame while the puppet is still
 configuring, drops with `puppet_state_mismatch` instead of ending the backend
 session. The frames the front client's own connection answers stay per-leg: `CONFIG_SERVERBOUND_DROPS` in `src/core/relay.js` holds
 `finish_configuration`, `select_known_packs`, and `settings`, and the core's
-name-based drops cover keep-alive, pong, cookies, and resource-pack replies.
+name-based drops cover keep-alive, pong, and cookies. A resource pack's
+`resource_pack_receive` forwards instead: the human's client is the one that
+accepted, downloaded, and loaded the pack, so its status is the answer the
+server hears, written as the puppet's own frame (#98).
 
 ### Transfer follow (`config.transfer`)
 
@@ -533,8 +537,12 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   ordered, but 26.1/775 config content (registry_data completeness,
   select_known_packs, server_links) must be verified against a live client —
   no acceptance claim without it.
-- Resource packs: B1 has no pack state machine (MVP targets no required pack);
-  `resource_pack_receive` is dropped serverbound.
+- Resource packs: the pack is a control frame the human answers (#98). The
+  held copy lives in `src/core/pending-resource-pack.js`, outside the state
+  cache, so a play-state pack is not evicted from the generic ring before a
+  client attaches. With no client attached, the puppet accepts and loads; with
+  one attached, it says nothing and the human's status is the answer. An absent
+  UUID on `remove_resource_pack` withdraws every pack.
 
 ## Limits / open questions
 
