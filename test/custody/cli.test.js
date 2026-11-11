@@ -234,6 +234,23 @@ test('status --json reports presence of tokens and never their values', (t) => {
   assert.ok(!result.stdout.includes(ACCESS_TOKEN), result.stdout)
 })
 
+// A profile field is operator text, so it can carry a secret shape. The report
+// is redacted before it reaches stdout, and the warning counts what the report
+// carried: a sentinel is what redaction leaves behind, not a finding (#92).
+test('a secret-shaped profile field is tagged in the report and counted in the warning', (t) => {
+  const h = harness(t)
+  seedAccounts(h.accountsDir)
+  const deviceCode = 'ABCD-1234-EFGH'
+  writeProfile(path.join(h.accountsDir, A), { uuid: A, deviceType: `device_code=${deviceCode}` })
+
+  const result = h.runIn('status', '--account', 'main', '--json')
+  assert.equal(result.status, 0, result.stderr)
+  assert.ok(!result.stdout.includes(deviceCode), result.stdout)
+  assert.ok(result.stdout.includes('[REDACTED]'), result.stdout)
+  assert.match(result.stderr, /warning: 1 secret-shaped string\(s\) were tagged/)
+  assert.doesNotThrow(() => JSON.parse(result.stdout), 'a redacted report must still parse')
+})
+
 test('status prints a one-line-per-fact summary without --json', (t) => {
   const h = harness(t)
   seedAccounts(h.accountsDir)
