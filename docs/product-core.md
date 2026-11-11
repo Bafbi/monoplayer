@@ -21,8 +21,11 @@ that client in 1.65 s. Clientbound connection control is now blocked and
 uncacheable at one decision point; see "Clientbound policy" below.
 
 B1 is the product-shaped core with **no real tokens, no sockets, no Microsoft
-auth**: adapters and the clock are injected. The CLI never opens a network
-connection; `--start` explicitly refuses (`exit 2`) until G1/M1 land live legs.
+auth**: adapters and the clock are injected, and the core opens no socket.
+`--start` runs the Service, and the image's `CMD` is `--start` (`Dockerfile`).
+Any other invocation starts the front leg and the backend leg. A default
+invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
+`--start` exits 2 with `refusing the default config`.
 
 ## Module map (`src/core/`, `src/legs/`, `src/observability/`, `src/service/`)
 
@@ -572,5 +575,5 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   60s-window semantics) is the session wiring's responsibility later.
 - Redaction is pattern-based (fields, Bearer, JWT shapes). Real-token logs
   must also grep audit before shipping evidence (B6).
-- CLI: `--print-config`, `--help`, refuse `--start`. No mise/package changes
-  per slice rules.
+- CLI: `--print-config`, `--help`, and `--start` behind its default-invocation
+  guard. No mise/package changes per slice rules.
