@@ -18,8 +18,8 @@
 // The packet shape itself is proved in test/core/skin.test.js.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, loadConfig, DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { loadConfig, DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
+import { makeCore as rig } from '../support/harness.js'
 
 const PLAYER = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const PUPPET = 'ea45ba2e-f47d-43ee-9604-b20af90be1f1'
@@ -28,44 +28,10 @@ const BUFFER = name => Buffer.from('backend:' + name)
 const TEXTURES = { name: 'textures', value: 'dGV4dHVyZXM=', signature: 'c2lnbmF0dXJl' }
 const STRANGER_TEXTURES = { name: 'textures', value: 'c3RyYW5nZXI=', signature: 'c2lnbmF0dXJl' }
 
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) { const t = { fn, fires: now + ms }; timers.push(t); return t },
-    clearTimeout (t) { timers = timers.filter(x => x !== t) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    },
-    get pending () { return timers.length }
-  }
-}
-
-function makeCore ({ skin, logLines = null, ...config } = {}) {
-  const clock = fakeClock()
-  const backendLeg = createFakeBackendLeg()
-  const frontLeg = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: {
-      ...DEFAULT_CONFIG,
-      puppet: { username: 'Wiriaw', uuid: PUPPET },
-      attachWhitelist: [PLAYER],
-      ...config,
-      skin: { ...DEFAULT_CONFIG.skin, ...(skin ?? {}) },
-      transfer: { ...DEFAULT_CONFIG.transfer, ...(config.transfer ?? {}) }
-    },
-    backendLeg,
-    frontLeg,
-    clock,
-    logStream: logLines === null ? null : { write: line => logLines.push(JSON.parse(line)) }
-  })
-  core.start()
-  return { clock, backendLeg, frontLeg, core }
-}
+// The skin fixture names the puppet Wiriaw: the backend's player_info entry the
+// frame under test carries is that account's. Everything else is the shared rig.
+const makeCore = ({ skin, logLines = null, ...config } = {}) =>
+  rig({ config: { puppet: { username: 'Wiriaw', uuid: PUPPET }, ...config, skin }, logLines })
 
 function warmBackend ({ backendLeg, core }, { playerInfo = true } = {}) {
   backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })

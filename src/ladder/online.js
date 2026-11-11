@@ -20,9 +20,10 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
+import { candidateLines, detail, flag, waitFor, withTimeout } from '../service/cli.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { DEFAULT_ACCOUNTS_DIR, listAccounts, resolveAccount } from '../custody/accounts.js'
-import { createWhitelistStore } from '../custody/store.js'
+import { DEFAULT_WHITELIST_FILE, createWhitelistStore } from '../custody/store.js'
 import { sameName, sameUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../legs/live-backend.js'
 import { createLiveFrontLeg } from '../legs/live-front.js'
@@ -37,7 +38,6 @@ import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-par
 // itself.
 const VERSION = process.env.MONOPLAYER_VERSION || '26.2'
 const DEFAULT_REPORT = '.reports/online-report.json'
-const WHITELIST_FILE = '.secrets/attach-whitelist.json'
 const PUPPET_SELECTOR = 'glowsquidye'
 const ATTACH_SELECTOR = 'bafbi'
 
@@ -69,56 +69,12 @@ export function buildOnlineBotOptions ({ frontPort, attach, attachCustody, versi
   }
 }
 
-function flag (argv, name) {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
-}
-
-function withTimeout (promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms)
-    timer.unref?.()
-    promise.then(
-      value => { clearTimeout(timer); resolve(value) },
-      error => { clearTimeout(timer); reject(error) }
-    )
-  })
-}
-
-function waitFor (pred, label, ms = 10_000) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + ms
-    const tick = () => {
-      let ok = false
-      try { ok = pred() } catch { /* treat a throwing predicate as not ready */ }
-      if (ok) return resolve()
-      if (Date.now() >= deadline) return reject(new Error(`timed out after ${ms} ms waiting for ${label}`))
-      setTimeout(tick, 10)
-    }
-    tick()
-  })
-}
-
-function detail (value) {
-  if (value === undefined) return ''
-  const json = JSON.stringify(value, (key, inner) => typeof inner === 'bigint' ? String(inner) : inner)
-  return json === undefined ? String(value) : json
-}
-
-function candidateLines (candidates = []) {
-  if (candidates.length === 0) return '  candidates: (none)'
-  return candidates
-    .map(candidate =>
-      `  uuid=${candidate.uuid} name=${candidate.name ?? '?'} alias=${candidate.alias ?? '-'} dir=${candidate.dir}`)
-    .join('\n')
-}
-
 // The report is metadata only. Keep custody and whitelist paths out of it;
 // stderr keeps the full setup message for the operator.
 function redactPaths (text, accountsDir = DEFAULT_ACCOUNTS_DIR) {
   return String(text)
     .split(String(accountsDir)).join('<accounts-dir>')
-    .split(WHITELIST_FILE).join('<attach-whitelist>')
+    .split(DEFAULT_WHITELIST_FILE).join('<attach-whitelist>')
     .split('.secrets').join('<secrets>')
 }
 
@@ -481,18 +437,18 @@ export async function runOnline (argv = process.argv.slice(2)) {
     })
 
     // --- setup: attach whitelist (UUID-keyed, never the puppet) ---
-    const whitelistStore = createWhitelistStore({ file: WHITELIST_FILE })
+    const whitelistStore = createWhitelistStore({ file: DEFAULT_WHITELIST_FILE })
     const whitelist = whitelistStore.list().map(player => player.uuid)
     if (whitelist.length === 0) {
-      throw new Error(`the attach whitelist is empty at ${WHITELIST_FILE}`)
+      throw new Error(`the attach whitelist is empty at ${DEFAULT_WHITELIST_FILE}`)
     }
     if (!whitelist.includes(attach.uuid)) {
       throw new Error(
-        `attach account ${attach.alias ?? attach.uuid} is not on the attach whitelist at ${WHITELIST_FILE}`)
+        `attach account ${attach.alias ?? attach.uuid} is not on the attach whitelist at ${DEFAULT_WHITELIST_FILE}`)
     }
     if (whitelist.includes(puppet.uuid)) {
       throw new Error(
-        `the puppet account must not be on the attach whitelist (${WHITELIST_FILE})`)
+        `the puppet account must not be on the attach whitelist (${DEFAULT_WHITELIST_FILE})`)
     }
 
     const config = loadConfig({
@@ -542,7 +498,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
       host: '127.0.0.1',
       port: 0,
       version: VERSION,
-      attachWhitelistFile: WHITELIST_FILE,
+      attachWhitelistFile: DEFAULT_WHITELIST_FILE,
       getSnapshotConfig: () => core.cache.snapshot().config,
       wireCheck: payload => wire.check(payload),
       wireMode: 'throw',
