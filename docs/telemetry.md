@@ -128,7 +128,7 @@ The journal and telemetry never record secrets or chat content.
 - Frame names `chat_message`, `system_chat`, `player_chat`, `profileless_chat`, `chat_command`, `chat_command_signed`, and `cookie_response` are skipped.
 - Frame names matching `/token|secret|password/i` are skipped.
 - Journal event fields and telemetry attributes whose key matches `/token|secret|password|authorization|cookie|credential|device_code|user_code/i` are dropped.
-- String values pass through the JSONL log redaction rules, with bearer values masked before redaction.
+- String values pass through the JSONL log redaction rules, which rewrite a bearer value behind its scheme word (`Authorization: Bearer` becomes `Authorization=[REDACTED]`).
 - Account UUIDs, profile names, and aliases are recorded. Tokens, passwords, and message bodies are not.
 
 ## One command per question

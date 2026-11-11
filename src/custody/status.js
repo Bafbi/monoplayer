@@ -11,7 +11,7 @@
 // pasted into a field, a JWT in a message) is tagged, not emitted.
 import fs from 'node:fs'
 
-import { scanSecrets, redactSecrets, REDACTION_TAG } from '../observability/secrets.js'
+import { scanSecrets, redactSecrets, tagForValue } from '../observability/secrets.js'
 import { createTokenCustody } from './cache.js'
 import { createMsaAuth, describeIdentity } from './msa.js'
 
@@ -174,8 +174,12 @@ export function createAuthStatus ({
 // Two passes: our local, auth-specific assignment prepass (device/refresh/
 // access code-and-token keys, which the shared secret scanner does not know
 // about) first, then the repo-wide scanner for the general shapes.
+// A key may be JSON-quoted, so the separator can sit behind a closing quote
+// (#92). A value that is already a sentinel is the result of this prepass, not
+// a secret: the shared scanner runs over this pass's output, and reading the
+// sentinel as a value would eat the kind this pass just wrote.
 const LOCAL_ASSIGNMENT =
-  /\b(device[_-]?code|refresh[_-]?token|access[_-]?token|client[_-]?secret)\s*[:=]\s*(?:"([^"]{6,})"|'([^']{6,})'|([^\s"',;]{6,}))/gi
+  /\b(device[_-]?code|refresh[_-]?token|access[_-]?token|client[_-]?secret)"?\s*[:=]\s*(?:"((?!\[REDACTED\])[^"]{6,})"|'((?!\[REDACTED\])[^']{6,})'|((?!\[REDACTED\])[^\s"',;}\]]{6,}))/gi
 
 function localRedact (text) {
   const source = String(text ?? '')
@@ -187,7 +191,7 @@ function localRedact (text) {
     const start = match.index
     const valueStart = source.indexOf(value, start)
     if (start !== -1 && valueStart !== -1) {
-      out += source.slice(last, valueStart) + `${REDACTION_TAG}<${key}>`
+      out += source.slice(last, valueStart) + tagForValue(source, valueStart, key)
       last = valueStart + value.length
     }
   }
