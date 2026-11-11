@@ -99,6 +99,7 @@ export function createBot ({
     health: [], // decoded clientbound update_health frames
     systemChat: [], // decoded clientbound system_chat frames
     dialogs: [], // decoded clientbound show_dialog frames (#16)
+    resourcePacks: [], // decoded clientbound add_resource_pack frames (#98)
     gatesHeld: 0, // code-of-conduct accepts this bot refused to send (#73)
     advancements: [], // decoded clientbound advancements frames (a proxy notice toast, #15)
     kick: null, // decoded clientbound kick_disconnect, if one arrived
@@ -171,6 +172,7 @@ export function createBot ({
   client.on('update_health', packet => received.health.push(packet))
   client.on('system_chat', packet => received.systemChat.push(packet))
   client.on('show_dialog', packet => received.dialogs.push(packet))
+  client.on('add_resource_pack', packet => received.resourcePacks.push(packet))
   client.on('advancements', packet => received.advancements.push(packet))
   client.on('kick_disconnect', packet => { received.kick = packet })
 
@@ -294,6 +296,12 @@ export function createBot ({
     },
     sendMessageAck (count = 0) {
       client.write('message_acknowledgement', { count })
+    },
+    // #98: the pack status a real client sends, one frame per stage: accepted
+    // (3), downloaded (4), successfully loaded (0). The proxy must carry it to
+    // the backend as the puppet's own frame.
+    sendResourcePackStatus (uuid, result) {
+      client.write('resource_pack_receive', { uuid, result })
     },
     // #16: answer a dialog the way a client does. The library's own writer for
     // this packet omits the payload's length prefix, so the body comes from the

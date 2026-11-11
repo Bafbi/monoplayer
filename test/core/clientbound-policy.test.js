@@ -11,6 +11,7 @@ import {
   clientboundPolicy,
   mayCrossToFront,
   CONTROL_FRAMES,
+  RESOURCE_PACK_FRAMES,
   NOT_REPLAYABLE
 } from '../../src/core/clientbound-policy.js'
 
@@ -76,6 +77,25 @@ test('control dialogs relay but are never cached or replayed (#16)', () => {
   }
   // Control dialogs are not chat: a chat mode has no say about them.
   assert.equal(mayCrossToFront('play', 'show_dialog', { chat: 'off' }), true)
+})
+
+// #98: the pack is the human's answer, so it is control in both states and in
+// neither cache. Ordinary state would put a play-state pack in the 512-entry
+// generic ring, where a live session evicts it about 90 seconds in.
+test('the resource pack is control in both states, never cached or replayed', () => {
+  for (const state of ['play', 'configuration']) {
+    for (const name of ['add_resource_pack', 'remove_resource_pack']) {
+      const policy = clientboundPolicy(state, name)
+      assert.equal(policy.decision, DECISION.CONTROL, `${state}/${name}`)
+      assert.equal(policy.relay, true, `${state}/${name} relay`)
+      assert.equal(policy.cache, false, `${state}/${name} cache`)
+      assert.equal(policy.replay, false, `${state}/${name} replay`)
+      assert.equal(policy.unknown, false, `${state}/${name} classified`)
+      assert.equal(NOT_REPLAYABLE.has(name), true, `${state}/${name} never replayed`)
+      assert.equal(mayCrossToFront(state, name), true, `${state}/${name} crosses to the human`)
+      assert.equal(RESOURCE_PACK_FRAMES.has(name), true, `${state}/${name} in the pack set`)
+    }
+  }
 })
 
 test('the chat mode decides which chat frames cross', () => {
