@@ -24,6 +24,10 @@
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
 //   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory
 //   MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 256 MiB)
+//   MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES                  journal directory budget, pruned on
+//                                                       start and on rotate (default 256 MiB)
+//   MONOPLAYER_JOURNAL_MAX_AGE_MS                       journal age cap; 0 keeps the byte
+//                                                       budget alone (default 7 days)
 //   MONOPLAYER_RECONNECT_ATTEMPTS                       backend reconnect attempts
 //                                                       (0 = unlimited; unset keeps the
 //                                                       config file's value, else unlimited)
@@ -59,6 +63,16 @@ import { createTransferFollowController } from '../core/transfer-follow.js'
 // cannot name the puppet's UUID writes no frame. The raw cacheDir override
 // resolves no account and reaches this with no UUID unless the operator supplied
 // one.
+// #96: the fields of the journal_volume_full report, or null when the journal
+// opened. A journal volume with no room is the journal's own failure, and it is
+// named with its path here instead of letting the first unrelated write on that
+// volume fail with ENOSPC under another stage. Apart from startLive so the
+// report is observable without a live backend.
+export function journalVolumeFull ({ disabledReason = null, dir = null, freeBytes = null, requiredBytes = null } = {}) {
+  if (disabledReason !== 'journal_volume_full') return null
+  return { reason: 'journal_volume_full', dir, freeBytes, requiredBytes }
+}
+
 export function unidentifiedSkinWarning ({ skin, puppet } = {}) {
   if (skin?.showPuppetSkin !== true) return null
   if ((puppet?.uuid ?? null) !== null) return null
@@ -126,6 +140,30 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
     if (Number.isFinite(parsed) && parsed > 0) reconnect.maxDelayMs = Math.floor(parsed)
   }
   out.reconnect = reconnect
+  // #96: the packet journal's directory and its retention budget. A rotation
+  // size alone deletes nothing, so the directory has a byte budget and an age
+  // cap. A cap the overlay cannot read is named in a warning and left at the
+  // default, the same as every other number in this function: the defaults are
+  // bounded, so a typo costs the operator the value they meant, not the bound.
+  const journal = { ...doc.journal }
+  if (env.MONOPLAYER_JOURNAL_DIR) journal.dir = env.MONOPLAYER_JOURNAL_DIR
+  const cap = (raw, variable, floor) => {
+    if (raw === undefined || raw === '') return undefined
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed) && parsed >= floor) return Math.floor(parsed)
+    warn(variable + ' must be a number of at least ' + floor + '; ignoring ' + raw)
+    return undefined
+  }
+  for (const [variable, key, floor] of [
+    ['MONOPLAYER_JOURNAL_MAX_BYTES', 'maxBytes', 1],
+    ['MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES', 'maxTotalBytes', 1],
+    // 0 turns the age rule off; the byte budget still bounds the directory.
+    ['MONOPLAYER_JOURNAL_MAX_AGE_MS', 'maxAgeMs', 0]
+  ]) {
+    const value = cap(env[variable], variable, floor)
+    if (value !== undefined) journal[key] = value
+  }
+  if (Object.keys(journal).length) out.journal = journal
   return out
 }
 
@@ -273,13 +311,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const telemetryEnv = { ...process.env }
   if (accountAlias) telemetryEnv.MONOPLAYER_ACCOUNT_ALIAS = accountAlias
   const telemetry = createTelemetry({ env: telemetryEnv, log })
-  const journalMaxBytes = Number(process.env.MONOPLAYER_JOURNAL_MAX_BYTES)
-  const journal = createJournal({
-    dir: process.env.MONOPLAYER_JOURNAL_DIR,
-    maxBytes: Number.isFinite(journalMaxBytes) && journalMaxBytes > 0
-      ? Math.floor(journalMaxBytes)
-      : undefined
-  })
+  const journal = createJournal(cfg.journal)
+  // #96: a journal volume with no room for its budget is reported here, with
+  // the path, before any leg opens. The journal stays off; a diagnostic
+  // artifact does not take the front down with it.
+  const journalFull = journalVolumeFull(journal.stats())
+  if (journalFull !== null) log('journalVolumeFull', journalFull)
 
   // --- 2. legs + core ---
   const backend = resolved

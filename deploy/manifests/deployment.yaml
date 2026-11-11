@@ -122,17 +122,23 @@ spec:
               value: http://otel-collector.deepmine-shared.svc.cluster.local:4318
             - name: OTEL_SERVICE_NAME
               value: monoplayer
-            # Exact packet journal, on the pod's own emptyDir rather than the
-            # custody PVC. The comment here used to promise "at most 256 MiB of
-            # the 1 GiB volume"; measured, one session writes ~5.6 GB a day and
-            # rotate() keeps every segment, so the volume filled and the front
-            # CrashLooped on ENOSPC twice on 2026-11-10 (#96). A diagnostic
-            # artifact must never be able to starve the account custody, and the
-            # journal is worth more than nothing while #96 builds the retention.
+            # Exact packet journal, on its own emptyDir and never on the
+            # custody PVC: a diagnostic artifact must not be able to starve the
+            # account tokens (#96). Retention is what bounds it; the volume's
+            # sizeLimit is the backstop that keeps a retention bug from filling
+            # the node, at the price of an eviction. The budget and the limit are
+            # a pair: the directory holds at most the budget plus one rotating
+            # file, 256 MiB + 128 MiB, and the limit sits above both. Frames do
+            # not survive a restart; the JSONL log and OTLP are the durable
+            # record.
             - name: MONOPLAYER_JOURNAL_DIR
               value: /tmp/journal
             - name: MONOPLAYER_JOURNAL_MAX_BYTES
               value: "134217728"
+            - name: MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES
+              value: "268435456"
+            - name: MONOPLAYER_JOURNAL_MAX_AGE_MS
+              value: "604800000"
             - name: HOME
               value: /tmp
           ports:
@@ -175,6 +181,8 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: journal
+              mountPath: /tmp/journal
       volumes:
         - name: custody
           persistentVolumeClaim:
@@ -182,5 +190,11 @@ spec:
         - name: config
           configMap:
             name: monoplayer-config
+        # HOME is /tmp, where the auth libraries write, so the journal gets its
+        # own volume: a full journal must not take that write path down with it.
+        # At the measured 4.07 MB/min the budget keeps about an hour of frames.
         - name: tmp
           emptyDir: {}
+        - name: journal
+          emptyDir:
+            sizeLimit: 512Mi

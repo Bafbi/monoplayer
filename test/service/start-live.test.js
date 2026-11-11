@@ -4,8 +4,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { envOverlay, unidentifiedSkinWarning } from '../../src/service/start-live.js'
-import { loadConfig } from '../../src/service/monoplayer.js'
+import { envOverlay, journalVolumeFull, unidentifiedSkinWarning } from '../../src/service/start-live.js'
+import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
+import {
+  DEFAULT_MAX_AGE_MS,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_TOTAL_BYTES
+} from '../../src/observability/journal.js'
 
 const base = () => ({ transfer: { follow: true, chainLimit: 8 } })
 
@@ -63,6 +68,81 @@ test('#108 a config document\'s reconnect attempts reach loadConfig', () => {
   const cfg = loadConfig(out)
   assert.equal(cfg.reconnect.attempts, 2)
   assert.equal(cfg.reconnect.maxDelayMs, 5000)
+})
+
+// #96: the journal's directory and its retention budget are config, because a
+// directory with only a rotation size grows without bound and took the live
+// front down on ENOSPC. The byte budget, the age cap, and the directory all
+// arrive through the overlay, and loadConfig refuses a value that cannot bound
+// anything.
+// The defaults are stated twice: in the config document, which stays free of
+// file I/O, and in the journal module, which owns the retention. Neither can
+// import the other, so this is the guard that keeps them equal.
+test('#96 the journal config defaults match the journal module', () => {
+  assert.deepEqual(DEFAULT_CONFIG.journal, {
+    dir: null,
+    maxBytes: DEFAULT_MAX_BYTES,
+    maxTotalBytes: DEFAULT_MAX_TOTAL_BYTES,
+    maxAgeMs: DEFAULT_MAX_AGE_MS
+  })
+})
+
+test('#96 a full journal volume is reported with the token and the path', () => {
+  const report = journalVolumeFull({
+    disabledReason: 'journal_volume_full',
+    dir: '/tmp/journal',
+    freeBytes: 0,
+    requiredBytes: 1024
+  })
+  assert.deepEqual(report, {
+    reason: 'journal_volume_full',
+    dir: '/tmp/journal',
+    freeBytes: 0,
+    requiredBytes: 1024
+  })
+  assert.equal(journalVolumeFull({ disabledReason: 'no_dir', dir: null }), null)
+  assert.equal(journalVolumeFull({ disabledReason: null }), null)
+})
+
+test('#96 the overlay carries the journal directory and its retention budget', () => {
+  const out = envOverlay({}, {
+    MONOPLAYER_JOURNAL_DIR: '/tmp/journal',
+    MONOPLAYER_JOURNAL_MAX_BYTES: '1024',
+    MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES: '4096',
+    MONOPLAYER_JOURNAL_MAX_AGE_MS: '60000'
+  })
+  const cfg = loadConfig(out)
+  assert.deepEqual(cfg.journal, {
+    dir: '/tmp/journal',
+    maxBytes: 1024,
+    maxTotalBytes: 4096,
+    maxAgeMs: 60000
+  })
+})
+
+test('#96 an unset variable leaves the journal config, and the journal, alone', () => {
+  const out = envOverlay({}, {})
+  assert.equal(out.journal, undefined)
+  const cfg = loadConfig(out)
+  assert.equal(cfg.journal.dir, null, 'no directory means the journal is off')
+  assert.ok(cfg.journal.maxTotalBytes > 0, 'the directory still has a budget')
+  assert.ok(cfg.journal.maxAgeMs > 0, 'and an age cap')
+})
+
+test('#96 a cap that cannot be read is named and left at the default', () => {
+  const warnings = []
+  const out = envOverlay({}, { MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES: '256MiB' }, w => warnings.push(w))
+  assert.equal(out.journal, undefined, 'the document is untouched')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES/)
+})
+
+test('#96 loadConfig refuses a journal budget that does not bound the rotation', () => {
+  assert.equal(loadConfig({ journal: { maxBytes: 1024, maxTotalBytes: 4096, maxAgeMs: 1 } }).journal.maxTotalBytes, 4096)
+  assert.throws(() => loadConfig({ journal: { maxBytes: 4096, maxTotalBytes: 1024 } }), /maxTotalBytes/)
+  assert.throws(() => loadConfig({ journal: { maxBytes: 0 } }), /maxBytes/)
+  assert.throws(() => loadConfig({ journal: { maxAgeMs: -1 } }), /maxAgeMs/)
+  assert.throws(() => loadConfig({ journal: { dir: '  ' } }), /journal\.dir/)
 })
 
 test('#108 the env var overrides the document, and 0 or unset means unlimited', () => {
