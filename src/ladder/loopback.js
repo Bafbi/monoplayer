@@ -541,6 +541,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // relay the frame and say nothing on the backend leg; the status the client
     // sends is the answer the server hears, with the human's own results.
     const LIVE_PACK = '11111111-1111-4111-8111-111111111111'
+    // Counters, not totals: any earlier rig that touched a pack would otherwise
+    // break this check for a reason that has nothing to do with it.
+    const answeredBefore = core.metrics.resourcePacksAnswered
+    const acksBefore = core.metrics.resourcePackAcks
     const livePackStatuses = fake.received.resourcePackResponses.length
     fake.sendResourcePack({
       uuid: LIVE_PACK,
@@ -567,14 +571,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         liveStatuses.length === 3 &&
         liveStatuses.every(entry => entry.uuid === LIVE_PACK) &&
         JSON.stringify(liveStatuses.map(entry => Number(entry.result))) === JSON.stringify([3, 4, 0]) &&
-        core.metrics.resourcePacksAnswered === 3 &&
-        core.metrics.resourcePackAcks === 0 &&
+        core.metrics.resourcePacksAnswered === answeredBefore + 3 &&
+        core.metrics.resourcePackAcks === acksBefore &&
         b1.leftovers.every(entry => entry.name !== 'add_resource_pack'),
       {
         onClient: b1.resourcePacks.map(pack => pack.uuid),
         puppetAcks: puppetAnsweredWhileAttached,
         statuses: liveStatuses.map(entry => Number(entry.result)),
-        answered: core.metrics.resourcePacksAnswered
+        answered: core.metrics.resourcePacksAnswered - answeredBefore
       }
     )
 
@@ -932,6 +936,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // client still needs the pack installed on its own client.
     const HELD_PACK = '22222222-2222-4222-8222-222222222222'
     const heldPackStatuses = fake.received.resourcePackResponses.length
+    const packsResentBefore = core.metrics.resourcePacksResent
     fake.sendResourcePack({
       uuid: HELD_PACK,
       url: 'https://example.invalid/loopback-held.zip',
@@ -1042,8 +1047,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // --- O47, attached half: the held pack reaches the next client, and its
     // answer reaches the backend ---
     // The reattaching client was not there when the backend sent the pack, so it
-    // has no copy but the held one. Ordinary state would have evicted it from the
-    // 512-entry generic ring long before this attach (#98).
+    // has no copy but the held one (#98). The eviction that made this the defect
+    // needs 512 generic frames, which this rung does not push: the unit lane
+    // pins that half ("600 generic frames" in test/service/monoplayer.test.js),
+    // and this check pins that the frame comes from the holder rather than from
+    // the cache, which never held it.
     await settleUntil(() => b2.resourcePacks.length >= 1, 5_000)
     const heldBeforeAnswer = fake.received.resourcePackResponses.slice(heldPackStatuses + 2)
     bot2.sendResourcePackStatus(HELD_PACK, 3)
@@ -1068,14 +1076,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         humanStatuses.every(entry => entry.uuid === HELD_PACK) &&
         JSON.stringify(humanStatuses.map(entry => Number(entry.result))) === JSON.stringify([3, 4, 0]) &&
         heldBeforeAnswer.length === 0 &&
-        core.metrics.resourcePacksResent === 2 &&
-        core.metrics.resourcePackAcks === 1,
+        core.metrics.resourcePacksResent === packsResentBefore + 2 &&
+        core.metrics.resourcePackAcks === acksBefore + 1,
       {
         headless: headlessStatuses.map(entry => [entry.uuid, Number(entry.result)]),
         onClient: b2.resourcePacks.map(pack => pack.uuid),
         human: humanStatuses.map(entry => Number(entry.result)),
-        resent: core.metrics.resourcePacksResent,
-        acks: core.metrics.resourcePackAcks
+        resent: core.metrics.resourcePacksResent - packsResentBefore,
+        acks: core.metrics.resourcePackAcks - acksBefore
       }
     )
 

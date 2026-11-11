@@ -169,11 +169,11 @@ The two halves of a control dialog's wire form, and the rule that decides whethe
 _Avoid_: dialog helper, dialog utils
 
 **Resource pack**:
-A control frame the server pushes once per connection with `add_resource_pack` and withdraws with `remove_resource_pack`. It is the player's to accept or decline, and their `resource_pack_receive` reaches the server as the puppet's own frame in every stage the client sends. With no player able to answer, the puppet accepts and loads.
+A control frame the server pushes once per connection with `add_resource_pack` and withdraws with `remove_resource_pack` — one pack by UUID, or every pack when the UUID is absent. It is the player's to accept or decline, and their `resource_pack_receive` reaches the server as the puppet's own frame, in each stage the client sends, while the puppet is in the state that frame was sent in. With no player attached, the puppet accepts and loads.
 _Avoid_: texture pack, pack request, pack push
 
 **Pending resource pack**:
-A pack the backend sent that a client can still be shown. Monoplayer holds one copy per pack UUID outside the state cache, because the server sends a pack once and a later player would otherwise get nothing; `remove_resource_pack` drops it, and a player's answer never does.
+A pack the backend sent that a client can still be shown. Monoplayer holds one copy per pack UUID outside the state cache, because the server sends a pack once and a later player would otherwise get nothing. `remove_resource_pack` drops it, a backend teardown or a failed transfer drops it, and a player's answer never does.
 _Avoid_: pack cache, pack queue
 
 **Pending dialog**:

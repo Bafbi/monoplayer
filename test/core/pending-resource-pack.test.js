@@ -32,19 +32,29 @@ test('a pack belongs to the state it was sent in', () => {
   assert.deepEqual(packs.list('configuration').map(entry => entry.uuid), [B])
 })
 
-test('remove withdraws one pack, and an unknown or unkeyed one leaves the rest', () => {
+test('remove withdraws one pack, and an absent UUID withdraws them all', () => {
   const packs = createPendingResourcePacks()
   packs.add({ state: 'play', buffer: frame('add_resource_pack'), data: { uuid: A } })
   packs.add({ state: 'play', buffer: frame('add_resource_pack'), data: { uuid: B } })
   packs.add({ state: 'play', buffer: frame('add_resource_pack'), data: {} })
 
-  assert.deepEqual(packs.remove({ uuid: A }), { dropped: true })
+  assert.deepEqual(packs.remove({ uuid: A }), { dropped: 1, all: false })
   assert.deepEqual(packs.list('play').map(entry => entry.uuid), [B, null])
-  assert.deepEqual(packs.remove({ uuid: A }), { dropped: false }, 'a withdrawn pack is not re-withdrawn')
-  assert.deepEqual(packs.remove({}), { dropped: false }, 'a remove with no uuid cannot pick a pack')
-  assert.equal(packs.size, 2)
-  assert.deepEqual(packs.clear(), { dropped: 2 })
+  assert.deepEqual(packs.remove({ uuid: A }), { dropped: 0, all: false }, 'a withdrawn pack is not re-withdrawn')
+  // The UUID is `option UUID` on the wire, and an absent one means every pack
+  // the connection pushed: the client is told to withdraw them all.
+  assert.deepEqual(packs.remove({}), { dropped: 2, all: true })
   assert.equal(packs.held, false)
+})
+
+test('remove all leaves an empty holder, not one pack the client was told to drop', () => {
+  const packs = createPendingResourcePacks()
+  packs.add({ state: 'play', buffer: frame('add_resource_pack'), data: { uuid: A } })
+  packs.add({ state: 'configuration', buffer: frame('add_resource_pack'), data: { uuid: B } })
+  assert.deepEqual(packs.remove({}), { dropped: 2, all: true })
+  assert.deepEqual(packs.list('play'), [])
+  assert.deepEqual(packs.list('configuration'), [])
+  assert.deepEqual(packs.clear(), { dropped: 0 })
 })
 
 test('only a terminal result ends the round', () => {

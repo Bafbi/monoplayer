@@ -167,24 +167,51 @@ test('a configuration-phase pack is delivered in the client configuration phase,
   // A client in play cannot parse a configuration frame, so the pack waits.
   assert.equal(rig.core.metrics.resourcePacksRelayed, 0)
 
-  attach(rig)
-  assert.equal(
-    rig.frontLeg.frames().some(f => f.name === 'add_resource_pack'),
-    false,
-    'a configuration pack is not written into the play replay'
-  )
-
-  // The client's own configuration phase is the moment it can parse the frame,
-  // and it comes before the play attach: a warm attach is never CONFIGURING.
+  // The live leg's order: the client's own configuration phase comes first
+  // (configuringReady), the play attach at playerJoin after it. A configuration
+  // pack reaches the client in that phase and nowhere else.
   rig.core.configuringReady({ name: 'Bafbi' })
   const delivered = rig.frontLeg.frames().filter(f => f.name === 'add_resource_pack')
   assert.equal(delivered.length, 1, 'delivered in the client configuration phase')
   assert.deepEqual(delivered[0].meta, { state: 'configuration', name: 'add_resource_pack' })
-  assert.equal(rig.core.metrics.resourcePacksResent, 1)
+
+  attach(rig)
+  assert.equal(
+    rig.frontLeg.frames().filter(f => f.name === 'add_resource_pack').length,
+    1,
+    'a configuration pack is not written into the play replay'
+  )
 
   rig.backendLeg.deliver({ state: 'configuration', name: 'remove_resource_pack', data: { uuid: OTHER } })
   assert.equal(rig.core.pendingPacks.held, false, 'remove drops the held copy')
   assert.equal(rig.core.metrics.resourcePacksRemoved, 1)
+})
+
+// #98: a client that is attached but cannot take the frame yet is still a client.
+// An early-attach client is in its own configuration when a play-state pack
+// arrives; it is offered the pack at its replay, so the puppet must not invent
+// an answer beside the human's.
+test('a pack that arrives while a client is attached but not in play waits, unanswered', () => {
+  // #16's early attach: the client follows the puppet's configuration, so the
+  // core is attached while the client is still in its own configuration round.
+  // A play-state pack now cannot be written to the client yet; it is offered at
+  // the play replay, and the puppet must not answer in the meantime.
+  const rig = makeCore()
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  const decision = rig.frontLeg.loginStart({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(decision.allowed, true)
+  const early = rig.core.attachConfiguringPlayer({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(early.attached, true)
+
+  rig.backendLeg.deliver({ ...PACK(PLAYER), state: 'play' })
+  assert.equal(
+    rig.backendLeg.packetWrites().filter(p => p.name === 'resource_pack_receive').length,
+    0,
+    'the puppet said nothing: a client is attached'
+  )
+  assert.equal(rig.core.metrics.resourcePacksWithheld, 1)
+  assert.equal(rig.core.pendingPacks.held, true)
+  assert.equal(rig.core.metrics.resourcePacksRelayed, 0, 'the client is not in play yet, so nothing was written')
 })
 
 test('a pack a client never answered becomes the puppet answer on detach', () => {

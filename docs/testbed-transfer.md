@@ -176,7 +176,7 @@ change what the server or the client does.
 | `brand` | `minecraft:brand` in configuration | none: the puppet announces `fabric`, and the baseline announces the same brand because it stands in for the human's Fabric client |
 | `locale`, `viewDistance`, `mainHand`, `skinParts` | `settings` | none once a human has attached; the view distance is the backend's cap, not the human's render distance |
 | `chatSession` | the session key registration | none: both joins register the account's own key, so the field matches. The human's key never crosses |
-| `resourcePack` | the resource-pack status | none: the lane serves no pack, and where a backend sends one the puppet accepts and loads; a human's own status is forwarded as the frame it is (#98) |
+| `resourcePack` | the resource-pack status | none: the lane serves no pack. A lane that does sees the puppet accept and load while nobody is attached, and the human's own status forwarded as the frame it is once someone is (#98) |
 | `transferred` | the transfer intent | none |
 | `codeOfConduct`, `codeOfConductAccepted` | the configuration gate and its accept | none: the puppet answers the gate on its own connection |
 
