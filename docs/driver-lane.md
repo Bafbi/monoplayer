@@ -197,8 +197,8 @@ node src/driver/run.js --lane parity --tunnel \
   --proxied monoplayer-testbed.tail41e568.ts.net:25565
 ```
 
-`mise run testbed:up` takes the live front down for the length of the run, so
-clear it with the operator first.
+`mise run testbed:up` takes the live front down and leaves it down until an
+operator runs `mise run testbed:down`. Clear it with the operator first.
 
 ## Result — 2026-11-09 (parity lane, dev lane)
 

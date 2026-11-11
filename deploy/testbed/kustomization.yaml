@@ -9,8 +9,10 @@
 # custody PVC as the live deployment, so the GlowSquidye token chain stays
 # single-writer. The orchestrator scales the live deployment to zero first.
 #
-# This tree is not managed by Argo. `src/testbed/switch.js` applies it, runs
-# the transfer, and restores the live deployment in a finally block.
+# This tree is not managed by Argo. `src/testbed/switch.js` applies it, and its
+# `run` command does the transfer and restores the live deployment from a
+# `finally`. An interrupt skips that block, so it needs
+# `mise run testbed:down`.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
