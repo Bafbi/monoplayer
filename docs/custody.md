@@ -182,11 +182,10 @@ candidate. Run the real migration only after taking the proxy down; it renames
 the legacy directory, so it cannot run while the old leg holds a lock.
 
 Every command follows one exit-code rule: `0` done, `1` failed (an operation
-did not succeed), `2` not honoured (no such account, an ambiguous selector, a
-usage error, a held lock, a cross-device or conflicting target). Do not retry a
-`2` blindly. `migrate --dry-run` is the exception: it always exits `0`,
-because its report is the answer, including when the report says the move
-cannot happen.
+did not succeed), `2` refused (no such account, an ambiguous selector, a usage
+error, a held lock, a cross-device or conflicting target). `migrate --dry-run`
+is the exception: it always exits `0`, because its report is the answer,
+including when the report says the move cannot happen.
 
 `--accounts-dir` (or `GATEB_ACCOUNTS_DIR`) moves the account tree, and wins
 over the tree `--secrets-dir` implies.
