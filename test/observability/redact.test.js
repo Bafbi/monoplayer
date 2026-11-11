@@ -39,3 +39,36 @@ test('a caller cannot choose the sentinel, and nothing survives the fixed one', 
   assert.equal(redact('nothing secret here'), 'nothing secret here')
   assert.equal(redact(null), null)
 })
+
+// The field rule read the word after the colon as the value, so an
+// Authorization header redacted the scheme and left the token beside it (#92).
+// The scheme word is not the secret: the header redacts to its label.
+test('an Authorization header redacts the bearer value, not the word Bearer', () => {
+  assert.equal(redact('Authorization: Bearer opaqueTokenValue123'), 'Authorization=' + SENTINEL)
+  assert.equal(redact('authorization: Bearer opaqueTokenValue123').includes('opaqueTokenValue123'), false)
+
+  // A bearer value with no field name keeps its scheme as a label, which is
+  // what the journal and telemetry paths rely on.
+  assert.equal(redact('sent Bearer opaqueTokenValue123 upstream'), 'sent Bearer ' + SENTINEL + ' upstream')
+
+  // Prose that names the scheme and nothing else is left alone.
+  assert.equal(redact('the Bearer header is required'), 'the Bearer header is required')
+})
+
+// A redacted line can be logged twice, and the second pass must not eat the
+// brace around the label it left. A sentinel is the result of redacting, never
+// a value to redact again (#92).
+test('redact() leaves a line it already redacted alone', () => {
+  const once = redact('{"access_token":"abc123"}')
+  assert.equal(redact(once), once)
+  assert.equal(redact('{access_token=' + SENTINEL + '}'), '{access_token=' + SENTINEL + '}')
+  assert.equal(redact('Authorization=' + SENTINEL), 'Authorization=' + SENTINEL)
+})
+
+// A bare value stops at the punctuation that ends it. A JSON number under a
+// guarded key must not eat the brace after it, and a form value that holds a
+// comma must not lose its tail to it.
+test('a bare value stops at the brace, and a comma does not stop it', () => {
+  assert.equal(redact('{"password":123456789012}'), '{password=' + SENTINEL + '}')
+  assert.equal(redact('password=abc,def,ghi,jkl'), 'password=' + SENTINEL)
+})

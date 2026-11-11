@@ -29,10 +29,7 @@ const clip = value => {
   return text.length > MAX_STRING ? text.slice(0, MAX_STRING) : text
 }
 
-// Mask bearer values before redact(): the field-label rewrite can otherwise
-// leave the token after "authorization=[REDACTED]".
-const BEARER = /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi
-const cleanString = value => clip(redact(String(value).replace(BEARER, 'Bearer [REDACTED]')))
+const cleanString = value => clip(redact(String(value)))
 
 // Attributes are string, bool, or int (int as a decimal string). Nested objects
 // are JSON-stringified into a stringValue; non-integer numbers are stringified

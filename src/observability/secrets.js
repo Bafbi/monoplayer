@@ -20,26 +20,28 @@
 // keys this scanner does not know. A secret shape that is not auth-specific
 // therefore has two homes, and an auth-specific one has three.
 //
-// Known gaps, kept as they were when this module moved out of the driver lane
-// (#38). Fixing them changes what redacted output looks like, so they need their
-// own ticket and their own tests (#92):
-//   - a JSON-quoted key is not matched here. The key group wants ':' or '=' right
-//     after the name, and {"access_token":"x"} puts a quote there. The log
-//     redactor catches that form, so only the report path leaks it.
-//   - an opaque Bearer token is not matched when it follows an Authorization
-//     field. This scanner reads the value after "authorization:" as the
-//     6-character word "Bearer", which is under its 8-character minimum, and a
-//     "bearer" key needs ':' or '=' that the space denies. The log redactor has
-//     the same blind spot for that form, though it does redact a bare
-//     "Bearer <value>".
+// Two shapes this scanner used to miss closed in #92. A JSON-quoted key is
+// matched now: JSON puts a quote between the key and the separator, and the key
+// rule accepts it. An RFC 7235 credential is matched by its own rule, because
+// the assignment rule reads the scheme word "Bearer" as a value and stops at
+// the space after it. The key rule skips a value that already begins with the
+// sentinel: a redacted span is the result of redacting, never a value to redact
+// again.
 // No I/O and no env access of any kind, so the unit tests stay fully offline.
 
 // ---------------------------------------------------------------------------
 // Secret scanning / redaction
 // ---------------------------------------------------------------------------
 
+// JSON puts a quote between the key and the separator, so the separator may
+// sit behind a closing quote (#92).
 const ASSIGNMENT =
-  /(token|password|passwd|secret|api[-_]?key|bearer|credential|authorization)\s*[:=]\s*(?:"([^"]{8,})"|'([^']{8,})'|([^\s"',;]{8,}))/gi
+  /(token|password|passwd|secret|api[-_]?key|bearer|credential|authorization)"?\s*[:=]\s*(?:"((?!\[REDACTED\])[^"]{8,})"|'((?!\[REDACTED\])[^']{8,})'|((?!\[REDACTED\])[^\s"',;}\]]{8,}))/gi
+// An RFC 7235 credential: the scheme word is a label, the value after it is
+// the secret. The assignment rule reads the scheme as a value and stops at the
+// space, and "Bearer" is under the 8-character floor, so this form needs its
+// own rule (#92).
+const BEARER = /\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/gi
 const JWT = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\b/g
 const LONG_HEX = /\b[0-9a-f]{40,}\b/gi
 
@@ -54,6 +56,11 @@ export function scanSecrets (text) {
       value,
       index: match.index,
     })
+  }
+  // Before the JWT rule, so a bearer value that is also a JWT is tagged
+  // <bearer+jwt> rather than <jwt+bearer>.
+  for (const match of source.matchAll(BEARER)) {
+    findings.push({ kind: 'bearer', value: match[1], index: match.index })
   }
   for (const match of source.matchAll(JWT)) {
     findings.push({ kind: 'jwt', value: match[0], index: match.index })
@@ -97,7 +104,16 @@ export function redactSecrets (text) {
   let out = source
   for (let i = merged.length - 1; i >= 0; i--) {
     const span = merged[i]
-    out = out.slice(0, span.start) + `${REDACTION_TAG}<${span.kinds.join('+')}>` + out.slice(span.end)
+    out = out.slice(0, span.start) + tagForValue(source, span.start, span.kinds.join('+')) + out.slice(span.end)
   }
   return { text: out, findings }
+}
+
+// A tag takes the place of a value. A bare value after a colon sits in a JSON
+// document, where the tag has to be a string: an unquoted tag stops the
+// document parsing, and a report must still parse (#92).
+export function tagForValue (source, start, kinds) {
+  const tag = `${REDACTION_TAG}<${kinds}>`
+  const before = String(source).slice(0, start).trimEnd()
+  return before.endsWith(':') ? `"${tag}"` : tag
 }
