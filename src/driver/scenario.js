@@ -44,10 +44,10 @@ export const DEFAULT_PINS = {
   backend: 'direct Paper 26.2 (M2 row); Monoplayer and Velocity are not involved in G0',
 }
 
-const LIMITATIONS = [
+export const LIMITATIONS = [
   'Client gamemode is creative; survival-rate break/place holds are not exercised by this lane.',
   'No driver reconnect op exists by design (council correction #1): rejoin = driver quit + host-side relaunch through the injected relaunch adapter.',
-  'The unmodded Prism witness run is a separate, still-pending manual lane; no anti-masking evidence yet.',
+  'The unmodded Prism witness is a separate manual lane, run by hand against the gate Paper. Its record is quoted in testdata/driver-verdict.md. This report carries no anti-masking evidence of its own.',
   'The driver does not select hotbar slots; the scenario relies on /give filling the first empty (selected) slot and verifies the held item client-side.',
   'The backend world is an emptyDir flat void map: restarts wipe edits; all coordinates are run-scoped.',
   'Generated report files are scanned for token/password-shaped content before writing; long hex-like strings may be over-redacted.',

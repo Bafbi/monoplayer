@@ -135,9 +135,9 @@ key never reach the server; a message the server rejects arrives back as a
 rejection on GlowSquidye; and the human's client receives `player_chat` from
 another connection, so its per-sender signature chain is out of order. The
 expectation is that the message still displays with a broken-chain marker. No
-run has confirmed that, and [#62](https://github.com/Bafbi/monoplayer/issues/62)
-is where a real client confirms it. The protocol bot cannot: it decodes frames,
-never renders them.
+run has confirmed that: `mise run driver:parity` compares 12 client-state
+fields, none of them chat text, and the client driver reads no chat history. The
+protocol bot cannot either: it decodes frames, never renders them.
 
 The proxy answers the backend's own acknowledgements and keeps its own
 last-seen window. The human's session key and acknowledgements never reach the
@@ -296,5 +296,7 @@ It does not prove:
   `mise run parity:run`
   ([#13](https://github.com/Bafbi/monoplayer/issues/13)). It lists frame and
   decoded-state differences and separates the expected ones from the
-  unexplained. The same comparison with the Fabric driver is
-  [#62](https://github.com/Bafbi/monoplayer/issues/62) and is not built.
+  unexplained. The same comparison with the client driver is `mise run
+  driver:parity` ([#62](https://github.com/Bafbi/monoplayer/issues/62)). It
+  passed on the dev lane on 2026-11-09 with 12 client-state fields: 9 same, 3
+  expected, and 0 unexplained ([driver-lane.md](driver-lane.md)).
