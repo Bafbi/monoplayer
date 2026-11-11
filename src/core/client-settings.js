@@ -52,7 +52,8 @@ const isIntBetween = (value, min, max) =>
 
 // VarInt: 7 bits per byte, low group first, high bit means "more follows".
 // The brand payload is the vanilla `string` type, which is exactly this length
-// prefix followed by UTF-8 bytes.
+// prefix followed by UTF-8 bytes; src/core/dialog-codec.js prefixes the click
+// action's identifier and payload lengths with the same function.
 export function encodeVarInt (value) {
   if (!Number.isInteger(value) || value < 0) throw new TypeError('encodeVarInt expects a non-negative integer')
   const out = []
