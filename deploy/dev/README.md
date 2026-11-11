@@ -162,6 +162,12 @@ mise run dev:image sha-$(git rev-parse --short=7 HEAD)
 
 The image workflow for a branch prints the same command when it finishes.
 
+That pin lives only in the namespace: no manifest carries it, so the retention job
+in `.github/workflows/image-retention.yaml` cannot see it. The last 20 `sha-*` tags
+stay, which covers a branch under review for about a day of merges. A pin that must
+outlive that goes in `deploy/pins.txt`, one line, with the lane in a comment.
+Delete the line once the lane moves back to `:main`.
+
 ## Join it
 
 The dev proxy's own account joins the dev Paper when the proxy starts, so the
