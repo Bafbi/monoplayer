@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling,testbed}/*.test.js'",
+    "test": "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling,testbed,support}/*.test.js'",
     "postinstall": "node scripts/patch-minecraft-data-26.2.mjs"
   },
   "dependencies": {

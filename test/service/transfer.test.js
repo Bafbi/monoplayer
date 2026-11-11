@@ -3,57 +3,17 @@
 // with the target's state (#22); with nobody attached the puppet moves alone.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { loadConfig } from '../../src/service/monoplayer.js'
+import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const BUFFER = name => Buffer.from(`backend:${name}`)
-
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) { const t = { fn, fires: now + ms }; timers.push(t); return t },
-    clearTimeout (t) { timers = timers.filter(x => x !== t) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    },
-    get pending () { return timers.length }
-  }
-}
-
-function makeCore (config = {}) {
-  const clock = fakeClock()
-  const backendLeg = createFakeBackendLeg()
-  const frontLeg = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: {
-      ...DEFAULT_CONFIG,
-      puppet: { username: 'GlowSquidye', uuid: null },
-      attachWhitelist: [PLAYER],
-      ...config,
-      transfer: { ...DEFAULT_CONFIG.transfer, ...(config.transfer ?? {}) }
-    },
-    backendLeg,
-    frontLeg,
-    clock
-  })
-  core.start()
-  const events = []
-  core.on('reconnect_due', event => events.push(event))
-  return { clock, backendLeg, frontLeg, core, events }
-}
 
 // The kept connection (#22) is the default. The detach-path tests state it off,
 // because that path still exists and a kept connection restores to it.
 function makeSeamless (config = {}) {
   return makeCore({
-    ...config,
-    transfer: { ...(config.transfer ?? {}), keepConnection: true }
+    config: { ...config, transfer: { ...(config.transfer ?? {}), keepConnection: true } }
   })
 }
 
@@ -657,7 +617,7 @@ test('a restore round the client never finishes detaches it at the deadline', ()
 })
 
 test('with the kept connection off, a transfer detaches and rejoins', () => {
-  const rig = makeCore({ transfer: { keepConnection: false } })
+  const rig = makeCore({ config: { transfer: { keepConnection: false } } })
   warmBackend(rig)
   attach(rig)
 
@@ -675,7 +635,7 @@ test('with the kept connection off, a transfer detaches and rejoins', () => {
 })
 
 test('with the kept connection off, a reconfiguration detaches and reconnects', () => {
-  const rig = makeCore({ transfer: { keepConnection: false } })
+  const rig = makeCore({ config: { transfer: { keepConnection: false } } })
   warmBackend(rig)
   attach(rig)
 

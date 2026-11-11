@@ -41,11 +41,13 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { DECISION, clientboundPolicy } from '../core/clientbound-policy.js'
+import { DEFAULT_ACCOUNTS_DIR } from '../custody/accounts.js'
 import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { createOfflineBackendLeg } from '../legs/live-backend.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
+import { detail, flag } from '../service/cli.js'
 import { waitForReady } from '../service/readiness.js'
 import { createBot } from './bot.js'
 import { compareSnapshots, decodeState } from './state-parity.js'
@@ -68,16 +70,6 @@ const DEFAULT_MAX_COLLECT_MS = 5000
 const INVENTORY_SLOTS = 46
 // The live fleet. Not ours, never measured by an automated join.
 const LIVE_HOST = 'excalia.fr'
-
-function flag (argv, name) {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
-}
-
-function detail (value) {
-  const json = JSON.stringify(value, (key, inner) => typeof inner === 'bigint' ? String(inner) : inner)
-  return json === undefined ? String(value) : json
-}
 
 // The live Excalia fleet is the one target no automated join may touch: this
 // repo does not deploy it, so a difference there is not ours to explain.
@@ -760,7 +752,7 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
   const auth = flag(argv, '--auth') ?? 'offline'
   const username = flag(argv, '--username') ?? DEFAULT_USERNAME
   const account = flag(argv, '--account') ?? process.env.MONOPLAYER_ATTACH_ACCOUNT ?? 'bafbi'
-  const accountsDir = flag(argv, '--accounts') ?? process.env.MONOPLAYER_PUPPET_ACCOUNTS_DIR ?? '.secrets/accounts'
+  const accountsDir = flag(argv, '--accounts') ?? process.env.MONOPLAYER_PUPPET_ACCOUNTS_DIR ?? DEFAULT_ACCOUNTS_DIR
   const timeoutMs = Number(flag(argv, '--timeout') ?? DEFAULT_TIMEOUT_MS)
   const quietMs = Number(flag(argv, '--quiet') ?? DEFAULT_QUIET_MS)
   const log = verbose ? (event, fields = {}) => io.stderr.write('[parity] ' + event + ' ' + detail(fields) + '\n') : () => {}

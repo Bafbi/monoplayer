@@ -9,25 +9,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createMonoplayer, DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const OTHER = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
-
-function makeCore (overrides = {}) {
-  const backendLeg = createFakeBackendLeg()
-  const frontLeg = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: { ...DEFAULT_CONFIG, puppet: { username: 'GlowSquidye', uuid: null }, attachWhitelist: [PLAYER, OTHER], ...(overrides.config ?? {}) },
-    backendLeg,
-    frontLeg,
-    clock: { now: () => 0, setTimeout: () => null, clearTimeout: () => {} },
-    logStream: null
-  })
-  core.start()
-  return { backendLeg, frontLeg, core }
-}
 
 // The front's own wiring: gate 1, then the configuring attach, then the
 // play-ready callback its library fires at playerJoin.

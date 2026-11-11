@@ -47,6 +47,6 @@ Validation work does not get a top-level home of its own. It lives where it runs
 | `src/driver/` | Driver lane: one-run scenario, plan, RCON, Toxiproxy, backend matrix, logins, evidence checks, the NDJSON client driver, the run controller |
 | `src/spike/` | The frozen protocol spike: proxy, scenario, fake client, the runner |
 | `src/testbed/` | Cluster switch, transfer testbed, registry compare |
-| `test/` | One directory per tested `src/` directory, plus `tooling/` for the gate's own checks and `spike/` for the socket test |
+| `test/` | One directory per tested `src/` directory, plus `tooling/` for the gate's own checks, `spike/` for the socket test, and `support/` for the rig the fake-integration tests share |
 | `tools/driver/` | The Fabric client driver |
 | `deploy/driver/` | The driver-lane cluster environment |

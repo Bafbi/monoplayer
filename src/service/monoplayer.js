@@ -67,10 +67,16 @@ import { createPendingResourcePacks } from '../core/pending-resource-pack.js'
 import { createSession, STATES } from '../core/session.js'
 import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact } from '../observability/redact.js'
+import { flag } from './cli.js'
 import { pathToFileURL } from 'node:url'
 
 // --- config ---
 
+// The two `.secrets` paths below restate `DEFAULT_ACCOUNTS_DIR`
+// (custody/accounts.js) and `DEFAULT_WHITELIST_FILE` (custody/store.js) on
+// purpose. Both custody modules import `node:fs`, and this module is loaded by
+// every test that builds a core config and by `--print-config`, so importing
+// them here would drag file I/O into the pure path (#104).
 export const DEFAULT_CONFIG = Object.freeze({
   version: '26.1',
   // 'read-only' (the default): relay clientbound chat to the attached client,
@@ -2505,10 +2511,6 @@ backend configuration frames + join prefix (warm marker preferred), then
 starts the front leg for whitelisted attaching players. See
 docs/product-core.md and docs/custody.md.`
 
-const flag = (argv, name) => {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
-}
 const has = (argv, name) => argv.includes(name)
 
 export async function main (argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
