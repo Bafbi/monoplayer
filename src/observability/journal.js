@@ -53,11 +53,7 @@ function noopJournal () {
   }
 }
 
-// redact() keeps a field label when it rewrites "Authorization: Bearer X" to
-// "authorization=[REDACTED]", which can strand the token after the label. Mask
-// bearer values first so the token itself never reaches the record.
-const BEARER = /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi
-const cleanText = value => clip(redact(String(value).replace(BEARER, 'Bearer [REDACTED]')))
+const cleanText = value => clip(redact(String(value)))
 
 function normalize (value, depth = 0) {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value

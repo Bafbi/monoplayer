@@ -46,6 +46,61 @@ test('redaction leaves ordinary text untouched, report-safe', () => {
   assert.equal(text, input)
 })
 
+// JSON puts a quote between the key and the colon. The assignment rule wanted
+// ':' or '=' right after the key name, so the report path missed a shape the
+// log path caught (#92). Only the value span is replaced, so the redacted
+// document still parses.
+test('a JSON-quoted key is scanned, and its value rewritten, without breaking the JSON', () => {
+  const token = 'abcdef123456789'
+  const input = JSON.stringify({ access_token: token, note: 'ordinary' })
+  const findings = scanSecrets(input)
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].kind, 'assignment')
+  assert.ok(findings[0].key.endsWith('token'), `the key names the field (saw ${findings[0].key})`)
+  const { text } = redactSecrets(input)
+  assert.equal(text.includes(token), false, 'the value must not survive')
+  assert.doesNotThrow(() => JSON.parse(text), 'redacted JSON must still parse')
+
+  // A bare value under a guarded key is a JSON value too. The tag takes its
+  // place as a string, and a number must not leave the brace or the type behind.
+  const numeric = redactSecrets('{"token":12345678}')
+  assert.equal(numeric.text, '{"token":"[REDACTED]<assignment>"}')
+  assert.doesNotThrow(() => JSON.parse(numeric.text), 'redacted JSON must still parse')
+})
+
+// The assignment rule read the word after the key as the value. "Bearer" is
+// six characters and the rule's minimum is eight, so the token after it was
+// never scanned, and the tripwire stayed silent (#92).
+test('an opaque bearer value is found and tagged as its own kind', () => {
+  const token = 'opaqueTokenValue123'
+  const input = `Authorization: Bearer ${token}`
+  const findings = scanSecrets(input)
+  assert.deepEqual(findings.map(f => f.kind), ['bearer'])
+  assert.equal(findings[0].value, token)
+  const { text } = redactSecrets(input)
+  assert.equal(text.includes(token), false, 'the token must not survive')
+  assert.equal(text, 'Authorization: Bearer [REDACTED]<bearer>', 'the scheme stays as the label')
+})
+
+test('a bearer value that is also a JWT keeps both kinds in one span', () => {
+  // The synthetic JWT the custody tests already use. A real sample token in a
+  // test file is a finding for every secret scanner that reads the diff.
+  const jwt = 'eyJhbGciOiJSUzI1NiJ9.SYNTHETICPAYLOAD01.SYNTHETICSIGNATURE001'
+  const { text, findings } = redactSecrets(`Authorization: Bearer ${jwt}`)
+  assert.deepEqual(findings.map(f => f.kind), ['bearer', 'jwt'])
+  assert.equal(text.includes(jwt), false)
+})
+
+// Redaction is a rewrite, not a map over the original: a sentinel already in
+// the text is the result of redacting, never a value to redact again. Without
+// this, a second pass eats the tag it just wrote and the report loses the kind.
+test('an existing sentinel is not treated as a value', () => {
+  const already = "access_token = '[REDACTED]<access_token>'"
+  const { text, findings } = redactSecrets(already)
+  assert.deepEqual(findings, [])
+  assert.equal(text, already)
+})
+
 test('a realistic report blob containing a leaked token gets redacted end to end', () => {
   const leaked = 'rconOp: {"kind":"probe","output":"... password=opensesame123 ..."}'
   const { text, findings } = redactSecrets(leaked)
