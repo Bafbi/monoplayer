@@ -5,14 +5,16 @@
 //   node src/testbed/switch.js transfer  RCON: transfer the puppet to paper-sky
 //   node src/testbed/switch.js down      stop the testbed, restore the live app,
 //                                        then delete its front Service
-//   node src/testbed/switch.js run       up + transfer + down, always restoring
+//   node src/testbed/switch.js run       up + transfer + down
 //   node src/testbed/switch.js status    what is running now
 //
 // The live Monoplayer and the testbed cannot run together: they share the
 // GlowSquidye custody PVC and the token has one writer. `up` disables Argo's
 // automated sync for the live Application, scales the live deployment to
-// zero, then starts the testbed. `down` (and the finally of `run`) restores
-// the deployment and the sync policy.
+// zero, then starts the testbed. `down` scales the live deployment back and
+// restores the sync policy from the restore record, and `run` calls it in a
+// `finally`. An interrupt skips that block, so it leaves the live front offline
+// until an operator runs `down`.
 //
 // Paper runs in monoplayer-gate-b. The testbed Monoplayer runs in the
 // monoplayer namespace on the custody PVC and exposes

@@ -51,7 +51,7 @@ mise run testbed:client    # Bafbi headless client through the testbed front
 mise run testbed:transfer  # RCON transfer the puppet to paper-sky
 mise run testbed:registry  # compare hub/target dimension_type registries
 mise run testbed:down      # stop testbed, restore the live proxy, then delete the testbed's front Service
-mise run testbed:run       # up + transfer + down, always restoring
+mise run testbed:run       # up + transfer + down. An interrupt skips the down, so run `mise run testbed:down`
 ```
 
 `testbed:up` runs the registry comparison before the client attaches. The
