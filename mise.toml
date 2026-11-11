@@ -102,10 +102,6 @@ depends = ["install"]
 wait_for = ["check", "driver:build"]
 run = "node src/driver/run.js --lane parity --tunnel || node src/ladder/next-rung.js driver:parity $?"
 
-[tasks."driver:install"]
-description = "Install the built driver into the display host's Prism root (run on the host)."
-run = "tools/driver/install.sh tools/driver/build/libs/monoplayer-driver-0.1.0.jar"
-
 [tasks."image:build"]
 description = "Build and push the Monoplayer image to the cluster Zot registry."
 wait_for = ["check"]
@@ -217,11 +213,11 @@ depends = ["install"]
 run = "node src/testbed/switch.js registry"
 
 [tasks."testbed:down"]
-description = "Stop the testbed, restore the live deployment, then delete its front Service."
+description = "Stop the testbed, restore the live deployment, then delete its front Service. It also puts Argo auto-sync back from the run's restore record, while that record survives."
 depends = ["install"]
 run = "node src/testbed/switch.js down"
 
 [tasks."testbed:run"]
-description = "Full puppet transfer: up, transfer, down, always restoring the live deployment."
+description = "Full puppet transfer: up, transfer, down. Its down step restores the live deployment. An interrupt skips it, so the live front stays offline until an operator runs mise run testbed:down."
 depends = ["install"]
 run = "node src/testbed/switch.js run || node src/ladder/next-rung.js testbed:run $?"

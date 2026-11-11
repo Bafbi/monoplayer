@@ -1,10 +1,17 @@
 // Reads the subset of mise.toml this repo's tasks use: one [tasks.<name>]
-// block per task, with single-line `depends` keys. A test helper, not a TOML
-// parser: a block is the text between two headers, so a multi-line `run` is
-// still searchable inside it.
+// block per task, with a single-line `description` string and single-line
+// `depends` / `wait_for` keys. A test helper, not a TOML parser: a block is the
+// text between two headers, so a multi-line `run` is still searchable inside it.
 import fs from 'node:fs'
 
 export const MISE_TOML = new URL('../../mise.toml', import.meta.url)
+
+// A key that is absent and a key with an empty value read the same, so a case
+// matches on a task's text without a null check at every site.
+function one (body, key) {
+  const match = body.match(new RegExp(`^\\s*${key}\\s*=\\s*"(.*)"\\s*$`, 'm'))
+  return match ? match[1] : ''
+}
 
 function list (body, key) {
   const match = body.match(new RegExp(`^\\s*${key}\\s*=\\s*\\[(.*)\\]\\s*$`, 'm'))
@@ -34,6 +41,7 @@ export function readMiseTasks (file = MISE_TOML) {
     tasks.set(name, {
       name,
       body,
+      description: one(body, 'description'),
       depends: list(body, 'depends'),
       wait_for: list(body, 'wait_for')
     })
