@@ -87,7 +87,7 @@ The puppet's authenticated connection to one game server. One backend session me
 _Avoid_: puppet session, connection, login
 
 **Session state**:
-The stage a backend session is in. The stages are boot (no connection), warm (a complete join is cached), attached (a player is playing through it), detached (no player, session alive), reconnecting (one retry pending), and failed (the retry budget is spent).
+The stage a backend session is in. The stages are boot (no connection), warm (a complete join is cached), configuring (a player attached before the join is cached), attached (a player is playing through it), detached (no player, session alive), transferring (a player following the puppet to another server), reconnecting (one retry pending), and failed (the retry budget is spent).
 _Avoid_: status, phase
 
 **Warm**:
