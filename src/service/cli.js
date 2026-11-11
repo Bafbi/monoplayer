@@ -42,3 +42,21 @@ export function withTimeout (promise, ms, label) {
     )
   })
 }
+
+// Poll a predicate until it holds, or the budget runs out. A predicate that
+// throws counts as not ready: a rung waiting on a leg that is still closing must
+// not fail on the way there. `src/ladder/bot.js` keeps its own `waitFor`, and its
+// contract is the opposite one — a throwing predicate rejects there.
+export function waitFor (pred, label, ms = 10_000) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + ms
+    const tick = () => {
+      let ok = false
+      try { ok = pred() } catch { /* treat a throwing predicate as not ready */ }
+      if (ok) return resolve()
+      if (Date.now() >= deadline) return reject(new Error(`timed out after ${ms} ms waiting for ${label}`))
+      setTimeout(tick, 10)
+    }
+    tick()
+  })
+}

@@ -20,7 +20,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
-import { candidateLines, detail, flag, withTimeout } from '../service/cli.js'
+import { candidateLines, detail, flag, waitFor, withTimeout } from '../service/cli.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { DEFAULT_ACCOUNTS_DIR, listAccounts, resolveAccount } from '../custody/accounts.js'
 import { DEFAULT_WHITELIST_FILE, createWhitelistStore } from '../custody/store.js'
@@ -67,20 +67,6 @@ export function buildOnlineBotOptions ({ frontPort, attach, attachCustody, versi
     authTitle: attach.profile?.authTitle ?? null,
     deviceType: attach.profile?.deviceType ?? null
   }
-}
-
-function waitFor (pred, label, ms = 10_000) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + ms
-    const tick = () => {
-      let ok = false
-      try { ok = pred() } catch { /* treat a throwing predicate as not ready */ }
-      if (ok) return resolve()
-      if (Date.now() >= deadline) return reject(new Error(`timed out after ${ms} ms waiting for ${label}`))
-      setTimeout(tick, 10)
-    }
-    tick()
-  })
 }
 
 // The report is metadata only. Keep custody and whitelist paths out of it;
