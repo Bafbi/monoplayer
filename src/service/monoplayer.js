@@ -122,6 +122,21 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxGeneric: 512
   }),
   reconnect: Object.freeze({ delayMs: 1000, attempts: 1, maxDelayMs: 60_000 }),
+  // #96: the exact packet journal. Off unless `dir` names a directory.
+  //
+  // `maxBytes` bounds one file; `maxTotalBytes` and `maxAgeMs` bound the
+  // directory, and retention prunes on start and on every rotation. A rotation
+  // size alone deletes nothing: two days of play wrote ~393 MB in one session,
+  // filled a 1 GiB custody volume, and the front CrashLooped on ENOSPC. The
+  // budget number is repeated in src/observability/journal.js, which owns the
+  // retention and the file names; this module stays free of file I/O (#104).
+  journal: Object.freeze({
+    dir: null,
+    maxBytes: 268_435_456,
+    maxTotalBytes: 268_435_456,
+    // A week, so an old session cannot sit on a volume forever.
+    maxAgeMs: 7 * 24 * 60 * 60 * 1000
+  }),
   // #99: the human's own player wears the puppet's skin. One `player_info`
   // entry for the human's UUID carrying the textures property the backend sent
   // for the puppet; an entry the client holds already wins over it.
@@ -170,7 +185,8 @@ export function loadConfig (doc = {}) {
     front: { ...DEFAULT_CONFIG.front, ...(doc.front ?? {}) },
     backend: { ...DEFAULT_CONFIG.backend, ...(doc.backend ?? {}) },
     puppet: { ...DEFAULT_CONFIG.puppet, ...(doc.puppet ?? {}) },
-    skin: { ...DEFAULT_CONFIG.skin, ...(doc.skin ?? {}) }
+    skin: { ...DEFAULT_CONFIG.skin, ...(doc.skin ?? {}) },
+    journal: { ...DEFAULT_CONFIG.journal, ...(doc.journal ?? {}) }
   }
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
@@ -195,6 +211,24 @@ export function loadConfig (doc = {}) {
   }
   if (typeof merged.skin.showPuppetSkin !== 'boolean') {
     throw new TypeError('config.skin.showPuppetSkin must be a boolean')
+  }
+  // #96: the journal's caps are the whole point of the ticket, so a value that
+  // cannot bound anything is refused here rather than defaulted away.
+  if (merged.journal.dir !== null &&
+      (typeof merged.journal.dir !== 'string' || merged.journal.dir.trim() === '')) {
+    throw new TypeError('config.journal.dir must be a directory path or null')
+  }
+  for (const key of ['maxBytes', 'maxTotalBytes']) {
+    if (!Number.isInteger(merged.journal[key]) || merged.journal[key] < 1) {
+      throw new TypeError('config.journal.' + key + ' must be a positive integer of bytes')
+    }
+  }
+  if (!Number.isInteger(merged.journal.maxAgeMs) || merged.journal.maxAgeMs < 0) {
+    throw new TypeError('config.journal.maxAgeMs must be a non-negative integer of milliseconds')
+  }
+  if (merged.journal.maxTotalBytes < merged.journal.maxBytes) {
+    throw new TypeError('config.journal.maxTotalBytes must be at least config.journal.maxBytes, ' +
+      'so a rotation cannot outgrow the directory budget')
   }
   return merged
 }
@@ -2504,6 +2538,10 @@ Config (JSON via --config, then env, then defaults):
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory (journal off when unset)
   MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 268435456)
+  MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES                  journal directory budget, pruned on start and
+                                                      on rotate (default 268435456)
+  MONOPLAYER_JOURNAL_MAX_AGE_MS                       journal age cap, pruned the same way; 0 keeps
+                                                      the byte budget alone (default 604800000)
 
 --start brings up the live backend leg (authenticated puppet via the G1 token
 custody in .secrets/accounts/<uuid>/), waits until the state cache holds the

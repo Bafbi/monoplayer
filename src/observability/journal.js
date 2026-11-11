@@ -9,6 +9,15 @@
 // maxBytes. A frame carries the raw bytes base64-encoded unless the frame is
 // longer than 8192 bytes, in which case only its length is journaled.
 //
+// Retention (#96): a rotation size deletes nothing, so the directory also has a
+// byte budget (maxTotalBytes) and an age cap (maxAgeMs), both applied on open
+// and after every rotation. The oldest files go first, in the reader's order,
+// and the segment being written is never pruned: maxBytes bounds it, so the
+// directory holds at most the budget plus one rotating file. A journal on a
+// volume with no room for its budget opens nothing and records why in
+// stats().disabledReason, with the path, so a full volume is the journal's own
+// reported failure instead of an ENOSPC under another stage.
+//
 // Writes are synchronous on purpose: a frame record must be on disk, in order,
 // before the next frame is written. Chat frames and secret-shaped frame names
 // are never journaled. Lifecycle events drop secret-shaped fields and run
@@ -20,8 +29,18 @@ import path from 'node:path'
 import { redact } from './redact.js'
 
 const MAX_FRAME_BYTES = 8192
-const DEFAULT_MAX_BYTES = 268435456
+export const DEFAULT_MAX_BYTES = 268435456
+// #96: the directory as a whole has a budget, because a rotation size alone
+// never deletes anything.
+export const DEFAULT_MAX_TOTAL_BYTES = 268435456
+// A week is longer than any diagnosis needs, and an old session is worthless.
+export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_STRING = 1024
+
+// The stamp is the writer's, at second and millisecond precision. Anything else
+// in the directory, such as session-backup.ndjson, is not a journal file: the
+// reader ignores it and retention never deletes it.
+const FILE_NAME = /^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)-(\d+)(?:-(\d+))?\.ndjson(\.1)?$/
 
 const SKIP_FRAMES = new Set([
   'chat_message',
@@ -43,13 +62,33 @@ const clip = value => {
   return text.length > MAX_STRING ? text.slice(0, MAX_STRING) : text
 }
 
-function noopJournal () {
+// A journal that opened nothing. `reason` is why, so the service can name the
+// real failure instead of letting the next write on the volume report ENOSPC
+// under another stage (#96).
+function disabledJournal ({ reason, dir = null, freeBytes = null, requiredBytes = null }) {
   return {
     enabled: false,
     frame: () => false,
     event () {},
     close () {},
-    stats: () => ({ enabled: false, file: null, frames: 0, events: 0, bytes: 0, rotations: 0, skipped: 0, truncated: 0, errors: 0 })
+    stats: () => ({
+      enabled: false,
+      disabledReason: reason,
+      dir,
+      freeBytes,
+      requiredBytes,
+      file: null,
+      frames: 0,
+      events: 0,
+      bytes: 0,
+      dirBytes: 0,
+      pruned: 0,
+      prunedBytes: 0,
+      rotations: 0,
+      skipped: 0,
+      truncated: 0,
+      errors: 0
+    })
   }
 }
 
@@ -90,25 +129,37 @@ function toBuffer (buffer) {
   return Buffer.from(String(buffer))
 }
 
+const positive = (value, fallback) =>
+  Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+const nonNegative = (value, fallback) =>
+  Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback
+
 export function createJournal ({
   dir = null,
   maxBytes = DEFAULT_MAX_BYTES,
+  maxTotalBytes = DEFAULT_MAX_TOTAL_BYTES,
+  maxAgeMs = DEFAULT_MAX_AGE_MS,
   clock = () => Date.now(),
   fs = nodeFs
 } = {}) {
-  const enabled = typeof dir === 'string' && dir.trim() !== ''
-  if (!enabled) return noopJournal()
+  const configured = typeof dir === 'string' && dir.trim() !== ''
+  if (!configured) return disabledJournal({ reason: 'no_dir' })
 
-  const limit = Number.isFinite(maxBytes) && maxBytes > 0
-    ? Math.floor(maxBytes)
-    : DEFAULT_MAX_BYTES
+  const limit = positive(maxBytes, DEFAULT_MAX_BYTES)
+  const totalLimit = positive(maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES)
+  // A zero age cap turns the age rule off; the byte budget still holds.
+  const ageLimit = nonNegative(maxAgeMs, DEFAULT_MAX_AGE_MS)
   const root = path.resolve(dir)
   const stats = {
     enabled: true,
+    disabledReason: null,
+    dir: root,
     file: null,
     frames: 0,
     events: 0,
     bytes: 0,
+    pruned: 0,
+    prunedBytes: 0,
     rotations: 0,
     skipped: 0,
     truncated: 0,
@@ -122,8 +173,76 @@ export function createJournal ({
   let sequence = 1
   let fileBytes = 0
 
+  // The journal's own files, with the size and the age retention reads. A name
+  // that is not a journal name is left alone: retention deletes what the reader
+  // reads, and nothing else.
+  function journalEntries () {
+    const entries = []
+    for (const name of fs.readdirSync(root)) {
+      if (!FILE_NAME.test(name)) continue
+      const file = path.join(root, name)
+      const stat = fs.statSync(file)
+      entries.push({ name, file, size: stat.size, mtimeMs: stat.mtimeMs })
+    }
+    return entries
+  }
+
+  // #96: keep the directory inside its byte budget and its age cap, oldest
+  // first. The segment being written is never pruned: maxBytes bounds it, and
+  // deleting it would lose the newest records and confuse the reader.
+  function prune () {
+    try {
+      const entries = journalEntries()
+      const byName = new Map(entries.map(entry => [entry.name, entry]))
+      let total = entries.reduce((sum, entry) => sum + entry.size, 0)
+      const now = clock()
+      for (const name of journalFileOrder(entries.map(entry => entry.name))) {
+        const entry = byName.get(name)
+        if (entry === undefined || entry.file === currentPath) continue
+        const tooOld = ageLimit > 0 && now - entry.mtimeMs > ageLimit
+        if (!tooOld && total <= totalLimit) break
+        fs.rmSync(entry.file, { force: true })
+        total -= entry.size
+        stats.pruned++
+        stats.prunedBytes += entry.size
+      }
+    } catch (error) {
+      // A directory that cannot be listed or pruned is not a reason to stop
+      // journaling; the write path reports its own failures.
+      stats.errors++
+    }
+  }
+
+  // Free bytes on the journal's own filesystem, or null where the platform
+  // cannot report them.
+  function freeBytes () {
+    if (typeof fs.statfsSync !== 'function') return null
+    try {
+      const stat = fs.statfsSync(root)
+      return Number(stat.bavail) * Number(stat.bsize)
+    } catch {
+      return null
+    }
+  }
+
+  const outOfSpace = error => error?.code === 'ENOSPC' || error?.code === 'EDQUOT'
+
   try {
     fs.mkdirSync(root, { recursive: true })
+  } catch (error) {
+    return disabledJournal({ reason: outOfSpace(error) ? 'journal_volume_full' : 'journal_open_failed', dir: root })
+  }
+
+  // The directory holds at most the budget plus one rotating file, so that is
+  // what the volume has to hold before the journal opens.
+  const requiredBytes = totalLimit + limit
+  const free = freeBytes()
+  if (free !== null && free < requiredBytes) {
+    return disabledJournal({ reason: 'journal_volume_full', dir: root, freeBytes: free, requiredBytes })
+  }
+
+  try {
+    prune()
     const stamp = new Date(clock()).toISOString().replace(/[:.]/g, '-')
     base = `session-${stamp}-${process.pid}`
     currentPath = path.join(root, `${base}.ndjson`)
@@ -132,6 +251,9 @@ export function createJournal ({
   } catch (error) {
     stats.errors++
     closed = true
+    if (outOfSpace(error)) {
+      return disabledJournal({ reason: 'journal_volume_full', dir: root, freeBytes: free, requiredBytes })
+    }
   }
 
   function reopen () {
@@ -155,24 +277,39 @@ export function createJournal ({
       fileBytes = 0
       stats.rotations++
       reopen()
+      prune()
     } catch (error) {
       stats.errors++
       reopen()
     }
   }
 
+  // Returns whether the record reached the file: the caller's counter and the
+  // `frame()` answer both mean "journaled", not "attempted".
   function write (record) {
-    if (closed || fd === null) return
+    if (closed || fd === null) return false
     try {
       const line = JSON.stringify(record) + '\n'
       const size = Buffer.byteLength(line)
       if (fileBytes > 0 && fileBytes + size > limit) rotate()
-      if (closed || fd === null) return
+      if (closed || fd === null) return false
       fs.writeSync(fd, line)
       fileBytes += size
       stats.bytes += size
+      return true
     } catch (error) {
       stats.errors++
+      // A full volume stops the journal instead of failing on every frame. The
+      // pod log and the heartbeat keep the write path for the rest of the
+      // process, and `disabledReason` names what happened (#96).
+      if (outOfSpace(error)) {
+        stats.disabledReason = 'journal_volume_full'
+        stats.enabled = false
+        closed = true
+        try { fs.closeSync(fd) } catch { /* already closed */ }
+        fd = null
+      }
+      return false
     }
   }
 
@@ -201,9 +338,9 @@ export function createJournal ({
       } else {
         record.b64 = payload ? payload.toString('base64') : ''
       }
-      write(record)
-      stats.frames++
-      return true
+      const wrote = write(record)
+      if (wrote) stats.frames++
+      return wrote
     },
 
     event (name, fields = {}) {
@@ -216,8 +353,7 @@ export function createJournal ({
           record[key] = normalize(value)
         }
       }
-      write(record)
-      stats.events++
+      if (write(record)) stats.events++
     },
 
     close () {
@@ -228,7 +364,13 @@ export function createJournal ({
     },
 
     stats () {
-      return { ...stats, file: currentPath }
+      // The directory's footprint, so an operator reading a heartbeat cannot
+      // mistake this process's bytes written for what is on the volume (#96).
+      let dirBytes = null
+      try {
+        dirBytes = journalEntries().reduce((sum, entry) => sum + entry.size, 0)
+      } catch { /* an unreadable directory reports nothing */ }
+      return { ...stats, file: currentPath, dirBytes }
     }
   }
 }
@@ -242,10 +384,6 @@ export function createJournal ({
 // Rotation order: <base>.ndjson, then <base>-2.ndjson, -3, ... A segment that
 // rotated keeps its own archive at <same>.ndjson.1, holding that segment's
 // records up to the rotation, so a segment's archive comes before the segment.
-
-// The stamp is the writer's, at second and millisecond precision. Anything else
-// in the directory, such as session-backup.ndjson, is not a journal file.
-const FILE_NAME = /^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)-(\d+)(?:-(\d+))?\.ndjson(\.1)?$/
 
 // Rotation order for a directory listing: session, then process, then segment,
 // then archive before live. Names that are not journal files are ignored.
