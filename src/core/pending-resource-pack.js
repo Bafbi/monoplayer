@@ -59,14 +59,14 @@ export function createPendingResourcePacks () {
     return { replaced: false, uuid }
   }
 
-  // The server withdrew a pack. Entries with no UUID are left alone: a frame the
-  // leg could not decode cannot prove which pack it withdraws.
+  // The server withdrew a pack. The field is optional on the wire, and an
+  // absent UUID means "every pack this connection pushed": the client is told to
+  // withdraw them all, so the holder must not keep one of them.
   function remove ({ uuid = null } = {}) {
     const id = uuid === null || uuid === undefined ? null : String(uuid)
-    if (id === null) return { dropped: false }
     const before = held.length
-    held = held.filter(entry => entry.uuid !== id)
-    return { dropped: held.length !== before }
+    held = id === null ? [] : held.filter(entry => entry.uuid !== id)
+    return { dropped: before - held.length, all: id === null }
   }
 
   // The server has been told a result for this pack. Only a terminal one ends

@@ -35,10 +35,13 @@ accepts and loads.
 - **Answer the player's decline as an accept.** Rejected: the server decides
   what a decline means. A required pack ends the session, and the proxy must not
   turn that into a lie about the player's client.
-- **Hold the pack in the pending dialog holder.** Rejected: one holder holds one
-  frame, and a dialog and a pack are asked at the same time on the same
-  connection. A pack also has no answer to release it, and a server may hold
-  several.
+- **Hold the pack in the pending dialog holder.** Rejected: the two holders are
+  the same shape and opposite rules. A dialog is released by the player's answer,
+  because an answered question is closed. A pack must never be released by an
+  answer, because the server keeps it installed and the next player needs it
+  too; only a withdrawal releases it. Sharing the structure would mean sharing
+  none of the behaviour, and a dialog and a pack can be pending on one
+  connection at once.
 
 ## Consequences
 
@@ -52,13 +55,21 @@ accepts and loads.
   copy; the frame costs one packet, not one download.
 - A pack a player never answered becomes the puppet's answer on detach, the same
   shape as #73's gate fallback, because a required pack the server hears nothing
-  about can end the session.
+  about can end the session. The puppet answers only when no player is attached:
+  a player who is attached but still in its own configuration round is offered
+  the pack at its replay, and answering beside them is the defect this ADR is
+  about.
+- `remove_resource_pack` carries `option UUID`, and an absent one withdraws every
+  pack the connection pushed. The holder empties on that form: a client that was
+  told to drop a pack must not be offered it again.
 - A configuration-phase pack whose player arrives after the puppet left
   configuration still reaches the client, and its answer cannot: the packet id is
   state-scoped, so the frame is dropped with `resourcePackAnswerUnforwardable`.
   The server already heard the puppet's accept.
-- `pendingPacks.clear()` runs where `pendingDialog.clear()` does. A pack belongs
-  to the backend session that sent it, and a copy from a dead session would be
-  offered beside the new one's.
+- `pendingPacks.clear()` runs where `pendingDialog.clear()` does, and on the two
+  paths that put a client back on another server: a failed followed transfer, and
+  the reconnect that restores the snapshot. A pack belongs to the backend session
+  that sent it, and a copy from a dead one would be offered beside the new one's
+  — or answered to a server that never sent it.
 - `client-parity` predicts `both` for a control frame. Before this, a control
   frame had no prediction and any one-sided pack row reported as unexplained.

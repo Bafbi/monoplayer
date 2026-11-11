@@ -540,7 +540,9 @@ above (real Paper, online-mode, official client) stays the acceptance record.
 - Resource packs: the pack is a control frame the human answers (#98). The
   held copy lives in `src/core/pending-resource-pack.js`, outside the state
   cache, so a play-state pack is not evicted from the generic ring before a
-  client attaches; with no client able to answer, the puppet accepts and loads.
+  client attaches. With no client attached, the puppet accepts and loads; with
+  one attached, it says nothing and the human's status is the answer. An absent
+  UUID on `remove_resource_pack` withdraws every pack.
 
 ## Limits / open questions
 
