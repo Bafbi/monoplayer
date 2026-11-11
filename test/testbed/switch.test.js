@@ -1,7 +1,8 @@
 // src/testbed/switch.js is the one script that scales the live deployment to
-// zero and disables Argo's auto-sync for the transfer run. `down` puts both back
-// from a record in a state file (#107). A second `up` before a `down` used to
-// overwrite that record with the empty one, so the policy was lost for good.
+// zero and disables Argo's auto-sync for the transfer run. `down` scales the
+// deployment back and reads the policy out of the restore record (#107). A
+// second `up` before a `down` used to overwrite that record with the empty
+// one, so the policy was lost for good.
 // These cases replace kubectl, and the registry probe the script shells out to,
 // with shims: nothing here reaches a cluster, and the live deployment is never
 // scaled. The assertions are made of the recorded argv.
