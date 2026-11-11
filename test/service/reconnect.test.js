@@ -4,45 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createMonoplayer, loadConfig } from '../../src/service/monoplayer.js'
 import { createSession, STATES } from '../../src/core/session.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
-
-function fakeClock () {
-  let now = 0
-  let timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) {
-      const timer = { fn, fires: now + ms }
-      timers.push(timer)
-      return timer
-    },
-    clearTimeout (timer) { timers = timers.filter(t => t !== timer) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      timers = timers.filter(t => t.fires > now)
-      for (const t of due) t.fn()
-    },
-    get pending () { return timers.length }
-  }
-}
-
-function buildCore (clock) {
-  const backend = createFakeBackendLeg()
-  const front = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: loadConfig(),
-    backendLeg: backend,
-    frontLeg: front,
-    clock
-  })
-  const dues = []
-  core.on('reconnect_due', payload => dues.push(payload))
-  core.start()
-  return { core, backend, front, dues }
-}
+import { fakeClock, makeCore } from '../support/harness.js'
 
 // Bring a fake core to warm with one real backend login.
 function warm (core, backend) {
@@ -159,7 +122,7 @@ test('a rescinded reconnect never calls onReconnect', () => {
 
 test('core emits one reconnect_due and the next backend login returns WARM', () => {
   const clock = fakeClock()
-  const { core, backend, dues } = buildCore(clock)
+  const { core, backendLeg: backend, events: dues } = makeCore({ clock })
   warm(core, backend)
   assert.equal(core.session.state, STATES.WARM)
   assert.equal(core.session.backendLogins, 1)
@@ -183,7 +146,7 @@ test('core emits one reconnect_due and the next backend login returns WARM', () 
 
 test('fail() after a failed reconnect reaches FAILED', () => {
   const clock = fakeClock()
-  const { core, backend } = buildCore(clock)
+  const { core, backendLeg: backend } = makeCore({ clock })
   warm(core, backend)
 
   backend.deliverEnd({ reason: 'drop' })
@@ -197,7 +160,7 @@ test('fail() after a failed reconnect reaches FAILED', () => {
 
 test('a fault during the fired attempt fails closed without another timer', () => {
   const clock = fakeClock()
-  const { core, backend, dues } = buildCore(clock)
+  const { core, backendLeg: backend, events: dues } = makeCore({ clock })
   warm(core, backend)
 
   backend.deliverEnd({ reason: 'drop' })

@@ -308,6 +308,10 @@ _Avoid_: proof, artifacts
 An in-process game server that speaks the real protocol and follows a script, used where a real server would be slow, remote, or uncooperative.
 _Avoid_: mock, stub, fake server
 
+**Fake-integration rig**:
+The shared test helper (`test/support/harness.js`) that builds a started core on both fake legs, with a clock the test drives and the events the core emits, so a test states only the one thing it changes.
+_Avoid_: test harness (that is the driver's), mock core, test bed
+
 **Protocol bot**:
 A scripted client built on the protocol library, used as an attaching player. It proves wire shape and relay behavior, never rendering or vanilla acceptance.
 _Avoid_: headless client, test client, fake player

@@ -11,45 +11,11 @@
 // transfer must not replay it.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
-import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { loadConfig } from '../../src/service/monoplayer.js'
+import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 const BUFFER = name => Buffer.from(`backend:${name}`)
-
-function fakeClock () {
-  let now = 0
-  const timers = []
-  return {
-    now: () => now,
-    setTimeout (fn, ms) { const t = { fn, fires: now + ms }; timers.push(t); return t },
-    clearTimeout (t) { timers.splice(timers.indexOf(t), 1) },
-    tick (ms) {
-      now += ms
-      const due = timers.filter(t => t.fires <= now)
-      for (const t of due) timers.splice(timers.indexOf(t), 1)
-      for (const t of due) t.fn()
-    }
-  }
-}
-
-function makeCore (config = {}) {
-  const backendLeg = createFakeBackendLeg()
-  const frontLeg = createFakeFrontLeg()
-  const core = createMonoplayer({
-    config: {
-      ...DEFAULT_CONFIG,
-      puppet: { username: 'GlowSquidye', uuid: null },
-      attachWhitelist: [PLAYER],
-      ...config
-    },
-    backendLeg,
-    frontLeg,
-    clock: fakeClock()
-  })
-  core.start()
-  return { backendLeg, frontLeg, core }
-}
 
 function warmBackend ({ backendLeg, core }) {
   backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
@@ -82,7 +48,7 @@ const signedPlayerChat = (text = 'hello everyone') => ({
 })
 
 test('the attached client chat is spoken by the puppet leg, not forwarded raw', () => {
-  const rig = makeCore({ chat: 'full' })
+  const rig = makeCore({ config: { chat: 'full' } })
   warmBackend(rig)
   attach(rig)
 
@@ -95,7 +61,7 @@ test('the attached client chat is spoken by the puppet leg, not forwarded raw', 
 })
 
 test('the attached client command is spoken by the puppet leg as a command', () => {
-  const rig = makeCore({ chat: 'full' })
+  const rig = makeCore({ config: { chat: 'full' } })
   warmBackend(rig)
   attach(rig)
 
@@ -106,7 +72,7 @@ test('the attached client command is spoken by the puppet leg as a command', () 
 })
 
 test('a signed command frame is spoken once, as one command', () => {
-  const rig = makeCore({ chat: 'full' })
+  const rig = makeCore({ config: { chat: 'full' } })
   warmBackend(rig)
   attach(rig)
 
@@ -116,7 +82,7 @@ test('a signed command frame is spoken once, as one command', () => {
 })
 
 test('chat sent while no client is attached is not spoken', () => {
-  const rig = makeCore({ chat: 'full' })
+  const rig = makeCore({ config: { chat: 'full' } })
   warmBackend(rig)
 
   rig.frontLeg.serverbound({ name: 'chat_message', data: { message: 'detached' } })
@@ -127,7 +93,7 @@ test('chat sent while no client is attached is not spoken', () => {
 
 test('the read-only and off modes never speak for the client', () => {
   for (const chat of ['read-only', 'off']) {
-    const rig = makeCore({ chat })
+    const rig = makeCore({ config: { chat } })
     warmBackend(rig)
     attach(rig)
     rig.frontLeg.serverbound({ name: 'chat_message', data: { message: 'hi' } })
@@ -137,7 +103,7 @@ test('the read-only and off modes never speak for the client', () => {
 })
 
 test('#97 the commands mode speaks the client command and drops the chat message', () => {
-  const rig = makeCore({ chat: 'commands' })
+  const rig = makeCore({ config: { chat: 'commands' } })
   warmBackend(rig)
   attach(rig)
 
@@ -151,7 +117,7 @@ test('#97 the commands mode speaks the client command and drops the chat message
 })
 
 test('session keys and acknowledgements stay on the front connection', () => {
-  const rig = makeCore({ chat: 'full' })
+  const rig = makeCore({ config: { chat: 'full' } })
   warmBackend(rig)
   attach(rig)
 
@@ -166,7 +132,7 @@ test('session keys and acknowledgements stay on the front connection', () => {
 })
 
 test('the server signed chat reaches the human and is never cached', () => {
-  const rig = makeCore({ chat: 'full' })
+  const rig = makeCore({ config: { chat: 'full' } })
   warmBackend(rig)
   attach(rig)
 

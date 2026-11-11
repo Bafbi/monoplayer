@@ -20,21 +20,16 @@ import { pathToFileURL } from 'node:url'
 
 import { brandFrame, FABRIC_BRAND } from '../core/client-settings.js'
 import { createTokenCustody } from '../custody/cache.js'
-import { resolveAccount } from '../custody/accounts.js'
+import { DEFAULT_ACCOUNTS_DIR, resolveAccount } from '../custody/accounts.js'
+import { flag } from '../service/cli.js'
 import { createBot } from './bot.js'
 
 // `||` not `??`: an empty MONOPLAYER_VERSION means unset, and an empty version
 // would let minecraft-protocol pick its own defaultVersion instead of the gate
 // Paper's.
 const VERSION = process.env.MONOPLAYER_VERSION || '26.2'
-const DEFAULT_ACCOUNTS_DIR = '.secrets/accounts'
 const DEFAULT_SELECTOR = 'glowsquidye'
 const JOIN_TIMEOUT_MS = Number(process.env.MONOPLAYER_BASELINE_TIMEOUT_MS ?? 120_000)
-
-function flag (argv, name) {
-  const i = argv.indexOf(name)
-  return i >= 0 ? argv[i + 1] : undefined
-}
 
 // Resolve a bot identity from token custody. Two rungs join as the same account
 // twice — the observer baseline once, the client-parity rung once directly and
