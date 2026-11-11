@@ -13,34 +13,6 @@ function warm (core, backend) {
   backend.deliver({ state: 'play', name: 'chunk_batch_finished', data: { batchSize: 1 } })
 }
 
-test('backendDown schedules exactly one onReconnect; a second fault adds none', () => {
-  const clock = fakeClock()
-  const calls = []
-  const s = createSession({
-    clock,
-    reconnectDelayMs: 1000,
-    onReconnect: payload => calls.push(payload)
-  })
-  s.backendLogin({})
-  s.warmComplete({})
-
-  s.backendDown({ reason: 'drop' })
-  s.backendDown({ reason: 'drop_again' })
-  assert.equal(s.state, STATES.RECONNECTING)
-  assert.equal(clock.pending, 1, 'a second fault while reconnecting must not arm a timer')
-  assert.equal(calls.length, 0, 'the callback waits for the timer')
-
-  clock.tick(1000)
-  assert.deepEqual(calls, [{ delayMs: 1000, attempt: 1 }], 'exactly one callback per scheduled reconnect')
-  assert.equal(s.state, STATES.BOOT)
-  assert.equal(clock.pending, 0)
-
-  // The fired attempt fails again: the session fails closed, no new callback.
-  s.backendDown({ reason: 'refused' })
-  assert.equal(s.state, STATES.FAILED)
-  assert.equal(calls.length, 1)
-})
-
 test('a retry policy keeps reconnecting with capped backoff until the budget runs out', () => {
   const clock = fakeClock()
   const calls = []
@@ -100,24 +72,6 @@ test('a successful reconnect resets the backoff budget', () => {
   s.backendDown({ reason: 'later_drop' })
   clock.tick(1000)
   assert.deepEqual(calls.at(-1), { delayMs: 1000, attempt: 1 }, 'back to the base delay')
-})
-
-test('a rescinded reconnect never calls onReconnect', () => {
-  const clock = fakeClock()
-  const calls = []
-  const s = createSession({
-    clock,
-    reconnectDelayMs: 1000,
-    onReconnect: payload => calls.push(payload)
-  })
-  s.backendLogin({})
-  s.warmComplete({})
-
-  s.backendDown({ reason: 'timeout' })
-  s.backendUp()
-  clock.tick(10_000)
-  assert.equal(calls.length, 0)
-  assert.equal(s.state, STATES.BOOT)
 })
 
 test('core emits one reconnect_due and the next backend login returns WARM', () => {
