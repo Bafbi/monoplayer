@@ -1,0 +1,164 @@
+// The dialog codec: which action of a `show_dialog` is clicked, and the
+// `custom_click_action` body that answers it.
+//
+// These cases moved here with the codec when it left the leg (#105). The
+// assertions are the ones that lived in test/legs/dialogs.test.js, which keeps
+// the leg's own cases: who answers, and when the puppet clicks nothing.
+//
+// The fixture mirrors the decoded `show_dialog` shape: every NBT node is a
+// { type, value } wrapper, and `actions` is a list of compounds. The real
+// Excalia dialog uses the same shape with two season buttons.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import {
+  buildCustomClickAction,
+  chooseDialogAction,
+  decideDialogAutoAnswer
+} from '../../src/core/dialog-codec.js'
+
+function action (label, id, buttonId) {
+  return {
+    action: {
+      type: 'compound',
+      value: {
+        type: { type: 'string', value: 'minecraft:dynamic/custom' },
+        id: { type: 'string', value: id },
+        additions: {
+          type: 'compound',
+          value: {
+            id: { type: 'intArray', value: buttonId }
+          }
+        }
+      }
+    },
+    label: {
+      type: 'compound',
+      value: { text: { type: 'string', value: label } }
+    }
+  }
+}
+
+function dialog (actions) {
+  return {
+    dialog: {
+      type: 'compound',
+      value: {
+        type: { type: 'string', value: 'minecraft:multi_action' },
+        actions: {
+          type: 'list',
+          value: { type: 'compound', value: actions }
+        }
+      }
+    }
+  }
+}
+
+const TWO_SEASONS = dialog([
+  action('Saison 2', 'paper:dialog_click_callback', [1, 2, 3, 4]),
+  action('Saison 3', 'paper:dialog_click_callback', [5, 6, 7, 8])
+])
+
+test('last picks the current season button', () => {
+  const choice = chooseDialogAction(TWO_SEASONS, 'last')
+  assert.equal(choice.index, 1)
+  assert.equal(choice.total, 2)
+  assert.equal(choice.label, 'Saison 3')
+  assert.equal(choice.id, 'paper:dialog_click_callback')
+  assert.equal(choice.dialogType, 'minecraft:multi_action')
+  assert.deepEqual(choice.additions.value.id.value, [5, 6, 7, 8])
+})
+
+test('first picks the first action', () => {
+  assert.equal(chooseDialogAction(TWO_SEASONS, 'first').label, 'Saison 2')
+})
+
+test('a label substring selects the matching action', () => {
+  assert.equal(chooseDialogAction(TWO_SEASONS, 'saison 2').index, 0)
+  assert.equal(chooseDialogAction(TWO_SEASONS, 'SAISON 3').index, 1)
+})
+
+test('an unmatched label falls back to the last action', () => {
+  assert.equal(chooseDialogAction(TWO_SEASONS, 'no-such-button').index, 1)
+})
+
+test('no actions or a missing callback id yields null', () => {
+  assert.equal(chooseDialogAction(dialog([]), 'last'), null)
+  const noId = dialog([{ action: { type: 'compound', value: {} }, label: { type: 'compound', value: {} } }])
+  assert.equal(chooseDialogAction(noId, 'last'), null)
+})
+
+test('the click body includes the identifier and the length-prefixed optional NBT', () => {
+  const choice = chooseDialogAction(TWO_SEASONS, 'last')
+  const body = buildCustomClickAction({
+    state: 'configuration',
+    id: choice.id,
+    additions: choice.additions
+  })
+
+  assert.equal(body[0], 0x08)
+  assert.equal(body[1], choice.id.length)
+  assert.equal(body.subarray(2, 2 + choice.id.length).toString('utf8'), choice.id)
+
+  let offset = 2 + choice.id.length
+  const payloadLength = body[offset++]
+  assert.equal(payloadLength, body.length - offset)
+  assert.equal(body[offset], 1) // optional NBT present
+  assert.equal(body[offset + 1], 0x0a) // compound root
+  assert.equal(body[offset + 2], 0x00) // empty root name length
+  assert.equal(body[offset + 3], 0x00)
+})
+
+test('#16 no auto-answer while a human is attached', () => {
+  // A headless configuration gate is answered with the configured action; the
+  // same policy with a human attached answers nothing, so the two answerers
+  // cannot both fire.
+  assert.deepEqual(
+    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: false, state: 'configuration' }),
+    { auto: true, reason: null }
+  )
+  assert.deepEqual(
+    decideDialogAutoAnswer({ dialogAction: 'last', humanAttached: true, state: 'configuration' }),
+    { auto: false, reason: 'human_attached' }
+  )
+  // No policy, no click, human or not.
+  assert.deepEqual(
+    decideDialogAutoAnswer({ dialogAction: null, humanAttached: false, state: 'configuration' }),
+    { auto: false, reason: 'no_policy' }
+  )
+})
+
+test('#20 a play dialog is never answered by the puppet', () => {
+  // The human owns every play dialog: the attached client answers it or it
+  // waits. The configured action covers configuration-phase gates only, so no
+  // combination of attachment and policy makes the puppet click a play dialog.
+  const cases = [
+    ['play', false, 'last', { auto: false, reason: 'play_dialog_waits' }],
+    ['play', true, 'last', { auto: false, reason: 'play_dialog_waits' }],
+    ['play', false, 'Saison 3', { auto: false, reason: 'play_dialog_waits' }],
+    // The phase is checked before the policy, so a play dialog reports the same
+    // reason whether or not one is configured.
+    ['play', false, null, { auto: false, reason: 'play_dialog_waits' }],
+    // A phase nobody named fails closed: waiting is always safe, clicking is not.
+    [undefined, false, 'last', { auto: false, reason: 'unsupported_state' }],
+    ['login', false, 'last', { auto: false, reason: 'unsupported_state' }]
+  ]
+  for (const [state, humanAttached, dialogAction, expected] of cases) {
+    assert.deepEqual(
+      decideDialogAutoAnswer({ state, humanAttached, dialogAction }),
+      expected,
+      `state=${state} attached=${humanAttached} action=${dialogAction}`
+    )
+  }
+})
+
+test('play uses the play packet id and a missing NBT is optional-absent', () => {
+  const play = buildCustomClickAction({ state: 'play', id: 'paper:dialog', additions: null })
+  assert.equal(play[0], 0x44)
+  const offset = 2 + 'paper:dialog'.length
+  assert.equal(play[offset], 1) // payload length
+  assert.equal(play[offset + 1], 0) // optional absent
+
+  assert.equal(buildCustomClickAction({ state: 'login', id: 'x' }), null)
+  assert.equal(buildCustomClickAction({ state: 'configuration', id: '' }), null)
+})
