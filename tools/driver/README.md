@@ -20,25 +20,26 @@ load it on any other version.
 
 ## Install on the display host
 
+This is a script, not a mise task. The installer writes into a Prism root on the
+machine it runs on, so it belongs to the host that holds that root.
+
 ```bash
 # copy the jar to the host, then:
-tools/driver/install.sh /path/to/monoplayer-driver-0.1.0.jar
+BASE=gate-b-player-262 INSTANCE=gate-b-player-262-fabric \
+  tools/driver/install.sh /path/to/monoplayer-driver-0.1.0.jar
 ```
 
 The installer clones a base Prism instance, reads its Minecraft version from
 `mmc-pack.json` (so the version is not written down twice), adds Fabric Loader
 0.20.1, and puts the driver in `minecraft/mods/`. It refuses to overwrite an
-existing instance.
-
-```bash
-BASE=gate-b-player-262 INSTANCE=gate-b-player-262-fabric \
-  tools/driver/install.sh monoplayer-driver-0.1.0.jar
-```
+existing instance, so a second install needs a new `INSTANCE` or the old one
+deleted.
 
 The instance names are frozen (see
 [deploy/driver/README.md](../../deploy/driver/README.md)): `gate-b-player` and
 `gate-b-player-fabric` are the 26.1.2 pair, kept as the record of the G0 run on
-that version. Launch:
+that version. `gate-b-player-262` and `gate-b-player-262-fabric` are the 26.2
+pair, and the only pair the current jar loads. Launch:
 
 ```bash
 tools/nath.sh launch gate-b-player-262-fabric \
