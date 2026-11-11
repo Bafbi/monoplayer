@@ -186,7 +186,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     fake = await createFakeBackend({ port: 0, logStream: null, viewDistance: 6, codeOfConduct: true })
     evidence.backendPort = fake.port
     // A second backend is the target of the followed transfers (O21-O24, the
-    // default detach path, and O33-O35, the kept connection).
+    // detach path with the key off, and O33-O35, the kept connection).
     fake2 = await createFakeBackend({ port: 0, logStream: null })
     evidence.backend2Port = fake2.port
     // The nmp fake server predates intent 3. The proxy records the real
@@ -1304,7 +1304,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       }
     )
 
-    // --- O33-O35: the kept connection (#22), opt-in through
+    // --- O33-O35: the kept connection (#22), on by default through
     // `transfer.keepConnection` ---
     // A second, independent puppet and front against the same fake backends,
     // with the key on. The client follows the move on its own connection.

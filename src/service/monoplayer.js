@@ -1014,8 +1014,8 @@ export function createMonoplayer ({
 
     // #22: with `transfer.keepConnection` on, the client keeps its connection
     // and the move holds the pre-transfer state so a target that never answers
-    // can be rolled back onto the same socket. Off (the default), the client is
-    // detached and rejoins once the puppet is warm on the target.
+    // can be rolled back onto the same socket. With the key off, the client is
+    // detached and rejoins the proxy once the puppet is warm on the target.
     const begun = cfg.transfer.keepConnection && isAttached()
       ? move.begin({ target: { host, port }, kind: TRANSFER_KINDS.TRANSFER, reason: 'backend_transfer' })
       : { began: false }
@@ -2152,8 +2152,8 @@ export function createMonoplayer ({
         return
       }
       blockClientbound('play', name, clientboundPolicy('play', name), data)
-      // Default path: the front cannot serve a restarted configuration phase
-      // on the client's own connection, so the puppet leg is ended on purpose
+      // With the key on, the front serves the restarted phase on the client's
+      // own connection. With the key off the puppet leg is ended on purpose,
       // and the normal backend-down path kicks the client with a clear reason.
       if (!cfg.transfer.keepConnection) {
         log('backendReconfigure', { name, keepConnection: false })
