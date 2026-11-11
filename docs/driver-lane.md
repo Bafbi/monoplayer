@@ -272,7 +272,10 @@ Monoplayer, never the live deployment.
 
 - Creative gamemode only; survival-rate break/place holds are not exercised.
 - No driver reconnect op by design; rejoin = quit + host-side relaunch.
-- The unmodded witness is a separate, still-pending manual lane.
+- The unmodded Prism witness is a separate manual lane, run by hand against the
+  gate Paper. Its record is quoted in
+  [the driver verdict](../testdata/driver-verdict.md). This report carries no
+  anti-masking evidence of its own.
 - The driver does not select hotbar slots (relies on `/give` filling the
   selected slot).
 - The backend world is an `emptyDir` void map; pod restarts wipe edits and the
