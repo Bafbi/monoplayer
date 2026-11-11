@@ -15,19 +15,20 @@
 // retired quarantine to its `retired/`, and the attach whitelist to its
 // `attach-whitelist.json`. `--accounts-dir` overrides only the account tree.
 //
-// Exit status: 0 done, 1 failed (an operation did not succeed), 2 not honoured
-// (no such account, an ambiguous selector, a usage error, a held lock). A
-// caller must not retry a 2 blindly. `migrate --dry-run` is the one command
-// that always exits 0, because its report is the answer.
+// Exit status: 0 done, 1 failed (an operation did not succeed), 2 refused (the
+// request cannot be honoured: no such account, an ambiguous selector, a usage
+// error, a held lock, a target that exists or sits on another filesystem).
+// `migrate --dry-run` is the one command that always exits 0, because its
+// report is the answer.
 //
 // Usage:
 //   node src/custody/cli.js accounts [--accounts-dir <dir>] [--secrets-dir <dir>] [--json]
-//   node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>]
+//   node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>] [--secrets-dir <dir>]
 //   node src/custody/cli.js device-code --dir <accountDir>
 //   node src/custody/cli.js status [--account ...] [--json] [--refresh] [--secrets-dir <dir>]
 //   node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]
 //   node src/custody/cli.js whitelist <attach|backend> add|remove <name-or-uuid>
-//        [--file <secretsDir>/attach-whitelist.json] [--namespace ... --deployment ...]
+//        [--file <secretsDir>/attach-whitelist.json] [--secrets-dir <dir>] [--namespace ... --deployment ...]
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -71,11 +72,11 @@ function custodyPathsFromArgs (args) {
 
 // --accounts-dir, or its environment twin, names the account tree explicitly;
 // without either, the tree is the one under the custody root.
-function accountsDirFromArgs (args) {
+function accountsDirFromArgs (args, paths = custodyPathsFromArgs(args)) {
   return path.resolve(
     args['accounts-dir'] ??
     process.env.GATEB_ACCOUNTS_DIR ??
-    custodyPathsFromArgs(args).accounts
+    paths.accounts
   )
 }
 
@@ -129,9 +130,11 @@ function fail (message, code = 1) {
   process.exit(code)
 }
 
-// A usage error is a refusal, not a failed operation: exit 2, with the usage.
+// A usage error is a refusal, not a failed operation: the same "refused:"
+// prefix as every other exit 2, with the usage text after it.
 function usageFail (message) {
-  fail(message, 2)
+  process.stderr.write(`refused: ${message}\n${USAGE}\n`)
+  process.exit(2)
 }
 
 function refuse (message, code = 2) {
@@ -239,11 +242,11 @@ function deriveAlias (name) {
 // Bootstrap a brand-new account in a staging directory, then rename it into
 // the account tree. The staging lock is released before the rename so no lock
 // file moves into the new account.
-async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
+async function bootstrapNewAccount ({ args, paths, uuid = null, codeSink }) {
   if (args.alias !== undefined && !ALIAS_PATTERN.test(args.alias)) {
     refuse(`--alias ${JSON.stringify(args.alias)} does not match ${ALIAS_PATTERN}`)
   }
-  const stagingDir = createStagingDir({ stagingDir: custodyPathsFromArgs(args).staging })
+  const stagingDir = createStagingDir({ stagingDir: paths.staging })
   const custody = createTokenCustody({ account: null, uuid, dir: stagingDir, create: false })
   const msa = createMsaAuth({
     account: null,
@@ -279,8 +282,8 @@ async function bootstrapNewAccount ({ args, uuid = null, codeSink }) {
 
   const finalized = finalizeStaging({
     stagingDir,
-    accountsDir: accountsDirFromArgs(args),
-    secretsDir: custodyPathsFromArgs(args).root,
+    accountsDir: accountsDirFromArgs(args, paths),
+    secretsDir: paths.root,
     profile: {
       uuid: result.identity.uuid,
       name: result.identity.name,
@@ -312,8 +315,9 @@ async function main () {
     if (error instanceof UsageError) usageFail(error.message)
     throw error
   }
-  const accountsDir = accountsDirFromArgs(args)
-  const secretsDir = custodyPathsFromArgs(args).root
+  const paths = custodyPathsFromArgs(args)
+  const accountsDir = accountsDirFromArgs(args, paths)
+  const secretsDir = paths.root
 
   switch (command) {
     case 'accounts': {
@@ -387,7 +391,7 @@ async function main () {
 
       // No selector at all: this is a fresh bootstrap.
       if (!selector) {
-        await bootstrapNewAccount({ args, codeSink })
+        await bootstrapNewAccount({ args, paths, codeSink })
         return
       }
 
@@ -417,7 +421,7 @@ async function main () {
       // An unknown UUID means "add this account": the finalize step asserts
       // the resulting profile uuid matches the requested one.
       if (isUuid(selector)) {
-        await bootstrapNewAccount({ args, uuid: selector, codeSink })
+        await bootstrapNewAccount({ args, paths, uuid: selector, codeSink })
         return
       }
 
@@ -462,7 +466,7 @@ async function main () {
       const options = {
         secretsDir,
         accountsDir,
-        retiredDir: custodyPathsFromArgs(args).retired,
+        retiredDir: paths.retired,
         from: args.from ?? 'puppet',
       }
       const result = apply
@@ -484,7 +488,7 @@ async function main () {
 
       if (scope === 'attach') {
         const store = createWhitelistStore({
-          file: args.file ?? custodyPathsFromArgs(args).attachWhitelist,
+          file: args.file ?? paths.attachWhitelist,
           lookup: createNameLookup(),
         })
         if (action === 'add') {
