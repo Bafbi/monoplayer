@@ -92,7 +92,10 @@ glowsquidye`; the runbook is [docs/custody.md](docs/custody.md).
 **Paper behind Velocity** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
 forwarding; the authenticated puppet joined through the proxy. The official
 26.1.2 client has since attached through the full Velocity + Paper path,
-rendered, moved, and edited blocks. B1 live is green; next are B2-B6.
+rendered, moved, and edited blocks. B1 live is green. `mise run driver:parity`
+passed on the dev lane on 2026-11-09 ([docs/driver-lane.md](docs/driver-lane.md)).
+The F1-F6 fault rows are still pending
+([docs/testing-ladder.md](docs/testing-ladder.md)).
 
 Each verdict is one page in `testdata/`: [the protocol spike](testdata/spike-verdict.md),
 [the driver lane](testdata/driver-verdict.md), [custody](testdata/custody-verdict.md),

@@ -261,17 +261,20 @@ the ones being measured.
 
 **The baseline client is the protocol bot, not a vanilla client.** The ticket
 asks for "a direct vanilla or Fabric baseline client". The bot proves the wire
-and nothing about rendering, and it is what runs today. A vanilla client in
-either role is not built.
+and nothing about rendering, and it is what runs today.
 
-## Not built yet
+## Both comparisons run. Neither uses a vanilla client.
 
-- A clientbound parity run: the direct bot and the proxy bot, plus the Fabric
-  driver, compared frame by frame ([#13](https://github.com/Bafbi/monoplayer/issues/13)).
-  `src/ladder/state-parity.js` is the comparison it will use; the orchestration
-  is not written.
-- A vanilla client in either role. The protocol bot proves the wire, not
-  rendering or vanilla acceptance.
+- `mise run parity:run` compares two protocol bots. `mise run driver:parity`
+  compares the client driver joined directly against the client driver joined
+  through Monoplayer ([#13](https://github.com/Bafbi/monoplayer/issues/13),
+  [#62](https://github.com/Bafbi/monoplayer/issues/62)).
+  `src/ladder/state-parity.js` is the frame comparison, and
+  `src/driver/parity.js` is the client-state one. Each run sorts its differences
+  into same, expected, absent, or unexplained.
+- A vanilla client in either role is not built. The protocol bot proves the
+  wire, not rendering or vanilla acceptance. The unmodded witness is the one
+  vanilla run, by hand and outside these comparisons.
 
 The real client remains the last rung: the protocol bot cannot prove rendering,
 UI, or vanilla acceptance.
