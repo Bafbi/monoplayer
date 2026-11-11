@@ -132,6 +132,43 @@ test('redaction sentinel: synthetic tokens anywhere in a report are tagged, not 
   assert.doesNotThrow(() => JSON.parse(redacted), 'redacted reports must stay parseable')
 })
 
+// Custody's own prepass had the same JSON-quoted-key gap as the shared
+// scanner, so the report path missed {"device_code":"…"} while the log path
+// caught the same shape (#92). The prepass runs first, so its fix is what
+// makes the report path see the quote.
+test('redaction sentinel: a JSON-quoted auth key is tagged, and the tripwire sees it', () => {
+  const deviceCode = 'ABCD-1234-EFGH'
+  const token = 'abcdef123456789'
+  const raw = JSON.stringify({ device_code: deviceCode, access_token: token })
+
+  const found = scanForLeaks(raw)
+  assert.ok(found.some(f => f.kind === 'local:device_code'), `the tripwire must see device_code (saw ${found.map(f => f.kind).join(', ')})`)
+
+  const redacted = redactForReport(raw)
+  assert.equal(redacted.includes(deviceCode), false, 'the device code must not survive')
+  assert.equal(redacted.includes(token), false, 'the access token must not survive')
+  assert.doesNotThrow(() => JSON.parse(redacted), 'redacted reports must stay parseable')
+  // The tripwire runs over the redacted text in src/custody/cli.js. It must not
+  // report the sentinel this pass just wrote, or it counts its own output.
+  assert.deepEqual(scanForLeaks(redacted), [])
+
+  // A number under an auth key is a JSON value with no quotes to hide behind,
+  // so the tag takes its place as a string and the report still parses.
+  const numeric = redactForReport('{"device_code":123456789}')
+  assert.equal(numeric, '{"device_code":"[REDACTED]<device_code>"}')
+  assert.doesNotThrow(() => JSON.parse(numeric), 'redacted reports must stay parseable')
+})
+
+// The prepass tags a value, then the shared scanner runs over its output. A
+// sentinel is the result of redacting, so the second pass must not read it as
+// a value and overwrite the kind the prepass just wrote (#92, and the chaining
+// bug the ADR records).
+test('redaction sentinel: a sentinel the prepass wrote is left as it is', () => {
+  const redacted = redactForReport("access_token = 'SYNTHETIC_ACCESS_TOKEN_000111'")
+  assert.equal(redacted.includes('SYNTHETIC_ACCESS_TOKEN_000111'), false)
+  assert.ok(redacted.includes('<access_token>'), `the prepass kind survives the shared pass (saw ${redacted})`)
+})
+
 test('redaction sentinel: a token-string field added by a future code path is caught too', () => {
   const leaky = { files: [{ name: 'x_live-cache.json' }], holder: { message: `device_code= ${SENTINELS[0]}` } }
   const redacted = redactForReport(JSON.stringify(leaky))

@@ -487,6 +487,7 @@ test('redaction sentinel: secret-shaped log content never survives', () => {
   assert.ok(lines.includes(SENTINEL), 'sentinel present')
   assert.equal(lines.includes('SUPERSECRET'), false)
   assert.equal(lines.includes('hunter2'), false)
+  assert.equal(lines.includes('eyAbcDefG1234567890'), false, 'the bearer value is the secret, not the word Bearer')
   assert.ok(lines.includes('refresh_token='), 'shape stays greppable')
 
   // P2: a JSON-quoted secret field keeps its field-name label too.

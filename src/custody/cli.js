@@ -150,9 +150,12 @@ function lockRefusal (message, holder) {
 }
 
 function emitReport (text) {
-  const safe = redactForReport(String(text ?? ''))
-  process.stdout.write(safe + '\n')
-  const leaks = scanForLeaks(safe)
+  const raw = String(text ?? '')
+  // Count what the report carried, not what is left of it: a sentinel is the
+  // result of redacting, so a scan of the redacted text finds nothing at all
+  // and the warning could never fire (#92).
+  const leaks = scanForLeaks(raw)
+  process.stdout.write(redactForReport(raw) + '\n')
   if (leaks.length > 0) {
     process.stderr.write(`warning: ${leaks.length} secret-shaped string(s) were tagged in status output\n`)
   }
