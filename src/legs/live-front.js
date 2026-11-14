@@ -427,8 +427,8 @@ function createFrontLeg ({
 
   // Leave the window, at most once per connection. Two ways out: the whitelist
   // accepted it, or its socket ended. A denial is not a way out, because a denied
-  // connection never reached the accept the window is defined by, and its socket
-  // stays open until the library's close timeout. Counting it keeps the cap
+  // connection never reached the accept the window is defined by. Its socket
+  // stays open until the library's close timeout, and counting it keeps the cap
   // honest about the sockets the process is holding.
   function closePreAuthWindow (client) {
     if (!preAuthOpen.delete(client)) return
@@ -616,9 +616,11 @@ function createFrontLeg ({
   }
 
   function denyConnection (client, reason) {
-    // #201: the connection stays counted until its socket ends. A denial is not
-    // the whitelist's accept, so the window still holds this socket, and the
-    // library's close timeout bounds how long that can last.
+    // #201: a denial after the whitelist accepted — an attach slot already
+    // taken, a backend that is not ready — lands on a connection that has left
+    // the window, so it holds no slot to release. Only the whitelist denial
+    // below is pre-accept, and that connection stays counted until its socket
+    // ends, which the library's close timeout bounds.
     const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
     if (originalWrite) {
       client.write = (name, ...args) =>

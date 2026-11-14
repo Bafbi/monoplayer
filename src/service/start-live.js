@@ -713,8 +713,8 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
     // #201: a refused pre-auth connection, sampled at each heartbeat like the
     // wire rejections: the front leg owns the socket, so the core never sees the
     // connection that was turned away. The leg counts one reason today, so the
-    // attribute repeats the constant. #204's per-source reasons turn the leg's
-    // count into a map, and this sampling reads it.
+    // attribute repeats the constant. #204's per-source reasons will turn the
+    // leg's count into a map, and this sampling will read it.
     const preAuthRefused = front.metrics.preAuthRefused
     if (preAuthRefused > lastPreAuthRefused) {
       telemetry.metric('monoplayer.preauth.refused', preAuthRefused - lastPreAuthRefused,
