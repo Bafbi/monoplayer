@@ -166,6 +166,32 @@ transfer's target. With `transfer.keepConnection` off, the core ends the puppet
 leg instead, and the normal backend-down path kicks the client with
 `The server reconfigured this session. Reconnect in a few seconds.`.
 
+### Pre-auth window (#201)
+
+The front leg counts the sockets inside its pre-auth window: from accepting a
+connection to the moment the client's UUID is resolved and the attach whitelist
+has accepted it. Past that point the connection is a session, and the count never
+looks at it again. The window is bounded by `preAuth.maxConnections` (16 by
+default), and the leg closes a connection over it before any of its own state
+exists for that connection: no login review, no configuration interceptor, no
+attach slot.
+
+The limit is a connection total rather than a rate or a per-source figure
+because a TCP tunnel may present its own address instead of the client's, and a
+count does not care whose address a socket carries (#199). The per-source limits
+and the measurement that decides whether they mean anything arrive with #204.
+
+A refused socket is destroyed rather than ended. The library's `end` waits on a
+30 s close timeout, and a flood would sit in that wait. The client therefore sees
+a closed connection rather than a reason; the reason is the operator's, in the
+`preAuthRefused` log line (once per saturated window, not once per attempt), in
+`front.preAuthRefused` in the heartbeat, and in `monoplayer.preauth.refused` in
+the telemetry.
+
+Nothing yet bounds how long an accepted socket may stay silent, so a set of
+silent sockets that fill the window holds it until they leave or the process
+restarts. A pre-auth deadline is the follow-up, not part of this limit.
+
 ### Control dialogs (#16)
 
 A control dialog is the server asking the player a question. Monoplayer relays

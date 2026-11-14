@@ -12,6 +12,9 @@
 //   MONOPLAYER_PUPPET_USERNAME                          assertion: resolved name must match
 //   MONOPLAYER_PUPPET_CACHE_DIR                         raw custody dir override (deprecated)
 //   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
+//   MONOPLAYER_PREAUTH_MAX_CONNECTIONS                  total concurrent
+//                                                       connections in the pre-auth
+//                                                       window (default 16, #201)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
@@ -58,6 +61,7 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
+import { PREAUTH_REFUSAL } from '../core/preauth-window.js'
 
 // #134: the skin frame names the puppet's own `player_info` entry, so a lane that
 // cannot name the puppet's UUID writes no frame. The raw cacheDir override
@@ -140,13 +144,9 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
     if (Number.isFinite(parsed) && parsed > 0) reconnect.maxDelayMs = Math.floor(parsed)
   }
   out.reconnect = reconnect
-  // #96: the packet journal's directory and its retention budget. A rotation
-  // size alone deletes nothing, so the directory has a byte budget and an age
-  // cap. A cap the overlay cannot read is named in a warning and left at the
-  // default, the same as every other number in this function: the defaults are
-  // bounded, so a typo costs the operator the value they meant, not the bound.
-  const journal = { ...doc.journal }
-  if (env.MONOPLAYER_JOURNAL_DIR) journal.dir = env.MONOPLAYER_JOURNAL_DIR
+  // A number an operator can set: read once, and a value that cannot mean
+  // anything is named rather than silently clamped. The defaults are bounded, so
+  // a typo costs the operator the value they meant, not the bound.
   const cap = (raw, variable, floor) => {
     if (raw === undefined || raw === '') return undefined
     const parsed = Number(raw)
@@ -154,6 +154,20 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
     warn(variable + ' must be a number of at least ' + floor + '; ignoring ' + raw)
     return undefined
   }
+  // #201: the total connection cap on the pre-auth window. The window runs from
+  // an accepted socket to the attach whitelist's accept, so the cap holds while
+  // a tunnel hides the client's address. 0 caps nothing, so it is refused here
+  // and by loadConfig rather than starting with the window wide open.
+  const preAuthMax = cap(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
+  if (preAuthMax !== undefined) out.preAuth = { ...doc.preAuth, maxConnections: preAuthMax }
+
+  // #96: the packet journal's directory and its retention budget. A rotation
+  // size alone deletes nothing, so the directory has a byte budget and an age
+  // cap. A cap the overlay cannot read is named in a warning and left at the
+  // default, the same as every other number in this function: the defaults are
+  // bounded, so a typo costs the operator the value they meant, not the bound.
+  const journal = { ...doc.journal }
+  if (env.MONOPLAYER_JOURNAL_DIR) journal.dir = env.MONOPLAYER_JOURNAL_DIR
   for (const [variable, key, floor] of [
     ['MONOPLAYER_JOURNAL_MAX_BYTES', 'maxBytes', 1],
     ['MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES', 'maxTotalBytes', 1],
@@ -360,6 +374,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
     port: cfg.front.port,
     version: cfg.version,
     attachWhitelistFile: cfg.attachWhitelistFile,
+    // #201: the total cap on the sockets inside the pre-auth window.
+    preAuth: cfg.preAuth,
     getSnapshotConfig: () => core.cache.snapshot().config,
     wireCheck: payload => wire.check(payload),
     wireMode: 'warn',
@@ -655,6 +671,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
   log('liveReady', {
     front: `${bound.host}:${bound.port}`,
+    // #201: the cap the front is enforcing, so an operator reads it from the pod
+    // log without reconstructing the config.
+    preAuth: { ...cfg.preAuth },
     ...accountLogFields,
     backendConnected: !backend.ended,
     configFrames: readiness.configFrames,
@@ -677,6 +696,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
 async function runForever ({ core, backend, front, log, sink, telemetry, journal }) {
   let stopping = false
   let lastRejected = front.wireStats.rejected
+  let lastPreAuthRefused = front.metrics.preAuthRefused
 
   // Heartbeat gauges: the same values the JSONL heartbeat logs, as OTLP gauges.
   function emitGauges () {
@@ -690,6 +710,15 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
     if (rejected > lastRejected) {
       telemetry.metric('monoplayer.wire.rejected', rejected - lastRejected, {})
       lastRejected = rejected
+    }
+    // #201: a refused pre-auth connection, sampled at each heartbeat like the
+    // wire rejections: the front leg owns the socket, so the core never sees the
+    // connection that was turned away.
+    const preAuthRefused = front.metrics.preAuthRefused
+    if (preAuthRefused > lastPreAuthRefused) {
+      telemetry.metric('monoplayer.preauth.refused', preAuthRefused - lastPreAuthRefused,
+        { reason: PREAUTH_REFUSAL.CONNECTION_CAP })
+      lastPreAuthRefused = preAuthRefused
     }
   }
 
@@ -720,6 +749,10 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
       backendLogins: core.session.backendLogins,
       warm: stats.warm,
       metrics: { ...core.metrics },
+      // #201: the front leg's own counters, which the core cannot hold: the
+      // accepted sockets, the logins allowed and denied, and the pre-auth
+      // refusals this heartbeat is the place to watch.
+      front: front.metrics,
       wire: front.wireStats,
       backendFrames: forwarder ? { ...forwarder.counters, names: forwarder.names } : null,
       // Export health: a silent OTLP or journal failure must be visible from

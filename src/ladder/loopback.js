@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O47 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O48 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -91,6 +91,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bot8 = null
   // #97: the commands-mode rig, its own puppet, front, and backend.
   let bot9 = null
+  // #201: the pre-auth window rig needs a window of its own, so its front leg,
+  // the socket that holds the only slot, and the client that follows it are
+  // named apart from the main rig's.
+  let capFront = null
+  let capSocket = null
+  let capBot = null
+  let capRefusedBot = null
   let commandsFront = null
   let commandsBackend = null
   let commandsBase = null
@@ -114,7 +121,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     attaches: null,
     denials: null,
     serverbound: { positions: null, digs: null, places: null },
-    bot: { playPrefix: [], leftovers: null, errors: null }
+    bot: { playPrefix: [], leftovers: null, errors: null },
+    preAuthWindow: null
   }
 
   const log = (event, fields = {}) => {
@@ -1886,15 +1894,112 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.playHeldOnDetach
     )
 
+    // --- O48: the total cap on the pre-auth window (#201) ---
+    // The window runs from the accepted socket to the attach whitelist's accept,
+    // and it is the one limit that still counts when a tunnel presents its own
+    // address instead of the client's. The rig is its own because the assertion
+    // needs a window of one: a second socket may not fit anywhere else on this
+    // rung while the over-cap connection arrives. No core and no backend are
+    // built: a refused connection must never reach a login, so there is nothing
+    // for either to decide.
+    const attachUuid = offlineUuid('Attach')
+    capFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      offlineWhitelist: [attachUuid],
+      preAuth: { maxConnections: 1 },
+      getSnapshotConfig: () => [],
+      wireMode: 'off',
+      log
+    })
+    // A login that reached the whitelist would be allowed: this leg's core
+    // attaches whatever arrives, so nothing but the cap can refuse the client.
+    capFront.setCoreAttachConfiguring(() => ({ attached: true, configuring: true, replayed: 0 }))
+    const capBound = await capFront.listen()
+    const capPort = capBound.port ?? capFront.port
+
+    // The hold: a socket that says nothing. It has been accepted and its login
+    // review has not run, which is the window the cap counts.
+    capSocket = net.connect({ host: '127.0.0.1', port: capPort })
+    await new Promise((resolve, reject) => {
+      capSocket.once('connect', resolve)
+      capSocket.once('error', reject)
+    })
+    await waitFor(() => capFront.metrics.preAuthInWindow === 1, 'the idle socket inside the pre-auth window')
+
+    const capMark = logs.length
+    capRefusedBot = createBot({ port: capPort, username: 'Attach' })
+    await withTimeout(capRefusedBot.ended, 10_000, 'the over-cap connection ended')
+    const refusedFrames = capRefusedBot.received.names.slice()
+    const refusedLogs = logs.slice(capMark)
+    const capRefusal = refusedLogs.filter(entry => entry.event === 'preAuthRefused')
+
+    // The socket leaves, and the slot it held leaves with it: the next client is
+    // admitted, is allowed (its UUID is the whitelist's), and then holds no slot
+    // at all, which is what keeps an established session outside the cap.
+    capSocket.destroy()
+    await waitFor(() => capFront.metrics.preAuthInWindow === 0, 'the released pre-auth slot')
+    capBot = createBot({ port: capPort, username: 'Attach' })
+    // This client stops at the whitelist's accept: the rig has no backend, so
+    // its configuration round never finishes. That is where the window ends,
+    // which is the point.
+    await waitFor(() => capFront.metrics.allowed === 1, 'the connection past the whitelist')
+    const windowAfterAccept = capFront.metrics.preAuthInWindow
+    // A third socket while the accepted client is still connected: a window that
+    // still held it could not admit this one.
+    capSocket = net.connect({ host: '127.0.0.1', port: capPort })
+    await new Promise((resolve, reject) => {
+      capSocket.once('connect', resolve)
+      capSocket.once('error', reject)
+    })
+    await waitFor(() => capFront.metrics.preAuthInWindow === 1, 'a second socket admitted beside an accepted one')
+    const windowWithAcceptedClient = capFront.metrics.preAuthInWindow
+    capSocket.destroy()
+
+    evidence.preAuthWindow = {
+      cap: 1,
+      overCapFrames: refusedFrames.length,
+      overCapSuccess: capRefusedBot.received.success !== null,
+      refused: capFront.metrics.preAuthRefused,
+      whitelistDenials: capFront.metrics.denied,
+      inWindowWithIdleSocket: 1,
+      inWindowAfterAccept: windowAfterAccept,
+      inWindowWithAcceptedClient: windowWithAcceptedClient,
+      logLines: capRefusal.map(entry => entry.fields),
+      loginReviewed: refusedLogs.some(entry => entry.event === 'frontLoginReview'),
+      // The rig above ran every other assertion through a front leg on the
+      // default cap, so a default that tripped on this rung would have answered
+      // here.
+      defaultCapRefused: front.metrics.preAuthRefused
+    }
+    check(
+      'O48',
+      'a connection over the pre-auth cap is refused before login, and a connection past the whitelist holds no slot',
+      refusedFrames.length === 0 &&
+        capRefusedBot.received.success === null &&
+        capFront.metrics.preAuthRefused === 1 &&
+        capFront.metrics.denied === 0 &&
+        capRefusal.length === 1 &&
+        capRefusal[0].fields?.reason === 'preauth_connection_cap' &&
+        !evidence.preAuthWindow.loginReviewed &&
+        windowAfterAccept === 0 &&
+        windowWithAcceptedClient === 1 &&
+        front.metrics.preAuthRefused === 0,
+      evidence.preAuthWindow
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger]) {
+    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
+    try { capSocket?.destroy?.() } catch { /* best effort */ }
+    try { await capFront?.close?.() } catch { /* best effort */ }
     try { await front?.close?.() } catch { /* best effort */ }
     try { await seamlessFront?.close?.() } catch { /* best effort */ }
     try { await commandsFront?.close?.() } catch { /* best effort */ }

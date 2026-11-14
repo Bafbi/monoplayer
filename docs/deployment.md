@@ -209,6 +209,11 @@ Common:
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
   `WORKDIR`) or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
+- `MONOPLAYER_PREAUTH_MAX_CONNECTIONS` (default `16`): the total concurrent
+  connections the front accepts between a socket and the attach whitelist's
+  accept. It is on by default, so exposing the port is not a switch to
+  remember. A value below `1` is named and ignored here, and a config document
+  that sets one below `1` refuses to start.
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
 - `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT` (both default `25565`)
 - `MONOPLAYER_RECONNECT_ATTEMPTS` (`0` = unlimited; unset keeps a config
@@ -236,6 +241,12 @@ See `docs/telemetry.md` for the signals and the journal layout.
 - **The custody PVC is never pruned.** The PVC and the namespace carry
   `argocd.argoproj.io/sync-options: Delete=false,Prune=false`, so removing the
   Application or the manifest does not delete the tokens.
+- **The front bounds its pre-auth window.** A connection over
+  `preAuth.maxConnections` is closed before the login is reviewed, with reason
+  `preauth_connection_cap`, and logged once per saturated window rather than
+  once per attempt. The count is a connection total rather than a per-source
+  figure, so it still holds when a tunnel presents its own address instead of
+  the client's (#199, #201).
 - **The front never attaches without a warm backend.** While the puppet has no
   session, a login is denied with `backend_not_ready` instead of being handed
   an incomplete configuration.
