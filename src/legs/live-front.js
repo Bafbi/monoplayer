@@ -509,9 +509,12 @@ function createFrontLeg ({
           return
         }
         // A socket that ends inside the window frees its slot here. The accept
-        // and the deny release it earlier, so this is the path for a connection
-        // that never reaches either.
+        // releases it earlier, so this is the path for a connection that never
+        // reaches the whitelist, including a denied one.
         client.on('end', () => closePreAuthWindow(client))
+        // The same release taken from the socket itself. A client whose end
+        // threw never emits 'end', and the cap must not lose a slot to that.
+        client.socket?.once('close', () => closePreAuthWindow(client))
         wireClient(client)
         if (dumpFramed) {
           // Diagnostic: framer output is framed (and compressed) bytes.
@@ -621,7 +624,13 @@ function createFrontLeg ({
       client.write = (name, ...args) =>
         (name === 'compress' || name === 'success') ? false : originalWrite(name, ...args)
     }
-    try { client.end(`attach denied (${reason})`) } catch { /* client already gone */ }
+    try {
+      client.end(`attach denied (${reason})`)
+    } catch {
+      // The library's end failed, so its close timeout was never armed. The
+      // socket has to go, or the connection holds its window slot forever.
+      try { client.socket?.destroy() } catch { /* already gone */ }
+    }
   }
 
   // The attach slot is claimed at check-pass time so a second racing client
