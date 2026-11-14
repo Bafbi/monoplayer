@@ -18,7 +18,7 @@ description = "Link the main working copy's .secrets into this worktree (symlink
 run = "scripts/link-secrets.sh"
 
 [tasks.test]
-description = "Run the pure unit/fake tests (no sockets, no auth)."
+description = "Run the unit/fake tests (loopback sockets only, no auth)."
 depends = ["install"]
 run = "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling,testbed,support}/*.test.js' || node src/ladder/next-rung.js test $?"
 
