@@ -83,8 +83,9 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 
 The four gauges are emitted at startup and on the 30-second heartbeat.
 
-The heartbeat also carries the front leg's own counters, which the core cannot
-hold because the core never sees a socket:
+The heartbeat also carries the front leg's own counters under `front`, which
+the core cannot hold because the core never sees a socket. Abbreviated to the
+five an operator watches:
 
 ```json
 {"event":"heartbeat","front":{"denied":0,"allowed":1,"attaches":1,"preAuthRefused":3,"preAuthInWindow":0}}

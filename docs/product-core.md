@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 929 tests (`mise run test`), and `mise run check` also runs the
-49-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 1057 tests (`mise run test`), and `mise run check` also runs the
+52-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -33,6 +33,7 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 |---|---|---|
 | `src/core/state-cache.js` | Bounded state cache: join prefix + configuration replay prefix + per-domain warm state | pure |
 | `src/core/join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
+| `src/core/preauth-window.js` | The count of sockets inside the pre-auth window, and the total cap on it (#201) | pure |
 | `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
 | `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + the chat frames whose text is spoken as the puppet), pose capture (backend teleport authoritative over client movement) | pure |
 | `src/core/clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
@@ -176,21 +177,21 @@ default), and the leg closes a connection over it before any of its own state
 exists for that connection: no login review, no configuration interceptor, no
 attach slot.
 
-The limit is a connection total rather than a rate or a per-source figure
-because a TCP tunnel may present its own address instead of the client's, and a
-count does not care whose address a socket carries (#199). The per-source limits
-and the measurement that decides whether they mean anything arrive with #204.
+The limit is a connection total rather than a rate or a per-source figure. A
+TCP tunnel may present its own address instead of the client's, and a count does
+not care whose address a socket carries (#199). The per-source limits and the
+measurement that decides whether they mean anything arrive with #204.
 
 A refused socket is destroyed rather than ended. The library's `end` waits on a
 30 s close timeout, and a flood would sit in that wait. The client therefore sees
-a closed connection rather than a reason; the reason is the operator's, in the
-`preAuthRefused` log line (once per saturated window, not once per attempt), in
-`front.preAuthRefused` in the heartbeat, and in `monoplayer.preauth.refused` in
-the telemetry.
+a closed connection rather than a reason. The reason is the operator's: the
+`preAuthRefused` log line, once per saturated window rather than once per
+attempt, `front.preAuthRefused` in the heartbeat, and
+`monoplayer.preauth.refused` in the telemetry.
 
 Nothing yet bounds how long an accepted socket may stay silent, so a set of
 silent sockets that fill the window holds it until they leave or the process
-restarts. A pre-auth deadline is the follow-up, not part of this limit.
+restarts. A pre-auth deadline is the follow-up (#205), not part of this limit.
 
 ### Control dialogs (#16)
 

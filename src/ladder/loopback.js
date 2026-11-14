@@ -1958,7 +1958,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     capSocket.destroy()
 
     evidence.preAuthWindow = {
-      cap: 1,
+      maxConnections: 1,
       overCapFrames: refusedFrames.length,
       overCapSuccess: capRefusedBot.received.success !== null,
       refused: capFront.metrics.preAuthRefused,
