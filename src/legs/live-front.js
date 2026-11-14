@@ -508,9 +508,9 @@ function createFrontLeg ({
           try { client.socket?.destroy() } catch { /* already gone */ }
           return
         }
-        // A socket that ends inside the window frees its slot here, which covers
-        // every denial before the accept. The library emits this from the
-        // socket's own close, so a destroyed socket arrives here too.
+        // A socket that ends inside the window leaves it here, which covers every
+        // denial before the accept. The library emits this from the socket's own
+        // close, so a destroyed socket arrives here too.
         client.on('end', () => closePreAuthWindow(client))
         wireClient(client)
         if (dumpFramed) {
@@ -614,10 +614,10 @@ function createFrontLeg ({
 
   function denyConnection (client, reason) {
     // #201: a denial before the whitelist accepted — a second attach, or a UUID
-    // that is not on the list — keeps its slot until its socket ends, which the
+    // that is not on the list — stays counted until its socket ends, which the
     // library's close timeout bounds. A denial after the accept, such as a
     // backend that is not ready, lands on a connection that has already left the
-    // window and holds no slot to release.
+    // window, so there is nothing to release.
     const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
     if (originalWrite) {
       client.write = (name, ...args) =>
@@ -627,7 +627,8 @@ function createFrontLeg ({
       client.end(`attach denied (${reason})`)
     } catch {
       // The library's end failed, so its close timeout was never armed and no
-      // close would ever release the slot. The socket has to go.
+      // close would ever take this connection out of the window. The socket has
+      // to go.
       try { client.socket?.destroy() } catch { /* already gone */ }
     }
   }
