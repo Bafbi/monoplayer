@@ -1,7 +1,7 @@
 // #201: the pre-auth window's total connection cap. The window runs from
 // accepting a socket to the attach whitelist's accept, and this module holds the
 // count and answers allow or refuse. The front leg owns the socket, the log line,
-// and the counter; nothing here reads a clock or touches a socket.
+// and the counter. Nothing here reads a clock or touches a socket.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -14,9 +14,7 @@ import {
 test('#201 the window admits up to its cap and refuses the connection over it', () => {
   const window = createPreAuthWindow({ maxConnections: 2 })
 
-  assert.deepEqual(window.admit(), {
-    admitted: true, reason: null, inWindow: 1, maxConnections: 2, refused: 0
-  })
+  assert.deepEqual(window.admit(), { admitted: true, reason: null, inWindow: 1 })
   assert.equal(window.admit().admitted, true, 'the second connection fits')
 
   const refused = window.admit()
@@ -43,16 +41,15 @@ test('#201 every refusal is counted, and only the first of a saturated window as
   const window = createPreAuthWindow({ maxConnections: 1 })
   window.admit()
 
-  // One flood attempt after another. The count is the operator's evidence; the
-  // log line is what a reader sees, and a line per attempt makes the log the
-  // second flood.
+  // One attempt after another. The count is the operator's evidence. The log
+  // line is what a reader sees, so a burst writes one line, not thousands.
   const first = window.admit()
   const second = window.admit()
   const third = window.admit()
 
-  assert.equal(first.first, true, 'the window that just filled is logged once')
-  assert.equal(second.first, false)
-  assert.equal(third.first, false)
+  assert.equal(first.shouldLog, true, 'the window that just filled is logged once')
+  assert.equal(second.shouldLog, false)
+  assert.equal(third.shouldLog, false)
   assert.equal(third.refused, 3, 'all three attempts are counted')
   assert.equal(window.stats().refused, 3)
 })
@@ -61,13 +58,13 @@ test('#201 a window that is no longer full logs its next refusal again', () => {
   const window = createPreAuthWindow({ maxConnections: 2 })
   window.admit()
   window.admit()
-  assert.equal(window.admit().first, true)
+  assert.equal(window.admit().shouldLog, true)
 
   window.release()
   // One slot free and the burst ended: the next refusal is a new window's first,
   // so a second attack is visible in the log instead of being swallowed.
   assert.equal(window.admit().admitted, true, 'the free slot is taken')
-  assert.equal(window.admit().first, true, 'the window filled again, so it is logged again')
+  assert.equal(window.admit().shouldLog, true, 'the window filled again, so it is logged again')
 })
 
 test('#201 a stray release never makes the window wider than its cap', () => {
@@ -99,8 +96,8 @@ test('#201 a cap that cannot bound anything refuses to build', () => {
 
 test('#201 the default is conservative, and a window built without a number uses it', () => {
   assert.equal(Number.isInteger(DEFAULT_MAX_CONNECTIONS), true)
-  // Two players, their status pings, and a burst's headroom. The rungs drive one
-  // bot at a time, and the dev lane and the gate Paper carry one player, so the
+  // A player, a status ping, and a burst's headroom. The rungs drive one bot at
+  // a time and the dev lane and the gate Paper serve one attach at a time, so the
   // default must sit above a busy lane and below a flood.
   assert.ok(DEFAULT_MAX_CONNECTIONS >= 8, 'a busy lane with a ping each must fit')
   assert.ok(DEFAULT_MAX_CONNECTIONS <= 64, 'a cap of hundreds bounds nothing')
