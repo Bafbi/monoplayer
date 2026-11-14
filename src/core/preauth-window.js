@@ -59,9 +59,9 @@ export function createPreAuthWindow ({ maxConnections = DEFAULT_MAX_CONNECTIONS 
     return { admitted: true, reason: null, inWindow }
   }
 
-  // A connection left the window: the whitelist accepted it, its socket ended,
-  // or it was denied. Every path releases once. A second release for the same
-  // connection must not widen the window.
+  // A connection left the window: the whitelist accepted it, or its socket
+  // ended. Every path releases once. A second release for the same connection
+  // must not widen the window.
   function release () {
     if (inWindow === 0) return { released: false, inWindow }
     inWindow--
