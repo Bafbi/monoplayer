@@ -157,8 +157,9 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // #201: the total connection cap on the pre-auth window. The window runs from
   // an accepted socket to the attach whitelist's accept, so the cap holds while a
   // tunnel hides the client's address. A value below 1 cannot bound the window:
-  // loadConfig refuses it, and here it is named and ignored like every other
-  // number, which leaves the compiled cap in force rather than none.
+  // loadConfig refuses it. Here it is named and ignored like every other number,
+  // which leaves the document's cap in force when it sets one, and the compiled
+  // cap when it does not.
   const preAuthMax = cap(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
   if (preAuthMax !== undefined) out.preAuth = { ...doc.preAuth, maxConnections: preAuthMax }
 

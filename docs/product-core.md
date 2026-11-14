@@ -184,7 +184,9 @@ measurement that decides whether they mean anything arrive with #204.
 
 A refused socket is destroyed rather than ended. The library's `end` waits on a
 30 s close timeout, and a flood would sit in that wait. The client therefore sees
-a closed connection rather than a reason. The reason is the operator's: the
+a closed connection rather than a reason. A connection that is denied rather than
+refused keeps its slot until its socket ends, which the same 30 s timeout bounds,
+so a denial flood can hold the window closed for that long. The reason is the operator's: the
 `preAuthRefused` log line, once per saturated window rather than once per
 attempt, `front.preAuthRefused` in the heartbeat, and
 `monoplayer.preauth.refused` in the telemetry.
