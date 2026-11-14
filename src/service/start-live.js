@@ -155,9 +155,10 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
     return undefined
   }
   // #201: the total connection cap on the pre-auth window. The window runs from
-  // an accepted socket to the attach whitelist's accept, so the cap holds while
-  // a tunnel hides the client's address. 0 caps nothing, so it is refused here
-  // and by loadConfig rather than starting with the window wide open.
+  // an accepted socket to the attach whitelist's accept, so the cap holds while a
+  // tunnel hides the client's address. A value below 1 cannot bound the window:
+  // loadConfig refuses it, and here it is named and ignored like every other
+  // number, which leaves the compiled cap in force rather than none.
   const preAuthMax = cap(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
   if (preAuthMax !== undefined) out.preAuth = { ...doc.preAuth, maxConnections: preAuthMax }
 
@@ -671,9 +672,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
   log('liveReady', {
     front: `${bound.host}:${bound.port}`,
-    // #201: the cap the front is enforcing, so an operator reads it from the pod
-    // log without reconstructing the config.
-    preAuth: { ...cfg.preAuth },
     ...accountLogFields,
     backendConnected: !backend.ended,
     configFrames: readiness.configFrames,
@@ -713,7 +711,9 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
     }
     // #201: a refused pre-auth connection, sampled at each heartbeat like the
     // wire rejections: the front leg owns the socket, so the core never sees the
-    // connection that was turned away.
+    // connection that was turned away. The leg counts one reason today, so the
+    // attribute repeats the constant. #204's per-source reasons turn the leg's
+    // count into a map, and this sampling reads it.
     const preAuthRefused = front.metrics.preAuthRefused
     if (preAuthRefused > lastPreAuthRefused) {
       telemetry.metric('monoplayer.preauth.refused', preAuthRefused - lastPreAuthRefused,
