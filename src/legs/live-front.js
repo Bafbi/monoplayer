@@ -508,13 +508,10 @@ function createFrontLeg ({
           try { client.socket?.destroy() } catch { /* already gone */ }
           return
         }
-        // A socket that ends inside the window frees its slot here. The accept
-        // releases it earlier, so this is the path for a connection that never
-        // reaches the whitelist, including a denied one.
+        // A socket that ends inside the window frees its slot here, which covers
+        // every denial before the accept. The library emits this from the
+        // socket's own close, so a destroyed socket arrives here too.
         client.on('end', () => closePreAuthWindow(client))
-        // The same release taken from the socket itself. A client whose end
-        // threw never emits 'end', and the cap must not lose a slot to that.
-        client.socket?.once('close', () => closePreAuthWindow(client))
         wireClient(client)
         if (dumpFramed) {
           // Diagnostic: framer output is framed (and compressed) bytes.
@@ -616,11 +613,11 @@ function createFrontLeg ({
   }
 
   function denyConnection (client, reason) {
-    // #201: a denial after the whitelist accepted — an attach slot already
-    // taken, a backend that is not ready — lands on a connection that has left
-    // the window, so it holds no slot to release. Only the whitelist denial
-    // below is pre-accept, and that connection stays counted until its socket
-    // ends, which the library's close timeout bounds.
+    // #201: a denial before the whitelist accepted — a second attach, or a UUID
+    // that is not on the list — keeps its slot until its socket ends, which the
+    // library's close timeout bounds. A denial after the accept, such as a
+    // backend that is not ready, lands on a connection that has already left the
+    // window and holds no slot to release.
     const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
     if (originalWrite) {
       client.write = (name, ...args) =>
@@ -629,8 +626,8 @@ function createFrontLeg ({
     try {
       client.end(`attach denied (${reason})`)
     } catch {
-      // The library's end failed, so its close timeout was never armed. The
-      // socket has to go, or the connection holds its window slot forever.
+      // The library's end failed, so its close timeout was never armed and no
+      // close would ever release the slot. The socket has to go.
       try { client.socket?.destroy() } catch { /* already gone */ }
     }
   }
