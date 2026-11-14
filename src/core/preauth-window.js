@@ -7,7 +7,7 @@
 //
 // The cap is the one pre-auth limit that survives a TCP tunnel. A per-source
 // limit reads the peer address, and a tunnel may present its own address rather
-// than the client's; a count of the sockets in the window does not care whose
+// than the client's. A count of the sockets in the window does not care whose
 // address they carry (#199, #204).
 //
 // Pure by construction: no socket, no clock, no log. The front leg owns every
@@ -19,10 +19,10 @@ export const PREAUTH_REFUSAL = Object.freeze({
 })
 
 // The cap in force when the config names none. It has to sit above a busy lane
-// and below a flood: two players, their status pings, and a login burst's
-// headroom fit, while the window closes long before a stranger's script does
-// anything with it. The rungs drive one bot at a time, the dev lane and the gate
-// Paper carry one player, so nothing this repo starts reaches it.
+// and below a flood. A player, a status ping, and a login burst's headroom fit,
+// while the window closes long before a stranger's script does anything with it.
+// The rungs drive one bot at a time and the dev lane and the gate Paper serve
+// one attach at a time, so nothing this repo starts reaches it.
 export const DEFAULT_MAX_CONNECTIONS = 16
 
 export function createPreAuthWindow ({ maxConnections = DEFAULT_MAX_CONNECTIONS } = {}) {
@@ -33,16 +33,18 @@ export function createPreAuthWindow ({ maxConnections = DEFAULT_MAX_CONNECTIONS 
   let inWindow = 0
   let refused = 0
   // A refusal is logged once per saturated window rather than once per attempt,
-  // so a flood cannot make the log the second flood. The flag is set by the
+  // so a burst writes one line instead of thousands. The flag is set by the
   // refusal that found the window full and cleared when a slot frees, which is
   // what makes the next attack visible again.
   let logged = false
 
-  // A connection arrives. `first` says this refusal is the one to log.
+  // A connection arrives. A refusal carries what the leg logs, because that
+  // record is the decision's whole operator surface. `shouldLog` says this is
+  // the refusal of a window that just filled.
   function admit () {
     if (inWindow >= maxConnections) {
       refused++
-      const first = !logged
+      const shouldLog = !logged
       logged = true
       return {
         admitted: false,
@@ -50,15 +52,15 @@ export function createPreAuthWindow ({ maxConnections = DEFAULT_MAX_CONNECTIONS 
         inWindow,
         maxConnections,
         refused,
-        first
+        shouldLog
       }
     }
     inWindow++
-    return { admitted: true, reason: null, inWindow, maxConnections, refused }
+    return { admitted: true, reason: null, inWindow }
   }
 
   // A connection left the window: the whitelist accepted it, its socket ended,
-  // or it was denied. Every path releases once; a second release for the same
+  // or it was denied. Every path releases once. A second release for the same
   // connection must not widen the window.
   function release () {
     if (inWindow === 0) return { released: false, inWindow }

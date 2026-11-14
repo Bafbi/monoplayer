@@ -110,6 +110,10 @@ _Avoid_: join, connect, takeover
 The single place for one attaching player. A second connection is denied while the slot is held.
 _Avoid_: client slot, seat
 
+**Pre-auth window**:
+The stretch of a front-leg connection from the accepted socket to the moment the attach whitelist accepts the resolved UUID. A connection past that point is an attach, and no pre-auth limit looks at it again. `preAuth.maxConnections` bounds how many connections sit in the window at once.
+_Avoid_: auth window, login window, flood window, connection queue
+
 **Detach**:
 The attaching player's connection ending while the backend session survives.
 _Avoid_: disconnect, logout

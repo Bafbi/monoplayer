@@ -441,10 +441,10 @@ function createFrontLeg ({
       return admission
     }
     metrics.preAuthRefused++
-    if (admission.first) {
+    if (admission.shouldLog) {
       log('preAuthRefused', {
         reason: admission.reason,
-        cap: admission.maxConnections,
+        maxConnections: admission.maxConnections,
         inWindow: admission.inWindow,
         refused: admission.refused
       })

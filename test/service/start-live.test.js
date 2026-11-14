@@ -163,9 +163,8 @@ test('#108 the env var overrides the document, and 0 or unset means unlimited', 
 })
 
 // #201: the pre-auth window's total connection cap. The window runs from an
-// accepted socket to the attach whitelist's accept, and the cap is the limit
-// that still counts when a TCP tunnel presents its own address instead of the
-// client's. On by default, so exposing the port is not a switch to remember.
+// accepted socket to the attach whitelist's accept. The cap is on by default,
+// and a value that cannot bound the window is refused rather than defaulted away.
 test('#201 the cap is on by default and is the number the window module owns', () => {
   assert.equal(DEFAULT_CONFIG.preAuth.maxConnections, DEFAULT_MAX_CONNECTIONS)
   assert.equal(loadConfig().preAuth.maxConnections, DEFAULT_MAX_CONNECTIONS)
