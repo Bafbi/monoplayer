@@ -352,6 +352,21 @@ first dial and its target warms in five seconds.
   is the behaviour that must not change, so the assertion is a guard: it holds
   without #73 too, and it fails if the detach rule ever widens to play dialogs.
 
+- `O48` the pre-auth window's total cap holds on a real socket (#201). A
+  rig of its own, because the assertion needs a window of one. A socket that
+  says nothing holds the only slot, so a real bot connecting over the cap
+  receives no frame at all: no login success, no configuration, no play. The
+  front leg counts one refusal (`preAuthRefused` 1), records no whitelist
+  denial (`denied` 0), logs exactly one `preAuthRefused` line with reason
+  `preauth_connection_cap`, and never reviews the refused login
+  (`frontLoginReview`). The idle socket then leaves, and the next client is
+  admitted and allowed: the window is 0 once the whitelist accepts it, so a
+  connection past the window holds no slot, and one more socket fits beside it.
+  The main rig's own front leg runs on the default cap, so the check also
+  states that the default refused nothing on this rung (`defaultCapRefused`
+  0).
+
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a

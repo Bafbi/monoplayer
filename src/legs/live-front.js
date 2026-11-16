@@ -9,6 +9,11 @@
 //                         UUID whitelist, no .secrets read.
 //
 // Flow per connection:
+//   0. #201 the pre-auth window. A socket is counted from the moment it is
+//      accepted until the whitelist accepts its resolved UUID. Over the cap the
+//      socket is closed here, before any of the steps below: no login review, no
+//      interceptor, no attach slot. An accepted, authenticated session has left
+//      the window, so the cap can never refuse one.
 //   1. library login. Online: encryption + real sessionserver hasJoined (real
 //      client.uuid / client.username / client.profile are set by the library
 //      BEFORE our synchronous beforeLogin hook runs). Offline: the library
@@ -61,6 +66,7 @@ import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
+import { createPreAuthWindow } from '../core/preauth-window.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // The configuration prefix the cache holds is bounded at 1024 frames, so a
@@ -372,6 +378,8 @@ function createFrontLeg ({
   check,
   store,
   getSnapshotConfig,
+  // #201: the total connection cap on the pre-auth window.
+  preAuth: preAuthOptions = {},
   log,
   wireCheck,
   wireMode,
@@ -408,8 +416,44 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
+
+  // #201: the total connection cap. The window is the one the spec bounds: from
+  // the accepted socket to the attach whitelist's accept. The count is the
+  // leg's, because the leg is the only place a socket exists.
+  const preAuthWindow = createPreAuthWindow({ maxConnections: preAuthOptions.maxConnections })
+  const preAuthOpen = new WeakSet()
+
+  // Leave the window, at most once per connection. Two ways out: the whitelist
+  // accepted it, or its socket ended. A denial is not a way out, because a denied
+  // connection never reached the accept the window is defined by. Its socket
+  // stays open until the library's close timeout, and counting it keeps the cap
+  // honest about the sockets the process is holding.
+  function closePreAuthWindow (client) {
+    if (!preAuthOpen.delete(client)) return
+    preAuthWindow.release()
+  }
+
+  // A connection arrived. Over the cap it is refused with its own reason, and
+  // the refusal is counted every time but logged once per saturated window.
+  function admitPreAuthWindow (client) {
+    const admission = preAuthWindow.admit()
+    if (admission.admitted) {
+      preAuthOpen.add(client)
+      return admission
+    }
+    metrics.preAuthRefused++
+    if (admission.shouldLog) {
+      log('preAuthRefused', {
+        reason: admission.reason,
+        maxConnections: admission.maxConnections,
+        inWindow: admission.inWindow,
+        refused: admission.refused
+      })
+    }
+    return admission
+  }
 
   function actualPort () {
     return server?.socketServer?.address()?.port ?? null
@@ -450,6 +494,24 @@ function createFrontLeg ({
       })
 
       server.on('connection', client => {
+        // #201: the cap is checked first. A refused connection never reaches the
+        // login review below, so nothing of this leg is allocated for it: no
+        // interceptor, no attach slot, no serverbound pipeline. The socket is
+        // destroyed rather than ended, because ending it waits on the library's
+        // 30 s close timeout and a flood would sit in that wait. The library
+        // emits 'error' on a client whose socket dies, and an unlistened 'error'
+        // would end the process, so the refused client gets a listener that
+        // knows nothing is coming.
+        const admission = admitPreAuthWindow(client)
+        if (!admission.admitted) {
+          client.on('error', () => {})
+          try { client.socket?.destroy() } catch { /* already gone */ }
+          return
+        }
+        // A socket that ends inside the window leaves it here, which covers every
+        // denial before the accept. The library emits this from the socket's own
+        // close, so a destroyed socket arrives here too.
+        client.on('end', () => closePreAuthWindow(client))
         wireClient(client)
         if (dumpFramed) {
           // Diagnostic: framer output is framed (and compressed) bytes.
@@ -512,6 +574,10 @@ function createFrontLeg ({
     }
 
     metrics.allowed++
+    // #201: the window ends here, at the reason the ticket names: the UUID is
+    // resolved and the whitelist accepted it. Everything after this is a
+    // session, and a session is never refused by the cap.
+    closePreAuthWindow(client)
     log('attachAllowed', {
       username: decision.username ?? username,
       uuid: decision.uuid ?? uuid,
@@ -547,12 +613,24 @@ function createFrontLeg ({
   }
 
   function denyConnection (client, reason) {
+    // #201: a denial before the whitelist accepted — a second attach, or a UUID
+    // that is not on the list — stays counted until its socket ends, which the
+    // library's close timeout bounds. A denial after the accept, such as a
+    // backend that is not ready, lands on a connection that has already left the
+    // window, so there is nothing to release.
     const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
     if (originalWrite) {
       client.write = (name, ...args) =>
         (name === 'compress' || name === 'success') ? false : originalWrite(name, ...args)
     }
-    try { client.end(`attach denied (${reason})`) } catch { /* client already gone */ }
+    try {
+      client.end(`attach denied (${reason})`)
+    } catch {
+      // The library's end failed, so its close timeout was never armed and no
+      // close would ever take this connection out of the window. The socket has
+      // to go.
+      try { client.socket?.destroy() } catch { /* already gone */ }
+    }
   }
 
   // The attach slot is claimed at check-pass time so a second racing client
@@ -905,7 +983,7 @@ function createFrontLeg ({
     },
     get listening () { return Boolean(server) },
     get attached () { return attached ?? null },
-    get metrics () { return { ...metrics } },
+    get metrics () { return { ...metrics, preAuthInWindow: preAuthWindow.stats().inWindow } },
     get checkStoreFile () { return store?.file ?? null },
     get port () { return actualPort() },
     get wireStats () {
@@ -947,6 +1025,8 @@ export function createLiveFrontLeg (options = {}) {
     version = '26.1',
     attachWhitelistFile,
     getSnapshotConfig,
+    // #201: the total connection cap on the pre-auth window.
+    preAuth = {},
     log = () => {},
     wireCheck = null,
     wireMode = 'off',
@@ -971,6 +1051,7 @@ export function createLiveFrontLeg (options = {}) {
     check: createAttachCheck({ log: () => {} }),
     store: createWhitelistStore({ file: attachWhitelistFile }),
     getSnapshotConfig,
+    preAuth,
     log,
     wireCheck,
     wireMode,
@@ -987,6 +1068,8 @@ export function createOfflineFrontLeg (options = {}) {
     version = '26.1',
     offlineWhitelist,
     getSnapshotConfig,
+    // #201: the total connection cap on the pre-auth window.
+    preAuth = {},
     log = () => {},
     wireCheck = null,
     wireMode = 'throw',
@@ -1028,6 +1111,7 @@ export function createOfflineFrontLeg (options = {}) {
     check: createOfflineAttachCheck({ whitelist }),
     store: null,
     getSnapshotConfig,
+    preAuth,
     log,
     wireCheck,
     wireMode,

@@ -75,12 +75,25 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.replay.frames` | sum | `player` | Frames written by the join replay per attach. |
 | `monoplayer.skin.frames` | sum | `player` | `player_info` skin frames written to the attaching player: one per play state that is owed one, plus one whenever the puppet's property changes while attached. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
+| `monoplayer.preauth.refused` | sum | `reason` | Increase of `front.preAuthRefused`, sampled at each heartbeat: a front connection refused because the pre-auth window was full (#201). The only reason today is `preauth_connection_cap`, and the front leg's JSONL `preAuthRefused` line is the same refusal with the cap and the count in it. A leg's log does not go through the core, so this sum and that line are the two records of one decision. |
 | `monoplayer.attached` | gauge | none | `1` while a client is attached. |
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |
 | `monoplayer.backend.logins` | gauge | none | Current backend login count. |
 | `monoplayer.cache.frames` | gauge | none | Total cached frames across all cache domains. |
 
 The four gauges are emitted at startup and on the 30-second heartbeat.
+
+The heartbeat also carries the front leg's own counters under `front`, which
+the core cannot hold because the core never sees a socket. Abbreviated to the
+five an operator watches:
+
+```json
+{"event":"heartbeat","front":{"denied":0,"allowed":1,"attaches":1,"preAuthRefused":3,"preAuthInWindow":0}}
+```
+
+`preAuthInWindow` is the window as it stands at the heartbeat: the connections
+accepted and not yet past the attach whitelist. A refused connection closes its
+socket before that, so it never shows up in the count.
 
 ## Packet journal
 

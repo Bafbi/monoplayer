@@ -67,6 +67,7 @@ import { createPendingResourcePacks } from '../core/pending-resource-pack.js'
 import { createSession, STATES } from '../core/session.js'
 import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact } from '../observability/redact.js'
+import { DEFAULT_MAX_CONNECTIONS } from '../core/preauth-window.js'
 import { flag } from './cli.js'
 import { pathToFileURL } from 'node:url'
 
@@ -110,6 +111,13 @@ export const DEFAULT_CONFIG = Object.freeze({
   // It never answers a play dialog, which belongs to the human (#20). Null
   // leaves the gate unanswered and a headless leg waits.
   dialogAction: null,
+  // #201: the total connection cap on the pre-auth window, which runs from an
+  // accepted socket to the attach whitelist's accept. It is the one limit that
+  // still counts when a TCP tunnel presents its own address rather than the
+  // client's, so it is on by default and a lane cannot be exposed without it.
+  // A cap smaller than one cannot bound the window, and loadConfig refuses it
+  // instead of starting misconfigured.
+  preAuth: Object.freeze({ maxConnections: DEFAULT_MAX_CONNECTIONS }),
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
   bounds: Object.freeze({
@@ -185,6 +193,7 @@ export function loadConfig (doc = {}) {
     front: { ...DEFAULT_CONFIG.front, ...(doc.front ?? {}) },
     backend: { ...DEFAULT_CONFIG.backend, ...(doc.backend ?? {}) },
     puppet: { ...DEFAULT_CONFIG.puppet, ...(doc.puppet ?? {}) },
+    preAuth: { ...DEFAULT_CONFIG.preAuth, ...(doc.preAuth ?? {}) },
     skin: { ...DEFAULT_CONFIG.skin, ...(doc.skin ?? {}) },
     journal: { ...DEFAULT_CONFIG.journal, ...(doc.journal ?? {}) }
   }
@@ -208,6 +217,9 @@ export function loadConfig (doc = {}) {
   }
   if (!Number.isFinite(merged.transfer.reconfigureTimeoutMs) || merged.transfer.reconfigureTimeoutMs < 0) {
     throw new TypeError('config.transfer.reconfigureTimeoutMs must be a non-negative number')
+  }
+  if (!Number.isInteger(merged.preAuth.maxConnections) || merged.preAuth.maxConnections < 1) {
+    throw new TypeError('config.preAuth.maxConnections must be a positive integer')
   }
   if (typeof merged.skin.showPuppetSkin !== 'boolean') {
     throw new TypeError('config.skin.showPuppetSkin must be a boolean')
