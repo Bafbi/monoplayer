@@ -98,6 +98,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let capSocket = null
   let capBot = null
   let capRefusedBot = null
+  // #205: the pre-auth deadline's own rig, for the same reason the cap has one.
+  let deadlineFront = null
+  let deadlineSocket = null
+  let deadlineBot = null
+  let deadlineStranger = null
   let commandsFront = null
   let commandsBackend = null
   let commandsBase = null
@@ -122,7 +127,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     denials: null,
     serverbound: { positions: null, digs: null, places: null },
     bot: { playPrefix: [], leftovers: null, errors: null },
-    preAuthWindow: null
+    preAuthWindow: null,
+    preAuthDeadline: null
   }
 
   const log = (event, fields = {}) => {
@@ -1989,17 +1995,111 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.preAuthWindow
     )
 
+    // --- O49: the deadline on the pre-auth window (#205) ---
+    // #201's cap bounds how many sockets sit in the window and nothing bounded
+    // how long one stayed, so a stranger could hold the window closed with
+    // sockets that never speak. This rig is the cap's with a millisecond deadline
+    // instead of a cap of one: the same silent socket, and a real attach beside
+    // it that the deadline must not cut.
+    const deadlineMs = 1000
+    deadlineFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      offlineWhitelist: [attachUuid],
+      preAuth: { maxConnections: 1, deadlineMs },
+      getSnapshotConfig: () => [],
+      wireMode: 'off',
+      log
+    })
+    // As in O48: this leg's core attaches whatever reaches the whitelist, so
+    // nothing but the deadline can take the silent socket's slot back.
+    deadlineFront.setCoreAttachConfiguring(() => ({ attached: true, configuring: true, replayed: 0 }))
+    const deadlineBound = await deadlineFront.listen()
+    const deadlinePort = deadlineBound.port ?? deadlineFront.port
+
+    // The hold: a socket that says nothing, exactly as in O48. Nothing writes to
+    // it, so a close here can only be the leg's.
+    deadlineSocket = net.connect({ host: '127.0.0.1', port: deadlinePort })
+    await new Promise((resolve, reject) => {
+      deadlineSocket.once('connect', resolve)
+      deadlineSocket.once('error', reject)
+    })
+    await waitFor(() => deadlineFront.metrics.preAuthInWindow === 1, 'the silent socket inside the pre-auth window')
+    const socketClosed = new Promise(resolve => deadlineSocket.once('close', () => resolve(true)))
+    const deadlineMark = logs.length
+    const destroyed = await withTimeout(socketClosed, deadlineMs + 10_000, 'the silent socket destroyed by its deadline')
+    await waitFor(() => deadlineFront.metrics.preAuthInWindow === 0, 'the slot the deadline freed')
+    const deadlineLogs = logs.slice(deadlineMark)
+    const deadlineExpiry = deadlineLogs.filter(entry => entry.event === 'preAuthExpired')
+
+    // A stranger whose UUID is not on the list is refused, not expired: the
+    // denial is that connection's decision, so the deadline is disarmed and the
+    // expiry line stays the silent socket's alone.
+    deadlineStranger = createBot({ port: deadlinePort, username: 'Stranger' })
+    await withTimeout(deadlineStranger.ended, 10_000, 'the refused stranger ended')
+    await waitFor(() => deadlineFront.metrics.preAuthInWindow === 0, 'the slot the refusal freed')
+
+    // A real attach on the same rig, and then past the deadline. The window ends
+    // at the whitelist's accept, so the timer has to be disarmed there: a slow
+    // login that reached the accept is never cut by a bound it already met.
+    deadlineBot = createBot({ port: deadlinePort, username: 'Attach' })
+    await waitFor(() => deadlineFront.metrics.allowed === 1, 'the connection past the whitelist')
+    const expiredAfterAccept = deadlineFront.metrics.preAuthExpired
+    await new Promise(resolve => setTimeout(resolve, deadlineMs + 250))
+    const survivedPastDeadline =
+      deadlineBot.received.ended === null &&
+      deadlineBot.client?.socket?.destroyed !== true &&
+      deadlineFront.metrics.allowed === 1
+    const expiryLines = logs.slice(deadlineMark).filter(entry => entry.event === 'preAuthExpired')
+
+    evidence.preAuthDeadline = {
+      deadlineMs,
+      socketDestroyed: destroyed,
+      expired: deadlineFront.metrics.preAuthExpired,
+      inWindowAfterExpiry: deadlineFront.metrics.preAuthInWindow,
+      logLines: deadlineExpiry.map(entry => entry.fields),
+      expiredAfterAccept,
+      survivedPastDeadline,
+      attachedAfterExpiry: deadlineFront.metrics.allowed,
+      refused: deadlineFront.metrics.denied,
+      expiryLinesTotal: expiryLines.length,
+      // The rig above ran every other assertion through a front leg on the
+      // default deadline, so a default that tripped on this rung would have
+      // destroyed a connection here.
+      defaultExpired: front.metrics.preAuthExpired
+    }
+    check(
+      'O49',
+      'a silent socket is destroyed by the pre-auth deadline, a refusal is counted as a refusal, and an accepted connection is never cut by it',
+      destroyed === true &&
+        deadlineFront.metrics.preAuthExpired === 1 &&
+        deadlineFront.metrics.preAuthInWindow === 0 &&
+        deadlineExpiry.length === 1 &&
+        deadlineExpiry[0].fields?.reason === 'preauth_deadline' &&
+        deadlineExpiry[0].fields?.deadlineMs === deadlineMs &&
+        expiredAfterAccept === 1 &&
+        deadlineFront.metrics.denied === 1 &&
+        expiryLines.length === 1 &&
+        survivedPastDeadline === true &&
+        deadlineFront.metrics.allowed === 1 &&
+        front.metrics.preAuthExpired === 0,
+      evidence.preAuthDeadline
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot]) {
+    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
+    try { deadlineSocket?.destroy?.() } catch { /* best effort */ }
     try { await capFront?.close?.() } catch { /* best effort */ }
+    try { await deadlineFront?.close?.() } catch { /* best effort */ }
     try { await front?.close?.() } catch { /* best effort */ }
     try { await seamlessFront?.close?.() } catch { /* best effort */ }
     try { await commandsFront?.close?.() } catch { /* best effort */ }
