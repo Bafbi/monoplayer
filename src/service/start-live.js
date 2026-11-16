@@ -65,7 +65,7 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
-import { PREAUTH_REFUSAL } from '../core/preauth-window.js'
+import { MAX_DEADLINE_MS, PREAUTH_REFUSAL } from '../core/preauth-window.js'
 
 // #134: the skin frame names the puppet's own `player_info` entry, so a lane that
 // cannot name the puppet's UUID writes no frame. The raw cacheDir override
@@ -151,11 +151,12 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // A number an operator can set: read once, and a value that cannot mean
   // anything is named rather than silently clamped. The defaults are bounded, so
   // a typo costs the operator the value they meant, not the bound.
-  const cap = (raw, variable, floor) => {
+  const cap = (raw, variable, floor, ceiling = Infinity) => {
     if (raw === undefined || raw === '') return undefined
     const parsed = Number(raw)
-    if (Number.isFinite(parsed) && parsed >= floor) return Math.floor(parsed)
-    warn(variable + ' must be a number of at least ' + floor + '; ignoring ' + raw)
+    if (Number.isFinite(parsed) && parsed >= floor && parsed <= ceiling) return Math.floor(parsed)
+    warn(variable + ' must be a number of at least ' + floor +
+      (ceiling === Infinity ? '' : ' and at most ' + ceiling) + '; ignoring ' + raw)
     return undefined
   }
   // #201: the total connection cap on the pre-auth window. The window runs from
@@ -168,8 +169,11 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   if (preAuthMax !== undefined) out.preAuth = { ...doc.preAuth, maxConnections: preAuthMax }
   // #205: the deadline on the same window, read the same way. A silent socket
   // that never leaves the window is what closes it against every real join, so
-  // the bound is a validated number and never an off switch.
-  const preAuthDeadline = cap(env.MONOPLAYER_PREAUTH_DEADLINE_MS, 'MONOPLAYER_PREAUTH_DEADLINE_MS', 1)
+  // the bound is a validated number and never an off switch. A delay above
+  // MAX_DEADLINE_MS is named and ignored like any other number the overlay cannot
+  // use: Node would fire it at 1 ms and destroy every connection at once.
+  const preAuthDeadline = cap(env.MONOPLAYER_PREAUTH_DEADLINE_MS,
+    'MONOPLAYER_PREAUTH_DEADLINE_MS', 1, MAX_DEADLINE_MS)
   if (preAuthDeadline !== undefined) out.preAuth = { ...(out.preAuth ?? doc.preAuth), deadlineMs: preAuthDeadline }
 
   // #96: the packet journal's directory and its retention budget. A rotation

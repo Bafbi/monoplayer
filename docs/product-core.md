@@ -216,9 +216,14 @@ login that reached the whitelist is never cut by a bound it already met.
 
 The close has its own reason, `preauth_deadline`, so an operator can tell a full
 window from a stuck one. It is counted in `front.preAuthExpired`, sampled into
-`monoplayer.preauth.expired`, and logged once per deadline episode: a flood of
-silent sockets that expire together writes one line, and the count says how many
-there were. An episode ends when the window empties.
+`monoplayer.preauth.expired`, and logged once per expiry.
+
+Every expiry is logged, which the cap's refusal is not. The cap suppresses
+because a flood writes thousands of refusals a second. An expiry cannot: the
+window admits at most `preAuth.maxConnections` connections at once, so one
+deadline period produces at most that many lines. Suppressing them would cost an
+operator the only signal a sustained attack gives, because an attacker who keeps
+staggered silent sockets in the window never lets it empty.
 
 A sustained flood is not ended by this. An attacker who reconnects every 30 s
 still closes the window for the moments it is full. The deadline bounds one
