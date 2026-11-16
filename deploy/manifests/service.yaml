@@ -4,11 +4,11 @@
 # `glowsquidye`, so the client joins:
 #   glowsquidye.tail41e568.ts.net:25565
 #
-# No public port and no Ingress on this object: the tailnet is the only route
-# to the front from here. The lane's one public route is not this Service, it is
-# the playit.gg tunnel in playit-agent.yaml (#202), which dials this Service by
-# its in-namespace DNS name. The bucket is still online-mode; hasJoined runs
-# against Mojang, and the attach whitelist decides who may stay.
+# No public port and no Ingress on this object: this Service publishes the tailnet
+# route only. The public route is not here, it is the playit.gg tunnel in
+# playit-agent.yaml (#202), which dials this Service by its in-namespace DNS name.
+# The bucket is still online-mode; hasJoined runs against Mojang, and the attach
+# whitelist decides who may stay.
 
 apiVersion: v1
 kind: Service
