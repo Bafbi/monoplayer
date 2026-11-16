@@ -15,7 +15,7 @@ The decision behind it is
 (#201) and the deadline (#205).** They are the only limits that still hold when a
 tunnel hides the client's address. Without the deadline, one stranger opens
 `preAuth.maxConnections` connections and sends nothing. Those silent sockets
-hold the window closed, and every real join is refused — on the tailnet as well as
+hold the window closed, and every real join is refused, on the tailnet as well as
 through the tunnel. The public door is what makes that reachable by anyone.
 
 ## Before you start
@@ -95,10 +95,6 @@ Skip this step if `kubectl -n monoplayer get secret playit-agent` already holds 
 working secret. The test is the agent's own connect line: a working secret makes
 it log `playit connected` with an `agent_id`, which "Step 4 — confirm the
 agent loaded the tunnel" shows.
-
-Run this step only after the five checks in "Before you start" pass. The
-deadline is the one that keeps a stranger from closing the door the rest of this
-runbook opens.
 
 1. In the dashboard, add an agent and copy its **Setup Code**.
 2. Run the agent once with the setup code as its secret. It needs no route to

@@ -151,7 +151,9 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // A number an operator can set: read once, and a value that cannot mean
   // anything is named rather than silently clamped. The defaults are bounded, so
   // a typo costs the operator the value they meant, not the bound.
-  const cap = (raw, variable, floor, ceiling = Infinity) => {
+  // A bounded number, read once. Named for what it does rather than "cap", which
+  // this repo uses for preAuth.maxConnections.
+  const boundedNumber = (raw, variable, floor, ceiling = Infinity) => {
     if (raw === undefined || raw === '') return undefined
     const parsed = Number(raw)
     if (Number.isFinite(parsed) && parsed >= floor && parsed <= ceiling) return Math.floor(parsed)
@@ -168,14 +170,14 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // One accumulator for both keys of this section, so a key written below cannot
   // silently drop one written above it.
   const preAuth = { ...doc.preAuth }
-  const preAuthMax = cap(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
+  const preAuthMax = boundedNumber(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
   if (preAuthMax !== undefined) preAuth.maxConnections = preAuthMax
   // #205: the deadline on the same window, read the same way. A silent socket
   // that never leaves the window is what closes it against every real join, so
   // the bound is a validated number and never an off switch. A delay above
   // MAX_DEADLINE_MS is named and ignored like any other number the overlay cannot
   // use: Node would fire it at 1 ms and destroy every connection at once.
-  const preAuthDeadline = cap(env.MONOPLAYER_PREAUTH_DEADLINE_MS,
+  const preAuthDeadline = boundedNumber(env.MONOPLAYER_PREAUTH_DEADLINE_MS,
     'MONOPLAYER_PREAUTH_DEADLINE_MS', 1, MAX_DEADLINE_MS)
   if (preAuthDeadline !== undefined) preAuth.deadlineMs = preAuthDeadline
   if (Object.keys(preAuth).length) out.preAuth = preAuth
@@ -193,7 +195,7 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
     // 0 turns the age rule off; the byte budget still bounds the directory.
     ['MONOPLAYER_JOURNAL_MAX_AGE_MS', 'maxAgeMs', 0]
   ]) {
-    const value = cap(env[variable], variable, floor)
+    const value = boundedNumber(env[variable], variable, floor)
     if (value !== undefined) journal[key] = value
   }
   if (Object.keys(journal).length) out.journal = journal

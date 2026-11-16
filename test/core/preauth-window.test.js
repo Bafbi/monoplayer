@@ -108,15 +108,21 @@ test('#205 an expiry has its own reason, and every close is counted', () => {
   window.admit()
 
   // The leg's timer fired: the connection is still in the window and its socket
-  // is about to be destroyed.
+  // is about to be destroyed. The leg then releases the slot, which is the order
+  // every expiry takes.
   const first = window.expire()
+  window.release()
+  assert.equal(window.admit().admitted, true)
   const second = window.expire()
+  window.release()
 
   assert.equal(first.reason, PREAUTH_CLOSE_REASON.DEADLINE, 'a stuck window has its own reason')
   assert.notEqual(PREAUTH_CLOSE_REASON.DEADLINE, PREAUTH_CLOSE_REASON.CONNECTION_CAP,
     'an operator can tell a flood from a stuck one')
   assert.equal(first.expired, 1)
   assert.equal(second.expired, 2)
+  assert.equal(window.stats().expired, 2, 'the count survives the release')
+  assert.equal(window.stats().inWindow, 0, 'and the slot came back')
 })
 
 test('#205 no expiry is held back, because the window bounds how many there can be', () => {
@@ -130,6 +136,7 @@ test('#205 no expiry is held back, because the window bounds how many there can 
   // lines. Holding them back would cost an operator the only signal a sustained
   // attack gives, because staggered silent sockets never let the window empty.
   assert.equal('shouldLog' in window.expire(), false, 'the policy never suppresses an expiry')
+  window.release()
   window.release()
   assert.equal('shouldLog' in window.expire(), false)
 })
