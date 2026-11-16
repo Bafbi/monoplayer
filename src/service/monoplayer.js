@@ -67,7 +67,7 @@ import { createPendingResourcePacks } from '../core/pending-resource-pack.js'
 import { createSession, STATES } from '../core/session.js'
 import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact } from '../observability/redact.js'
-import { DEFAULT_MAX_CONNECTIONS } from '../core/preauth-window.js'
+import { DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONNECTIONS } from '../core/preauth-window.js'
 import { flag } from './cli.js'
 import { pathToFileURL } from 'node:url'
 
@@ -117,7 +117,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   // client's, so it is on by default and a lane cannot be exposed without it.
   // A cap smaller than one cannot bound the window, and loadConfig refuses it
   // instead of starting misconfigured.
-  preAuth: Object.freeze({ maxConnections: DEFAULT_MAX_CONNECTIONS }),
+  //
+  // #205: the deadline on the same window. The cap bounds how many connections
+  // sit in it and nothing bounded how long one stayed, so a stranger could hold
+  // the window closed with silent sockets. A connection still in the window when
+  // its timer fires is destroyed. A deadline of zero cannot bound anything, and
+  // loadConfig refuses it for the same reason it refuses a cap of zero.
+  preAuth: Object.freeze({
+    maxConnections: DEFAULT_MAX_CONNECTIONS,
+    deadlineMs: DEFAULT_DEADLINE_MS
+  }),
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
   bounds: Object.freeze({
@@ -220,6 +229,9 @@ export function loadConfig (doc = {}) {
   }
   if (!Number.isInteger(merged.preAuth.maxConnections) || merged.preAuth.maxConnections < 1) {
     throw new TypeError('config.preAuth.maxConnections must be a positive integer')
+  }
+  if (!Number.isInteger(merged.preAuth.deadlineMs) || merged.preAuth.deadlineMs < 1) {
+    throw new TypeError('config.preAuth.deadlineMs must be a positive integer')
   }
   if (typeof merged.skin.showPuppetSkin !== 'boolean') {
     throw new TypeError('config.skin.showPuppetSkin must be a boolean')
