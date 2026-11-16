@@ -162,9 +162,12 @@ report that could not be written.
 The report is metadata only, scanned for token-shaped strings before it is
 written.
 
-Both endpoints are refused when they name the live Excalia fleet or the live
-deployment in front of it (`deploy/manifests/service.yaml`), so a mistyped flag
-cannot measure a server this repo does not own.
+Both endpoints are refused when they name the live Excalia fleet, the live
+deployment in front of it (`deploy/manifests/service.yaml`), or a `playit.gg`
+tunnel to it (`deploy/manifests/playit-agent.yaml`; see
+[public-access.md](public-access.md)), so a mistyped flag cannot measure a server
+this repo does not own. A paid tunnel's custom domain has no suffix to catch, so
+that one stays a rule for the operator.
 
 ### Reaching the dev lane
 

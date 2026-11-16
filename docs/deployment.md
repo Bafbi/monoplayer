@@ -23,7 +23,8 @@ digest, never by a moving tag.
 
 | Path | Contents |
 |---|---|
-| `deploy/manifests/` | Kustomization: namespace, attach whitelist ConfigMap, custody PVC, Deployment, Tailscale Service |
+| `deploy/manifests/` | Kustomization: namespace, attach whitelist ConfigMap, custody PVC, Deployment, Tailscale Service, playit tunnel agent |
+| `deploy/manifests/playit-agent.yaml` | The public route (#202): one playit.gg agent. Runbook: [public-access.md](public-access.md), decision: [the ADR](adr/public-access-goes-through-a-tcp-tunnel.md) |
 | `deploy/argocd/project.yaml` | AppProject `monoplayer`: one source repo, one destination namespace |
 | `deploy/argocd/application.yaml` | Application `monoplayer` |
 | `.github/workflows/image.yaml` | Build, push to GHCR, commit the digest |
@@ -68,6 +69,12 @@ These objects are not in Git. Create them once, in this order.
 4. **Custody seed.** The image carries no tokens. Copy the account directory
    into the claim after Argo creates it; the Deployment's init container waits
    for `profile.json` before the app starts.
+
+5. **Tunnel secret, only for the public route.** The playit agent reads the
+   cluster Secret `playit-agent`, key `SECRET_KEY`, and the tunnel's local target
+   is the front's in-namespace DNS name. Both are operator steps, and the order
+   matters: link the agent, then take its secret. See
+   [public-access.md](public-access.md).
 
 ## Custody seed
 
@@ -241,6 +248,13 @@ See `docs/telemetry.md` for the signals and the journal layout.
 - **The custody PVC is never pruned.** The PVC and the namespace carry
   `argocd.argoproj.io/sync-options: Delete=false,Prune=false`, so removing the
   Application or the manifest does not delete the tokens.
+- **The public route is one Deployment, and the front cannot tell it apart.**
+  The playit agent forwards bytes and decides nothing: authentication plus the
+  attach whitelist are the gate on both routes, and a refusal through the
+  tunnel is the same answer as a refusal on the tailnet. The tunnel's pod is not
+  a member of the Service (its `app.kubernetes.io/name` is `playit-agent`), and
+  deleting it returns the lane to tailnet-only with no change to the proxy
+  (#202).
 - **The front bounds its pre-auth window.** A connection over
   `preAuth.maxConnections` is closed before the login is reviewed, with reason
   `preauth_connection_cap`, and logged once per saturated window rather than
