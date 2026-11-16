@@ -68,7 +68,7 @@ import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
-import { createPreAuthWindow, DEFAULT_DEADLINE_MS } from '../core/preauth-window.js'
+import { createPreAuthWindow } from '../core/preauth-window.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // The configuration prefix the cache holds is bounded at 1024 frames, so a
@@ -444,7 +444,9 @@ function createFrontLeg ({
     deadlineMs: preAuthOptions.deadlineMs
   })
   const preAuthOpen = new WeakSet()
-  const preAuthDeadlineMs = preAuthOptions.deadlineMs ?? DEFAULT_DEADLINE_MS
+  // The window validated the deadline and owns it; the leg reads the effective
+  // value back rather than resolving the default a second time.
+  const preAuthDeadlineMs = preAuthWindow.stats().deadlineMs
   // One timer per admitted connection. minecraft-protocol sets no idle timeout on
   // its client and closeTimeout starts only after end(), so this is the only bound
   // a socket that never speaks ever meets. Every entry leaves the map either in
@@ -491,7 +493,7 @@ function createFrontLeg ({
   // over-cap refusal does. Its 'end' listener still runs and releases the slot.
   function expirePreAuthWindow (client) {
     const expiry = preAuthWindow.expire()
-    metrics.preAuthExpired++
+    metrics.preAuthExpired = expiry.expired
     // One line per expiry. The window admits at most maxConnections connections
     // at once, so a deadline period cannot write more lines than that, and a
     // sustained attack is exactly the case where a reader needs to see them.

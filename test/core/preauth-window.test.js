@@ -11,7 +11,7 @@ import {
   DEFAULT_DEADLINE_MS,
   DEFAULT_MAX_CONNECTIONS,
   MAX_DEADLINE_MS,
-  PREAUTH_REFUSAL
+  PREAUTH_CLOSE_REASON
 } from '../../src/core/preauth-window.js'
 
 test('#201 the window admits up to its cap and refuses the connection over it', () => {
@@ -22,7 +22,7 @@ test('#201 the window admits up to its cap and refuses the connection over it', 
 
   const refused = window.admit()
   assert.equal(refused.admitted, false)
-  assert.equal(refused.reason, PREAUTH_REFUSAL.CONNECTION_CAP, 'the cap has its own reason')
+  assert.equal(refused.reason, PREAUTH_CLOSE_REASON.CONNECTION_CAP, 'the cap has its own reason')
   assert.equal(refused.inWindow, 2, 'a refused connection never enters the window')
   assert.equal(refused.refused, 1)
   assert.equal(window.stats().inWindow, 2)
@@ -85,7 +85,13 @@ test('#201 stats reports the window without handing out the internals', () => {
   const window = createPreAuthWindow({ maxConnections: 3 })
   window.admit()
   const stats = window.stats()
-  assert.deepEqual(stats, { inWindow: 1, maxConnections: 3, refused: 0 })
+  assert.deepEqual(stats, {
+    inWindow: 1,
+    maxConnections: 3,
+    deadlineMs: DEFAULT_DEADLINE_MS,
+    refused: 0,
+    expired: 0
+  })
   stats.inWindow = 99
   assert.equal(window.stats().inWindow, 1, 'a reader cannot move the count')
 })
@@ -106,8 +112,8 @@ test('#205 an expiry has its own reason, and every close is counted', () => {
   const first = window.expire()
   const second = window.expire()
 
-  assert.equal(first.reason, PREAUTH_REFUSAL.DEADLINE, 'a stuck window has its own reason')
-  assert.notEqual(PREAUTH_REFUSAL.DEADLINE, PREAUTH_REFUSAL.CONNECTION_CAP,
+  assert.equal(first.reason, PREAUTH_CLOSE_REASON.DEADLINE, 'a stuck window has its own reason')
+  assert.notEqual(PREAUTH_CLOSE_REASON.DEADLINE, PREAUTH_CLOSE_REASON.CONNECTION_CAP,
     'an operator can tell a flood from a stuck one')
   assert.equal(first.expired, 1)
   assert.equal(second.expired, 2)
@@ -133,7 +139,8 @@ test('#205 a deadline that cannot bound anything refuses to build', () => {
     assert.throws(() => createPreAuthWindow({ deadlineMs: bad }),
       /deadlineMs must be an integer between 1 and/, JSON.stringify(bad))
   }
-  assert.equal(createPreAuthWindow({ deadlineMs: 1000 }).stats().maxConnections, DEFAULT_MAX_CONNECTIONS)
+  assert.equal(createPreAuthWindow({ deadlineMs: 1000 }).stats().deadlineMs, 1000,
+    'the window carries the deadline it was built with')
 })
 
 test('#205 a deadline past what a timer can hold is refused, not fired at once', () => {
@@ -145,8 +152,8 @@ test('#205 a deadline past what a timer can hold is refused, not fired at once',
     assert.throws(() => createPreAuthWindow({ deadlineMs: bad }),
       /deadlineMs must be an integer between 1 and/, JSON.stringify(bad))
   }
-  assert.equal(createPreAuthWindow({ deadlineMs: MAX_DEADLINE_MS }).stats().maxConnections,
-    DEFAULT_MAX_CONNECTIONS, 'the largest delay a timer holds is still a deadline')
+  assert.equal(createPreAuthWindow({ deadlineMs: MAX_DEADLINE_MS }).stats().deadlineMs,
+    MAX_DEADLINE_MS, 'the largest delay a timer holds is still a deadline')
 })
 
 test('#205 the default deadline is conservative, and a window built without one uses it', () => {
@@ -157,8 +164,8 @@ test('#205 the default deadline is conservative, and a window built without one 
   // socket has taken the front offline for a noticeable while.
   assert.ok(DEFAULT_DEADLINE_MS >= 10_000, 'a slow but real login must never be cut')
   assert.ok(DEFAULT_DEADLINE_MS <= 120_000, 'a deadline of minutes bounds nothing an operator notices')
-  assert.equal(createPreAuthWindow().stats().maxConnections, DEFAULT_MAX_CONNECTIONS,
-    'the deadline and the cap share one default window')
+  assert.equal(createPreAuthWindow().stats().deadlineMs, DEFAULT_DEADLINE_MS,
+    'a window built without a deadline uses the compiled one')
 })
 
 test('#201 the default is conservative, and a window built without a number uses it', () => {

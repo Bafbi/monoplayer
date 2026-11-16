@@ -65,7 +65,7 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
-import { MAX_DEADLINE_MS, PREAUTH_REFUSAL } from '../core/preauth-window.js'
+import { MAX_DEADLINE_MS, PREAUTH_CLOSE_REASON } from '../core/preauth-window.js'
 
 // #134: the skin frame names the puppet's own `player_info` entry, so a lane that
 // cannot name the puppet's UUID writes no frame. The raw cacheDir override
@@ -165,8 +165,11 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // loadConfig refuses it. Here it is named and ignored like every other number,
   // which leaves the document's cap in force when it sets one, and the compiled
   // cap when it does not.
+  // One accumulator for both keys of this section, so a key written below cannot
+  // silently drop one written above it.
+  const preAuth = { ...doc.preAuth }
   const preAuthMax = cap(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
-  if (preAuthMax !== undefined) out.preAuth = { ...doc.preAuth, maxConnections: preAuthMax }
+  if (preAuthMax !== undefined) preAuth.maxConnections = preAuthMax
   // #205: the deadline on the same window, read the same way. A silent socket
   // that never leaves the window is what closes it against every real join, so
   // the bound is a validated number and never an off switch. A delay above
@@ -174,7 +177,8 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // use: Node would fire it at 1 ms and destroy every connection at once.
   const preAuthDeadline = cap(env.MONOPLAYER_PREAUTH_DEADLINE_MS,
     'MONOPLAYER_PREAUTH_DEADLINE_MS', 1, MAX_DEADLINE_MS)
-  if (preAuthDeadline !== undefined) out.preAuth = { ...(out.preAuth ?? doc.preAuth), deadlineMs: preAuthDeadline }
+  if (preAuthDeadline !== undefined) preAuth.deadlineMs = preAuthDeadline
+  if (Object.keys(preAuth).length) out.preAuth = preAuth
 
   // #96: the packet journal's directory and its retention budget. A rotation
   // size alone deletes nothing, so the directory has a byte budget and an age
@@ -732,7 +736,7 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
     const preAuthRefused = front.metrics.preAuthRefused
     if (preAuthRefused > lastPreAuthRefused) {
       telemetry.metric('monoplayer.preauth.refused', preAuthRefused - lastPreAuthRefused,
-        { reason: PREAUTH_REFUSAL.CONNECTION_CAP })
+        { reason: PREAUTH_CLOSE_REASON.CONNECTION_CAP })
       lastPreAuthRefused = preAuthRefused
     }
     // #205: a connection the deadline destroyed. It was admitted, so this is not
@@ -741,7 +745,7 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
     const preAuthExpired = front.metrics.preAuthExpired
     if (preAuthExpired > lastPreAuthExpired) {
       telemetry.metric('monoplayer.preauth.expired', preAuthExpired - lastPreAuthExpired,
-        { reason: PREAUTH_REFUSAL.DEADLINE })
+        { reason: PREAUTH_CLOSE_REASON.DEADLINE })
       lastPreAuthExpired = preAuthExpired
     }
   }
