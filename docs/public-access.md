@@ -13,7 +13,8 @@ The decision behind it is
 
 ## Before you start
 
-Four things must be true. Check each one; each has a cheap test.
+Four checks, each with a cheap test. The first three are true before you deploy;
+the fourth runs once the tunnel pod exists.
 
 1. **The front carries the pre-auth cap (#201).** It is on by default at 16, so
    the check is that nothing has turned it off: `deploy/manifests/deployment.yaml`
@@ -38,7 +39,8 @@ Four things must be true. Check each one; each has a cheap test.
 3. **The cluster Secret exists.** `kubectl -n monoplayer get secret playit-agent`
    lists it with one key, `SECRET_KEY`. Do not print its value.
 
-4. **The tunnel's local target reaches the front.** From inside the tunnel pod:
+4. **The tunnel's local target reaches the front.** Once `playit-agent` runs,
+   ask it from inside its own pod:
 
    ```bash
    kubectl -n monoplayer exec deploy/playit-agent -- sh -c \
@@ -111,8 +113,8 @@ was.
 ## Step 3 — create the tunnel
 
 In the dashboard, add a tunnel to that agent. Pick the **Minecraft Java** preset:
-it is on the free tier and it sets the ports itself. Then set two fields, because
-the preset's defaults are the docker example's:
+it is on the free tier and it sets the ports itself. Then set these fields, and
+`local_ip` first, because the preset carries the docker example's default:
 
 | Field | Value |
 |---|---|
@@ -130,8 +132,8 @@ the cluster resolver and dials the first address it gets.
 Leave proxy protocol off. The front's first bytes must be the Minecraft
 handshake, and nothing in it reads a PROXY header.
 
-The dashboard now shows the public route: a host on `playit.gg` and a port. That address is playit's to assign, so do not write it into this
-repository.
+The dashboard now shows the public route: a host on `playit.gg` and a port.
+That address is playit's to assign, so do not write it into this repository.
 
 ## Step 4 — confirm the agent loaded the tunnel
 
@@ -143,12 +145,13 @@ Read the `playit connected` line:
 
 ```text
 playitd::daemon: playit connected; tunnels loaded agent_id=<uuid> tunnel_count=1
-  pending_tunnel_count=0 disabled_tunnel_count=0 account_status="verified"
+  pending_tunnel_count=0 disabled_tunnel_count=0 account_status="<state>"
 ```
 
-`tunnel_count=0` means the tunnel is not on this agent, or the account cannot own
-it. `account_status="email_not_verified"` means the account needs its email
-confirmed first.
+`tunnel_count=1` is the check that matters. `tunnel_count=0` means the tunnel is
+not on this agent, or the account cannot own it. `account_status` is playit's
+own word for the account's state, and `email_not_verified` is the value this lane
+last saw.
 
 Two log lines look like trouble and are not:
 
@@ -169,7 +172,7 @@ unchanged, so the two checks are the same two checks as on the tailnet:
 
 1. A whitelisted account joins.
 2. A non-whitelisted account is refused, and the refusal is indistinguishable
-   from the one on the tailnet: same reason, same bytes, same timing shape.
+   from the one on the tailnet: the same reason, in the same bytes.
 
 The refusal check is the one that matters. Run it from a client outside the
 tailnet, and compare it with the same attempt against
