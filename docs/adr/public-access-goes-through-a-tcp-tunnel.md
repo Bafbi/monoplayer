@@ -79,8 +79,10 @@ The other limits of playit's free tier, as the support page states them: four
 allocated ports (premium: sixteen), and premium adds more agents than the free
 tier, regional tunnels, `.playit.plus` domains, and external domains. This lane
 spends one port and one agent. The address, the edge and the data path belong
-to playit, and an account that loses its verified email stops being able to add
-tunnels — so the tunnel is a dependency of the public route, not of the lane.
+to playit, and the account's own state gates the tunnel: this lane's account
+reports `account_status="email_not_verified"` and owns no tunnel, so the route
+carries nothing until an operator finishes `docs/public-access.md`. The tunnel
+is a dependency of the public route, not of the lane.
 
 ## Consequences
 
