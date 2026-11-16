@@ -492,14 +492,14 @@ function createFrontLeg ({
   function expirePreAuthWindow (client) {
     const expiry = preAuthWindow.expire()
     metrics.preAuthExpired++
-    if (expiry.shouldLog) {
-      log('preAuthExpired', {
-        reason: expiry.reason,
-        deadlineMs: preAuthDeadlineMs,
-        inWindow: expiry.inWindow,
-        expired: expiry.expired
-      })
-    }
+    // One line per expiry. The window admits at most maxConnections connections
+    // at once, so a deadline period cannot write more lines than that, and a
+    // sustained attack is exactly the case where a reader needs to see them.
+    log('preAuthExpired', {
+      reason: expiry.reason,
+      deadlineMs: preAuthDeadlineMs,
+      expired: expiry.expired
+    })
     client.removeAllListeners('error')
     client.on('error', () => {})
     try { client.socket?.destroy() } catch { /* already gone */ }

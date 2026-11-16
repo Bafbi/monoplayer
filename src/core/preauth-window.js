@@ -22,7 +22,7 @@
 //
 // Pure by construction: no socket, no clock, no log. The front leg owns every
 // effect of the decision: the closed socket, the timer, the counted refusal, and
-// the one log line per saturated window or per deadline episode.
+// the one log line per saturated window, and the line for every expiry.
 
 export const PREAUTH_REFUSAL = Object.freeze({
   CONNECTION_CAP: 'preauth_connection_cap',
@@ -46,6 +46,12 @@ export const DEFAULT_MAX_CONNECTIONS = 16
 // half a minute, not for the life of the pod.
 export const DEFAULT_DEADLINE_MS = 30_000
 
+// The largest delay a timer can hold. Node clamps a longer one to 1 ms and warns,
+// so a deadline above this would destroy every admitted connection the moment it
+// arrived: the opposite of the bound, and a one-digit typo away. It is refused
+// instead.
+export const MAX_DEADLINE_MS = 2_147_483_647
+
 export function createPreAuthWindow ({
   maxConnections = DEFAULT_MAX_CONNECTIONS,
   deadlineMs = DEFAULT_DEADLINE_MS
@@ -54,9 +60,11 @@ export function createPreAuthWindow ({
     throw new TypeError('maxConnections must be a positive integer, got ' + JSON.stringify(maxConnections))
   }
   // A deadline of 0 or less would bound nothing, which is the defect this
-  // exists to close, so it is refused rather than defaulted away.
-  if (!Number.isInteger(deadlineMs) || deadlineMs < 1) {
-    throw new TypeError('deadlineMs must be a positive integer, got ' + JSON.stringify(deadlineMs))
+  // exists to close, so it is refused rather than defaulted away. One above
+  // MAX_DEADLINE_MS would fire at once, which is worse, so it is refused too.
+  if (!Number.isInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > MAX_DEADLINE_MS) {
+    throw new TypeError('deadlineMs must be an integer between 1 and ' + MAX_DEADLINE_MS +
+      ', got ' + JSON.stringify(deadlineMs))
   }
 
   let inWindow = 0
@@ -67,11 +75,6 @@ export function createPreAuthWindow ({
   // refusal that found the window full and cleared when a slot frees, which is
   // what makes the next attack visible again.
   let logged = false
-  // The deadline's own flag, for the same reason: a flood of silent sockets that
-  // expire together writes one line, and the count says how many there were. An
-  // episode ends when the window empties, because the next silent socket is a
-  // new event rather than the tail of the last one.
-  let loggedDeadline = false
 
   // A connection arrives. A refusal carries what the leg logs, because that
   // record is the decision's whole operator surface. `shouldLog` says this is
@@ -101,18 +104,21 @@ export function createPreAuthWindow ({
     if (inWindow === 0) return { released: false, inWindow }
     inWindow--
     if (inWindow < maxConnections) logged = false
-    if (inWindow === 0) loggedDeadline = false
     return { released: true, inWindow }
   }
 
   // A connection stayed in the window past its deadline. The leg destroys the
-  // socket and releases the slot; this counts the close and says whether it is
-  // the episode's first, which is what the log line is for.
+  // socket and releases the slot; this counts the close.
+  //
+  // Every expiry is logged, unlike every refusal. The cap suppresses because a
+  // flood writes thousands of refusals a second. An expiry cannot: the window
+  // admits at most maxConnections connections at once, so one deadline period
+  // produces at most that many lines. Suppressing them would cost an operator
+  // the only signal a sustained attack gives, because an attacker who keeps
+  // staggered silent sockets in the window never lets it empty.
   function expire () {
     expired++
-    const shouldLog = !loggedDeadline
-    loggedDeadline = true
-    return { reason: PREAUTH_REFUSAL.DEADLINE, expired, shouldLog, inWindow }
+    return { reason: PREAUTH_REFUSAL.DEADLINE, expired }
   }
 
   return {

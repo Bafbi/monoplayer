@@ -225,8 +225,9 @@ Common:
   may stay in that window. A connection still in it when the deadline fires is
   destroyed, counted, and logged with reason `preauth_deadline`. It is on by
   default for the same reason the cap is: a socket that never speaks otherwise
-  holds its slot until its peer closes or the pod restarts. A value below `1` is
-  named and ignored here, and a config document that sets one below `1` refuses
+  holds its slot until its peer closes or the pod restarts. A value below `1`, or
+  above `2147483647` (the largest delay a timer holds; Node fires a longer one at
+  1 ms), is named and ignored here, and a config document that sets one refuses
   to start.
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
 - `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT` (both default `25565`)
