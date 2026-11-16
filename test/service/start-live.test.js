@@ -11,6 +11,7 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_TOTAL_BYTES
 } from '../../src/observability/journal.js'
+import { DEFAULT_MAX_CONNECTIONS } from '../../src/core/preauth-window.js'
 
 const base = () => ({ transfer: { follow: true, chainLimit: 8 } })
 
@@ -159,4 +160,40 @@ test('#108 the env var overrides the document, and 0 or unset means unlimited', 
   // non-positive attempts as unlimited (src/core/session.js:74), which is how
   // the file's 0 means the same as the env var's 0.
   assert.equal(envOverlay({ reconnect: { attempts: 0 } }, {}).reconnect.attempts, 0)
+})
+
+// #201: the pre-auth window's total connection cap. The window runs from an
+// accepted socket to the attach whitelist's accept. The cap is on by default,
+// and a value that cannot bound the window is refused rather than defaulted away.
+test('#201 the cap is on by default and is the number the window module owns', () => {
+  assert.equal(DEFAULT_CONFIG.preAuth.maxConnections, DEFAULT_MAX_CONNECTIONS)
+  assert.equal(loadConfig().preAuth.maxConnections, DEFAULT_MAX_CONNECTIONS)
+  assert.ok(DEFAULT_MAX_CONNECTIONS > 1, 'the default bounds the window without refusing a lone player')
+})
+
+test('#201 MONOPLAYER_PREAUTH_MAX_CONNECTIONS sets the cap', () => {
+  const out = envOverlay({ preAuth: { maxConnections: DEFAULT_MAX_CONNECTIONS } },
+    { MONOPLAYER_PREAUTH_MAX_CONNECTIONS: '4' })
+  assert.equal(loadConfig(out).preAuth.maxConnections, 4)
+})
+
+test('#201 an unset variable leaves the cap at its default', () => {
+  assert.equal(envOverlay({}, {}).preAuth, undefined, 'the document is untouched')
+  assert.equal(loadConfig(envOverlay({}, {})).preAuth.maxConnections, DEFAULT_MAX_CONNECTIONS)
+})
+
+test('#201 a cap the overlay cannot read is named and left at the default', () => {
+  const warnings = []
+  const out = envOverlay({}, { MONOPLAYER_PREAUTH_MAX_CONNECTIONS: '0' }, w => warnings.push(w))
+  assert.equal(out.preAuth, undefined)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /MONOPLAYER_PREAUTH_MAX_CONNECTIONS/)
+})
+
+test('#201 loadConfig refuses a cap that cannot bound the window', () => {
+  for (const bad of [0, -2, 1.5, '8', null]) {
+    assert.throws(() => loadConfig({ preAuth: { maxConnections: bad } }),
+      /config\.preAuth\.maxConnections/, JSON.stringify(bad))
+  }
+  assert.equal(loadConfig({ preAuth: { maxConnections: 8 } }).preAuth.maxConnections, 8)
 })

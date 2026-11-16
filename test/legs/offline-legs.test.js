@@ -391,3 +391,33 @@ test('#73 a leg with no connection refuses the held gate instead of throwing', (
     { answered: false, reason: 'no_connection', name: 'code_of_conduct' }
   )
 })
+
+// #201: the cap is the front leg's, because the front leg owns the socket. A leg
+// built without a preAuth section still tames the window, and a cap that cannot
+// bound anything fails at construction rather than at the first stranger.
+test('#201 the front legs carry the pre-auth cap, and refuse a cap that bounds nothing', () => {
+  const leg = createOfflineFrontLeg({ offlineWhitelist: [ATTACH_UUID], getSnapshotConfig: snapshot, wireMode: 'off' })
+  assert.equal(leg.metrics.preAuthRefused, 0)
+  assert.equal(leg.metrics.preAuthInWindow, 0, 'a leg that never listened holds an empty window')
+
+  const tight = createOfflineFrontLeg({
+    offlineWhitelist: [ATTACH_UUID],
+    getSnapshotConfig: snapshot,
+    wireMode: 'off',
+    preAuth: { maxConnections: 1 }
+  })
+  assert.deepEqual(tight.metrics.preAuthInWindow, 0)
+
+  for (const bad of [0, -1, '8']) {
+    assert.throws(
+      () => createOfflineFrontLeg({
+        offlineWhitelist: [ATTACH_UUID],
+        getSnapshotConfig: snapshot,
+        wireMode: 'off',
+        preAuth: { maxConnections: bad }
+      }),
+      /maxConnections/,
+      JSON.stringify(bad)
+    )
+  }
+})
