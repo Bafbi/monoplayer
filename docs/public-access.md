@@ -30,9 +30,10 @@ Four things must be true. Check each one; each has a cheap test.
    image: the cap is the one bound that holds when a tunnel hides the client's
    address.
 
-2. **The playit account's email is verified.** An unverified account reaches
-   playit's control plane and loads zero tunnels. The agent says so itself:
-   `account_status="email_not_verified"` in the `playit connected` line.
+2. **The playit account may own a tunnel.** The agent reports the account's
+   state on its connect line, and this lane's account last reported
+   `account_status="email_not_verified"` with `tunnel_count=0`. Verify the
+   email in the dashboard before you go looking for a tunnel that is not there.
 
 3. **The cluster Secret exists.** `kubectl -n monoplayer get secret playit-agent`
    lists it with one key, `SECRET_KEY`. Do not print its value.
