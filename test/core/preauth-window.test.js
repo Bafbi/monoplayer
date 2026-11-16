@@ -10,6 +10,7 @@ import {
   createPreAuthWindow,
   DEFAULT_DEADLINE_MS,
   DEFAULT_MAX_CONNECTIONS,
+  MAX_DEADLINE_MS,
   PREAUTH_REFUSAL
 } from '../../src/core/preauth-window.js'
 
@@ -96,55 +97,56 @@ test('#201 a cap that cannot bound anything refuses to build', () => {
   }
 })
 
-test('#205 an expiry has its own reason, counts every close, and logs once per episode', () => {
+test('#205 an expiry has its own reason, and every close is counted', () => {
   const window = createPreAuthWindow({ maxConnections: 1 })
   window.admit()
 
   // The leg's timer fired: the connection is still in the window and its socket
-  // is about to be destroyed. A flood of silent sockets writes one line, not one
-  // per socket, and the count is what says how many there were.
+  // is about to be destroyed.
   const first = window.expire()
   const second = window.expire()
-  const third = window.expire()
 
   assert.equal(first.reason, PREAUTH_REFUSAL.DEADLINE, 'a stuck window has its own reason')
   assert.notEqual(PREAUTH_REFUSAL.DEADLINE, PREAUTH_REFUSAL.CONNECTION_CAP,
     'an operator can tell a flood from a stuck one')
-  assert.equal(first.shouldLog, true, 'the first expiry of an episode is logged')
-  assert.equal(second.shouldLog, false)
-  assert.equal(third.shouldLog, false)
-  assert.equal(third.expired, 3, 'every close is counted, not just the logged one')
+  assert.equal(first.expired, 1)
+  assert.equal(second.expired, 2)
 })
 
-test('#205 an emptied window ends the episode, so the next expiry is logged again', () => {
-  const window = createPreAuthWindow({ maxConnections: 1 })
-  window.admit()
-  assert.equal(window.expire().shouldLog, true)
-
-  // The leg released the slot the expiry freed. The window is empty, so the next
-  // silent socket is a new episode and its close has to be visible in the log.
-  window.release()
-  assert.equal(window.admit().admitted, true)
-  assert.equal(window.expire().shouldLog, true, 'the window emptied, so the episode ended')
-})
-
-test('#205 an expiry that leaves the window occupied does not open a new episode', () => {
+test('#205 no expiry is held back, because the window bounds how many there can be', () => {
   const window = createPreAuthWindow({ maxConnections: 2 })
   window.admit()
   window.admit()
-  assert.equal(window.expire().shouldLog, true)
+
+  // The cap logs one line per saturated window because a flood writes thousands
+  // of refusals a second. The deadline cannot: the window admits at most
+  // maxConnections at once, so one deadline period produces at most that many
+  // lines. Holding them back would cost an operator the only signal a sustained
+  // attack gives, because staggered silent sockets never let the window empty.
+  assert.equal('shouldLog' in window.expire(), false, 'the policy never suppresses an expiry')
   window.release()
-  // One slot is still held by a connection the deadline has not reached, so the
-  // episode is still running.
-  assert.equal(window.expire().shouldLog, false)
+  assert.equal('shouldLog' in window.expire(), false)
 })
 
 test('#205 a deadline that cannot bound anything refuses to build', () => {
   for (const bad of [0, -1, 1.5, '8', null, NaN, Infinity]) {
     assert.throws(() => createPreAuthWindow({ deadlineMs: bad }),
-      /deadlineMs must be a positive integer/, JSON.stringify(bad))
+      /deadlineMs must be an integer between 1 and/, JSON.stringify(bad))
   }
   assert.equal(createPreAuthWindow({ deadlineMs: 1000 }).stats().maxConnections, DEFAULT_MAX_CONNECTIONS)
+})
+
+test('#205 a deadline past what a timer can hold is refused, not fired at once', () => {
+  // Node clamps a delay above MAX_DEADLINE_MS to 1 ms and warns. A deadline like
+  // that would destroy every admitted connection the moment it arrived, which is
+  // the lockout this bound exists to prevent.
+  assert.equal(MAX_DEADLINE_MS, 2_147_483_647)
+  for (const bad of [MAX_DEADLINE_MS + 1, 3_000_000_000, Number.MAX_SAFE_INTEGER]) {
+    assert.throws(() => createPreAuthWindow({ deadlineMs: bad }),
+      /deadlineMs must be an integer between 1 and/, JSON.stringify(bad))
+  }
+  assert.equal(createPreAuthWindow({ deadlineMs: MAX_DEADLINE_MS }).stats().maxConnections,
+    DEFAULT_MAX_CONNECTIONS, 'the largest delay a timer holds is still a deadline')
 })
 
 test('#205 the default deadline is conservative, and a window built without one uses it', () => {

@@ -67,7 +67,7 @@ import { createPendingResourcePacks } from '../core/pending-resource-pack.js'
 import { createSession, STATES } from '../core/session.js'
 import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact } from '../observability/redact.js'
-import { DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONNECTIONS } from '../core/preauth-window.js'
+import { DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONNECTIONS, MAX_DEADLINE_MS } from '../core/preauth-window.js'
 import { flag } from './cli.js'
 import { pathToFileURL } from 'node:url'
 
@@ -230,8 +230,12 @@ export function loadConfig (doc = {}) {
   if (!Number.isInteger(merged.preAuth.maxConnections) || merged.preAuth.maxConnections < 1) {
     throw new TypeError('config.preAuth.maxConnections must be a positive integer')
   }
-  if (!Number.isInteger(merged.preAuth.deadlineMs) || merged.preAuth.deadlineMs < 1) {
-    throw new TypeError('config.preAuth.deadlineMs must be a positive integer')
+  // A deadline above MAX_DEADLINE_MS makes Node fire the timer at 1 ms, which
+  // destroys every admitted connection at once. A document that sets one refuses
+  // to start rather than taking the front down that way.
+  if (!Number.isInteger(merged.preAuth.deadlineMs) || merged.preAuth.deadlineMs < 1 ||
+      merged.preAuth.deadlineMs > MAX_DEADLINE_MS) {
+    throw new TypeError('config.preAuth.deadlineMs must be an integer between 1 and ' + MAX_DEADLINE_MS)
   }
   if (typeof merged.skin.showPuppetSkin !== 'boolean') {
     throw new TypeError('config.skin.showPuppetSkin must be a boolean')
