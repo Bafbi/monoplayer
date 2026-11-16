@@ -702,6 +702,12 @@ function createFrontLeg ({
     // library's close timeout bounds. A denial after the accept, such as a
     // backend that is not ready, lands on a connection that has already left the
     // window, so there is nothing to release.
+    //
+    // #205: the deadline is disarmed here. The denial is this connection's
+    // decision, and the close timeout bounds the socket from the end() below. A
+    // deadline left armed would fire first for a peer that ignores the disconnect,
+    // and the expiry line would report a refused stranger as a stuck socket.
+    clearPreAuthDeadline(client)
     const originalWrite = typeof client.write === 'function' ? client.write.bind(client) : null
     if (originalWrite) {
       client.write = (name, ...args) =>
