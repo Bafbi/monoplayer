@@ -4,6 +4,10 @@
 # ../argocd syncs it into the `monoplayer` namespace. The image comes from
 # GHCR and is pinned by digest; .github/workflows/image.yaml builds it on
 # every push to main and writes the new digest back here.
+#
+# playit-agent.yaml is the public tunnel (#202). It is the only object here
+# whose secret lives outside Git; docs/public-access.md is its runbook, and
+# its removal returns the lane to tailnet-only.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -14,6 +18,7 @@ resources:
   - pvc.yaml
   - deployment.yaml
   - service.yaml
+  - playit-agent.yaml
 
 # main references the moving `main` tag. The image workflow rebuilds the
 # `deploy` branch from main and appends an `images:` digest pin there, so this
