@@ -11,7 +11,7 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_TOTAL_BYTES
 } from '../../src/observability/journal.js'
-import { DEFAULT_MAX_CONNECTIONS } from '../../src/core/preauth-window.js'
+import { DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONNECTIONS, MAX_DEADLINE_MS } from '../../src/core/preauth-window.js'
 
 const base = () => ({ transfer: { follow: true, chainLimit: 8 } })
 
@@ -196,4 +196,61 @@ test('#201 loadConfig refuses a cap that cannot bound the window', () => {
       /config\.preAuth\.maxConnections/, JSON.stringify(bad))
   }
   assert.equal(loadConfig({ preAuth: { maxConnections: 8 } }).preAuth.maxConnections, 8)
+})
+
+// #205: the deadline on the pre-auth window. It bounds how long one connection
+// may hold a slot, so it is on by default too, and a value that cannot bound
+// anything is refused rather than defaulted away.
+test('#205 the deadline is on by default and is the number the window module owns', () => {
+  assert.equal(DEFAULT_CONFIG.preAuth.deadlineMs, DEFAULT_DEADLINE_MS)
+  assert.equal(loadConfig().preAuth.deadlineMs, DEFAULT_DEADLINE_MS)
+  assert.ok(DEFAULT_DEADLINE_MS >= 10_000, 'a slow but real login must never be cut')
+})
+
+test('#205 MONOPLAYER_PREAUTH_DEADLINE_MS sets the deadline', () => {
+  const out = envOverlay({ preAuth: { deadlineMs: DEFAULT_DEADLINE_MS } },
+    { MONOPLAYER_PREAUTH_DEADLINE_MS: '5000' })
+  assert.equal(loadConfig(out).preAuth.deadlineMs, 5000)
+})
+
+test('#205 an unset variable leaves the deadline at its default', () => {
+  assert.equal(envOverlay({}, {}).preAuth, undefined, 'the document is untouched')
+  assert.equal(loadConfig(envOverlay({}, {})).preAuth.deadlineMs, DEFAULT_DEADLINE_MS)
+})
+
+test('#205 a deadline the overlay cannot read is named and left at the default', () => {
+  const warnings = []
+  const out = envOverlay({}, { MONOPLAYER_PREAUTH_DEADLINE_MS: '0' }, w => warnings.push(w))
+  assert.equal(out.preAuth, undefined)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /MONOPLAYER_PREAUTH_DEADLINE_MS/)
+})
+
+test('#205 loadConfig refuses a deadline that cannot bound anything', () => {
+  for (const bad of [0, -2, 1.5, '8', null]) {
+    assert.throws(() => loadConfig({ preAuth: { deadlineMs: bad } }),
+      /config\.preAuth\.deadlineMs/, JSON.stringify(bad))
+  }
+  assert.equal(loadConfig({ preAuth: { deadlineMs: 5000 } }).preAuth.deadlineMs, 5000)
+})
+
+test('#205 loadConfig refuses a deadline past what a timer can hold', () => {
+  // Node fires a longer delay at 1 ms, which would destroy every connection the
+  // moment it arrived. A document that sets one refuses to start instead.
+  for (const bad of [MAX_DEADLINE_MS + 1, 3_000_000_000]) {
+    assert.throws(() => loadConfig({ preAuth: { deadlineMs: bad } }),
+      /config\.preAuth\.deadlineMs/, JSON.stringify(bad))
+  }
+  assert.equal(loadConfig({ preAuth: { deadlineMs: MAX_DEADLINE_MS } }).preAuth.deadlineMs, MAX_DEADLINE_MS)
+})
+
+test('#205 a deadline past what a timer can hold is named and ignored, so a typo cannot fire it', () => {
+  const warnings = []
+  const out = envOverlay({}, { MONOPLAYER_PREAUTH_DEADLINE_MS: String(MAX_DEADLINE_MS + 1) },
+    w => warnings.push(w))
+  assert.equal(out.preAuth, undefined, 'the document is untouched')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /MONOPLAYER_PREAUTH_DEADLINE_MS/)
+  assert.match(warnings[0], new RegExp(String(MAX_DEADLINE_MS)), 'the warning names the ceiling')
+  assert.equal(loadConfig(out).preAuth.deadlineMs, DEFAULT_DEADLINE_MS)
 })
