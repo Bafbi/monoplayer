@@ -187,10 +187,12 @@ A refused socket is destroyed rather than ended. The library's `end` waits on a
 a closed connection, not a reason.
 
 A connection denied before the whitelist accepts it stays counted until its
-socket ends. The library's close timeout bounds that at 30 s, and so does the
-deadline below, whichever comes first. A denial flood can therefore hold the
-window closed for that long. A denial after the accept, such as a backend that
-is not ready, lands on a connection that has already left the window.
+socket ends, which the library's close timeout bounds at 30 s. A denial flood can
+therefore hold the window closed for that long. The deadline is disarmed at the
+denial: the denial is that connection's decision, the close timeout bounds its
+socket, and a deadline left armed would report a refused stranger as a stuck
+socket. A denial after the accept, such as a backend that is not ready, lands on
+a connection that has already left the window.
 
 The reason is the operator's: the `preAuthRefused` log line, once per saturated
 window rather than once per attempt, `front.preAuthRefused` in the heartbeat,

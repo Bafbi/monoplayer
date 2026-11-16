@@ -102,6 +102,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let deadlineFront = null
   let deadlineSocket = null
   let deadlineBot = null
+  let deadlineStranger = null
   let commandsFront = null
   let commandsBackend = null
   let commandsBase = null
@@ -2032,6 +2033,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const deadlineLogs = logs.slice(deadlineMark)
     const deadlineExpiry = deadlineLogs.filter(entry => entry.event === 'preAuthExpired')
 
+    // A stranger whose UUID is not on the list is refused, not expired: the
+    // denial is that connection's decision, so the deadline is disarmed and the
+    // expiry line stays the silent socket's alone.
+    deadlineStranger = createBot({ port: deadlinePort, username: 'Stranger' })
+    await withTimeout(deadlineStranger.ended, 10_000, 'the refused stranger ended')
+    await waitFor(() => deadlineFront.metrics.preAuthInWindow === 0, 'the slot the refusal freed')
+
     // A real attach on the same rig, and then past the deadline. The window ends
     // at the whitelist's accept, so the timer has to be disarmed there: a slow
     // login that reached the accept is never cut by a bound it already met.
@@ -2043,16 +2051,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       deadlineBot.received.ended === null &&
       deadlineBot.client?.socket?.destroyed !== true &&
       deadlineFront.metrics.allowed === 1
+    const expiryLines = logs.slice(deadlineMark).filter(entry => entry.event === 'preAuthExpired')
 
     evidence.preAuthDeadline = {
       deadlineMs,
       socketDestroyed: destroyed,
       expired: deadlineFront.metrics.preAuthExpired,
-      inWindowAfterExpiry: 0,
+      inWindowAfterExpiry: deadlineFront.metrics.preAuthInWindow,
       logLines: deadlineExpiry.map(entry => entry.fields),
       expiredAfterAccept,
       survivedPastDeadline,
       attachedAfterExpiry: deadlineFront.metrics.allowed,
+      refused: deadlineFront.metrics.denied,
+      expiryLinesTotal: expiryLines.length,
       // The rig above ran every other assertion through a front leg on the
       // default deadline, so a default that tripped on this rung would have
       // destroyed a connection here.
@@ -2060,7 +2071,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }
     check(
       'O49',
-      'a silent socket is destroyed by the pre-auth deadline, and a connection past the whitelist is never cut by it',
+      'a silent socket is destroyed by the pre-auth deadline, a refusal is counted as a refusal, and an accepted connection is never cut by it',
       destroyed === true &&
         deadlineFront.metrics.preAuthExpired === 1 &&
         deadlineFront.metrics.preAuthInWindow === 0 &&
@@ -2068,6 +2079,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         deadlineExpiry[0].fields?.reason === 'preauth_deadline' &&
         deadlineExpiry[0].fields?.deadlineMs === deadlineMs &&
         expiredAfterAccept === 1 &&
+        deadlineFront.metrics.denied === 1 &&
+        expiryLines.length === 1 &&
         survivedPastDeadline === true &&
         deadlineFront.metrics.allowed === 1 &&
         front.metrics.preAuthExpired === 0,
@@ -2080,7 +2093,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot]) {
+    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
