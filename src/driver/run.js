@@ -62,8 +62,8 @@ Options:
                      reaches it (default 127.0.0.1:25565, the dev-lane tunnel).
   --proxied HOST:PORT The proxy front the second parity run joins, as the client
                      reaches it (default 127.0.0.1:25566). Both parity endpoints
-                     are refused when they name the live Excalia fleet or the live
-                     deployment in front of it.
+                     are refused when they name the live Excalia fleet, the live
+                     deployment in front of it, or a playit.gg tunnel to it.
   --report PATH      Where the parity or skin report goes
                      (default .reports/driver-parity-report.json, or
                      .reports/skin-report.json for --lane skin).
