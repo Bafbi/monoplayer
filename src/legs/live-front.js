@@ -366,6 +366,20 @@ function createOfflineAttachCheck ({ whitelist }) {
   }
 }
 
+// #200: the status answer, written by the leg and never inherited from
+// minecraft-protocol, so an upgrade cannot change what a stranger reads. The
+// decision behind the empty fields is docs/adr/the-status-ping-says-only-the-
+// server-is-up.md.
+//
+// Pure: takes the library's own answer and returns the reply that replaces it.
+export function statusPingAnswer (libraryResponse) {
+  return {
+    version: { name: '', protocol: libraryResponse?.version?.protocol },
+    players: { max: 0, online: 0 },
+    description: { text: '' }
+  }
+}
+
 // Shared body. The constructors below own the mode-specific pieces (check,
 // store, loopback checks); this body never decides the mode itself.
 function createFrontLeg ({
@@ -473,6 +487,13 @@ function createFrontLeg ({
         port,
         version,
         'online-mode': onlineMode,
+        // #200: nothing the status answer says comes from a library default.
+        // `beforePing` replaces the modern answer whole. The pre-1.7 legacy
+        // ping is answered from `motd` and `maxPlayers`, and the login
+        // `server_data` from `motd`; none of the three has a hook.
+        motd: '',
+        maxPlayers: 0,
+        beforePing: statusPingAnswer,
         keepAlive: true, // the library answers per-connection keep-alives for the client
         hideErrors: true, // errors surface through our own server/client error log lines
         versionChecking: false,
