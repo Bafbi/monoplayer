@@ -24,7 +24,10 @@
 // effect of the decision: the closed socket, the timer, the counted refusal, and
 // the one log line per saturated window, and the line for every expiry.
 
-export const PREAUTH_REFUSAL = Object.freeze({
+// The reason a connection left the front leg's hands without becoming an attach.
+// Both are closes the leg performs, and each is named for the rule that decided
+// it, so an operator reads the log and knows which limit fired.
+export const PREAUTH_CLOSE_REASON = Object.freeze({
   CONNECTION_CAP: 'preauth_connection_cap',
   DEADLINE: 'preauth_deadline'
 })
@@ -86,7 +89,7 @@ export function createPreAuthWindow ({
       logged = true
       return {
         admitted: false,
-        reason: PREAUTH_REFUSAL.CONNECTION_CAP,
+        reason: PREAUTH_CLOSE_REASON.CONNECTION_CAP,
         inWindow,
         maxConnections,
         refused,
@@ -118,13 +121,16 @@ export function createPreAuthWindow ({
   // staggered silent sockets in the window never lets it empty.
   function expire () {
     expired++
-    return { reason: PREAUTH_REFUSAL.DEADLINE, expired }
+    return { reason: PREAUTH_CLOSE_REASON.DEADLINE, expired }
   }
 
   return {
     admit,
     release,
     expire,
-    stats: () => ({ inWindow, maxConnections, refused })
+    // The effective numbers, including the deadline and the expiry count, so a
+    // caller reads the policy's value instead of keeping a copy that can drift
+    // from it.
+    stats: () => ({ inWindow, maxConnections, deadlineMs, refused, expired })
   }
 }
