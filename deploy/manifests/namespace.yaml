@@ -4,7 +4,7 @@
 # Service, and the playit tunnel agent that publishes the front outside the
 # tailnet (#202). The public Minecraft backend stays at play.excalia.fr; the
 # player reaches this proxy over the tailnet at glowsquidye.tail41e568.ts.net, or
-# from anywhere by the name playit assigns.
+# from outside it through the playit tunnel in playit-agent.yaml.
 
 apiVersion: v1
 kind: Namespace

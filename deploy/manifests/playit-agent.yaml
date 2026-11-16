@@ -24,8 +24,9 @@
 # authorship so Argo does not prune it. docs/public-access.md covers the
 # two-credential trap that secret hides behind.
 #
-# Image: pinned by digest. `crane digest ghcr.io/playit-cloud/playit-agent:1.0`
-# prints the index digest below; its linux/amd64 manifest is
+# Image: pinned by digest. The image line below pins the index digest, which is
+# what `crane digest ghcr.io/playit-cloud/playit-agent:1.0` prints; the linux/amd64
+# manifest under it is
 # sha256:33a05b36b16c2b036ab4fef951d9a7c029e91509257fb0e9fbcea2566d7883c0.
 # The tag is not referenced, so a re-tag upstream cannot move this pod.
 #
