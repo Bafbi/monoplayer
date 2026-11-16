@@ -30,7 +30,7 @@ The default gate runs the bottom three rungs of the testing ladder:
 
 ```bash
 mise run check             # lint + node:test + offline loopback
-mise run test              # unit tests only (no sockets, no auth)
+mise run test              # unit tests only (loopback sockets, no auth)
 mise run loopback          # product offline loopback rung (real legs, fake backend)
 mise run spike             # frozen protocol spike (real sockets, offline protocol)
 mise run spike:report      # full spike scenario, writes testdata/spike-report.json
