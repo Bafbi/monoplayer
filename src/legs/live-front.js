@@ -13,7 +13,9 @@
 //      accepted until the whitelist accepts its resolved UUID. Over the cap the
 //      socket is closed here, before any of the steps below: no login review, no
 //      interceptor, no attach slot. An accepted, authenticated session has left
-//      the window, so the cap can never refuse one.
+//      the window, so the cap can never refuse one. #205: the same window has a
+//      deadline. A connection still in it when its timer fires is destroyed, so
+//      a socket that never speaks cannot hold a slot until its peer closes.
 //   1. library login. Online: encryption + real sessionserver hasJoined (real
 //      client.uuid / client.username / client.profile are set by the library
 //      BEFORE our synchronous beforeLogin hook runs). Offline: the library
@@ -66,7 +68,7 @@ import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
-import { createPreAuthWindow } from '../core/preauth-window.js'
+import { createPreAuthWindow, DEFAULT_DEADLINE_MS } from '../core/preauth-window.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // The configuration prefix the cache holds is bounded at 1024 frames, so a
@@ -430,31 +432,89 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, preAuthExpired: 0 }
   const clients = new Map() // Client -> { interceptor }
 
-  // #201: the total connection cap. The window is the one the spec bounds: from
-  // the accepted socket to the attach whitelist's accept. The count is the
-  // leg's, because the leg is the only place a socket exists.
-  const preAuthWindow = createPreAuthWindow({ maxConnections: preAuthOptions.maxConnections })
+  // #201: the total connection cap, and #205: the deadline on the same window.
+  // The window is the one the spec bounds: from the accepted socket to the attach
+  // whitelist's accept. The count and the timer are the leg's, because the leg is
+  // the only place a socket exists.
+  const preAuthWindow = createPreAuthWindow({
+    maxConnections: preAuthOptions.maxConnections,
+    deadlineMs: preAuthOptions.deadlineMs
+  })
   const preAuthOpen = new WeakSet()
+  const preAuthDeadlineMs = preAuthOptions.deadlineMs ?? DEFAULT_DEADLINE_MS
+  // One timer per admitted connection. minecraft-protocol sets no idle timeout on
+  // its client and closeTimeout starts only after end(), so this is the only bound
+  // a socket that never speaks ever meets. Every entry leaves the map either in
+  // closePreAuthWindow or in the timer itself, so it cannot outgrow the window.
+  const preAuthTimers = new Map()
 
   // Leave the window, at most once per connection. Two ways out: the whitelist
   // accepted it, or its socket ended. A denial is not a way out, because a denied
   // connection never reached the accept the window is defined by. Its socket
   // stays open until the library's close timeout, and counting it keeps the cap
-  // honest about the sockets the process is holding.
+  // honest about the sockets the process is holding. #205: leaving the window
+  // also disarms the deadline, so a slow but real login that reached the
+  // whitelist is never cut after its window ended.
   function closePreAuthWindow (client) {
+    clearPreAuthDeadline(client)
     if (!preAuthOpen.delete(client)) return
     preAuthWindow.release()
   }
 
+  function armPreAuthDeadline (client) {
+    const timer = setTimeout(() => {
+      preAuthTimers.delete(client)
+      expirePreAuthWindow(client)
+    }, preAuthDeadlineMs)
+    // A pending deadline must never hold the process open: a shutdown with a
+    // silent socket in the window would otherwise wait for the timer.
+    timer.unref?.()
+    preAuthTimers.set(client, timer)
+  }
+
+  function clearPreAuthDeadline (client) {
+    const timer = preAuthTimers.get(client)
+    if (timer === undefined) return
+    preAuthTimers.delete(client)
+    clearTimeout(timer)
+  }
+
+  // #205: the deadline fired. The connection did not reach the whitelist's accept
+  // in the time a real login needs, so it is destroyed rather than ended: ending
+  // it waits on the library's 30 s close timeout, which would hand a silent peer
+  // another deadline's worth of slot. Destroying the socket makes the library emit
+  // 'error' on the client, and this connection is on its way out, so its error
+  // listener is replaced with one that knows nothing is coming, exactly as the
+  // over-cap refusal does. Its 'end' listener still runs and releases the slot.
+  function expirePreAuthWindow (client) {
+    const expiry = preAuthWindow.expire()
+    metrics.preAuthExpired++
+    if (expiry.shouldLog) {
+      log('preAuthExpired', {
+        reason: expiry.reason,
+        deadlineMs: preAuthDeadlineMs,
+        inWindow: expiry.inWindow,
+        expired: expiry.expired
+      })
+    }
+    client.removeAllListeners('error')
+    client.on('error', () => {})
+    try { client.socket?.destroy() } catch { /* already gone */ }
+    closePreAuthWindow(client)
+  }
+
   // A connection arrived. Over the cap it is refused with its own reason, and
-  // the refusal is counted every time but logged once per saturated window.
+  // the refusal is counted every time but logged once per saturated window. An
+  // admitted connection starts its deadline here, so the slot and the timer are
+  // armed and disarmed in the same two places.
   function admitPreAuthWindow (client) {
     const admission = preAuthWindow.admit()
     if (admission.admitted) {
       preAuthOpen.add(client)
+      armPreAuthDeadline(client)
       return admission
     }
     metrics.preAuthRefused++
@@ -1020,6 +1080,8 @@ function createFrontLeg ({
       if (closePromise) return closePromise
       closePromise = new Promise(resolve => {
         const current = server
+        for (const timer of preAuthTimers.values()) clearTimeout(timer)
+        preAuthTimers.clear()
         if (!current) { resolve(); return }
         for (const client of Object.values(current.clients ?? {})) {
           try { client.socket?.destroy() } catch { /* already gone */ }

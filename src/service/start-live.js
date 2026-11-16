@@ -15,6 +15,10 @@
 //   MONOPLAYER_PREAUTH_MAX_CONNECTIONS                  total concurrent
 //                                                       connections in the pre-auth
 //                                                       window (default 16, #201)
+//   MONOPLAYER_PREAUTH_DEADLINE_MS                      how long one connection may
+//                                                       stay in that window before
+//                                                       its socket is destroyed
+//                                                       (default 30000, #205)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
@@ -162,6 +166,11 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // cap when it does not.
   const preAuthMax = cap(env.MONOPLAYER_PREAUTH_MAX_CONNECTIONS, 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', 1)
   if (preAuthMax !== undefined) out.preAuth = { ...doc.preAuth, maxConnections: preAuthMax }
+  // #205: the deadline on the same window, read the same way. A silent socket
+  // that never leaves the window is what closes it against every real join, so
+  // the bound is a validated number and never an off switch.
+  const preAuthDeadline = cap(env.MONOPLAYER_PREAUTH_DEADLINE_MS, 'MONOPLAYER_PREAUTH_DEADLINE_MS', 1)
+  if (preAuthDeadline !== undefined) out.preAuth = { ...(out.preAuth ?? doc.preAuth), deadlineMs: preAuthDeadline }
 
   // #96: the packet journal's directory and its retention budget. A rotation
   // size alone deletes nothing, so the directory has a byte budget and an age
@@ -696,6 +705,7 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
   let stopping = false
   let lastRejected = front.wireStats.rejected
   let lastPreAuthRefused = front.metrics.preAuthRefused
+  let lastPreAuthExpired = front.metrics.preAuthExpired
 
   // Heartbeat gauges: the same values the JSONL heartbeat logs, as OTLP gauges.
   function emitGauges () {
@@ -720,6 +730,15 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
       telemetry.metric('monoplayer.preauth.refused', preAuthRefused - lastPreAuthRefused,
         { reason: PREAUTH_REFUSAL.CONNECTION_CAP })
       lastPreAuthRefused = preAuthRefused
+    }
+    // #205: a connection the deadline destroyed. It was admitted, so this is not
+    // a full window: a socket sat in it and never left. Kept apart from the
+    // refusal sum because the two ask different questions of an operator.
+    const preAuthExpired = front.metrics.preAuthExpired
+    if (preAuthExpired > lastPreAuthExpired) {
+      telemetry.metric('monoplayer.preauth.expired', preAuthExpired - lastPreAuthExpired,
+        { reason: PREAUTH_REFUSAL.DEADLINE })
+      lastPreAuthExpired = preAuthExpired
     }
   }
 

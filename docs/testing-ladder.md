@@ -365,6 +365,18 @@ first dial and its target warms in five seconds.
   The main rig's own front leg runs on the default cap, so the check also
   states that the default refused nothing on this rung (`defaultCapRefused`
   0).
+- `O49` the pre-auth window's deadline takes a silent socket's slot back
+  (#205). The cap bounds how many sockets sit in the window and nothing bounded
+  how long one stayed, so a stranger could hold the window closed by doing
+  nothing. The rig is O48's with a deadline of 1000 ms instead of a cap of one.
+  A socket that says nothing is destroyed by the leg, the slot returns to 0, the
+  leg counts one expiry (`preAuthExpired` 1), and it logs exactly one
+  `preAuthExpired` line with reason `preauth_deadline` and the deadline in it.
+  A whitelisted client then attaches on the same rig and stays connected past the
+  deadline: the window ended at the whitelist's accept, so the timer was disarmed
+  there and a slow but real login is never cut by a bound it already met
+  (`survivedPastDeadline` true, `expiredAfterAccept` 1). The main rig's front
+  leg runs on the default deadline and expires nothing (`defaultExpired` 0).
 
 
 ## The client parity rung
