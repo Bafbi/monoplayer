@@ -13,8 +13,8 @@ The decision behind it is
 
 ## Before you start
 
-Four checks, each with a cheap test. The first three are true before you deploy;
-the fourth runs once the tunnel pod exists.
+Four checks, each with a cheap test. The first three are true before you deploy.
+The fourth runs once the tunnel pod exists.
 
 1. **The front carries the pre-auth cap (#201).** It is on by default at 16, so
    the check is that nothing has turned it off: `deploy/manifests/deployment.yaml`
@@ -57,15 +57,16 @@ playit hands out two credentials that read alike in a hurry.
 | **Agent secret** | the dashboard, after the agent is linked | stored in the Secret `playit-agent` under `SECRET_KEY` | long-lived, until revoked |
 
 The order is **link the agent first, then take the secret**. The first link
-attempt on this lane stored a setup code as if it were the agent secret, and the
-mistake is silent: both are strings, and the agent's only symptom is an
-authentication failure that says nothing about which string it was given.
+attempt on this lane stored a setup code as if it were the agent secret. The
+mistake is silent, because both are strings. The agent's only symptom is an
+authentication failure that says nothing about which string it was given, so
+the order is the check.
 
 ## Step 1 — link the agent
 
 Skip this step if `kubectl -n monoplayer get secret playit-agent` already holds a
-working secret. The test is step 4, below: a working secret makes the agent log
-`playit connected` with an `agent_id`.
+working secret. The test is the agent's own connect line: a working secret makes
+it log `playit connected` with an `agent_id`, which step 4 shows.
 
 1. In the dashboard, add an agent and copy its **Setup Code**.
 2. Run the agent once with the setup code as its secret. It needs no route to
@@ -81,6 +82,10 @@ working secret. The test is step 4, below: a working secret makes the agent log
    `SECRET_KEY` holds.
 
 ## Step 2 — store the secret in the cluster
+
+Run this when the Secret does not exist, or when the agent's connect line shows
+an authentication failure. A Secret whose value already links needs nothing
+here.
 
 Paste the secret into a shell variable, not into a file, and apply it. The
 `create … | kubectl apply` form replaces the value when the Secret already
@@ -113,7 +118,7 @@ was.
 ## Step 3 — create the tunnel
 
 In the dashboard, add a tunnel to that agent. Pick the **Minecraft Java** preset:
-it is on the free tier and it sets the ports itself. Then set these fields, and
+it is on the free tier and it sets the ports itself. Set these fields. Change
 `local_ip` first, because the preset carries the docker example's default:
 
 | Field | Value |
@@ -219,9 +224,13 @@ the Deployment, and the tunnel is gone until someone puts the line back:
 #   - playit-agent.yaml        <- delete this line, then merge to main
 ```
 
+Revoke the tunnel in the playit dashboard too. The free tier allocates four ports
+and this lane spends one, and a tunnel left behind holds its port against an
+agent that no longer runs.
+
 The Secret stays in the cluster through a rollback. It is outside Git and outside
 Argo's ownership, so a redeploy picks it up without a new link. Delete it only
-when the agent is revoked in the dashboard:
+when the agent is revoked:
 
 ```bash
 kubectl -n monoplayer delete secret playit-agent

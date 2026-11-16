@@ -105,7 +105,9 @@ export const PARITY_LIMITATIONS = Object.freeze([
 //                     allocated at link time and no file here names it, so the
 //                     rule is the provider's domain: any name under playit.gg.
 //                     A paid tunnel can carry a custom domain, which no suffix
-//                     can catch; AGENTS.md's rule covers that one.
+//                     can catch; AGENTS.md's rule covers that one. This refuses
+//                     a tunnel on any lane, so a rung that legitimately needs
+//                     one on playit would have to narrow the rule first.
 //
 // The rule is restated here instead of imported: src/ladder/client-parity.js
 // pulls the whole service graph in at import time, and this module's tests are
