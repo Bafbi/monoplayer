@@ -221,6 +221,14 @@ Common:
   accept. It is on by default, so exposing the port is not a switch to
   remember. A value below `1` is named and ignored here, and a config document
   that sets one below `1` refuses to start.
+- `MONOPLAYER_PREAUTH_DEADLINE_MS` (default `30000`): how long one connection
+  may stay in that window. A connection still in it when the deadline fires is
+  destroyed, counted, and logged with reason `preauth_deadline`. It is on by
+  default for the same reason the cap is: a socket that never speaks otherwise
+  holds its slot until its peer closes or the pod restarts. A value below `1`, or
+  above `2147483647` (the largest delay a timer holds; Node fires a longer one at
+  1 ms), is named and ignored here, and a config document that sets one refuses
+  to start.
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
 - `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT` (both default `25565`)
 - `MONOPLAYER_RECONNECT_ATTEMPTS` (`0` = unlimited; unset keeps a config
@@ -255,12 +263,14 @@ See `docs/telemetry.md` for the signals and the journal layout.
   a member of the Service (its `app.kubernetes.io/name` is `playit-agent`), and
   deleting it returns the lane to tailnet-only with no change to the proxy
   (#202).
-- **The front bounds its pre-auth window.** A connection over
-  `preAuth.maxConnections` is closed before the login is reviewed, with reason
-  `preauth_connection_cap`, and logged once per saturated window rather than
-  once per attempt. The count is a connection total rather than a per-source
-  figure, so it still holds when a tunnel presents its own address instead of
-  the client's (#199, #201).
+- **The front bounds its pre-auth window, in count and in time.** A connection
+  over `preAuth.maxConnections` is closed before the login is reviewed, with
+  reason `preauth_connection_cap`, and logged once per saturated window rather
+  than once per attempt. The count is a connection total rather than a per-source
+  figure, so it still holds when a tunnel presents its own address instead of the
+  client's (#199, #201). A connection still in the window after
+  `preAuth.deadlineMs` is destroyed with reason `preauth_deadline`, so a set of
+  silent sockets cannot hold the window closed (#205).
 - **The front never attaches without a warm backend.** While the puppet has no
   session, a login is denied with `backend_not_ready` instead of being handed
   an incomplete configuration.

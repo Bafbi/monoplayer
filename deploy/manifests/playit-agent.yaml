@@ -11,8 +11,11 @@
 #
 # What bounds it: `preAuth.maxConnections` (#201), on by default at 16, is a
 # total rather than a per-source count, so it holds when the tunnel presents
-# its own address instead of the client's. That cap landed before this file
-# existed, and the record of the order is docs/public-access.md.
+# its own address instead of the client's. `preAuth.deadlineMs` (#205), on by
+# default at 30 s, bounds how long one connection may hold a slot in that
+# window, so a stranger cannot close the door with sockets that never speak.
+# Both landed before this file could be created, and the record of the order is
+# docs/public-access.md.
 #
 # The tunnel's local target is the front's in-namespace DNS name, set in the
 # playit dashboard (tunnel field `local_ip`, "IP or hostname"): the docker

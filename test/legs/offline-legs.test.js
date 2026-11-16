@@ -421,3 +421,32 @@ test('#201 the front legs carry the pre-auth cap, and refuse a cap that bounds n
     )
   }
 })
+
+// #205: the deadline on the same window. The leg owns the timer, so a leg built
+// without a preAuth section still bounds a silent socket, and a deadline that
+// cannot bound anything fails at construction rather than at the first stranger.
+test('#205 the front legs carry the pre-auth deadline, and refuse one that bounds nothing', () => {
+  const leg = createOfflineFrontLeg({ offlineWhitelist: [ATTACH_UUID], getSnapshotConfig: snapshot, wireMode: 'off' })
+  assert.equal(leg.metrics.preAuthExpired, 0, 'a leg that never listened expired nothing')
+
+  const tight = createOfflineFrontLeg({
+    offlineWhitelist: [ATTACH_UUID],
+    getSnapshotConfig: snapshot,
+    wireMode: 'off',
+    preAuth: { deadlineMs: 1000 }
+  })
+  assert.equal(tight.metrics.preAuthExpired, 0)
+
+  for (const bad of [0, -1, '1000']) {
+    assert.throws(
+      () => createOfflineFrontLeg({
+        offlineWhitelist: [ATTACH_UUID],
+        getSnapshotConfig: snapshot,
+        wireMode: 'off',
+        preAuth: { deadlineMs: bad }
+      }),
+      /deadlineMs/,
+      JSON.stringify(bad)
+    )
+  }
+})
