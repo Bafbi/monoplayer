@@ -432,7 +432,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, preAuthExpired: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   // #201: the total connection cap, and #205: the deadline on the same window.
@@ -484,16 +484,23 @@ function createFrontLeg ({
     clearTimeout(timer)
   }
 
+  // Drop a socket this leg is done with. The library emits 'error' on a client
+  // whose socket dies and an unlistened 'error' ends the process, so every
+  // listener is replaced with one that knows nothing is coming: a connection on
+  // its way out has nothing left to say. Destroyed rather than ended, because
+  // ending waits on the library's 30 s close timeout and would hold the socket
+  // for another 30 s.
+  function destroyQuietly (client) {
+    client.removeAllListeners('error')
+    client.on('error', () => {})
+    try { client.socket?.destroy() } catch { /* already gone */ }
+  }
+
   // #205: the deadline fired. The connection did not reach the whitelist's accept
-  // in the time a real login needs, so it is destroyed rather than ended: ending
-  // it waits on the library's 30 s close timeout, which would hand a silent peer
-  // another deadline's worth of slot. Destroying the socket makes the library emit
-  // 'error' on the client, and this connection is on its way out, so its error
-  // listener is replaced with one that knows nothing is coming, exactly as the
-  // over-cap refusal does. Its 'end' listener still runs and releases the slot.
+  // in the time a real login needs, so its socket goes. Its 'end' listener still
+  // runs and releases the slot.
   function expirePreAuthWindow (client) {
     const expiry = preAuthWindow.expire()
-    metrics.preAuthExpired = expiry.expired
     // One line per expiry. The window admits at most maxConnections connections
     // at once, so a deadline period cannot write more lines than that, and a
     // sustained attack is exactly the case where a reader needs to see them.
@@ -502,9 +509,7 @@ function createFrontLeg ({
       deadlineMs: preAuthDeadlineMs,
       expired: expiry.expired
     })
-    client.removeAllListeners('error')
-    client.on('error', () => {})
-    try { client.socket?.destroy() } catch { /* already gone */ }
+    destroyQuietly(client)
     closePreAuthWindow(client)
   }
 
@@ -581,14 +586,10 @@ function createFrontLeg ({
         // login review below, so nothing of this leg is allocated for it: no
         // interceptor, no attach slot, no serverbound pipeline. The socket is
         // destroyed rather than ended, because ending it waits on the library's
-        // 30 s close timeout and a flood would sit in that wait. The library
-        // emits 'error' on a client whose socket dies, and an unlistened 'error'
-        // would end the process, so the refused client gets a listener that
-        // knows nothing is coming.
+        // 30 s close timeout and a flood would sit in that wait.
         const admission = admitPreAuthWindow(client)
         if (!admission.admitted) {
-          client.on('error', () => {})
-          try { client.socket?.destroy() } catch { /* already gone */ }
+          destroyQuietly(client)
           return
         }
         // A socket that ends inside the window leaves it here, which covers every
@@ -712,7 +713,7 @@ function createFrontLeg ({
       // The library's end failed, so its close timeout was never armed and no
       // close would ever take this connection out of the window. The socket has
       // to go.
-      try { client.socket?.destroy() } catch { /* already gone */ }
+      destroyQuietly(client)
     }
   }
 
@@ -1066,7 +1067,12 @@ function createFrontLeg ({
     },
     get listening () { return Boolean(server) },
     get attached () { return attached ?? null },
-    get metrics () { return { ...metrics, preAuthInWindow: preAuthWindow.stats().inWindow } },
+    // The window's own numbers are read live, so the leg keeps no copy of a count
+    // the policy already holds.
+    get metrics () {
+      const window = preAuthWindow.stats()
+      return { ...metrics, preAuthInWindow: window.inWindow, preAuthExpired: window.expired }
+    },
     get checkStoreFile () { return store?.file ?? null },
     get port () { return actualPort() },
     get wireStats () {

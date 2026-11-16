@@ -23,12 +23,12 @@ person and per device, and this lane's answer is a name a guest pastes into a
 client they already have.
 
 The limiter covers the pre-auth window only: connections opened but not yet past
-the attach check. `preAuth.maxConnections` bounds how many of them exist at
-once, and `preAuth.deadlineMs` bounds how long one may stay. Both count in total
-rather than per source, so they hold when the tunnel presents its own address
-instead of the client's (#201, #205, #199). Both bounds landed before this tunnel
-opened, and that order is the reason the tunnel is safe to open at all: the cap
-alone leaves a stranger able to close the window with sockets that never speak.
+the attach check. `preAuth.maxConnections` bounds how many of them exist at once,
+and it counts in total rather than per source, so it holds when the tunnel
+presents its own address instead of the client's (#201, #199). `preAuth.deadlineMs`
+bounds how long one of them may stay, so a stranger cannot close the window by
+opening silent sockets and leaving them (#205). Both bounds landed before this
+tunnel opened, and that order is the reason the tunnel is safe to open at all.
 
 ## Considered options
 

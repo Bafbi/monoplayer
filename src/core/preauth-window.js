@@ -129,8 +129,10 @@ export function createPreAuthWindow ({
     release,
     expire,
     // The effective numbers, including the deadline and the expiry count, so a
-    // caller reads the policy's value instead of keeping a copy that can drift
-    // from it.
+    // caller reads the policy's value instead of resolving the default itself.
+    // Pairing an expiry with a release is the caller's: this module has no
+    // connection identity, and the leg's WeakSet is what makes the pairing
+    // exactly once per socket.
     stats: () => ({ inWindow, maxConnections, deadlineMs, refused, expired })
   }
 }
