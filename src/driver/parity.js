@@ -99,6 +99,15 @@ export const PARITY_LIMITATIONS = Object.freeze([
 //                     this Tailscale hostname, and joining it lands the client
 //                     on the live fleet. Refusing the fleet and not its front
 //                     would only hide the join one hop away.
+//   a public tunnel   deploy/manifests/playit-agent.yaml carries a raw TCP port
+//                     from playit.gg's edge to that same front (#202), so its
+//                     address is a third route to the live fleet. The address is
+//                     allocated at link time and no file here names it, so the
+//                     rule is the provider's domain: any name under playit.gg.
+//                     A paid tunnel can carry a custom domain, which no suffix
+//                     can catch; AGENTS.md's rule covers that one. This refuses
+//                     a tunnel on any lane, so a rung that legitimately needs
+//                     one on playit would have to narrow the rule first.
 //
 // The rule is restated here instead of imported: src/ladder/client-parity.js
 // pulls the whole service graph in at import time, and this module's tests are
@@ -106,6 +115,7 @@ export const PARITY_LIMITATIONS = Object.freeze([
 // files, so the copies cannot drift apart silently.
 export const LIVE_FLEET_HOST = 'excalia.fr'
 export const LIVE_FRONT_HOST = 'glowsquidye.tail41e568.ts.net'
+export const LIVE_TUNNEL_DOMAIN = 'playit.gg'
 
 function refused (host) {
   const name = String(host ?? '').trim().toLowerCase()
@@ -116,6 +126,10 @@ function refused (host) {
   if (name === LIVE_FRONT_HOST || name.endsWith('.' + LIVE_FRONT_HOST)) {
     return host + ' is the live deployment\'s front (deploy/manifests/service.yaml). Joining it lands the ' +
       'client on the live Excalia fleet, which no automated join may touch.'
+  }
+  if (name === LIVE_TUNNEL_DOMAIN || name.endsWith('.' + LIVE_TUNNEL_DOMAIN)) {
+    return host + ' is a public tunnel (deploy/manifests/playit-agent.yaml). Its far end is the live ' +
+      'deployment, so joining it lands the client on the live Excalia fleet, which no automated join may touch.'
   }
   return null
 }
