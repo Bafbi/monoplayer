@@ -7,7 +7,7 @@ The refresh token is the password, and Microsoft rotates the chain on every refr
 - **Pool several accounts and serve several tenants.** Rejected for the first slice: it changes the custody model, adds quotas and billing, and answers a question nobody has asked yet.
 - **Keep tokens in a cluster Secret.** Rejected: anything with read access to the namespace can read them, there is no atomic writer lock across pods, and rotation would need a second writer.
 - **Run replicas behind a load balancer.** Rejected: two writers, one dead chain. The custody model forbids it.
-- **Expose the front on a public address.** Rejected first, and reopened once the bound existed: the reason was that the attach check was the only thing standing in front of a real account, and #201 put a total pre-auth cap in front of the attach check. Public access now goes through one tunnel, recorded in [public-access-goes-through-a-tcp-tunnel.md](public-access-goes-through-a-tcp-tunnel.md). A bare forwarded port stays rejected: it is the same exposure without the cap, without a record in the tree, and without a rollback that removes one object.
+- **Expose the front on a public address.** Rejected as a bare port: that is exposure with no bound in front of the attach check, no record in the tree, and no rollback that removes one object. Public access goes through one tunnel instead, bounded by the total pre-auth cap #201 added, and recorded in [public-access-goes-through-a-tcp-tunnel.md](public-access-goes-through-a-tcp-tunnel.md).
 - **Restore custody from a backup when it breaks.** Rejected: a restored refresh token was already rotated by the live writer, so the restore is dead on arrival. Re-bootstrapping the account is the recovery path.
 
 ## Consequences
