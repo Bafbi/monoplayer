@@ -115,8 +115,12 @@ The single place for one attaching player. A second connection is denied while t
 _Avoid_: client slot, seat
 
 **Pre-auth window**:
-The stretch of a front-leg connection from the accepted socket to the moment the attach whitelist accepts the resolved UUID. A connection past that point is an attach, and no pre-auth limit looks at it again. `preAuth.maxConnections` bounds how many connections sit in the window at once. A connection denied before the whitelist accepts it stays counted until its socket ends, because a denial is not the accept the window is defined by.
+The stretch of a front-leg connection from the accepted socket to the moment the attach whitelist accepts the resolved UUID. A connection past that point is an attach, and no pre-auth limit looks at it again. `preAuth.maxConnections` bounds how many connections sit in the window at once, and `preAuth.deadlineMs` bounds how long one may stay. A connection denied before the whitelist accepts it stays counted until its socket ends, because a denial is not the accept the window is defined by.
 _Avoid_: auth window, login window, flood window, connection queue
+
+**Deadline episode**:
+A stretch of pre-auth deadline closes with no break in them. Its first close is logged and the rest are only counted, so a flood of silent sockets writes one line. The episode ends when the window empties.
+_Avoid_: timeout burst, expiry window
 
 **Detach**:
 The attaching player's connection ending while the backend session survives.

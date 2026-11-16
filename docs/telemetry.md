@@ -76,6 +76,7 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.skin.frames` | sum | `player` | `player_info` skin frames written to the attaching player: one per play state that is owed one, plus one whenever the puppet's property changes while attached. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
 | `monoplayer.preauth.refused` | sum | `reason` | Increase of `front.preAuthRefused`, sampled at each heartbeat: a front connection refused because the pre-auth window was full (#201). The only reason today is `preauth_connection_cap`, and the front leg's JSONL `preAuthRefused` line is the same refusal with the cap and the count in it. A leg's log does not go through the core, so this sum and that line are the two records of one decision. |
+| `monoplayer.preauth.expired` | sum | `reason` | Increase of `front.preAuthExpired`, sampled at each heartbeat: a front connection the pre-auth deadline destroyed because it had not left the window in time (#205). The only reason today is `preauth_deadline`, and the leg's `preAuthExpired` line is the same close, logged once per deadline episode rather than once per socket. It is a separate sum from `preauth.refused` because the two answer different questions: a refusal means the window was full, and an expiry means a socket sat in it and never left. |
 | `monoplayer.attached` | gauge | none | `1` while a client is attached. |
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |
 | `monoplayer.backend.logins` | gauge | none | Current backend login count. |
@@ -94,6 +95,10 @@ five an operator watches:
 `preAuthInWindow` is the window as it stands at the heartbeat: the connections
 accepted and not yet past the attach whitelist. A refused connection closes its
 socket before that, so it never shows up in the count.
+
+`front` also carries `preAuthExpired`, the connections the deadline destroyed
+(#205). It is a different number from `preAuthRefused`: a refused connection
+never entered the window, and an expired one entered it and did not leave.
 
 ## Packet journal
 

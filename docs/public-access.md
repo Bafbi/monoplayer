@@ -11,10 +11,17 @@ backend do not change.
 The decision behind it is
 [`docs/adr/public-access-goes-through-a-tcp-tunnel.md`](adr/public-access-goes-through-a-tcp-tunnel.md).
 
+**Do not create the tunnel until the front carries both pre-auth bounds: the cap
+(#201) and the deadline (#205).** They are the only limits that still hold when a
+tunnel hides the client's address. Without the deadline, one stranger opens
+`preAuth.maxConnections` connections and sends nothing. Those silent sockets
+hold the window closed, and every real join is refused — on the tailnet as well as
+through the tunnel. The public door is what makes that reachable by anyone.
+
 ## Before you start
 
-Four checks, each with a cheap test. The first three are true before you deploy.
-The fourth runs once the tunnel pod exists.
+Five checks, each with a cheap test. The first four are true before you deploy.
+The fifth runs once the tunnel pod exists.
 
 1. **The front carries the pre-auth cap (#201).** It is on by default at 16, so
    the check is that nothing has turned it off: `deploy/manifests/deployment.yaml`
@@ -31,15 +38,35 @@ The fourth runs once the tunnel pod exists.
    image: the cap is the one bound that holds when a tunnel hides the client's
    address.
 
-2. **The playit account may own a tunnel.** The agent reports the account's
+2. **The front carries the pre-auth deadline (#205).** The cap bounds how many
+   connections sit in the pre-auth window. The deadline bounds how long one
+   stays, so a silent socket cannot hold a slot. It is on by default at 30 s, so
+   the check is that nothing has turned it off:
+   `deploy/manifests/deployment.yaml` sets no `MONOPLAYER_PREAUTH_DEADLINE_MS`,
+   and the running image has the default. To see the default in the image the pod
+   actually runs:
+
+   ```bash
+   kubectl -n monoplayer exec deploy/monoplayer -- \
+     node -e "import('/app/src/core/preauth-window.js').then(m=>console.log(m.DEFAULT_DEADLINE_MS))"
+   # 30000
+   ```
+
+   **Do not create the tunnel while that prints nothing, or before #205 is in the
+   image.** A front with the cap and no deadline can be taken offline by a
+   stranger who opens connections and sends nothing: the silent sockets fill the
+   window, and the cap then refuses every real join. Check the log for the close:
+   a line with reason `preauth_deadline` means the bound is working.
+
+3. **The playit account may own a tunnel.** The agent reports the account's
    state on its connect line, and this lane's account last reported
    `account_status="email_not_verified"` with `tunnel_count=0`. Verify the
    email in the dashboard before you go looking for a tunnel that is not there.
 
-3. **The cluster Secret exists.** `kubectl -n monoplayer get secret playit-agent`
+4. **The cluster Secret exists.** `kubectl -n monoplayer get secret playit-agent`
    lists it with one key, `SECRET_KEY`. Do not print its value.
 
-4. **The tunnel's local target reaches the front.** Once `playit-agent` runs,
+5. **The tunnel's local target reaches the front.** Once `playit-agent` runs,
    ask it from inside its own pod:
 
    ```bash
@@ -66,7 +93,12 @@ the order is the check.
 
 Skip this step if `kubectl -n monoplayer get secret playit-agent` already holds a
 working secret. The test is the agent's own connect line: a working secret makes
-it log `playit connected` with an `agent_id`, which step 4 shows.
+it log `playit connected` with an `agent_id`, which "Step 4 — confirm the
+agent loaded the tunnel" shows.
+
+Run this step only after the five checks in "Before you start" pass. The
+deadline is the one that keeps a stranger from closing the door the rest of this
+runbook opens.
 
 1. In the dashboard, add an agent and copy its **Setup Code**.
 2. Run the agent once with the setup code as its secret. It needs no route to

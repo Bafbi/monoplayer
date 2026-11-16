@@ -187,18 +187,42 @@ A refused socket is destroyed rather than ended. The library's `end` waits on a
 a closed connection, not a reason.
 
 A connection denied before the whitelist accepts it stays counted until its
-socket ends, which the same 30 s timeout bounds. A denial flood can therefore
-hold the window closed for that long. A denial after the accept, such as a
-backend that is not ready, lands on a connection that has already left the
-window.
+socket ends. The library's close timeout bounds that at 30 s, and so does the
+deadline below, whichever comes first. A denial flood can therefore hold the
+window closed for that long. A denial after the accept, such as a backend that
+is not ready, lands on a connection that has already left the window.
 
 The reason is the operator's: the `preAuthRefused` log line, once per saturated
 window rather than once per attempt, `front.preAuthRefused` in the heartbeat,
 and `monoplayer.preauth.refused` in the telemetry.
 
-Nothing yet bounds how long an accepted socket may stay silent, so a set of
-silent sockets that fill the window holds it until they leave or the process
-restarts. A pre-auth deadline is the follow-up (#205), not part of this limit.
+### The pre-auth deadline (#205)
+
+The cap bounds how many connections sit in the window. Nothing bounded how long
+one stayed. `minecraft-protocol` sets no idle timeout on its client,
+`closeTimeout` starts only after `end()`, and keep-alive runs in the play state
+only, so a socket that is accepted and never speaks held its slot until its peer
+closed or the process restarted. A stranger who opened `preAuth.maxConnections`
+silent sockets closed the window by doing nothing, and the cap then refused every
+real join. The library's own login timeout does not cover this case: it arms when
+the login state starts, which needs a handshake the silent socket never sends.
+
+`preAuth.deadlineMs` (30 s by default) is the bound. A connection still in the
+window when its timer fires is destroyed, counted, and logged. Destroyed rather
+than ended, for the reason the cap destroys: ending waits on the library's 30 s
+close timeout, which would hand a silent peer another deadline's worth of slot.
+The timer is disarmed when the connection leaves the window, so a slow but real
+login that reached the whitelist is never cut by a bound it already met.
+
+The close has its own reason, `preauth_deadline`, so an operator can tell a full
+window from a stuck one. It is counted in `front.preAuthExpired`, sampled into
+`monoplayer.preauth.expired`, and logged once per deadline episode: a flood of
+silent sockets that expire together writes one line, and the count says how many
+there were. An episode ends when the window empties.
+
+A sustained flood is not ended by this. An attacker who reconnects every 30 s
+still closes the window for the moments it is full. The deadline bounds one
+socket's occupancy; the per-source limits that answer a flood arrive with #204.
 
 ### Control dialogs (#16)
 
