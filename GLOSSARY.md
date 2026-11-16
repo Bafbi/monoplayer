@@ -70,6 +70,10 @@ _Avoid_: testbed service, the front
 Monoplayer's server-side connection: the socket an attaching player joins, authenticated as that player.
 _Avoid_: front, client leg, ingress
 
+**Public route**:
+The playit.gg tunnel's address, the one way to the front from outside the tailnet: one agent Deployment that forwards a raw TCP port to the front's in-namespace DNS name, and the name playit assigns to it. It is a route, not a gate: authentication and the attach whitelist decide who stays, on either route.
+_Avoid_: public door, public address, ingress, port forward
+
 **Backend leg**:
 Monoplayer's client-side connection: the socket that holds the puppet's session on the game server, authenticated as the puppet.
 _Avoid_: backend, puppet leg, egress

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  LIVE_FLEET_HOST, LIVE_FRONT_HOST, PARITY_FIELDS, PARITY_LIMITATIONS,
+  LIVE_FLEET_HOST, LIVE_FRONT_HOST, LIVE_TUNNEL_DOMAIN, PARITY_FIELDS, PARITY_LIMITATIONS,
   compareParity, formatParityReport, observeClient, parseParityEndpoint, runParity, sameEndpoint
 } from '../../src/driver/parity.js'
 import { versionRefusal } from '../../src/driver/checks.js'
@@ -216,6 +216,16 @@ test('the live Excalia fleet and its front are never a parity target', () => {
   for (const host of [LIVE_FRONT_HOST, LIVE_FRONT_HOST.toUpperCase()]) {
     assert.throws(() => parseParityEndpoint(host + ':25565', '--proxied'), /live deployment/, host)
   }
+})
+
+test('a public tunnel name is never a parity target either', () => {
+  // The tunnel's address is allocated at link time, so no file names it and a
+  // suffix is the only rule Git can hold. It reaches the same front.
+  for (const host of ['auto.playit.gg', 'AUTO.PLAYIT.GG', LIVE_TUNNEL_DOMAIN, 'x.at.playit.gg']) {
+    assert.throws(() => parseParityEndpoint(host + ':25565', '--proxied'), /public tunnel/, host)
+  }
+  // A lookalike is not a tunnel, so the rule is the domain boundary.
+  assert.equal(parseParityEndpoint('notplayit.gg:25565', '--proxied').host, 'notplayit.gg')
 })
 
 test('the refused hosts are the ones the sources name', () => {
