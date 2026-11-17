@@ -1,0 +1,38 @@
+# The panel on the tailnet.
+#
+# The Tailscale operator turns this LoadBalancer into a proxy device named
+# `monoplayer`, the same way deploy/manifests/service.yaml publishes the front as
+# `glowsquidye`. The human opens:
+#
+#   http://monoplayer.tail41e568.ts.net:8080
+#
+# No Ingress and no public port: this Service is the only way in, and it is
+# reachable from the tailnet only. There is no playit tunnel here and there must
+# never be one: the panel writes, and the public route is the one the whole
+# repository is careful about. There is also no bearer token, by decision: the
+# WireGuard network is the transport, and the tailnet ACL is the authorization, so
+# whoever may reach this device may read the page.
+#
+# Plain HTTP on the tailnet port: the operator proxies the Service's port, and the
+# transport is already encrypted end to end between the two devices.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: panel
+  namespace: monoplayer-panel
+  labels:
+    app.kubernetes.io/name: panel
+    app.kubernetes.io/part-of: monoplayer
+  annotations:
+    tailscale.com/hostname: monoplayer
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:
+    app.kubernetes.io/name: panel
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

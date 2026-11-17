@@ -1,0 +1,102 @@
+# The panel: one replica, the same image as the proxy, a second entrypoint.
+#
+# The image line is the moving `main` tag, which is what the ticket asks for and
+# what every manifest on main carries: .github/workflows/image.yaml appends its
+# digest pin to deploy/manifests/kustomization.yaml only, so on the `deploy`
+# branch the panel runs `main` while the proxy runs the pinned digest. docs/panel.md
+# records that skew as the price of one image and one build.
+#
+# The container is the puppet's hardening, with one difference: no /tmp volume.
+# Nothing in the panel writes to disk — the registry is mounted read-only and the
+# page is rendered in memory — so a scratch volume would be a promise that
+# something writes there.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: panel
+  namespace: monoplayer-panel
+  labels:
+    app.kubernetes.io/name: panel
+    app.kubernetes.io/part-of: monoplayer
+spec:
+  # Stateless: no custody, no writer lock, no reason for Recreate. A rolling
+  # update keeps the tailnet name answering while the new pod starts.
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: panel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: panel
+        app.kubernetes.io/part-of: monoplayer
+    spec:
+      serviceAccountName: panel
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 15
+      # The GHCR package is private, and the pull secret the proxy uses lives in
+      # the proxy's namespace: a Secret is namespaced, so this namespace needs its
+      # own copy. docs/panel.md carries the command.
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: panel
+          image: ghcr.io/bafbi/monoplayer:main
+          imagePullPolicy: IfNotPresent
+          command: ["node", "src/panel/start.js"]
+          args:
+            - --registry
+            - /etc/panel/registry/puppets.json
+            - --port
+            - "8080"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # /healthz reads no registry: a document the panel could not parse fails
+          # the start, and the probe keeps answering for a pod that is up.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: registry
+              mountPath: /etc/panel/registry
+              readOnly: true
+      volumes:
+        # One key, one file: the panel reads /etc/panel/registry/puppets.json, and
+        # the kubelet rewrites it in place when the ConfigMap changes, which is why
+        # the routes read the file on every request.
+        - name: registry
+          configMap:
+            name: panel-registry

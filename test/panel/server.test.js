@@ -1,0 +1,134 @@
+// The panel's surface, asserted on the wire: a real http server on a loopback
+// port, and the status, the content type, and the bytes a browser receives. A
+// handler called directly would pass while the server sent the wrong status or
+// no content type, and this is the whole product today.
+//
+// /healthz is the interesting one. It is the readiness and liveness probe, so it
+// must answer while the registry is broken: a panel that fails its probe when the
+// registry cannot be read is a pod that restarts forever instead of showing the
+// operator what is wrong. The registry here throws, and the route still answers.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import http from 'node:http'
+
+import { createPanelHandler, renderPage } from '../../src/panel/server.js'
+
+const puppet = {
+  name: 'glowsquidye',
+  namespace: 'monoplayer',
+  deployment: 'monoplayer',
+  controlConfigMap: 'monoplayer-control',
+  frontHostname: 'glowsquidye.tail41e568.ts.net',
+  backend: 'play2.excalia.fr:25565'
+}
+
+const registry = () => ({ version: 1, puppets: [puppet] })
+
+async function panel (options = {}) {
+  const server = http.createServer(createPanelHandler({ registry, ...options }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  return {
+    url: 'http://127.0.0.1:' + port,
+    close: () => new Promise(resolve => server.close(resolve))
+  }
+}
+
+test('/healthz answers without reading the registry', async () => {
+  const broken = await panel({ registry: () => { throw new Error('registry: puppets is empty') } })
+  try {
+    const response = await fetch(broken.url + '/healthz')
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type'), /^application\/json/)
+    assert.deepEqual(await response.json(), { ok: true })
+  } finally {
+    await broken.close()
+  }
+})
+
+test('/api/puppets serves the registry as JSON', async () => {
+  const { url, close } = await panel()
+  try {
+    const response = await fetch(url + '/api/puppets')
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type'), /^application\/json/)
+    assert.deepEqual(await response.json(), { version: 1, puppets: [puppet] })
+    // A query string is not part of the route: a browser or a curl that adds one
+    // still gets the list.
+    const withQuery = await fetch(url + '/api/puppets?cache=0')
+    assert.equal(withQuery.status, 200)
+  } finally {
+    await close()
+  }
+})
+
+test('/ is the page a human opens, naming each puppet and its targets', async () => {
+  const { url, close } = await panel()
+  try {
+    const response = await fetch(url + '/')
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type'), /^text\/html; charset=utf-8$/)
+    const page = await response.text()
+    for (const text of [puppet.name, puppet.namespace, puppet.frontHostname, puppet.backend,
+      puppet.deployment, puppet.controlConfigMap]) {
+      assert.ok(page.includes(text), 'the page names ' + text)
+    }
+    // One page, one document, no asset the browser has to fetch: the panel is
+    // reached over a tailnet and nothing else serves its files.
+    assert.doesNotMatch(page, /<(script|link|img)\b/i, 'the page loads no external asset')
+  } finally {
+    await close()
+  }
+})
+
+test('the page says which puppet count it is showing', async () => {
+  const { url, close } = await panel()
+  try {
+    const page = await (await fetch(url + '/')).text()
+    assert.match(page, /1 puppet\b/)
+  } finally {
+    await close()
+  }
+})
+
+test('a registry the panel cannot read is a 500 that names the reason', async () => {
+  const { url, close } = await panel({
+    registry: () => { throw new Error('registry: puppets[0].backend must be host:port, not "play2"') }
+  })
+  try {
+    for (const route of ['/', '/api/puppets']) {
+      const response = await fetch(url + route)
+      assert.equal(response.status, 500, route + ' reports the broken registry')
+      assert.match(await response.text(), /backend must be host:port/, route + ' names the reason')
+    }
+  } finally {
+    await close()
+  }
+})
+
+test('the handler answers GET and refuses everything else', async () => {
+  const { url, close } = await panel()
+  try {
+    const refused = await fetch(url + '/api/puppets', { method: 'POST' })
+    assert.equal(refused.status, 405)
+    assert.equal(refused.headers.get('allow'), 'GET')
+    assert.equal((await fetch(url + '/nothing')).status, 404)
+    // A panel is a read-only page today, so a write method is refused before the
+    // route is even looked at.
+    assert.equal((await fetch(url + '/nothing', { method: 'DELETE' })).status, 405)
+  } finally {
+    await close()
+  }
+})
+
+test('the page escapes what it renders', () => {
+  // The registry is validated, so this is defence in depth: the next field to
+  // reach the page is written by someone who may not think of it.
+  const page = renderPage({
+    version: 1,
+    puppets: [{ ...puppet, name: '<script>alert(1)</script>', backend: '"><b>x' }]
+  })
+  assert.ok(page.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
+  assert.ok(page.includes('&quot;&gt;&lt;b&gt;x'))
+  assert.doesNotMatch(page, /<script>alert/)
+})
