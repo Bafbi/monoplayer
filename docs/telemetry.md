@@ -84,6 +84,63 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 
 The four gauges are emitted at startup and on the 30-second heartbeat.
 
+## The heartbeat record
+
+Every 30 seconds the service appends one `heartbeat` record to its JSONL log. It is the lane's periodic readout: the record an operator reads to see the lane as it stands, and the one that has been misread.
+
+The `Kind` column is why this table exists, and it holds two words.
+
+- **cumulative**: the field only grows over the life of the process. Subtract the previous heartbeat to get what happened in between. Divide the value itself by 30 s and you have a wrong rate.
+- **gauge**: the value at the instant the record was written, whatever its type. It rises and falls, and it says nothing about history.
+
+Every cumulative field counts from the start of the process except the top-level `backendFrames` object, which counts from the current backend connection.
+
+| Field | Kind | Meaning |
+| --- | --- | --- |
+| `attached` | gauge | A client is attached right now. |
+| `warm` | gauge | The cache is warm. A reconnect to a new target resets it, so it falls as well as rises. |
+| `backendLogins` | cumulative | Backend logins this process completed. |
+| `metrics.backendFrames`, `.configFrames` | cumulative | Backend frames seen, and the configuration-state share of them. |
+| `metrics.framesCached`, `.framesReplayed`, `.positionsSynthesized` | cumulative | Frames put in the cache, frames replayed on attach, and positions invented for the join. `framesCached` climbing is not resident growth: the chunk ring is bounded, and `sizes` says what is held now. |
+| `metrics.serverboundForwarded`, `.serverboundDropped`, `.serverboundNotAttached`, `.serverboundByName.*`, `.serverboundDroppedByName.*` | cumulative | Client frames relayed to the backend, refused, or dropped because no client was attached, split by frame name. |
+| `metrics.clientboundBlocked`, `.clientboundBlockedByName.*`, `.clientboundUnclassified` | cumulative | Backend frames the proxy withheld from the client, split by name, and the ones it could not classify. |
+| `metrics.chatBlocked`, `.chatRelayed`, `.chatSent` | cumulative | Chat frames blocked, relayed from a client, and sent by the proxy. |
+| `metrics.attaches`, `.attachesConfiguring`, `.denials`, `.frontKicks` | cumulative | Attaches, attaches that landed in configuration, login denials, and clients the proxy kicked. |
+| `metrics.configFramesRelayed`, `.configFramesReconfigured` | cumulative | Configuration frames relayed, and replayed after a reconfiguration. |
+| `metrics.transfersFollowed`, `.transfersSeamless`, `.transfersBlocked`, `.transfersRefused` | cumulative | Transfers followed, transfers carried on the same connection, frames blocked during one, and transfers refused. |
+| `metrics.reconfigurationsStarted`, `.reconfigurationsCompleted`, `.reconfigurationsRestored`, `.reconfigurationRefusals`, `.lateFramesAfterHandover` | cumulative | Reconfiguration attempts, completions, restores to the previous server, refusals, and frames that arrived after the handover. |
+| `metrics.noticesSent`, `.noticeFallbacks`, `.noticeGhosts`, `.brandAnnounced` | cumulative | Proxy notices written, fallbacks when the verbatim form failed, ghost states answered, and brand announcements. |
+| `metrics.skinFramesWritten`, `.skinFramesRefused` | cumulative | `player_info` skin frames written and refused (#99). |
+| `metrics.resourcePackAcks`, `.resourcePackAckFailures`, `.resourcePacksHeld`, `.resourcePacksRelayed`, `.resourcePacksResent`, `.resourcePacksAnswered`, `.resourcePacksRemoved`, `.resourcePacksAnsweredOnDetach`, `.resourcePacksWithheld` | cumulative | Pack handling, counted as events: acknowledgements and the acknowledgements that failed, hold events, relays, resends, answers, removals, answers on detach, and packs withheld (#98). `resourcePacksHeld` counts hold events, not the packs held now. |
+| `metrics.controlDialogsShown`, `.controlDialogsCleared`, `.controlDialogsRelayed`, `.controlDialogsHeld`, `.controlDialogsResent`, `.controlDialogsAnswered`, `.controlDialogsPuppetAnswered`, `.controlDialogsAnsweredOnDetach` | cumulative | Code-of-conduct dialogs shown, cleared, relayed, held, re-sent, answered, answered by the puppet, and answered on detach (#73). |
+| `metrics.clientSettingsSent`, `.clientSettingsRewritten`, `.clientSettingsFailed` | cumulative | Client Information frames sent, rewritten, and failed. |
+| `metrics.bundleDelimitersDropped`, `.nonPlayFramesIgnored` | cumulative | Bundle delimiters dropped, and non-play frames ignored. |
+| `sizes.{prefix,config,chunks,blocks,entities,inventories,latest,generic}` | gauge | What each cache domain holds now. All but `inventories` count frames; `inventories` counts the window map plus its slot map, so it includes slots that a base frame will overwrite and never replay. The `cacheStats` line readiness writes until the lane is ready carries the same `sizes` object, so the boot numbers and the heartbeat numbers have one shape. |
+| `chunkBytes` | gauge | Bytes the chunk ring holds now: the sum of its `buffer.length`. Before the cache is warm, chunk frames sit in the join prefix instead, so `0` here does not mean the target sent no terrain. The `backendViewDistance` line writes the same figure at backend login, before any terrain arrived, so every live record of that line has read 0. |
+| `front.denied`, `front.allowed`, `front.attaches` | cumulative | Login-start denials, allows, and attaches. |
+| `front.policyRefused`, `front.stateRefused` | cumulative | Clientbound frames the policy refused to pass to the client, and frames refused because the client's protocol state could not parse them. |
+| `front.reconfigurations`, `front.reconfigured` | cumulative | Reconfiguration attempts and completions. |
+| `front.reconfigurationFramesFlushed`, `front.reconfigurationFramesDropped` | cumulative | Held configuration frames flushed when the client acknowledged, and held frames dropped when the queue overflowed. |
+| `front.preAuthRefused` | cumulative | Connections refused because the pre-auth window was full. |
+| `front.preAuthExpired` | cumulative | Connections the pre-auth deadline destroyed. |
+| `front.preAuthInWindow` | gauge | The one gauge in that group: connections accepted and not yet past the attach whitelist. |
+| `wire.checked`, `wire.rejected`, `wire.byState.*` | cumulative | Frames the wire checker inspected, the ones it rejected, and the split by protocol state. |
+| `wire.lastFailure` | gauge | The most recent rejection, or `null`. |
+| `backendFrames.frames`, `.swallowed`, `.bundledFramesRelayed`, `.bundledDelimiters`, `.names.*` | cumulative | The backend forwarder's frame counts and its per-`state/name` totals, for one connection. It restarts at 0 on each reconnect, so a difference across one is not a rate. It is `null` until the first connection of the process, and it keeps the last connection's figures after that connection closes. |
+| `telemetry.requests`, `.retries`, `.failures` | cumulative | OTLP posts attempted, retried, and failed. |
+| `telemetry.logs.{accepted,sent,dropped,batches}`, `telemetry.metrics.{accepted,sent,dropped,batches}` | cumulative | Export counts, per signal. |
+| `telemetry.logs.queued` | gauge | Log records buffered for the next flush. |
+| `telemetry.metrics.queued` | cumulative | **The number of distinct telemetry series**, not a queue depth. It is `pending.size`, one entry per kind, name, and attribute set. Nothing ever removes a series, so it only grows, and the difference between two heartbeats is the series that appeared. |
+| `telemetry.lastError` | gauge | The most recent export error, or `null`. |
+| `telemetry.enabled` | gauge | Whether telemetry is on. It never changes after startup. |
+| `journal.frames`, `.events`, `.bytes` | cumulative | Frame records and event records written, and bytes appended. `bytes` is written, never the volume's footprint. |
+| `journal.pruned`, `.prunedBytes`, `.rotations` | cumulative | Files and bytes retention removed, and rotations performed. |
+| `journal.skipped`, `.truncated`, `.errors` | cumulative | Frames the skip and secret name lists left out, frames cut down to a header because they passed 8192 bytes (counted whether or not the write lands), and failures in the journal's own file work: opening a segment, rotating, pruning, or writing. A directory the process could not create reports `disabledReason` and counts nothing here, so `errors: 1` does not mean a record was lost. |
+| `journal.dirBytes` | gauge | The footprint of the journal's own files, measured at this heartbeat. It leaves out other names in the directory, and it is `null` when the listing throws. |
+| `journal.enabled`, `.disabledReason`, `.dir` | gauge | Whether the journal is on, why it is off, and its directory. A write that hits a full volume turns `enabled` to `false` and sets `disabledReason` mid-run. |
+| `journal.file` | gauge | The segment being written now. Rotation moves it. |
+| `journal.freeBytes`, `.requiredBytes` | gauge | Present only on a journal disabled before its first write: the bytes free on the volume and the budget it needed. Both are `null` when the reason was not a full volume. A journal that stops mid-run for a full volume sets `disabledReason` and carries neither field. |
+
 The heartbeat also carries the front leg's own counters under `front`, which
 the core cannot hold because the core never sees a socket. Abbreviated to the
 six an operator watches:
