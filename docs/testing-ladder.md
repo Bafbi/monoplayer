@@ -399,6 +399,18 @@ first dial and its target warms in five seconds.
   frame in `domains.entities`. Every field the record calls a count is an
   integer, and `domains` adds up to `replayed`, the number the attach stream
   wrote on that snapshot.
+- `O51` the entity domain is bounded by entity, not by frame arrival (#213). A
+  rig of its own, because the assertion needs a small bound, and the main rig's
+  default is 2048 entities. The bound is four entities and the churn is five
+  frames: entity 9's spawn, its correction, then three more entities. An
+  arrival-ordered ring of four frames would evict entity 9's spawn and replay the
+  correction for a body no client spawned, which is the reported "present in the
+  tab list, absent from the world". The replay carries all five frames in capture
+  order, the attaching bot decodes exactly those, the cache counts four entities
+  and five slots, and no bound overflowed (`overflows.entity` 0,
+  `overflows.entityDepth` 0, `overflows.entityFrames` 0). The metadata-index half of the keying is not on
+  this rung: `test/core/cache-equivalence.test.js` compares the replay with the
+  stream on the client-state model, where a superseded index is visible.
 
 
 ## The client parity rung
