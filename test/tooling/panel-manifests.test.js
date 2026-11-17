@@ -1,9 +1,10 @@
 // The panel's whole promise is that it can only ever write the control
-// ConfigMaps its registry names. That promise lives in three manifest facts, and
+// ConfigMaps its registry names. That promise lives in four manifest facts, and
 // nothing walked deploy/panel before this file: the Role's `resourceNames` is the
-// registry's list, no rule grants a verb that escapes it, and the Service is on
-// the tailnet and nowhere else. A panel that is scoped today is not a panel that
-// is scoped tomorrow without an assertion.
+// registry's list, no rule grants a verb that escapes it, the Service is on the
+// tailnet and nowhere else, and the Argo project whitelists exactly the kinds this
+// tree holds. A panel that is scoped today is not a panel that is scoped tomorrow
+// without an assertion.
 //
 // Styled after live-manifests.test.js, which exists because nothing walked
 // deploy/manifests either. There is no YAML library in this repo and no new
@@ -74,6 +75,11 @@ function section (text, indent, key) {
   return body.join('\n')
 }
 
+// The one line policy every reader here shares: a blank line is nothing, and a
+// comment is not data. Two readers with two policies would disagree about the
+// same manifest, which is the shape of bug this file exists to prevent.
+const isData = line => line.trim() !== '' && !line.trimStart().startsWith('#')
+
 const RULE_KEYS = ['apiGroups', 'resources', 'resourceNames', 'verbs']
 
 // The rules of a Role. A key this reader does not know, or a line it cannot
@@ -84,7 +90,7 @@ function rules (text) {
   const parsed = []
   let current = null
   for (const line of body.split('\n')) {
-    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
+    if (!isData(line)) continue
     if (line.length - line.trimStart().length < 2) break
     const opening = line.match(/^ {2}- (\S.*)$/)
     if (opening) {
@@ -313,13 +319,14 @@ function audit ({ files, documents, registry }) {
   return problems
 }
 
-// A list of pair entries, such as a project's whitelists. A line this reader
-// cannot place fails, for the same reason a rule line does.
-function nestedList (text, key) {
+// The entries under a key, each a run of `key: value` pairs: a project's
+// whitelists, and anything else shaped like `- group: ""` / `kind: Role`. A line
+// this reader cannot place fails, for the same reason a rule line does.
+function entriesUnder (text, key) {
   const entries = []
   let current = null
   for (const line of section(text, 2, key).split('\n')) {
-    if (line.trim() === '') continue
+    if (!isData(line)) continue
     const opening = line.match(/^ {4}- ([a-z]+): (".*"|\S+)$/)
     if (opening) {
       current = { [opening[1]]: opening[2].replace(/^"|"$/g, '') }
@@ -506,7 +513,7 @@ test('the panel Application syncs deploy/panel, and its project allows every nam
   // refuses to sync a kind its project does not name, so a wildcard here would be
   // the project allowing any object in the namespace it was given: the reach the
   // Role exists to bound, granted to the Application instead.
-  const allowed = nestedList(project, 'namespaceResourceWhitelist')
+  const allowed = entriesUnder(project, 'namespaceResourceWhitelist')
   assert.ok(allowed.length > 0, 'the project whitelists the kinds the panel tree holds')
   for (const entry of allowed) {
     assert.notEqual(entry.group, '*', 'the project whitelists every API group')
@@ -514,6 +521,9 @@ test('the panel Application syncs deploy/panel, and its project allows every nam
   }
   const held = new Map()
   for (const document of documents) {
+    // Two exemptions, both named. A Kustomization is the tree's own assembly, not
+    // an object Argo creates. A Namespace is cluster-scoped and covered by
+    // clusterResourceWhitelist above. Any other kind belongs in the list below.
     if (document.kind === 'Kustomization' || document.kind === 'Namespace') continue
     const group = (document.apiVersion ?? '').includes('/') ? document.apiVersion.split('/')[0] : ''
     held.set(group + '/' + document.kind, { group, kind: document.kind })
