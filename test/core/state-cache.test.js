@@ -146,6 +146,34 @@ test('one metadata frame carrying several indexes is one entry and several slots
   assert.equal(cache.stats().entitySlots, 2)
 })
 
+test('entity_effect keeps one slot per effect id', () => {
+  // The frame adds one effect and removes none, so two effects are two slots and
+  // a newer frame for one leaves the other alone.
+  const cache = createStateCache()
+  cache.push('play', 'chunk_batch_finished', buf('warm'), {})
+  cache.push('play', 'entity_effect', buf('effect-1-v1'), { entityId: 9, effectId: 1 })
+  cache.push('play', 'entity_effect', buf('effect-2'), { entityId: 9, effectId: 2 })
+  cache.push('play', 'entity_effect', buf('effect-1-v2'), { entityId: 9, effectId: 1 })
+
+  assert.deepEqual(cache.snapshot().entities.map(f => f.buffer.toString()), ['cache:effect-2', 'cache:effect-1-v2'])
+  assert.equal(cache.stats().entitySlots, 2)
+})
+
+test('an entity frame without decoded data keeps one shared record', () => {
+  // The id and the metadata index are decoded fields, not buffer offsets, so a
+  // caller that passes no `data` gets one id-less record per frame name. The
+  // header of state-cache.js says the entity domain needs `data`; this pins what
+  // happens when it is missing.
+  const cache = createStateCache()
+  cache.push('play', 'chunk_batch_finished', buf('warm'), {})
+  cache.push('play', 'spawn_entity', buf('spawn'), {})
+  cache.push('play', 'entity_metadata', buf('meta-0'), {})
+  cache.push('play', 'entity_metadata', buf('meta-1'), {})
+
+  assert.deepEqual(cache.snapshot().entities.map(f => f.buffer.toString()), ['cache:spawn', 'cache:meta-1'])
+  assert.equal(cache.stats().sizes.entities, 1)
+})
+
 test('the entity bound counts entities, so one chatty entity cannot evict another', () => {
   // The defect of #213: eight metadata frames for entity 9 filled the old
   // 2048-frame ring and took entity 9's own spawn with them.
