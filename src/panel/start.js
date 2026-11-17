@@ -28,6 +28,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
+import { redact } from '../observability/redact.js'
 import { parseRegistry } from './registry.js'
 import { createPanelHandler } from './server.js'
 
@@ -36,9 +37,10 @@ import { createPanelHandler } from './server.js'
 export const DEFAULT_PORT = 8080
 // Where the kubelet projects the ConfigMap key. One key, one file.
 export const DEFAULT_REGISTRY = '/etc/panel/registry/puppets.json'
-// The identity the next tickets' write path will authenticate with. Read here so
-// the start line says whether this pod can act at all, and never logged.
-export const SERVICE_ACCOUNT_TOKEN = '/var/run/secrets/kubernetes.io/serviceaccount/token'
+// Where the kubelet projects the identity the next tickets' write path will
+// authenticate with. Only its presence is read: the start line says whether this
+// pod can act at all, and the value never reaches a log, an error, or a return.
+export const SERVICE_ACCOUNT_TOKEN_FILE = '/var/run/secrets/kubernetes.io/serviceaccount/token'
 // How long a stop waits for an open response before it closes the socket anyway.
 // A browser holding a keep-alive connection must not hold a rolling update open.
 export const STOP_GRACE_MS = 5_000
@@ -83,12 +85,15 @@ function hasServiceAccountToken (file) {
   }
 }
 
-export async function startPanel ({ argv = [], io = process, tokenFile = SERVICE_ACCOUNT_TOKEN } = {}) {
+export async function startPanel ({ argv = [], io = process, tokenFile = SERVICE_ACCOUNT_TOKEN_FILE } = {}) {
   const options = parseArgs(argv)
   const stdout = io.stdout ?? process.stdout
+  // The same redaction every other line in this repo passes through
+  // (src/observability/redact.js): a second log writer is not a reason for a
+  // second rule, and the next field someone adds here is the one that matters.
   const log = (event, fields = {}) => {
     try {
-      stdout.write(JSON.stringify({ t: new Date().toISOString(), event, ...fields }) + '\n')
+      stdout.write(redact(JSON.stringify({ t: new Date().toISOString(), event, ...fields })) + '\n')
     } catch { /* a closed stdout must not take the panel down */ }
   }
 
