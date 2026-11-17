@@ -30,11 +30,12 @@
 //   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL
 //   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
 //   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory
-//   MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 256 MiB)
+//   MONOPLAYER_JOURNAL_MAX_BYTES                        one shard's seal threshold
+//                                                       (default 128 MiB)
 //   MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES                  journal directory budget, pruned on
-//                                                       start and on rotate (default 256 MiB)
+//                                                       start and after every seal (default 256 MiB)
 //   MONOPLAYER_JOURNAL_MAX_AGE_MS                       journal age cap; 0 keeps the byte
-//                                                       budget alone (default 7 days)
+//                                                       budget alone (default 48 hours)
 //   MONOPLAYER_RECONNECT_ATTEMPTS                       backend reconnect attempts
 //                                                       (0 = unlimited; unset keeps the
 //                                                       config file's value, else unlimited)

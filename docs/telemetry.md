@@ -22,9 +22,9 @@ Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch a
 | `OTEL_SERVICE_VERSION` | `service.version` and the OTLP scope version. Defaults to `unknown`; set it to the image tag. |
 | `HOSTNAME` | `service.instance.id`. Falls back to the process id. |
 | `MONOPLAYER_JOURNAL_DIR` | Journal directory. The journal is off when unset. The directory is created if missing. |
-| `MONOPLAYER_JOURNAL_MAX_BYTES` | Rotation threshold for one journal file. Defaults to `268435456` (256 MiB). |
-| `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` | Byte budget for the journal directory, pruned on start and after every rotation. Defaults to `268435456` (256 MiB), and must be at least `MONOPLAYER_JOURNAL_MAX_BYTES`. |
-| `MONOPLAYER_JOURNAL_MAX_AGE_MS` | Age cap for a journal file, pruned the same way. `0` leaves the byte budget as the only rule. Defaults to `604800000` (7 days). |
+| `MONOPLAYER_JOURNAL_MAX_BYTES` | Seal threshold for one shard. A shard that would pass it seals early, so one hour cannot grow without bound. Defaults to `67108864` (64 MiB). |
+| `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` | Byte budget for the journal directory, pruned on start, after every seal, and at close. Defaults to `268435456` (256 MiB), and must be at least `MONOPLAYER_JOURNAL_MAX_BYTES`. |
+| `MONOPLAYER_JOURNAL_MAX_AGE_MS` | Age cap for a shard, pruned the same way. `0` leaves the byte budget as the only rule. Defaults to `172800000` (48 hours). |
 
 `MONOPLAYER_ACCOUNT_ALIAS` is set internally from the resolved puppet alias; it becomes the resource attribute `monoplayer.account.alias`.
 
@@ -184,11 +184,11 @@ Every cumulative field counts from the start of the process except the top-level
 | `telemetry.lastError` | gauge | The most recent export error, or `null`. |
 | `telemetry.enabled` | gauge | Whether telemetry is on. It never changes after startup. |
 | `journal.frames`, `.events`, `.bytes` | cumulative | Frame records and event records written, and bytes appended. `bytes` is written, never the volume's footprint. |
-| `journal.pruned`, `.prunedBytes`, `.rotations` | cumulative | Files and bytes retention removed, and rotations performed. |
-| `journal.skipped`, `.truncated`, `.errors` | cumulative | Frames the skip and secret name lists left out, frames cut down to a header because they passed 8192 bytes (counted whether or not the write lands), and failures in the journal's own file work: opening a segment, rotating, pruning, or writing. A directory the process could not create reports `disabledReason` and counts nothing here, so `errors: 1` does not mean a record was lost. |
+| `journal.pruned`, `.prunedBytes`, `.sealed` | cumulative | Files and bytes retention removed, and shards sealed. A seal happens when the hour turns, when the next record would pass `MONOPLAYER_JOURNAL_MAX_BYTES`, and at close. |
+| `journal.skipped`, `.dropped`, `.truncated`, `.errors` | cumulative | Frames the skip and secret name lists left out, frames the name policy dropped (the entity stream), frames cut down to a header because they passed 8192 bytes (counted whether or not the write lands), and failures in the journal's own file work: opening a shard, sealing, pruning, or writing. A directory the process could not create reports `disabledReason` and counts nothing here, so `errors: 1` does not mean a record was lost. |
 | `journal.dirBytes` | gauge | The footprint of the journal's own files, measured at this heartbeat. It leaves out other names in the directory, and it is `null` when the listing throws. |
 | `journal.enabled`, `.disabledReason`, `.dir` | gauge | Whether the journal is on, why it is off, and its directory. A write that hits a full volume turns `enabled` to `false` and sets `disabledReason` mid-run. |
-| `journal.file` | gauge | The segment being written now. Rotation moves it. |
+| `journal.file` | gauge | The shard written most recently. The directory can hold one more shard per kind beside it, and a seal moves this to the next one. |
 | `journal.freeBytes`, `.requiredBytes` | gauge | Present only on a journal disabled before its first write: the bytes free on the volume and the budget it needed. Both are `null` when the reason was not a full volume. A journal that stops mid-run for a full volume sets `disabledReason` and carries neither field. |
 
 The heartbeat also carries the front leg's own counters under `front`, which
@@ -212,12 +212,28 @@ than that in one deadline period.
 
 ## Packet journal
 
-The journal directory holds files named `session-<ISO>-<pid>.ndjson`. The ISO stamp uses `-` instead of `:` and `.`. Each line is one JSON record.
+The journal keeps 48 hours of the frames a diagnosis reads: the frames that answer player visibility, transfers, dialogs, resource packs, wire drops, and chat. It is not a replay log. It drops the entity stream and keeps terrain length-only, because at 441 frames a second a record of everything is 11 GB a day and almost none of it is read (#217).
+
+The directory holds one shard per hour and frame kind:
+
+| Name | Holds |
+| --- | --- |
+| `journal-<YYYY-MM-DDTHH>-frames-<pid>[-<n>].ndjson` | Frames with a body: the frames a diagnosis reads. |
+| `journal-<YYYY-MM-DDTHH>-bulk-<pid>[-<n>].ndjson` | Terrain, length only. |
+| `journal-<YYYY-MM-DDTHH>-events-<pid>[-<n>].ndjson` | Lifecycle events. |
+| `<same>.ndjson.gz` | The same shard, sealed and gzipped. |
+| `<same>.manifest.json` | What the sealed shard holds. |
+
+The hour is UTC and comes from each record's own `t`, so a shard never holds two hours however long the process idles. `-n` appears only when one hour and kind needed more than one shard.
+
+A shard is written plain, with `fs.writeSync`, one record at a time. It seals when its hour turns, when the next record would pass `MONOPLAYER_JOURNAL_MAX_BYTES`, or at close. Sealing gzips the shard to `<same>.ndjson.gz`, writes its manifest, and then removes the plain file. A crash mid-seal leaves the plain shard, which the reader reads. A journal stopped by a full volume leaves its last shard plain for the same reason.
+
+Each line is one JSON record.
 
 A frame record:
 
 ```json
-{"t":1762560000123,"dir":"s2c","state":"play","name":"map_chunk","len":412,"b64":"..."}
+{"t":1762560000123,"dir":"s2c","state":"play","name":"player_info","len":412,"b64":"..."}
 ```
 
 - `t` is epoch milliseconds.
@@ -226,7 +242,18 @@ A frame record:
 - `len` is the raw byte length.
 - `b64` is the raw frame bytes, base64-encoded.
 
-Frames longer than 8192 bytes keep the same header and replace `b64` with `"truncated":true`, so the journal stays bounded per frame while preserving order and size.
+Two flags replace `b64`:
+
+| Flag | Meaning |
+| --- | --- |
+| `"lengthOnly":true` | The name policy never keeps this body, whatever its size. |
+| `"truncated":true` | The frame passed 8192 bytes, so only the header was kept. |
+
+A length-only record:
+
+```json
+{"t":1762560000123,"dir":"s2c","state":"play","name":"map_chunk","len":51493,"lengthOnly":true}
+```
 
 A lifecycle event record:
 
@@ -234,37 +261,73 @@ A lifecycle event record:
 {"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","accountUuid":"...","warm":true}
 ```
 
-The core writes `startLive`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/service/start-live.js`.
+The service writes `startLive`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/service/start-live.js`. The core writes none.
+
+### The name policy
+
+One table decides what a frame costs. It is data in `src/observability/journal.js`:
+
+| Policy | Names | Why |
+| --- | --- | --- |
+| `drop` | `entity_head_rotation`, `entity_look`, `entity_metadata`, `entity_move_look`, `entity_teleport`, `rel_entity_move`, `sync_entity_position` | The entity stream: the per-tick position and rotation deltas, plus the metadata a client merges into a body. It is 98% of the frames, and nobody replays a 25-byte delta. |
+| `length` | `chunk_biomes`, `map_chunk`, `unload_chunk`, `update_light` | Terrain. About 100 KB a frame, and gigabytes a day. `len` is what a diagnosis reads from one. |
+| `full` | Every other name, up to 8192 bytes | The frames a diagnosis reads, body and all. |
+
+`spawn_entity`, `add_entity`, `entity_destroy`, and `remove_entities` stay at `full`, because a diagnosis of "present in the tab list, absent from the world" reads them.
+
+The recorded cost: dropping `entity_metadata` removes the journal's record of exactly the domain #213 changed. Entity behaviour is observable through client parity and the attach record (#218), not through the journal.
+
+### The manifest
+
+One manifest per sealed shard. A reader reads it before it reads the shard:
+
+```json
+{"shard":"journal-2026-11-17T14-frames-77.ndjson.gz","kind":"frames","hour":"2026-11-17T14","from":1762560000123,"to":1762563600456,"lines":812,"bytes":74213,"gzBytes":9124,"names":{"player_info":318,"login":2},"bytesByName":{"player_info":61204,"login":290}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `shard`, `kind`, `hour` | The file, its kind, and the hour it covers. |
+| `from`, `to` | The first and last `t` in the shard. |
+| `lines` | Records in the shard. |
+| `bytes` | The NDJSON the records made, before compression. |
+| `gzBytes` | The sealed file's size. |
+| `names` | One entry per frame name, or `event:<name>` for a lifecycle record, busiest first. |
+| `bytesByName` | What each name costs on disk. This is the number the 48-hour budget rests on: the horizon holds while a kept frame averages under about 120 bytes of body. |
+
+A shard still being written has no manifest. `node tools/journal.mjs manifest` derives one for it and marks it `"live":true`.
 
 ### Reconstruction
 
-Frame records are appended synchronously in the order the frames crossed each leg. A reconstruction reads the journal files in rotation order and:
+Records are appended synchronously in the order the frames crossed each leg. A reconstruction reads the shards hour by hour, merges the kind shards of each hour by `t`, and then:
 
-1. Orders records by `t`, then by file order for equal timestamps.
+1. Orders records by `t`.
 2. Joins `s2c` and `c2s` records on `state` and `name`.
 3. Matches lifecycle events to frames by `t`.
 4. Matches OTLP log records by `timeUnixNano` (journal `t` × 1,000,000) and the same `event` name.
 
-Because `t` is captured when the frame reaches the core, a client action (`c2s`) and the server response it triggers (`s2c`) are ordered by their own timestamps, not by a shared sequence number. Clock changes can reorder adjacent records; the file and line order still holds.
+Because `t` is captured when the frame reaches the core, a client action (`c2s`) and the server response it triggers (`s2c`) are ordered by their own timestamps, not by a shared sequence number. A clock that steps backwards reorders adjacent records; the file and line order inside one shard still holds.
 
-### Rotation and retention
+### Sealing and retention
 
-A file rotates when the next record would push it past `MONOPLAYER_JOURNAL_MAX_BYTES`. Rotation closes the current file, renames it to `<same>.1`, replacing an older `<same>.1`, and continues in a new file with a `-2`, `-3`, ... suffix. A single record larger than the threshold is written to an empty file and rotates on the next record.
+A shard seals on three triggers: its hour turns, the next record would push it past `MONOPLAYER_JOURNAL_MAX_BYTES`, or the journal closes. A single record larger than the threshold is written to an empty shard, which seals on the next record.
 
-The directory also has a budget, enforced on start and after every rotation (#96):
+The directory also has a budget, enforced on start, after every seal, and at close (#96):
 
-- The oldest files go first, in the reader's rotation order.
-- A file older than `MONOPLAYER_JOURNAL_MAX_AGE_MS` goes even when the directory is under its byte budget.
-- `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` bounds the directory. The segment being written is never pruned, because `MONOPLAYER_JOURNAL_MAX_BYTES` bounds it, so the directory holds at most the budget plus one rotating file.
+- The oldest shards go first, in the reader's order: hour, then sequence, then kind.
+- A shard older than `MONOPLAYER_JOURNAL_MAX_AGE_MS` goes even when the directory is under its byte budget. Its manifest goes with it.
+- `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` bounds the directory. A shard being written is never pruned, because `MONOPLAYER_JOURNAL_MAX_BYTES` bounds it, so the directory holds at most the budget plus one shard per kind.
 - A name that is not a journal name is never deleted.
 
 The journal prunes itself because nothing else can see it: on the deployed lane it lives on the pod's own `emptyDir`, which dies with the pod. No CronJob or node janitor can reach it.
 
-A rotation size alone deletes nothing. One measured session wrote 393.5 MB in 96.5 minutes, and journal segments filled the 1 GiB custody volume until the front CrashLooped on ENOSPC (#96). At that rate, the 256 MiB budget the deployment sets keeps about an hour of frames.
+A seal alone deletes nothing. One measured session wrote 393.5 MB in 96.5 minutes, and journal segments filled the 1 GiB custody volume until the front CrashLooped on ENOSPC (#96). The 48-hour horizon is what dropping the entity stream buys: an hour of everything the policy keeps is about two megabytes.
 
-The journal never shares the custody volume. It lives at `MONOPLAYER_JOURNAL_DIR`, `/tmp/journal` on the deployed lane, on its own `emptyDir` with a `sizeLimit` of `512Mi`. The directory holds at most the budget plus one rotating file, and the limit sits above both.
+The journal never shares the custody volume. It lives at `MONOPLAYER_JOURNAL_DIR`, `/tmp/journal` on the deployed lane, on its own `emptyDir` with a `sizeLimit` of `512Mi`. The deployment sets a 256 MiB budget and a 64 MiB seal threshold, so the directory holds at most 256 MiB + 3 × 64 MiB, and the limit sits above that.
 
-When its volume has no room for the budget, the journal opens no file and the service logs `journalVolumeFull` with the path, then starts the front anyway: a diagnostic artifact does not take the service down with it. A write that hits a full volume stops the journal the same way.
+**The journal does not survive a restart.** The `emptyDir` dies with the pod, so "48 hours" means 48 hours or since the last restart, whichever is shorter. Nothing durable holds frames: the JSONL log and OTLP are the durable record, and they carry events and counters, not bodies.
+
+When its volume has no room for the budget plus one shard per kind, the journal opens no file and the service logs `journalVolumeFull` with the path, then starts the front anyway: a diagnostic artifact does not take the service down with it. A write that hits a full volume stops the journal the same way.
 
 The heartbeat's `journal` object reports `disabledReason` when the journal is off, and `dirBytes`, the directory's own footprint.
 
@@ -272,12 +335,13 @@ The heartbeat's `journal` object reports `disabledReason` when the journal is of
 
 The journal and telemetry never record secrets or chat content.
 
-- Frame names `chat_message`, `system_chat`, `player_chat`, `profileless_chat`, `chat_command`, `chat_command_signed`, and `cookie_response` are skipped.
+- Frame names `chat_message`, `system_chat`, `player_chat`, `profileless_chat`, `chat_command`, `chat_command_signed`, `cookie_response`, and `store_cookie` are skipped.
 - Frame names matching `/token|secret|password/i` are skipped.
-- Journal event fields and telemetry attributes whose key matches `/token|secret|password|authorization|cookie|credential|device_code|user_code/i` are dropped.
+- Journal event fields and telemetry attributes whose key matches `/(token|secret|password|authorization|cookie|credential|device_code|user_code)/i` are dropped.
 - String values pass through the JSONL log redaction rules, which rewrite a bearer value behind its scheme word (`Authorization: Bearer` becomes `Authorization=[REDACTED]`).
 - Account UUIDs, profile names, and aliases are recorded. Tokens, passwords, and message bodies are not.
 
+The name policy drops frames for volume, not for privacy: `stats().dropped` counts those, and `stats().skipped` counts the privacy skips.
 ## One command per question
 
 Two CLIs answer the questions this file describes. Neither needs a shell
@@ -288,6 +352,7 @@ log. The path defaults to `MONOPLAYER_JOURNAL_DIR`, and to `MONOPLAYER_LOG` for
 `heartbeat`.
 
 ```bash
+node tools/journal.mjs manifest --path /tmp/journal
 node tools/journal.mjs tail 20 --path /tmp/journal
 node tools/journal.mjs heartbeat --path monoplayer.jsonl
 node tools/journal.mjs names map_chunk --path /tmp/journal
@@ -295,14 +360,19 @@ node tools/journal.mjs tail 1 --name map_chunk --path /tmp/journal
 node tools/journal.mjs window 60 --dir s2c --path /tmp/journal
 ```
 
+- `manifest` prints one line per shard: hour, time range, line count, byte
+  counts, and the frames it holds. Read this first: it is how a reader skips the
+  shards that hold nothing it wants, and it is the only command that checks a
+  sealed shard without decompressing it.
 - `tail [n]` prints the last n records, one JSON per line. The default is 10.
-- `heartbeat` prints the last `heartbeat` record of the JSONL log.
 - `names [pattern]` prints one line per frame name, direction, and state, with
   `count`, `bytes`, `first`, and `last`. The pattern is a substring of the name.
 - `window <seconds>` prints the same rows over the seconds before the newest
   frame in the journal.
 - `--name`, `--dir`, and `--state` narrow every command. `names <pattern>` is
   `--name` for the summary.
+- `--path` takes the directory, or one shard, which is what the manifest gives
+  you. A `.ndjson.gz` shard reads the same as a plain one.
 
 Every record the service writes ends with a newline. A terminated line that is
 not JSON fails with `path:line`, so a torn record is visible instead of counted.

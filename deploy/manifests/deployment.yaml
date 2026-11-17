@@ -127,18 +127,23 @@ spec:
             # account tokens (#96). Retention is what bounds it; the volume's
             # sizeLimit is the backstop that keeps a retention bug from filling
             # the node, at the price of an eviction. The budget and the limit are
-            # a pair: the directory holds at most the budget plus one rotating
-            # file, 256 MiB + 128 MiB, and the limit sits above both. Frames do
-            # not survive a restart; the JSONL log and OTLP are the durable
-            # record.
+            # a pair: the directory holds at most the budget plus one shard per
+            # kind, 256 MiB + 3 x 64 MiB, and the limit sits above both. Frames do
+            # not survive a restart, so the 48-hour horizon below means 48 hours
+            # or since the last restart, whichever is shorter; the JSONL log and
+            # OTLP are the durable record.
+            #
+            # One shard per hour and frame kind (#217), gzipped when its hour
+            # turns. The entity stream is dropped and chunks are length-only, so
+            # an hour is about two megabytes and 48 hours fits the budget.
             - name: MONOPLAYER_JOURNAL_DIR
               value: /tmp/journal
             - name: MONOPLAYER_JOURNAL_MAX_BYTES
-              value: "134217728"
+              value: "67108864"
             - name: MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES
               value: "268435456"
             - name: MONOPLAYER_JOURNAL_MAX_AGE_MS
-              value: "604800000"
+              value: "172800000"
             - name: HOME
               value: /tmp
           ports:

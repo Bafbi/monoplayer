@@ -242,10 +242,11 @@ Telemetry and journal:
 - `OTEL_SERVICE_NAME=monoplayer`
 - `MONOPLAYER_JOURNAL_DIR=/tmp/journal`, on the pod's own `journal`
   `emptyDir` with `sizeLimit: 512Mi`, never on the custody volume
-- `MONOPLAYER_JOURNAL_MAX_BYTES` (default `268435456`), the rotation size
+- `MONOPLAYER_JOURNAL_MAX_BYTES` (default `67108864`), one shard's seal
+  threshold
 - `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` (default `268435456`), the directory
-  budget, pruned on start and on every rotation
-- `MONOPLAYER_JOURNAL_MAX_AGE_MS` (default `604800000`), the age cap
+  budget, pruned on start, after every seal, and at close
+- `MONOPLAYER_JOURNAL_MAX_AGE_MS` (default `172800000`, 48 hours), the age cap
 
 See `docs/telemetry.md` for the signals and the journal layout.
 
@@ -287,6 +288,7 @@ See `docs/telemetry.md` for the signals and the journal layout.
   `docs/product-core.md`.
 - **The journal never lives on the custody volume.** It has its own `emptyDir`
   with `sizeLimit: 512Mi`, and retention keeps it to a 256 MiB budget plus one
-  128 MiB rotating file on start and on every rotation. Two days of play once
-  filled the custody volume with journal segments and the front CrashLooped on
-  ENOSPC (#96). Frames do not survive a restart.
+  64 MiB shard per kind. Two days of play once filled the custody volume with
+  journal segments and the front CrashLooped on ENOSPC (#96). Frames do not
+  survive a restart, so the 48-hour horizon means 48 hours or since the last
+  restart, whichever is shorter (#217).
