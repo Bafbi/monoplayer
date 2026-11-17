@@ -411,6 +411,25 @@ first dial and its target warms in five seconds.
   `overflows.entityDepth` 0, `overflows.entityFrames` 0). The metadata-index half of the keying is not on
   this rung: `test/core/cache-equivalence.test.js` compares the replay with the
   stream on the client-state model, where a superseded index is visible.
+- `O52` the post-filter journal still records the frames a diagnosis reads, and
+  describes every shard it sealed (#217). The journal drops the entity stream and
+  keeps terrain length-only, so "the filter leaves what you need" was a claim
+  nobody had tested. The rig is the main one, because it is the only rig that
+  writes the names a diagnosis reads: a join with terrain, two dialogs, three
+  resource packs, two transfers, and traffic in both directions. One
+  `player_info` is written through the fake's own server, because the fake has no
+  sender for it and the journal never sees the front leg's own skin frame, which
+  is a write the core does not relay. The check reads the directory back through
+  the reader the tools use. `login`, `position`, `map_chunk`, `player_info`,
+  `show_dialog`, `add_resource_pack`, and `transfer` are all present, five of them
+  with a body that decodes; a client frame carries its body too; `map_chunk`
+  carries 51493 bytes with `lengthOnly` and no body; and none of the seven dropped
+  entity names appears, while `journal.dropped` counted four of them. The writer
+  then seals: one gzipped shard per kind, each with a manifest whose line count
+  and name histogram are what the shard holds and whose `bytesByName` is not
+  empty. The events shard holds the `liveReady` record the rig wrote, because the
+  core writes no lifecycle event and this rung does not run `start-live`, which
+  does.
 
 
 ## The client parity rung
