@@ -62,7 +62,7 @@
 import fs from 'node:fs'
 
 import { createMonoplayer, loadConfig } from './monoplayer.js'
-import { createControlDocument, dialTargetFor } from './control.js'
+import { createControlDocument, dialIntent, dialTargetFor } from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
 import { createWhitelistStore } from '../custody/store.js'
@@ -571,7 +571,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   let reconnecting = false
   // The last desired backend this process logged, so an unchanging edit is one
   // line rather than one per reconnect.
-  let lastDesired = desiredAtStart === null ? null : startupTarget.host + ':' + startupTarget.port
+  let lastDesired = desiredAtStart
   core.on('reconnect_due', async ({ delayMs, attempt, target } = {}) => {
     if (reconnecting) return
     reconnecting = true
@@ -588,20 +588,17 @@ export async function startLive ({ argv = [], io = process } = {}) {
       attached: core.attached === true
     })
     const dialTarget = chosen.target
-    if (chosen.source === 'desired' && dialTarget.host + ':' + dialTarget.port !== lastDesired) {
-      lastDesired = dialTarget.host + ':' + dialTarget.port
+    if (chosen.source === 'desired' &&
+        (lastDesired === null || lastDesired.host !== dialTarget.host || lastDesired.port !== dialTarget.port)) {
+      lastDesired = { ...dialTarget }
       log('controlDesiredBackend', { host: dialTarget.host, port: dialTarget.port, source: 'reconnect' })
     }
     try {
-      // A followed transfer is the only dial that asks the target for a transfer:
-      // intent 3 carries the session, and its cookies, to the server that moved
-      // it. A desired backend is a fresh login on a server that never saw the
-      // puppet, so it gets intent 2 and no cookies.
-      const follows = due.target !== null && !isBase(dialTarget)
-      backend.setTarget(dialTarget, {
-        keepCookies: follows,
-        transfer: follows
-      })
+      // A transfer dial, and the return to the server the session was on, ask the
+      // target for the transfer handshake and keep the cookies: the behaviour
+      // every lane had before this ticket. A desired backend is a fresh login on
+      // a server that never saw the puppet.
+      backend.setTarget(dialTarget, dialIntent({ source: chosen.source, target: dialTarget, base: baseTarget }))
       if (chosen.source !== 'current') currentTarget = { ...dialTarget }
       if (due.target) {
         log('transferFollowConnect', {

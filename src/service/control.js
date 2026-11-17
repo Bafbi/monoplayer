@@ -48,12 +48,6 @@ export function createControlDocument ({
   log = () => {}
 } = {}) {
   const enabled = typeof file === 'string' && file.trim() !== ''
-  // One store for the whole process: the core reads it through attachWhitelist()
-  // and the front leg reads it through has(). Both reload per read, so the file
-  // is the only authority.
-  const whitelistStore = enabled && typeof whitelistFile === 'string' && whitelistFile.trim() !== ''
-    ? createWhitelistStore({ file: whitelistFile, reloadEachUse: true })
-    : null
   const said = new Set()
 
   // One line per distinct refusal. A reconnect loop re-reads the same file every
@@ -65,9 +59,20 @@ export function createControlDocument ({
     log(event, fields)
   }
 
+  // One store for the whole process: the core reads the list through
+  // attachWhitelist() and the front legs read has(). Every read reloads, so the
+  // file is the only authority and a broken one is named, not silently empty.
+  const whitelistStore = enabled && typeof whitelistFile === 'string' && whitelistFile.trim() !== ''
+    ? createWhitelistStore({
+      file: whitelistFile,
+      reloadEachUse: true,
+      onLoadError: ({ file, code }) => sayOnce('controlUnreadable', { file, code })
+    })
+    : null
+
   function attachWhitelist () {
     if (whitelistStore === null) return []
-    return whitelistStore.reload().players.map(player => player.uuid)
+    return whitelistStore.list().map(player => player.uuid)
   }
 
   function desiredTarget () {
@@ -106,4 +111,14 @@ export function dialTargetFor ({ transfer = null, desired = null, current = null
   if (transfer !== null) return { target: transfer, source: 'transfer' }
   if (desired !== null && attached !== true) return { target: desired, source: 'desired' }
   return { target: current, source: 'current' }
+}
+
+// The leg options for a dial. A transfer, or the return to the server the session
+// was on, asks for the transfer handshake and keeps its cookies; that is the
+// behaviour every lane had before this ticket. A desired backend is a fresh
+// login on a server that never saw the puppet, so it gets neither.
+export function dialIntent ({ source, target, base }) {
+  const onBase = target.host === base.host && target.port === base.port
+  const follows = source !== 'desired' && !onBase
+  return { keepCookies: follows, transfer: follows }
 }

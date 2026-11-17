@@ -12,6 +12,7 @@ import path from 'node:path'
 import {
   DESIRED_VERSION,
   createControlDocument,
+  dialIntent,
   dialTargetFor,
   parseDesiredTarget
 } from '../../src/service/control.js'
@@ -138,4 +139,45 @@ test('#229 a followed transfer wins, a desired backend never moves an attached c
     { target: current, source: 'current' },
     'moving a live session is the last ticket in the epic, not this one')
   assert.deepEqual(dialTargetFor({ current }), { target: current, source: 'current' })
+})
+
+test('#229 a control whitelist that cannot be parsed is named, and denies instead of crashing', () => {
+  const dir = controlDir('broken')
+  const whitelistFile = path.join(dir, 'attach-whitelist.json')
+  fs.writeFileSync(whitelistFile, '{ "version": 1, "players": [')
+  const lines = []
+  const document = createControlDocument({
+    file: path.join(dir, 'desired.json'),
+    whitelistFile,
+    log: (event, fields) => lines.push({ event, fields })
+  })
+
+  assert.deepEqual(document.attachWhitelist(), [], 'a broken file is an empty whitelist, which denies')
+  assert.deepEqual(document.attachWhitelist(), [])
+  const unreadable = lines.filter(line => line.event === 'controlUnreadable')
+  assert.equal(unreadable.length, 1, 'one named line, not one per login')
+  assert.equal(unreadable[0].fields.file, whitelistFile)
+  assert.equal(unreadable[0].fields.code, 'invalid_json')
+
+  // Valid JSON of the wrong shape is the same failure with a different name.
+  fs.writeFileSync(whitelistFile, JSON.stringify({ version: 1, players: 'everyone' }))
+  assert.deepEqual(document.attachWhitelist(), [])
+  assert.deepEqual(lines.filter(line => line.event === 'controlUnreadable').map(line => line.fields.code),
+    ['invalid_json', 'invalid_shape'])
+})
+
+test('#229 only a desired backend drops the transfer handshake, and the dial rule is unchanged otherwise', () => {
+  const base = { host: '127.0.0.1', port: 25565 }
+  const other = { host: '127.0.0.1', port: 25566 }
+
+  // The rule every lane had before #229: anything off the base target is dialled
+  // with the transfer intent and the cookies, whether it is a followed transfer
+  // or the return to a server the session was already on.
+  assert.deepEqual(dialIntent({ source: 'transfer', target: other, base }), { keepCookies: true, transfer: true })
+  assert.deepEqual(dialIntent({ source: 'current', target: other, base }), { keepCookies: true, transfer: true })
+  assert.deepEqual(dialIntent({ source: 'transfer', target: base, base }), { keepCookies: false, transfer: false })
+  assert.deepEqual(dialIntent({ source: 'current', target: base, base }), { keepCookies: false, transfer: false })
+
+  // A desired backend is a fresh login on a server that never saw the puppet.
+  assert.deepEqual(dialIntent({ source: 'desired', target: other, base }), { keepCookies: false, transfer: false })
 })
