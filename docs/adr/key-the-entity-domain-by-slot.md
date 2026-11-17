@@ -7,8 +7,8 @@ frames therefore made metadata volume evict `spawn_entity`, and a reattaching
 client got a body it never spawned, or a correction for a body it never had:
 present in the tab list, absent from the world.
 
-The cache keys every entity frame by `entityId` and by the piece of state it
-carries, and keeps the newest raw frame for each piece. A piece is:
+The cache keys every entity frame by `entityId` and by the slot of state it
+carries, and keeps the newest raw frame for each slot. A slot is:
 
 - one metadata index, `metadata:<key>`, because the client merges each pair;
 - one effect, `effect:<id>`, because the frame adds an effect and removes none;
@@ -55,15 +55,15 @@ never rebuilds a frame, so the replay stays a raw-buffer replay.
 
 ## Consequences
 
-- Three bounds, because two of them multiplied. `maxEntitySlots` (64 per entity)
-  drops the whole entity past its depth, and 64 clears the worst case — a body
-  with every metadata index set is about 60 slots — so that bound catches a
-  pathological stream and no real one (`metrics.overflows.entityDepth`).
-  `maxEntities` (2048) evicts the least recently updated body
-  (`metrics.overflows.entity`). `maxEntityFrames` (32768) bounds the slots the
-  domain holds (`metrics.overflows.entityFrames`): without it the worst case is
-  2048 x 64 entries, sixty-four times the frame ring this replaced, and 32768
-  small frames with their decoded metadata is about 3 MB.
+- Three bounds, because two of them multiplied. `maxEntitySlots` (128 per entity)
+  drops the whole entity past its depth (`metrics.overflows.entityDepth`). 128 is
+  the count that clears any real body with room: the protocol defines 43 metadata
+  indexes, 8 whole-value frames, and one slot per effect id. `maxEntities`
+  (2048) evicts the least recently updated body (`metrics.overflows.entity`).
+  `maxEntityFrames` (32768) bounds the slots the domain holds
+  (`metrics.overflows.entityFrames`): without it the ceiling is 2048 x 128
+  entries, and 32768 small frames with their decoded metadata is about 3 MB,
+  which is what caps the memory in practice.
 - Two kinds of state live outside a record, and both exist because the bound must
   never spend a live body on a dead one. A removal for an id the domain never
   held — every body the join prefix spawned is that — waits in a bounded list
@@ -86,10 +86,18 @@ never rebuilds a frame, so the replay stays a raw-buffer replay.
   the model applies the same slot last-write-wins. That is why the equivalence
   property in `test/core/cache-equivalence.test.js` is still the whole stream for
   these cases, rather than the suffix the old ring forced.
+- A transient frame keeps one slot per body like the rest, so the newest
+  `entity_sound_effect` or `entity_velocity` per entity replays and an older one
+  does not. A replayed sound is one the attach is about to make stale anyway, and
+  the old ring only replayed them because it had no opinion; this is the one
+  client-visible difference the keying accepts on purpose. `entity_sound_effect`
+  without an entity carries `entityId: 0`, so all of those share one slot.
 - The bounds are defaults, not measurements. Nothing here says how many entities
   a real backend tracks; that measurement is its own ticket, and read
   `stats().sizes.entities`, `stats().entitySlots`, `stats().entityRemovals`
-  and the three overflow counters until it lands.
+  and the three overflow counters until it lands. The login and warm log lines
+  carry `sizes`; `entitySlots` and the counters reach an operator through
+  `stats()` and the attach record #218 adds.
 - Relative-move frames stay in `generic`: a slot holds one frame per key, so
   routing per-tick deltas here would replay the last delta and none of the ones
   it built on. See [keep-relative-moves-out-of-the-entity-ring.md](keep-relative-moves-out-of-the-entity-ring.md).
