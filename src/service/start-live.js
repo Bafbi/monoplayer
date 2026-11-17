@@ -562,6 +562,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // restored client holds. A given-up target reverts here, not to the base: on a
   // chain A->B->C a failed C restores the client into B's world (#87).
   let settledTarget = { ...baseTarget }
+  // Whether the settled server got there by a followed transfer. It decides the
+  // dialect of a revert dial, exactly as `currentIsTransfer` decides a reconnect.
+  let settledIsTransfer = false
   const isBase = target =>
     target.host === baseTarget.host && target.port === baseTarget.port
 
@@ -570,8 +573,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   function revertToSettled (reason) {
     const abandoned = follow.abort(reason).abandoned ?? null
     currentTarget = { ...settledTarget }
+    currentIsTransfer = settledIsTransfer
     try {
-      backend.setTarget(settledTarget, { keepCookies: !isBase(settledTarget) })
+      backend.setTarget(settledTarget, { keepCookies: settledIsTransfer && !isBase(settledTarget) })
     } catch (error) {
       log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
     }
@@ -606,16 +610,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
       log('controlDesiredBackend', { host: dialTarget.host, port: dialTarget.port, source: 'reconnect' })
     }
     try {
-      // A transfer dial, and the return to the server the session was on, ask the
-      // target for the transfer handshake and keep the cookies: the behaviour
-      // every lane had before this ticket. A desired backend is a fresh login on
-      // a server that never saw the puppet.
-      backend.setTarget(dialTarget, dialIntent({
-        source: chosen.source,
-        target: dialTarget,
-        base: baseTarget,
-        currentIsTransfer
-      }))
+      // A transfer dial, and the return to the server a transfer moved the session
+      // to, ask the target for the transfer handshake and keep the cookies: the
+      // behaviour every lane had before this ticket. A desired backend is a fresh
+      // login on a server that never saw the puppet.
+      const transferDial = chosen.source === 'transfer' ||
+        (chosen.source === 'current' && currentIsTransfer)
+      backend.setTarget(dialTarget, dialIntent({ transfer: transferDial, target: dialTarget, base: baseTarget }))
       if (chosen.source !== 'current') {
         currentTarget = { ...dialTarget }
         currentIsTransfer = chosen.source === 'transfer'
@@ -647,6 +648,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
       }
       const outcome = follow.onSuccess()
       settledTarget = { ...dialTarget }
+      settledIsTransfer = transferDial
       log('backendReconnect', {
         delayMs,
         attempt,
