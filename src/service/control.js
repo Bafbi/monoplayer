@@ -113,16 +113,16 @@ export function dialTargetFor ({ transfer = null, desired = null, current = null
   return { target: current, source: 'current' }
 }
 
-// The leg options for a dial. A followed transfer, and the return to a server a
-// transfer moved the session to, ask for the transfer handshake and keep their
-// cookies: that is the behaviour every lane had before this ticket.
+// The leg options for a dial. A transfer, and the return to a server a transfer
+// moved the session to, ask for the transfer handshake and keep their cookies:
+// that is the behaviour every lane had before this ticket. A desired backend is a
+// fresh login on a server that never saw the puppet.
 //
-// `current` alone does not say which happened. A server off the base is one a
-// transfer moved the session to (preserve, and ask for the handshake) or one a
-// desired backend sent it to (a fresh login, no cookies). `currentIsTransfer`
-// carries that one bit, and it is false on every lane without a control file.
-export function dialIntent ({ source, target, base, currentIsTransfer = false }) {
+// `transfer` is the provenance of the target, not the source of the dial: the
+// caller knows whether this server was reached by a followed transfer, and the
+// rule only needs that one bit.
+export function dialIntent ({ transfer = false, target, base }) {
   const onBase = target.host === base.host && target.port === base.port
-  const follows = !onBase && (source === 'transfer' || (source === 'current' && currentIsTransfer))
+  const follows = transfer === true && !onBase
   return { keepCookies: follows, transfer: follows }
 }

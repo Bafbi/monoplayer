@@ -166,26 +166,19 @@ test('#229 a control whitelist that cannot be parsed is named, and denies instea
     ['invalid_json', 'invalid_shape'])
 })
 
-test('#229 a desired backend is a fresh login, and the transfer dial rule is unchanged otherwise', () => {
+test('#229 a dial is a transfer only when the server was reached by one', () => {
   const base = { host: '127.0.0.1', port: 25565 }
   const other = { host: '127.0.0.1', port: 25566 }
 
-  // The rule every lane had before #229: a followed transfer, and the return to a
-  // server a transfer moved the session to, keep the cookies and ask for the
-  // transfer handshake.
-  assert.deepEqual(dialIntent({ source: 'transfer', target: other, base }), { keepCookies: true, transfer: true })
-  assert.deepEqual(dialIntent({ source: 'current', target: other, base, currentIsTransfer: true }),
-    { keepCookies: true, transfer: true })
-  assert.deepEqual(dialIntent({ source: 'transfer', target: base, base, currentIsTransfer: true }),
-    { keepCookies: false, transfer: false })
-  assert.deepEqual(dialIntent({ source: 'current', target: base, base }), { keepCookies: false, transfer: false })
-
-  // A desired backend is a fresh login on a server that never saw the puppet, on
-  // the dial itself and on every fault after it. Without the provenance bit this
-  // is the case that would send intent 3 to a server that never issued a transfer.
-  assert.deepEqual(dialIntent({ source: 'desired', target: other, base }), { keepCookies: false, transfer: false })
-  assert.deepEqual(dialIntent({ source: 'current', target: other, base, currentIsTransfer: false }),
-    { keepCookies: false, transfer: false })
+  // Every lane before #229: off the base, and reached by a followed transfer,
+  // either the move itself or the return to the server it moved the session to.
+  assert.deepEqual(dialIntent({ transfer: true, target: other, base }), { keepCookies: true, transfer: true })
+  // A desired backend is a fresh login on a server that never saw the puppet,
+  // on the dial itself and on every fault after it.
+  assert.deepEqual(dialIntent({ transfer: false, target: other, base }), { keepCookies: false, transfer: false })
+  // A base target is never a transfer, whatever reached it.
+  assert.deepEqual(dialIntent({ transfer: true, target: base, base }), { keepCookies: false, transfer: false })
+  assert.deepEqual(dialIntent({ target: base, base }), { keepCookies: false, transfer: false })
 })
 
 test('#229 two control files that fail the same way are two named lines', () => {
