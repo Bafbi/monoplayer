@@ -216,12 +216,12 @@ Common:
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
   `WORKDIR`) or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
-- `MONOPLAYER_CONTROL_FILE=/control/desired.json`: the runtime control document.
-  Setting it also makes the attach whitelist reload at each login, so an
-  operator's edit is allowed on the next attempt with no restart. Unset (the
-  default) leaves the lane static: the whitelist is read once at startup and no
-  control file is opened. A file that cannot be read is named in the log and
-  ignored.
+- `MONOPLAYER_CONTROL_FILE`: the path to `desired.json`, the runtime control
+  document, for example `/control/desired.json` on a volume a later ticket
+  mounts beside `/config`. No manifest mounts one yet, so the variable is unset
+  today and the lane is static. Setting it also makes the attach whitelist
+  reload at each login, so an operator's edit is allowed on the next attempt
+  with no restart. A file that cannot be read is named in the log and ignored.
 - `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH` (default `0`): `1` honours a
   `desired.json` on the next backend connect, and only while no player is
   attached. `0` writes `controlSwitchRefused` once and stays on
