@@ -1,6 +1,6 @@
 // The panel's in-cluster entrypoint.
 //
-//   node src/panel/start.js [--registry <file>] [--port <n>]
+//   node src/panel/start.js [--registry <file>] [--port <n>] [--host <address>]
 //
 // It is a second entrypoint on the same image as the proxy: the Dockerfile CMD
 // runs src/service/monoplayer.js, and the panel Deployment overrides the command.
@@ -45,13 +45,19 @@ export const SERVICE_ACCOUNT_TOKEN_FILE = '/var/run/secrets/kubernetes.io/servic
 // A browser holding a keep-alive connection must not hold a rolling update open.
 export const STOP_GRACE_MS = 5_000
 
-const USAGE = 'usage: node src/panel/start.js [--registry <file>] [--port <n>]'
+const USAGE = 'usage: node src/panel/start.js [--registry <file>] [--port <n>] [--host <address>]'
+
+// The pod binds every interface, because a Service targets the pod IP and not its
+// loopback. A run on a workstation binds loopback instead, which is what
+// `mise run panel:run` asks for: the panel's one documented ingress is the tailnet
+// Service, and a laptop must not publish it on a LAN as a side effect of trying it.
+export const DEFAULT_HOST = '0.0.0.0'
 
 export function parseArgs (argv) {
-  const options = { registry: DEFAULT_REGISTRY, port: DEFAULT_PORT }
+  const options = { registry: DEFAULT_REGISTRY, port: DEFAULT_PORT, host: DEFAULT_HOST }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
-    if (arg !== '--registry' && arg !== '--port') {
+    if (arg !== '--registry' && arg !== '--port' && arg !== '--host') {
       throw new Error('unknown argument ' + JSON.stringify(arg) + '\n' + USAGE)
     }
     const value = argv[index + 1]
@@ -61,6 +67,15 @@ export function parseArgs (argv) {
     index += 1
     if (arg === '--registry') {
       options.registry = value
+      continue
+    }
+    if (arg === '--host') {
+      // An address, not a name to resolve: the two values in use are the wildcard
+      // the pod needs and the loopback a workstation uses.
+      if (value.trim() === '' || /\s/.test(value)) {
+        throw new Error('--host must be an address, not ' + JSON.stringify(value) + '\n' + USAGE)
+      }
+      options.host = value
       continue
     }
     // 0 is allowed: it asks the kernel for a free port, which is what a test
@@ -112,16 +127,17 @@ export async function startPanel ({ argv = [], io = process, tokenFile = SERVICE
   const server = http.createServer(createPanelHandler({ registry: read, log }))
   await new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(options.port, '0.0.0.0', () => {
+    server.listen(options.port, options.host, () => {
       server.off('error', reject)
       resolve()
     })
   })
-  const { port } = server.address()
+  const { address: host, port } = server.address()
 
   log('panelStart', {
     registry: options.registry,
     puppets: document.puppets.length,
+    host,
     port,
     serviceAccountToken: hasServiceAccountToken(tokenFile)
   })
@@ -144,7 +160,7 @@ export async function startPanel ({ argv = [], io = process, tokenFile = SERVICE
     return closing
   }
 
-  return { port, close }
+  return { host, port, close }
 }
 
 export async function main ({ argv = process.argv.slice(2), io = process } = {}) {

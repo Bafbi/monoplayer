@@ -51,7 +51,7 @@ run = "scripts/online-cluster.sh"
 
 [tasks."panel:run"]
 description = "Serve the panel on this machine from the registry this repo ships, on port 8080. Needs no cluster: the page reads the ConfigMap in deploy/panel."
-run = "node src/panel/start.js --registry deploy/panel/registry.yaml"
+run = "node src/panel/start.js --registry deploy/panel/registry.yaml --host 127.0.0.1"
 
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback."
