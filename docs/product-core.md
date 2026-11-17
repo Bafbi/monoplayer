@@ -52,17 +52,45 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 - `config` (configuration-phase replay prefix, max 1024). Per-leg config
   keep-alives/pings are dropped at capture.
 - Warm domains: `chunk` (latest per `cx,cz`, `unload_chunk` deletes the key,
-  max 1024), `block` (FIFO ring, max 2048), `entity` (FIFO ring, max 2048; every
-  entity frame the policy accepts, except the relative-move frames, so their
-  capture order survives the replay),
+  max 1024), `block` (FIFO ring, max 2048), `entity` (keyed by entity and by
+  entity slot — one per metadata index, one per effect id, one `destroy`, one
+  per other entity frame; max 2048 entities, 128 slots per entity before the
+  whole entity is dropped, and 32768 slots in the domain. Every entity frame the
+  policy accepts, except the relative-move frames),
   `inventory` (newest per windowId, max 32 windows), `latest` (health/food/
   abilities/experience/held_item_slot/game_state_change/entity_event/
   advancements — newest wins), `generic` (anything else state-bearing, FIFO,
   max 512).
+- The entity domain holds the raw frame per slot, so an attach replays bytes: it
+  locates a metadata index, it never rebuilds a frame. One `entity_metadata`
+  frame writes one slot per index it carries and is still one entry in
+  `snapshot().entities`. Three bounds: `maxEntitySlots` (a record past its
+  depth drops the whole entity, counted in `metrics.overflows.entityDepth` — a
+  truncated record would replay a dropped index at the client's default),
+  `maxEntities` (least recently updated entity evicted,
+  `metrics.overflows.entity`), and `maxEntityFrames` (the slots the whole
+  domain holds, `metrics.overflows.entityFrames`, so the worst case is a number
+  rather than `maxEntities` times `maxEntitySlots`).
+- Two entity states live outside a record. A removal for an id the domain never
+  held — every body the join prefix spawned is one — waits in a bounded list
+  (`stats().entityRemovals`), because a record per such id would let a busy
+  world's removals evict the bodies that are still alive. And an id a bound
+  dropped is remembered (`snapshot().entityDropped`,
+  `stats().entitiesDropped`): later frames for it are suppressed and counted in
+  `metrics.entitySuppressed` until a spawn, `spawn_entity` or `add_entity`,
+  starts the body again. Replaying those frames is the "present in the tab list,
+  absent from the world" shape #218 measures.
+- A play `login` and a `respawn` flush the entity domain (`metrics.entityFlushes`).
+  26.x has no separate dimension-change frame: `respawn` carries the new
+  dimension. The flush is the cache's own hook, because a respawn is ordinary
+  play state and no other module sees it.
 - `snapshot()` carries the warm flag and the capture sequence, and `restore(snapshot)`
   puts a snapshot back entry-for-entry (#22). A restore that lost the warm flag
   would file every new frame into the join prefix, and one that renumbered the
-  entries would reorder the entity/generic merge join-synth builds.
+  entries would reorder the entity/generic merge join-synth builds. The entity
+  section of a snapshot is flat and in capture order even though the domain is a
+  keyed map: `restore` rebuilds the map from that array through the same keying
+  the capture path uses.
 - Not cacheable (from `clientbound-policy.js`): per-leg mechanics
   (`keep_alive`, `position`, `ping`, bundle delimiters), live-only chat and
   per-request answers (`system_chat`, `profileless_chat`, `player_chat`,
@@ -81,7 +109,8 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
    position is actually sent)
 4. warm domains in snapshot order (chunks → blocks → entities → inventories →
    latest → generic), except that the relative-move frames replay with
-   `entities` in capture order
+   `entities` in capture order. The entity domain is keyed by entity, so its
+   section is rebuilt in capture order before it leaves the cache
 
 The merge is the one exception to the fixed order. The cache routes an entity's
 absolute position frames to `entity` and its relative-move deltas to `generic`,
@@ -620,9 +649,13 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   apply only where chunks are loaded), but a client that rejects a flattened
   order with a real backend would falsify the synthesis — test with the 26.1
   client, not the fakes.
-- `entity` domain is an ordered ring, not per-entity latest-wins: stale high
-  volume evicts real state under entity pressure. If re-attach tests show
-  stale mobs, promote to per-entityId latest with a ring of entityIds.
+- `entity` domain bounds are defaults, not measurements: 2048 entities, 128
+  slots per entity, and 32768 slots in the domain, so the memory ceiling is about
+  3 MB of small entity frames instead of the old 2048-frame ring. Nothing
+  measures how many entities a real backend tracks, and the peak on Excalia is its
+  own ticket. Until it lands, `sizes` rides the warm and login log lines;
+  `entitySlots`, `entityRemovals`, and the three overflow counters are on
+  `stats()`, and the attach record #218 adds is where they reach an operator.
 - Only the relative-move frames leave `generic`'s place in the replay. Chunks
   and blocks still replay before it, and `latest` and `inventories` keep their
   latest-wins and base-then-slots rules, so their `seq` is a recency stamp rather

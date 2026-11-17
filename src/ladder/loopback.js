@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O50 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O51 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -2237,6 +2237,131 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         orphanAttach.domains.entities > ordinaryAttach.domains.entities,
       evidence.attachRecord
     )
+    // --- O51: the entity domain is keyed by entity, not by arrival order (#213) ---
+    // A rig of its own, because the assertion needs a small entity bound: the main
+    // rig runs on the default 2048 entities, and proving the bound on it would mean
+    // sending 2049 of them. Four entities here, and the churn is five frames, so an
+    // arrival-ordered ring of four loses the first entity's spawn while this one
+    // keeps every entity. Nothing above this line changes.
+    let entityFake = null
+    let entityBackend = null
+    let entityFront = null
+    let entityCore = null
+    let entityBot = null
+    try {
+      entityFake = await createFakeBackend({ port: 0, logStream: null })
+      const entityWhitelist = [offlineUuid('Attach')]
+      const entityConfig = loadConfig({
+        version: VERSION,
+        attachWhitelist: entityWhitelist,
+        front: { host: '127.0.0.1', port: 0 },
+        backend: { host: '127.0.0.1', port: entityFake.port },
+        puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') },
+        bounds: { maxEntities: 4 }
+      })
+      entityBackend = createOfflineBackendLeg({
+        host: '127.0.0.1',
+        port: entityFake.port,
+        version: VERSION,
+        username: 'GlowSquidye',
+        log
+      })
+      const entityWire = createWireChecker({ version: VERSION })
+      entityFront = createOfflineFrontLeg({
+        host: '127.0.0.1',
+        port: 0,
+        version: VERSION,
+        offlineWhitelist: entityWhitelist,
+        getSnapshotConfig: () => entityCore.cache.snapshot().config,
+        wireCheck: payload => entityWire.check(payload),
+        wireMode: 'throw',
+        log
+      })
+      entityCore = createMonoplayer({
+        config: entityConfig,
+        backendLeg: entityBackend,
+        frontLeg: entityFront,
+        clock: {
+          now: Date.now,
+          setTimeout: (fn, ms) => setTimeout(fn, ms),
+          clearTimeout
+        },
+        logStream: { write: line => log('core', { line }) }
+      })
+      const entityAttaches = []
+      entityFront.setCoreAttachConfiguring(({ name, uuid }) => entityCore.attachConfiguringPlayer({ name, uuid }))
+      entityFront.setConfiguringHandler(({ name }) => entityCore.configuringReady({ name }))
+      entityFront.setClientSettingsHandler(settings => entityCore.noteClientSettings(settings))
+      entityFront.setCoreAttach(({ name, uuid }) => {
+        const outcome = entityCore.attachPlayer({ name, uuid, includeConfig: false })
+        if (outcome.attached) entityAttaches.push(outcome.frames ?? [])
+        return outcome
+      })
+      entityCore.start()
+      const entityBound = await entityFront.listen()
+      const entityPort = entityBound.port ?? entityFront.port
+      await entityBackend.connect()
+      await waitForReady({ core: entityCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+
+      // Entity 9's body, then its correction, then three more entities: four
+      // entities and five frames. Under the old ring these five frames were a FIFO
+      // of four, so entity 9's spawn was the one that went, and the replay carried a
+      // correction for a body the client never spawned.
+      entityFake.sendSpawnEntity({ entityId: 9, x: 1 })
+      entityFake.sendSyncEntityPosition({ entityId: 9, x: 2 })
+      for (let entityId = 10; entityId <= 12; entityId++) {
+        entityFake.sendSpawnEntity({ entityId, x: 3 })
+      }
+      await waitFor(
+        () => entityCore.cache.snapshot().entities.length === 5,
+        'the five entity frames in the keyed entity domain'
+      )
+
+      const entitySnapshot = entityCore.cache.snapshot()
+      entityBot = createBot({ port: entityPort, username: 'Attach' })
+      await entityBot.ready()
+      await entityBot.waitFor(
+        () => entityAttaches.length === 1 &&
+          entityBot.playNames().filter(name => name === 'spawn_entity' || name === 'sync_entity_position').length >= 5,
+        'the entity frames the replay carried'
+      )
+      const replayedEntityFrames = (entityAttaches[0] ?? [])
+        .map(frame => frame.name)
+        .filter(name => name === 'spawn_entity' || name === 'sync_entity_position')
+      const receivedEntityFrames = entityBot.playNames()
+        .filter(name => name === 'spawn_entity' || name === 'sync_entity_position')
+      const entityStats = entityCore.cache.stats()
+
+      evidence.entityDomain = {
+        bound: 4,
+        entities: entityStats.sizes.entities,
+        frames: entitySnapshot.entities.length,
+        replayed: replayedEntityFrames,
+        received: receivedEntityFrames,
+        overflows: entityStats.metrics.overflows.entity,
+        frameOverflows: entityStats.metrics.overflows.entityFrames,
+        slots: entityStats.entitySlots
+      }
+      check(
+        'O51',
+        'the entity domain keeps every entity the bound allows, so a replayed body always carries its spawn',
+        entityStats.sizes.entities === 4 &&
+          entitySnapshot.entities.length === 5 &&
+          replayedEntityFrames.join(',') ===
+            'spawn_entity,sync_entity_position,spawn_entity,spawn_entity,spawn_entity' &&
+          receivedEntityFrames.join(',') === replayedEntityFrames.join(',') &&
+          entityStats.entitySlots === 5 &&
+          entityStats.metrics.overflows.entity === 0 &&
+          entityStats.metrics.overflows.entityDepth === 0 &&
+          entityStats.metrics.overflows.entityFrames === 0,
+        evidence.entityDomain
+      )
+    } finally {
+      try { await entityBot?.close?.() } catch { /* best effort */ }
+      try { await entityFront?.close?.() } catch { /* best effort */ }
+      try { await entityBackend?.close?.() } catch { /* best effort */ }
+      try { await entityFake?.close?.() } catch { /* best effort */ }
+    }
 
   } catch (error) {
     runError = error

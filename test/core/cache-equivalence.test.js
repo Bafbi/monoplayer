@@ -1,16 +1,27 @@
-// Property target: replay(cache(stream)) == stream.
+// Property target: replay(cache(stream)) == stream, compared on the client-state
+// model.
 //
 // `stream` is the clientbound play sequence the backend sent after the join
 // prefix warmed. `cache(stream)` is createStateCache's bounded per-domain
 // rebuild, and `replay` is the order join-synth.synthAttach emits, taken from its
-// own `replayFrames`. See the top of the file for the property.
-// The client-state model gives both sides the same shape, so a cache domain
-// that keys or evicts the wrong frames fails here.
+// own `replayFrames`. The client-state model gives both sides the same shape, so
+// a cache domain that keys or evicts the wrong frames fails here.
 //
-// Bounded FIFO domains (block, entity, generic) cannot replay state they
-// evicted. For those streams the exact property is defined on the replayed
-// suffix: replay(cache(stream)) == apply(tail(stream)), where tail is the
-// frames the ring kept. The tests say which case they assert.
+// One domain drops frames and still keeps the equality. The entity domain is
+// keyed by entity and slot (#213), so it drops a frame that the next frame for
+// the same slot supersedes: superseded metadata is invisible to the model,
+// which applies one slot last-write-wins. For those streams the assertion is the
+// whole stream.
+//
+// Three cases state the stream they expect, because the cache drops state no
+// later frame restates:
+//
+//   - Bounded FIFO domains (block, generic) replay the suffix their ring kept:
+//     replay(cache(stream)) == apply(tail(stream)).
+//   - The entity count and depth bounds drop whole entities, so the expected
+//     stream is the one a client would hold if those entities never existed.
+//   - A login or a respawn flushes the entity domain, so the expected stream
+//     starts at the frame that flushed it.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createStateCache } from '../../src/core/state-cache.js'
@@ -168,7 +179,8 @@ test('replay equals the stream: entity metadata merge, removal, and the entity b
   assert.equal(removed.removed, true)
   assert.deepEqual(removed.fields, [])
 
-  // More entities than maxEntities: the ring must keep the newest maxEntities.
+  // More entities than maxEntities: the bound counts entities, and the ones it
+  // keeps are the most recently updated.
   const limit = 3
   const many = Array.from({ length: 6 }, (_, index) => ({
     name: 'entity_metadata',
@@ -214,7 +226,7 @@ test('replay equals the stream: sync_entity_position then entity_teleport ends a
 
 test('replay equals the stream: a generic frame between two entity frames keeps entity order', () => {
   // A frame from another domain landing between two entity frames must not
-  // reorder the entity pair. The generic ring replays after the entity ring, so
+  // reorder the entity pair. The generic ring replays after the entity domain, so
   // the last absolute position captured for the entity still wins.
   const stream = [
     ...joinPrefix(),
@@ -238,9 +250,9 @@ test('replay equals the stream: a generic frame between two entity frames keeps 
   assert.equal(state.latest.find(entry => entry.name === 'update_health').data.health, 12)
 })
 
-test('replay equals the stream: entity_destroy lands in the entity ring', () => {
+test('replay equals the stream: entity_destroy lands in the entity domain', () => {
   // 26.2 sends entity_destroy, not remove_entities. A destroy kept out of the
-  // entity ring replays after the entity frames it was meant to remove.
+  // entity domain replays after the entity frames it was meant to remove.
   const stream = [
     ...joinPrefix(),
     { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
@@ -285,6 +297,149 @@ test('replay equals the stream: deltas captured before the last absolute keep th
   const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
   const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
   assert.equal(fields.x, 10) // the backend's position, not the 13 a section-order replay gives
+})
+
+test('replay equals the stream: a newer metadata frame supersedes only its own index', () => {
+  // #213. The frame that set index 0 and index 1 is superseded twice, on each
+  // index by a different frame. Keeping it would replay an index at its old
+  // value; keeping it and dropping both later frames would replay both indexes
+  // stale.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }, { key: 1, type: 'byte', value: 1 }] } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 2 }] } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 1, type: 'byte', value: 3 }] } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(snapshot.entities.map(frame => frame.name), ['spawn_entity', 'entity_metadata', 'entity_metadata'])
+  assert.deepEqual(
+    snapshot.entities.slice(1).map(frame => frame.data.metadata[0].value),
+    [2, 3],
+    'the dropped frame took no index with it'
+  )
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields[0], 2)
+  assert.equal(fields[1], 3)
+})
+
+test('replay equals the stream: one entity churning cannot evict another entity', () => {
+  // #213 repro. The entity domain was a FIFO over frames, so eight metadata
+  // frames for entity 9 filled it and took entity 9's own spawn: the client got
+  // a body it never spawned. The bound is two entities and the stream has two,
+  // so the replay is the whole stream.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 1, y: 64, z: 1, yaw: 0, pitch: 0 } },
+    ...Array.from({ length: 8 }, (_, index) => ({
+      name: 'entity_metadata',
+      data: { entityId: 9, metadata: [{ key: index, type: 'byte', value: index }] }
+    })),
+    { name: 'spawn_entity', data: { entityId: 10, x: 2, y: 64, z: 2, yaw: 0, pitch: 0 } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream, { maxEntities: 2 })
+
+  assert.equal(snapshot.entities.filter(frame => frame.data.entityId === 9).length, 9, 'the spawn and eight indexes')
+  assert.equal(snapshot.entities.filter(frame => frame.data.entityId === 10).length, 1)
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields.x, 1, 'the body replayed with its spawn')
+  assert.equal(fields[7], 7)
+})
+
+test('replay drops an entity past its depth whole, so the client sees no truncated body', () => {
+  // The model cannot express a half-replayed body either: an index the cache
+  // truncated would sit at the client default, which is the defect. The expected
+  // stream is the one a client holds if the entity never existed.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 1, type: 'byte', value: 2 }] } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream, { maxEntitySlots: 2 }, [...joinPrefix()])
+
+  assert.deepEqual(snapshot.entities, [], 'nothing of the entity replays')
+  assert.deepEqual(stateSnapshot(replayed).entities, [])
+})
+
+test('replay equals the stream: a removal for a body the join prefix spawned still replays', () => {
+  // The domain never saw the spawn, so the removal has no record to write to and
+  // spends no entity. It still replays, because a client that rebuilds from the
+  // prefix does hold that body.
+  const prefix = [
+    { name: 'login', data: { entityId: 42 } },
+    { name: 'spawn_entity', data: { entityId: 7, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'chunk_batch_start', data: {} },
+    { name: 'map_chunk', data: { x: 0, z: 0 } },
+    { name: 'chunk_batch_finished', data: { batchSize: 1 } }
+  ]
+  const stream = [...prefix, { name: 'entity_destroy', data: { entityIds: [7] } }]
+
+  const { snapshot, replayed } = assertEquivalent(stream, { maxEntities: 1 })
+
+  assert.equal(snapshot.entities.length, 1, 'one removal, no record per destroyed id')
+  assert.equal(snapshot.entities[0].name, 'entity_destroy')
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 7)
+  assert.equal(entity.removed, true, 'the body the prefix spawned is gone')
+  assert.deepEqual(entity.fields, [])
+})
+
+test('replay drops a body the entity bound dropped, so no body has metadata alone', () => {
+  // #213, the other direction: after the bound drops a body, its later metadata
+  // cannot rebuild it. The expected stream is the one a client holds when the
+  // body never appeared again.
+  const dropped = [
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'spawn_entity', data: { entityId: 10, x: 1, y: 64, z: 1, yaw: 0, pitch: 0 } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } }
+  ]
+  const expected = [
+    { name: 'spawn_entity', data: { entityId: 10, x: 1, y: 64, z: 1, yaw: 0, pitch: 0 } }
+  ]
+
+  const { snapshot, replayed, cache } = assertEquivalent(
+    [...joinPrefix(), ...dropped],
+    { maxEntities: 1 },
+    [...joinPrefix(), ...expected]
+  )
+
+  assert.equal(cache.stats().metrics.entitySuppressed, 1)
+  assert.deepEqual(snapshot.entities.map(frame => frame.data.entityId), [10])
+  assert.deepEqual(stateSnapshot(replayed).entities.map(entity => entity.entityId), [10])
+})
+
+test('replay equals the stream after a respawn: the entity domain is per world', () => {
+  // #213: a respawn starts a world whose entity ids the old ones do not name, and
+  // nothing else in the pipeline sees it. The client-state model ignores the
+  // frame, so the expected stream starts there.
+  const oldWorld = [
+    { name: 'spawn_entity', data: { entityId: 9, x: 1, y: 64, z: 1, yaw: 0, pitch: 0 } },
+    { name: 'entity_metadata', data: { entityId: 9, metadata: [{ key: 0, type: 'byte', value: 1 }] } }
+  ]
+  const newWorld = [
+    { name: 'respawn', data: { copyMetadata: 0 } },
+    { name: 'spawn_entity', data: { entityId: 11, x: 2, y: 64, z: 2, yaw: 0, pitch: 0 } },
+    { name: 'entity_metadata', data: { entityId: 11, metadata: [{ key: 0, type: 'byte', value: 5 }] } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(
+    [...joinPrefix(), ...oldWorld, ...newWorld],
+    {},
+    [...joinPrefix(), ...newWorld]
+  )
+
+  assert.deepEqual(snapshot.entities.map(frame => frame.data.entityId), [11, 11])
+  assert.deepEqual(
+    stateSnapshot(replayed).entities.map(entity => entity.entityId),
+    [11],
+    'the old world\'s body is gone, not replayed into the new one'
+  )
 })
 
 test('replay equals the stream: repeated latest health and abilities', () => {

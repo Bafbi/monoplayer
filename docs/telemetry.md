@@ -130,7 +130,7 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.attached` | gauge | none | `1` while a client is attached. |
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |
 | `monoplayer.backend.logins` | gauge | none | Current backend login count. |
-| `monoplayer.cache.frames` | gauge | none | Total cached frames across all cache domains. |
+| `monoplayer.cache.frames` | gauge | none | The entries the cache domains hold, summed over `stats().sizes`. Every domain contributes frames except `entities`, which contributes the number of entities it tracks, so read this as one number for "how full is the cache", not as a frame count. |
 
 The four gauges are emitted at startup and on the 30-second heartbeat.
 
