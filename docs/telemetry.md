@@ -84,6 +84,51 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 
 The four gauges are emitted at startup and on the 30-second heartbeat.
 
+## The heartbeat record
+
+Every 30 seconds the service appends one `heartbeat` record to the JSONL log.
+It is the only operator readout the deployed lane writes.
+
+The `Kind` column is the one thing this table exists for. **Cumulative** means
+the field only grows over the life of the process: to get a rate, subtract the
+previous heartbeat before dividing by the interval, because the value itself is
+a running total and dividing it by 30 s is not a rate. **Gauge** means the value
+at the instant the record was written: it rises and falls, and it says nothing
+about history.
+
+| Field | Kind | Meaning |
+| --- | --- | --- |
+| `attached` | gauge | A client is attached right now. |
+| `warm` | gauge | The cache saw `chunk_batch_finished`. It never goes back to `false`, so it rises once and stays. |
+| `backendLogins` | cumulative | Backend logins this process completed. |
+| `metrics.framesCached` | cumulative | Frames the cache accepted. Not resident growth: the chunk ring is bounded by `chunkBound`, and `sizes` says what is held now. |
+| `metrics.framesDropped` | cumulative | Frames the cache refused. |
+| `metrics.overflows.{prefix,config,chunk,block,entity,generic}` | cumulative | Frames that pushed a bounded domain past its cap. |
+| `metrics.evictions.{inventory,latest}` | cumulative | Frames a bounded map dropped to store a newer one. |
+| `metrics.warmComplete` | cumulative | Times the cache marked itself warm at `chunk_batch_finished`. |
+| `metrics.warmFallback` | cumulative | Times readiness forced warm because the backend streamed chunks unbatched, so the prefix was pinned at its edge. |
+| `metrics.restores` | cumulative | Cache snapshots restored into a later session. |
+| `sizes.{prefix,config,chunks,blocks,entities,inventories,latest,generic}` | gauge | Frames each cache domain holds now. The startup `cacheStats` line carries the same object, so the boot numbers and the heartbeat numbers have one shape. |
+| `chunkBytes` | gauge | Sum of the chunk ring's `buffer.length` now, in bytes. The `backendViewDistance` line also writes it, at backend login, where the ring is empty by construction, so this record is the readable one. |
+| `front.denied`, `front.allowed`, `front.attaches` | cumulative | Login-start denials, allows, and attaches. |
+| `front.policyRefused`, `front.stateRefused` | cumulative | Refusals from the code-of-conduct policy and from the protocol state. |
+| `front.reconfigurations`, `front.reconfigured` | cumulative | Reconfiguration attempts and completions. |
+| `front.reconfigurationFramesFlushed`, `front.reconfigurationFramesDropped` | cumulative | Frames held for the new connection, and frames lost because it never came. |
+| `front.preAuthRefused` | cumulative | Connections refused because the pre-auth window was full. |
+| `front.preAuthExpired` | cumulative | Connections the pre-auth deadline destroyed. |
+| `front.preAuthInWindow` | gauge | The one gauge in that group: connections accepted and not yet past the attach whitelist. |
+| `wire.checked`, `wire.rejected`, `wire.byState.*` | cumulative | Frames the wire checker inspected, the ones it rejected, and the split by protocol state. |
+| `wire.lastFailure` | last value | The most recent rejection, or `null`. |
+| `backendFrames.frames`, `.swallowed`, `.bundledFramesRelayed`, `.bundledDelimiters`, `.names.*` | cumulative | The backend forwarder's frame counts and its per-`state/name` totals. The whole object is `null` until a backend connection exists. |
+| `telemetry.requests`, `.retries`, `.failures` | cumulative | OTLP posts attempted, retried, and failed. |
+| `telemetry.logs.{accepted,sent,dropped,batches}`, `telemetry.metrics.{accepted,sent,dropped,batches}` | cumulative | Export counts, per signal. |
+| `telemetry.logs.queued` | gauge | Log records buffered for the next flush. |
+| `telemetry.metrics.queued` | gauge | **The number of distinct telemetry series**, not a queue depth. It is `pending.size`, one entry per name-and-attribute pair, so it moves when a new series appears and not when a frame is counted. |
+| `telemetry.lastError`, `telemetry.enabled` | last value | The most recent export error, and whether telemetry is on. |
+| `journal.frames`, `.events`, `.bytes`, `.pruned`, `.prunedBytes`, `.rotations`, `.skipped`, `.truncated`, `.errors` | cumulative | Journal records written and bytes appended, and what rotation and retention removed. `bytes` is written, not resident. |
+| `journal.dirBytes` | gauge | The directory's footprint, measured at this heartbeat. |
+| `journal.enabled`, `.disabledReason`, `.dir`, `.file` | constant | Fixed at startup; `disabledReason` is the reason the journal is off. |
+
 The heartbeat also carries the front leg's own counters under `front`, which
 the core cannot hold because the core never sees a socket. Abbreviated to the
 six an operator watches:
