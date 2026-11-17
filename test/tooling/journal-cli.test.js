@@ -31,6 +31,8 @@ function harness (t) {
 }
 
 // A journal with one frame per name, one second apart, written by the product.
+// The writer seals on close, so a fixture is read back through its gzipped
+// shards, which is what the reader does on the deployed lane.
 function writeJournal (dir, frames, { start = NOW } = {}) {
   let clock = start
   const journal = createJournal({ dir, clock: () => clock })
@@ -73,14 +75,74 @@ test('tail defaults to the last ten records', t => {
   assert.equal(records(result.stdout).length, 10)
 })
 
-test('tail reads a journal file given directly', t => {
+test('tail reads one sealed shard given directly', t => {
   const h = harness(t)
   writeJournal(h.dir, [['one'], ['two']])
-  const file = path.join(h.dir, fs.readdirSync(h.dir)[0])
+  const file = path.join(h.dir, fs.readdirSync(h.dir).find(name => name.endsWith('.ndjson.gz')))
 
   const result = h.run('tail', '1', '--path', file)
   assert.equal(result.status, 0, result.stderr)
   assert.deepEqual(records(result.stdout).map(record => record.name), ['two'])
+})
+
+test('tail reads a chunk as length only, from the bulk shard', t => {
+  const h = harness(t)
+  writeJournal(h.dir, [['map_chunk'], ['login']])
+
+  const result = h.run('tail', '5', '--path', h.dir)
+  assert.equal(result.status, 0, result.stderr)
+  const byName = Object.fromEntries(records(result.stdout).map(record => [record.name, record]))
+  assert.equal(byName.map_chunk.lengthOnly, true)
+  assert.equal('b64' in byName.map_chunk, false)
+  assert.equal(Buffer.from(byName.login.b64, 'base64').toString(), 'login')
+})
+
+// ---------------------------------------------------------------------------
+// manifest
+// ---------------------------------------------------------------------------
+
+test('manifest answers one line per shard, with the frames each one holds', t => {
+  const h = harness(t)
+  writeJournal(h.dir, [['map_chunk'], ['login'], ['login']])
+
+  const result = h.run('manifest', '--path', h.dir)
+  assert.equal(result.status, 0, result.stderr)
+  const shards = records(result.stdout)
+  assert.equal(shards.length, 2, result.stdout)
+  const frames = shards.find(row => row.kind === 'frames')
+  const bulk = shards.find(row => row.kind === 'bulk')
+  assert.deepEqual(frames.names, { login: 2 })
+  assert.equal(frames.lines, 2)
+  assert.equal(frames.from, NOW + 1000)
+  assert.equal(frames.to, NOW + 2000)
+  assert.ok(frames.bytes > 0)
+  assert.ok(frames.gzBytes > 0)
+  assert.deepEqual(bulk.names, { map_chunk: 1 })
+  assert.equal(bulk.live, undefined, 'a sealed shard carries the manifest the writer wrote')
+})
+
+test('manifest derives one for the shard still being written', t => {
+  const h = harness(t)
+  // The writer is left open, so nothing sealed and no manifest exists on disk.
+  const journal = createJournal({ dir: h.dir, clock: () => NOW })
+  journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('login') })
+  t.after(() => journal.close())
+
+  const result = h.run('manifest', '--path', h.dir)
+  assert.equal(result.status, 0, result.stderr)
+  const [row] = records(result.stdout)
+  assert.equal(row.kind, 'frames')
+  assert.equal(row.live, true)
+  assert.equal(row.lines, 1)
+  assert.deepEqual(row.names, { login: 1 })
+})
+
+test('manifest takes no argument, and a bad invocation exits 2', t => {
+  const h = harness(t)
+  writeJournal(h.dir, [['one']])
+  const result = h.run('manifest', 'extra', '--path', h.dir)
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /takes no argument/)
 })
 
 

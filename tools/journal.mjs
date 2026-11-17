@@ -5,8 +5,9 @@
 //   node tools/journal.mjs heartbeat
 //   node tools/journal.mjs names [pattern]
 //   node tools/journal.mjs window <seconds>
+//   node tools/journal.mjs manifest
 //
-// The layout, the file names, and the rotation order come from
+// The layout, the file names, and the shard order come from
 // src/observability/journal.js; this file only picks records and prints them.
 // Every command accepts --path, --dir, and --state.
 //
@@ -15,7 +16,7 @@
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-import { readJournal, readNdjson } from '../src/observability/journal.js'
+import { describeShard, readJournal, readManifests, readNdjson } from '../src/observability/journal.js'
 
 // The protocol states a journal frame can carry. A typo in --state is a usage
 // error, not an empty answer.
@@ -28,6 +29,9 @@ const USAGE = `usage: node tools/journal.mjs <command> [options]
   names [pattern]    frames per name: count, bytes, first and last time
                      (pattern is a substring of the frame name)
   window <seconds>   the same, for the N seconds before the newest frame
+  manifest           one line per shard: hour, time range, line count, byte
+                     count, and the frames it holds. Read this first: it is
+                     how a reader skips the shards that hold nothing it wants.
 
   --path <file|dir>  a journal directory, a journal file, or the JSONL log.
                      Default: MONOPLAYER_JOURNAL_DIR, or MONOPLAYER_LOG for
@@ -85,15 +89,18 @@ function sourcePath (command, options) {
   return value
 }
 
-// A directory reads as every journal file in rotation order; a file reads as
-// itself, which is how a log file or one rotated segment is inspected.
-async function * readPath (source) {
-  let stat
+function statSource (source) {
   try {
-    stat = fs.statSync(source)
+    return fs.statSync(source)
   } catch (error) {
     throw new Error(`cannot read ${source}: ${error.message}`)
   }
+}
+
+// A directory reads as every journal shard in the writer's order; a file reads
+// as itself, which is how the JSONL log or one shard is inspected.
+async function * readPath (source) {
+  const stat = statSource(source)
   if (stat.isDirectory()) {
     yield * readJournal(source)
     return
@@ -215,6 +222,15 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
       // A second pass: the window needs the newest frame before it can decide
       // what falls inside, and the source is a single-pass stream.
       const rows = await summarize(readPath(source), { ...options, since: newest - seconds * 1000 })
+      for (const row of rows) write(JSON.stringify(row))
+      return 0
+    }
+
+    if (command === 'manifest') {
+      if (positional.length > 0) usage('manifest takes no argument')
+      const source = sourcePath(command, options)
+      const stat = statSource(source)
+      const rows = stat.isDirectory() ? await readManifests(source) : [await describeShard(source)]
       for (const row of rows) write(JSON.stringify(row))
       return 0
     }
