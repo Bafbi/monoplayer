@@ -49,6 +49,10 @@ run = "node src/ladder/online.js || node src/ladder/next-rung.js online $?"
 description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving."
 run = "scripts/online-cluster.sh"
 
+[tasks."panel:run"]
+description = "Serve the panel on this machine from the registry this repo ships, on port 8080. Needs no cluster: the page reads the ConfigMap in deploy/panel."
+run = "node src/panel/start.js --registry deploy/panel/registry.yaml"
+
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback."
 depends = ["lint", "test", "loopback"]

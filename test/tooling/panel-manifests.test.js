@@ -50,6 +50,7 @@ function documentsIn (dir, files) {
 function describe (text) {
   const metadata = section(text, 0, 'metadata')
   return {
+    apiVersion: scalar(text, 'apiVersion'),
     kind: scalar(text, 'kind'),
     name: (metadata.match(/^ {2}name:\s*(\S+)\s*$/m) ?? [])[1] ?? null,
     namespace: (metadata.match(/^ {2}namespace:\s*(\S+)\s*$/m) ?? [])[1] ?? null
@@ -288,26 +289,50 @@ function audit ({ files, documents, registry }) {
     // The booleans are read without their indentation: the guard is about what
     // the pod declares, and a reindented manifest is not a weaker pod.
     const required = [
-      [/command: \["node", "src\/panel\/start\.js"\]/, 'runs the panel entrypoint'],
-      [/image: ghcr\.io\/bafbi\/monoplayer:\S+/, 'runs this repository\'s image'],
-      [/\n\s+runAsNonRoot: true/, 'requires a non-root user'],
-      [/\n\s+readOnlyRootFilesystem: true/, 'has a read-only root filesystem'],
-      [/\n\s+allowPrivilegeEscalation: false/, 'refuses privilege escalation'],
-      [/\n\s+drop:\s*\n\s+- ALL/, 'drops every capability'],
-      [/\n\s+serviceAccountName: panel/, 'runs as the panel ServiceAccount']
+      [/command: \["node", "src\/panel\/start\.js"\]/, 'the panel entrypoint'],
+      // The tag the registry records, exactly. A digest or a sha tag would be a
+      // different image from the one the proxy runs on this branch; #234 pins both
+      // and changes this line with it.
+      [/image: ghcr\.io\/bafbi\/monoplayer:main\n/, 'ghcr.io/bafbi/monoplayer:main'],
+      [/\n\s+runAsNonRoot: true/, 'a non-root user'],
+      [/\n\s+readOnlyRootFilesystem: true/, 'a read-only root filesystem'],
+      [/\n\s+allowPrivilegeEscalation: false/, 'a refusal of privilege escalation'],
+      [/\n\s+drop:\s*\n\s+- ALL/, 'every capability dropped'],
+      [/\n\s+serviceAccountName: panel/, 'the panel ServiceAccount']
     ]
-    for (const [pattern, promise] of required) {
-      if (!pattern.test(pod)) report('Deployment ' + deployment.name + ' ' + promise.replace(/^/, 'does not ') + '')
+    for (const [pattern, what] of required) {
+      if (!pattern.test(pod)) report('Deployment ' + deployment.name + ' does not declare ' + what)
     }
     for (const probe of ['readinessProbe', 'livenessProbe']) {
       const body = new RegExp(probe + ':\\s*\\n(?:\\s+\\S.*\\n)*?\\s+path: /healthz\\n')
       if (!body.test(pod)) report('Deployment ' + deployment.name + ' has no ' + probe + ' on /healthz')
     }
     if (/^\s+hostPath:/m.test(pod)) report('Deployment ' + deployment.name + ' mounts a hostPath')
-    if (/:latest\s*$/m.test(pod)) report('Deployment ' + deployment.name + ' pulls :latest')
   }
 
   return problems
+}
+
+// A list of pair entries, such as a project's whitelists. A line this reader
+// cannot place fails, for the same reason a rule line does.
+function nestedList (text, key) {
+  const entries = []
+  let current = null
+  for (const line of section(text, 2, key).split('\n')) {
+    if (line.trim() === '') continue
+    const opening = line.match(/^ {4}- ([a-z]+): (".*"|\S+)$/)
+    if (opening) {
+      current = { [opening[1]]: opening[2].replace(/^"|"$/g, '') }
+      entries.push(current)
+      continue
+    }
+    const entry = line.match(/^ {6}([a-z]+): (".*"|\S+)$/)
+    if (!entry || current === null) {
+      throw new Error('this guard cannot read the ' + key + ' line: ' + JSON.stringify(line))
+    }
+    current[entry[1]] = entry[2].replace(/^"|"$/g, '')
+  }
+  return entries
 }
 
 // --- the tree ---
@@ -378,6 +403,18 @@ test('the guard refuses a Service that leaves the tailnet', () => {
   const tunnel = structuredClone(documents)
   tunnel[0].text += '\n    publish: playit\n'
   assert.ok(audit({ files, documents: tunnel, registry }).some(problem => problem.includes('playit')))
+})
+
+test('the guard refuses an image that is not the one the branch records', () => {
+  const broken = structuredClone(documents)
+  const deployment = broken.find(document => document.kind === 'Deployment')
+  deployment.text = deployment.text.replace(
+    'ghcr.io/bafbi/monoplayer:main',
+    'ghcr.io/bafbi/monoplayer:sha-1a2b3c4'
+  )
+  assert.ok(audit({ files, documents: broken, registry }).includes(
+    'Deployment panel does not declare ghcr.io/bafbi/monoplayer:main'),
+  'a sha tag is a different image from the one the proxy runs on this branch')
 })
 
 test('the guard refuses a role or a binding that leaves the namespaces it names', () => {
@@ -464,6 +501,33 @@ test('the panel Application syncs deploy/panel, and its project allows every nam
     .map(match => match[1])
   assert.deepEqual(cluster, ['Namespace'],
     'the panel project may create a Namespace and no other cluster-scoped object')
+
+  // Every namespaced kind the tree holds is whitelisted, and nothing else is. Argo
+  // refuses to sync a kind its project does not name, so a wildcard here would be
+  // the project allowing any object in the namespace it was given: the reach the
+  // Role exists to bound, granted to the Application instead.
+  const allowed = nestedList(project, 'namespaceResourceWhitelist')
+  assert.ok(allowed.length > 0, 'the project whitelists the kinds the panel tree holds')
+  for (const entry of allowed) {
+    assert.notEqual(entry.group, '*', 'the project whitelists every API group')
+    assert.notEqual(entry.kind, '*', 'the project whitelists every kind')
+  }
+  const held = new Map()
+  for (const document of documents) {
+    if (document.kind === 'Kustomization' || document.kind === 'Namespace') continue
+    const group = (document.apiVersion ?? '').includes('/') ? document.apiVersion.split('/')[0] : ''
+    held.set(group + '/' + document.kind, { group, kind: document.kind })
+  }
+  for (const [key, entry] of held) {
+    assert.ok(
+      allowed.some(allowing => allowing.group === entry.group && allowing.kind === entry.kind),
+      'the panel project does not whitelist ' + key + ', which deploy/panel creates'
+    )
+  }
+  for (const entry of allowed) {
+    assert.ok(held.has(entry.group + '/' + entry.kind),
+      'the panel project whitelists ' + entry.group + '/' + entry.kind + ', which deploy/panel never creates')
+  }
 
   // The ServiceAccount token is the one privilege boundary, so the namespace that
   // hands it out is restricted, like the puppet's.
