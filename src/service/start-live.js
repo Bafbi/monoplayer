@@ -20,6 +20,14 @@
 //                                                       its socket is destroyed
 //                                                       (default 30000, #205)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
+//   MONOPLAYER_CONTROL_FILE                             desired.json, the control
+//                                                       document that moves the
+//                                                       puppet's backend; setting it
+//                                                       also reloads the attach
+//                                                       whitelist at each login (#229)
+//   MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json on the
+//                                                       next connect, 0 leaves the
+//                                                       configured backend (default 0)
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
 //                                                       commands, full, or off
@@ -54,10 +62,12 @@
 import fs from 'node:fs'
 
 import { createMonoplayer, loadConfig } from './monoplayer.js'
+import { createControlDocument, dialTargetFor } from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { resolveAccount } from '../custody/accounts.js'
+import { accountTokenExpiry } from '../custody/status.js'
 import { normalizeUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../legs/live-backend.js'
 import { createLiveFrontLeg } from '../legs/live-front.js'
@@ -112,6 +122,20 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   }
   out.puppet = puppet
   if (env.MONOPLAYER_ATTACH_WHITELIST) out.attachWhitelistFile = env.MONOPLAYER_ATTACH_WHITELIST
+  // #229: the runtime control document. The path is the only switch, so an unset
+  // variable leaves the lane static. One accumulator for both keys, so a key
+  // written below cannot silently drop one written above it.
+  const control = { ...doc.control }
+  if (env.MONOPLAYER_CONTROL_FILE) control.file = env.MONOPLAYER_CONTROL_FILE
+  // Only "1" and "0" are read, so a typo cannot quietly move a deployed lane's
+  // puppet to another server.
+  const controlSwitch = env.MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH
+  if (controlSwitch === '1' || controlSwitch === '0') {
+    control.allowBackendSwitch = controlSwitch === '1'
+  } else if (controlSwitch !== undefined && controlSwitch !== '') {
+    warn('MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH must be 1 or 0; ignoring ' + controlSwitch)
+  }
+  if (Object.keys(control).length) out.control = control
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   if (env.MONOPLAYER_CHAT) out.chat = env.MONOPLAYER_CHAT
@@ -291,15 +315,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const skinWarning = unidentifiedSkinWarning(cfg)
   if (skinWarning !== null) stderr.write(`monoplayer --start: warning: ${skinWarning}\n`)
 
-  if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
-    const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
-    cfg.attachWhitelist = store.list().map(player => player.uuid)
-  }
-  if (cfg.attachWhitelist.length === 0) {
-    stderr.write(`monoplayer --start: attach whitelist empty at ${cfg.attachWhitelistFile}\n`)
-    return 2
-  }
-
   // --- logging sink (JSONL; every line redacted) ---
   let sink = stdout
   if (process.env.MONOPLAYER_LOG) {
@@ -340,6 +355,46 @@ export async function startLive ({ argv = [], io = process } = {}) {
     log('debugFramedDump', { file: framedFile })
   }
 
+  // --- 1c. the control document, and the attach whitelist it drives (#229) ---
+  // With control.file set, the attach whitelist is a file an operator edits: it is
+  // read at each login, so a UUID added through the panel is allowed on the next
+  // attempt with no restart. With it unset, the whitelist is the startup snapshot
+  // it has always been, and no control file is opened.
+  const control = createControlDocument({
+    file: cfg.control.file,
+    whitelistFile: cfg.attachWhitelistFile,
+    allowBackendSwitch: cfg.control.allowBackendSwitch,
+    log
+  })
+  const whitelistSource = control.whitelistStore === null ? null : control.attachWhitelist
+  if (whitelistSource !== null) {
+    cfg.attachWhitelist = whitelistSource()
+  } else if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
+    const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
+    cfg.attachWhitelist = store.list().map(player => player.uuid)
+  }
+  if (cfg.attachWhitelist.length === 0) {
+    if (whitelistSource === null) {
+      stderr.write(`monoplayer --start: attach whitelist empty at ${cfg.attachWhitelistFile}\n`)
+      return 2
+    }
+    // A control lane may start empty: the operator adds the first UUID through
+    // the panel. Exiting here would crash-loop the pod on the same file, which is
+    // the one thing the reload exists to avoid.
+    log('whitelistEmpty', { file: cfg.attachWhitelistFile, control: cfg.control.file })
+  }
+
+  // #229: the desired backend is read once before the first dial, and again
+  // before every reconnect. The target the process treats as its base is the one
+  // it actually dialled, so the follow controller's keepCookies decision and its
+  // revert compare like with like.
+  const configuredTarget = { host: cfg.backend.host, port: cfg.backend.port }
+  const desiredAtStart = control.desiredTarget()
+  const startupTarget = desiredAtStart ?? configuredTarget
+  if (desiredAtStart !== null) {
+    log('controlDesiredBackend', { host: startupTarget.host, port: startupTarget.port, source: 'startup' })
+  }
+
   // --- telemetry + journal (both inert unless their env is set) ---
   // Telemetry carries the puppet alias as a resource attribute; the alias and
   // account UUID are not secrets.
@@ -357,8 +412,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // --- 2. legs + core ---
   const backend = resolved
     ? createLiveBackendLeg({
-      host: cfg.backend.host,
-      port: cfg.backend.port,
+      host: startupTarget.host,
+      port: startupTarget.port,
       version: cfg.version,
       accountDir: resolved.account.dir,
       account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
@@ -375,8 +430,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
       log
     })
     : createLiveBackendLeg({
-      host: cfg.backend.host,
-      port: cfg.backend.port,
+      host: startupTarget.host,
+      port: startupTarget.port,
       version: cfg.version,
       cacheDir: cfg.puppet.cacheDir,
       cacheAccount: cfg.puppet.cacheAccount,
@@ -396,6 +451,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
     port: cfg.front.port,
     version: cfg.version,
     attachWhitelistFile: cfg.attachWhitelistFile,
+    // #229: the control document's store, so the leg's own whitelist check reads
+    // the same file the core gate does, at each login. Null keeps the leg's one
+    // startup read, which is every lane that never set control.file.
+    whitelistStore: control.whitelistStore,
     // #201: the total cap on the sockets inside the pre-auth window.
     preAuth: cfg.preAuth,
     getSnapshotConfig: () => core.cache.snapshot().config,
@@ -423,7 +482,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
     clock,
     logStream: { write: line => log('core', { line }) },
     telemetry,
-    journal
+    journal,
+    // #229: the attach whitelist read at each login, when a control document
+    // drives it. Null means cfg.attachWhitelist, frozen at startup.
+    whitelistSource
   })
 
   front.setCoreAttach(({ name, uuid }) =>
@@ -479,7 +541,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     return readiness
   }
 
-  const baseTarget = { host: cfg.backend.host, port: cfg.backend.port }
+  const baseTarget = { ...startupTarget }
   const follow = createTransferFollowController()
   // The server the puppet is on now. A plain backend fault reconnects here,
   // not always to the configured base.
@@ -507,20 +569,41 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // One backend.connect() per reconnect_due: the guard refuses a second
   // attempt while one is in flight, so the reconnect can never loop.
   let reconnecting = false
+  // The last desired backend this process logged, so an unchanging edit is one
+  // line rather than one per reconnect.
+  let lastDesired = desiredAtStart === null ? null : startupTarget.host + ':' + startupTarget.port
   core.on('reconnect_due', async ({ delayMs, attempt, target } = {}) => {
     if (reconnecting) return
     reconnecting = true
     core.session.backendConnecting({ initial: false })
 
     const due = follow.onDue({ target })
-    const dialTarget = due.target ?? currentTarget
+    // #229: the desired backend is read again here, before the dial, and only
+    // while no client is attached. Moving a live session is the last ticket in
+    // the epic; this one must never disturb an attached client.
+    const chosen = dialTargetFor({
+      transfer: due.target ?? null,
+      desired: control.desiredTarget(),
+      current: currentTarget,
+      attached: core.attached === true
+    })
+    const dialTarget = chosen.target
+    if (chosen.source === 'desired' && dialTarget.host + ':' + dialTarget.port !== lastDesired) {
+      lastDesired = dialTarget.host + ':' + dialTarget.port
+      log('controlDesiredBackend', { host: dialTarget.host, port: dialTarget.port, source: 'reconnect' })
+    }
     try {
+      // A followed transfer is the only dial that asks the target for a transfer:
+      // intent 3 carries the session, and its cookies, to the server that moved
+      // it. A desired backend is a fresh login on a server that never saw the
+      // puppet, so it gets intent 2 and no cookies.
+      const follows = due.target !== null && !isBase(dialTarget)
       backend.setTarget(dialTarget, {
-        keepCookies: !isBase(dialTarget),
-        transfer: !isBase(dialTarget)
+        keepCookies: follows,
+        transfer: follows
       })
+      if (chosen.source !== 'current') currentTarget = { ...dialTarget }
       if (due.target) {
-        currentTarget = { ...due.target }
         log('transferFollowConnect', {
           host: due.target.host,
           port: due.target.port,
@@ -638,7 +721,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
     front: `${cfg.front.host}:${cfg.front.port}`,
-    backend: `${cfg.backend.host}:${cfg.backend.port}`,
+    backend: `${startupTarget.host}:${startupTarget.port}`,
+    backendConfigured: `${configuredTarget.host}:${configuredTarget.port}`,
+    control: {
+      file: cfg.control.file,
+      allowBackendSwitch: cfg.control.allowBackendSwitch,
+      whitelistReload: whitelistSource !== null
+    },
     ...accountLogFields,
     attachWhitelist: cfg.attachWhitelistFile,
     whitelistCount: cfg.attachWhitelist.length
@@ -648,7 +737,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
     front: `${cfg.front.host}:${cfg.front.port}`,
-    backend: `${cfg.backend.host}:${cfg.backend.port}`,
+    backend: `${startupTarget.host}:${startupTarget.port}`,
     ...accountLogFields,
     whitelistCount: cfg.attachWhitelist.length,
     reconnect: {
@@ -708,11 +797,23 @@ export async function startLive ({ argv = [], io = process } = {}) {
     warm: readiness.warm
   })
 
-  await runForever({ core, backend, front, log, sink, telemetry, journal })
+  // #229: when the puppet's Minecraft token expires, the one "info" fact the
+  // panel cannot reach any other way. Read at each heartbeat, because a token
+  // refresh moves it. Unknown is null, never a guess.
+  const account = {
+    alias: resolved?.account.alias ?? null,
+    expiresAt: () => resolved
+      ? accountTokenExpiry({
+        dir: resolved.account.dir,
+        account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid
+      })
+      : accountTokenExpiry({ dir: cfg.puppet.cacheDir, account: cfg.puppet.cacheAccount ?? null })
+  }
+  await runForever({ core, backend, front, log, sink, telemetry, journal, account })
   return 0
 }
 
-async function runForever ({ core, backend, front, log, sink, telemetry, journal }) {
+async function runForever ({ core, backend, front, log, sink, telemetry, journal, account = { alias: null, expiresAt: () => null } }) {
   let stopping = false
   let lastRejected = front.wireStats.rejected
   let lastPreAuthRefused = front.metrics.preAuthRefused
@@ -792,6 +893,10 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
       front: front.metrics,
       wire: front.wireStats,
       backendFrames: forwarder ? { ...forwarder.counters, names: forwarder.names } : null,
+      // #229: the account the lane speaks for, and when its Minecraft token
+      // expires. A gauge of a timestamp in epoch milliseconds; null when the
+      // custody cache does not say, which is not the same as "no expiry".
+      account: { alias: account.alias, expiresAt: account.expiresAt() },
       // Export health: a silent OTLP or journal failure must be visible from
       // the pod log alone, without querying the collector.
       telemetry: telemetry.stats(),

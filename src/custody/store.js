@@ -84,6 +84,10 @@ export function createWhitelistStore ({
   existsSync = fs.existsSync,
   beforeRename = null,
   role = 'attach',
+  // #229: re-read the file at each has(), so a control document an operator
+  // edits between two logins takes effect on the next one. Off by default: a
+  // lane that never set config.control.file keeps the single read it always did.
+  reloadEachUse = false,
   knownOtherRoleUuids = () => [],
 } = {}) {
   let doc = null
@@ -118,6 +122,7 @@ export function createWhitelistStore ({
   }
 
   function has (identifier) {
+    if (reloadEachUse) doc = null
     return find(identifier) !== null
   }
 
