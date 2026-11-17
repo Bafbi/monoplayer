@@ -53,7 +53,7 @@ export function createControlDocument ({
   // One line per distinct refusal. A reconnect loop re-reads the same file every
   // few seconds, and a heartbeat of identical warnings is not a diagnosis.
   function sayOnce (event, fields) {
-    const key = event + ':' + String(fields.reason ?? fields.code ?? '')
+    const key = [event, fields.file, fields.reason ?? fields.code].map(value => String(value ?? '')).join(':')
     if (said.has(key)) return
     said.add(key)
     log(event, fields)
@@ -113,12 +113,16 @@ export function dialTargetFor ({ transfer = null, desired = null, current = null
   return { target: current, source: 'current' }
 }
 
-// The leg options for a dial. A transfer, or the return to the server the session
-// was on, asks for the transfer handshake and keeps its cookies; that is the
-// behaviour every lane had before this ticket. A desired backend is a fresh
-// login on a server that never saw the puppet, so it gets neither.
-export function dialIntent ({ source, target, base }) {
+// The leg options for a dial. A followed transfer, and the return to a server a
+// transfer moved the session to, ask for the transfer handshake and keep their
+// cookies: that is the behaviour every lane had before this ticket.
+//
+// `current` alone does not say which happened. A server off the base is one a
+// transfer moved the session to (preserve, and ask for the handshake) or one a
+// desired backend sent it to (a fresh login, no cookies). `currentIsTransfer`
+// carries that one bit, and it is false on every lane without a control file.
+export function dialIntent ({ source, target, base, currentIsTransfer = false }) {
   const onBase = target.host === base.host && target.port === base.port
-  const follows = source !== 'desired' && !onBase
+  const follows = !onBase && (source === 'transfer' || (source === 'current' && currentIsTransfer))
   return { keepCookies: follows, transfer: follows }
 }

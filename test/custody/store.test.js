@@ -191,7 +191,7 @@ test('name lookup: invalid names and exhausted failures are reported as failures
 // #229: a control lane's store re-reads the file at each login. Every other
 // lane keeps the one read it has always done, which is what keeps an edited
 // `.secrets/attach-whitelist.json` from changing a lane that never opted in.
-test('#229 reloadEachUse re-reads at each has(), and the default keeps one read', () => {
+test('#229 reloadEachUse re-reads at each read, and the default keeps one', () => {
   const file = tmpFile('reload')
   fs.writeFileSync(file, JSON.stringify({ version: 1, players: [{ uuid: PLAYER.dashed }] }))
 

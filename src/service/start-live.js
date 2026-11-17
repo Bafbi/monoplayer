@@ -315,6 +315,21 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const skinWarning = unidentifiedSkinWarning(cfg)
   if (skinWarning !== null) stderr.write(`monoplayer --start: warning: ${skinWarning}\n`)
 
+  // A static lane keeps the order it always had: its whitelist is read here, and
+  // an empty one exits before a log stream or a diagnostic dump is opened. A
+  // control lane reads its file later, through the control document, because
+  // naming a file the service could not read needs the log sink.
+  if (cfg.control.file === null) {
+    if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
+      const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
+      cfg.attachWhitelist = store.list().map(player => player.uuid)
+    }
+    if (cfg.attachWhitelist.length === 0) {
+      stderr.write(`monoplayer --start: attach whitelist empty at ${cfg.attachWhitelistFile}\n`)
+      return 2
+    }
+  }
+
   // --- logging sink (JSONL; every line redacted) ---
   let sink = stdout
   if (process.env.MONOPLAYER_LOG) {
@@ -369,19 +384,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const whitelistSource = control.whitelistStore === null ? null : control.attachWhitelist
   if (whitelistSource !== null) {
     cfg.attachWhitelist = whitelistSource()
-  } else if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
-    const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
-    cfg.attachWhitelist = store.list().map(player => player.uuid)
-  }
-  if (cfg.attachWhitelist.length === 0) {
-    if (whitelistSource === null) {
-      stderr.write(`monoplayer --start: attach whitelist empty at ${cfg.attachWhitelistFile}\n`)
-      return 2
+    if (cfg.attachWhitelist.length === 0) {
+      // A control lane may start empty: the operator adds the first UUID through
+      // the panel. Exiting here would crash-loop the pod on the same file, which
+      // is the one thing the reload exists to avoid.
+      log('whitelistEmpty', { file: cfg.attachWhitelistFile, control: cfg.control.file })
     }
-    // A control lane may start empty: the operator adds the first UUID through
-    // the panel. Exiting here would crash-loop the pod on the same file, which is
-    // the one thing the reload exists to avoid.
-    log('whitelistEmpty', { file: cfg.attachWhitelistFile, control: cfg.control.file })
   }
 
   // #229: the desired backend is read once before the first dial, and again
@@ -546,6 +554,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // The server the puppet is on now. A plain backend fault reconnects here,
   // not always to the configured base.
   let currentTarget = { ...baseTarget }
+  // Why it is off the base, when it is: a followed transfer keeps the transfer
+  // handshake on the next fault, and a desired backend does not. Before #229 the
+  // only reason was a transfer, which is why one boolean said it.
+  let currentIsTransfer = false
   // The server the session last warmed on, which is the one whose state a
   // restored client holds. A given-up target reverts here, not to the base: on a
   // chain A->B->C a failed C restores the client into B's world (#87).
@@ -598,8 +610,16 @@ export async function startLive ({ argv = [], io = process } = {}) {
       // target for the transfer handshake and keep the cookies: the behaviour
       // every lane had before this ticket. A desired backend is a fresh login on
       // a server that never saw the puppet.
-      backend.setTarget(dialTarget, dialIntent({ source: chosen.source, target: dialTarget, base: baseTarget }))
-      if (chosen.source !== 'current') currentTarget = { ...dialTarget }
+      backend.setTarget(dialTarget, dialIntent({
+        source: chosen.source,
+        target: dialTarget,
+        base: baseTarget,
+        currentIsTransfer
+      }))
+      if (chosen.source !== 'current') {
+        currentTarget = { ...dialTarget }
+        currentIsTransfer = chosen.source === 'transfer'
+      }
       if (due.target) {
         log('transferFollowConnect', {
           host: due.target.host,
