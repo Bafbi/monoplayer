@@ -73,6 +73,33 @@ test('a registry edit reaches the next request without a restart', async () => {
   }
 })
 
+test('the panel binds the address it was given, and every interface by default', async () => {
+  const file = registryFile([puppet()])
+  const quiet = { stdout: { write () {} }, stderr: { write () {} } }
+
+  // The pod binds every interface: a Service targets the pod IP, not its loopback.
+  const wildcard = await startPanel({ argv: ['--registry', file, '--port', '0'], io: quiet })
+  try {
+    assert.equal(wildcard.host, '0.0.0.0')
+  } finally {
+    await wildcard.close()
+  }
+
+  // A workstation binds loopback, so trying the panel does not publish it on a LAN.
+  const loopback = await startPanel({ argv: ['--registry', file, '--port', '0', '--host', '127.0.0.1'], io: quiet })
+  try {
+    assert.equal(loopback.host, '127.0.0.1')
+    assert.equal((await fetch('http://127.0.0.1:' + loopback.port + '/healthz')).status, 200)
+  } finally {
+    await loopback.close()
+  }
+
+  await assert.rejects(
+    startPanel({ argv: ['--registry', file, '--port', '0', '--host', 'two words'], io: quiet }),
+    /--host must be an address/
+  )
+})
+
 test('an unknown flag is refused instead of ignored', async () => {
   const file = registryFile([puppet()])
   for (const argv of [['--registry', file, '--por', '8080'], ['--registry', file, '--port', 'eighty']]) {

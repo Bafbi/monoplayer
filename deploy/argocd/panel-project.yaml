@@ -29,8 +29,9 @@ spec:
     - group: ""
       kind: Namespace
   # The kinds deploy/panel creates, named one by one. A wildcard here would let any
-  # future commit in this repository create any object in the puppet's namespace,
-  # which is the reach the Role exists to bound.
+  # future commit in this repository create any object in either namespace this
+  # project allows — the panel's, and the puppet's, where the Role lives. That is
+  # the reach the Role exists to bound, granted to the Application instead.
   # test/tooling/panel-manifests.test.js fails when the tree holds a kind this list
   # does not name.
   namespaceResourceWhitelist:
