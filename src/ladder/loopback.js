@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O48 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O50 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -22,6 +22,7 @@ import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { waitForReady } from '../service/readiness.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
+import { REPLAY_DOMAINS } from '../core/replay-summary.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 import { advancementComplete, applyAdvancementFrames } from './client-state.js'
@@ -103,6 +104,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let deadlineSocket = null
   let deadlineBot = null
   let deadlineStranger = null
+  // #218: the attach-record rig. It is the smallest rig that attaches twice, so
+  // "no metadata frame without a spawn" is a claim about a stream this run can
+  // reconstruct. Its core logs as `attachCore`, which is what `coreLogEvents`
+  // reads to reach the `attach` record.
+  let attachBase = null
+  let attachFront = null
+  let attachBackend = null
+  let attachCore = null
+  let attachBot1 = null
+  let attachBot2 = null
   let commandsFront = null
   let commandsBackend = null
   let commandsBase = null
@@ -128,7 +139,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     serverbound: { positions: null, digs: null, places: null },
     bot: { playPrefix: [], leftovers: null, errors: null },
     preAuthWindow: null,
-    preAuthDeadline: null
+    preAuthDeadline: null,
+    attachRecord: null
   }
 
   const log = (event, fields = {}) => {
@@ -138,9 +150,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
   // The core's lifecycle records arrive as one JSON line inside a
   // `seamlessCore` entry, because the rig hands it a logStream. This reads
-  // them back so a check can assert on what the core decided.
-  const coreLogEvents = (from = 0) => logs.slice(from)
-    .filter(entry => entry.event === 'seamlessCore')
+  // them back so a check can assert on what the core decided. `stream` is the
+  // event name that rig's logStream writes, so a check that builds its own core
+  // can read its lines instead of the seamless rig's.
+  const coreLogEvents = (from = 0, stream = 'seamlessCore') => logs.slice(from)
+    .filter(entry => entry.event === stream)
     .map(entry => {
       try { return JSON.parse(entry.fields?.line ?? '') } catch { return null }
     })
@@ -2087,19 +2101,159 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.preAuthDeadline
     )
 
+    // --- O50: what an attach says its attach stream contained (#218) ---
+    // A report said a player could not see another player after attaching. The
+    // state cache's entity domain keeps a bounded window (#213), so a body that
+    // spawned earlier has no `spawn_entity` left to send, while `player_info` is
+    // a keyed domain and behaves. Nothing recorded what an attach stream
+    // actually carried, so the prediction could not be checked against
+    // production.
+    //
+    // Its own rig, for the reason O48 and O49 have one. The main rig has been
+    // through nine attaches, two transfers, and three other backends, so a count
+    // taken there would describe a stream nobody can reconstruct. This rig is
+    // the smallest one that attaches twice.
+    //
+    // The defect's shape comes from sending metadata for an id the backend never
+    // spawned. The cache cannot tell that apart from a window that evicted the
+    // spawn, because both leave a metadata entry with no spawn beside it.
+    attachBase = await createFakeBackend({ port: 0, logStream: null })
+    attachFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      offlineWhitelist,
+      getSnapshotConfig: () => attachCore?.cache.snapshot().config ?? [],
+      wireCheck: payload => wire.check(payload),
+      wireMode: 'throw',
+      log
+    })
+    attachBackend = createOfflineBackendLeg({
+      host: '127.0.0.1',
+      port: attachBase.port,
+      version: VERSION,
+      username: 'GlowSquidye',
+      dialogAction: 'last',
+      isHumanAttached: () => attachCore?.attached === true,
+      onDialogAnswered: ({ state }) => attachCore?.notePuppetDialogAnswer({ state }),
+      log
+    })
+    attachCore = createMonoplayer({
+      config: loadConfig({ ...config, backend: { ...config.backend, port: attachBase.port } }),
+      backendLeg: attachBackend,
+      frontLeg: attachFront,
+      clock: {
+        now: Date.now,
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout
+      },
+      logStream: { write: line => log('attachCore', { line }) }
+    })
+    attachFront.setCoreAttachConfiguring(({ name, uuid }) => attachCore.attachConfiguringPlayer({ name, uuid }))
+    attachFront.setConfiguringHandler(({ name }) => attachCore.configuringReady({ name }))
+    attachFront.setClientSettingsHandler(settings => attachCore.noteClientSettings(settings))
+    attachFront.setCoreAttach(({ name, uuid }) => attachCore.attachPlayer({ name, uuid, includeConfig: false }))
+    attachCore.start()
+    await attachBackend.connect()
+    const attachReadiness = await waitForReady({ core: attachCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+    if (!attachReadiness.warm) throw new Error('the attach-record rig did not warm')
+    const attachBound = await attachFront.listen()
+    const attachPort = attachBound.port ?? attachFront.port
+
+    // One body, and no metadata for it, so the ordinary attach's stream is a
+    // spawn and nothing else. That is the shape a healthy attach has.
+    attachBase.sendSpawnEntity({ entityId: 99, x: 0, y: 64, z: 0 })
+    await waitFor(() => attachCore.cache.snapshot().entities.some(entry =>
+      entry.name === 'spawn_entity' && entry.data?.entityId === 99), 'the rig body in the cache')
+
+    // The attach records the core wrote, oldest first. Reading the core's own
+    // log line is the point: the record under test is the one the product
+    // emitted, not a value this rig rebuilt from the same snapshot.
+    const attachRecords = from => coreLogEvents(from, 'attachCore').filter(entry => entry.event === 'attach')
+
+    const ordinaryMark = logs.length
+    attachBot1 = createBot({ port: attachPort, username: 'Attach' })
+    await attachBot1.ready()
+    await waitFor(() => attachRecords(ordinaryMark).length === 1, 'the ordinary attach record')
+    const ordinaryAttach = attachRecords(ordinaryMark)[0]
+
+    // The client leaves, so the metadata written next cannot be relayed live to
+    // it. It is cache state, and the next client's attach stream is what the
+    // record describes.
+    await attachBot1.close()
+    attachBot1 = null
+    await waitFor(() => attachCore.attached === false, 'the first client detached')
+
+    // One entity_metadata for an id nothing spawned. It is written through the
+    // fake's own server, so the frame that reaches the cache is encoded and
+    // decoded like every other. The fake offers no sender for it, because
+    // nothing before this ticket needed a body that was never spawned, and
+    // src/legs/fake-backend.js is outside this ticket's fence.
+    const orphanEntityId = 55
+    for (const client of Object.values(attachBase.server.clients)) {
+      client.write('entity_metadata', { entityId: orphanEntityId, metadata: [{ key: 0, type: 'byte', value: 0 }] })
+    }
+    await waitFor(() => attachCore.cache.snapshot().entities.some(entry =>
+      entry.name === 'entity_metadata' && entry.data?.entityId === orphanEntityId),
+      'the orphan metadata frame in the cache')
+
+    const orphanMark = logs.length
+    attachBot2 = createBot({ port: attachPort, username: 'Attach' })
+    await attachBot2.ready()
+    await waitFor(() => attachRecords(orphanMark).length === 1, 'the second attach record')
+    const orphanAttach = attachRecords(orphanMark)[0]
+
+    evidence.attachRecord = { ordinary: ordinaryAttach ?? null, orphan: orphanAttach ?? null }
+
+    // Every field the record calls a count is a count, and the domains add up
+    // to the frames the attach stream wrote on this snapshot. A field the record
+    // gained without a meaning would show up here as a number that is not one.
+    const counted = value => Number.isInteger(value) && value >= 0
+    const describesTheAttachRecord = record =>
+      record !== undefined &&
+      record.reason === 'attach' &&
+      counted(record.replayed) &&
+      counted(record.entities?.replayed) &&
+      counted(record.entities?.withoutSpawn) &&
+      counted(record.players?.info) &&
+      counted(record.players?.bodies) &&
+      counted(record.dialogs?.held) &&
+      counted(record.dialogs?.resent) &&
+      counted(record.packs?.held) &&
+      counted(record.packs?.resent) &&
+      Number.isFinite(record.tookMs) &&
+      REPLAY_DOMAINS.every(domain => counted(record.domains?.[domain])) &&
+      REPLAY_DOMAINS.reduce((sum, domain) => sum + record.domains[domain], 0) === record.replayed
+
+    check(
+      'O50',
+      'the attach record counts what the attach stream contained, and a metadata frame with no spawn is visible in it',
+      describesTheAttachRecord(ordinaryAttach) &&
+        describesTheAttachRecord(orphanAttach) &&
+        ordinaryAttach.entities.withoutSpawn === 0 &&
+        ordinaryAttach.entities.replayed >= 1 &&
+        orphanAttach.entities.withoutSpawn === 1 &&
+        orphanAttach.entities.replayed === ordinaryAttach.entities.replayed &&
+        orphanAttach.domains.entities > ordinaryAttach.domains.entities,
+      evidence.attachRecord
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
     try { deadlineSocket?.destroy?.() } catch { /* best effort */ }
     try { await capFront?.close?.() } catch { /* best effort */ }
     try { await deadlineFront?.close?.() } catch { /* best effort */ }
+    try { await attachFront?.close?.() } catch { /* best effort */ }
+    try { await attachBackend?.close?.() } catch { /* best effort */ }
+    try { await attachBase?.close?.() } catch { /* best effort */ }
     try { await front?.close?.() } catch { /* best effort */ }
     try { await seamlessFront?.close?.() } catch { /* best effort */ }
     try { await commandsFront?.close?.() } catch { /* best effort */ }
