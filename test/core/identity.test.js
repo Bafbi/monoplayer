@@ -90,3 +90,44 @@ test('whoAmI exposes configuration without secrets', () => {
   assert.equal(me.whitelist.length, 1)
   assert.equal(me.hasLiveVerifier, false)
 })
+
+// #229: the attach whitelist can be a provider so a file edited between two
+// logins takes effect on the next one. The array stays the default and stays
+// frozen, so no existing lane changes behaviour by accident.
+const STRANGER = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
+
+test('#229 a provider whitelist is read at each login, so a UUID added between two logins is allowed', () => {
+  let players = [PLAYER]
+  const live = createFrontIdentity({ attachWhitelist: () => players })
+  assert.equal(live.reviewLoginStart({ uuid: STRANGER, name: 'Stranger' }).allowed, false)
+  assert.equal(live.reviewLoginStart({ uuid: STRANGER, name: 'Stranger' }).reason, DENY_REASONS.NOT_WHITELISTED)
+
+  players = [PLAYER, STRANGER]
+  const allowed = live.reviewLoginStart({ uuid: STRANGER, name: 'Stranger' })
+  assert.equal(allowed.allowed, true, 'the same gate allows it on the next login, with no rebuild')
+  assert.equal(allowed.reason, ALLOW_REASONS.WHITELISTED)
+})
+
+test('#229 a provider whitelist is case-insensitive and reports what it holds now', () => {
+  let players = [PLAYER]
+  const live = createFrontIdentity({ attachWhitelist: () => players })
+  players = [PLAYER, STRANGER.toUpperCase()]
+  assert.equal(live.reviewLoginStart({ uuid: STRANGER.toUpperCase(), name: 'Stranger' }).allowed, true)
+  assert.deepEqual(live.whoAmI().whitelist, [PLAYER, STRANGER].map(uuid => uuid.toLowerCase()))
+})
+
+test('#229 a provider that throws denies, it never allows', () => {
+  const broken = createFrontIdentity({
+    attachWhitelist: () => { throw new Error('control file is a directory') }
+  })
+  const decision = broken.reviewLoginStart({ uuid: PLAYER, name: 'Bafbi' })
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.reason, DENY_REASONS.NOT_WHITELISTED)
+})
+
+test('#229 an array whitelist is still a snapshot, so a caller mutating its own array changes nothing', () => {
+  const players = [PLAYER]
+  const fixed = createFrontIdentity({ attachWhitelist: players })
+  players.push(STRANGER)
+  assert.equal(fixed.reviewLoginStart({ uuid: STRANGER, name: 'Stranger' }).allowed, false)
+})

@@ -28,12 +28,31 @@ export const ALLOW_REASONS = Object.freeze({
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+// #229: the whitelist is an array (frozen here, the default) or a provider
+// read at each login. The provider is what config.control.file turns on: an
+// operator adds a UUID to the file on disk and the next login sees it, with no
+// restart. A provider that throws, or that returns anything but an array,
+// denies: a broken control document must never allow a player.
 export function createFrontIdentity ({
   attachWhitelist = [],
   puppetProfile,
   verifyProfile = null
 } = {}) {
-  const whitelist = new Set(attachWhitelist.map(u => u.toLowerCase()))
+  const provided = typeof attachWhitelist === 'function' ? attachWhitelist : null
+  if (provided === null && !Array.isArray(attachWhitelist)) {
+    throw new TypeError('attachWhitelist must be an array of UUIDs or a function returning one')
+  }
+  const frozen = new Set((provided === null ? attachWhitelist : []).map(u => u.toLowerCase()))
+
+  function whitelistNow () {
+    if (provided === null) return [...frozen]
+    try {
+      const list = provided()
+      return Array.isArray(list) ? list.map(u => String(u).toLowerCase()) : []
+    } catch {
+      return []
+    }
+  }
 
   // Whitelist review — Login Start. Synchronous, deny-before-anything-else.
   // deny phase is 'login_start': this must fire before Login Success by
@@ -44,7 +63,8 @@ export function createFrontIdentity ({
     if (!uuid || !UUID_RE.test(uuid)) {
       return { allowed: false, reason: DENY_REASONS.MALFORMED_UUID, phase: 'login_start', uuid, name: who }
     }
-    if (!whitelist.has(uuid.toLowerCase())) {
+    const listed = provided === null ? frozen.has(uuid.toLowerCase()) : whitelistNow().includes(uuid.toLowerCase())
+    if (!listed) {
       return { allowed: false, reason: DENY_REASONS.NOT_WHITELISTED, phase: 'login_start', uuid, name: who }
     }
     return { allowed: true, reason: ALLOW_REASONS.WHITELISTED, phase: 'login_start', uuid, name: who }
@@ -69,7 +89,7 @@ export function createFrontIdentity ({
   }
 
   const whoAmI = () => ({
-    whitelist: [...whitelist],
+    whitelist: whitelistNow(),
     puppet: puppetProfile ?? null,
     hasLiveVerifier: verifyProfile != null
   })
@@ -78,6 +98,6 @@ export function createFrontIdentity ({
     reviewLoginStart,
     verifySession,
     whoAmI,
-    get includes () { return [...whitelist].map(u => u.toUpperCase()) }
+    get includes () { return whitelistNow().map(u => u.toUpperCase()) }
   }
 }
