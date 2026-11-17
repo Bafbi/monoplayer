@@ -17,7 +17,9 @@ main goes stale. `deploy` is bot-owned: the workflow force-pushes it as `main`
 plus an `images:` digest pin for the image it just built, so the running image
 is recorded in Git without adding commits to `main`. Argo tracks `deploy`. One
 Application, one project, one namespace. The deployed image is pinned by
-digest, never by a moving tag.
+digest, never by a moving tag — for the proxy. The panel (`deploy/panel`, #230)
+is its own Application and runs the moving `main` tag until #234 pins it too;
+[panel.md](panel.md) records what that costs.
 
 ## What lives where
 
