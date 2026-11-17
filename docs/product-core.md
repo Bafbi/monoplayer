@@ -556,11 +556,12 @@ session is its own ticket in the epic, and a followed transfer wins over it. Wit
 and stays on the configured backend.
 
 Neither file reaches `loadConfig`: the path is config, the contents are runtime
-state. A file that cannot be read or parsed is named once (`controlUnreadable`
-with its error code, or `controlRejected` with its reason) and ignored, and the
-lane keeps the value it had. `control.file` set also replaces a
-`config.attachWhitelist` array, so the file is the only authority rather than one
-of two.
+state. An absent `desired.json` is the normal state before a panel writes one
+and is silent. A file that is there but cannot be read or parsed is named once,
+per file (`controlUnreadable` with its error code, or `controlRejected` with its
+reason), and ignored, and the lane keeps the value it had. `control.file` set
+also replaces a `config.attachWhitelist` array, so the file is the only authority
+rather than one of two.
 
 ### Session invariants (`session.js`)
 
