@@ -28,6 +28,21 @@ spec:
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
+  # The kinds deploy/panel creates, named one by one. A wildcard here would let any
+  # future commit in this repository create any object in the puppet's namespace,
+  # which is the reach the Role exists to bound.
+  # test/tooling/panel-manifests.test.js fails when the tree holds a kind this list
+  # does not name.
   namespaceResourceWhitelist:
-    - group: "*"
-      kind: "*"
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: Service
+    - group: apps
+      kind: Deployment
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding

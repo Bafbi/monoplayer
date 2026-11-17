@@ -152,12 +152,22 @@ the two content routes return 500 with the reason. The first log line of the pod
 says what the panel read:
 
 ```json
-{"event":"panelStart","registry":"/etc/panel/registry/puppets.json","puppets":1,"port":8080,"serviceAccountToken":true}
+{"t":"2026-11-17T22:41:07.512Z","event":"panelStart","registry":"/etc/panel/registry/puppets.json","puppets":1,"port":8080,"serviceAccountToken":true}
 ```
 
 `serviceAccountToken` is whether a token is mounted, never the token. A panel with
 `false` serves the page and would fail its first write, which is worth seeing before
 the write route exists.
+
+To see the page without a cluster, run it from a checkout against the registry this
+repository ships:
+
+```bash
+mise run panel:run    # http://127.0.0.1:8080
+```
+
+It reads `deploy/panel/registry.yaml` through the same parser the pod uses, so a
+registry edit is visible here before it is merged.
 
 ## The image, and one known skew
 
