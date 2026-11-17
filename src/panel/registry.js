@@ -20,7 +20,8 @@
 
 export const REGISTRY_KEY = 'puppets.json'
 
-// Sorted, so the message a rejection prints does not depend on the order above.
+// Alphabetical, so the message that lists the expected fields reads the same
+// wherever it is printed.
 const FIELDS = ['backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace']
 
 // A name the API server accepts for a namespace, a Deployment, or a ConfigMap.

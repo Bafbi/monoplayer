@@ -29,7 +29,7 @@ rules:
     resources: ["configmaps"]
     resourceNames: ["monoplayer-control"]
     verbs: ["get", "patch", "update"]
-  # Reads: this ticket's page makes none, and the info view (#T3) reads the
+  # Reads: this ticket's page makes none, and the info view (#231) reads the
   # puppet's pod and its log. get and list only.
   - apiGroups: [""]
     resources: ["pods"]
