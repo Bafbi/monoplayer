@@ -381,6 +381,24 @@ first dial and its target warms in five seconds.
   there and a slow but real login is never cut by a bound it already met
   (`survivedPastDeadline` true, `expiredAfterAccept` 1). The main rig's front
   leg runs on the default deadline and expires nothing (`defaultExpired` 0).
+- `O50` an attach says what its attach stream contained, and a metadata frame
+  with no spawn to send is visible in it (#218). A report said a player could not
+  see another player after attaching. The state cache's entity domain keeps a
+  bounded window, so a body that spawned earlier has no `spawn_entity` left to
+  send, while `player_info` is a keyed domain and behaves. Until this record,
+  nothing said what an attach stream carried, so that prediction could not be
+  checked against production. The rig is its own, and the smallest one that
+  attaches twice: a fake backend, a front leg, a core, and two clients behind one
+  body. The core writes one `attach` record per attach, and the check reads the
+  record the product wrote rather than one rebuilt from the same snapshot. The
+  ordinary attach reports `entities.withoutSpawn` 0 with its body counted in
+  `entities.replayed`. One `entity_metadata` for an id nothing spawned then
+  enters the state cache, written through the fake's own server because the cache
+  cannot tell it apart from a window that evicted the spawn. The next attach
+  reports `entities.withoutSpawn` 1, the same body count, and one more entity
+  frame in `domains.entities`. Every field the record calls a count is an
+  integer, and `domains` adds up to `replayed`, the number the attach stream
+  wrote on that snapshot.
 
 
 ## The client parity rung
