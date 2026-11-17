@@ -118,9 +118,9 @@ Every cumulative field counts from the start of the process except `backendFrame
 | `sizes.{prefix,config,chunks,blocks,entities,inventories,latest,generic}` | gauge | What each cache domain holds now. All but `inventories` count frames; `inventories` counts the window map plus its slot map, so it includes slots that a base frame will overwrite and never replay. The startup `cacheStats` line carries the same object. |
 | `chunkBytes` | gauge | Bytes the chunk ring holds now: the sum of its `buffer.length`. Before the cache is warm, chunk frames sit in the join prefix instead, so `0` here does not mean the target sent no terrain. The `backendViewDistance` line writes the same figure at backend login, before any terrain arrived, so every live record of that line has read 0. |
 | `front.denied`, `front.allowed`, `front.attaches` | cumulative | Login-start denials, allows, and attaches. |
-| `front.policyRefused`, `front.stateRefused` | cumulative | Refusals from the code-of-conduct policy and from the protocol state. |
+| `front.policyRefused`, `front.stateRefused` | cumulative | Clientbound frames the policy refused to pass to the client, and frames refused because the client's protocol state could not parse them. |
 | `front.reconfigurations`, `front.reconfigured` | cumulative | Reconfiguration attempts and completions. |
-| `front.reconfigurationFramesFlushed`, `front.reconfigurationFramesDropped` | cumulative | Frames held for the new connection, and frames lost because it never came. |
+| `front.reconfigurationFramesFlushed`, `front.reconfigurationFramesDropped` | cumulative | Held configuration frames flushed when the client acknowledged, and held frames dropped when the queue overflowed. |
 | `front.preAuthRefused` | cumulative | Connections refused because the pre-auth window was full. |
 | `front.preAuthExpired` | cumulative | Connections the pre-auth deadline destroyed. |
 | `front.preAuthInWindow` | gauge | The one gauge in that group: connections accepted and not yet past the attach whitelist. |
