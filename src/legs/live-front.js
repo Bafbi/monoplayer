@@ -344,9 +344,13 @@ export function decideOnlineAttach (input = {}) {
 
 // Offline check: username and uuid must be strings; the normalized uuid must be
 // on the offline whitelist. No name matching, no wildcard.
-function createOfflineAttachCheck ({ whitelist }) {
+//
+// #229: a leg handed a whitelist store reads the store instead. The store is
+// what reloads a control document at each login, and this keeps the offline
+// rung on the same whitelist code the deployed lane runs.
+function createOfflineAttachCheck ({ whitelist = null }) {
   return {
-    checkVerified ({ client } = {}) {
+    checkVerified ({ client, store = null } = {}) {
       const username = typeof client?.username === 'string' && client.username.length > 0
         ? client.username
         : null
@@ -360,7 +364,10 @@ function createOfflineAttachCheck ({ whitelist }) {
       if (!uuid) {
         return { ok: false, reason: DENY_REASONS.PROFILE_INVALID, stage: 'login', username, uuid: null }
       }
-      if (!whitelist.includes(uuid)) {
+      const listed = store !== null && typeof store.has === 'function'
+        ? store.has(uuid)
+        : (whitelist ?? []).includes(uuid)
+      if (!listed) {
         return { ok: false, reason: DENY_REASONS.NOT_WHITELISTED, stage: 'login', username, uuid }
       }
       return { ok: true, reason: null, stage: 'login', username, uuid }
@@ -1121,6 +1128,10 @@ export function createLiveFrontLeg (options = {}) {
     port = 25565,
     version = '26.1',
     attachWhitelistFile,
+    // #229: the control document's store. One instance for the process, so this
+    // leg's whitelist check and the core's gate read the same file at each
+    // login. Null keeps the one startup read every other lane has always done.
+    whitelistStore = null,
     getSnapshotConfig,
     // #201: the total connection cap on the pre-auth window.
     preAuth = {},
@@ -1136,6 +1147,9 @@ export function createLiveFrontLeg (options = {}) {
     throw new TypeError('createLiveFrontLeg does not accept offlineWhitelist; use createOfflineFrontLeg')
   }
   if (!attachWhitelistFile) throw new TypeError('attachWhitelistFile is required')
+  if (whitelistStore !== null && typeof whitelistStore.has !== 'function') {
+    throw new TypeError('whitelistStore must expose has(uuid)')
+  }
   if (typeof getSnapshotConfig !== 'function') throw new TypeError('getSnapshotConfig is required')
 
   return createFrontLeg({
@@ -1146,7 +1160,7 @@ export function createLiveFrontLeg (options = {}) {
     port,
     version,
     check: createAttachCheck({ log: () => {} }),
-    store: createWhitelistStore({ file: attachWhitelistFile }),
+    store: whitelistStore ?? createWhitelistStore({ file: attachWhitelistFile }),
     getSnapshotConfig,
     preAuth,
     log,
@@ -1163,7 +1177,10 @@ export function createOfflineFrontLeg (options = {}) {
     host = '127.0.0.1',
     port = 0,
     version = '26.1',
-    offlineWhitelist,
+    offlineWhitelist = null,
+    // #229: the same store option the live leg takes. A store wins over the
+    // array, because it is the file that reloads at each login.
+    whitelistStore = null,
     getSnapshotConfig,
     // #201: the total connection cap on the pre-auth window.
     preAuth = {},
@@ -1181,12 +1198,15 @@ export function createOfflineFrontLeg (options = {}) {
   if (!isLoopbackHost(host)) {
     throw new TypeError(`offline front leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
   }
-  if (!Array.isArray(offlineWhitelist) || offlineWhitelist.length === 0) {
+  if (whitelistStore !== null && typeof whitelistStore.has !== 'function') {
+    throw new TypeError('whitelistStore must expose has(uuid)')
+  }
+  if (whitelistStore === null && (!Array.isArray(offlineWhitelist) || offlineWhitelist.length === 0)) {
     throw new TypeError('offlineWhitelist must be a non-empty array of UUID strings')
   }
 
   const whitelist = []
-  for (const entry of offlineWhitelist) {
+  for (const entry of offlineWhitelist ?? []) {
     if (typeof entry !== 'string') {
       throw new TypeError('offlineWhitelist entries must be UUID strings')
     }
@@ -1206,7 +1226,7 @@ export function createOfflineFrontLeg (options = {}) {
     port,
     version,
     check: createOfflineAttachCheck({ whitelist }),
-    store: null,
+    store: whitelistStore,
     getSnapshotConfig,
     preAuth,
     log,

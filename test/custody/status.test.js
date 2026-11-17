@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createAuthStatus, stringifyForReport, redactForReport, scanForLeaks } from '../../src/custody/status.js'
+import { createAuthStatus, accountTokenExpiry, stringifyForReport, redactForReport, scanForLeaks } from '../../src/custody/status.js'
 import { atomicWriteFile } from '../../src/custody/cache.js'
 
 const dir = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'auth-status-')), 'puppet')
@@ -174,4 +174,33 @@ test('redaction sentinel: a token-string field added by a future code path is ca
   const redacted = redactForReport(JSON.stringify(leaky))
   assert.equal(redacted.includes(SENTINELS[0]), false, 'device_code values must be tagged')
   assert.ok(redacted.includes('device_code'), 'the (non-secret) key name stays')
+})
+
+// #229: the one "info" fact the panel cannot otherwise reach. The heartbeat
+// carries when the puppet's Minecraft token expires, and it is exactly what
+// `status` reports for the account: the mca cache's obtain time plus its
+// expires_in. Unknown is null, never a guess.
+test('#229 accountTokenExpiry reads the mca cache the same way the status report does', () => {
+  const root = dir()
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+  atomicWriteFile(path.join(root, 'mca-cache.json'), JSON.stringify({
+    mca: { access_token: 'SENTINEL_ACCESS', obtainedOn: 1_700_000_000_000, expires_in: 86_400 }
+  }))
+
+  const expected = 1_700_000_000_000 + 86_400 * 1000
+  assert.equal(accountTokenExpiry({ dir: root, account: 'puppet' }), expected)
+  const report = createAuthStatus({ account: 'puppet', dir: root })
+  return report.collect().then(collected => {
+    assert.equal(collected.mca.expiresAt, expected, 'the heartbeat and the status report cannot disagree')
+  })
+})
+
+test('#229 accountTokenExpiry is null when the token facts are absent, never a guess', () => {
+  const empty = dir()
+  fs.mkdirSync(empty, { recursive: true, mode: 0o700 })
+  assert.equal(accountTokenExpiry({ dir: empty, account: 'puppet' }), null, 'no cache file')
+  assert.equal(accountTokenExpiry({ dir: path.join(empty, 'absent'), account: 'puppet' }), null, 'no directory')
+
+  atomicWriteFile(path.join(empty, 'mca-cache.json'), JSON.stringify({ mca: { access_token: 'SENTINEL_ACCESS' } }))
+  assert.equal(accountTokenExpiry({ dir: empty, account: 'puppet' }), null, 'a token with no expiry facts')
 })

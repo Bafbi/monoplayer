@@ -58,6 +58,14 @@ _Avoid_: hasJoined check, auth check
 The running Monoplayer process: config, core, both legs, custody, and the CLI. It holds one puppet session open and serves one attach at a time.
 _Avoid_: app, daemon, the proxy, the bot
 
+**Control document**:
+The two files an operator edits between deploys, named by `config.control.file` (`desired.json`) and `config.attachWhitelistFile` (`attach-whitelist.json`). Both are read at the point of use, the whitelist at each login and the desired backend before each connect, so an edit takes effect without a deploy and without a restart. There is no watcher, and `control.file` unset means no lane reads a control document at all.
+_Avoid_: control file, runtime config, feature flag, control dialog
+
+**Desired backend**:
+The host and port in `desired.json`: where the next backend connect should go. It applies on the next connect and only while no player is attached, so moving a live session stays a separate act. With `control.allowBackendSwitch` off, the lane names the file once and stays on its configured backend.
+_Avoid_: target server, new backend, switch
+
 **Testbed front**:
 The testbed's published endpoint: its front Service, the Tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the Tailscale operator then removes the pod and the tailnet name.
 _Avoid_: testbed Service, the front unqualified
@@ -169,8 +177,8 @@ One of six outcomes the clientbound policy returns for a frame. State caches, re
 _Avoid_: action, verdict
 
 **Control dialog**:
-A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the player who answers it, and their answer goes back to the server as the puppet's own frame.
-_Avoid_: prompt, popup, form, UI
+A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the player who answers it, and their answer goes back to the server as the puppet's own frame. It shares nothing with the control document but the adjective.
+_Avoid_: prompt, popup, form, UI, control
 
 **Dialog codec**:
 The two halves of a control dialog's wire form, and the rule that decides whether the puppet may answer one: the reader that lists a `show_dialog`'s actions and chooses one, the encoder that builds the `custom_click_action` body, and the per-dialog decision that refuses a play dialog and stands down while a player is attached. The leg asks that question once per dialog, counts the answers against its cap, and writes the frame.

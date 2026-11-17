@@ -130,6 +130,18 @@ export const DEFAULT_CONFIG = Object.freeze({
   }),
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
+  // #229: the runtime control document an operator edits between deploys.
+  // `file` is the only switch. It names desired.json, the file that moves the
+  // puppet's backend, and setting it also turns on the attach whitelist's reload
+  // at each login (attachWhitelistFile). Null leaves every lane exactly as it
+  // was: the whitelist is read once at startup and no control file is opened.
+  // `allowBackendSwitch` gates only the move: with a desired.json present and
+  // this off, the lane logs once, named, and stays on the configured backend.
+  //
+  // This module never reads either file. The core stays free of file I/O (#104),
+  // and a bad control value is named and ignored at the point of use rather than
+  // stopping the lane at boot. See src/service/control.js.
+  control: Object.freeze({ file: null, allowBackendSwitch: false }),
   bounds: Object.freeze({
     maxPrefix: 8192,
     maxConfig: 1024,
@@ -213,12 +225,23 @@ export function loadConfig (doc = {}) {
     front: { ...DEFAULT_CONFIG.front, ...(doc.front ?? {}) },
     backend: { ...DEFAULT_CONFIG.backend, ...(doc.backend ?? {}) },
     puppet: { ...DEFAULT_CONFIG.puppet, ...(doc.puppet ?? {}) },
+    control: { ...DEFAULT_CONFIG.control, ...(doc.control ?? {}) },
     preAuth: { ...DEFAULT_CONFIG.preAuth, ...(doc.preAuth ?? {}) },
     skin: { ...DEFAULT_CONFIG.skin, ...(doc.skin ?? {}) },
     journal: { ...DEFAULT_CONFIG.journal, ...(doc.journal ?? {}) }
   }
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
+  }
+  // #229: the control document's path is a config key, resolved once, so a value
+  // that cannot name a file is refused at boot. The file's contents are runtime
+  // state and are read at the point of use, never here.
+  if (merged.control.file !== null &&
+      (typeof merged.control.file !== 'string' || merged.control.file.trim() === '')) {
+    throw new TypeError('config.control.file must be a file path or null')
+  }
+  if (typeof merged.control.allowBackendSwitch !== 'boolean') {
+    throw new TypeError('config.control.allowBackendSwitch must be a boolean')
   }
   if (!CHAT_MODES.has(merged.chat)) {
     throw new TypeError("config.chat must be 'full', 'commands', 'read-only', or 'off'")
@@ -299,7 +322,12 @@ export function createMonoplayer ({
   clock,
   logStream = null,
   telemetry = NOOP_TELEMETRY,
-  journal = NOOP_JOURNAL
+  journal = NOOP_JOURNAL,
+  // #229: a function returning the attach whitelist now, called at each login.
+  // The live orchestrator passes one when config.control.file is set, so a UUID
+  // added to the file takes effect on the next login with no restart. Null is the
+  // default, and config.attachWhitelist is then the whole whitelist, frozen here.
+  whitelistSource = null
 } = {}) {
   if (!backendLeg) throw new TypeError('backendLeg adapter is required')
   if (!frontLeg) throw new TypeError('frontLeg adapter is required')
@@ -308,7 +336,7 @@ export function createMonoplayer ({
 
   const cache = createStateCache(cfg.bounds)
   const identity = createFrontIdentity({
-    attachWhitelist: cfg.attachWhitelist,
+    attachWhitelist: whitelistSource ?? cfg.attachWhitelist,
     puppetProfile: cfg.puppet
   })
   const session = createSession({
@@ -2590,6 +2618,14 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
   MONOPLAYER_DIALOG_ACTION                            configuration-gate answer: first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
+  MONOPLAYER_CONTROL_FILE                             desired.json: the control
+                                                      document that moves the
+                                                      puppet's backend, and turns
+                                                      on the whitelist's reload at
+                                                      each login (default null)
+  MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json on the
+                                                      next connect; 0 leaves the
+                                                      configured backend (default 0)
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
