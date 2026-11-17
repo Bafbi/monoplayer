@@ -136,6 +136,13 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxChunks: 1024,
     maxBlocks: 2048,
     maxEntities: 2048,
+    // #213: the depth of one entity's keyed record: 43 metadata indexes, 8
+    // whole-value frames, and one slot per effect id. Past 128 the whole entity
+    // is dropped rather than truncated.
+    maxEntitySlots: 128,
+    // The slots the whole entity domain holds, so its memory is a number and not
+    // maxEntities times maxEntitySlots.
+    maxEntityFrames: 32768,
     maxInventories: 32,
     maxGeneric: 512
   }),

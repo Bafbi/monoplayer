@@ -1,13 +1,16 @@
 # Keep relative-move frames out of the entity ring
 
+The entity ring this file was named for is the keyed entity domain now
+([key-the-entity-domain-by-slot.md](key-the-entity-domain-by-slot.md)); the name
+stayed because the decision did.
+
 Entity state replays in capture order, so an attaching client ends where the
-backend did. Absolute positions live in the `entity` ring. Relative-move deltas
-live in `generic`, because they are per-tick traffic and the entity ring is a
-2048-entry FIFO: promoting them would let move traffic evict `spawn_entity` and
-`entity_metadata`, the frames that tell the client the entity exists. A stale
-position is cheap. A missing entity is not. So the deltas stay in `generic` and
-replay merged with the entity ring by capture sequence rather than in their
-section's place. `client-state` decodes them, because otherwise state parity
+backend did. Absolute positions live in the `entity` domain. Relative-move
+deltas live in `generic`, because they are per-tick traffic and an entity slot
+holds the newest frame for its key: promoting them would replay the last delta
+and none of the ones it built on, and the client would land where the backend
+never put it. So the deltas stay in `generic` and replay merged with the entity
+domain by capture sequence rather than in their section's place. `client-state` decodes them, because otherwise state parity
 ignores them on both sides and cannot see the position a moved entity ends at.
 
 ## Considered options
@@ -18,11 +21,16 @@ ignores them on both sides and cannot see the position a moved entity ends at.
 - **Keep the plain FIFO ring and accept the eviction.** Rejected: an attaching
   client would miss whole entities, and state parity could not see a missing
   `spawn_entity`, because the client model builds an entity from
-  `entity_metadata` alone.
+  `entity_metadata` alone. The ring has since been replaced by the keyed entity
+  domain (#213).
 - **Replace the ring with per-entity state, last absolute frame plus later
-  deltas.** Rejected for now: `entity_metadata` carries only changed keys and the
-  attach stream replays raw buffers, so a merged per-entity state needs a
-  re-encoding pass inside a module whose contract is no decode and no encode.
+  deltas.** Rejected when this decision was taken, on the ground that a merged
+  per-entity state needs a re-encoding pass inside a module whose contract is no
+  decode and no encode. That ground no longer holds: the keying reads the
+  metadata index the backend leg already decoded and keeps the raw frame per
+  slot, so nothing is re-encoded. The domain is keyed by entity and slot now
+  (#213), and this decision stands on its own reason rather than on that one. See
+  [key-the-entity-domain-by-slot.md](key-the-entity-domain-by-slot.md).
 - **Replay the two rings as two sections, in a fixed order.** Rejected: the
   cache routes an entity's absolutes and deltas to different rings, so a section
   order applies every delta after every absolute. An entity that moved before a
