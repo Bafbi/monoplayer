@@ -779,6 +779,12 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
       backendLogins: core.session.backendLogins,
       warm: stats.warm,
       metrics: { ...core.metrics },
+      // #216: what the cache holds at this instant, beside the cumulative
+      // counters above. chunkBytes is written only at backend login today, and
+      // it is 0 there by construction, so this is the one place an operator can
+      // read the byte figure from the pod log.
+      sizes: stats.sizes,
+      chunkBytes: stats.chunkBytes,
       // #201: the front leg's own counters, which the core cannot hold: the
       // accepted sockets, the logins allowed and denied, and the pre-auth
       // refusals this heartbeat is the place to watch.
