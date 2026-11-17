@@ -54,9 +54,9 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 - Warm domains: `chunk` (latest per `cx,cz`, `unload_chunk` deletes the key,
   max 1024), `block` (FIFO ring, max 2048), `entity` (keyed by entity and by
   entity slot — one per metadata index, one per effect id, one `destroy`, one
-  per other entity frame; max 2048 entities, and 64 slots per entity before the
-  whole entity is dropped. Every entity frame the policy accepts, except the
-  relative-move frames),
+  per other entity frame; max 2048 entities, 128 slots per entity before the
+  whole entity is dropped, and 32768 slots in the domain. Every entity frame the
+  policy accepts, except the relative-move frames),
   `inventory` (newest per windowId, max 32 windows), `latest` (health/food/
   abilities/experience/held_item_slot/game_state_change/entity_event/
   advancements — newest wins), `generic` (anything else state-bearing, FIFO,
@@ -649,12 +649,13 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   apply only where chunks are loaded), but a client that rejects a flattened
   order with a real backend would falsify the synthesis — test with the 26.1
   client, not the fakes.
-- `entity` domain bounds are defaults, not measurements: 2048 entities, 64
+- `entity` domain bounds are defaults, not measurements: 2048 entities, 128
   slots per entity, and 32768 slots in the domain, so the memory ceiling is about
   3 MB of small entity frames instead of the old 2048-frame ring. Nothing
-  measures how many entities a real backend tracks. The peak on Excalia is its
-  own ticket; until then read `sizes.entities`, `entitySlots`,
-  `entityRemovals`, and the three overflow counters.
+  measures how many entities a real backend tracks, and the peak on Excalia is its
+  own ticket. Until it lands, `sizes` rides the warm and login log lines;
+  `entitySlots`, `entityRemovals`, and the three overflow counters are on
+  `stats()`, and the attach record #218 adds is where they reach an operator.
 - Only the relative-move frames leave `generic`'s place in the replay. Chunks
   and blocks still replay before it, and `latest` and `inventories` keep their
   latest-wins and base-then-slots rules, so their `seq` is a recency stamp rather

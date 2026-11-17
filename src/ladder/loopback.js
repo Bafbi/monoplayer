@@ -2350,6 +2350,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
           replayedEntityFrames.join(',') ===
             'spawn_entity,sync_entity_position,spawn_entity,spawn_entity,spawn_entity' &&
           receivedEntityFrames.join(',') === replayedEntityFrames.join(',') &&
+          entityStats.entitySlots === 5 &&
           entityStats.metrics.overflows.entity === 0 &&
           entityStats.metrics.overflows.entityDepth === 0 &&
           entityStats.metrics.overflows.entityFrames === 0,

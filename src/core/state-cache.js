@@ -20,9 +20,11 @@
 // frames, live-only chat, and blocked connection-control frames never enter
 // the cache and therefore cannot be replayed onto a later attach.
 //
-// Purity: no I/O, no timers, no sockets. `buffer` is opaque; `data` (the
-// decoded fields used for keys) is optional but recommended. The caller owns
-// both.
+// Purity: no I/O, no timers, no sockets. `buffer` is opaque. `data` (the decoded
+// fields used for keys) is optional for the chunk, block, inventory, and latest
+// domains, and required for the entity domain: without it every entity frame
+// collapses into one id-less record, because the id and the metadata index are
+// decoded fields and not buffer offsets. The caller owns both.
 
 import { clientboundPolicy } from './clientbound-policy.js'
 
@@ -112,10 +114,11 @@ export function createStateCache (overrides = {}) {
     maxChunks: 1024,
     maxBlocks: 2048,
     maxEntities: 2048,
-    // How many slots one entity may hold before the whole entity is dropped: a
-    // body with every metadata index set is about 60 slots, so the default
-    // never touches a real entity.
-    maxEntitySlots: 64,
+    // How many slots one entity may hold before the whole entity is dropped. The
+    // protocol defines 43 metadata indexes, 8 whole-value frames, and one slot
+    // per effect id, so 128 clears any real body and still catches a stream that
+    // is not entity state at all. maxEntityFrames is what caps the memory.
+    maxEntitySlots: 128,
     // The slots the whole domain may hold. Without it the worst case is
     // maxEntities x maxEntitySlots, which is 64 times the frame ring this
     // replaced (#213). Typical traffic is about 12 slots per body, so 2048
