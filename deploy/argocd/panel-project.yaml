@@ -1,0 +1,33 @@
+# The panel's Argo CD project.
+#
+# A second project rather than a second destination on `monoplayer`: the panel's
+# namespace is not the puppet's, and the two are granted separately so a reader can
+# see each lane's reach on its own. Applied by the operator once, beside the
+# Application, exactly as the first project was:
+#
+#   kubectl apply -f deploy/argocd/panel-project.yaml -f deploy/argocd/panel.yaml
+#
+# Two destinations, because RBAC is namespaced: the Deployment and the Service live
+# in monoplayer-panel, and the Role that grants on the puppet's namespace has to be
+# created in that namespace.
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: monoplayer-panel
+  namespace: argocd
+spec:
+  description: The Monoplayer panel
+  sourceRepos:
+    - https://github.com/Bafbi/monoplayer.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: monoplayer-panel
+    - server: https://kubernetes.default.svc
+      namespace: monoplayer
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

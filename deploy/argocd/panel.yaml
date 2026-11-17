@@ -1,0 +1,43 @@
+# The panel's Argo CD Application.
+#
+# Applied by the operator once, with its project:
+#   kubectl apply -f deploy/argocd/panel-project.yaml -f deploy/argocd/panel.yaml
+#
+# This is the one command a human runs for the panel, and it is the same shape as
+# the first bootstrap. A panel that is not synced by Argo is a panel nobody can
+# reproduce: the namespace, the Deployment, the Role and the registry would exist
+# only as something someone applied by hand.
+#
+# targetRevision is `deploy`, not `main`: the panel is deployed the same way the
+# proxy is, from the branch the image workflow rewrites, so the tree Argo runs is
+# the tree that commit holds. Deleting this Application deletes what it owns — the
+# namespace and the Role included — which is the rollback in docs/panel.md.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monoplayer-panel
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: monoplayer-panel
+  source:
+    repoURL: https://github.com/Bafbi/monoplayer.git
+    targetRevision: deploy
+    path: deploy/panel
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monoplayer-panel
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m

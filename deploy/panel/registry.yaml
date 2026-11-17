@@ -1,0 +1,41 @@
+# The registry: the puppets the panel may touch.
+#
+# It is a ConfigMap in Git, not a discovery step. The panel never lists pods to
+# find work, so the list it can act on is the list a reviewer reads in the diff.
+# Each entry names the one control ConfigMap the panel may write for that puppet;
+# role.yaml names the same ConfigMap in `resourceNames`, and
+# test/tooling/panel-manifests.test.js fails when the two lists disagree in either
+# direction.
+#
+# The control ConfigMap itself is deliberately not here. RBAC cannot scope
+# `create` by name, so the panel is given no create verb at all; the operator
+# creates the object once per puppet (docs/panel.md carries the command). A
+# Git-tracked copy would also be reverted to its committed content by Argo's
+# selfHeal within minutes of the first panel write.
+#
+# The JSON is one block because the panel mounts this ConfigMap and reads the
+# projected file: one key, one file, no YAML reader in the image.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: panel-registry
+  namespace: monoplayer-panel
+  labels:
+    app.kubernetes.io/name: panel
+    app.kubernetes.io/part-of: monoplayer
+data:
+  puppets.json: |
+    {
+      "version": 1,
+      "puppets": [
+        {
+          "name": "glowsquidye",
+          "namespace": "monoplayer",
+          "deployment": "monoplayer",
+          "controlConfigMap": "monoplayer-control",
+          "frontHostname": "glowsquidye.tail41e568.ts.net",
+          "backend": "play2.excalia.fr:25565"
+        }
+      ]
+    }
