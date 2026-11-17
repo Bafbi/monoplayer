@@ -58,6 +58,7 @@ import {
 } from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
+import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { SKIN_FRAME, carriesTextures, skinPlayerInfoPacket, texturesPropertyOf } from '../core/skin.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
@@ -1695,6 +1696,9 @@ export function createMonoplayer ({
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
   function replaySnapshot ({ name, includeConfig = true, reason = 'attach', snapshot = null } = {}) {
+    // #218: the record this attach leaves behind says how long it took, which is
+    // the one thing about an attach a count cannot show.
+    const startedAt = clock?.now?.() ?? Date.now()
     // #134: Excalia moves the puppet mid-session, so a client that re-entered
     // play arrives here owed the frame again.
     forgetPuppetSkin()
@@ -1726,13 +1730,26 @@ export function createMonoplayer ({
     // which is how a played body lost its skin without a trace.
     logWithheldSkin(sendPuppetSkin({ reason }), name)
 
+    // #218: what this attach offers, read before the two resends answer it, and
+    // what they then write. `answered` and `relayed` would be 0 by construction
+    // here, because the record is written before the client can answer anything.
+    // The record carries the holder's size and the resend's own count instead.
+    // A dialog holder keeps one dialog at a time, so its size is 0 or 1.
+    const dialogHeld = pendingDialog.held ? 1 : 0
+    const packHeld = pendingPacks.list('play').length
+
     // #16: a dialog that was waiting for a client goes after the replay, so the
     // client is in play when the screen opens.
-    resendPendingDialog('play')
+    const dialogResent = resendPendingDialog('play').sent === true ? 1 : 0
     // #98: and the packs this connection holds go right beside it, so a
     // reattaching client gets the pack the backend sent once and never repeats.
-    resendPendingPacks('play')
+    const packResent = resendPendingPacks('play').sent
 
+    // #218: one record per attach, and this is the only place one is written.
+    // `replaySummary` reads the same snapshot and the same `replayFrames` order
+    // the replay above just used, after `synthAttach` accepted it, so a snapshot
+    // that could not be replayed never reaches it. Nested values arrive flattened
+    // as one string attribute on the OTLP path (docs/telemetry.md).
     log('attach', {
       name,
       reason,
@@ -1741,7 +1758,11 @@ export function createMonoplayer ({
       skippedLegOwned: synthesized.counts.skipped,
       includeConfig,
       backendLogins: session.backendLogins,
-      pose: session.currentPose
+      pose: session.currentPose,
+      tookMs: (clock?.now?.() ?? Date.now()) - startedAt,
+      ...replaySummary(source, { includeConfig }),
+      dialogs: { held: dialogHeld, resent: dialogResent },
+      packs: { held: packHeld, resent: packResent }
     })
     emit('attach', { name, replayed: synthesized.counts.replayed })
     return { attached: true, replayed: synthesized.counts.replayed, frames: synthesized.frames }
