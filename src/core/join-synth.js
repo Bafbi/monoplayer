@@ -9,7 +9,7 @@
 //      per attach and is owned by the proxy, never replayed from the prefix
 //   4. warm-state domains in snapshot order (chunks, blocks, entities,
 //      inventories, latest, generic), except that the relative-move frames
-//      replay with the entity ring in capture order (`replayFrames`)
+//      replay with the entity state in capture order (`replayFrames`)
 //
 // Never replayed, by cache and (defensively) here: frames the clientbound
 // policy marks not replayable — per-leg mechanics, live-only chat, and blocked
@@ -39,7 +39,7 @@ const REPLAY_SECTIONS = Object.freeze([
 ])
 
 // The `generic` frames that belong with entity state: a relative move only means
-// something after the absolute it followed, so it replays in the entity ring's
+// something after the absolute it followed, so it replays in the entity state's
 // stream instead of at the end of the replay (issue #35). Every other generic
 // frame keeps its place, because moving them would reorder state that does not
 // interact with entity positions, such as a `close_window` after its
@@ -50,10 +50,12 @@ const ENTITY_MOVE_FRAMES = new Set(['rel_entity_move', 'entity_move_look', 'enti
 //
 // Every section replays where the header documents it, except that the relative
 // move frames replay merged with `entities` by capture sequence. The cache
-// routes an entity's absolute position frames to one ring and its deltas to
+// routes an entity's absolute position frames to one domain and its deltas to
 // another, so a section-ordered replay applies the deltas after the correction
 // that ended them and lands the entity somewhere the backend never put it.
-// Entries carry the sequence, so the merge needs no new field.
+// Entries carry the sequence, so the merge needs no new field. The cache rebuilds
+// its keyed entity domain in capture order before it reaches this function, so
+// the two lists are both in `seq` order and the merge compares like with like.
 //
 // One function for the replay and for the parity expectation: two orders would
 // drift, and the parity check would then compare against a replay nobody sends.

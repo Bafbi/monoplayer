@@ -208,6 +208,10 @@ _Avoid_: connection frame, local frame
 The bounded store of clientbound frames from the backend session, split by the kind of state it holds so that an attach is rebuilt from state rather than from a frame history.
 _Avoid_: frame cache, buffer, ring
 
+**Entity slot**:
+One addressable piece of one entity's cached state: a metadata index, one effect, the removal, or one other entity frame that carries a whole value. A slot holds the newest raw frame for its key, so an attach replays each piece once, at its last value, and a body always replays beside the spawn that gave it a model.
+_Avoid_: entry, cell, field
+
 **Join prefix**:
 The ordered frames of a join, captured verbatim until warm, that every later attach replays in the same order.
 _Avoid_: login prefix, join sequence
