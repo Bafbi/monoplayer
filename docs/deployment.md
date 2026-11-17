@@ -221,7 +221,8 @@ Common:
   mounts beside `/config`. No manifest mounts one yet, so the variable is unset
   today and the lane is static. Setting it also makes the attach whitelist
   reload at each login, so an operator's edit is allowed on the next attempt
-  with no restart. A file that cannot be read is named in the log and ignored.
+  with no restart. An absent `desired.json` is not an error; a file that is there
+  but unreadable or malformed is named in the log and ignored.
 - `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH` (default `0`): `1` honours a
   `desired.json` on the next backend connect, and only while no player is
   attached. `0` writes `controlSwitchRefused` once and stays on

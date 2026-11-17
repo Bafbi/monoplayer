@@ -166,18 +166,45 @@ test('#229 a control whitelist that cannot be parsed is named, and denies instea
     ['invalid_json', 'invalid_shape'])
 })
 
-test('#229 only a desired backend drops the transfer handshake, and the dial rule is unchanged otherwise', () => {
+test('#229 a desired backend is a fresh login, and the transfer dial rule is unchanged otherwise', () => {
   const base = { host: '127.0.0.1', port: 25565 }
   const other = { host: '127.0.0.1', port: 25566 }
 
-  // The rule every lane had before #229: anything off the base target is dialled
-  // with the transfer intent and the cookies, whether it is a followed transfer
-  // or the return to a server the session was already on.
+  // The rule every lane had before #229: a followed transfer, and the return to a
+  // server a transfer moved the session to, keep the cookies and ask for the
+  // transfer handshake.
   assert.deepEqual(dialIntent({ source: 'transfer', target: other, base }), { keepCookies: true, transfer: true })
-  assert.deepEqual(dialIntent({ source: 'current', target: other, base }), { keepCookies: true, transfer: true })
-  assert.deepEqual(dialIntent({ source: 'transfer', target: base, base }), { keepCookies: false, transfer: false })
+  assert.deepEqual(dialIntent({ source: 'current', target: other, base, currentIsTransfer: true }),
+    { keepCookies: true, transfer: true })
+  assert.deepEqual(dialIntent({ source: 'transfer', target: base, base, currentIsTransfer: true }),
+    { keepCookies: false, transfer: false })
   assert.deepEqual(dialIntent({ source: 'current', target: base, base }), { keepCookies: false, transfer: false })
 
-  // A desired backend is a fresh login on a server that never saw the puppet.
+  // A desired backend is a fresh login on a server that never saw the puppet, on
+  // the dial itself and on every fault after it. Without the provenance bit this
+  // is the case that would send intent 3 to a server that never issued a transfer.
   assert.deepEqual(dialIntent({ source: 'desired', target: other, base }), { keepCookies: false, transfer: false })
+  assert.deepEqual(dialIntent({ source: 'current', target: other, base, currentIsTransfer: false }),
+    { keepCookies: false, transfer: false })
+})
+
+test('#229 two control files that fail the same way are two named lines', () => {
+  const dir = controlDir('two-files')
+  const whitelistFile = path.join(dir, 'attach-whitelist.json')
+  const file = path.join(dir, 'desired.json')
+  fs.writeFileSync(whitelistFile, 'not json')
+  fs.writeFileSync(file, '{"version":1,"backend":{"host":"","port":1}}')
+  const lines = []
+  const document = createControlDocument({
+    file,
+    whitelistFile,
+    allowBackendSwitch: true,
+    log: (event, fields) => lines.push({ event, fields })
+  })
+  assert.deepEqual(document.attachWhitelist(), [])
+  assert.equal(document.desiredTarget(), null)
+  assert.deepEqual(lines.filter(line => line.event === 'controlUnreadable').map(line => line.fields.file),
+    [whitelistFile], 'the whitelist is named')
+  assert.deepEqual(lines.filter(line => line.event === 'controlRejected').map(line => line.fields.file),
+    [file], 'and the desired file is named with it')
 })
