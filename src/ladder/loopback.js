@@ -6,11 +6,12 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O51 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O52 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -22,6 +23,7 @@ import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { waitForReady } from '../service/readiness.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
+import { createJournal, readJournal, readManifests } from '../observability/journal.js'
 import { REPLAY_DOMAINS } from '../core/replay-summary.js'
 import { createBot } from './bot.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
@@ -127,6 +129,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // follow budget runs out.
   let dialFailureState = null
   let giveUpOnFailedDial = false
+  // #217: the packet journal O52 reads, in its own temporary directory.
+  let journalDir = null
+  let journal = null
 
   const evidence = {
     frontPort: null,
@@ -238,6 +243,22 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       log
     })
 
+    // #217: a real writer, into a temporary directory. This rig is the only
+    // place an offline run produces the stream a diagnosis reads, so O52 reads
+    // what this one wrote. The caps are small on purpose: the journal opens only
+    // when the volume holds its budget plus one shard per kind, and a runner has
+    // less room than the deployed emptyDir. A journal that did not open is a
+    // setup failure, not a passing check.
+    journalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-loopback-journal-'))
+    journal = createJournal({
+      dir: journalDir,
+      maxBytes: 4 * 1024 * 1024,
+      maxTotalBytes: 8 * 1024 * 1024
+    })
+    if (!journal.enabled) {
+      throw new Error('the loopback journal did not open: ' + journal.stats().disabledReason)
+    }
+
     core = createMonoplayer({
       config,
       backendLeg: backend,
@@ -247,7 +268,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         setTimeout: (fn, ms) => setTimeout(fn, ms),
         clearTimeout
       },
-      logStream: { write: line => log('core', { line }) }
+      logStream: { write: line => log('core', { line }) },
+      journal
     })
     front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
     front.setConfiguringHandler(({ name }) => core.configuringReady({ name }))
@@ -527,6 +549,24 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         equipmentLeftovers: b1.leftovers.filter(entry => entry.name === 'entity_equipment').length
       }
     )
+
+    // #217, for O52: one `player_info`, which the fake has no sender for. The
+    // proxy's own skin frame is a `player_info` the front leg writes, and the
+    // journal never sees a front-leg write, so the backend-to-core direction is
+    // the one to prove. It is written through the fake's own server, as O50
+    // writes its orphan metadata: the frame is encoded and decoded like any
+    // other, and the core journals it on its way past.
+    const journalFramesBefore = journal.stats().frames
+    for (const client of Object.values(fake.server.clients)) {
+      client.write('player_info', {
+        action: 'add_player',
+        data: [{
+          uuid: offlineUuid('Watcher'),
+          player: { name: 'Watcher', properties: [] }
+        }]
+      })
+    }
+    await waitFor(() => journal.stats().frames > journalFramesBefore, 'the player_info frame in the journal')
 
     // --- O46: while a client is attached, the pack is the human's answer (#98) ---
     // The backend sends one pack and never repeats it. The puppet's own accept
@@ -2363,6 +2403,133 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       try { await entityFake?.close?.() } catch { /* best effort */ }
     }
 
+    // --- O52: the journal still records the frames a diagnosis reads (#217) ---
+    // #217 drops the entity stream from the journal and makes chunks
+    // length-only, and that filter's promise — "what a diagnosis reads is still
+    // there" — is the council's own blind spot. It is a check here or it is an
+    // opinion.
+    //
+    // The rig is the main one, because it is the only one that writes the names
+    // a diagnosis reads: a join with terrain, two dialogs, three resource packs,
+    // two transfers, and traffic in both directions. A rig built for this check
+    // alone would prove the writer on a stream nobody diagnoses.
+    //
+    // The rig's own `player_info` was written above, while a client was attached:
+    // the fake has no sender for it, and the journal never sees the front leg's
+    // own skin frame.
+    //
+    // The third kind, `events`: the service writes lifecycle events from
+    // src/service/start-live.js, and this rung does not run start-live, so the
+    // rig writes the record start-live writes on a healthy start. Without it the
+    // events shard and its manifest would be untested by the one rung that owns a
+    // real writer. `rig` marks the record as this rung's, not a live lane's.
+    journal.event('liveReady', { warm: true, rig: 'loopback' })
+
+    // The seal is the writer's, not the rig's: close() gzips every live shard and
+    // writes its manifest, exactly as the service does when it shuts down. A
+    // loopback run never crosses an hour, so this is the only seal the check has.
+    journal.close()
+    const journalStats = journal.stats()
+
+    const journalEntries = []
+    for await (const entry of readJournal(journalDir)) journalEntries.push(entry)
+    const frameRecords = journalEntries
+      .map(entry => entry.record)
+      .filter(record => typeof record.dir === 'string' && typeof record.name === 'string')
+    const shardFiles = fs.readdirSync(journalDir).sort()
+    const sealedShards = shardFiles.filter(name => name.endsWith('.ndjson.gz'))
+    const storedManifests = await readManifests(journalDir)
+
+    // The names a diagnosis reads, and the seven the policy drops. Both lists are
+    // the writer's own, so this check fails when the table changes and the
+    // promise does not.
+    const readsNames = ['login', 'position', 'map_chunk', 'player_info', 'show_dialog', 'add_resource_pack', 'transfer']
+    const droppedNames = [
+      'entity_head_rotation',
+      'entity_look',
+      'entity_metadata',
+      'entity_move_look',
+      'entity_teleport',
+      'rel_entity_move',
+      'sync_entity_position'
+    ]
+    const carriesBody = name => frameRecords.some(record =>
+      record.name === name && typeof record.b64 === 'string' && record.b64.length > 0)
+    const present = name => frameRecords.some(record => record.name === name)
+    const chunk = frameRecords.find(record => record.name === 'map_chunk')
+    const clientFrame = frameRecords.find(record =>
+      record.dir === 'c2s' && typeof record.b64 === 'string' && record.b64.length > 0)
+    const liveEvent = journalEntries.map(entry => entry.record).find(record => record.event === 'liveReady')
+
+    // One manifest per sealed shard, and each one's line count and histogram are
+    // what the shard holds. `bytesByName` is what each name costs on disk, which
+    // is the number the 48-hour budget rests on.
+    const histogram = list => {
+      const out = {}
+      for (const entry of list) {
+        const name = typeof entry.record.event === 'string' ? 'event:' + entry.record.event : String(entry.record.name)
+        out[name] = (out[name] ?? 0) + 1
+      }
+      return out
+    }
+    const sameHistogram = (left, right) => {
+      const keys = Object.keys(left).sort()
+      if (keys.join(',') !== Object.keys(right).sort().join(',')) return false
+      return keys.every(key => left[key] === right[key])
+    }
+    const describedShards = sealedShards.filter(name => {
+      const manifest = storedManifests.find(entry => entry.shard === name)
+      if (manifest === undefined) return false
+      const own = journalEntries.filter(entry => path.basename(entry.file) === name)
+      return manifest.lines === own.length &&
+        sameHistogram(manifest.names, histogram(own)) &&
+        manifest.kind !== null &&
+        manifest.hour !== null &&
+        Number.isFinite(manifest.bytes) &&
+        manifest.gzBytes > 0 &&
+        Number.isFinite(manifest.from) &&
+        Number.isFinite(manifest.to) &&
+        Object.keys(manifest.bytesByName ?? {}).length >= 1
+    })
+
+    evidence.journal = {
+      dir: journalDir,
+      shards: shardFiles,
+      kept: readsNames.filter(present),
+      dropped: droppedNames.filter(present),
+      clientFrame: clientFrame?.name ?? null,
+      chunk: chunk === undefined ? null : { len: chunk.len, lengthOnly: chunk.lengthOnly === true, hasBody: 'b64' in chunk },
+      events: journalEntries.map(entry => entry.record.event).filter(name => typeof name === 'string'),
+      described: describedShards,
+      manifests: storedManifests.map(manifest => ({ shard: manifest.shard, hour: manifest.hour, lines: manifest.lines })),
+      skipped: journalStats.skipped,
+      droppedCount: journalStats.dropped,
+      sealed: journalStats.sealed
+    }
+
+    check(
+      'O52',
+      'the journal keeps the frames a diagnosis reads, drops the entity stream, and describes every shard it sealed',
+      readsNames.every(present) &&
+        carriesBody('player_info') &&
+        carriesBody('login') &&
+        carriesBody('show_dialog') &&
+        carriesBody('add_resource_pack') &&
+        carriesBody('transfer') &&
+        clientFrame !== undefined &&
+        chunk !== undefined &&
+        chunk.lengthOnly === true &&
+        'b64' in chunk === false &&
+        chunk.len > 8192 &&
+        droppedNames.every(name => !present(name)) &&
+        journalStats.dropped > 0 &&
+        journalStats.skipped > 0 &&
+        liveEvent !== undefined &&
+        sealedShards.length >= 3 &&
+        describedShards.length === sealedShards.length,
+      evidence.journal
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
@@ -2394,6 +2561,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { coldProxy?.close?.() } catch { /* best effort */ }
     try { gatedFake?.close?.() } catch { /* best effort */ }
     try { gatedProxy?.close?.() } catch { /* best effort */ }
+    // #217: the journal's own close, for a run that failed before O52 got to it.
+    // A passing run's directory goes, so a loopback leaves no shards behind; a
+    // failing run keeps it, because the report's `journal.dir` then names
+    // evidence a human can open.
+    try { journal?.close?.() } catch { /* best effort */ }
+    if (!failed) {
+      try { if (journalDir) fs.rmSync(journalDir, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
 
     if (failed && exitCode === 0) exitCode = 1
     if (runError && exitCode === 0) exitCode = 1

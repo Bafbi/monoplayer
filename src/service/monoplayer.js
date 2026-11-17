@@ -149,18 +149,21 @@ export const DEFAULT_CONFIG = Object.freeze({
   reconnect: Object.freeze({ delayMs: 1000, attempts: 1, maxDelayMs: 60_000 }),
   // #96: the exact packet journal. Off unless `dir` names a directory.
   //
-  // `maxBytes` bounds one file; `maxTotalBytes` and `maxAgeMs` bound the
-  // directory, and retention prunes on start and on every rotation. A rotation
-  // size alone deletes nothing: two days of play wrote ~393 MB in one session,
-  // filled a 1 GiB custody volume, and the front CrashLooped on ENOSPC. The
-  // budget number is repeated in src/observability/journal.js, which owns the
-  // retention and the file names; this module stays free of file I/O (#104).
+  // The journal writes one shard per hour and frame kind (#217).
+  //
+  // `maxBytes` is one shard's seal threshold; `maxTotalBytes` and `maxAgeMs`
+  // bound the directory, and retention prunes on start, after every seal, and at
+  // close. A seal alone deletes nothing: two days of play wrote ~393 MB in one
+  // session, filled a 1 GiB custody volume, and the front CrashLooped on ENOSPC.
+  // The budget numbers are repeated in src/observability/journal.js, which owns
+  // the retention and the file names; this module stays free of file I/O (#104).
   journal: Object.freeze({
     dir: null,
-    maxBytes: 268_435_456,
+    maxBytes: 67_108_864,
     maxTotalBytes: 268_435_456,
-    // A week, so an old session cannot sit on a volume forever.
-    maxAgeMs: 7 * 24 * 60 * 60 * 1000
+    // The horizon the budget buys once the entity stream is dropped: 48 hours,
+    // or since the last restart, whichever is shorter.
+    maxAgeMs: 48 * 60 * 60 * 1000
   }),
   // #99: the human's own player wears the puppet's skin. One `player_info`
   // entry for the human's UUID carrying the textures property the backend sent
@@ -264,7 +267,7 @@ export function loadConfig (doc = {}) {
   }
   if (merged.journal.maxTotalBytes < merged.journal.maxBytes) {
     throw new TypeError('config.journal.maxTotalBytes must be at least config.journal.maxBytes, ' +
-      'so a rotation cannot outgrow the directory budget')
+      'so one shard cannot outgrow the directory budget')
   }
   return merged
 }
@@ -2593,11 +2596,11 @@ Config (JSON via --config, then env, then defaults):
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
   MONOPLAYER_JOURNAL_DIR                              exact packet journal directory (journal off when unset)
-  MONOPLAYER_JOURNAL_MAX_BYTES                        journal rotation size (default 268435456)
+  MONOPLAYER_JOURNAL_MAX_BYTES                        one shard's seal threshold (default 67108864)
   MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES                  journal directory budget, pruned on start and
-                                                      on rotate (default 268435456)
+                                                      after every seal (default 268435456)
   MONOPLAYER_JOURNAL_MAX_AGE_MS                       journal age cap, pruned the same way; 0 keeps
-                                                      the byte budget alone (default 604800000)
+                                                      the byte budget alone (default 172800000, 48 hours)
 
 --start brings up the live backend leg (authenticated puppet via the G1 token
 custody in .secrets/accounts/<uuid>/), waits until the state cache holds the
