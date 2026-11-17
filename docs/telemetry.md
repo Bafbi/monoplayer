@@ -62,6 +62,56 @@ One log record per lifecycle call to the core's `log(event, fields)` funnel:
 
 Attribute values are strings, booleans, or integers (`intValue` is a decimal string). Nested objects are JSON-stringified into `stringValue`; non-integer numbers are stringified too. Every string is capped at 1024 characters. `undefined` and `null` fields are dropped.
 
+### The attach record
+
+One `attach` record per attach, on this path and nowhere else: no extra file, no
+config key, no switch. It answers one question that inference could not: why a
+player could not see another player after attaching. It answers it without
+storing a frame.
+
+`name`, `reason`, `tookMs`, `replayed`, `synthesizedPositions`,
+`skippedLegOwned`, `includeConfig`, `backendLogins`, and `pose` describe the
+attach itself. The rest describe the attach stream, and what the dialog holder
+and the pack holder offered beside it. Every field in the table is a count
+except `tookMs`, which is a duration, and `reason`, which is a label. No field
+is a byte size: sizes belong to `cache.stats()`, which measures what the state
+cache holds rather than what one attach sent.
+
+Each nested object arrives as **one** `stringValue` attribute holding its JSON,
+so the 1024-character cap applies to that attribute. `attributeValue`
+stringifies an object, which means there is no `domains.config` attribute to
+query. Parse the `domains`, `entities`, `players`, `dialogs`, or `packs`
+attribute instead.
+
+| Field | Kind | Meaning |
+| --- | --- | --- |
+| `reason` | label | The path that wrote the record: `attach`, `early_attach`, `transfer`, `reconfigure`, or `transfer_restored`. |
+| `tookMs` | duration, milliseconds | Time `replaySnapshot` took, measured with the clock the core was built with, or `Date.now` when the core has none. |
+| `replayed` | count, frames | Frames the attach stream wrote. The synthesized position is not one of them, and `synthesizedPositions` counts it. |
+| `domains.config` | count, frames | Frames from the configuration phase. 0 when the attach leaves that prefix out, as the warm and early attaches do. |
+| `domains.prefix` | count, frames | Frames from the join prefix. A state cache that is not warm yet files every play frame here, so this is large before warm and small after. |
+| `domains.chunks` | count, frames | Chunk frames (`map_chunk`, `unload_chunk`). |
+| `domains.blocks` | count, frames | Block-mutation frames. |
+| `domains.entities` | count, frames | Entity-state frames from the entity domain. |
+| `domains.inventories` | count, frames | Window base and slot frames. |
+| `domains.latest` | count, frames | Frames from the domain that keeps only the newest frame per name (`abilities`, `held_item_slot`, `advancements`, and the rest of that set in `src/core/state-cache.js`). |
+| `domains.generic` | count, frames | Frames from the generic domain, which includes `player_info` and the relative-move frames. Each row counts the frames its domain stores. The attach stream sends the relative-move frames right after the entity domain's, in capture order, and they are still counted here. |
+| `entities.replayed` | count, bodies | Distinct entity ids the attach stream gives a spawn, by `spawn_entity` or its pre-rename spelling `add_entity`. This counts bodies where `replayed` counts frames, and `players.bodies` is a subset of it. |
+| `entities.withoutSpawn` | count, frames | `entity_metadata` frames naming an entity id with no spawn earlier in the same attach stream. **Non-zero is #213's defect, measured**: the client was told about a body it never saw appear. A spawn in the join prefix counts, so a pre-warm attach is not reported as every body missing one. A metadata frame whose decoded `entityId` is absent cannot be attributed and is not counted. |
+| `players.info` | count, identities | Distinct player identities the `player_info` frames leave listed: the tab list this client is told about. A frame that unlists one removes it, and an update that carries neither `add_player` nor `update_listed` cannot list one on its own. |
+| `players.bodies` | count, bodies | Distinct spawned ids whose spawn carried a UUID that tab list names, so a body for a player the tab list lists. A body the tab list does not name is not counted, which makes `players.info` above `players.bodies` the shape the report in #218 describes. |
+| `dialogs.held` | count, dialogs | Control dialogs held for a client when this attach ran. The holder keeps one at a time, so this is 0 or 1. |
+| `dialogs.resent` | count, dialogs | Dialogs this attach wrote to the client: 0 or 1. Written after the attach stream, as a dialog always is. |
+| `packs.held` | count, packs | Resource packs the holder kept for the play state when this attach ran. |
+| `packs.resent` | count, packs | Packs this attach wrote to the client. Written after the attach stream, as a pack always is. |
+
+There is no `dialogs.answered`, `packs.answered`, or `packs.relayed` field. The
+record is written before the client can answer anything, so all three would be 0
+by construction. Those numbers live in the heartbeat's `metrics` object, which
+carries the core's own counters: `controlDialogsAnswered`,
+`controlDialogsAnsweredOnDetach`, `resourcePackAcks`, `resourcePacksRelayed`,
+and `resourcePacksAnsweredOnDetach`.
+
 ## Metrics
 
 Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series keeps the start time it was first seen at, and each export re-sends its running total. Values for the same name and attributes are summed before export. Gauges keep the last value in the batch and carry no temporality or monotonicity fields.
