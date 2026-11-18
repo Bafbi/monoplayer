@@ -93,7 +93,7 @@ holds is a read.
 
 | Object | Verbs | Where |
 |---|---|---|
-| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: one key, `desired.json` |
+| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: two keys, `desired.json` and `attach-whitelist.json` |
 | `pods`, `pods/log` | `get`, `list` | each puppet's namespace |
 | `deployments` | `get`, `list` | each puppet's namespace: the pod selector, the pods' readiness, and the caps its environment sets |
 
@@ -111,10 +111,11 @@ And, by design:
   grants `create`, `delete`, `secrets` or a wildcard, or when the Service stops
   being the tailscale class.
 
-The page uses the three read rules. One write rule is exercised too:
-`POST /api/puppets/:name/backend`, below, is the only object the panel patches.
-The whitelist route is the next ticket of
-[epic #228](https://github.com/Bafbi/monoplayer/issues/228).
+The page uses the three read rules and the `get` on the control ConfigMap. Three
+routes exercise the write rule, and they patch one object: `desired.json` for
+`POST /api/puppets/:name/backend`, and `attach-whitelist.json` for the two
+whitelist writes. Each patches its own key, and a merge patch of one key leaves
+the other where it was.
 
 ## Point a puppet at another backend
 
@@ -186,6 +187,99 @@ A move that fails costs the player one configuration round and puts them back. T
 puppet logs `backendMoveFailed` and does not retry the same document: point it
 somewhere else, or send the same address again, which stamps a new `changedAt` and
 is therefore a new request.
+
+## Add or remove an attach whitelist entry
+
+```bash
+curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/whitelist
+curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/whitelist \
+  -H 'content-type: application/json' -d '{"uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba"}'
+curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/whitelist \
+  -H 'content-type: application/json' -d '{"name": "Bafbi"}'
+curl -X DELETE http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/whitelist/6eb73524-ff88-4a62-a8d0-c63905e7afba
+```
+
+That rewrites one key of the control ConfigMap, `attach-whitelist.json`, and
+nothing else. The document is the shape the puppet already reads, so no second
+shape exists:
+
+```json
+{
+  "version": 1,
+  "players": [
+    { "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba", "name": "Bafbi", "addedAt": "2026-11-07T13:04:51.092Z" }
+  ]
+}
+```
+
+The body must be sent as `application/json`, and that requirement is the guard
+against a cross-site write: a browser has to preflight it, and the panel answers no
+preflight. A form body is refused rather than parsed.
+
+| Answer | Meaning |
+|---|---|
+| 200 | written, or already the document you asked for |
+| 400 | a body that is not JSON, neither a uuid nor a name, a uuid that is not one, or a name the resolver could not answer |
+| 404 | no such puppet in the registry, or no such uuid in the whitelist |
+| 409 | the uuid is the puppet's own account, or the write lost three races |
+| 413 | a body over 4 KiB |
+| 500 | the registry could not be read, or the whitelist document could not be parsed |
+| 503 | no cluster client, or the cluster refused the read or the patch |
+
+**A change takes effect on the next login with no restart and no deploy.** The
+puppet re-reads the file at each login (#229), so it is one file read away. A client
+already mid-login may be picked up on the following attempt.
+
+Four refusals are deliberate, and each one is a refusal rather than a repair:
+
+- **A document that does not parse is never rewritten.** The answer is a 500 with the
+  parse error, and the key is left byte for byte. The same holds for a document of
+  the wrong shape, an entry whose uuid is not one, and a `version` this panel does
+  not write.
+- **A lost race is re-read, not clobbered.** The patch carries the
+  `resourceVersion` it read, so the API server answers 409 when somebody else wrote
+  the document in between. The panel re-reads and re-applies, at most three times,
+  and then reports the conflict by name. The other writer's entry survives: the
+  second attempt applies your change to the document they left.
+- **The puppet's own uuid is refused** with a 409. The uuid is the one the puppet's
+  Deployment sets in `MONOPLAYER_PUPPET_UUID`, and it appears in neither the answer
+  nor the log line: it is the puppet's account identifier, not the caller's.
+- **Removal takes a uuid**, so renaming an account cannot remove a different one. A
+  uuid that is not in the list is a 404, and nothing is written.
+
+`{"name": "..."}` is resolved through `createNameLookup` from
+`src/custody/store.js`: Minecraft services first, then the legacy Mojang API. That
+needs egress from the panel namespace. When the endpoints answer nothing, the route
+says so and asks for the uuid rather than writing nothing and reporting success. A
+name that does not exist is a 400 that names it.
+
+Every write leaves one JSONL line on the panel's own log, because the ConfigMap keeps
+no history:
+
+```json
+{"t":"2026-11-18T10:00:00.000Z","event":"panelWhitelistAdd","puppet":"glowsquidye","namespace":"monoplayer","controlConfigMap":"monoplayer-control","key":"attach-whitelist.json","uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi","count":2,"changed":true,"attempts":1,"address":"100.64.0.9"}
+```
+
+`panelWhitelistRemove` is its twin. The address is the tailnet peer, which is the
+only actor the panel can name.
+
+The control ConfigMap is not in Git, so the 200 also carries the `data:` block of
+`deploy/manifests/configmap.yaml` to paste, under `yaml` and `pasteInto`. Replace
+that file's `data` block with it when a change should survive the next deploy.
+Then delete the ConfigMap the panel patched, because the two copies now disagree.
+
+**The write lands in a document the lane may not read yet.** A puppet reads this key
+only when `MONOPLAYER_ATTACH_WHITELIST` names it, and
+`deploy/manifests/deployment.yaml` names `/config/attach-whitelist.json`, the
+ConfigMap in Git. So on the deployed lane today a write lands in a document nothing
+opens, and the 200 means "written", not "read". Pointing the lane at the control
+volume is one manifest edit, and it belongs in the same change as the registry row.
+Check it before you trust an answer:
+
+```bash
+kubectl -n monoplayer get deployment monoplayer \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MONOPLAYER_ATTACH_WHITELIST")].value}'
+```
 
 ## It ships with the proxy
 
