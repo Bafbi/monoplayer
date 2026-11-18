@@ -11,14 +11,19 @@
 # from the panel (#233). It is the panel's own declaration, not the fence: the
 # puppet reads a desired backend only when its lane sets MONOPLAYER_CONTROL_FILE,
 # and obeys it only when it also sets MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1.
-# A registry that says true over a lane that says 0 gets one named refusal in the
-# puppet's log; over a lane that names no control file it gets silence, because
-# nothing reads the document at all.
 #
-# False, because `deploy/manifests/deployment.yaml` sets neither variable yet: the
-# live puppet reads no control document, so a write from this panel would land in a
-# file nothing opens. Flip this and both variables together, and `docs/panel.md`
-# records why the two exist.
+# **The two halves must agree, and a test now says so.** This flag answers "may the
+# panel ask"; the lane's variables answer "will the puppet obey". True over a lane
+# that says 0 is a button that writes a document the puppet refuses once and names;
+# true over a lane with no control file is a button that writes into a file nothing
+# opens, which is the failure that was live for an hour after the panel shipped.
+# `test/tooling/live-manifests.test.js` reads both files and fails when they
+# disagree, so flipping one without the other is a red gate rather than a silent
+# no-op.
+#
+# True, because `deploy/manifests/deployment.yaml` mounts the control ConfigMap and
+# sets all three variables. `docs/panel.md` records the order the two are meant to
+# be turned on in.
 #
 # The control ConfigMap itself is deliberately not here. RBAC cannot scope
 # `create` by name, so the panel is given no create verb at all; the operator
@@ -49,7 +54,7 @@ data:
           "controlConfigMap": "monoplayer-control",
           "frontHostname": "glowsquidye.tail41e568.ts.net",
           "backend": "play2.excalia.fr:25565",
-          "allowBackendSwitch": false
+          "allowBackendSwitch": true
         }
       ]
     }
