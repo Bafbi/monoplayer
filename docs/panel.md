@@ -4,7 +4,7 @@ The panel is one page and two JSON routes on the tailnet, showing what each pupp
 it may touch is doing and which control ConfigMap it may write for it. It runs beside
 the proxy, not inside it: same image, second entrypoint, its own namespace.
 
-    http://monoplayer.tail41e568.ts.net:8080
+    http://monoplayer.tail41e568.ts.net
 
 That name comes from `tailscale.com/hostname: monoplayer` on the Service in
 `deploy/panel/service.yaml`, the way `glowsquidye` names the front. There is no
@@ -213,9 +213,9 @@ name still resolves and refuses; removing the tree removes the name with it.
 ## Check it
 
 ```bash
-curl http://monoplayer.tail41e568.ts.net:8080/healthz             # {"ok":true}
-curl http://monoplayer.tail41e568.ts.net:8080/api/puppets         # the registry
-curl http://monoplayer.tail41e568.ts.net:8080/api/puppets/glowsquidye
+curl http://monoplayer.tail41e568.ts.net/healthz             # {"ok":true}
+curl http://monoplayer.tail41e568.ts.net/api/puppets         # the registry
+curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye
 ```
 
 The third is one puppet's facts, the same object the card is rendered from.
