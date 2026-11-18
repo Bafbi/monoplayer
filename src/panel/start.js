@@ -29,6 +29,7 @@ import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
 import { redact } from '../observability/redact.js'
+import { createKubeClient } from './kube.js'
 import { parseRegistry } from './registry.js'
 import { createPanelHandler } from './server.js'
 
@@ -100,7 +101,15 @@ function hasServiceAccountToken (file) {
   }
 }
 
-export async function startPanel ({ argv = [], io = process, tokenFile = SERVICE_ACCOUNT_TOKEN_FILE } = {}) {
+export async function startPanel ({
+  argv = [],
+  io = process,
+  tokenFile = SERVICE_ACCOUNT_TOKEN_FILE,
+  // #231: the read path to the API server. Injected for the same reason the
+  // registry is: a test hands in a function that answers for a Deployment, a pod
+  // list, and a log, and the routes cannot tell it from the cluster.
+  kubernetes = createKubeClient()
+} = {}) {
   const options = parseArgs(argv)
   const stdout = io.stdout ?? process.stdout
   // The same redaction every other line in this repo passes through
@@ -124,7 +133,7 @@ export async function startPanel ({ argv = [], io = process, tokenFile = SERVICE
   // Fail fast, before the socket exists.
   const document = read()
 
-  const server = http.createServer(createPanelHandler({ registry: read, log }))
+  const server = http.createServer(createPanelHandler({ registry: read, kubernetes, log }))
   await new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(options.port, options.host, () => {
