@@ -88,6 +88,7 @@ export function countEvent (records, event) {
 }
 
 const finite = value => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+const dayWord = days => (Math.abs(days) === 1 ? 'day' : 'days')
 const counter = (source, name) => (isObject(source) ? finite(source[name]) : null)
 
 // The named fields of one group, as numbers, booleans, strings, or null. A value
@@ -140,17 +141,30 @@ function podFacts (pod, now) {
 // The effective backend is the one the last successful dial used, so a puppet
 // that followed a transfer or a desired move shows where it is now, not where it
 // started. `configured` is the config document's target, and `registry` is this
-// panel's own copy: two different facts, labelled, never merged.
-function backendFacts ({ puppet, start, reconnect }) {
-  const dialled = time(reconnect?.t ?? null)
+// panel's own copy: two different facts, labelled, never merged. `lastDial` is the
+// newest dial of either outcome, because a reconnect that failed in the tail is
+// the difference between "on play2" and "on play2 until three minutes ago".
+function backendFacts ({ puppet, start, reconnect, failed }) {
   const started = time(start?.t ?? null)
   const effective = (reconnect !== null && typeof reconnect.target === 'string')
-    ? { value: clean(reconnect.target), source: 'reconnect', at: dialled.at }
+    ? { value: clean(reconnect.target), source: 'reconnect', at: time(reconnect.t).at }
     : (start !== null && typeof start.backend === 'string')
         ? { value: clean(start.backend), source: 'start', at: started.at }
         : null
+
+  const dials = [reconnect, failed]
+    .filter(record => record !== null && typeof record.target === 'string')
+    .map(record => ({ record, at: time(record.t) }))
+  const newest = dials.sort((left, right) => (left.at.ms ?? 0) - (right.at.ms ?? 0)).at(-1) ?? null
   return {
     effective,
+    lastDial: newest === null
+      ? null
+      : {
+          value: clean(newest.record.target),
+          at: newest.at.at,
+          connected: newest.record.event === 'backendReconnect'
+        },
     configured: start !== null && typeof start.backendConfigured === 'string'
       ? { value: clean(start.backendConfigured), source: 'start', at: started.at }
       : null,
@@ -223,9 +237,11 @@ function accountFacts (source, now) {
     // An expired token is the case this line exists for, so it reads as expired
     // rather than as a negative forecast.
     warning: expired
-      ? 'the Minecraft token expired ' + Math.abs(days) + ' days ago; the puppet serves until its next refresh fails'
+      ? 'the Minecraft token expired ' + Math.abs(days) + ' ' + dayWord(days) +
+        ' ago; the puppet serves until its next refresh fails'
       : remaining <= EXPIRY_WARNING_MS
-        ? 'the Minecraft token expires in ' + days + ' days; a refresh that fails is a front that stops serving'
+        ? 'the Minecraft token expires in ' + days + ' ' + dayWord(days) +
+          '; a refresh that fails is a front that stops serving'
         : null
   }
 }
@@ -321,20 +337,28 @@ function stateOf ({ failure, pod, log, heartbeat, tail, records, puppet, now }) 
     }
   }
   const age = heartbeat.ageSeconds
+  if (heartbeat.stale === true) {
+    // The record answered and is old. That is neither "serving" nor "no
+    // heartbeat", and it is the state the page exists to keep out of the live
+    // colour: three intervals with nothing written is a lane that stopped.
+    return {
+      state: 'stale',
+      serving: false,
+      reason: 'stale: the newest heartbeat was written ' + age + ' s ago, and the interval is ' +
+        Math.round(HEARTBEAT_MS / 1000) + ' s; read every number below as old'
+    }
+  }
   return {
     state: 'serving',
     serving: true,
-    reason: (age === null
+    reason: age === null
       ? 'serving, and the newest heartbeat carries no readable timestamp'
       : 'serving: the newest heartbeat was written ' + age + ' s ago, and the interval is ' +
-        Math.round(HEARTBEAT_MS / 1000) + ' s') +
-      (heartbeat.stale === true
-        ? ', which is more than three intervals, so read these numbers as old'
-        : '')
+        Math.round(HEARTBEAT_MS / 1000) + ' s'
   }
 }
 
-export function activity ({ puppet, pod = null, log = null, failure = null, now = Date.now() } = {}) {
+export function activity ({ puppet, pod = null, log = null, failure = null, caps = null, now = Date.now() } = {}) {
   const tail = log !== null && typeof log.text === 'string' ? parseTail(log.text) : null
   const records = tail?.records ?? []
   const start = newest(records, 'startLive')
@@ -352,7 +376,16 @@ export function activity ({ puppet, pod = null, log = null, failure = null, now 
     observedAt: new Date(now).toISOString(),
     pod: podView,
     state: stateOf({ failure, pod: podView, log, heartbeat, tail, records, puppet, now }),
-    backend: backendFacts({ puppet, start, reconnect: newest(records, 'backendReconnect') }),
+    backend: backendFacts({
+      puppet,
+      start,
+      reconnect: newest(records, 'backendReconnect'),
+      failed: newest(records, 'backendReconnectFailed')
+    }),
+    // The caps the Deployment's own environment sets, read from the object the
+    // panel already fetches. A variable the Deployment does not set is null: the
+    // compiled default applies and the panel cannot see it.
+    caps: caps === null ? null : { ...caps, source: 'Deployment env', at: null },
     start: startFacts(start),
     whitelist: whitelistFacts(start, newest(records, 'start')),
     preAuth: preAuthFacts(newest(records, 'preAuthRefused'), newest(records, 'preAuthExpired')),

@@ -11,7 +11,8 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 
 import { activity } from '../../src/panel/activity.js'
-import { ReadRefused } from '../../src/panel/kube.js'
+import { deploymentCaps, ReadRefused } from '../../src/panel/kube.js'
+import { renderPage } from '../../src/panel/page.js'
 import { createPanelHandler } from '../../src/panel/server.js'
 
 const puppet = {
@@ -259,21 +260,77 @@ test('a refused Deployment read is its own sentence too', () => {
 test('a panel with no API client says exactly that', async () => {
   const { readPuppet } = await import('../../src/panel/routes/info.js')
   const card = await readPuppet({ kubernetes: null, puppet, now: NOW })
+  assert.equal(card.caps, null, 'no client, no Deployment to read caps from')
   assert.equal(card.state.state, 'read-refused')
   assert.match(card.state.reason, /started without a Kubernetes client/)
 })
 
 // --- staleness and expiry ---
 
-test('a heartbeat older than three intervals is shown as old, never as live', () => {
+test('a heartbeat older than three intervals is its own state, never the live one', () => {
   const late = HEARTBEAT_MS + 10 * 60_000
   const card = activity({ puppet, pod, log: { text: tail(startLive, heartbeat) }, now: late })
   assert.equal(card.heartbeat.stale, true)
   assert.equal(card.heartbeat.ageSeconds, 600)
-  assert.match(card.state.reason, /^serving: the newest heartbeat was written 600 s ago/)
-  assert.match(card.state.reason, /more than three intervals, so read these numbers as old/)
+  assert.equal(card.state.state, 'stale')
+  assert.equal(card.state.serving, false, 'a stale record is not the live colour')
+  assert.match(card.state.reason, /^stale: the newest heartbeat was written 600 s ago/)
+  assert.match(card.state.reason, /read every number below as old/)
   // And the timestamp a reader sees is the record's, not the clock's.
   assert.equal(card.heartbeat.at, HEARTBEAT_AT)
+})
+
+test('the caps the Deployment sets are shown, and the ones it does not stay unknown', () => {
+  const deployment = {
+    spec: {
+      selector: { matchLabels: { app: 'monoplayer' } },
+      template: {
+        spec: {
+          containers: [{
+            name: 'monoplayer',
+            env: [
+              { name: 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', value: '3' },
+              { name: 'MONOPLAYER_PREAUTH_DEADLINE_MS', value: '15000' },
+              { name: 'MONOPLAYER_JOURNAL_MAX_BYTES', value: '67108864' },
+              { name: 'MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES', value: '268435456' },
+              { name: 'MONOPLAYER_JOURNAL_MAX_AGE_MS', value: '172800000' }
+            ]
+          }]
+        }
+      }
+    }
+  }
+  const caps = deploymentCaps(deployment)
+  const card = activity({ puppet, pod, log: { text: tail(startLive, heartbeat) }, caps, now: NOW })
+  assert.deepEqual(caps, {
+    preAuthMaxConnections: 3,
+    preAuthDeadlineMs: 15_000,
+    journalMaxBytes: 67_108_864,
+    journalMaxTotalBytes: 268_435_456,
+    journalMaxAgeMs: 172_800_000
+  })
+  // A healthy lane writes no refusal line, so the Deployment's env is the only
+  // statement of the cap, and the page says where it came from.
+  const page = renderPage({ version: 1, puppets: [puppet] }, [card])
+  assert.match(page, /3 \(Deployment env, no timestamp\)/)
+  assert.match(page, /67108864 \(64 MiB\) \(Deployment env, no timestamp\)/)
+  // An empty env is unknown, never the compiled default guessed.
+  const bare = activity({ puppet, pod, log: { text: tail(startLive, heartbeat) }, caps: deploymentCaps({}), now: NOW })
+  const barePage = renderPage({ version: 1, puppets: [puppet] }, [bare])
+  assert.match(barePage, /unknown: no refusal line in the tail, and the Deployment does not set it/)
+  assert.match(barePage, /not in the Deployment env; the compiled defaults apply and the panel cannot see them/)
+})
+
+test('the last dial is shown with its outcome, so a failed reconnect is visible', () => {
+  const failed = { t: '2026-11-18T10:36:00.000Z', event: 'backendReconnectFailed', target: 'alt.excalia.fr:25565', attempt: 1 }
+  const card = activity({ puppet, pod, log: { text: tail(startLive, failed, heartbeat) }, now: NOW })
+  assert.deepEqual(card.backend.lastDial, { value: 'alt.excalia.fr:25565', at: failed.t, connected: false })
+  // A failed dial does not move the effective backend: the lane is still where
+  // the start record put it.
+  assert.equal(card.backend.effective.value, 'play2.excalia.fr:25565')
+  assert.equal(card.backend.effective.source, 'start')
+  const page = renderPage({ version: 1, puppets: [puppet] }, [card])
+  assert.match(page, /alt\.excalia\.fr:25565 \(failed, 2026-11-18T10:36:00\.000Z\)/)
 })
 
 test('an expiry inside seven days is a date and a warning', () => {
@@ -303,7 +360,7 @@ test('a secret-shaped key in the tail reaches neither the page nor the JSON', as
     journal: { ...heartbeat.journal, refresh_token: 'should-never-be-shown' }
   }
   const secretFacts = activity({ puppet, pod, log: { text: tail(startLive, leaked) }, now: NOW })
-  const html = (await import('../../src/panel/routes/info.js')).renderPage({ version: 1, puppets: [puppet] }, [secretFacts])
+  const html = renderPage({ version: 1, puppets: [puppet] }, [secretFacts])
   const json = JSON.stringify(secretFacts)
   for (const value of ['mca-should-never-be-shown', 'should-never-be-shown', 'c2VjcmV0LXNpZ25hdHVyZQ']) {
     assert.ok(!html.includes(value), 'the page does not print ' + value)
@@ -328,7 +385,7 @@ test('an expired token reads as expired, not as a negative forecast', () => {
   })
   assert.equal(card.heartbeat.account.expired, true)
   assert.equal(card.heartbeat.account.expiresInDays, -1)
-  assert.match(card.heartbeat.account.warning, /expired 1 days ago/)
+  assert.match(card.heartbeat.account.warning, /expired 1 day ago/)
 })
 
 // --- the routes ---
@@ -361,7 +418,7 @@ test('/ is the card for each puppet, under the timestamp of every record', async
     for (const text of [HEARTBEAT_AT, START_AT, attach.t,
       '2243099 (2.1 MiB)', 'monoplayer-84855d7f8b-5h5bd',
       'play2.excalia.fr:25565 (start, ' + START_AT + ')',
-      '1 entries (startLive, ' + START_AT + '); re-read at each login',
+      '1 entry (startLive, ' + START_AT + '); re-read at each login',
       'monoplayer-control', 'glowsquidye.tail41e568.ts.net']) {
       assert.ok(page.includes(text), 'the page shows ' + text)
     }
@@ -404,7 +461,6 @@ test('the page escapes what it renders', async () => {
     log: { text: tail({ ...heartbeat, account: { alias: '<img src=x onerror=alert(1)>', expiresAt: null } }) },
     now: NOW
   })
-  const { renderPage } = await import('../../src/panel/routes/info.js')
   const page = renderPage({ version: 1, puppets: [{ ...puppet, name: '<script>alert(1)</script>' }] }, [hostile])
   assert.ok(page.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
   assert.ok(page.includes('&quot;&gt;&lt;b&gt;x'))

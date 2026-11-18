@@ -45,6 +45,38 @@ export class ReadRefused extends Error {
 const reason = error => String(error?.message ?? error)
 const encode = value => encodeURIComponent(String(value))
 
+// The caps the puppet's Deployment sets in its own environment. The panel already
+// reads this object for its selector, and these five variables are the only
+// cap-shaped facts it can reach: the config document that would carry the rest is
+// not the panel's to read, and a value the Deployment omits falls back to a
+// compiled default the panel cannot see. An unset variable is therefore unknown,
+// never the default guessed.
+export const CAP_VARIABLES = {
+  preAuthMaxConnections: 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS',
+  preAuthDeadlineMs: 'MONOPLAYER_PREAUTH_DEADLINE_MS',
+  journalMaxBytes: 'MONOPLAYER_JOURNAL_MAX_BYTES',
+  journalMaxTotalBytes: 'MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES',
+  journalMaxAgeMs: 'MONOPLAYER_JOURNAL_MAX_AGE_MS'
+}
+
+export function deploymentCaps (deployment, container = CONTAINER) {
+  const containers = deployment?.spec?.template?.spec?.containers
+  const list = Array.isArray(containers) ? containers : []
+  const chosen = list.find(entry => entry?.name === container) ?? list[0] ?? null
+  const entries = Array.isArray(chosen?.env) ? chosen.env : []
+  const values = new Map()
+  for (const entry of entries) {
+    if (typeof entry?.name === 'string' && typeof entry.value === 'string') values.set(entry.name, entry.value)
+  }
+  const caps = {}
+  for (const [key, variable] of Object.entries(CAP_VARIABLES)) {
+    const text = values.get(variable)
+    const value = text === undefined ? NaN : Number(text)
+    caps[key] = Number.isFinite(value) ? value : null
+  }
+  return caps
+}
+
 // `spec.selector.matchLabels` as a label selector, sorted so the same Deployment
 // always produces the same URL. Returns null when the Deployment does not say,
 // which is a read the panel must not guess at: an empty selector would list every

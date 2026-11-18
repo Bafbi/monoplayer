@@ -218,9 +218,10 @@ Neither cap is in the heartbeat. The `preAuthRefused` line carries `reason`,
 window's size and deadline are stated, and the panel shows each with the
 timestamp of the last line that stated it.
 
-### The start records
+### The start and dial records
 
-Two records are written once, at startup, and neither is a heartbeat.
+Three kinds of record say where the lane is dialled and who it lets in, and none is
+a heartbeat.
 
 | Record | Field | Kind | Meaning |
 | --- | --- | --- | --- |
@@ -228,10 +229,12 @@ Two records are written once, at startup, and neither is a heartbeat.
 | `startLive` | `whitelistCount` | count | Entries in the attach whitelist at startup. |
 | `startLive` | `control.file`, `.allowBackendSwitch`, `.whitelistReload` | label, boolean | The control document's path, whether a desired backend may move the lane, and whether the whitelist is re-read at each login (#229). |
 | `start` | `whitelist` | list | The core's copy of the same whitelist, one UUID per entry. Its length is `whitelistCount`. |
+| `backendReconnect`, `backendReconnectFailed` | `target` | label | The `host:port` a reconnect dialled. `backendReconnect` is a dial that connected, and `backendReconnectFailed` one that did not, with `error` and no `warm`. |
+| `backendReconnect`, `backendReconnectFailed` | `delayMs`, `attempt`, `backendLogins`, `followed`, `warm`, `state` | count, boolean, label | The delay before the dial, its attempt number, the logins the session completed, whether a followed transfer landed, whether the cache came back warm, and the session's state after it. |
 
 The panel reads them to name the effective backend and the whitelist's size. A
-400-line log tail usually predates a pod's start, so both are absent from a tail
-more often than not.
+400-line log tail usually predates a pod's start, so a start record is absent from
+a tail more often than not.
 
 ## Packet journal
 
