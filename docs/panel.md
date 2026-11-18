@@ -248,16 +248,21 @@ reviewers read beside the workload. The cost is that the panel's refusal is a
 courtesy and the puppet's is the truth.
 
 A third condition sits under both: **the lane must name the file.**
-`MONOPLAYER_CONTROL_FILE` is what makes a puppet read `desired.json` at all, and no
-manifest in this repository sets it yet, so on the deployed lane a write lands in a
-document nothing opens and the 200 means "written", not "read". Nothing says so in
-the log, because a lane that names no control file reads no file to report on.
+`MONOPLAYER_CONTROL_FILE` is what makes a puppet read `desired.json` at all. Without
+it a write lands in a document nothing opens, and a 200 means "written", not "read" —
+with no log line to say so, because a lane that names no control file reads no file
+to report on.
 
-For that reason `deploy/panel/registry.yaml` ships `allowBackendSwitch: false`:
-the panel should refuse to write a document the only puppet it lists cannot read.
-Wiring the lane is one edit to `deploy/manifests/deployment.yaml` (a volume for the
-control ConfigMap, and the two variables) and one to the registry, and the two
-belong in the same change. Check the lane before you trust the answer:
+**The live lane names it.** `deploy/manifests/deployment.yaml` mounts
+`monoplayer-control` read-only at `/control` and sets all three variables, and
+`deploy/panel/registry.yaml` therefore ships `allowBackendSwitch: true`. That is the
+order they have to be turned on in, and it was shipped the other way round once: the
+lane was wired while the registry still said false, which is a page with no move
+control and a 409 on the route. **`test/tooling/live-manifests.test.js` now reads
+both files** and fails when a registry row says true over a lane that does not obey,
+so the next drift is a red gate instead of a silent no-op.
+
+Check the lane before you trust the answer:
 
 ```bash
 kubectl -n monoplayer get deployment monoplayer \
