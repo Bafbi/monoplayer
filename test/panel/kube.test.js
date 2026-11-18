@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createKubeClient, labelSelector, ReadRefused } from '../../src/panel/kube.js'
+import { createKubeClient, deploymentCaps, labelSelector, ReadRefused } from '../../src/panel/kube.js'
 
 const answer = (body, status = 200, statusText = 'OK') => ({
   status,
@@ -68,6 +68,40 @@ test('a selector is sorted, and a Deployment that names none is null rather than
   assert.equal(labelSelector({ spec: { selector: { matchExpressions: [] } } }), null)
   assert.equal(labelSelector({}), null)
   assert.equal(labelSelector(null), null)
+})
+
+test('the caps come from the Deployment\'s own environment, and an unset one stays unknown', () => {
+  const deployment = {
+    spec: {
+      template: {
+        spec: {
+          containers: [
+            { name: 'sidecar', env: [{ name: 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', value: '99' }] },
+            {
+              name: 'monoplayer',
+              env: [
+                { name: 'MONOPLAYER_PREAUTH_MAX_CONNECTIONS', value: '3' },
+                { name: 'MONOPLAYER_PREAUTH_DEADLINE_MS', value: '15000' },
+                { name: 'MONOPLAYER_JOURNAL_MAX_BYTES', value: '67108864' },
+                { name: 'OTHER_VARIABLE', value: '7' }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+  assert.deepEqual(deploymentCaps(deployment), {
+    preAuthMaxConnections: 3,
+    preAuthDeadlineMs: 15_000,
+    journalMaxBytes: 67_108_864,
+    journalMaxTotalBytes: null,
+    journalMaxAgeMs: null
+  })
+  // A variable that is not a number is unknown, not zero.
+  const broken = deploymentCaps({ spec: { template: { spec: { containers: [{ name: 'monoplayer', env: [{ name: 'MONOPLAYER_PREAUTH_DEADLINE_MS', value: 'soon' }] }] } } } })
+  assert.equal(broken.preAuthDeadlineMs, null)
+  assert.equal(deploymentCaps({}).preAuthMaxConnections, null)
 })
 
 test('a refusal keeps its status and names the read that failed', async () => {

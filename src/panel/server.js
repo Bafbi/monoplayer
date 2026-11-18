@@ -1,12 +1,11 @@
 // The panel's HTTP surface: the probe, the registry list, and one dispatch line
-// into the puppet screens.
+// into the puppet cards.
 //
 // Nothing here knows about namespaces, tokens, or the API server. The registry
 // arrives as a function, so a test hands in a document and a pod hands in the
 // mounted ConfigMap, and the routes cannot tell the difference. The API client
-// arrives the same way, and so does the puppet screen: src/panel/routes/info.js
-// owns every route that reads a pod, so this file does not grow a branch per
-// feature (#231).
+// arrives the same way, and so do the cards: src/panel/routes/info.js owns every
+// route that reads a pod, so this file does not grow a branch per feature (#231).
 //
 // `GET /healthz` never touches the registry. It is the probe, so it has to answer
 // while the registry is broken; a panel that fails its probe when the document
@@ -39,7 +38,7 @@ export function createPanelHandler ({ registry, kubernetes = null, log = () => {
     }
   }
 
-  // #231: the puppet screens, as one module and one dispatch line. A route that
+  // #231: the puppet cards, as one module and one dispatch line. A route that
   // reads a pod or patches a ConfigMap arrives beside this file, not inside it.
   const info = createInfoRoutes({ read, kubernetes, log, send, now })
 

@@ -1,7 +1,7 @@
 # Run the panel
 
-The panel is one page and one JSON route on the tailnet, listing the puppets it
-may touch and the control ConfigMap it may write for each of them. It runs beside
+The panel is one page and two JSON routes on the tailnet, showing what each puppet
+it may touch is doing and which control ConfigMap it may write for it. It runs beside
 the proxy, not inside it: same image, second entrypoint, its own namespace.
 
     http://monoplayer.tail41e568.ts.net:8080
@@ -45,6 +45,7 @@ stale record shown as live is the failure this page exists to prevent.
 | `not-ready` | `pod not ready: <pod> is not Ready (<reason>) …` |
 | `log-refused` | `log fetch refused: …` |
 | `no-heartbeat` | `no heartbeat in the last N lines of <pod> …`, with the newest line's timestamp |
+| `stale` | `stale: the newest heartbeat was written N s ago …` — older than three intervals |
 | `serving` | `serving: the newest heartbeat was written N s ago …` |
 
 Two facts are stated only by the lines that carry them, and the card says so
@@ -60,16 +61,24 @@ rather than guessing:
   document re-reads the whitelist at each login (#229), so an edit made after start
   is invisible here; the row is labelled `at start`, carries that record's
   timestamp, and says `re-read at each login` when it is.
-- **`preAuth.maxConnections` and `preAuth.deadlineMs` are not in the heartbeat.**
-  A refusal line carries the cap, an expiry line carries the deadline, so each cap
-  is shown with the timestamp of the last line that stated it, and as unknown when
-  no line has.
-- **The journal's caps are not in the heartbeat either.** They are the
-  `MONOPLAYER_JOURNAL_MAX_BYTES`, `..._MAX_TOTAL_BYTES`, and `..._MAX_AGE_MS`
-  environment values, and `journal.stats()` reports what the journal did with them
-  (`sealed`, `pruned`, `dirBytes`), not the caps. The card shows the effects and
-  names no cap. A journal a full volume stopped before its first write does report
-  `freeBytes` and `requiredBytes`, and those rows appear.
+- **The effective backend is the last successful dial**, so a puppet that followed a
+  transfer shows where it is now rather than where it started. `last dial` shows the
+  newest dial of either outcome with `connected` or `failed`, because a reconnect
+  that failed in the tail is the difference between "on play2" and "on play2 until
+  three minutes ago".
+- **`preAuth.maxConnections` and `preAuth.deadlineMs` are not in the heartbeat.** A
+  refusal line carries the cap and an expiry line carries the deadline, so each cap
+  is shown with the timestamp of the last line that stated it. A healthy lane writes
+  neither, so the fallback is the Deployment's own environment
+  (`MONOPLAYER_PREAUTH_MAX_CONNECTIONS`, `MONOPLAYER_PREAUTH_DEADLINE_MS`), labelled
+  `Deployment env` with no timestamp. When both are silent the row says unknown: the
+  compiled default applies and the panel cannot see it.
+- **The journal's caps are the same shape.** `journal.stats()` reports what the
+  journal did, not its caps, so the card shows the journal's effects and the three
+  `MONOPLAYER_JOURNAL_MAX_BYTES`, `..._MAX_TOTAL_BYTES`, and `..._MAX_AGE_MS` values
+  from the Deployment's environment, or says they are not set there. A journal a full
+  volume stopped before its first write does report `freeBytes` and
+  `requiredBytes`, and those rows appear.
 
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning
@@ -213,7 +222,7 @@ curl http://monoplayer.tail41e568.ts.net:8080/api/puppets/glowsquidye
 The third is one puppet's facts, the same object the card is rendered from.
 
 `/healthz` never reads the registry, so it answers while the document is broken and
-the two content routes return 500 with the reason. The first log line of the pod
+all three content routes return 500 with the reason. The first log line of the pod
 says what the panel read:
 
 ```json
@@ -236,7 +245,7 @@ registry edit is visible here before it is merged.
 
 A panel run from a checkout has no ServiceAccount token, so every card reads
 `read refused: no service account token at
-/var/run/secrets/kubernetes.io/serviceaccount/token` and the registry facts are
+/var/run/secrets/kubernetes.io/serviceaccount/token: …` and the registry facts are
 still on it. That sentence is the point: a panel that cannot read the cluster
 names the read that failed instead of showing a spinner.
 
