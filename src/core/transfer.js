@@ -23,7 +23,13 @@ export const TRANSFER_KINDS = Object.freeze({
   TRANSFER: 'transfer',
   // A backend `start_configuration`: the same connection restarts its
   // configuration phase.
-  RECONFIGURE: 'reconfigure'
+  RECONFIGURE: 'reconfigure',
+  // #233: an operator moved the puppet from the control document. No packet is
+  // behind it, the target is an ordinary login rather than a transfer intent,
+  // and the move counts in the reconfiguration counters rather than the
+  // transfer ones. The kind exists so every line that already logs `kind` names
+  // the operator's act instead of a transfer nobody sent.
+  OPERATOR: 'operator'
 })
 
 export function createTransfer ({ session, cache } = {}) {

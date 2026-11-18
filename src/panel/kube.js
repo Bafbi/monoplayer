@@ -1,4 +1,4 @@
-// The panel's read path to the cluster: three GETs, and no other verb.
+// The panel's path to the cluster: three reads, and one write.
 //
 // The panel reads what the puppet already says about itself, and it reaches that
 // through the API server for one reason: the pod's log. The registry names a
@@ -14,7 +14,13 @@
 // `request` is injected. The default is one `node:https` call; a test hands in a
 // function that records the path and answers bytes, so the panel's tests need no
 // cluster, no certificate, and no token. There is no Kubernetes client package
-// in this repo and none is added: three GETs are three GETs.
+// in this repo and none is added: four requests are four requests.
+//
+// The one write is a JSON merge patch on one key of one ConfigMap (#233). It lives
+// here because this module is where the token, the CA and the API base are read,
+// and a second transport would be a second copy of all three. What it cannot touch
+// is still decided elsewhere and unchanged: the registry names the one ConfigMap,
+// and role.yaml grants `patch` on that name and no other object.
 
 import fs from 'node:fs'
 import https from 'node:https'
@@ -40,6 +46,24 @@ export class ReadRefused extends Error {
     this.name = 'ReadRefused'
     this.status = status
   }
+}
+
+// The same fact for the write, under its own name: a card says what it could not
+// read, and a route says what it could not write. One class would put the word
+// "read" in the failure of a request that wrote.
+export class WriteRefused extends Error {
+  constructor (message, { status = 0 } = {}) {
+    super(message)
+    this.name = 'WriteRefused'
+    this.status = status
+  }
+}
+
+// The patch body. `application/merge-patch+json` merges objects recursively
+// (RFC 7386), so `data` keeps every key this patch does not name: the whitelist
+// the operator created the ConfigMap with survives every backend move.
+export function mergePatchBody ({ key, text }) {
+  return JSON.stringify({ data: { [key]: text } })
 }
 
 const reason = error => String(error?.message ?? error)
@@ -95,7 +119,7 @@ export function createKubeClient ({
   caFile = CA_FILE,
   container = CONTAINER,
   tailLines = TAIL_LINES,
-  request = httpsGet,
+  request = httpsRequest,
   readToken = () => {
     try {
       const token = fs.readFileSync(tokenFile, 'utf8').trim()
@@ -137,7 +161,39 @@ export function createKubeClient ({
     return answer.body
   }
 
+  // One key of one ConfigMap, rewritten. Resolves with what the API server
+  // answered and rejects with a reason the route turns into a 503.
+  async function patchConfigMapKey ({ namespace, name, key, text }) {
+    const path = '/api/v1/namespaces/' + encode(namespace) + '/configmaps/' + encode(name)
+    const what = 'write ' + key + ' in ConfigMap ' + namespace + '/' + name
+    const body = mergePatchBody({ key, text })
+    const startedAt = Date.now()
+    let answer
+    try {
+      answer = await request({
+        baseUrl,
+        path,
+        token: readToken(),
+        ca: readCA(),
+        method: 'PATCH',
+        body,
+        contentType: 'application/merge-patch+json'
+      })
+    } catch (error) {
+      if (error instanceof WriteRefused) throw error
+      throw new WriteRefused(what + ': ' + reason(error))
+    }
+    if (!(answer?.status >= 200 && answer?.status < 300)) {
+      const status = answer?.status ?? 0
+      const said = messageFrom(answer?.body)
+      throw new WriteRefused(what + ': the API server answered ' + (status === 0 ? 'nothing' : status) +
+        (said === null ? '' : ': ' + said), { status })
+    }
+    return { namespace, name, key, status: answer.status, bytes: Buffer.byteLength(body), tookMs: Date.now() - startedAt }
+  }
+
   return {
+    patchConfigMapKey,
     async deployment (namespace, name) {
       const path = '/apis/apps/v1/namespaces/' + encode(namespace) + '/deployments/' + encode(name)
       const what = 'read Deployment ' + namespace + '/' + name
@@ -158,22 +214,39 @@ export function createKubeClient ({
   }
 }
 
-// The one real call: GET over TLS with the pod's token and CA, and the body as
-// text. A timeout is not optional here: the API server answers, or the page says
-// it could not read, and neither of those may depend on a socket that never
-// closes.
-export function httpsGet ({ baseUrl, path, token, ca }) {
+// What an error response says about itself, bounded: the API server's `message` is
+// about the object, which is public configuration, but it reaches a browser and a
+// log line.
+function messageFrom (body) {
+  try {
+    const parsed = JSON.parse(String(body ?? ''))
+    const heard = parsed?.message ?? parsed?.reason ?? null
+    if (typeof heard === 'string' && heard.trim() !== '') return heard.slice(0, 300)
+  } catch { /* not the API server's shape */ }
+  return null
+}
+
+// The one real call: TLS with the pod's token and CA, and the body as text. A
+// timeout is not optional here: the API server answers, or the panel says it could
+// not, and neither of those may depend on a socket that never closes.
+//
+// `method` and `body` are the write's two additions (#233). A read passes neither,
+// and the request it makes is the request it has always made.
+export function httpsRequest ({ baseUrl, path, token, ca, method = 'GET', body = null, contentType = null }) {
   return new Promise((resolve, reject) => {
     const url = new URL(baseUrl + path)
+    const headers = {
+      authorization: 'Bearer ' + token,
+      accept: 'application/json, text/plain;q=0.9, */*;q=0.1'
+    }
+    if (contentType !== null) headers['content-type'] = contentType
+    if (body !== null) headers['content-length'] = Buffer.byteLength(body)
     const options = {
-      method: 'GET',
+      method,
       hostname: url.hostname,
       port: url.port === '' ? 443 : url.port,
       path: url.pathname + url.search,
-      headers: {
-        authorization: 'Bearer ' + token,
-        accept: 'application/json, text/plain;q=0.9, */*;q=0.1'
-      },
+      headers,
       timeout: TIMEOUT_MS
     }
     if (ca !== null && ca !== undefined) options.ca = ca
@@ -190,6 +263,12 @@ export function httpsGet ({ baseUrl, path, token, ca }) {
     })
     req.on('timeout', () => { req.destroy(new Error('no answer in ' + TIMEOUT_MS + ' ms')) })
     req.on('error', reject)
-    req.end()
+    req.end(body ?? undefined)
   })
+}
+
+// The read-only spelling, kept because a caller that only reads should not have to
+// know the transport can write.
+export function httpsGet (options) {
+  return httpsRequest({ ...options, method: 'GET' })
 }

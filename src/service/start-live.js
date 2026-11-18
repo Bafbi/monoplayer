@@ -25,8 +25,9 @@
 //                                                       puppet's backend; setting it
 //                                                       also reloads the attach
 //                                                       whitelist at each login (#229)
-//   MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json on the
-//                                                       next connect, 0 leaves the
+//   MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json, on the
+//                                                       next connect and on every
+//                                                       heartbeat tick; 0 leaves the
 //                                                       configured backend (default 0)
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
@@ -62,7 +63,13 @@
 import fs from 'node:fs'
 
 import { createMonoplayer, loadConfig } from './monoplayer.js'
-import { createControlDocument, dialIntent, dialTargetFor } from './control.js'
+import {
+  createBackendMoveTick,
+  createControlDocument,
+  dialIntent,
+  dialTargetFor,
+  revertAfterRestore
+} from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
 import { createWhitelistStore } from '../custody/store.js'
@@ -565,6 +572,15 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // Whether the settled server got there by a followed transfer. It decides the
   // dialect of a revert dial, exactly as `currentIsTransfer` decides a reconnect.
   let settledIsTransfer = false
+  // #233: the heartbeat's move, built once. The memory of the document whose move
+  // already failed lives in the tick, so the loopback rung can drive the same one
+  // instead of a copy of it.
+  const moveTick = createBackendMoveTick({
+    core,
+    control,
+    log,
+    current: () => currentTarget
+  })
   const isBase = target =>
     target.host === baseTarget.host && target.port === baseTarget.port
 
@@ -588,17 +604,32 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // The last desired backend this process logged, so an unchanging edit is one
   // line rather than one per reconnect.
   let lastDesired = desiredAtStart
-  core.on('reconnect_due', async ({ delayMs, attempt, target } = {}) => {
+  core.on('reconnect_due', async ({ delayMs, attempt, target, moveTarget } = {}) => {
     if (reconnecting) return
     reconnecting = true
     core.session.backendConnecting({ initial: false })
 
-    const due = follow.onDue({ target })
+    // #233: an operator move hands its target over once, through the same
+    // controller a transfer uses, so one budget owns the retries and the give-up
+    // for both. A target fed again on every retry would reset that budget. The
+    // controller remembers the dialect as well as the address, because the retry
+    // hop carries neither.
+    //
+    // `moveTarget` is an optional field of the event, so it is normalized once:
+    // read as "not null", an event that omits it would claim to be an operator's
+    // move and dial a transfer's target as a fresh login.
+    const handedMove = moveTarget ?? null
+    const due = follow.onDue({
+      target: handedMove ?? target,
+      kind: handedMove !== null ? 'operator' : 'transfer'
+    })
     // #229: the desired backend is read again here, before the dial, and only
-    // while no client is attached. Moving a live session is the last ticket in
-    // the epic; this one must never disturb an attached client.
+    // while no client is attached. #233's move is the one path that carries a
+    // desired backend onto an attached session, and it arrives as `moveTarget`
+    // because the core started it.
     const chosen = dialTargetFor({
-      transfer: due.target ?? null,
+      transfer: due.kind === 'transfer' ? due.target : null,
+      operator: due.kind === 'operator' ? due.target : null,
       desired: control.desiredTarget(),
       current: currentTarget,
       attached: core.attached === true
@@ -625,6 +656,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
         log('transferFollowConnect', {
           host: due.target.host,
           port: due.target.port,
+          kind: due.kind,
           attempt,
           failures: due.failures
         })
@@ -672,11 +704,23 @@ export async function startLive ({ argv = [], io = process } = {}) {
         // The followed target is unreachable; the next reconnect goes back to
         // the server the client was restored onto so the puppet is never
         // stranded and never lands where the client is not.
+        if (due.kind === 'operator') {
+          // #233: an operator's target the budget gave up on, named as such: the
+          // restore lines below are the machine's, and this is the one an
+          // operator greps for.
+          log('backendMoveFailed', {
+            host: failure.abandoned?.host ?? null,
+            port: failure.abandoned?.port ?? null,
+            attempt,
+            error: String(error?.message ?? error).slice(0, 300)
+          })
+        }
         core.abortTransfer('target_unreachable')
         revertToSettled('target_unreachable')
         log('transferFollowReverted', {
           host: failure.abandoned?.host ?? null,
-          port: failure.abandoned?.port ?? null
+          port: failure.abandoned?.port ?? null,
+          kind: due.kind
         })
       }
       const outcome = core.session.fail()
@@ -694,9 +738,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // has already given up on, and the next dial lands the puppet on the server
   // the human was just moved off.
   core.on('transfer_restored', ({ reason = null, kind = null } = {}) => {
-    // A reconfigure is the same server restarting its configuration phase, so
-    // there is no target to abandon: the puppet stays where it is.
-    if (kind !== 'transfer') {
+    // The decision is `control.js`'s, so the one case that must not revert is
+    // asserted in a unit test rather than read here: #233 read this as "not a
+    // transfer, keep the target" and re-dialled the server that never answered,
+    // with the client attached, for as long as the process lived.
+    if (!revertAfterRestore({ kind })) {
       log('transferRestoreKeptTarget', { reason, kind })
       return
     }
@@ -828,11 +874,40 @@ export async function startLive ({ argv = [], io = process } = {}) {
       })
       : accountTokenExpiry({ dir: cfg.puppet.cacheDir, account: cfg.puppet.cacheAccount ?? null })
   }
-  await runForever({ core, backend, front, log, sink, telemetry, journal, account })
+  // #233: the operator's move, asked for on the heartbeat the service already
+  // runs. There is no watcher and no second timer: the control document is read
+  // at the cadence the lane already reports at, which is the ticket's decision.
+  // The decision itself is `control.js`'s (`createBackendMoveTick`), so the
+  // loopback rung drives the same one.
+  await runForever({
+    core,
+    backend,
+    front,
+    log,
+    sink,
+    telemetry,
+    journal,
+    account,
+    onHeartbeat: moveTick.tick
+  })
   return 0
 }
 
-async function runForever ({ core, backend, front, log, sink, telemetry, journal, account = { alias: null, expiresAt: () => null } }) {
+async function runForever ({
+  core,
+  backend,
+  front,
+  log,
+  sink,
+  telemetry,
+  journal,
+  account = { alias: null, expiresAt: () => null },
+  // #233: the work one heartbeat tick also does, beside the report the loop
+  // writes. It is injected rather than read from here because it needs the dial
+  // state this function does not hold: which backend the puppet is on, and the
+  // control document's last attempt.
+  onHeartbeat = () => {}
+}) {
   let stopping = false
   let lastRejected = front.wireStats.rejected
   let lastPreAuthRefused = front.metrics.preAuthRefused
@@ -895,6 +970,13 @@ async function runForever ({ core, backend, front, log, sink, telemetry, journal
     const stats = core.cache.stats()
     const forwarder = backend.forwarderStats()
     emitGauges()
+    // #233: after the report, so a tick that starts a move says what the lane
+    // looked like before it. A throw here must not stop the beating.
+    try {
+      onHeartbeat()
+    } catch (error) {
+      log('heartbeatHookFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
     log('heartbeat', {
       attached: core.attached,
       backendLogins: core.session.backendLogins,
