@@ -36,7 +36,7 @@ page's read time is printed once, at the bottom, labelled `read at`; nothing els
 is rendered as "now". A heartbeat older than three intervals says so in words. A
 stale record shown as live is the failure this page exists to prevent.
 
-**A puppet that is not serving says why**, in one of six sentences:
+**A puppet that is not serving says why**, in one of seven sentences:
 
 | State | Sentence |
 | --- | --- |
@@ -48,15 +48,14 @@ stale record shown as live is the failure this page exists to prevent.
 | `stale` | `stale: the newest heartbeat was written N s ago …` — older than three intervals |
 | `serving` | `serving: the newest heartbeat was written N s ago …` |
 
-Two facts are stated only by the lines that carry them, and the card says so
+Some facts are stated only by the lines that carry them, and the card says so
 rather than guessing:
 
 - **The attach whitelist's size and the effective backend** come from the
   `startLive` record. The tail is 400 lines, so a pod older than that has no start
   record in it: the card prints `unknown, and no start record is in the tail`, and
   shows the registry's own backend beside it, labelled `registry` with no
-  timestamp. A successful `backendReconnect` line moves the effective backend,
-  because a puppet that followed a transfer is not where it started.
+  timestamp.
 - **The whitelist count is the one the lane resolved at startup.** The control
   document re-reads the whitelist at each login (#229), so an edit made after start
   is invisible here; the row is labelled `at start`, carries that record's
@@ -96,7 +95,7 @@ holds is a read.
 |---|---|---|
 | the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace |
 | `pods`, `pods/log` | `get`, `list` | each puppet's namespace |
-| `deployments` | `get`, `list` | each puppet's namespace, for readiness only |
+| `deployments` | `get`, `list` | each puppet's namespace: the pod selector, the pods' readiness, and the caps its environment sets |
 
 And, by design:
 
