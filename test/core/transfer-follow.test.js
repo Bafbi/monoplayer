@@ -14,7 +14,7 @@ test('a target from the due event is remembered across retries', () => {
 
 test('the base target stays null when no transfer is pending', () => {
   const c = createTransferFollowController()
-  assert.deepEqual(c.onDue({ target: null }), { target: null, failures: 0 })
+  assert.deepEqual(c.onDue({ target: null }), { target: null, kind: null, failures: 0 })
   assert.equal(c.target, null)
 })
 
@@ -28,7 +28,7 @@ test(`after ${DEFAULT_MAX_TARGET_FAILURES} failures the controller reverts to th
   assert.deepEqual(last.abandoned, target)
   assert.equal(c.target, null)
   assert.equal(c.reverts, 1)
-  assert.deepEqual(c.onDue({ target: null }), { target: null, failures: 0 })
+  assert.deepEqual(c.onDue({ target: null }), { target: null, kind: null, failures: 0 })
 })
 
 test('a successful connect clears the target', () => {
@@ -36,7 +36,23 @@ test('a successful connect clears the target', () => {
   c.onDue({ target })
   assert.deepEqual(c.onSuccess(), { followed: true })
   assert.equal(c.target, null)
-  assert.deepEqual(c.onDue({}), { target: null, failures: 0 })
+  assert.equal(c.kind, null, 'the dialect goes with the target it described')
+  assert.deepEqual(c.onDue({}), { target: null, kind: null, failures: 0 })
+})
+
+test('#233 the hop\'s kind survives the retries that carry no target', () => {
+  const c = createTransferFollowController()
+  assert.deepEqual(c.onDue({ target, kind: 'operator' }), { target, kind: 'operator', failures: 0 })
+  assert.equal(c.kind, 'operator')
+  assert.deepEqual(c.onDue({ target: null, kind: 'transfer' }), { target, kind: 'operator', failures: 0 },
+    'a retry carries no target, so it must not overwrite the dialect either')
+  assert.equal(c.kind, 'operator', 'and the target is still there')
+})
+
+test('#233 a kind the controller does not know is a transfer, which is what every lane had', () => {
+  const c = createTransferFollowController()
+  assert.equal(c.onDue({ target, kind: 'nonsense' }).kind, 'transfer')
+  assert.equal(createTransferFollowController().onDue({ target }).kind, 'transfer')
 })
 
 test('invalid targets are ignored', () => {

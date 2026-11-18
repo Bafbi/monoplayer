@@ -235,9 +235,11 @@ Common:
   with no restart. An absent `desired.json` is not an error; a file that is there
   but unreadable or malformed is named in the log and ignored.
 - `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH` (default `0`): `1` honours a
-  `desired.json` on the next backend connect, and only while no player is
-  attached. `0` writes `controlSwitchRefused` once and stays on
-  `MONOPLAYER_BACKEND_HOST`. A value other than `1` or `0` is named and ignored.
+  `desired.json` on the next backend connect and on every heartbeat tick. A tick
+  with a player attached moves them without dropping their connection; a tick with
+  nobody attached moves the puppet alone. `0` writes `controlSwitchRefused` once
+  and stays on `MONOPLAYER_BACKEND_HOST`. A value other than `1` or `0` is named
+  and ignored.
 - `MONOPLAYER_PREAUTH_MAX_CONNECTIONS` (default `16`): the total concurrent
   connections the front accepts between a socket and the attach whitelist's
   accept. It is on by default, so exposing the port is not a switch to

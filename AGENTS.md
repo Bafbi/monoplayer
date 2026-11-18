@@ -94,7 +94,7 @@ Where to look: a decision lives in `src/core/` (pure), the wiring in `src/servic
 | `src/spike/` | The frozen protocol spike. It grows no features. |
 | `src/driver/`, `tools/driver/` | Fabric client driver, and the scenario runner `src/driver/run.js`. A G0 pass needs two passed reports and the human unmodded witness, so `--verify-g0` is not the whole check. |
 | `src/testbed/`, `deploy/testbed/` | The two-Paper transfer testbed. |
-| `src/panel/`, `deploy/panel/` | The ops panel on the tailnet: `start.js` the entrypoint, `server.js` the three routes, `registry.js` the registry document. It has no Application of its own: the one Argo Application syncs `deploy/kustomization.yaml`, which includes it beside the proxy. Runbook: `docs/panel.md`. |
+| `src/panel/`, `deploy/panel/` | The ops panel on the tailnet: `start.js` the entrypoint, `server.js` the dispatch and the read routes, `routes/` one module per write route, `kube.js` the ConfigMap patch, `registry.js` the registry document. It has no Application of its own: the one Argo Application syncs `deploy/kustomization.yaml`, which includes it beside the proxy. Runbook: `docs/panel.md`. Its tests stay in `test/panel/`, one level, because `mise run test` globs that level only. |
 | `deploy/` | Manifests and Argo CD. `scripts/build-image.sh` publishes the image. |
 | `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` covers `tools/`, `mise.toml`, and the manifests under `deploy/`; `test/support/` holds the shared fake-integration rig, `harness.js`, and no test of its own. |
 

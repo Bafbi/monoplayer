@@ -350,7 +350,9 @@ export function createMonoplayer ({
     // actual backend connect (the core never touches the backend leg here).
     onReconnect: ({ delayMs, attempt }) => {
       const target = pendingTransfer
+      const moveTarget = pendingMove
       pendingTransfer = null
+      pendingMove = null
       // The dial starts now: the ended leg's late end event, if any, arrives
       // before this and must not be read as the target faulting (#22).
       legHandover = false
@@ -366,7 +368,7 @@ export function createMonoplayer ({
         pendingPacks.clear()
         log('cacheReset', { reason: 'transfer_restored' })
       }
-      emit('reconnect_due', { delayMs, attempt, target })
+      emit('reconnect_due', { delayMs, attempt, target, moveTarget })
     }
   })
 
@@ -501,6 +503,11 @@ export function createMonoplayer ({
   let transferNoticeSent = false // one refusal notice per attach
   let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let pendingTransfer = null // target for the next reconnect_due
+  // #233: the target an operator move dials on the next reconnect_due. It is a
+  // second slot rather than a flag on the first because the two dials differ in
+  // dialect: a transfer asks for the transfer handshake and keeps its cookies, an
+  // operator move is a fresh login on a server that never saw the puppet.
+  let pendingMove = null
   // The default path: a backend start_configuration ends the leg, and the end
   // handler turns that into a kick with the reconfiguration reason.
   let reconfigureRequested = false
@@ -1148,7 +1155,13 @@ export function createMonoplayer ({
       return outcome
     }
     cache.reset()
-    log('cacheReset', { reason: retainFront ? 'transfer' : 'backend_down', backendLogins: session.backendLogins })
+    // #233: a reset under a move names the move, so an operator's reset is not
+    // filed under a transfer nobody sent. A retained teardown with no move is
+    // still the followed-transfer path it has always been.
+    log('cacheReset', {
+      reason: retainFront ? (moveKind ?? 'transfer') : 'backend_down',
+      backendLogins: session.backendLogins
+    })
     // #22: a client following a move keeps its connection and the session
     // stays attached to it. One reconnect is armed; the front is never kicked
     // and never told to rejoin.
@@ -1164,12 +1177,12 @@ export function createMonoplayer ({
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: true, outcome })
       frontLeg.end(kickReason)
-      emit('backend_down', { reason, target: pendingTransfer })
+      emit('backend_down', { reason, target: pendingTransfer ?? pendingMove })
       return outcome
     }
     const outcome = session.backendDown({ reason })
     log('backendDown', { reason, frontEnded: false, outcome })
-    emit('backend_down', { reason, target: pendingTransfer })
+    emit('backend_down', { reason, target: pendingTransfer ?? pendingMove })
     return outcome
   }
 
@@ -1260,27 +1273,11 @@ export function createMonoplayer ({
     // and the move holds the pre-transfer state so a target that never answers
     // can be rolled back onto the same socket. With the key off, the client is
     // detached and rejoins the proxy once the puppet is warm on the target.
-    const begun = cfg.transfer.keepConnection && isAttached()
-      ? move.begin({ target: { host, port }, kind: TRANSFER_KINDS.TRANSFER, reason: 'backend_transfer' })
-      : { began: false }
+    const begun = beginKeptMove({ target: { host, port }, kind: TRANSFER_KINDS.TRANSFER, reason: 'backend_transfer' })
     if (begun.began) {
       metrics.transfersSeamless++
-      moveKind = TRANSFER_KINDS.TRANSFER
-      clientReconfiguring = false
-      clientLeftPlay = false
-      targetLoginReady = false
-      restoreReplayPending = false
-      frontPlayReady = false
       log('transferSeamless', { host, port, depth: transferChain.depth })
       emit('transfer_seamless', { host, port })
-      reconfigurationWaitingWorld = false
-      // #87: the loading screen starts on the intent, not on the target's first
-      // configuration frame. The client enters its own configuration phase now,
-      // so it stops dropping serverbound frames into a play session that no
-      // longer exists, and the human sees the move begin instead of a frozen
-      // world for the length of the dial. A leg that cannot serve the round
-      // reports it here; the first configuration frame tries again below.
-      startClientReconfiguration()
     }
 
     teardownBackend({
@@ -1296,6 +1293,120 @@ export function createMonoplayer ({
     } catch (error) {
       log('transferFollowEndFailed', { error: String(error?.message ?? error) })
     }
+  }
+
+  // #22 and #233: start a move that keeps the client's connection, and hold the
+  // pre-move state so a target that never answers can be rolled back onto the
+  // same socket. One body, because the transfer frame and the operator's
+  // document differ in where the intent comes from and not in what it does.
+  //
+  // Returns `began` false when the key is off or nobody is attached: the caller
+  // then takes the ordinary backend-down path, which detaches the client and
+  // lets it rejoin the warm target.
+  function beginKeptMove ({ target, kind, reason }) {
+    if (!cfg.transfer.keepConnection || !isAttached()) return { began: false }
+    const begun = move.begin({ target, kind, reason })
+    if (begun.began !== true) return { began: false, reason: begun.reason }
+    moveKind = kind
+    clientReconfiguring = false
+    clientLeftPlay = false
+    targetLoginReady = false
+    restoreReplayPending = false
+    frontPlayReady = false
+    reconfigurationWaitingWorld = false
+    // #87: the loading screen starts on the intent, not on the target's first
+    // configuration frame. The client enters its own configuration phase now,
+    // so it stops dropping serverbound frames into a play session that no
+    // longer exists, and the human sees the move begin instead of a frozen
+    // world for the length of the dial. A leg that cannot serve the round
+    // reports it here; the first configuration frame tries again below.
+    startClientReconfiguration()
+    return { began: true, kind, target }
+  }
+
+  // #233: an operator moved the puppet from the control document. No packet is
+  // behind the intent, so this is the only driver of the machine that is not the
+  // server talking.
+  //
+  // Two cases, and the difference is whether there is a connection to keep:
+  //
+  //   a client is attached: the same-connection reconfiguration carries it, the
+  //     pre-move state is held for a target that never answers, and the client
+  //     ends on the target's configuration and play state without reconnecting;
+  //
+  //   nobody is attached: there is nothing to keep, and the puppet moves alone.
+  //     The old session is torn down and one reconnect dials the target, which is
+  //     the shape a followed transfer already takes with no client.
+  //
+  // The counters are the reconfiguration ones. `transfersFollowed`,
+  // `transfersSeamless`, `transfersBlocked` and `transfersRefused` describe a
+  // server-initiated transfer and do not move here (docs/telemetry.md).
+  function startBackendMove ({ target = null, reason = 'operator' } = {}) {
+    const host = typeof target?.host === 'string' ? target.host.trim() : ''
+    const port = Number(target?.port)
+    const valid = host.length > 0 && Number.isInteger(port) && port > 0 && port <= 65535
+    const refuse = why => {
+      log('backendMoveRefused', { reason: why, host: valid ? host : null, port: valid ? port : null })
+      return { started: false, reason: why }
+    }
+    if (!valid) return refuse('invalid_target')
+    // One move at a time, for the same reason a second transfer is refused: a
+    // second one would tear down the connection the first is holding. A transfer
+    // that is waiting for its dial owns that dial, so the next one carries one
+    // target and the operator's would be the one dropped.
+    if (moveKind !== null || pendingTransfer !== null) return refuse('in_flight')
+    // A move needs a session to move from. `backendSessionOpen` is true only
+    // between this session's first frame and the teardown that ends it, so this
+    // refuses exactly when the puppet is between sessions: a restore's reconnect
+    // is still in flight, or a dial is. Starting a move there would hold a
+    // partial or empty snapshot for a client whose screen is not, and its own
+    // dial would race the one already out.
+    if (!backendSessionOpen) return refuse('backend_not_open')
+    // A client still finishing its own configuration cannot start a second one,
+    // and the move would write play frames into it. The operator's document is
+    // not lost: the next heartbeat asks again.
+    if (isAttached() && !frontPlayReady) return refuse('client_not_in_play')
+
+    // The target is handed over once, like a transfer's: the dial reads it on the
+    // next reconnect and the follow budget then owns the retries. A target fed
+    // again on every retry would reset that budget forever.
+    pendingMove = { host, port }
+    // An operator's act starts a new chain: a transfer back to a server this
+    // session visited before the move is not a redirect loop.
+    clearTransferChain('backend_move')
+
+    const attachable = isAttached()
+    const begun = beginKeptMove({ target: { host, port }, kind: TRANSFER_KINDS.OPERATOR, reason })
+    // With nobody attached the move is the dial itself, so the target stays
+    // pending. With a client attached and no move begun, there is no dial to
+    // hand a target to.
+    if (attachable && begun.began !== true) pendingMove = null
+    log('backendMove', {
+      host,
+      port,
+      reason,
+      kind: begun.began === true ? TRANSFER_KINDS.OPERATOR : null,
+      frontKept: begun.began === true,
+      backendLogins: session.backendLogins,
+      state: session.state
+    })
+    emit('backend_move', { host, port, frontKept: begun.began === true })
+
+    teardownBackend({
+      reason: 'backend_move',
+      retainFront: begun.began === true,
+      kickReason: TRANSFER_FOLLOW_REASON
+    })
+    // The core ended this leg on purpose. Its late end event belongs to the
+    // session being replaced, and a retained client keeps the session in
+    // `transferring`, so neither can be told apart from a fault by state alone.
+    legHandover = true
+    try {
+      backendLeg.end('backend_move')
+    } catch (error) {
+      log('backendMoveEndFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    return { started: true, target: { host, port }, kind: begun.began === true ? TRANSFER_KINDS.OPERATOR : null }
   }
 
   // The orchestrator calls this when a followed target cannot be reached; the
@@ -1578,6 +1689,17 @@ export function createMonoplayer ({
       sendTransferRestoredNotice()
     }
     metrics.reconfigurationsRestored++
+    // #233: an operator move that failed says so by name, because the operator is
+    // the one who has to act on it. The line below already carries `kind`; this
+    // one is what a reader greps for.
+    if (kind === TRANSFER_KINDS.OPERATOR) {
+      log('backendMoveRestored', {
+        reason,
+        state: session.state,
+        clientConfiguration: clientReconfiguring,
+        scheduled: outcome.scheduled === true
+      })
+    }
     log('transferRestored', {
       kind,
       reason,
@@ -2568,6 +2690,10 @@ export function createMonoplayer ({
     attachPlayer,
     detachPlayer,
     abortTransfer,
+    // #233: the operator's move, driven from the control document rather than a
+    // packet. The orchestrator calls it when its heartbeat sees a desired backend
+    // that is not the one in use.
+    startBackendMove,
     // #22: the front leg reports the client answered the reconfiguration's
     // finish frame and is back in play on its own connection.
     frontReconfigured,
@@ -2623,8 +2749,9 @@ Config (JSON via --config, then env, then defaults):
                                                       puppet's backend, and turns
                                                       on the whitelist's reload at
                                                       each login (default null)
-  MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json on the
-                                                      next connect; 0 leaves the
+  MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json, on the
+                                                      next connect and on every
+                                                      heartbeat tick; 0 leaves the
                                                       configured backend (default 0)
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
