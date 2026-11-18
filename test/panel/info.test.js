@@ -3,7 +3,7 @@
 // serving says which fact is missing. Both are asserted here, on the HTML a
 // browser gets and on the JSON an agent queries.
 //
-// No cluster: the API client is four functions, the log is a string, and the clock
+// No cluster: the API client is three methods, the log is a string, and the clock
 // is fixed. The records below are the shapes docs/telemetry.md documents, copied
 // from a live pod's tail.
 import { test } from 'node:test'
@@ -213,27 +213,26 @@ test('the last attach names the bodies that never spawned', () => {
 
 // --- the four sentences ---
 
-const serving = (card) => card.state.reason
+const sentence = (card) => card.state.reason
 
 test('a puppet with no pod says so, and names the Deployment', () => {
   const card = activity({ puppet, pod: null, log: null, now: NOW })
   assert.equal(card.state.state, 'no-pod')
-  assert.equal(card.state.serving, false)
-  assert.match(serving(card), /^no pod: Deployment monoplayer\/monoplayer has no pod/)
+  assert.match(sentence(card), /^no pod: Deployment monoplayer\/monoplayer has no pod/)
 })
 
 test('a pod that is not ready says why, in words', () => {
   const starting = { ...pod, status: { ...pod.status, conditions: [{ type: 'Ready', status: 'False', reason: 'ContainersNotReady' }] } }
   const card = activity({ puppet, pod: starting, log: { text: '' }, now: NOW })
   assert.equal(card.state.state, 'not-ready')
-  assert.match(serving(card), /^pod not ready: monoplayer-84855d7f8b-5h5bd is not Ready \(ContainersNotReady\)/)
+  assert.match(sentence(card), /^pod not ready: monoplayer-84855d7f8b-5h5bd is not Ready \(ContainersNotReady\)/)
 })
 
 test('a tail with no heartbeat says how many lines it read and how old they are', () => {
   const card = activity({ puppet, pod, log: { text: tail(startLive, attach) }, now: NOW })
   assert.equal(card.state.state, 'no-heartbeat')
-  assert.match(serving(card), /^no heartbeat in the last 2 lines of monoplayer-84855d7f8b-5h5bd/)
-  assert.match(serving(card), /the newest line is 2026-11-18T10:30:00\.000Z/)
+  assert.match(sentence(card), /^no heartbeat in the last 2 lines of monoplayer-84855d7f8b-5h5bd/)
+  assert.match(sentence(card), /the newest line is 2026-11-18T10:30:00\.000Z/)
 })
 
 test('a refused log read is its own sentence, with the status the API answered', () => {
@@ -244,7 +243,7 @@ test('a refused log read is its own sentence, with the status the API answered',
     now: NOW
   })
   assert.equal(card.state.state, 'log-refused')
-  assert.match(serving(card), /^log fetch refused: read the log of monoplayer\/x: the API server answered 403 Forbidden/)
+  assert.match(sentence(card), /^log fetch refused: read the log of monoplayer\/x: the API server answered 403 Forbidden/)
 })
 
 test('a refused Deployment read is its own sentence too', () => {
@@ -254,7 +253,7 @@ test('a refused Deployment read is its own sentence too', () => {
     now: NOW
   })
   assert.equal(card.state.state, 'read-refused')
-  assert.match(serving(card), /^read refused: read Deployment/)
+  assert.match(sentence(card), /^read refused: read Deployment/)
 })
 
 test('a panel with no API client says exactly that', async () => {
@@ -272,8 +271,7 @@ test('a heartbeat older than three intervals is its own state, never the live on
   const card = activity({ puppet, pod, log: { text: tail(startLive, heartbeat) }, now: late })
   assert.equal(card.heartbeat.stale, true)
   assert.equal(card.heartbeat.ageSeconds, 600)
-  assert.equal(card.state.state, 'stale')
-  assert.equal(card.state.serving, false, 'a stale record is not the live colour')
+  assert.equal(card.state.state, 'stale', 'a stale record is not the live colour')
   assert.match(card.state.reason, /^stale: the newest heartbeat was written 600 s ago/)
   assert.match(card.state.reason, /read every number below as old/)
   // And the timestamp a reader sees is the record's, not the clock's.

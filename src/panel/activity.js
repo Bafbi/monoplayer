@@ -293,17 +293,16 @@ function startFacts (start) {
   }
 }
 
-// The sentence a card shows instead of its numbers. Six cases, six sentences: a
-// puppet that is not serving says which fact is missing, never a spinner and
+// The sentence a card shows instead of its numbers. Seven states, seven sentences:
+// a puppet that is not serving says which fact is missing, never a spinner and
 // never a chip without words.
 function stateOf ({ failure, pod, log, heartbeat, tail, records, puppet, now }) {
   if (failure !== null) {
-    return { state: 'read-refused', serving: false, reason: 'read refused: ' + reason(failure) }
+    return { state: 'read-refused', reason: 'read refused: ' + reason(failure) }
   }
   if (pod === null) {
     return {
       state: 'no-pod',
-      serving: false,
       reason: 'no pod: Deployment ' + puppet.namespace + '/' + puppet.deployment +
         ' has no pod, so nothing is running'
     }
@@ -311,7 +310,6 @@ function stateOf ({ failure, pod, log, heartbeat, tail, records, puppet, now }) 
   if (pod.ready !== true) {
     return {
       state: 'not-ready',
-      serving: false,
       reason: 'pod not ready: ' + pod.name + ' is not Ready' +
         (pod.readyReason === null ? '' : ' (' + pod.readyReason + ')') +
         ', so the front serves nothing yet'
@@ -320,7 +318,6 @@ function stateOf ({ failure, pod, log, heartbeat, tail, records, puppet, now }) 
   if (log === null || log.error !== undefined) {
     return {
       state: 'log-refused',
-      serving: false,
       reason: 'log fetch refused: ' + (log === null ? 'the panel read no log' : reason(log.error))
     }
   }
@@ -328,7 +325,6 @@ function stateOf ({ failure, pod, log, heartbeat, tail, records, puppet, now }) 
     const newestRecord = records.length === 0 ? null : time(records[records.length - 1].t)
     return {
       state: 'no-heartbeat',
-      serving: false,
       reason: 'no heartbeat in the last ' + tail.lines + ' lines of ' + pod.name +
         (newestRecord?.at === null || newestRecord === null
           ? ': the tail holds no timestamped record'
@@ -343,14 +339,12 @@ function stateOf ({ failure, pod, log, heartbeat, tail, records, puppet, now }) 
     // colour: three intervals with nothing written is a lane that stopped.
     return {
       state: 'stale',
-      serving: false,
       reason: 'stale: the newest heartbeat was written ' + age + ' s ago, and the interval is ' +
         Math.round(HEARTBEAT_MS / 1000) + ' s; read every number below as old'
     }
   }
   return {
     state: 'serving',
-    serving: true,
     reason: age === null
       ? 'serving, and the newest heartbeat carries no readable timestamp'
       : 'serving: the newest heartbeat was written ' + age + ' s ago, and the interval is ' +
