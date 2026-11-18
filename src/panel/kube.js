@@ -1,10 +1,15 @@
-// The panel's path to the cluster: three reads, and one write.
+// The panel's path to the cluster: four reads, and one write.
 //
 // The panel reads what the puppet already says about itself, and it reaches that
 // through the API server for one reason: the pod's log. The registry names a
 // Deployment; the Deployment names its pods in `spec.selector.matchLabels`, so
 // the reads are a Deployment, a pod list, and one pod's log. No discovery, no
 // label the operator did not write.
+//
+// The fourth read is the control ConfigMap itself (#232). The attach whitelist
+// route rewrites one key of it, so it reads the document and its `resourceVersion`
+// first and patches with that version as a precondition. The object is the one the
+// registry names, so a read and a write can never name two different ConfigMaps.
 //
 // Credentials are the pod's own ServiceAccount: the token file and the CA the
 // kubelet mounts. Both are read per request, because the kubelet rotates the
@@ -62,8 +67,21 @@ export class WriteRefused extends Error {
 // The patch body. `application/merge-patch+json` merges objects recursively
 // (RFC 7386), so `data` keeps every key this patch does not name: the whitelist
 // the operator created the ConfigMap with survives every backend move.
-export function mergePatchBody ({ key, text }) {
-  return JSON.stringify({ data: { [key]: text } })
+//
+// `resourceVersion` is optional and is not part of the document. It is the
+// optimistic-concurrency precondition: a merge patch that names the version it
+// read is applied only while the object is still at that version, and the API
+// server answers 409 Conflict otherwise. The check is the store's, after the patch
+// is applied (staging/src/k8s.io/apiserver/pkg/registry/generic/registry/store.go,
+// the `ObjectResourceVersion` comparison before the update), which is why this is a
+// field of the patch and not a query parameter. A caller that does not read first
+// sends what it always sent.
+export function mergePatchBody ({ key, text, resourceVersion = null }) {
+  const body = { data: { [key]: text } }
+  if (resourceVersion !== null && resourceVersion !== undefined) {
+    body.metadata = { resourceVersion }
+  }
+  return JSON.stringify(body)
 }
 
 const reason = error => String(error?.message ?? error)
@@ -83,7 +101,11 @@ export const CAP_VARIABLES = {
   journalMaxAgeMs: 'MONOPLAYER_JOURNAL_MAX_AGE_MS'
 }
 
-export function deploymentCaps (deployment, container = CONTAINER) {
+// The environment of one container in a Deployment's pod template, as a map. One
+// rule, two readers: the caps the card shows (#231) and the puppet's own UUID
+// (#232), which `deploy/manifests/deployment.yaml` sets as MONOPLAYER_PUPPET_UUID.
+// A variable the Deployment omits is absent from the map, never a guessed default.
+export function containerEnv (deployment, container = CONTAINER) {
   const containers = deployment?.spec?.template?.spec?.containers
   const list = Array.isArray(containers) ? containers : []
   const chosen = list.find(entry => entry?.name === container) ?? list[0] ?? null
@@ -92,6 +114,11 @@ export function deploymentCaps (deployment, container = CONTAINER) {
   for (const entry of entries) {
     if (typeof entry?.name === 'string' && typeof entry.value === 'string') values.set(entry.name, entry.value)
   }
+  return values
+}
+
+export function deploymentCaps (deployment, container = CONTAINER) {
+  const values = containerEnv(deployment, container)
   const caps = {}
   for (const [key, variable] of Object.entries(CAP_VARIABLES)) {
     const text = values.get(variable)
@@ -162,11 +189,13 @@ export function createKubeClient ({
   }
 
   // One key of one ConfigMap, rewritten. Resolves with what the API server
-  // answered and rejects with a reason the route turns into a 503.
-  async function patchConfigMapKey ({ namespace, name, key, text }) {
+  // answered and rejects with a reason the route turns into a 503. A `409` arrives
+  // as a WriteRefused carrying that status, so a route that read the document first
+  // can tell a lost race from a refusal and retry it.
+  async function patchConfigMapKey ({ namespace, name, key, text, resourceVersion = null }) {
     const path = '/api/v1/namespaces/' + encode(namespace) + '/configmaps/' + encode(name)
     const what = 'write ' + key + ' in ConfigMap ' + namespace + '/' + name
-    const body = mergePatchBody({ key, text })
+    const body = mergePatchBody({ key, text, resourceVersion })
     const startedAt = Date.now()
     let answer
     try {
@@ -189,11 +218,31 @@ export function createKubeClient ({
       throw new WriteRefused(what + ': the API server answered ' + (status === 0 ? 'nothing' : status) +
         (said === null ? '' : ': ' + said), { status })
     }
-    return { namespace, name, key, status: answer.status, bytes: Buffer.byteLength(body), tookMs: Date.now() - startedAt }
+    // The answer to a patch is the object after the write, so its
+    // `resourceVersion` is the version this write produced. A route that reports it
+    // is reporting the cluster's fact, not a number it computed.
+    return {
+      namespace,
+      name,
+      key,
+      status: answer.status,
+      bytes: Buffer.byteLength(body),
+      tookMs: Date.now() - startedAt,
+      resourceVersion: resourceVersionOf(answer.body)
+    }
   }
 
   return {
     patchConfigMapKey,
+    // One ConfigMap, whole: every key it holds and the version it holds them at.
+    // The attach whitelist route reads it and rewrites one key (#232). A caller that
+    // only reads a key could too, and the version is the reason the whole object is
+    // returned.
+    async configMap (namespace, name) {
+      const path = '/api/v1/namespaces/' + encode(namespace) + '/configmaps/' + encode(name)
+      const what = 'read ConfigMap ' + namespace + '/' + name
+      return json(await get(path, what), what)
+    },
     async deployment (namespace, name) {
       const path = '/apis/apps/v1/namespaces/' + encode(namespace) + '/deployments/' + encode(name)
       const what = 'read Deployment ' + namespace + '/' + name
@@ -211,6 +260,19 @@ export function createKubeClient ({
         '/log?container=' + encodeURIComponent(container) + '&tailLines=' + tailLines
       return get(path, 'read the log of ' + namespace + '/' + pod)
     }
+  }
+}
+
+// `metadata.resourceVersion` from a response body, or null when the body is not an
+// object with one. Never guessed: a route that shows a version it made up would be
+// showing the operator something the next patch would then disagree with.
+function resourceVersionOf (body) {
+  try {
+    const parsed = JSON.parse(String(body ?? ''))
+    const version = parsed?.metadata?.resourceVersion
+    return typeof version === 'string' && version !== '' ? version : null
+  } catch {
+    return null
   }
 }
 
