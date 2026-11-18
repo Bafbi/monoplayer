@@ -3,14 +3,16 @@
 // Both read the same facts, through the same function, so a number on the page and
 // a number in the JSON cannot disagree. The facts come from src/panel/activity.js,
 // which never touches a socket; this module does the reads, hands them over, and
-// src/panel/page.js writes the page.
+// src/panel/views/page.js writes the page (#248 split the one renderer into views/,
+// so the stream writes the same card body the page does).
 //
 // One card per puppet, from the records the puppet already writes. Every number
 // carries the timestamp of the log line it came from, and a record older than three
 // heartbeats gets its own state, so a stale lane is never coloured as a live one.
 import { activity } from '../activity.js'
 import { deploymentCaps, labelSelector } from '../kube.js'
-import { renderPage } from '../page.js'
+import { renderPage } from '../views/page.js'
+import { readAttachList } from './whitelist.js'
 
 const HTML = 'text/html; charset=utf-8'
 const TEXT = 'text/plain; charset=utf-8'
@@ -32,7 +34,16 @@ export function choosePod (items) {
 // One puppet's facts: its Deployment, its pods, and the log of the pod that is
 // serving. A read that fails becomes a fact about the read, not an exception, so
 // the card can say which one failed.
-export async function readPuppet ({ kubernetes, puppet, now = Date.now(), log = () => {} }) {
+export async function readPuppet ({ kubernetes, puppet, recorded = null, now = Date.now(), log = () => {} }) {
+  // Fixture mode's whole mechanism (#248): a function that answers with a document
+  // recorded from GET /api/puppets/<name>, or null to read the cluster. It is the
+  // same seam as the injected client, one level up, so the page and the stream
+  // cannot tell a recording from a cluster. It is null in a pod: the entrypoint
+  // refuses to start with --fixture when the ServiceAccount token is mounted.
+  if (recorded !== null && typeof recorded === 'function') {
+    const facts = recorded(puppet.name)
+    if (facts !== null && facts !== undefined) return facts
+  }
   if (kubernetes === null || kubernetes === undefined) {
     return activity({ puppet, failure: new Error('the panel was started without a Kubernetes client'), now })
   }
@@ -68,7 +79,7 @@ export async function readPuppet ({ kubernetes, puppet, now = Date.now(), log = 
 // reason it could not be read, so a broken registry is the same 500 here as on
 // /api/puppets. `send` is the panel's one response writer, injected so this module
 // cannot disagree with the rest of the surface about headers.
-export function createInfoRoutes ({ read, kubernetes = null, log = () => {}, send, now = () => Date.now() } = {}) {
+export function createInfoRoutes ({ read, kubernetes = null, recorded = null, log = () => {}, send, now = () => Date.now() } = {}) {
   if (typeof read !== 'function') throw new TypeError('createInfoRoutes: read must be a function returning the registry or its failure')
   if (typeof send !== 'function') throw new TypeError('createInfoRoutes: send must be the panel response writer')
 
@@ -83,10 +94,21 @@ export function createInfoRoutes ({ read, kubernetes = null, log = () => {}, sen
           return true
         }
         const at = now()
-        const activities = await Promise.all(
-          document.puppets.map(puppet => readPuppet({ kubernetes, puppet, now: at, log }))
-        )
-        send(res, 200, HTML, renderPage(document, activities))
+        // The card's facts and its attach whitelist are two reads of two objects, so
+        // they run together: the page waits for the slower one, not for both (#248).
+        const [activities, lists] = await Promise.all([
+          Promise.all(document.puppets.map(puppet => readPuppet({ kubernetes, puppet, recorded, now: at, log }))),
+          Promise.all(document.puppets.map(puppet => readAttachList({ kubernetes, puppet, now: at, log })))
+        ])
+        const byName = new Map(document.puppets.map((puppet, index) => [puppet.name, lists[index]]))
+        // A page served from a recording says so, in the page, where a screenshot can see
+        // it. The start line says it too, and a write refuses by name, but neither of
+        // those is on the page (#248).
+        const banner = recorded === null
+          ? null
+          : 'this panel is serving a recording, not a cluster: every fact below was captured from ' +
+            'GET /api/puppets/<name>, and every write is refused'
+        send(res, 200, HTML, renderPage(document, activities, byName, banner))
         return true
       }
 
@@ -110,7 +132,7 @@ export function createInfoRoutes ({ read, kubernetes = null, log = () => {}, sen
         send(res, 404, TEXT, 'no such puppet: ' + name + '\n')
         return true
       }
-      const facts = await readPuppet({ kubernetes, puppet, now: now(), log })
+      const facts = await readPuppet({ kubernetes, puppet, recorded, now: now(), log })
       send(res, 200, JSON_TYPE, JSON.stringify(facts, null, 2) + '\n')
       return true
     } catch (error) {

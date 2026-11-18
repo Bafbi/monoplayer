@@ -1,6 +1,7 @@
 // The panel's in-cluster entrypoint.
 //
 //   node src/panel/start.js [--registry <file>] [--port <n>] [--host <address>]
+//   node src/panel/start.js --fixture <file> [--port <n>] [--host <address>]
 //
 // It is a second entrypoint on the same image as the proxy: the Dockerfile CMD
 // runs src/service/monoplayer.js, and the panel Deployment overrides the command.
@@ -24,11 +25,20 @@
 // that reads MONOPLAYER_* out of the environment, and the panel does not widen
 // that. A panel Deployments sets its flags in the manifest, where a reader of the
 // diff sees them.
+//
+// `--fixture` serves a recorded document instead of the cluster (#248), so a branch
+// can be rendered and screenshotted before it is merged. It REFUSES to start when
+// the in-cluster ServiceAccount token is mounted: a fixture is a development tool,
+// and a pod that served one would be a panel showing a recording while the lane it
+// is supposed to describe runs on. That is the one failure this mode must make
+// impossible, so the check is on the start path and it runs before the socket
+// exists.
 import fs from 'node:fs'
 import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
 import { redact } from '../observability/redact.js'
+import { createFixtureClient, fixtureReader, lookupNothing } from './fixture.js'
 import { createKubeClient } from './kube.js'
 import { parseRegistry } from './registry.js'
 import { createPanelHandler } from './server.js'
@@ -47,7 +57,8 @@ export const SERVICE_ACCOUNT_TOKEN_FILE = '/var/run/secrets/kubernetes.io/servic
 // A browser holding a keep-alive connection must not hold a rolling update open.
 export const STOP_GRACE_MS = 5_000
 
-const USAGE = 'usage: node src/panel/start.js [--registry <file>] [--port <n>] [--host <address>]'
+const USAGE = 'usage: node src/panel/start.js [--registry <file>] [--port <n>] [--host <address>]\n' +
+  '       node src/panel/start.js --fixture <file> [--port <n>] [--host <address>]'
 
 // The pod binds every interface, because a Service targets the pod IP and not its
 // loopback. A run on a workstation binds loopback instead, which is what
@@ -56,10 +67,10 @@ const USAGE = 'usage: node src/panel/start.js [--registry <file>] [--port <n>] [
 export const DEFAULT_HOST = '0.0.0.0'
 
 export function parseArgs (argv) {
-  const options = { registry: DEFAULT_REGISTRY, port: DEFAULT_PORT, host: DEFAULT_HOST }
+  const options = { registry: DEFAULT_REGISTRY, fixture: null, port: DEFAULT_PORT, host: DEFAULT_HOST }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
-    if (arg !== '--registry' && arg !== '--port' && arg !== '--host') {
+    if (arg !== '--registry' && arg !== '--fixture' && arg !== '--port' && arg !== '--host') {
       throw new Error('unknown argument ' + JSON.stringify(arg) + '\n' + USAGE)
     }
     const value = argv[index + 1]
@@ -67,7 +78,21 @@ export function parseArgs (argv) {
       throw new Error(arg + ' needs a value\n' + USAGE)
     }
     index += 1
+    // One source of facts, named once. Two would leave the panel reading a
+    // recording for the page and a cluster for a write, which is the shape of a
+    // page that cannot be trusted.
+    if (arg === '--fixture') {
+      if (options.fixture !== null) throw new Error('--fixture is given twice\n' + USAGE)
+      if (options.registry !== DEFAULT_REGISTRY) {
+        throw new Error('--fixture and --registry name two sources, and the panel reads one\n' + USAGE)
+      }
+      options.fixture = value
+      continue
+    }
     if (arg === '--registry') {
+      if (options.fixture !== null) {
+        throw new Error('--fixture and --registry name two sources, and the panel reads one\n' + USAGE)
+      }
       options.registry = value
       continue
     }
@@ -103,6 +128,21 @@ function hasServiceAccountToken (file) {
   }
 }
 
+// The registry file, re-read on every request: the kubelet rewrites a mounted
+// ConfigMap in place, so a read at start would show the old document until the pod
+// restarted.
+function registryReader (file) {
+  return () => {
+    let text
+    try {
+      text = fs.readFileSync(file, 'utf8')
+    } catch (error) {
+      throw new Error('registry: cannot read ' + file + ': ' + error.message)
+    }
+    return parseRegistry(text)
+  }
+}
+
 export async function startPanel ({
   argv = [],
   io = process,
@@ -123,19 +163,29 @@ export async function startPanel ({
     } catch { /* a closed stdout must not take the panel down */ }
   }
 
-  const read = () => {
-    let text
-    try {
-      text = fs.readFileSync(options.registry, 'utf8')
-    } catch (error) {
-      throw new Error('registry: cannot read ' + options.registry + ': ' + error.message)
-    }
-    return parseRegistry(text)
+  const fixture = options.fixture === null ? null : fixtureReader(options.fixture)
+  // The fence, and it is first: a pod must never serve a recording. The token is
+  // the one thing a fixture host does not have and a pod always does.
+  if (fixture !== null && hasServiceAccountToken(tokenFile)) {
+    throw new Error('--fixture refuses to start: ' + tokenFile + ' holds a ServiceAccount token, ' +
+      'so this process is in a pod. A fixture is a development document, and a panel that served one ' +
+      'beside a running lane would be showing a recording instead of the lane')
   }
+
+  // Fixture mode reads the recording on every request, exactly as the registry is
+  // read, so an edit to the file reaches an open page on its next tick.
+  const read = fixture === null ? registryReader(options.registry) : fixture.registry
+  const recorded = fixture === null ? null : fixture.facts
+  // A fixture's cluster is the recording: the attach whitelist comes from the file,
+  // and every write is refused by name. A name resolves to nothing there, which is
+  // the route's 400 asking for the uuid, not a guess.
+  const client = fixture === null ? kubernetes : createFixtureClient(fixture.load)
+  const lookup = fixture === null ? null : lookupNothing
+
   // Fail fast, before the socket exists.
   const document = read()
 
-  const server = http.createServer(createPanelHandler({ registry: read, kubernetes, log }))
+  const server = http.createServer(createPanelHandler({ registry: read, kubernetes: client, recorded, lookup, log }))
   await new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(options.port, options.host, () => {
@@ -146,7 +196,9 @@ export async function startPanel ({
   const { address: host, port } = server.address()
 
   log('panelStart', {
-    registry: options.registry,
+    // Which document the facts come from, named once. A fixture says so in the
+    // first line, so a log with a fake heartbeat in it is not mistaken for a lane.
+    ...(fixture === null ? { registry: options.registry } : { fixture: options.fixture }),
     puppets: document.puppets.length,
     host,
     port,
