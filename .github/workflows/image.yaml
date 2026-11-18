@@ -91,14 +91,22 @@ jobs:
           import sys
 
           digest, tag = sys.argv[1], sys.argv[2]
-          path = pathlib.Path("deploy/manifests/kustomization.yaml")
-          text = path.read_text()
-          # main has no images block; the branch is rebuilt from main, but drop
-          # any previous pin defensively before appending the new one.
-          text = re.sub(r"\nimages:\n(?:[ \t]+.*\n?)+", "", text)
-          text = text.rstrip("\n") + "\n\nimages:\n  - name: ghcr.io/bafbi/monoplayer\n    digest: " + digest + "\n"
-          path.write_text(text)
-          print(f"pinned {tag} {digest}")
+          # Every kustomization that runs this repository's image is pinned in the
+          # same commit. A tree left unpinned runs the moving `main` tag, and a
+          # panel one build apart from the proxy beside it reads a document shape
+          # its own commit did not ship (#234).
+          paths = [
+              pathlib.Path("deploy/manifests/kustomization.yaml"),
+              pathlib.Path("deploy/panel/kustomization.yaml"),
+          ]
+          for path in paths:
+              text = path.read_text()
+              # main has no images block; the branch is rebuilt from main, but drop
+              # any previous pin defensively before appending the new one.
+              text = re.sub(r"\nimages:\n(?:[ \t]+.*\n?)+", "", text)
+              text = text.rstrip("\n") + "\n\nimages:\n  - name: ghcr.io/bafbi/monoplayer\n    digest: " + digest + "\n"
+              path.write_text(text)
+              print(f"pinned {tag} {digest} in {path}")
           PY
           git config user.name "monoplayer-bot"
           git config user.email "monoplayer-bot@users.noreply.github.com"
@@ -106,7 +114,7 @@ jobs:
           # Its message mirrors the main commit it patches.
           SUBJECT=$(git log -1 --pretty=%s)
           git checkout -B deploy
-          git add deploy/manifests/kustomization.yaml
+          git add deploy/manifests/kustomization.yaml deploy/panel/kustomization.yaml
           if git diff --cached --quiet; then
             echo "digest unchanged; deploy matches main"
           else
