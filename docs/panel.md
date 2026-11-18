@@ -42,21 +42,18 @@ is exercised yet: the write routes are the next tickets of
 [epic #228](https://github.com/Bafbi/monoplayer/issues/228). The Role is declared
 now so the scope is reviewable now, and it is inert until then.
 
-## Apply it once
+## It ships with the proxy
 
-The panel is a second Argo CD Application with its own project. A human runs one
-command, exactly as the first bootstrap did:
+The panel is not a second Argo CD Application. One Application syncs
+`deploy/kustomization.yaml`, which includes `deploy/manifests` (the proxy) and
+`deploy/panel` (this panel). Merging to `main` deploys both, and the operator
+runs no bootstrap command for the panel. A second Application would mean two
+deploys, two rollbacks, and two places a tree can drift.
 
-```bash
-kubectl apply -f deploy/argocd/panel-project.yaml -f deploy/argocd/panel.yaml
-```
+So the panel arrives on the next sync after the merge, in the same `deploy`
+revision the proxy runs, with `prune` and `selfHeal` on.
 
-After that the panel syncs itself from the `deploy` branch, with `prune` and
-`selfHeal` on. A panel deployed by hand is a panel nobody can reproduce: the
-namespace, the Deployment, the Role and the registry would exist only as something
-someone typed.
-
-Two prerequisites come before that command, and neither is in Git:
+Two prerequisites are not in Git, and each is one command:
 
 1. **The pull secret, in the panel's namespace.** The GHCR package is private and a
    Secret is namespaced, so the `ghcr-pull` secret the proxy uses does not reach
@@ -69,9 +66,9 @@ Two prerequisites come before that command, and neither is in Git:
      --docker-password="$GHCR_READ_TOKEN"
    ```
 
-   The namespace arrives with the Application, so create the secret after the first
-   sync. Until it exists the pod stays in `ImagePullBackOff`, which is the failure
-   the manifest means to show.
+   The namespace arrives with the first sync, so create the secret after the merge.
+   Until it exists the pod stays in `ImagePullBackOff`, which is the failure the
+   manifest means to show.
 
 2. **The control ConfigMap, once per puppet.** Not in Git, and never in Git:
    Argo's `selfHeal` would revert a tracked object to its committed content within
@@ -109,36 +106,36 @@ its start with the field that broke it — a misspelled key, a name that is not 
 label, a backend with no port, two puppets writing one ConfigMap. A document that
 passes is a document the panel will act on.
 
-Adding a puppet in a new namespace means three things, and the gate enforces all
-three: a registry row, a `Role` and a `RoleBinding` in that namespace, and a
-destination entry for it in `deploy/argocd/panel-project.yaml`.
+Adding a puppet in a new namespace means four things, and the gate enforces the
+first three: a registry row in this file, a `Role` and a `RoleBinding` in that
+namespace, a destination entry for the namespace in `deploy/argocd/project.yaml`,
+and, for a manifest tree the root does not include yet, a line in
+`deploy/kustomization.yaml`.
 
 ## Roll it back
 
-The Application carries Argo's resources finalizer, so deleting it deletes what it
-owns: the Deployment, the Service, the Role, the RoleBinding and the whole
-`monoplayer-panel` namespace.
+The panel is not an Argo object of its own, so there is nothing to delete with
+`kubectl`. Take it out of the tree and let Argo prune it:
 
-```bash
-kubectl delete -f deploy/argocd/panel.yaml
+```yaml
+# deploy/kustomization.yaml
+resources:
+  - manifests
+  # - panel
 ```
 
-The control ConfigMap survives. It is not Argo's object and Argo never created it,
-so nothing prunes it, and the puppet keeps the document it was reading. Delete it
-by hand only if you mean to lose the whitelist it holds.
+Merge that, and the next sync prunes the seven panel objects and the
+`monoplayer-panel` namespace. The proxy is untouched: same Application, same
+revision, one directory fewer.
 
-To stop the panel without deleting it, stop the sync first and then scale it down;
-otherwise `selfHeal` puts the replica back.
+The control ConfigMap survives. Argo never created it and it carries no tracking
+annotation, so nothing prunes it, and the puppet keeps the document it was reading.
+Delete it by hand only if you mean to lose the whitelist it holds.
 
-```bash
-kubectl -n argocd patch application monoplayer-panel --type merge \
-  -p '{"spec":{"syncPolicy":{"automated":null}}}'
-kubectl -n monoplayer-panel scale deployment/panel --replicas=0
-```
-
-The tailnet name stops answering when the Service's proxy goes, which scaling to
-zero does not do: the Service stays, so the name resolves and refuses instead of
-disappearing. Delete the Service if you want the name gone.
+To stop the panel temporarily, the same one-line change is the durable way:
+`selfHeal` puts a replica back within about three minutes of a manual scale to
+zero. The difference matters. Scaling to zero leaves the Service, so the tailnet
+name still resolves and refuses; removing the tree removes the name with it.
 
 ## Check it
 
