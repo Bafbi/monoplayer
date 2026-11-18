@@ -221,6 +221,10 @@ function renderHeartbeat (heartbeat) {
     row('pruned', count(journal.pruned)),
     row('pruned bytes', bytes(journal.prunedBytes)),
     row('directory bytes', bytes(journal.dirBytes)),
+    // Present only on a journal that a full volume stopped before its first
+    // write: the bytes free and the budget it needed.
+    row('free bytes when it stopped', bytes(journal.freeBytes)),
+    row('required bytes', bytes(journal.requiredBytes)),
     row('shard', journal.file)
   ]))
 
@@ -246,7 +250,9 @@ function renderHeartbeat (heartbeat) {
     ? 'unknown (the custody cache does not say)'
     : account.expiresAtDate + (count(account.expiresInDays) === null
         ? ''
-        : ' (in ' + account.expiresInDays + ' days)')
+        : account.expired === true
+          ? ' (expired ' + Math.abs(account.expiresInDays) + ' days ago)'
+          : ' (in ' + account.expiresInDays + ' days)')
   lines.push(group('Account', [
     row('alias', account.alias),
     row('token expires', expiry)
@@ -268,9 +274,13 @@ function renderStart (facts) {
     row('serving on', sourced(facts.backend.effective) ?? 'unknown, and no start or reconnect record is in the tail'),
     row('configured backend', sourced(facts.backend.configured) ?? 'unknown, and no start record is in the tail'),
     row('registry backend', sourced(facts.backend.registry)),
-    row('attach whitelist', whitelist === null
+    // The count is the one the lane resolved at startup. #229 re-reads the
+    // whitelist at each login, so this is where the lane started, not what it
+    // holds now, and the label says so.
+    row('attach whitelist at start', whitelist === null
       ? 'unknown, and no start record is in the tail'
-      : whitelist.count + ' entries (' + whitelist.source + ', ' + whitelist.at + ')'),
+      : whitelist.count + ' entries (' + whitelist.source + ', ' + whitelist.at + ')' +
+        (start.control?.whitelistReload === true ? '; re-read at each login' : '')),
     row('control file', control.file),
     row('backend switch', yesno(control.allowBackendSwitch)),
     row('whitelist reload', yesno(control.whitelistReload))

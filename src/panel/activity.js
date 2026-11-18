@@ -48,8 +48,9 @@ export function time (value) {
   return { at: null, ms: null }
 }
 
-// One line per record, and the count of lines this module could not read. An
-// unterminated last line is skipped: the service may still be writing it.
+// One line per record, and the count of lines this module could not read. A torn
+// last line is counted, not dropped silently: the page shows the count, so a
+// half-written record is visible instead of vanishing.
 export function parseTail (text) {
   const records = []
   let lines = 0
@@ -208,18 +209,24 @@ function accountFacts (source, now) {
   const at = finite(source.expiresAt)
   if (at === null) {
     // null is "the custody cache does not say", which is not "no expiry".
-    return { alias, expiresAt: null, expiresAtDate: null, expiresInDays: null, warning: null }
+    return { alias, expiresAt: null, expiresAtDate: null, expiresInDays: null, expired: false, warning: null }
   }
   const remaining = at - now
   const days = Math.round((remaining / 86_400_000) * 10) / 10
+  const expired = remaining <= 0
   return {
     alias,
     expiresAt: at,
     expiresAtDate: time(at).at,
     expiresInDays: days,
-    warning: remaining <= EXPIRY_WARNING_MS
-      ? 'the Minecraft token expires in ' + days + ' days; a refresh that fails is a front that stops serving'
-      : null
+    expired,
+    // An expired token is the case this line exists for, so it reads as expired
+    // rather than as a negative forecast.
+    warning: expired
+      ? 'the Minecraft token expired ' + Math.abs(days) + ' days ago; the puppet serves until its next refresh fails'
+      : remaining <= EXPIRY_WARNING_MS
+        ? 'the Minecraft token expires in ' + days + ' days; a refresh that fails is a front that stops serving'
+        : null
   }
 }
 

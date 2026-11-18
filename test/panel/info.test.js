@@ -309,6 +309,26 @@ test('a secret-shaped key in the tail reaches neither the page nor the JSON', as
     assert.ok(!html.includes(value), 'the page does not print ' + value)
     assert.ok(!json.includes(value), 'the JSON does not carry ' + value)
   }
+  // The key names too, not only the values: the panel renders a field it names,
+  // so a secret-shaped key never has a row to print.
+  for (const key of ['access_token', 'mca_token', 'authorization', 'cookie', 'password',
+    'client_secret', 'refresh_token']) {
+    assert.ok(!html.includes(key), 'the page has no row for ' + key)
+    assert.ok(!json.includes(key), 'the JSON has no field named ' + key)
+  }
+})
+
+test('an expired token reads as expired, not as a negative forecast', () => {
+  const yesterday = NOW - 86_400_000
+  const card = activity({
+    puppet,
+    pod,
+    log: { text: tail({ ...heartbeat, account: { alias: 'GlowSquidye', expiresAt: yesterday } }) },
+    now: NOW
+  })
+  assert.equal(card.heartbeat.account.expired, true)
+  assert.equal(card.heartbeat.account.expiresInDays, -1)
+  assert.match(card.heartbeat.account.warning, /expired 1 days ago/)
 })
 
 // --- the routes ---
@@ -341,7 +361,7 @@ test('/ is the card for each puppet, under the timestamp of every record', async
     for (const text of [HEARTBEAT_AT, START_AT, attach.t,
       '2243099 (2.1 MiB)', 'monoplayer-84855d7f8b-5h5bd',
       'play2.excalia.fr:25565 (start, ' + START_AT + ')',
-      '1 entries (startLive, ' + START_AT + ')',
+      '1 entries (startLive, ' + START_AT + '); re-read at each login',
       'monoplayer-control', 'glowsquidye.tail41e568.ts.net']) {
       assert.ok(page.includes(text), 'the page shows ' + text)
     }
