@@ -88,7 +88,7 @@ test('core emits one reconnect_due and the next backend login returns WARM', () 
   assert.equal(dues.length, 0)
 
   clock.tick(1000)
-  assert.deepEqual(dues, [{ delayMs: 1000, attempt: 1, target: null }])
+  assert.deepEqual(dues, [{ delayMs: 1000, attempt: 1, target: null, moveTarget: null }])
   assert.equal(core.session.state, STATES.BOOT)
 
   // A fresh backend login finishes the one reconnect.

@@ -38,9 +38,10 @@ import { createPanelHandler } from './server.js'
 export const DEFAULT_PORT = 8080
 // Where the kubelet projects the ConfigMap key. One key, one file.
 export const DEFAULT_REGISTRY = '/etc/panel/registry/puppets.json'
-// Where the kubelet projects the identity the next tickets' write path will
-// authenticate with. Only its presence is read: the start line says whether this
-// pod can act at all, and the value never reaches a log, an error, or a return.
+// Where the kubelet projects the identity the panel authenticates with: the start
+// line says whether this pod can act at all (#233), and the value never reaches a
+// log, an error, or a return. src/panel/kube.js reads it per request, because the
+// kubelet rotates it.
 export const SERVICE_ACCOUNT_TOKEN_FILE = '/var/run/secrets/kubernetes.io/serviceaccount/token'
 // How long a stop waits for an open response before it closes the socket anyway.
 // A browser holding a keep-alive connection must not hold a rolling update open.
@@ -91,8 +92,9 @@ export function parseArgs (argv) {
 }
 
 // Whether this pod has an identity mounted. The token itself is never read into
-// a log line, an error, or a returned value: the only question today is whether
-// the next ticket's write path would be able to authenticate.
+// a log line, an error, or a returned value: the question is whether the write path
+// can authenticate, and a start line that says false is a panel whose first move
+// will answer 503.
 function hasServiceAccountToken (file) {
   try {
     return fs.readFileSync(file, 'utf8').trim() !== ''

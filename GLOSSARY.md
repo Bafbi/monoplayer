@@ -63,8 +63,12 @@ The two files an operator edits between deploys, named by `config.control.file` 
 _Avoid_: control file, runtime config, feature flag, control dialog
 
 **Desired backend**:
-The host and port in `desired.json`: where the next backend connect should go. It applies on the next connect and only while no player is attached, so moving a live session stays a separate act. With `control.allowBackendSwitch` off, the lane names the file once and stays on its configured backend.
+The host and port in `desired.json`: where the next backend connect should go. It applies on the next connect, and only while no player is attached, because a reconnect is not an operator's act. Moving a session that has a player on it is the backend move, which the same document starts from the heartbeat. With `control.allowBackendSwitch` off, the lane names the file once and stays on its configured backend, whoever is attached.
 _Avoid_: target server, new backend, switch
+
+**Backend move**:
+An operator pointing a puppet at another backend by writing `desired.json`, and the puppet carrying it out on its heartbeat. It is not a transfer: no server asked for it, and the target is dialled with a fresh login rather than a transfer intent. With a player attached, the player keeps their connection through it, and the move counts in the reconfiguration counters because it is that machine running. With nobody attached, the puppet moves alone, no reconfiguration happens, and only the `backendMove` log line records it. A failed move puts the player back on the backend they came from.
+_Avoid_: hot swap, live migration, transfer, redirect
 
 **Testbed front**:
 The testbed's published endpoint: its front Service, the Tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the Tailscale operator then removes the pod and the tailnet name.
@@ -147,7 +151,7 @@ A followed transfer that keeps the attaching client's connection and lands it in
 _Avoid_: hot swap, live migration
 
 **Transfer**:
-A server instruction, sent on the puppet's connection, to move the session to another address.
+A server instruction, sent on the puppet's connection, to move the session to another address. A backend move moves a session too, and is not this: nothing on the wire asked for it.
 _Avoid_: redirect, handoff, switch
 
 **Transfer follow**:
