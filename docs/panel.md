@@ -56,10 +56,20 @@ rather than guessing:
   shows the registry's own backend beside it, labelled `registry` with no
   timestamp. A successful `backendReconnect` line moves the effective backend,
   because a puppet that followed a transfer is not where it started.
+- **The whitelist count is the one the lane resolved at startup.** The control
+  document re-reads the whitelist at each login (#229), so an edit made after start
+  is invisible here; the row is labelled `at start`, carries that record's
+  timestamp, and says `re-read at each login` when it is.
 - **`preAuth.maxConnections` and `preAuth.deadlineMs` are not in the heartbeat.**
   A refusal line carries the cap, an expiry line carries the deadline, so each cap
   is shown with the timestamp of the last line that stated it, and as unknown when
   no line has.
+- **The journal's caps are not in the heartbeat either.** They are the
+  `MONOPLAYER_JOURNAL_MAX_BYTES`, `..._MAX_TOTAL_BYTES`, and `..._MAX_AGE_MS`
+  environment values, and `journal.stats()` reports what the journal did with them
+  (`sealed`, `pruned`, `dirBytes`), not the caps. The card shows the effects and
+  names no cap. A journal a full volume stopped before its first write does report
+  `freeBytes` and `requiredBytes`, and those rows appear.
 
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning
