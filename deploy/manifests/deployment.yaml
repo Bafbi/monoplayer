@@ -100,8 +100,21 @@ spec:
               value: 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed
             - name: MONOPLAYER_PUPPET_USERNAME
               value: GlowSquidye
+            # #229/#232: the runtime control document, and the whitelist it
+            # reloads. Both files live in `monoplayer-control`, an object the
+            # panel patches and Git does not own, mounted at /control (#228).
+            # Before this, the whitelist was the Git ConfigMap read once at boot,
+            # so a write from the panel reached a file the puppet never re-read.
             - name: MONOPLAYER_ATTACH_WHITELIST
-              value: /config/attach-whitelist.json
+              value: /control/attach-whitelist.json
+            - name: MONOPLAYER_CONTROL_FILE
+              value: /control/desired.json
+            # The panel may move this puppet's backend, and an attached player
+            # keeps their connection through the move (#233). This is the one
+            # switch that lets an operator action reach the live session with no
+            # deploy; setting it to "0" turns the move into a named refusal.
+            - name: MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH
+              value: "1"
             - name: MONOPLAYER_VERSION
               value: "26.2"
             # Commands-only chat (#97): the human's commands are spoken as the
@@ -184,6 +197,12 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
+            # Read-only, and the only writable leg is the panel patching the
+            # object through the API server. A puppet that could write its own
+            # control document would be a puppet that can move itself.
+            - name: control
+              mountPath: /control
+              readOnly: true
             - name: tmp
               mountPath: /tmp
             - name: journal
@@ -195,6 +214,18 @@ spec:
         - name: config
           configMap:
             name: monoplayer-config
+        # The runtime control document (#229, #232). Not in Git, and never in Git:
+        # Argo's selfHeal would revert every panel write within minutes. The
+        # operator creates it once, from the whitelist this repository ships:
+        #   kubectl create configmap monoplayer-control -n monoplayer \
+        #     --from-file=attach-whitelist.json
+        # `optional: true` is load-bearing. Without it a missing object keeps the
+        # puppet from starting, which would make the panel's own documentation a
+        # prerequisite for the lane coming up.
+        - name: control
+          configMap:
+            name: monoplayer-control
+            optional: true
         # HOME is /tmp, where the auth libraries write, so the journal gets its
         # own volume: a full journal must not take that write path down with it.
         # At the measured 4.07 MB/min the budget keeps about an hour of frames.

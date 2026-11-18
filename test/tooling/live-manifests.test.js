@@ -44,3 +44,41 @@ test('the public route is pinned by digest and is not a member of the front Serv
   assert.equal(selector?.[1], 'monoplayer')
   assert.match(agent, /app\.kubernetes\.io\/name: playit-agent/)
 })
+// --- the runtime control document (#229, #232, #228) ---
+
+// The panel writes `monoplayer-control`; the puppet reads it. Before this wiring
+// the two halves existed and never met: the whitelist was the Git ConfigMap read
+// once at boot, and no control file was mounted at all, so every panel write landed
+// in an object the puppet never opened. These assertions are what keep the halves
+// joined — and they fail loudly rather than letting the panel look wired.
+
+test('the lane mounts the control ConfigMap read-only, and optionally', () => {
+  const deployment = read('deployment.yaml')
+  const mount = /- name: control\n\s+mountPath: (\S+)\n\s+readOnly: true/.exec(deployment)
+  assert.ok(mount, 'the control volume is not mounted read-only, or not mounted at all')
+  assert.equal(mount[1], '/control', 'the control volume moved; every path below follows it')
+
+  const volume = /- name: control\n\s+configMap:\n\s+name: monoplayer-control\n\s+optional: true/.exec(deployment)
+  assert.ok(volume, 'the control volume is not monoplayer-control with optional: true')
+
+  // Read-only in the pod, writable only through the API server: a puppet that
+  // could write its own control document would be a puppet that moves itself.
+  assert.doesNotMatch(deployment, /mountPath: \/control\n\s+readOnly: false/,
+    'the control volume is mounted writable')
+})
+
+test('the lane reads its control document and its whitelist from the mounted volume', () => {
+  const deployment = read('deployment.yaml')
+  const env = new Map([...deployment.matchAll(/- name: (MONOPLAYER_[A-Z_]+)\n\s+value: (.*)$/gm)]
+    .map(match => [match[1], match[2].replace(/^"|"$/g, '')]))
+
+  assert.equal(env.get('MONOPLAYER_ATTACH_WHITELIST'), '/control/attach-whitelist.json',
+    'the whitelist is not the file the panel patches, so a panel write is ignored at login')
+  assert.equal(env.get('MONOPLAYER_CONTROL_FILE'), '/control/desired.json',
+    'no desired.json means the panel can never move this puppet')
+  // "1" enables the move, and the move keeps an attached player's connection
+  // (#233). Only "1" and "0" are read, so a typo here is a refusal that names
+  // itself rather than a silent behaviour change.
+  assert.equal(env.get('MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH'), '1',
+    'the backend switch is off; the panel answers 409 and the move route is dead')
+})
