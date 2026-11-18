@@ -78,7 +78,7 @@ test('the kustomization lists every manifest in the directory', () => {
 
 test('the dev lane is not registered in Argo CD', () => {
   const application = fs.readFileSync(path.join(ROOT, 'deploy', 'argocd', 'application.yaml'), 'utf8')
-  assert.match(application, /path: deploy\/manifests/, 'Argo tracks the live manifests')
+  assert.match(application, /^ {4}path: deploy$/m, 'Argo tracks the root tree, the live manifests among them')
   assert.match(application, /namespace: monoplayer$|namespace: monoplayer\s*$/m, 'Argo tracks the live namespace')
   for (const file of fs.readdirSync(path.join(ROOT, 'deploy', 'argocd'))) {
     const text = fs.readFileSync(path.join(ROOT, 'deploy', 'argocd', file), 'utf8')

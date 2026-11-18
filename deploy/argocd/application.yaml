@@ -8,6 +8,16 @@
 # and this Application tracks `deploy`. main stays human history. The
 # repository credential is the `monoplayer-repo` Secret in the argocd
 # namespace; see docs/deployment.md.
+#
+# This is the only Application. Its source is deploy/kustomization.yaml, which
+# includes the proxy (deploy/manifests) and its ops panel (deploy/panel), so one
+# merge deploys both and the operator applies one command. The panel does not get
+# an Application of its own: a second one would mean two deploys, two rollbacks
+# and two places a tree can drift.
+#
+# The dev and gate lanes are not here on purpose. docs/deployment.md records it:
+# a branch image and a sleeping gate both depend on a human applying the tree,
+# and this Application's selfHeal would undo each of them.
 
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -15,15 +25,17 @@ metadata:
   name: monoplayer
   namespace: argocd
   finalizers:
-    # Deleting this Application deletes what it owns, except the resources
-    # annotated Delete=false: the namespace and the custody PVC.
+    # Deleting this Application deletes what it owns: both namespaces, the
+    # panel included, except the resources annotated Delete=false, which are the
+    # custody PVC and the live namespace. The control ConfigMap survives because
+    # Argo never created it.
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: monoplayer
   source:
     repoURL: https://github.com/Bafbi/monoplayer.git
     targetRevision: deploy
-    path: deploy/manifests
+    path: deploy
   destination:
     server: https://kubernetes.default.svc
     namespace: monoplayer
