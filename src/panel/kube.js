@@ -6,8 +6,8 @@
 // the reads are a Deployment, a pod list, and one pod's log. No discovery, no
 // label the operator did not write.
 //
-// The fourth read is the control ConfigMap itself (#232): the whitelist route
-// rewrites one key of it, so it reads the document and its `resourceVersion`
+// The fourth read is the control ConfigMap itself (#232). The attach whitelist
+// route rewrites one key of it, so it reads the document and its `resourceVersion`
 // first and patches with that version as a precondition. The object is the one the
 // registry names, so a read and a write can never name two different ConfigMaps.
 //
@@ -235,8 +235,8 @@ export function createKubeClient ({
   return {
     patchConfigMapKey,
     // One ConfigMap, whole: every key it holds and the version it holds them at.
-    // The whitelist route reads it and rewrites one key (#232); a caller that only
-    // reads a key could too, but the version is the reason the whole object is
+    // The attach whitelist route reads it and rewrites one key (#232). A caller that
+    // only reads a key could too, and the version is the reason the whole object is
     // returned.
     async configMap (namespace, name) {
       const path = '/api/v1/namespaces/' + encode(namespace) + '/configmaps/' + encode(name)
