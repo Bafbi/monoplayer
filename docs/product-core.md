@@ -439,10 +439,65 @@ second one. A kept client's configuration round has a deadline
 (`transfer.reconfigureTimeoutMs`, default 30 s); a restore round that never
 completes detaches the client with a reason.
 
-The loopback runs both paths: O21-O24 assert the detach-and-rejoin with the key
-off, and O33-O35 assert the kept connection, which is the default. O43 follows a
-second transfer from there to a gated target, where the kept client leaves its
-configuration gate to the puppet (#73), and O44 leaves a play dialog behind.
+**The operator's move (#233).** The same machine, driven by an operator instead
+of the server. `desired.json` names a backend the puppet is not on; the
+heartbeat reads it and calls `core.startBackendMove({target})`. With a client
+attached the move's kind is `operator`; with nobody attached there is no move in
+flight and the return's `kind` is null, because the dial is the whole of it.
+
+- With a client attached, the client keeps its socket and re-enters
+  configuration, the pre-move state is held, and a target that never answers is
+  restored: the machine is the transfer's. What differs is the dial, which is a
+  **fresh login** rather than a transfer intent, because the target never sent a
+  transfer, and the counters, which are the reconfiguration ones.
+- With nobody attached there is no connection to keep, so the puppet moves alone:
+  one teardown and one reconnect to the target, which is the shape a followed
+  transfer already takes with no client.
+
+With `transfer.keepConnection` off, an operator's move takes the pre-#22 path a
+transfer takes with the key off: the client is detached with the moving reason and
+rejoins once the puppet is warm on the target. Every lane in this repo has the key
+on, so that path is a lane's choice and not the product's behaviour.
+
+A desired backend that never answered is still what a later reconnect dials while
+nobody is attached, because that is #229's rule and an operator's document outranks
+it. The heartbeat stops asking; a fault with no client does not.
+
+The heartbeat asks once per document. A move that failed is not retried: each
+attempt costs the human a configuration round, so the lane logs
+`backendMoveNotRetried` once and waits for a new document. A new document is a new
+`changedAt`, which the panel stamps on every write, so the operator's retry is one
+click. A move that never started (a client still in its own configuration) spent
+nothing and is asked again on the next tick.
+
+The counters are the reconfiguration ones, because the machine is the same one:
+`reconfigurationsStarted`, `reconfigurationsCompleted` and
+`reconfigurationsRestored` move for a move that keeps the client's connection.
+`transfersFollowed`, `transfersSeamless`, `transfersBlocked` and
+`transfersRefused` describe a server-initiated transfer and never move for an
+operator's document. A move with nobody attached moves the session without a
+reconfiguration, so no counter moves at all: it is the `backendMove` line, with
+`frontKept: false`, that records it. A lane with `transfer.keepConnection` off
+answers the same way. The log names the act: `backendMove` with
+its kind, `backendMoveRefused`, `backendMoveRestored`, `backendMoveFailed` when
+the follow budget gives up on the target, and `cacheReset` with reason `operator`
+for a kept client (`backend_down` for a headless one, which is what a headless
+followed transfer logs too).
+
+A failed move takes **both** halves of the #22 restore, and neither alone would do.
+The client's frames come from the pre-move snapshot, in the configuration round it
+already opened, because the old backend's socket was ended when the move began:
+there is no live connection to hand it back. The puppet then dials the backend the
+client is on again, so the session that follows is a real one. A move restored
+without that dial would leave the client playing a snapshot the puppet is not
+connected to, and a dial without the snapshot would leave the client in the
+failed target's configuration round.
+
+The loopback runs each path: O21-O24 assert the detach-and-rejoin with the key
+off, O33-O35 the kept connection, which is the default, O54 the operator's move
+landing on a second backend, and O54b the restore when the target never answers. O43 follows a second transfer from there to a gated target, where the
+kept client leaves its configuration gate to the puppet (#73), and O44 leaves a
+play dialog behind.
 
 ### Chat and commands (`config.chat`)
 
@@ -529,7 +584,8 @@ Two files an operator changes without a deploy:
 | Path | Shape | Read |
 | --- | --- | --- |
 | `attachWhitelistFile` | `{version, players:[{uuid,name,addedAt}]}` | at each login |
-| `control.file` (`desired.json`) | `{version:1, backend:{host,port}, changedAt, changedBy}` | before each backend connect |
+| `control.file` (`desired.json`) | `{version:1, backend:{host,port}, changedAt, changedBy}` | before each backend connect, and on each heartbeat tick |
+| `control.allowBackendSwitch` | `true`/`false` | gates every use of `desired.json`, attached client or not |
 
 `control.file` is the switch. With it `null`, the compiled default, the attach
 whitelist is the startup snapshot it has always been, `desired.json` is never
@@ -549,11 +605,13 @@ service starts. A static lane still exits 2, as it always did: on a control lane
 that exit would crash-loop the pod on the same file, and the file is the one
 thing the operator can fix.
 
-A desired backend is read once before the first dial and again before each
-reconnect. It applies only while no player is attached, because moving a live
-session is its own ticket in the epic, and a followed transfer wins over it. With
+A desired backend is read once before the first dial, again before each
+reconnect, and again on every heartbeat tick. A followed transfer wins over it.
+Before the first dial and before a reconnect it applies only while no player is
+attached, because a reconnect is not an operator's act. The heartbeat is where an
+attached session can be moved, and that is the operator's move (#233, below). With
 `control.allowBackendSwitch` false, the lane writes `controlSwitchRefused` once
-and stays on the configured backend.
+and stays on the configured backend, attached client or not.
 
 Neither file reaches `loadConfig`: the path is config, the contents are runtime
 state. An absent `desired.json` is the normal state before a panel writes one

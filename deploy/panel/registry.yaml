@@ -7,6 +7,19 @@
 # test/tooling/panel-manifests.test.js fails when the two lists disagree in either
 # direction.
 #
+# `allowBackendSwitch` is whether this puppet may be pointed at another backend
+# from the panel (#233). It is the panel's own declaration, not the fence: the
+# puppet reads a desired backend only when its lane sets MONOPLAYER_CONTROL_FILE,
+# and obeys it only when it also sets MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1.
+# A registry that says true over a lane that says 0 gets one named refusal in the
+# puppet's log; over a lane that names no control file it gets silence, because
+# nothing reads the document at all.
+#
+# False, because `deploy/manifests/deployment.yaml` sets neither variable yet: the
+# live puppet reads no control document, so a write from this panel would land in a
+# file nothing opens. Flip this and both variables together, and `docs/panel.md`
+# records why the two exist.
+#
 # The control ConfigMap itself is deliberately not here. RBAC cannot scope
 # `create` by name, so the panel is given no create verb at all; the operator
 # creates the object once per puppet (docs/panel.md carries the command). A
@@ -35,7 +48,8 @@ data:
           "deployment": "monoplayer",
           "controlConfigMap": "monoplayer-control",
           "frontHostname": "glowsquidye.tail41e568.ts.net",
-          "backend": "play2.excalia.fr:25565"
+          "backend": "play2.excalia.fr:25565",
+          "allowBackendSwitch": false
         }
       ]
     }
