@@ -10,8 +10,13 @@ description = "Install the workspace dependencies."
 run = "pnpm install --frozen-lockfile"
 
 [tasks.lint]
-description = "Syntax-check every source, test, tool, and shell script."
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh) || node src/ladder/next-rung.js lint $?"
+description = "Syntax-check every source, test, tool, and shell script, and prove the panel's committed stylesheet is what its source compiles to."
+# The stylesheet check compiles Tailwind, which is a dev dependency, so lint needs
+# the install like the test rung does. Without it a fresh checkout would fail the
+# gate on a missing compiler instead of on a stale bundle.
+depends = ["install"]
+run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check) || node src/ladder/next-rung.js lint $?"
+
 
 [tasks."secrets:link"]
 description = "Link the main working copy's .secrets into this worktree (symlink, never a copy)."
@@ -49,9 +54,17 @@ run = "node src/ladder/online.js || node src/ladder/next-rung.js online $?"
 description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving."
 run = "scripts/online-cluster.sh"
 
+[tasks."panel:css"]
+description = "Compile the panel's Tailwind source into the committed src/panel/public/app.css. Pass -- --check to recompile and fail when the committed bundle is stale, which is what the lint rung runs."
+run = "node tools/panel-css.mjs"
+
 [tasks."panel:run"]
 description = "Serve the panel on this machine from the registry this repo ships, on port 8080. Needs no cluster: the page reads the ConfigMap in deploy/panel."
 run = "node src/panel/start.js --registry deploy/panel/registry.yaml --host 127.0.0.1"
+
+[tasks."panel:fixture"]
+description = "Serve the panel on this machine from the recorded document at test/panel/fixtures/panel.json instead of a cluster, so a page can be reviewed before it is merged. For another document, run node src/panel/start.js --fixture <file> directly."
+run = "node src/panel/start.js --fixture test/panel/fixtures/panel.json --host 127.0.0.1"
 
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback."
