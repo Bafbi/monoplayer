@@ -212,6 +212,27 @@ own `preAuthExpired` line, because the window admits at most
 `preAuth.maxConnections` connections at once and so cannot produce more lines
 than that in one deadline period.
 
+Neither cap is in the heartbeat. The `preAuthRefused` line carries `reason`,
+`maxConnections`, `inWindow`, and `refused`; the `preAuthExpired` line carries
+`reason`, `deadlineMs`, and `expired`. Those two lines are the only place the
+window's size and deadline are stated, and the panel shows each with the
+timestamp of the last line that stated it.
+
+### The start records
+
+Two records are written once, at startup, and neither is a heartbeat.
+
+| Record | Field | Kind | Meaning |
+| --- | --- | --- | --- |
+| `startLive` | `version`, `front`, `backend`, `backendConfigured` | label | The service version, the address the front bound, the backend the lane dialled, and the backend the config document asks for. Both backends are `host:port` strings. |
+| `startLive` | `whitelistCount` | count | Entries in the attach whitelist at startup. |
+| `startLive` | `control.file`, `.allowBackendSwitch`, `.whitelistReload` | label, boolean | The control document's path, whether a desired backend may move the lane, and whether the whitelist is re-read at each login (#229). |
+| `start` | `whitelist` | list | The core's copy of the same whitelist, one UUID per entry. Its length is `whitelistCount`. |
+
+The panel reads them to name the effective backend and the whitelist's size. A
+400-line log tail usually predates a pod's start, so both are absent from a tail
+more often than not.
+
 ## Packet journal
 
 The journal keeps 48 hours of the frames a diagnosis reads: the frames that answer player visibility, transfers, dialogs, resource packs, wire drops, and chat. It is not a replay log. It drops the entity stream and keeps terrain length-only, because at 441 frames a second a record of everything is 11 GB a day and almost none of it is read (#217).
