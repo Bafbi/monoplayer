@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  containerEnv,
   createKubeClient,
   deploymentCaps,
   labelSelector,
@@ -253,4 +254,127 @@ test('a write that succeeded says what it wrote, and the token reaches nothing',
     text: '{}'
   })
   assert.ok(!JSON.stringify(outcome).includes('test-token'), 'the token is not in a return value')
+})
+
+// --- #232: the read-modify-write ----------------------------------------------
+//
+// The whitelist route reads one ConfigMap, patches one key, and has to lose a race
+// as a 409 rather than as a silently overwritten document. Both halves are the
+// client's: a read that does not exist yet, and a patch that carries the version
+// it read as a precondition.
+
+const CONFIG_MAP = '/api/v1/namespaces/monoplayer/configmaps/monoplayer-control'
+
+test('the ConfigMap read asks for that object, by namespace and name', async () => {
+  const { kube, calls } = patcher([], {
+    [CONFIG_MAP]: {
+      status: 200,
+      statusText: 'OK',
+      body: JSON.stringify({
+        kind: 'ConfigMap',
+        metadata: { name: 'monoplayer-control', namespace: 'monoplayer', resourceVersion: '412' },
+        data: { 'attach-whitelist.json': '{ "version": 1, "players": [] }', 'desired.json': '{}' }
+      })
+    }
+  })
+  const answer = await kube.configMap('monoplayer', 'monoplayer-control')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].method, undefined, 'a read passes no method, so the transport defaults to GET')
+  assert.equal(calls[0].path, CONFIG_MAP)
+  assert.equal(answer.metadata.resourceVersion, '412')
+  assert.equal(Object.keys(answer.data).length, 2, 'every key is returned, so the route can leave the others alone')
+})
+
+test('a ConfigMap the cluster will not give up is a ReadRefused that names the status', async () => {
+  const { kube } = patcher([], {
+    [CONFIG_MAP]: { status: 404, statusText: 'Not Found', body: JSON.stringify({ kind: 'Status', reason: 'NotFound', message: 'configmaps "monoplayer-control" not found' }) }
+  })
+  await assert.rejects(kube.configMap('monoplayer', 'monoplayer-control'), error => {
+    assert.ok(error instanceof ReadRefused)
+    assert.equal(error.status, 404)
+    assert.match(error.message, /answered 404/)
+    return true
+  })
+})
+
+test('a merge patch can carry the resourceVersion it read, so a lost race is a 409', () => {
+  assert.deepEqual(
+    JSON.parse(mergePatchBody({ key: 'attach-whitelist.json', text: '{}', resourceVersion: '412' })),
+    { data: { 'attach-whitelist.json': '{}' }, metadata: { resourceVersion: '412' } },
+    'the version is a precondition on the object, not a second document'
+  )
+  assert.deepEqual(
+    JSON.parse(mergePatchBody({ key: 'desired.json', text: '{}' })),
+    { data: { 'desired.json': '{}' } },
+    'a write that does not read first sends exactly what it always did'
+  )
+})
+
+test('a patched write carries the precondition and reports the version it produced', async () => {
+  const { kube, calls } = patcher([], {
+    [CONFIG_MAP]: {
+      status: 200,
+      statusText: 'OK',
+      body: JSON.stringify({ metadata: { resourceVersion: '413' } })
+    }
+  })
+  const outcome = await kube.patchConfigMapKey({
+    namespace: 'monoplayer',
+    name: 'monoplayer-control',
+    key: 'attach-whitelist.json',
+    text: '{}',
+    resourceVersion: '412'
+  })
+  assert.deepEqual(JSON.parse(calls[0].body), {
+    data: { 'attach-whitelist.json': '{}' },
+    metadata: { resourceVersion: '412' }
+  })
+  assert.equal(outcome.resourceVersion, '413', 'the answer says which version the write produced')
+  assert.equal(outcome.bytes, Buffer.byteLength(calls[0].body))
+})
+
+test('a patch that lost a race is a WriteRefused with the status, so the route can retry', async () => {
+  const { kube } = patcher([], {
+    [CONFIG_MAP]: {
+      status: 409,
+      statusText: 'Conflict',
+      body: JSON.stringify({
+        kind: 'Status',
+        reason: 'Conflict',
+        message: 'Operation cannot be fulfilled on configmaps "monoplayer-control": the object has been modified; please apply your changes to the latest version and try again'
+      })
+    }
+  })
+  await assert.rejects(
+    kube.patchConfigMapKey({
+      namespace: 'monoplayer',
+      name: 'monoplayer-control',
+      key: 'attach-whitelist.json',
+      text: '{}',
+      resourceVersion: '412'
+    }),
+    error => {
+      assert.ok(error instanceof WriteRefused)
+      assert.equal(error.status, 409)
+      assert.match(error.message, /modified/)
+      return true
+    })
+})
+
+test('the container env is one rule, shared by the caps and the whitelist guard', () => {
+  const deployment = {
+    spec: {
+      template: {
+        spec: {
+          containers: [
+            { name: 'sidecar', env: [{ name: 'MONOPLAYER_PUPPET_UUID', value: 'not-this-one' }] },
+            { name: 'monoplayer', env: [{ name: 'MONOPLAYER_PUPPET_UUID', value: '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed' }] }
+          ]
+        }
+      }
+    }
+  }
+  assert.equal(containerEnv(deployment).get('MONOPLAYER_PUPPET_UUID'), '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed')
+  assert.equal(containerEnv(deployment, 'sidecar').get('MONOPLAYER_PUPPET_UUID'), 'not-this-one')
+  assert.equal(containerEnv(null).size, 0)
 })
