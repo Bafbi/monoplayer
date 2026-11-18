@@ -4,7 +4,7 @@
 # `monoplayer`, the same way deploy/manifests/service.yaml publishes the front as
 # `glowsquidye`. The human opens:
 #
-#   http://monoplayer.tail41e568.ts.net:8080
+#   http://monoplayer.tail41e568.ts.net
 #
 # No Ingress and no public port: this Service is the only way in, and it is
 # reachable from the tailnet only. There is no playit tunnel here and there must
@@ -13,8 +13,11 @@
 # WireGuard network is the transport, and the tailnet ACL is the authorization, so
 # whoever may reach this device may read the page.
 #
-# Plain HTTP on the tailnet port: the operator proxies the Service's port, and the
-# transport is already encrypted end to end between the two devices.
+# Plain HTTP on port 80, with no port in the URL. The Service publishes 80 and
+# targets the container's 8080: the pod runs as a non-root user with every
+# capability dropped, and binding a privileged port inside the container would mean
+# giving one back. The operator proxies the Service's port, and WireGuard already
+# encrypts the transport between the two devices.
 
 apiVersion: v1
 kind: Service
@@ -33,6 +36,6 @@ spec:
     app.kubernetes.io/name: panel
   ports:
     - name: http
-      port: 8080
+      port: 80
       targetPort: http
       protocol: TCP

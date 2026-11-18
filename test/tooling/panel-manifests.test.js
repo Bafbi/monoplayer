@@ -278,6 +278,13 @@ function audit ({ files, documents, registry }) {
       report('Service ' + service.name + ' is published as ' + hostname + ', and the panel is monoplayer')
     }
     if (!/^ {4}- name: http$/m.test(spec)) report('Service ' + service.name + ' has no http port')
+    // Published on 80, so the URL carries no port, and targeted by the container
+    // port's name: the pod runs non-root with every capability dropped, and a
+    // privileged port inside the container would mean giving one back.
+    if (!/^ {6}port: 80$/m.test(spec)) report('Service ' + service.name + ' does not publish port 80')
+    if (!/^ {6}targetPort: http$/m.test(spec)) {
+      report('Service ' + service.name + ' does not target the container port by name')
+    }
   }
   for (const document of documents) {
     if (document.kind === 'Ingress') report(document.file + ' holds an Ingress, and the tailnet Service is the only way in')
@@ -315,6 +322,9 @@ function audit ({ files, documents, registry }) {
       if (!body.test(pod)) report('Deployment ' + deployment.name + ' has no ' + probe + ' on /healthz')
     }
     if (/^\s+hostPath:/m.test(pod)) report('Deployment ' + deployment.name + ' mounts a hostPath')
+    if (/containerPort: 80$/m.test(pod)) {
+      report('Deployment ' + deployment.name + ' binds port 80 in the container, which needs a capability back')
+    }
   }
 
   return problems
