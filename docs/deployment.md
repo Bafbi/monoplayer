@@ -226,15 +226,17 @@ Common:
   that by closing the connection.
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
   `WORKDIR`) or the mount path
-- `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
-- `MONOPLAYER_CONTROL_FILE`: the path to `desired.json`, the runtime control
-  document, for example `/control/desired.json` on a volume a later ticket
-  mounts beside `/config`. No manifest mounts one yet, so the variable is unset
-  today and the lane is static. Setting it also makes the attach whitelist
-  reload at each login, so an operator's edit is allowed on the next attempt
-  with no restart. An absent `desired.json` is not an error; a file that is there
-  but unreadable or malformed is named in the log and ignored.
-- `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH` (default `0`): `1` honours a
+- `MONOPLAYER_ATTACH_WHITELIST=/control/attach-whitelist.json`: the file the
+  **panel** writes (#232), not the Git ConfigMap. It is re-read at each login, so
+  a UUID the panel adds is allowed on the next attempt with no restart. The
+  ConfigMap in this repository is the seed the operator copies once; after that
+  the object the panel patches is the authority.
+- `MONOPLAYER_CONTROL_FILE=/control/desired.json`: the runtime control document
+  (#229). Setting it is what turns the lane's whitelist from a boot-time snapshot
+  into a file read at each login. An absent `desired.json` is not an error, and
+  means no override; a file that is there but unreadable or malformed is named in
+  the log and ignored.
+- `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1` on the live lane: `1` honours a
   `desired.json` on the next backend connect and on every heartbeat tick. A tick
   with a player attached moves them without dropping their connection; a tick with
   nobody attached moves the puppet alone. `0` writes `controlSwitchRefused` once
