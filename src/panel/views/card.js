@@ -10,12 +10,18 @@
 //    region     carries the state sentence, the scene, and every number with the
 //               timestamp of the record behind it (src/panel/views/live.js).
 //   the actions  the move form and the whitelist block, outside the live region so
-//               a tick cannot overwrite a half-typed host (src/panel/views/forms.js).
+//               a tick cannot overwrite a half-typed host (src/panel/views/forms.js
+//               and src/panel/views/whitelist.js). The whitelist's list is outside
+//               too, and the stream refreshes it with an out-of-band swap.
 import { escape, heading, list, row } from './html.js'
 import { renderLive } from './live.js'
-import { renderMoveForm, renderWhitelistBlock } from './forms.js'
+import { renderMoveForm } from './forms.js'
+import { renderWhitelistBlock } from './whitelist.js'
 
-export function renderCard (puppet, facts) {
+// `attach` is the attach whitelist, read by the caller. It is a separate read from
+// the facts because it comes from the control ConfigMap and not from the puppet's log,
+// and because a failure to read it is the whitelist block's fact, not the card's.
+export function renderCard (puppet, facts, attach = null) {
   const name = facts.name
   return [
     '<article class="card" id="puppet-' + escape(name) + '">',
@@ -31,12 +37,12 @@ export function renderCard (puppet, facts) {
     // swaps its innerHTML, so the extension stays attached across every tick.
     '  <div class="live" hx-ext="sse" sse-connect="/api/puppets/' + escape(encodeURIComponent(name)) +
       '/stream" sse-swap="message">',
-    renderLive(facts),
+    renderLive(facts, attach),
     '  </div>',
     '  <section class="actions">',
     '    <h3>Move it</h3>',
     renderMoveForm(puppet),
-    renderWhitelistBlock(puppet, facts),
+    renderWhitelistBlock({ puppet, list: attach }),
     '  </section>',
     '</article>',
     ''

@@ -53,9 +53,26 @@ const pod = {
   }
 }
 
-function kube ({ log = tail(heartbeat), delayMs = 0, calls = { podLog: 0 } } = {}) {
+const ATTACH = {
+  version: 1,
+  players: [
+    { uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', name: 'Bafbi', addedAt: '2026-11-17T09:12:00.000Z' }
+  ]
+}
+
+function kube ({ log = tail(heartbeat), delayMs = 0, calls = { podLog: 0 }, attach = ATTACH, attachFails = false } = {}) {
   return {
     calls,
+    // The attach whitelist comes from the control ConfigMap, through the same read the
+    // route uses (#232). A stream tick reads it too, so the block's list refreshes
+    // with the card (#248).
+    async configMap () {
+      if (attachFails) throw new Error('read ConfigMap monoplayer/monoplayer-control: the API server answered 403 Forbidden')
+      return {
+        metadata: { resourceVersion: '41221' },
+        data: { 'attach-whitelist.json': JSON.stringify(attach) }
+      }
+    },
     async deployment () {
       return { spec: { selector: { matchLabels: { app: 'monoplayer' } } } }
     },
@@ -161,6 +178,44 @@ test('the first fragment arrives at once, and it is the live region, not a page'
     // a page swapped inside a page.
     assert.doesNotMatch(fragment, /<!doctype|<html|<body/i)
     assert.doesNotMatch(fragment, /sse-connect/, 'the element that opened the stream is not replaced by its own content')
+  } finally {
+    await panel.close()
+  }
+})
+
+test('a tick carries the attach whitelist beside the live region, as an out-of-band swap', async () => {
+  const panel = await serve()
+  try {
+    const { text } = await read(panel.url + '/api/puppets/glowsquidye/stream', {
+      until: value => datas(value).length >= 1
+    })
+    const fragment = dataOf(datas(text)[0])
+    // The list is in the fragment, marked for a swap into the element that holds it and
+    // not into the live region: a tick must not disarm a remove button or clear a name
+    // the operator is typing.
+    assert.match(fragment, /<div class="attach" id="whitelist-glowsquidye" hx-swap-oob="true">/)
+    assert.match(fragment, /6eb73524-ff88-4a62-a8d0-c63905e7afba/)
+    assert.match(fragment, /added 2026-11-17T09:12:00\.000Z/)
+    assert.match(fragment, /and the attach whitelist read at 2026-11-18T10:37:24\.906Z at ConfigMap resourceVersion 41221 \(a version, not a time\)/)
+    // The live region's own element is not in the fragment, so the out-of-band swap is
+    // the only way the list gets there.
+    assert.doesNotMatch(fragment, /class="live"/)
+  } finally {
+    await panel.close()
+  }
+})
+
+test('a whitelist read that failed is a sentence in the block, not a lost tick', async () => {
+  const panel = await serve({ kubernetes: kube({ attachFails: true }) })
+  try {
+    const { text } = await read(panel.url + '/api/puppets/glowsquidye/stream', {
+      until: value => datas(value).length >= 1
+    })
+    const fragment = dataOf(datas(text)[0])
+    assert.match(fragment, /the attach whitelist could not be read: read ConfigMap monoplayer\/monoplayer-control: the API server answered 403 Forbidden/)
+    // And the card is still the card: one failed read of one object does not cost the
+    // rest of the fragment.
+    assert.match(fragment, /serving: the newest heartbeat was written 12 s ago/)
   } finally {
     await panel.close()
   }

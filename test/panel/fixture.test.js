@@ -8,6 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { parseFixture } from '../../src/panel/fixture.js'
 import { startPanel } from '../../src/panel/start.js'
 import { activity } from '../../src/panel/activity.js'
+import { createPanelHandler } from '../../src/panel/server.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(HERE, 'fixtures', 'panel.json')
@@ -45,6 +47,34 @@ function fixtureFile (document) {
   fs.writeFileSync(file, JSON.stringify(document))
   return file
 }
+
+// The recorded attach whitelist, which every fixture needs: the page draws the block
+// for every puppet it shows, so a fixture without one would be refused rather than
+// rendered with a list it never had.
+const attachFor = (name, players = []) => ({
+  [name]: {
+    resourceVersion: '41221',
+    puppetUuid: '11111111-2222-4333-8444-555555555555',
+    document: { version: 1, players }
+  }
+})
+
+// The smallest client the page needs to render a card: a Deployment with a selector, no
+// pods, and a control ConfigMap with an empty attach whitelist.
+const kubeFor = () => ({
+  async deployment () {
+    return { spec: { selector: { matchLabels: { app: 'monoplayer' } }, template: { spec: { containers: [{ name: 'monoplayer', env: [] }] } } } }
+  },
+  async pods () {
+    return { items: [] }
+  },
+  async podLog () {
+    return ''
+  },
+  async configMap () {
+    return { metadata: { resourceVersion: '1' }, data: { 'attach-whitelist.json': JSON.stringify({ version: 1, players: [] }) } }
+  }
+})
 
 const factsFor = (name, overrides = {}) => activity({
   puppet: puppet({ name }),
@@ -139,7 +169,7 @@ test('fixture mode and a registry are two sources, and the panel reads one', asy
 
 test('a rewrite of the fixture reaches the next read, which is how the stream rolls', async () => {
   const first = factsFor('glowsquidye')
-  const file = fixtureFile({ version: 1, puppets: [puppet()], facts: { glowsquidye: first } })
+  const file = fixtureFile({ version: 1, puppets: [puppet()], facts: { glowsquidye: first }, whitelist: attachFor('glowsquidye') })
   const panel = await startPanel({
     argv: ['--fixture', file, '--port', '0', '--host', '127.0.0.1'],
     io: quiet,
@@ -152,7 +182,7 @@ test('a rewrite of the fixture reaches the next read, which is how the stream ro
     // The operator's live roll: the recording is rewritten, and the next request
     // reads the new one, exactly as the registry is re-read.
     const later = factsFor('glowsquidye', { now: Date.parse('2026-11-18T10:39:12.906Z') })
-    fs.writeFileSync(file, JSON.stringify({ version: 1, puppets: [puppet()], facts: { glowsquidye: later } }))
+    fs.writeFileSync(file, JSON.stringify({ version: 1, puppets: [puppet()], facts: { glowsquidye: later }, whitelist: attachFor('glowsquidye') }))
     const next = await (await fetch(url)).json()
     assert.equal(next.observedAt, '2026-11-18T10:39:12.906Z')
     assert.notEqual(next.observedAt, first.observedAt)
@@ -161,27 +191,48 @@ test('a rewrite of the fixture reaches the next read, which is how the stream ro
   }
 })
 
-test('the committed fixture holds the three states a reviewer has to see', () => {
-  const { registry, facts } = parseFixture(fs.readFileSync(FIXTURE, 'utf8'))
+test('the committed fixture holds the states a reviewer has to see', () => {
+  const { registry, facts, whitelists } = parseFixture(fs.readFileSync(FIXTURE, 'utf8'))
   const states = registry.puppets.map(puppet => facts.get(puppet.name).state.state)
   assert.ok(states.includes('serving'), 'a puppet with a heartbeat: ' + states.join(', '))
   assert.ok(states.includes('no-heartbeat'), 'a puppet with none: ' + states.join(', '))
   const refused = registry.puppets.filter(puppet => puppet.allowBackendSwitch === false)
   assert.ok(refused.length >= 1, 'a write the registry refuses')
+  // And the attach whitelist the block renders: one puppet with entries, one with an
+  // empty list, so the block's two states are both on the page.
+  const counts = registry.puppets.map(puppet => whitelists.get(puppet.name).document.players.length)
+  assert.ok(counts.includes(0), 'a puppet nobody may attach as: ' + counts.join(', '))
+  assert.ok(counts.some(count => count > 0), 'a puppet with entries: ' + counts.join(', '))
+  const withEntries = registry.puppets.find(puppet => whitelists.get(puppet.name).document.players.length > 0)
+  assert.ok(withEntries !== undefined)
+  for (const player of whitelists.get(withEntries.name).document.players) {
+    assert.match(player.addedAt, /^\d{4}-\d{2}-\d{2}T/, 'every entry carries the time it was added')
+  }
 })
 
 test('a fixture the panel cannot act on is refused by name', () => {
+  const base = { version: 1, puppets: [puppet()], facts: { glowsquidye: factsFor('glowsquidye') }, whitelist: attachFor('glowsquidye') }
   const cases = [
     ['{"version":1,"puppets":[', /fixture: not JSON/],
     ['[]', /fixture: the document is not an object/],
-    [JSON.stringify({ version: 1, puppets: [puppet()], facts: {}, extra: 1 }), /unknown key "extra"/],
-    [JSON.stringify({ version: 1, puppets: [puppet({ backend: 'play2' })], facts: {} }), /backend must be host:port/],
-    [JSON.stringify({ version: 1, puppets: [puppet()], facts: {} }), /no recorded document for "glowsquidye"/],
-    [JSON.stringify({ version: 1, puppets: [puppet()], facts: { nobody: {} } }), /an entry for "nobody"/],
-    [JSON.stringify({ version: 1, puppets: [puppet()], facts: { glowsquidye: { name: 'other', state: { state: 'serving', reason: 'x' } } } }),
+    [JSON.stringify({ ...base, extra: 1 }), /unknown key "extra"/],
+    [JSON.stringify({ ...base, puppets: [puppet({ backend: 'play2' })] }), /backend must be host:port/],
+    [JSON.stringify({ ...base, facts: {} }), /no recorded document for "glowsquidye"/],
+    [JSON.stringify({ ...base, facts: { nobody: {} } }), /an entry for "nobody"/],
+    [JSON.stringify({ ...base, facts: { glowsquidye: { name: 'other', state: { state: 'serving', reason: 'x' } } } }),
       /facts\["glowsquidye"\]\.name is "other"/],
-    [JSON.stringify({ version: 1, puppets: [puppet()], facts: { glowsquidye: { name: 'glowsquidye' } } }),
-      /no state sentence/]
+    [JSON.stringify({ ...base, facts: { glowsquidye: { name: 'glowsquidye' } } }), /no state sentence/],
+    // The attach whitelist is validated by the route's own parser, so a fixture cannot
+    // hold a document the panel would refuse to rewrite.
+    [JSON.stringify({ ...base, whitelist: undefined }), /whitelist must be an object keyed by puppet name/],
+    [JSON.stringify({ ...base, whitelist: {} }), /whitelist has no entry for "glowsquidye"/],
+    [JSON.stringify({ ...base, whitelist: { glowsquidye: { document: { version: 1, players: [{ uuid: 'not-a-uuid' }] } } } }),
+      /players\[0\]\.uuid is not a Minecraft uuid/],
+    [JSON.stringify({ ...base, whitelist: { ...attachFor('glowsquidye'), nobody: {} } }), /an entry for "nobody"/],
+    // Every field a whitelist record may hold is named, so a misspelling is refused
+    // instead of becoming a recording that silently names no puppet account.
+    [JSON.stringify({ ...base, whitelist: { glowsquidye: { ...attachFor('glowsquidye').glowsquidye, puppetUUID: 'x' } } }),
+      /whitelist\["glowsquidye"\] has the unknown key "puppetUUID"/]
   ]
   for (const [text, expected] of cases) {
     assert.throws(() => parseFixture(text), expected)
@@ -192,7 +243,8 @@ test('a fixture with only one puppet for two registry rows names the one it lack
   const text = JSON.stringify({
     version: 1,
     puppets: [puppet(), puppet({ name: 'quiet', controlConfigMap: 'quiet-control', deployment: 'quiet' })],
-    facts: { glowsquidye: factsFor('glowsquidye') }
+    facts: { glowsquidye: factsFor('glowsquidye') },
+    whitelist: { ...attachFor('glowsquidye'), ...attachFor('quiet') }
   })
   assert.throws(() => parseFixture(text), /no recorded document for "quiet"/)
 })
@@ -203,6 +255,11 @@ test('the panel serves a fixture and writes nothing', async () => {
     io: quiet,
     tokenFile: '/nonexistent/token'
   })
+  const post = (path, body) => fetch('http://127.0.0.1:' + panel.port + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  })
   try {
     // A fixture has no cluster, so the one write the panel makes answers 503 and
     // says why. It never pretends to have written a document.
@@ -212,7 +269,87 @@ test('the panel serves a fixture and writes nothing', async () => {
       body: JSON.stringify({ host: 'alt.excalia.fr', port: 25565 })
     })
     assert.equal(response.status, 503)
-    assert.match(await response.text(), /no cluster client/)
+    assert.match(await response.text(), /fixture mode is a recording, so no document was written/)
+  } finally {
+    await panel.close()
+  }
+})
+
+test('a page served from a recording says so on the page', async () => {
+  const panel = await startPanel({
+    argv: ['--fixture', FIXTURE, '--port', '0', '--host', '127.0.0.1'],
+    io: quiet,
+    tokenFile: '/nonexistent/token'
+  })
+  try {
+    const page = await (await fetch('http://127.0.0.1:' + panel.port + '/')).text()
+    // The start line and a refused write both say it, and neither is on the page a
+    // screenshot of this branch shows.
+    assert.match(page, /<p class="recording">this panel is serving a recording, not a cluster/)
+  } finally {
+    await panel.close()
+  }
+})
+
+test('a panel reading a cluster carries no recording banner', async () => {
+  // The same view with no recording behind it: the banner is a fact about where the
+  // facts came from, so it is absent when they came from a cluster.
+  const registry = () => ({ version: 1, puppets: [puppet()] })
+  const server = http.createServer(createPanelHandler({ registry, kubernetes: kubeFor() }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const page = await (await fetch('http://127.0.0.1:' + server.address().port + '/')).text()
+    assert.doesNotMatch(page, /class="recording"/)
+  } finally {
+    server.closeAllConnections?.()
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('the whitelist block answers every refusal through the recording', async () => {
+  const panel = await startPanel({
+    argv: ['--fixture', FIXTURE, '--port', '0', '--host', '127.0.0.1'],
+    io: quiet,
+    tokenFile: '/nonexistent/token'
+  })
+  const url = 'http://127.0.0.1:' + panel.port
+  const send = (body) => fetch(url + '/api/puppets/glowsquidye/whitelist', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  try {
+    // The list is the recording's, through the route the page calls.
+    const listed = await fetch(url + '/api/puppets/glowsquidye/whitelist')
+    assert.equal(listed.status, 200)
+    const list = await listed.json()
+    assert.equal(list.count, 2)
+    assert.equal(list.resourceVersion, '41221')
+    assert.deepEqual(list.document.players.map(player => player.name), ['Bafbi', 'Second'])
+
+    // A name resolves to nothing in a recording, and the route answers with the
+    // instruction the block renders as one: send the uuid instead.
+    const byName = await send({ name: 'Bafbi' })
+    assert.equal(byName.status, 400)
+    assert.match(await byName.text(), /no Minecraft account is named "Bafbi", so send the uuid instead/)
+
+    // The puppet's own uuid is refused by the rule, not by the missing cluster,
+    // because the recording names one in the Deployment's environment.
+    const own = await send({ uuid: '11111111-2222-4333-8444-555555555555' })
+    assert.equal(own.status, 409)
+    assert.match(await own.text(), /that uuid is the puppet's own account/)
+
+    // A uuid already in the list is not a write at all: the route answers 200 with
+    // changed: false, so a retried request and a double click are the same request.
+    const already = await send({ uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba' })
+    assert.equal(already.status, 200)
+    assert.equal((await already.json()).changed, false)
+
+    // A uuid that is neither the puppet's nor already there reaches the write, and the
+    // write is the one thing a recording cannot do.
+    const write = await send({ uuid: '99999999-8888-4777-8666-555555555555' })
+    assert.equal(write.status, 503)
+    assert.match(await write.text(), /the attach whitelist was not written: fixture mode is a recording/)
   } finally {
     await panel.close()
   }

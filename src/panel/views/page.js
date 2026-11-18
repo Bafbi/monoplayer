@@ -26,11 +26,19 @@ export const ASSETS = [
   ['script', '/static/panel.js']
 ]
 
-export function renderPage ({ version, puppets }, activities) {
+// `lists` is each puppet's attach whitelist, keyed by name (#248). A caller that
+// omits it gets the block's "not read" sentence rather than an empty list, because
+// the two are different facts: one says the panel did not look, the other says nobody
+// may attach.
+// `banner` is the sentence a recording is announced with, or null. A fixture must be
+// visible as one on the page itself, not only in the start line and in a refusal after a
+// write: a screenshot of a recording that reads like a live lane is the failure this
+// whole ticket exists to prevent (#248).
+export function renderPage ({ version, puppets }, activities, lists = new Map(), banner = null) {
   const byName = new Map(activities.map(facts => [facts.name, facts]))
   const cards = puppets.map(puppet => {
     const facts = byName.get(puppet.name)
-    return facts === undefined ? '' : renderCard(puppet, facts)
+    return facts === undefined ? '' : renderCard(puppet, facts, lists.get(puppet.name) ?? null)
   }).filter(card => card !== '')
   const total = puppets.length === 1 ? '1 puppet' : puppets.length + ' puppets'
   return [
@@ -47,6 +55,7 @@ export function renderPage ({ version, puppets }, activities) {
     '</head>',
     '<body>',
     '  <header class="top">',
+    ...(banner === null ? [] : ['    <p class="recording">' + escape(banner) + '</p>']),
     '    <h1>Monoplayer panel</h1>',
     '    <p class="count">' + escape(total) + ' in the registry (document version ' + escape(version) +
       '). Every number carries the timestamp of the record it came from, and the stream writes the same',

@@ -13,10 +13,8 @@
 // page therefore sends exactly what the route demands, and the route is not
 // relaxed to accept a form body.
 //
-// The whitelist block is rendered and refuses. Its route is #232, which is not on
-// main, so this page shows what it knows (the count the lane resolved at start,
-// from the start record) and names the reason the form is absent. A form that
-// posted nowhere would be the alternative, and it would look wired.
+// The whitelist block is not here: it is src/panel/views/whitelist.js, which renders
+// the entries #232 reads and the two writes that change them.
 import { escape } from './html.js'
 
 // The move, in the two fields the route takes. The port is a number in the route's
@@ -49,27 +47,6 @@ export function renderMoveForm (puppet) {
     '        a cross-origin form post cannot send. The answer below is the write, not the move: it says',
     '        what the API server did.</p>',
     '      </form>',
-    ''
-  ].join('\n')
-}
-
-export function renderWhitelistBlock (puppet, facts) {
-  const whitelist = facts.whitelist
-  const who = whitelist === null
-    ? 'unknown: no start record is in the tail, so the panel cannot say how many entries the lane resolved'
-    : whitelist.count + (whitelist.count === 1 ? ' entry' : ' entries') + ' at start (' + whitelist.source +
-      (whitelist.at === null || whitelist.at === undefined ? '' : ', ' + whitelist.at) + ')'
-  return [
-    '      <h3>Who may attach</h3>',
-    '      <p class="refused">',
-    '        add and remove are unavailable. The write route is issue #232, and it is not on',
-    '        <code>main</code> in this branch, so this page renders the block and says so rather than',
-    '        showing a form that posts nowhere. When #232 lands, its two routes are what this block',
-    '        calls: one JSON POST to add a UUID, one JSON DELETE to remove it, both against the',
-    '        ConfigMap named above.',
-    '      </p>',
-    '      <p class="note">What the page does know: ' + escape(who) + '.',
-    '      The list itself is not in the tail, so the panel does not print it.</p>',
     ''
   ].join('\n')
 }

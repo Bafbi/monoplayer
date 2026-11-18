@@ -12,6 +12,9 @@ its own namespace.
 | `GET /api/puppets/<name>` | one puppet's facts, as JSON |
 | `GET /api/puppets/<name>/stream` | the live region, one fragment every 5 s |
 | `POST /api/puppets/<name>/backend` | the move, JSON in, a document written |
+| `GET /api/puppets/<name>/whitelist` | the attach whitelist, as JSON |
+| `POST /api/puppets/<name>/whitelist` | add one entry, by uuid or by name |
+| `DELETE /api/puppets/<name>/whitelist/<uuid>` | remove one entry |
 | `GET /static/…` | the page's own files: the stylesheet, htmx, the font |
 | `GET /healthz` | the probe, which never reads the registry |
 
@@ -67,10 +70,12 @@ rather than guessing:
   record in it: the card prints `unknown, and no start record is in the tail`, and
   shows the registry's own backend beside it, labelled `registry` with no
   timestamp.
-- **The whitelist count is the one the lane resolved at startup.** The control
-  document re-reads the whitelist at each login (#229), so an edit made after start
-  is invisible here; the row is labelled `at start`, carries that record's
-  timestamp, and says `re-read at each login` when it is.
+- **The `attach whitelist at start` count is the one the lane resolved at startup.**
+  The control document re-reads the whitelist at each login (#229), so an edit made
+  after start is invisible in that row. The block under the card is the list itself,
+  read on every tick, so an edit shows there within five seconds. Those are two
+  different facts and the page never merges them: one is what the lane started with,
+  the other is what the file holds now.
 - **The effective backend is the last successful dial**, so a puppet that followed a
   transfer shows where it is now rather than where it started. `last dial` shows the
   newest dial of either outcome with `connected` or `failed`, because a reconnect
@@ -105,7 +110,7 @@ A card has three parts, and the order is the contract:
 |---|---|---|
 | the head | the name, and the registry rows: namespace, Deployment, front, control ConfigMap | no, and no tick touches it |
 | the live region | the scene, the state sentence, and every number with the timestamp of its record | yes, replaced whole every 5 s |
-| the actions | the move form, and the whitelist block | no: a tick must not overwrite a half-typed host |
+| the actions | the move form, and the whitelist block | no: a tick must not overwrite a half-typed host, and it must not disarm a remove button |
 
 The live region is filled by `GET /api/puppets/<name>/stream`, server-sent events
 ([#248](https://github.com/Bafbi/monoplayer/issues/248)):
@@ -123,11 +128,16 @@ One fragment per tick, as `data:` lines. A comment line every 15 s is the heartb
 quiet connection. The stream ends when the client closes, and nothing else ends it: a
 puppet that stopped writing still gets a fragment every five seconds that says so.
 
-A tick that finds the previous read still pending is **skipped** and logged as
-`panelStreamTickSkipped`. Filling a card is three sequential API reads (a Deployment,
-a pod list, and a pod log, each with a 5 s timeout), so a slow API server can outlast
-a tick, and overlapping reads would answer out of order. A skipped tick costs one
-interval of freshness. An out-of-order one costs trust in the page.
+A tick reads four objects: a Deployment, a pod list, a pod log, and the control
+ConfigMap's attach whitelist. They run as two pairs, so a tick waits for the slower of
+the two and not for all four in turn. A tick that finds the previous read still pending
+is **skipped** and logged as `panelStreamTickSkipped`: a slow API server can outlast a
+tick, and overlapping reads would answer out of order. A skipped tick costs one interval
+of freshness. An out-of-order one costs trust in the page.
+
+The whitelist list travels in the same frame as an out-of-band swap, so the block
+redraws with the card while the form beside it keeps what the operator typed. A failed
+whitelist read is a sentence in that block, and the rest of the card still arrives.
 
 The cadence is deliberately not a setting. The page says "every 5 s" in words, and a
 Deployment detail behind that sentence is a sentence that can be wrong.
@@ -269,6 +279,31 @@ somewhere else, or send the same address again, which stamps a new `changedAt` a
 is therefore a new request.
 
 ## Add or remove an attach whitelist entry
+
+The page does this, and so does `curl`. The block under each card lists the entries the
+lane admits with the uuid and the time each was added, then the form that adds one:
+
+- **one field, two shapes.** A uuid is sent as `{"uuid": "..."}` and anything else as
+  `{"name": "..."}`. A name the panel cannot resolve comes back as a 400 asking for the
+  uuid, and the block prints that as an instruction rather than as a failure: it is
+  something to do next, not a rejection.
+- **removing asks twice.** The first press arms the button and sends nothing. The second
+  sends the `DELETE`. An arm nobody uses disarms itself after ten seconds, because a
+  control that deletes on a stray tap is not one to put on a page a phone opens. The arm
+  is held by the page, not by the button: the stream replaces the list, so a confirmation
+  stored in the DOM would be lost between the two presses and the second one would only
+  arm it again. The page paints the confirmation back onto the button a redraw replaced,
+  keyed by the entry's uuid, and the test of that is a press, a tick, and a second press.
+- **a conflict is never a success.** A 409 is printed as the refusal it is, in the
+  route's own words, and the list keeps showing the version that was read.
+- **the list refreshes through the stream**, not through a reload: the entries are part
+  of the tick as an out-of-band swap, and a row appears or goes within five seconds of
+  the write.
+- **the answers sit outside the list**, one area per block, because a refusal printed in
+  a row would be taken away with the row it was about. The instant the list was read and
+  the ConfigMap's version are in the card's footer, which is rewritten every tick: a
+  clock inside the list would be the time of the last change, and a reader would take it
+  for the time of the read.
 
 ```bash
 curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/whitelist
@@ -518,8 +553,16 @@ each puppet is a registry row and each fact is what `GET /api/puppets/<name>` an
 and a puppet with no recorded document, a record whose `name` disagrees, or a fact
 without a state sentence is refused by name.
 
-The committed fixture holds the three states worth looking at: a puppet with a
-heartbeat, one with none, and one whose registry row refuses the move.
+The committed fixture holds the states worth looking at: a puppet with a heartbeat,
+one with none, one whose registry row refuses the move, an attach whitelist with two
+entries and one with none.
+
+A fixture's cluster is the recording, so the whitelist block reads the recorded document
+through the same parser a pod uses, and a name resolves to nothing: the route then answers
+the 400 that asks for the uuid, which is the instruction the block has to render. Every
+write is refused by name ("fixture mode is a recording, so no document was written"), and
+a uuid the recording already lists answers 200 with `changed: false`, exactly as it does
+against a cluster.
 
 **It refuses to start when the in-cluster ServiceAccount token is mounted**, and that
 check runs before the socket exists. A fixture is a development aid. A pod that served
@@ -528,6 +571,10 @@ one would be a panel showing a recording while the lane it describes runs on.
 The file is re-read on every request, like the registry. That is also how the stream is
 shown to update: rewrite the file, wait one tick, and the open page shows the new
 numbers without a reload.
+
+The page says it is a recording, above the title. A screenshot of a branch served from a
+fixture must not read like a lane that is running, and neither the start line nor a
+refused write is on the page.
 
 ## The image, and one known skew
 
