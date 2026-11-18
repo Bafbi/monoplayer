@@ -5,10 +5,10 @@
 # because each owns one namespace. This file says only that both belong to the
 # same deploy.
 #
-# The image workflow appends `images:` to deploy/manifests/kustomization.yaml on
-# the bot-owned `deploy` branch. A child's image pin applies to that child's
-# resources, so the proxy is pinned by digest and the panel tracks the moving
-# `main` tag until #234 pins it too; docs/panel.md records what that costs.
+# The image workflow appends `images:` to each child kustomization on the
+# bot-owned `deploy` branch (#234). A child's image pin applies to that child's
+# resources, so the proxy and the panel are pinned by digest in the same commit
+# and neither can be a build behind the other.
 #
 # The dev and gate lanes are deliberately not here. docs/deployment.md says why:
 # a branch image and a sleeping gate both depend on a human applying the tree,
