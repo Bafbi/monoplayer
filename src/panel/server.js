@@ -5,8 +5,10 @@
 // arrives as a function, so a test hands in a document and a pod hands in the
 // mounted ConfigMap, and the routes cannot tell the difference. The API client
 // arrives the same way, and so do the cards: src/panel/routes/info.js owns every
-// route that reads a pod, and src/panel/routes/backend.js owns the one that patches
-// a ConfigMap, so this file does not grow a branch per feature (#231, #233).
+// route that reads a pod, src/panel/routes/backend.js owns the one that patches a
+// move, and src/panel/routes/whitelist.js owns the three that read and write the
+// attach whitelist, so this file does not grow a branch per feature (#231, #232,
+// #233).
 //
 // `GET /healthz` never touches the registry. It is the probe, so it has to answer
 // while the registry is broken; a panel that fails its probe when the document
@@ -18,11 +20,12 @@
 
 import { createBackendRoute } from './routes/backend.js'
 import { createInfoRoutes } from './routes/info.js'
+import { createWhitelistRoute } from './routes/whitelist.js'
 
 const TEXT = 'text/plain; charset=utf-8'
 const JSON_TYPE = 'application/json; charset=utf-8'
 
-export function createPanelHandler ({ registry, kubernetes = null, log = () => {}, now = () => Date.now() } = {}) {
+export function createPanelHandler ({ registry, kubernetes = null, log = () => {}, now = () => Date.now(), lookup = null } = {}) {
   if (typeof registry !== 'function') {
     throw new TypeError('createPanelHandler: registry must be a function returning the registry document')
   }
@@ -45,6 +48,8 @@ export function createPanelHandler ({ registry, kubernetes = null, log = () => {
   const info = createInfoRoutes({ read, kubernetes, log, send, now })
   // #233: the one write the panel makes, the same way.
   const backend = createBackendRoute({ read, kubernetes, log, now })
+  // #232: the attach whitelist, the same way again.
+  const whitelist = createWhitelistRoute({ read, kubernetes, log, now, lookup })
 
   return async function handle (req, res) {
     const method = req.method ?? 'GET'
@@ -54,6 +59,7 @@ export function createPanelHandler ({ registry, kubernetes = null, log = () => {
     // method check, so the verb it takes is not refused here and the guard still
     // refuses every other write method.
     if (backend.match(path) !== null) return backend.handle(req, res, { method, send })
+    if (whitelist.match(path) !== null) return whitelist.handle(req, res, { method, send })
 
     if (method !== 'GET') {
       return send(res, 405, TEXT, 'the panel answers GET only\n', { allow: 'GET' })
