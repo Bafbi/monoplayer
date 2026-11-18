@@ -1,8 +1,22 @@
 # Run the panel
 
-The panel is one page and two JSON routes on the tailnet, showing what each puppet
-it may touch is doing and which control ConfigMap it may write for it. It runs beside
-the proxy, not inside it: same image, second entrypoint, its own namespace.
+The panel is one page, its own assets, one stream and two JSON routes on the tailnet,
+showing what each puppet it may touch is doing and which control ConfigMap it may
+write for it. It runs beside the proxy, not inside it: same image, second entrypoint,
+its own namespace.
+
+| Route | Answers |
+|---|---|
+| `GET /` | the page: one card per puppet, and the actions |
+| `GET /api/puppets` | the registry document, as JSON |
+| `GET /api/puppets/<name>` | one puppet's facts, as JSON |
+| `GET /api/puppets/<name>/stream` | the live region, one fragment every 5 s |
+| `POST /api/puppets/<name>/backend` | the move, JSON in, a document written |
+| `GET /api/puppets/<name>/whitelist` | the attach whitelist, as JSON |
+| `POST /api/puppets/<name>/whitelist` | add one entry, by uuid or by name |
+| `DELETE /api/puppets/<name>/whitelist/<uuid>` | remove one entry |
+| `GET /static/…` | the page's own files: the stylesheet, htmx, the font |
+| `GET /healthz` | the probe, which never reads the registry |
 
     http://monoplayer.tail41e568.ts.net
 
@@ -15,7 +29,7 @@ panel is never published through the playit tunnel ([public-access.md](public-ac
 ## What the page shows
 
 Per puppet, one card: what it is doing, read from the records the puppet already
-writes to its JSONL log on stdout. Read-only, and the card adds no state anywhere.
+writes to its JSONL log on stdout. The card adds no state anywhere.
 
 The panel makes three reads to fill a card:
 
@@ -56,10 +70,12 @@ rather than guessing:
   record in it: the card prints `unknown, and no start record is in the tail`, and
   shows the registry's own backend beside it, labelled `registry` with no
   timestamp.
-- **The whitelist count is the one the lane resolved at startup.** The control
-  document re-reads the whitelist at each login (#229), so an edit made after start
-  is invisible here; the row is labelled `at start`, carries that record's
-  timestamp, and says `re-read at each login` when it is.
+- **The `attach whitelist at start` count is the one the lane resolved at startup.**
+  The control document re-reads the whitelist at each login (#229), so an edit made
+  after start is invisible in that row. The block under the card is the list itself,
+  read on every tick, so an edit shows there within five seconds. Those are two
+  different facts and the page never merges them: one is what the lane started with,
+  the other is what the file holds now.
 - **The effective backend is the last successful dial**, so a puppet that followed a
   transfer shows where it is now rather than where it started. `last dial` shows the
   newest dial of either outcome with `connected` or `failed`, because a reconnect
@@ -85,6 +101,80 @@ sentence. `null` means the custody cache does not say, which is not "no expiry".
 
 `GET /api/puppets/<name>` serves the same facts as one JSON object, for an agent
 that would rather not parse the page. A name the registry does not hold is a 404.
+
+## The page updates itself, without a reload
+
+A card has three parts, and the order is the contract:
+
+| Part | What it holds | Does it change while the page is open? |
+|---|---|---|
+| the head | the name, and the registry rows: namespace, Deployment, front, control ConfigMap | no, and no tick touches it |
+| the live region | the scene, the state sentence, and every number with the timestamp of its record | yes, replaced whole every 5 s |
+| the actions | the move form, and the whitelist block | no: a tick must not overwrite a half-typed host, and it must not disarm a remove button |
+
+The live region is filled by `GET /api/puppets/<name>/stream`, server-sent events
+([#248](https://github.com/Bafbi/monoplayer/issues/248)):
+
+| Header | Why |
+|---|---|
+| `content-type: text/event-stream` | nothing buffers it as a document that has not finished |
+| `cache-control: no-store` | a cached tick is a page that lies about when it was read |
+| `x-accel-buffering: no` | a proxy in front of this must not wait for a buffer before forwarding |
+| no `content-length` | the answer has no end until the client goes |
+| no `content-encoding` | a compressor buffer is one more place a tick waits |
+
+One fragment per tick, as `data:` lines. A comment line every 15 s is the heartbeat:
+`EventSource` ignores it, and it keeps the socket alive through anything that closes a
+quiet connection. The stream ends when the client closes, and nothing else ends it: a
+puppet that stopped writing still gets a fragment every five seconds that says so.
+
+A tick reads four objects: a Deployment, a pod list, a pod log, and the control
+ConfigMap's attach whitelist. They run as two pairs, so a tick waits for the slower of
+the two and not for all four in turn. A tick that finds the previous read still pending
+is **skipped** and logged as `panelStreamTickSkipped`: a slow API server can outlast a
+tick, and overlapping reads would answer out of order. A skipped tick costs one interval
+of freshness. An out-of-order one costs trust in the page.
+
+The whitelist list travels in the same frame as an out-of-band swap, so the block
+redraws with the card while the form beside it keeps what the operator typed. A failed
+whitelist read is a sentence in that block, and the rest of the card still arrives.
+
+The cadence is deliberately not a setting. The page says "every 5 s" in words, and a
+Deployment detail behind that sentence is a sentence that can be wrong.
+
+## The page's own files
+
+Everything the browser loads is served by the panel from `src/panel/public/`, under
+`/static/`. No CDN: a panel on a tailnet must not fetch its assets from the public
+internet, and a page that breaks when a CDN is down is a page nobody can debug.
+
+| File | What it is |
+|---|---|
+| `app.css` | compiled from `app.css.in` by `mise run panel:css`. The bundle is committed |
+| `panel.js` | the one write the page makes: a JSON `fetch` per form |
+| `vendor/htmx.min.js` | htmx 2.0.11, Zero-Clause BSD, licence beside it |
+| `vendor/htmx-ext-sse.min.js` | its SSE extension, 2.2.4, Zero-Clause BSD, licence beside it |
+| `fonts/VT323-Regular.ttf` | the pixel font, SIL Open Font License, `fonts/OFL.txt` beside it |
+
+**No Mojang asset is in this repository.** The scene is three isometric blocks per
+card, clipped out of a square by `clip-path` and textured with repeating gradients: a
+grass top face and dirt sides, hard 2 px edges, no border-radius anywhere, and a
+grass/dirt/stone palette. The top face of the puppet's block is the state, and the
+scene is `aria-hidden` because a colour is not a fact: the sentence beside it says
+which state the colour means, and every number stays in the lists with its record's
+timestamp.
+
+**The stylesheet is compiled, and the bundle is committed.** The image ships a
+stylesheet and no compiler (`pnpm install --prod` drops the devDependencies):
+
+```bash
+mise run panel:css              # rewrite src/panel/public/app.css
+mise run panel:css -- --check   # recompile and fail when the committed bundle is stale
+```
+
+`--check` is part of `mise run lint`, so a stale bundle is a red gate instead of a
+silent drift. The comparison is byte for byte: Tailwind's output is deterministic for
+a given input, so a difference is a bundle compiled from a different tree.
 
 ## What the panel can and cannot touch
 
@@ -113,14 +203,14 @@ And, by design:
 
 The page uses the three read rules and the `get` on the control ConfigMap. Three
 routes exercise the write rule, and they patch one object: `desired.json` for
-`POST /api/puppets/:name/backend`, and `attach-whitelist.json` for the two
-attach whitelist writes. Each patches its own key, and a merge patch of one key
-leaves the other where it was.
+`POST /api/puppets/:name/backend`, and `attach-whitelist.json` for the two attach
+whitelist writes. Each patches its own key, and a merge patch of one key leaves the
+other where it was.
 
 ## Point a puppet at another backend
 
 ```bash
-curl -X POST http://monoplayer.tail41e568.ts.net:8080/api/puppets/glowsquidye/backend \
+curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/backend \
   -H 'content-type: application/json' \
   -d '{"host": "play.example.net", "port": 25565}'
 ```
@@ -189,6 +279,31 @@ somewhere else, or send the same address again, which stamps a new `changedAt` a
 is therefore a new request.
 
 ## Add or remove an attach whitelist entry
+
+The page does this, and so does `curl`. The block under each card lists the entries the
+lane admits with the uuid and the time each was added, then the form that adds one:
+
+- **one field, two shapes.** A uuid is sent as `{"uuid": "..."}` and anything else as
+  `{"name": "..."}`. A name the panel cannot resolve comes back as a 400 asking for the
+  uuid, and the block prints that as an instruction rather than as a failure: it is
+  something to do next, not a rejection.
+- **removing asks twice.** The first press arms the button and sends nothing. The second
+  sends the `DELETE`. An arm nobody uses disarms itself after ten seconds, because a
+  control that deletes on a stray tap is not one to put on a page a phone opens. The arm
+  is held by the page, not by the button: the stream replaces the list, so a confirmation
+  stored in the DOM would be lost between the two presses and the second one would only
+  arm it again. The page paints the confirmation back onto the button a redraw replaced,
+  keyed by the entry's uuid, and the test of that is a press, a tick, and a second press.
+- **a conflict is never a success.** A 409 is printed as the refusal it is, in the
+  route's own words, and the list keeps showing the version that was read.
+- **the list refreshes through the stream**, not through a reload: the entries are part
+  of the tick as an out-of-band swap, and a row appears or goes within five seconds of
+  the write.
+- **the answers sit outside the list**, one area per block, because a refusal printed in
+  a row would be taken away with the row it was about. The instant the list was read and
+  the ConfigMap's version are in the card's footer, which is rewritten every tick: a
+  clock inside the list would be the time of the last change, and a reader would take it
+  for the time of the read.
 
 ```bash
 curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/whitelist
@@ -392,9 +507,12 @@ name still resolves and refuses; removing the tree removes the name with it.
 curl http://monoplayer.tail41e568.ts.net/healthz             # {"ok":true}
 curl http://monoplayer.tail41e568.ts.net/api/puppets         # the registry
 curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye
+curl -N http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/stream
 ```
 
-The third is one puppet's facts, the same object the card is rendered from.
+The third is one puppet's facts, the same object the card is rendered from. The fourth
+is the same card body, once every five seconds, as `data:` lines. `-N` is what stops
+`curl` from holding them until its buffer fills.
 
 `/healthz` never reads the registry, so it answers while the document is broken and
 all three content routes return 500 with the reason. The first log line of the pod
@@ -423,6 +541,46 @@ A panel run from a checkout has no ServiceAccount token, so every card reads
 /var/run/secrets/kubernetes.io/serviceaccount/token: …` and the registry facts are
 still on it. That sentence is the point: a panel that cannot read the cluster
 names the read that failed instead of showing a spinner.
+
+## Review the page before it is merged
+
+A branch has to be reviewable before it is merged, and a screenshot of a page that
+reads a cluster nobody can reach proves nothing. Fixture mode serves a recorded
+document instead:
+
+```bash
+mise run panel:fixture                      # test/panel/fixtures/dashboard.json
+node src/panel/start.js --fixture <file> --host 127.0.0.1 --port 8080
+```
+
+The document is `{ "version": 1, "puppets": [...], "facts": { "<name>": {...} } }`, where
+each puppet is a registry row and each fact is what `GET /api/puppets/<name>` answered.
+`src/panel/fixture.js` validates it: the puppets go through the registry's own parser,
+and a puppet with no recorded document, a record whose `name` disagrees, or a fact
+without a state sentence is refused by name.
+
+The committed fixture holds the states worth looking at: a puppet with a heartbeat,
+one with none, one whose registry row refuses the move, an attach whitelist with two
+entries and one with none.
+
+A fixture's cluster is the recording, so the whitelist block reads the recorded document
+through the same parser a pod uses, and a name resolves to nothing: the route then answers
+the 400 that asks for the uuid, which is the instruction the block has to render. Every
+write is refused by name ("fixture mode is a recording, so no document was written"), and
+a uuid the recording already lists answers 200 with `changed: false`, exactly as it does
+against a cluster.
+
+**It refuses to start when the in-cluster ServiceAccount token is mounted**, and that
+check runs before the socket exists. A fixture is a development aid. A pod that served
+one would be a panel showing a recording while the lane it describes runs on.
+
+The file is re-read on every request, like the registry. That is also how the stream is
+shown to update: rewrite the file, wait one tick, and the open page shows the new
+numbers without a reload.
+
+The page says it is a recording, above the title. A screenshot of a branch served from a
+fixture must not read like a lane that is running, and neither the start line nor a
+refused write is on the page.
 
 ## The image, and one known skew
 

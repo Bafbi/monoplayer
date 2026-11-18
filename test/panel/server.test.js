@@ -86,9 +86,15 @@ test('/ is the page a human opens, naming each puppet and its targets', async ()
       puppet.deployment, puppet.controlConfigMap]) {
       assert.ok(page.includes(text), 'the page names ' + text)
     }
-    // One page, one document, no asset the browser has to fetch: the panel is
-    // reached over a tailnet and nothing else serves its files.
-    assert.doesNotMatch(page, /<(script|link|img)\b/i, 'the page loads no external asset')
+    // Every asset the page loads is served by the panel itself. The tailnet
+    // Service is the only thing answering on that name, so a stylesheet, a script,
+    // a font or an icon fetched from anywhere else is a request that fails on the
+    // one network this page is opened from (#248).
+    const urls = [...page.matchAll(/\b(?:src|href)="([^"]+)"/g)].map(match => match[1])
+    assert.ok(urls.length >= 4, 'the page loads its stylesheet, htmx, its sse extension and its own script')
+    for (const url of urls) {
+      assert.match(url, /^\/static\//, url + ' is served by the panel, not fetched from elsewhere')
+    }
   } finally {
     await close()
   }

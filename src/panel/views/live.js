@@ -1,83 +1,43 @@
-// The panel's page: one document, one inline stylesheet, and one card per puppet.
+// The live region: everything on a puppet's card that can change, rendered as one
+// HTML fragment.
 //
-// Every number sits under the `t` of the record it came from, and a record older
-// than three heartbeats is its own state so it is never coloured as live. The page
-// loads no asset the browser has to fetch: the tailnet Service is the only thing
-// answering on that name, so a stylesheet or a script would be a request that
-// fails. It is read on a phone, which is why the row grid is one column below
-// 30 rem and two above it.
+// This function is the page's only answer to "what is it doing". GET / renders it
+// inside the card, and GET /api/puppets/<name>/stream writes it again every tick,
+// so a number on the first page and a number five seconds later come from the same
+// place. The stream swaps the innerHTML of the element that holds this fragment,
+// which is why the forms live outside it: a tick must not overwrite a half-typed
+// move.
+//
+// Every number sits under the timestamp of the record it came from, and a record
+// older than three heartbeats is its own state so it is never coloured as live
+// (#231).
+//
+// #248 split the one renderer in src/panel/page.js into these views, and made this
+// function the fragment the stream writes: the first render and every tick after it
+// are the same code, so a number on the page and a number five seconds later cannot
+// disagree.
+import {
+  bytes, count, dayWord, env, escape, group, heading, list, present, row, sourced, span, yesno
+} from './html.js'
+import { renderStage } from './stage.js'
 
-const escape = value => String(value)
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;')
-
-const present = value => value !== null && value !== undefined && value !== ''
-const yesno = value => (value === true ? 'yes' : value === false ? 'no' : null)
-const dayWord = days => (Math.abs(days) === 1 ? 'day' : 'days')
-const count = value => (typeof value === 'number' && Number.isFinite(value) ? value : null)
-
-// A value that came with a record says which record and when. A cap read from the
-// Deployment says so too, because the Deployment has no timestamp and the reader
-// needs to know that.
-function sourced (fact) {
-  if (fact === null || fact === undefined) return null
-  const where = present(fact.at) ? fact.source + ', ' + fact.at : fact.source
-  return fact.value + ' (' + where + ')'
-}
-
-function bytes (value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null
-  const units = ['B', 'KiB', 'MiB', 'GiB']
-  let size = value
-  let unit = 0
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024
-    unit += 1
-  }
-  return unit === 0 ? value + ' B' : value + ' (' + (Math.round(size * 10) / 10) + ' ' + units[unit] + ')'
-}
-
-// The Deployment env is a value nobody rewrote at a known instant, so it carries
-// the source and no timestamp.
-const env = value => (present(value) ? value + ' (Deployment env, no timestamp)' : null)
-
-// A millisecond cap in the unit an operator reads it in.
-function span (value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null
-  if (value >= 86_400_000) return value + ' ms (' + Math.round((value / 86_400_000) * 10) / 10 + ' days)'
-  if (value >= 3_600_000) return value + ' ms (' + Math.round((value / 3_600_000) * 10) / 10 + ' hours)'
-  return value + ' ms'
-}
-
-function row (label, value) {
-  if (!present(value)) return ''
-  return '      <div><dt>' + escape(label) + '</dt><dd>' + escape(value) + '</dd></div>\n'
-}
-
-function list (rows) {
-  const body = rows.filter(line => line !== '').join('')
-  return body === '' ? '' : '    <dl>\n' + body + '    </dl>\n'
-}
-
-function group (title, rows) {
-  const body = list(rows)
-  return body === '' ? '' : '    <h4>' + escape(title) + '</h4>\n' + body
-}
-
-function heading (title, at, note = null) {
-  return '    <h3>' + escape(title) +
-    (present(at) ? ' <time>' + escape(at) + '</time>' : '') +
-    (present(note) ? ' <span class="note">' + escape(note) + '</span>' : '') +
-    '</h3>\n'
+// The whitelist read of this instant, as one clause of the card's footer. A
+// resourceVersion orders writes. It is not a clock, and a reader who took it for one
+// would date the list from a number that means nothing outside the API server.
+function whitelistRead (attach) {
+  if (attach === null || attach === undefined) return ''
+  if (present(attach.failure)) return ', and the attach whitelist could not be read'
+  if (!present(attach.observedAt)) return ''
+  const version = present(attach.resourceVersion)
+    ? ' at ConfigMap resourceVersion ' + attach.resourceVersion + ' (a version, not a time)'
+    : ', and the ConfigMap named no resourceVersion'
+  return ', and the attach whitelist read at ' + attach.observedAt + version
 }
 
 function renderHeartbeat (facts) {
   const heartbeat = facts.heartbeat
   if (heartbeat === null) return ''
-  const age = heartbeat.ageSeconds === null ? null : heartbeat.ageSeconds + ' s before this page'
+  const age = heartbeat.ageSeconds === null ? null : heartbeat.ageSeconds + ' s before this read'
   const lines = [heading('Heartbeat', heartbeat.at, age)]
 
   lines.push(group('Session', [
@@ -244,10 +204,13 @@ function renderAttach (attach) {
   return lines.join('')
 }
 
+// The pod's rows under the group heading, not under a second heading with the same
+// word in it: "Pod" twice in a row was a wart the first render carried, and a page
+// that is the operator's only view of the lane should not repeat itself.
 function renderPod (facts) {
   const pod = facts.pod
   const lines = [heading('Pod', null)]
-  lines.push(group('Pod', [
+  lines.push(list([
     row('name', pod === null ? null : pod.name),
     row('phase', pod === null ? null : pod.phase),
     row('ready', pod === null ? null : yesno(pod.ready)),
@@ -257,85 +220,38 @@ function renderPod (facts) {
   return lines.join('')
 }
 
-function renderCard (facts) {
-  const lines = []
-  lines.push('<article class="puppet">\n')
-  lines.push('  <h2>' + escape(facts.name) + ' <span class="state ' + escape(facts.state.state) + '">' +
-    escape(facts.state.state) + '</span></h2>\n')
-  lines.push('  <p class="reason">' + escape(facts.state.reason) + '</p>\n')
-  lines.push(heading('Registry', null, 'this panel\'s own document, no timestamp'))
-  lines.push(list([
-    row('namespace', facts.namespace),
-    row('deployment', facts.deployment),
-    row('front', facts.frontHostname),
-    row('control ConfigMap', facts.controlConfigMap)
-  ]))
-  lines.push(renderHeartbeat(facts))
-  lines.push(renderStart(facts))
-  lines.push(renderPreAuth(facts))
-  lines.push(renderAttach(facts.attach))
-  lines.push(renderPod(facts))
-  lines.push('  <p class="read">read at ' + escape(facts.observedAt) +
-    (facts.tail === null
-      ? ', and no log was read'
-      : ' from ' + facts.tail.lines + ' log lines (' + facts.tail.heartbeats + ' heartbeats' +
-        (facts.tail.unreadable === 0 ? '' : ', ' + facts.tail.unreadable + ' unreadable') + ')') + '</p>\n')
-  lines.push('</article>')
-  return lines.join('')
+// The state sentence, in words, with the chip beside it. The chip is the colour
+// the scene's top face uses; the sentence is what a reader acts on.
+function renderState (facts) {
+  return '  <p class="state-line"><span class="state ' + escape(facts.state.state) + '">' +
+    escape(facts.state.state) + '</span> <span class="reason">' + escape(facts.state.reason) + '</span></p>\n'
 }
 
-// One page, no asset the browser has to fetch, and one column on a phone.
-export function renderPage ({ version, puppets }, activities) {
-  const byName = new Map(activities.map(facts => [facts.name, facts]))
-  const cards = puppets.map(puppet => {
-    const facts = byName.get(puppet.name)
-    return facts === undefined ? '' : renderCard(facts)
-  }).filter(card => card !== '')
-  const total = puppets.length === 1 ? '1 puppet' : puppets.length + ' puppets'
+// One puppet's live region. No closing wrapper: the caller owns the element whose
+// innerHTML this becomes, because the same markup is the server's first render and
+// the stream's every later one.
+//
+// `attach` is the attach whitelist read of this same instant, and the footer names it
+// beside the log read. It is here and not in the list, because the list is only redrawn
+// when it changes: a time printed there would be the time of the last change, which a
+// reader would take for the time of the read (#248).
+export function renderLive (facts, attach = null) {
   return [
-    '<!doctype html>',
-    '<html lang="en">',
-    '<head>',
-    '  <meta charset="utf-8">',
-    '  <meta name="viewport" content="width=device-width, initial-scale=1">',
-    '  <title>Monoplayer panel</title>',
-    '  <style>',
-    '    :root { color-scheme: light dark; --muted: 0.7 }',
-    '    body { margin: 1rem auto; max-width: 46rem; padding: 0 0.75rem;',
-    '      font: 16px/1.5 system-ui, sans-serif }',
-    '    h1 { font-size: 1.4rem; margin-bottom: 0.25rem }',
-    '    p.count { margin-top: 0; opacity: var(--muted); font-size: 0.9rem }',
-    '    article { border: 1px solid; border-color: color-mix(in srgb, currentColor 25%, transparent);',
-    '      border-radius: 0.5rem; padding: 0.75rem 0.9rem; margin: 1rem 0 }',
-    '    article h2 { margin: 0; font-size: 1.2rem }',
-    '    .state { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;',
-    '      border: 1px solid; border-radius: 999px; padding: 0.05rem 0.45rem; vertical-align: 0.15rem }',
-    '    .state.serving { color: #15803d }',
-    '    .state:not(.serving) { color: #b45309 }',
-    '    p.reason { margin: 0.4rem 0 0; font-size: 0.95rem }',
-    '    h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; opacity: var(--muted);',
-    '      margin: 1.1rem 0 0.3rem }',
-    '    h3 time, h3 .note { text-transform: none; letter-spacing: 0; font-family: ui-monospace, monospace;',
-    '      font-size: 0.8rem }',
-    '    h4 { font-size: 0.8rem; margin: 0.6rem 0 0.2rem }',
-    '    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.75rem; margin: 0 }',
-    '    dt { opacity: var(--muted) }',
-    '    dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere }',
-    '    p.warn, p.read { border-left: 3px solid currentColor; padding-left: 0.5rem; font-size: 0.9rem }',
-    '    p.read { border-left-color: transparent; opacity: var(--muted) }',
-    '    @media (max-width: 30rem) {',
-    '      dl { grid-template-columns: 1fr; gap: 0 0 }',
-    '      dt { margin-top: 0.4rem; font-size: 0.85rem }',
-    '    }',
-    '  </style>',
-    '</head>',
-    '<body>',
-    '  <h1>Monoplayer panel</h1>',
-    '  <p class="count">' + escape(total) + ' in the registry (document version ' + escape(version) +
-      '). Each number carries the timestamp of the log line it came from; nothing is rendered as "now".</p>',
-    cards.join('\n'),
-    '</body>',
-    '</html>',
+    renderStage(facts),
+    renderState(facts),
+    renderHeartbeat(facts),
+    renderStart(facts),
+    renderPreAuth(facts),
+    renderAttach(facts.attach),
+    renderPod(facts),
+    '  <p class="read">read at ' + escape(facts.observedAt) +
+      (facts.tail === null
+        ? ', and no log was read'
+        // Escaped like every other value on the page. These are numbers today, and
+        // a fixture can hand in anything, which is the case this covers.
+        : ' from ' + escape(facts.tail.lines) + ' log lines (' + escape(facts.tail.heartbeats) + ' heartbeats' +
+          (facts.tail.unreadable === 0 ? '' : ', ' + escape(facts.tail.unreadable) + ' unreadable') + ')') +
+      whitelistRead(attach) + '</p>',
     ''
   ].join('\n')
 }
