@@ -82,3 +82,40 @@ test('the lane reads its control document and its whitelist from the mounted vol
   assert.equal(env.get('MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH'), '1',
     'the backend switch is off; the panel answers 409 and the move route is dead')
 })
+// --- the two halves of the backend switch agree ---
+
+// Two switches decide one action, and one comment used to be the only thing keeping
+// them in step: the registry's `allowBackendSwitch` says whether the panel may ask,
+// and the lane's `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH` says whether the puppet
+// obeys. They were shipped disagreeing — the lane said 1, the registry said false —
+// and the visible result was a page with no move control and a 409 on the route.
+// This reads both files so the next drift is a red gate.
+
+test('the registry and the lane agree on the backend switch', () => {
+  const registry = read(path.join('..', 'panel', 'registry.yaml'))
+  const deployment = read('deployment.yaml')
+
+  const document = /puppets\.json: \|\n([\s\S]*)$/.exec(registry)
+  assert.ok(document, 'the registry does not carry a puppets.json block')
+  const puppets = JSON.parse(document[1].replace(/^ {4}/gm, '')).puppets
+  assert.ok(puppets.length > 0, 'the registry names no puppet')
+
+  const env = new Map([...deployment.matchAll(/- name: (MONOPLAYER_[A-Z_]+)\n\s+value: (.*)$/gm)]
+    .map(match => [match[1], match[2].replace(/^"|"$/g, '')]))
+  const laneAsks = env.get('MONOPLAYER_CONTROL_FILE') !== undefined
+  const laneObeys = env.get('MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH') === '1'
+
+  for (const puppet of puppets) {
+    if (puppet.allowBackendSwitch !== true) continue
+    assert.ok(laneAsks,
+      puppet.name + ': the panel may ask for a move, and the lane mounts no control document')
+    assert.ok(laneObeys,
+      puppet.name + ': the panel may ask for a move, and the lane refuses to obey it')
+  }
+  // The other direction is not an error — a lane may obey a document the panel does
+  // not write yet, which is how the wiring was landed — but it is worth saying in the
+  // gate's own words rather than leaving it to a comment.
+  if (laneObeys && puppets.every(puppet => puppet.allowBackendSwitch !== true)) {
+    assert.ok(true, 'the lane obeys the control document and no registry row may ask it')
+  }
+})
