@@ -40,8 +40,8 @@ const onePlayer = document([{ uuid: PLAYER_UUID, name: 'Bafbi', addedAt: '2026-1
 const text = (doc) => JSON.stringify(doc, null, 2) + '\n'
 
 // The cluster, as text plus a version. `conflicts` is how many patches report
-// 409 before one lands; each one also rewrites the document, the way a second
-// writer would, so a panel that forgot to re-read is caught by the result.
+// 409 before one lands. Each one also rewrites the document, the way a second writer
+// would, so a panel that forgot to re-read is caught by the result.
 function cluster ({ doc = onePlayer, missingKey = false, conflicts = 0, refuse = null, puppetUuid = PUPPET_UUID } = {}) {
   const state = {
     text: text(doc),
@@ -230,15 +230,20 @@ test('a name the resolver cannot answer is a 400 that asks for a uuid', async ()
 })
 
 test('a uuid already in the list is a no-op, not a second entry', async () => {
-  const rig = await panel()
+  // Once by uuid, once by the name that resolves to the same account: a retried
+  // request and a double click are the same request, and neither rewrites the entry.
+  const rig = await panel({ lookup: async name => (name === 'Bafbi' ? { uuid: PLAYER_UUID, name: 'Bafbi' } : null) })
   try {
-    const response = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: PLAYER_UUID })
-    assert.equal(response.status, 200)
-    const body = await response.json()
-    assert.equal(body.changed, false)
-    assert.equal(body.count, 1)
+    for (const body of [{ uuid: PLAYER_UUID }, { name: 'Bafbi' }]) {
+      const response = await post(rig.url + '/api/puppets/glowsquidye/whitelist', body)
+      assert.equal(response.status, 200)
+      const answer = await response.json()
+      assert.equal(answer.changed, false, 'refused to rewrite for: ' + JSON.stringify(body))
+      assert.equal(answer.count, 1)
+      assert.equal(answer.document.players[0].addedAt, onePlayer.players[0].addedAt, 'the original stamp survives')
+      assert.equal(answer.document.players[0].name, 'Bafbi', 'a stored name is not replaced by a request')
+    }
     assert.equal(rig.state.patches.length, 0, 'nothing is written when nothing changes')
-    assert.equal(body.document.players[0].addedAt, onePlayer.players[0].addedAt, 'the original stamp survives')
   } finally {
     await rig.close()
   }
@@ -493,18 +498,20 @@ test('a path segment that is not percent-encoding is refused, not thrown', async
   }
 })
 
-test('a lane whose Deployment names no puppet uuid still writes, and says the check did not run', async () => {
+test('a lane whose Deployment names no puppet uuid cannot be written, and is told which line to fix', async () => {
   // start-live resolves the account from custody when MONOPLAYER_PUPPET_UUID is
-  // unset, so the panel has no uuid to compare against. It says so in the answer
-  // instead of pretending it checked.
+  // unset, so the panel has no uuid to compare against. It refuses rather than
+  // skipping the rule, and names the variable that fixes it.
   const rig = await panel({ cluster: cluster({ puppetUuid: null }) })
   try {
     const response = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: OTHER_UUID })
-    assert.equal(response.status, 200)
-    const body = await response.json()
-    assert.match(body.guard, /could not check/)
-    assert.match(body.guard, /MONOPLAYER_PUPPET_UUID/)
-    assert.deepEqual(rig.puppetReads().map(player => player.uuid), [PLAYER_UUID, OTHER_UUID])
+    assert.equal(response.status, 503)
+    const said = await response.text()
+    assert.match(said, /MONOPLAYER_PUPPET_UUID/)
+    assert.match(said, /could not check|names no/)
+    assert.equal(rig.state.patches.length, 0, 'the rule is total: nothing is written without it')
+    assert.equal(rig.state.reads, 0, 'and nothing is even read')
+    assert.ok(rig.lines().some(line => line.event === 'panelWhitelistOwnUuidUnknown'))
   } finally {
     await rig.close()
   }
