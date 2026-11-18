@@ -93,7 +93,7 @@ holds is a read.
 
 | Object | Verbs | Where |
 |---|---|---|
-| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace |
+| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: one key, `desired.json` |
 | `pods`, `pods/log` | `get`, `list` | each puppet's namespace |
 | `deployments` | `get`, `list` | each puppet's namespace: the pod selector, the pods' readiness, and the caps its environment sets |
 
@@ -111,9 +111,81 @@ And, by design:
   grants `create`, `delete`, `secrets` or a wildcard, or when the Service stops
   being the tailscale class.
 
-The page uses the three read rules today. The write rule is declared and not yet
-exercised: the write routes are the next tickets of
+The page uses the three read rules. One write rule is exercised too:
+`POST /api/puppets/:name/backend`, below, is the only object the panel patches.
+The whitelist route is the next ticket of
 [epic #228](https://github.com/Bafbi/monoplayer/issues/228).
+
+## Point a puppet at another backend
+
+```bash
+curl -X POST http://monoplayer.tail41e568.ts.net:8080/api/puppets/glowsquidye/backend \
+  -H 'content-type: application/json' \
+  -d '{"host": "play.example.net", "port": 25565}'
+```
+
+That writes `desired.json` into the puppet's control ConfigMap, and nothing else:
+
+```json
+{
+  "version": 1,
+  "backend": { "host": "play.example.net", "port": 25565 },
+  "changedAt": "2026-11-18T09:41:07.512Z",
+  "changedBy": "panel"
+}
+```
+
+The puppet reads it on its next heartbeat, which is at most 30 seconds away, and
+moves its session. **A player who is attached keeps their connection**: they see a
+loading screen and land in the new server's world ([product-core.md](product-core.md)).
+With nobody attached the puppet moves alone.
+
+Two fences, and they are not the same one:
+
+- **the registry's `allowBackendSwitch`** decides whether the panel writes the
+  request. Set false, the route answers 409 and writes nothing.
+- **the puppet's `control.allowBackendSwitch`** decides whether it obeys. A
+  `desired.json` that reaches a lane with the switch off is named once
+  (`controlSwitchRefused`) and ignored.
+
+The two can disagree, and the puppet wins. The registry is a document in Git while
+the switch is the Deployment's environment, so a lane that never sets
+`MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1` refuses every move however the registry
+reads. That is deliberate: a panel that could move a lane the lane does not allow
+would be a second authorization path, and the puppet's own config is the one
+reviewers read beside the workload. The cost is that the panel's refusal is a
+courtesy and the puppet's is the truth.
+
+A third condition sits under both: **the lane must name the file.**
+`MONOPLAYER_CONTROL_FILE` is what makes a puppet read `desired.json` at all, and no
+manifest in this repository sets it yet, so on the deployed lane a write lands in a
+document nothing opens and the 200 means "written", not "read". Nothing says so in
+the log, because a lane that names no control file reads no file to report on.
+
+For that reason `deploy/panel/registry.yaml` ships `allowBackendSwitch: false`:
+the panel should refuse to write a document the only puppet it lists cannot read.
+Wiring the lane is one edit to `deploy/manifests/deployment.yaml` (a volume for the
+control ConfigMap, and the two variables) and one to the registry, and the two
+belong in the same change. Check the lane before you trust the answer:
+
+```bash
+kubectl -n monoplayer get deployment monoplayer \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MONOPLAYER_CONTROL_FILE")].value}'
+```
+
+`changedBy` is the word `panel`. The panel has no way to name a person: the
+tailnet ACL is the authorization (P4), and the Service is not in front of an
+identity provider. What the panel does record is the peer it answered, in its own
+log line:
+
+```json
+{"event":"panelBackendMove","puppet":"glowsquidye","backend":"play.example.net:25565","address":"100.64.0.9"}
+```
+
+A move that fails costs the player one configuration round and puts them back. The
+puppet logs `backendMoveFailed` and does not retry the same document: point it
+somewhere else, or send the same address again, which stamps a new `changedAt` and
+is therefore a new request.
 
 ## It ships with the proxy
 
@@ -166,7 +238,7 @@ Two prerequisites are not in Git, and each is one command:
 
 The registry is `deploy/panel/registry.yaml`: a ConfigMap whose `puppets.json` key
 names, per puppet, its `name`, `namespace`, `deployment`, `controlConfigMap`,
-`frontHostname` and `backend`. Edit it on `main` and merge.
+`frontHostname`, `backend` and `allowBackendSwitch`. Edit it on `main` and merge.
 
 The pod mounts the ConfigMap and reads the file on every request, so an edit
 reaches the page within a minute of the kubelet rewriting the projection. No

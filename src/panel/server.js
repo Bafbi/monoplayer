@@ -1,11 +1,12 @@
-// The panel's HTTP surface: the probe, the registry list, and one dispatch line
-// into the puppet cards.
+// The panel's HTTP surface: the probe, the registry list, one dispatch line into
+// the puppet cards, and one into the write route.
 //
 // Nothing here knows about namespaces, tokens, or the API server. The registry
 // arrives as a function, so a test hands in a document and a pod hands in the
 // mounted ConfigMap, and the routes cannot tell the difference. The API client
 // arrives the same way, and so do the cards: src/panel/routes/info.js owns every
-// route that reads a pod, so this file does not grow a branch per feature (#231).
+// route that reads a pod, and src/panel/routes/backend.js owns the one that patches
+// a ConfigMap, so this file does not grow a branch per feature (#231, #233).
 //
 // `GET /healthz` never touches the registry. It is the probe, so it has to answer
 // while the registry is broken; a panel that fails its probe when the document
@@ -15,6 +16,7 @@
 // rewrites the mounted file within a minute, and the next request reads the new
 // document.
 
+import { createBackendRoute } from './routes/backend.js'
 import { createInfoRoutes } from './routes/info.js'
 
 const TEXT = 'text/plain; charset=utf-8'
@@ -41,14 +43,18 @@ export function createPanelHandler ({ registry, kubernetes = null, log = () => {
   // #231: the puppet cards, as one module and one dispatch line. A route that
   // reads a pod or patches a ConfigMap arrives beside this file, not inside it.
   const info = createInfoRoutes({ read, kubernetes, log, send, now })
+  // #233: the one write the panel makes, the same way.
+  const backend = createBackendRoute({ read, kubernetes, log, now })
 
   return async function handle (req, res) {
     const method = req.method ?? 'GET'
     const path = (req.url ?? '/').split('?')[0]
 
-    // Read today, write later: a write method is refused before the route is
-    // looked at, so a future route cannot be reached by the wrong verb by
-    // accident.
+    // #233: the write route dispatches before the read guard and owns its own
+    // method check, so the verb it takes is not refused here and the guard still
+    // refuses every other write method.
+    if (backend.match(path) !== null) return backend.handle(req, res, { method, send })
+
     if (method !== 'GET') {
       return send(res, 405, TEXT, 'the panel answers GET only\n', { allow: 'GET' })
     }

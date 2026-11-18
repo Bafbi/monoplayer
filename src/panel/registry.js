@@ -22,7 +22,7 @@ export const REGISTRY_KEY = 'puppets.json'
 
 // Alphabetical, so the message that lists the expected fields reads the same
 // wherever it is printed.
-const FIELDS = ['backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace']
+const FIELDS = ['allowBackendSwitch', 'backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace']
 
 // A name the API server accepts for a namespace, a Deployment, or a ConfigMap.
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
@@ -31,6 +31,14 @@ const HOSTNAME = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?
 const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/
 
 const quote = value => JSON.stringify(value ?? null)
+
+// A host a dial can target: a DNS name of at least two labels with no scheme, no
+// port and no trailing dot, or an IPv4 literal. Exported because the write route
+// (#233) accepts the same two shapes in a request body, and a second rule would
+// drift from this one.
+export function isTargetHost (value) {
+  return typeof value === 'string' && (HOSTNAME.test(value) || IPV4.test(value))
+}
 
 // The JSON text inside the document, from either shape. A bare JSON document is
 // returned as it arrived, so a mounted `puppets.json` costs no branch at the call
@@ -120,6 +128,14 @@ function puppet (entry, index, seen) {
     throw new Error('registry: ' + where + '.frontHostname must be a hostname with no scheme and no port, not ' + quote(entry.frontHostname))
   }
   const backend = hostPort(entry.backend, where + '.backend')
+  // #233: whether the panel may ask this puppet to move. It is not the fence:
+  // the puppet's own `control.allowBackendSwitch` decides whether it obeys, and
+  // this value only decides whether the panel writes the request at all
+  // (docs/panel.md).
+  if (typeof entry.allowBackendSwitch !== 'boolean') {
+    throw new Error('registry: ' + where + '.allowBackendSwitch must be true or false, not ' +
+      quote(entry.allowBackendSwitch))
+  }
 
   if (seen.names.has(entry.name)) {
     throw new Error('registry: the name ' + quote(entry.name) + ' appears twice, and a puppet has one name')
@@ -140,7 +156,8 @@ function puppet (entry, index, seen) {
     deployment: entry.deployment,
     controlConfigMap: entry.controlConfigMap,
     frontHostname: entry.frontHostname,
-    backend
+    backend,
+    allowBackendSwitch: entry.allowBackendSwitch
   }
 }
 
@@ -150,7 +167,7 @@ function hostPort (value, where) {
   const at = typeof value === 'string' ? value.lastIndexOf(':') : -1
   const host = at > 0 ? value.slice(0, at) : ''
   const port = Number(at > 0 ? value.slice(at + 1) : NaN)
-  if (at <= 0 || !(HOSTNAME.test(host) || IPV4.test(host)) ||
+  if (at <= 0 || !isTargetHost(host) ||
       !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('registry: ' + where + ' must be host:port, not ' + quote(value))
   }

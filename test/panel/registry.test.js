@@ -16,6 +16,7 @@ const puppet = (overrides = {}) => ({
   controlConfigMap: 'monoplayer-control',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
+  allowBackendSwitch: true,
   ...overrides
 })
 
@@ -57,6 +58,8 @@ test('a document the panel cannot act on is refused with the field that broke it
     ['a backend with no port', document([puppet({ backend: 'play2.excalia.fr' })]), /backend/],
     ['a backend port out of range', document([puppet({ backend: 'play2.excalia.fr:70000' })]), /backend/],
     ['a front with a scheme', document([puppet({ frontHostname: 'https://glowsquidye.tail41e568.ts.net' })]), /frontHostname/],
+    ['a backend switch that is not a boolean', document([puppet({ allowBackendSwitch: 'yes' })]), /allowBackendSwitch/],
+    ['a puppet with no backend switch', document([{ ...puppet(), allowBackendSwitch: undefined }]), /allowBackendSwitch/],
     ['the same puppet twice', document([puppet(), puppet({ controlConfigMap: 'monoplayer-control-two' })]), /name/],
     ['two puppets writing one ConfigMap', document([puppet(), puppet({ name: 'other' })]), /monoplayer-control/],
     ['an empty registry', document([]), /puppets/],

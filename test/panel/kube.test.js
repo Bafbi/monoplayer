@@ -9,7 +9,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createKubeClient, deploymentCaps, labelSelector, ReadRefused } from '../../src/panel/kube.js'
+import {
+  createKubeClient,
+  deploymentCaps,
+  labelSelector,
+  mergePatchBody,
+  ReadRefused,
+  WriteRefused
+} from '../../src/panel/kube.js'
 
 const answer = (body, status = 200, statusText = 'OK') => ({
   status,
@@ -139,4 +146,111 @@ test('a pod with no token says so instead of sending an empty bearer', async () 
     assert.match(error.message, /no service account token at \/nonexistent\/token/)
     return true
   })
+})
+
+// --- #233: the one write -------------------------------------------------------
+//
+// The same client, the same injected `request`, and the same credentials: the
+// write is a fourth request, not a second transport. What these cases assert is the
+// request it makes, because the URL, the method and the merge patch are the whole
+// contract with an API server no test here can reach.
+
+function patcher (calls = [], responses = {}) {
+  const kube = createKubeClient({
+    readToken: () => 'test-token',
+    readCA: () => 'test-ca',
+    request: async call => {
+      calls.push(call)
+      const answerFor = responses[call.path]
+      if (answerFor === undefined) return { status: 200, statusText: 'OK', body: JSON.stringify({ kind: 'ConfigMap' }) }
+      if (answerFor instanceof Error) throw answerFor
+      return answerFor
+    }
+  })
+  return { kube, calls }
+}
+
+test('the merge patch keeps every key it does not name', () => {
+  const body = JSON.parse(mergePatchBody({ key: 'desired.json', text: '{ "version": 1 }' }))
+  assert.deepEqual(body, { data: { 'desired.json': '{ "version": 1 }' } },
+    'RFC 7386 merges objects, so the whitelist beside this key survives the patch')
+})
+
+test('a patch is one authorized request on the object the registry names', async () => {
+  const { kube, calls } = patcher()
+  const outcome = await kube.patchConfigMapKey({
+    namespace: 'monoplayer',
+    name: 'monoplayer-control',
+    key: 'desired.json',
+    text: '{ "version": 1 }'
+  })
+
+  assert.equal(outcome.status, 200)
+  assert.equal(outcome.key, 'desired.json')
+  assert.equal(typeof outcome.bytes, 'number')
+  assert.equal(calls.length, 1)
+  const call = calls[0]
+  assert.equal(call.method, 'PATCH')
+  assert.equal(call.path, '/api/v1/namespaces/monoplayer/configmaps/monoplayer-control')
+  assert.equal(call.token, 'test-token')
+  assert.equal(call.ca, 'test-ca', 'the cluster CA is read from its mounted file')
+  assert.equal(call.contentType, 'application/merge-patch+json')
+  assert.equal(call.body, mergePatchBody({ key: 'desired.json', text: '{ "version": 1 }' }))
+})
+
+test('a write with no token says so, and sends nothing', async () => {
+  const calls = []
+  const kube = createKubeClient({
+    tokenFile: '/nonexistent/token',
+    readCA: () => null,
+    request: async call => { calls.push(call); return { status: 200, statusText: 'OK', body: '{}' } }
+  })
+  await assert.rejects(
+    kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'desired.json', text: '{}' }),
+    error => {
+      assert.ok(error instanceof WriteRefused)
+      assert.match(error.message, /no service account token at \/nonexistent\/token/)
+      return true
+    })
+  assert.equal(calls.length, 0, 'nothing is sent without a token')
+})
+
+test('a write the API server refuses carries the reason it gave', async () => {
+  const path = '/api/v1/namespaces/monoplayer/configmaps/monoplayer-control'
+  const refused = patcher([], {
+    [path]: {
+      status: 403,
+      statusText: 'Forbidden',
+      body: JSON.stringify({ kind: 'Status', reason: 'Forbidden', message: 'configmaps "monoplayer-control" is forbidden' })
+    }
+  })
+  await assert.rejects(
+    refused.kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'desired.json', text: '{}' }),
+    error => {
+      assert.ok(error instanceof WriteRefused)
+      assert.equal(error.status, 403)
+      assert.match(error.message, /answered 403: configmaps "monoplayer-control" is forbidden/)
+      return true
+    })
+
+  const unreachable = patcher([], { [path]: new Error('connect ECONNREFUSED 10.96.0.1:443') })
+  await assert.rejects(
+    unreachable.kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'desired.json', text: '{}' }),
+    error => {
+      assert.ok(error instanceof WriteRefused)
+      assert.equal(error.status, 0)
+      assert.match(error.message, /ECONNREFUSED/)
+      return true
+    })
+})
+
+test('a write that succeeded says what it wrote, and the token reaches nothing', async () => {
+  const { kube } = patcher()
+  const outcome = await kube.patchConfigMapKey({
+    namespace: 'monoplayer',
+    name: 'monoplayer-control',
+    key: 'desired.json',
+    text: '{}'
+  })
+  assert.ok(!JSON.stringify(outcome).includes('test-token'), 'the token is not in a return value')
 })
