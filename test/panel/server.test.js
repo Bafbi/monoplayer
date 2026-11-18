@@ -3,6 +3,10 @@
 // handler called directly would pass while the server sent the wrong status or
 // no content type, and this is the whole product today.
 //
+// The puppet cards (#231) have their own file, test/panel/info.test.js. Here the
+// API client is a stub that answers "no pod", because what this file checks is the
+// surface around the cards: the probe, the registry list, the 500, the 405.
+//
 // /healthz is the interesting one. It is the readiness and liveness probe, so it
 // must answer while the registry is broken: a panel that fails its probe when the
 // registry cannot be read is a pod that restarts forever instead of showing the
@@ -11,7 +15,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 
-import { createPanelHandler, renderPage } from '../../src/panel/server.js'
+import { createPanelHandler } from '../../src/panel/server.js'
 
 const puppet = {
   name: 'glowsquidye',
@@ -24,8 +28,16 @@ const puppet = {
 
 const registry = () => ({ version: 1, puppets: [puppet] })
 
+// The panel's read path, answering what a cluster with no pod would: the registry
+// facts are on the page, and the card says why there are no others.
+const kubernetes = {
+  deployment: async () => ({ spec: { selector: { matchLabels: { app: 'monoplayer' } } } }),
+  pods: async () => ({ items: [] }),
+  podLog: async () => ''
+}
+
 async function panel (options = {}) {
-  const server = http.createServer(createPanelHandler({ registry, ...options }))
+  const server = http.createServer(createPanelHandler({ registry, kubernetes, ...options }))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
   return {
@@ -121,14 +133,15 @@ test('the handler answers GET and refuses everything else', async () => {
   }
 })
 
-test('the page escapes what it renders', () => {
-  // The registry is validated, so this is defence in depth: the next field to
-  // reach the page is written by someone who may not think of it.
-  const page = renderPage({
-    version: 1,
-    puppets: [{ ...puppet, name: '<script>alert(1)</script>', backend: '"><b>x' }]
-  })
-  assert.ok(page.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
-  assert.ok(page.includes('&quot;&gt;&lt;b&gt;x'))
-  assert.doesNotMatch(page, /<script>alert/)
+test('a puppet the registry does not name is a 404, not an empty card', async () => {
+  const { url, close } = await panel()
+  try {
+    const response = await fetch(url + '/api/puppets/nobody')
+    assert.equal(response.status, 404)
+    assert.match(await response.text(), /no such puppet: nobody/)
+    // '/api/puppets' is the registry list, and it is not read as a puppet name.
+    assert.equal((await fetch(url + '/api/puppets')).status, 200)
+  } finally {
+    await close()
+  }
 })
