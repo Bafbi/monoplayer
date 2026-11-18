@@ -316,21 +316,27 @@ Two prerequisites are not in Git, and each is one command:
 2. **The control ConfigMap, once per puppet.** Not in Git, and never in Git:
    Argo's `selfHeal` would revert a tracked object to its committed content within
    minutes of the first panel write. Create it yourself, for the single puppet the
-   registry names:
+   registry names, **before the Deployment that mounts it rolls**:
 
    ```bash
    kubectl create configmap monoplayer-control -n monoplayer \
-     --from-file=attach-whitelist.json \
-     --from-file=desired.json
+     --from-file=attach-whitelist.json
    ```
 
-   Run it from a directory holding both files. The keys are the control document's
-   (issue #229), and the panel patches `data` without caring which keys it holds; a
-   key the puppet does not read yet is ignored. The whitelist's current content is
-   `deploy/manifests/configmap.yaml`, so copy
-   `attach-whitelist.json` out of it rather than retyping it. Creating the object
-   once is the whole cost of `create` being out of reach: after that the panel only
-   patches it.
+   The whitelist's current content is `deploy/manifests/configmap.yaml`, so copy
+   `attach-whitelist.json` out of it rather than retyping it. **Do not seed
+   `desired.json`:** the puppet treats a missing control file as "no override", and
+   a document naming the backend it is already on would be an intent with a
+   `changedAt` that never meant anything. The panel creates the key on its first
+   move.
+
+   **The order matters.** The Deployment mounts this object at `/control` with
+   `optional: true`, so a missing object does not keep the pod from starting — it
+   starts and denies every login, because its whitelist is the file that is not
+   there. Create the object first, then let the rollout read it.
+
+   Creating the object once is the whole cost of `create` being out of reach: after
+   that the panel only patches it.
 
 ## Change the registry
 
