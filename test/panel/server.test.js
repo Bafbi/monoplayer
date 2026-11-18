@@ -3,9 +3,9 @@
 // handler called directly would pass while the server sent the wrong status or
 // no content type, and this is the whole product today.
 //
-// The puppet screens (#231) have their own file, test/panel/info.test.js. Here the
+// The puppet cards (#231) have their own file, test/panel/info.test.js. Here the
 // API client is a stub that answers "no pod", because what this file checks is the
-// surface around the screens: the probe, the registry list, the 500, the 405.
+// surface around the cards: the probe, the registry list, the 500, the 405.
 //
 // /healthz is the interesting one. It is the readiness and liveness probe, so it
 // must answer while the registry is broken: a panel that fails its probe when the
