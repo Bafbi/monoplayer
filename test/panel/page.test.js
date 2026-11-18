@@ -81,22 +81,70 @@ test('the live region is the element the stream swaps, and no form is inside it'
   assert.match(card, /application\/json|panel\.js|sends exactly what the route demands/)
 })
 
-test('a puppet the registry refuses renders the refusal, not a form', () => {
+test('a puppet the registry refuses renders the refusal, and no move form', () => {
   const refused = { ...puppet, allowBackendSwitch: false }
   const card = renderCard(refused, facts())
-  assert.doesNotMatch(card, /<form class="write"/, 'no form when the registry refuses the move')
+  assert.doesNotMatch(card, /data-write="backend"/, 'no move form when the registry refuses the move')
   assert.match(card, /move: refused by the registry/)
   assert.match(card, /allowBackendSwitch: false/)
   assert.match(card, /control\.allowBackendSwitch/, 'the second fence is named too')
+  // The whitelist is a different fence and stays: the registry's switch is about the
+  // move, and a lane that refuses to be repointed can still admit a player.
+  assert.match(card, /data-write="add"/)
 })
 
-test('the whitelist block is unavailable and says which ticket owns the route', () => {
-  const card = renderCard(puppet, facts())
+const attachList = {
+  observedAt: '2026-11-18T10:37:24.906Z',
+  resourceVersion: '41221',
+  document: {
+    version: 1,
+    players: [
+      { uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', name: 'Bafbi', addedAt: '2026-11-17T09:12:00.000Z' },
+      { uuid: '424ac88b-7531-3224-8934-922380568a46', name: null, addedAt: null }
+    ]
+  }
+}
+
+test('the whitelist block renders the entries, their added time, and the two writes', () => {
+  const card = renderCard(puppet, facts(), attachList)
   assert.match(card, /Who may attach/)
-  assert.match(card, /add and remove are unavailable/)
-  assert.match(card, /#232/)
-  assert.match(card, /not on\s+<code>main<\/code>|not on/, 'the reason names the branch state')
-  assert.doesNotMatch(card, /data-write="whitelist"/, 'no form for a route that does not exist')
+  // The entries, with the uuid the removal addresses and the added-at the document
+  // recorded. A missing name and a missing addedAt say so instead of printing nothing.
+  assert.match(card, /6eb73524-ff88-4a62-a8d0-c63905e7afba/)
+  assert.match(card, /Bafbi/)
+  assert.match(card, /added 2026-11-17T09:12:00\.000Z/)
+  assert.match(card, /added no added-at recorded/)
+  assert.match(card, /no name recorded/)
+  // The read instant and the ConfigMap's version, in the card's footer, and the version
+  // is called a version. Not in the list: the list is redrawn on change, so a clock
+  // printed there would be the time of the last change.
+  assert.match(card, /and the attach whitelist read at 2026-11-18T10:37:24\.906Z at ConfigMap resourceVersion 41221 \(a version, not a time\)/)
+  assert.doesNotMatch(card, /<div class="attach"[^>]*>[^<]*<p class="note">read at/, 'the list carries no clock')
+  // The add form, JSON, and a removal that names its uuid in the path the route takes.
+  assert.match(card, /<form class="write" method="post" data-write="add" action="\/api\/puppets\/glowsquidye\/whitelist">/)
+  assert.match(card, /add to the attach whitelist/, 'the glossary names it, and the button uses the name')
+  // One answer area for the block, outside the list the tick replaces.
+  assert.match(card, /<output class="result block-result"/)
+  const rows = [...card.matchAll(/<li class="entry">([\s\S]*?)<\/li>/g)].map(match => match[1])
+  assert.equal(rows.length, 2, 'one row per entry')
+  for (const row of rows) assert.doesNotMatch(row, /<output/, 'no answer is printed inside a row')
+  // The uuid is the key the page holds its armed confirmation under, so a tick that
+  // replaces the button can paint it back, and the name is what the confirmation reads.
+  assert.match(card, /data-write="remove" data-uuid="6eb73524-ff88-4a62-a8d0-c63905e7afba" data-who="Bafbi" action="\/api\/puppets\/glowsquidye\/whitelist\/6eb73524-ff88-4a62-a8d0-c63905e7afba"/,
+    'the confirm step names the entry it would remove, by the key the page holds it under')
+  assert.match(card, /data-armed="false"/, 'a removal starts unarmed')
+})
+
+test('the whitelist block tells an empty list apart from a list it could not read', () => {
+  const empty = renderCard(puppet, facts(), { observedAt: '2026-11-18T10:37:24.906Z', resourceVersion: '7', document: { version: 1, players: [] } })
+  assert.match(empty, /no entries: only the puppet's own account may attach/)
+
+  const failed = renderCard(puppet, facts(), { observedAt: '2026-11-18T10:37:24.906Z', failure: 'read ConfigMap monoplayer/monoplayer-control: the API server answered 403 Forbidden' })
+  assert.match(failed, /the attach whitelist could not be read: read ConfigMap/)
+  assert.doesNotMatch(failed, /no entries/, 'a read that failed is never drawn as an empty allow-list')
+
+  const unread = renderCard(puppet, facts())
+  assert.match(unread, /the panel did not read the attach whitelist for this page/)
 })
 
 test('the scene is decoration: no number, no word, nothing a colour would have to say', () => {

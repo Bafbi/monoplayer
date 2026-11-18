@@ -30,7 +30,9 @@
 // The stream ends when the client closes. Nothing else ends it: a pod that stops
 // writing still gets a fragment every five seconds that says so.
 import { renderLive } from '../views/live.js'
+import { renderWhitelistSwap } from '../views/whitelist.js'
 import { readPuppet } from './info.js'
+import { readAttachList } from './whitelist.js'
 
 export const PATTERN = /^\/api\/puppets\/([^/]+)\/stream$/
 // The ticket's cadence, and it is a constant rather than a setting: the page says
@@ -139,12 +141,23 @@ export function createStreamRoute ({
       }
       pending = true
       try {
-        const facts = await readPuppet({ kubernetes, puppet, recorded, now: now(), log })
+        const at = now()
+        // Two objects, one instant, read together: the card's facts from the pod's log
+        // and the attach whitelist from the control ConfigMap. The page waits for the
+        // slower read, not for both in turn.
+        const [facts, list] = await Promise.all([
+          readPuppet({ kubernetes, puppet, recorded, now: at, log }),
+          readAttachList({ kubernetes, puppet, now: at, log })
+        ])
         if (closed) return
         // An event stream carries text lines, so each line of the fragment is its
         // own data field. The browser joins them with a newline and htmx swaps the
         // result, which is why the fragment is written once and not escaped.
-        if (write(renderLive(facts).split('\n').map(line => 'data: ' + line).join('\n') + '\n\n')) ticks += 1
+        // The live region, and the whitelist list beside it as an out-of-band swap. The
+        // list sits outside the live region so a tick cannot disarm a remove button or
+        // clear a half-typed name, and it still refreshes with the card (#248).
+        const fragment = renderLive(facts, list) + renderWhitelistSwap({ puppet, list })
+        if (write(fragment.split('\n').map(line => 'data: ' + line).join('\n') + '\n\n')) ticks += 1
       } catch (error) {
         log('panelStreamTickFailed', { puppet: puppet.name, reason: String(error?.message ?? error).slice(0, 200) })
       } finally {

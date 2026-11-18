@@ -148,6 +148,54 @@ function readBody (req, limit = MAX_BODY_BYTES) {
   })
 }
 
+// The attach whitelist as the document it is, with the version it was read at. One
+// reader, two callers: the routes above rewrite it, and the page's stream renders the
+// list from it (#248). A second copy of "no key means an empty list" is a second
+// copy to keep true, and this is the rule that decides whether an absent key is an
+// error or an empty allow-list.
+//
+// It throws for a transport failure and returns `{ failure }` for a document it
+// cannot act on. The two are different facts, and every caller says which.
+export async function readWhitelistDocument ({ kubernetes, puppet }) {
+  const configMap = await kubernetes.configMap(puppet.namespace, puppet.controlConfigMap)
+  const resourceVersion = typeof configMap?.metadata?.resourceVersion === 'string' &&
+    configMap.metadata.resourceVersion !== '' ? configMap.metadata.resourceVersion : null
+  const text = configMap?.data?.[WHITELIST_KEY]
+  if (text === undefined || text === null) {
+    // `kubectl create configmap --from-file` may have created the object with only
+    // the key another reader uses. No key is an empty attach whitelist, and the next
+    // patch creates it. A merge patch of one key never disturbs the others.
+    return { document: { version: WHITELIST_VERSION, players: [] }, text: null, resourceVersion }
+  }
+  if (typeof text !== 'string') {
+    return { failure: 'the ConfigMap key ' + WHITELIST_KEY + ' is not text', resourceVersion }
+  }
+  const parsed = parseWhitelist(text)
+  if (parsed.failure) return { failure: parsed.failure, resourceVersion }
+  return { ...parsed, text, resourceVersion }
+}
+
+// The same read, as the fact the page renders: a document, or the sentence that says
+// why there is none, with the instant it was read at. It never throws, so a stream tick
+// or a page render can carry a failed read without losing the rest of the card (#248).
+export async function readAttachList ({ kubernetes, puppet, now = Date.now(), log = () => {} }) {
+  const observedAt = new Date(now).toISOString()
+  if (kubernetes === null || kubernetes === undefined || typeof kubernetes.configMap !== 'function') {
+    return { failure: 'the panel has no cluster client, so the attach whitelist was not read', observedAt }
+  }
+  try {
+    const read = await readWhitelistDocument({ kubernetes, puppet })
+    return { ...read, observedAt }
+  } catch (error) {
+    log('attachListReadFailed', {
+      puppet: puppet.name,
+      controlConfigMap: puppet.controlConfigMap,
+      reason: String(error?.message ?? error).slice(0, 200)
+    })
+    return { failure: String(error?.message ?? error).slice(0, 300), observedAt }
+  }
+}
+
 export function createWhitelistRoute ({
   read,
   kubernetes = null,
@@ -238,22 +286,7 @@ export function createWhitelistRoute ({
   // The ConfigMap's attach whitelist key, parsed. The whole object is read because
   // the patch needs its resourceVersion, and no other key is touched at any point.
   async function readDocument (puppet) {
-    const configMap = await kubernetes.configMap(puppet.namespace, puppet.controlConfigMap)
-    const resourceVersion = typeof configMap?.metadata?.resourceVersion === 'string' &&
-      configMap.metadata.resourceVersion !== '' ? configMap.metadata.resourceVersion : null
-    const text = configMap?.data?.[WHITELIST_KEY]
-    if (text === undefined || text === null) {
-      // `kubectl create configmap --from-file` may have created the object with only
-      // the key another reader uses. No key is an empty attach whitelist, and the next
-      // patch creates it. A merge patch of one key never disturbs the others.
-      return { document: { version: WHITELIST_VERSION, players: [] }, text: null, resourceVersion }
-    }
-    if (typeof text !== 'string') {
-      return { failure: 'the ConfigMap key ' + WHITELIST_KEY + ' is not text', resourceVersion }
-    }
-    const parsed = parseWhitelist(text)
-    if (parsed.failure) return { failure: parsed.failure, resourceVersion }
-    return { ...parsed, text, resourceVersion }
+    return readWhitelistDocument({ kubernetes, puppet })
   }
 
   function readable (res, send, puppet, failure) {

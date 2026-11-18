@@ -88,6 +88,16 @@
 
 @layer components {
   .top { border-bottom: 2px solid var(--color-grass-dark); padding-bottom: 0.5rem; margin-bottom: 0.5rem; }
+  /* A recording is announced above everything, in the sand that means "read this first". */
+  .recording {
+    margin: 0 0 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border: 2px solid var(--color-sand);
+    color: var(--color-sand);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.95rem;
+  }
   .count { margin: 0.25rem 0 0; color: var(--color-ink-dim); font-size: 0.95rem; }
 
   .card {
@@ -223,9 +233,49 @@
   }
   .write button:disabled { background-color: var(--color-stone-dark); border-color: #4c4c4c; cursor: progress; }
 
+  /* --- who may attach ---------------------------------------------------- */
+
+  .attach-block { display: grid; gap: 0.2rem; margin: 0.4rem 0 0; }
+
+  /* The list is the one block a tick redraws by itself (an out-of-band swap), so its
+     rows are bricks: same 2px edge, same palette, no radius. */
+  .entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+  .entry {
+    border: 2px solid var(--color-grass-dark);
+    background-color: #101a12;
+    padding: 0.3rem 0.4rem;
+    display: grid;
+    gap: 0.15rem;
+  }
+  .entry .who { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; }
+  .entry .player { color: var(--color-grass); }
+  .entry .when { color: var(--color-ink-dim); font-size: 0.9em; }
+  .remove { margin: 0.2rem 0 0; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+  .remove button {
+    font: inherit;
+    font-size: 0.95rem;
+    color: var(--color-clay);
+    background-color: transparent;
+    border: 2px solid var(--color-clay);
+    padding: 0.15rem 0.5rem;
+    min-height: 2.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+  }
+  .remove button.armed { color: var(--color-night); background-color: var(--color-clay); }
+  .remove button:disabled { opacity: 0.5; cursor: progress; }
+  /* One answer area per block, outside the list the tick replaces: a refusal printed in
+     a row would be taken away with the row it was about. */
+  .block-result { margin: 0.35rem 0 0; min-height: 1.6rem; }
+
   .result:empty { display: none; }
   .result { border-left: 3px solid var(--color-grass); padding: 0.2rem 0 0.2rem 0.5rem; margin: 0.2rem 0 0; }
   .result[data-outcome="refused"] { border-left-color: var(--color-clay); }
+  /* An instruction is a route asking for the uuid when a name did not resolve. It is
+     the one non-success answer that is not a failure, so it is sand rather than clay. */
+  .result[data-outcome="instruction"] { border-left-color: var(--color-sand); color: var(--color-sand); }
+  .result[data-outcome="done"] { border-left-color: var(--color-grass); }
 
   .note { color: var(--color-ink-dim); font-size: 0.9rem; margin: 0.2rem 0 0; }
   .refused { border-left: 3px solid var(--color-clay); padding-left: 0.5rem; margin: 0.4rem 0 0; }
