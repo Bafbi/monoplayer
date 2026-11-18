@@ -297,9 +297,9 @@ function audit ({ files, documents, registry }) {
     // the pod declares, and a reindented manifest is not a weaker pod.
     const required = [
       [/command: \["node", "src\/panel\/start\.js"\]/, 'the panel entrypoint'],
-      // The tag the registry records, exactly. A digest or a sha tag would be a
-      // different image from the one the proxy runs on this branch; #234 pins both
-      // and changes this line with it.
+      // The tag this branch records. On `deploy` the image workflow replaces it
+      // with a digest pin in this tree's kustomization (#234), exactly as it does
+      // for the proxy, so the two always run one build.
       [/image: ghcr\.io\/bafbi\/monoplayer:main\n/, 'ghcr.io/bafbi/monoplayer:main'],
       [/\n\s+runAsNonRoot: true/, 'a non-root user'],
       [/\n\s+readOnlyRootFilesystem: true/, 'a read-only root filesystem'],
@@ -566,4 +566,31 @@ test('one Application syncs the root tree, and its project allows both namespace
   const namespace = documents.find(document => document.kind === 'Namespace')
   assert.equal(namespace.name, 'monoplayer-panel')
   assert.match(namespace.text, /pod-security\.kubernetes\.io\/enforce: restricted/)
+})
+
+
+// --- the pin that decides which build runs ---
+
+// A tree the Application syncs that runs this repository's image and is not pinned
+// on the deploy branch runs the moving `main` tag. #234 came from exactly that: the
+// panel ran a build its commit did not contain, and its pod crashlooped on a module
+// the image never shipped. The set to check is the root kustomization's, not every
+// directory under deploy/: the dev, testbed and driver trees are not synced, and the
+// dev lane is unpinned on purpose because a branch image is its whole point.
+
+test('every tree the Application syncs is pinned on the deploy branch', () => {
+  const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'image.yaml'), 'utf8')
+  const rootKustomization = read(ROOT, 'deploy', 'kustomization.yaml')
+  const synced = [...rootKustomization.matchAll(/^ {2}- (\S+)$/gm)].map(match => match[1])
+  assert.deepEqual(synced.sort(), ['manifests', 'panel'],
+    'the Application syncs a different set of trees, and the pin below has to follow')
+  for (const tree of synced) {
+    const dir = path.join(ROOT, 'deploy', tree)
+    const runsImage = documentsIn(dir, fs.readdirSync(dir).filter(file => file.endsWith('.yaml')))
+      .some(document => document.kind === 'Deployment' &&
+        /image:\s*ghcr\.io\/bafbi\/monoplayer/.test(document.text))
+    assert.ok(runsImage, 'deploy/' + tree + ' runs no image of this repository, so it needs no pin')
+    assert.match(workflow, new RegExp('deploy/' + tree + '/kustomization\\.yaml'),
+      'image.yaml does not pin deploy/' + tree + ' on the deploy branch, so it runs the moving main tag')
+  }
 })

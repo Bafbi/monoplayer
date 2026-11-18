@@ -5,10 +5,10 @@
 # rolebinding.yaml land in the puppet's namespace instead: RBAC is namespaced, and
 # a Role can only grant on the namespace it lives in.
 #
-# The image is not pinned here. .github/workflows/image.yaml rewrites the digest
-# pin in deploy/manifests/kustomization.yaml and nowhere else, so the panel tracks
-# the moving `main` tag on the `deploy` branch too. docs/panel.md records what that
-# costs.
+# The image is named with the moving `main` tag, and
+# .github/workflows/image.yaml appends a digest pin here on the `deploy` branch, in
+# the same commit it pins the proxy (#234). So this tree and the one beside it
+# always run one build, and the kustomization on main carries no pin at all.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
