@@ -21,6 +21,19 @@ import {
 } from './html.js'
 import { renderStage } from './stage.js'
 
+// The whitelist read of this instant, as one clause of the card's footer. A
+// resourceVersion orders writes. It is not a clock, and a reader who took it for one
+// would date the list from a number that means nothing outside the API server.
+function whitelistRead (attach) {
+  if (attach === null || attach === undefined) return ''
+  if (present(attach.failure)) return ', and the attach whitelist could not be read'
+  if (!present(attach.observedAt)) return ''
+  const version = present(attach.resourceVersion)
+    ? ' at ConfigMap resourceVersion ' + attach.resourceVersion + ' (a version, not a time)'
+    : ', and the ConfigMap named no resourceVersion'
+  return ', and the attach whitelist read at ' + attach.observedAt + version
+}
+
 function renderHeartbeat (facts) {
   const heartbeat = facts.heartbeat
   if (heartbeat === null) return ''
@@ -217,7 +230,12 @@ function renderState (facts) {
 // One puppet's live region. No closing wrapper: the caller owns the element whose
 // innerHTML this becomes, because the same markup is the server's first render and
 // the stream's every later one.
-export function renderLive (facts) {
+//
+// `attach` is the attach whitelist read of this same instant, and the footer names it
+// beside the log read. It is here and not in the list, because the list is only redrawn
+// when it changes: a time printed there would be the time of the last change, which a
+// reader would take for the time of the read (#248).
+export function renderLive (facts, attach = null) {
   return [
     renderStage(facts),
     renderState(facts),
@@ -232,7 +250,8 @@ export function renderLive (facts) {
         // Escaped like every other value on the page. These are numbers today, and
         // a fixture can hand in anything, which is the case this covers.
         : ' from ' + escape(facts.tail.lines) + ' log lines (' + escape(facts.tail.heartbeats) + ' heartbeats' +
-          (facts.tail.unreadable === 0 ? '' : ', ' + escape(facts.tail.unreadable) + ' unreadable') + ')') + '</p>',
+          (facts.tail.unreadable === 0 ? '' : ', ' + escape(facts.tail.unreadable) + ' unreadable') + ')') +
+      whitelistRead(attach) + '</p>',
     ''
   ].join('\n')
 }

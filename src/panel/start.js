@@ -38,7 +38,7 @@ import http from 'node:http'
 import { pathToFileURL } from 'node:url'
 
 import { redact } from '../observability/redact.js'
-import { parseFixture } from './fixture.js'
+import { createFixtureClient, fixtureReader, lookupNothing } from './fixture.js'
 import { createKubeClient } from './kube.js'
 import { parseRegistry } from './registry.js'
 import { createPanelHandler } from './server.js'
@@ -143,29 +143,6 @@ function registryReader (file) {
   }
 }
 
-// The recorded document, re-read on every request too, and for a second reason:
-// rewriting the file is how the stream is shown to update. The panel never writes
-// it, and the page says nothing about where the facts came from, because a fixture
-// is a development aid and not a state the product has.
-function fixtureReader (file) {
-  const load = () => {
-    let text
-    try {
-      text = fs.readFileSync(file, 'utf8')
-    } catch (error) {
-      throw new Error('fixture: cannot read ' + file + ': ' + error.message)
-    }
-    return parseFixture(text)
-  }
-  return {
-    registry: () => load().registry,
-    facts: name => {
-      const found = load().facts.get(name)
-      return found ?? null
-    }
-  }
-}
-
 export async function startPanel ({
   argv = [],
   io = process,
@@ -199,14 +176,16 @@ export async function startPanel ({
   // read, so an edit to the file reaches an open page on its next tick.
   const read = fixture === null ? registryReader(options.registry) : fixture.registry
   const recorded = fixture === null ? null : fixture.facts
-  // A fixture has no cluster: the write routes answer 503 "no cluster client"
-  // rather than pretending to have written something.
-  const client = fixture === null ? kubernetes : null
+  // A fixture's cluster is the recording: the attach whitelist comes from the file,
+  // and every write is refused by name. A name resolves to nothing there, which is
+  // the route's 400 asking for the uuid, not a guess.
+  const client = fixture === null ? kubernetes : createFixtureClient(fixture.load)
+  const lookup = fixture === null ? null : lookupNothing
 
   // Fail fast, before the socket exists.
   const document = read()
 
-  const server = http.createServer(createPanelHandler({ registry: read, kubernetes: client, recorded, log }))
+  const server = http.createServer(createPanelHandler({ registry: read, kubernetes: client, recorded, lookup, log }))
   await new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(options.port, options.host, () => {

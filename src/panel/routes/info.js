@@ -12,6 +12,7 @@
 import { activity } from '../activity.js'
 import { deploymentCaps, labelSelector } from '../kube.js'
 import { renderPage } from '../views/page.js'
+import { readAttachList } from './whitelist.js'
 
 const HTML = 'text/html; charset=utf-8'
 const TEXT = 'text/plain; charset=utf-8'
@@ -93,10 +94,21 @@ export function createInfoRoutes ({ read, kubernetes = null, recorded = null, lo
           return true
         }
         const at = now()
-        const activities = await Promise.all(
-          document.puppets.map(puppet => readPuppet({ kubernetes, puppet, recorded, now: at, log }))
-        )
-        send(res, 200, HTML, renderPage(document, activities))
+        // The card's facts and its attach whitelist are two reads of two objects, so
+        // they run together: the page waits for the slower one, not for both (#248).
+        const [activities, lists] = await Promise.all([
+          Promise.all(document.puppets.map(puppet => readPuppet({ kubernetes, puppet, recorded, now: at, log }))),
+          Promise.all(document.puppets.map(puppet => readAttachList({ kubernetes, puppet, now: at, log })))
+        ])
+        const byName = new Map(document.puppets.map((puppet, index) => [puppet.name, lists[index]]))
+        // A page served from a recording says so, in the page, where a screenshot can see
+        // it. The start line says it too, and a write refuses by name, but neither of
+        // those is on the page (#248).
+        const banner = recorded === null
+          ? null
+          : 'this panel is serving a recording, not a cluster: every fact below was captured from ' +
+            'GET /api/puppets/<name>, and every write is refused'
+        send(res, 200, HTML, renderPage(document, activities, byName, banner))
         return true
       }
 
