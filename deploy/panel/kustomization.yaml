@@ -1,8 +1,9 @@
 # The panel's whole GitOps state.
 #
-# deploy/argocd/panel.yaml syncs this directory into monoplayer-panel. role.yaml
-# and rolebinding.yaml land in the puppet's namespace instead: RBAC is namespaced,
-# and a Role can only grant on the namespace it lives in.
+# The Application in deploy/argocd syncs deploy/kustomization.yaml, which includes
+# this directory beside the proxy: one deploy, both namespaces. role.yaml and
+# rolebinding.yaml land in the puppet's namespace instead: RBAC is namespaced, and
+# a Role can only grant on the namespace it lives in.
 #
 # The image is not pinned here. .github/workflows/image.yaml rewrites the digest
 # pin in deploy/manifests/kustomization.yaml and nowhere else, so the panel tracks
