@@ -272,6 +272,20 @@ _Avoid_: local chat, notice toast
 A strict parse of one clientbound frame that fails on leftover bytes or on a frame name that does not match its state.
 _Avoid_: validator, frame linter
 
+## The panel
+
+**Panel**:
+The one page and one JSON route that list the puppets Monoplayer may touch, served on the tailnet from its own Deployment and its own namespace. It shows state; it does not hold a session.
+_Avoid_: dashboard, admin, control plane
+
+**Registry**:
+The list of puppets the panel may act on, one row per puppet, holding the name, namespace, Deployment, control ConfigMap, front hostname, and backend. It is a ConfigMap in Git, and it is the panel's whole permission model: a control ConfigMap it does not name is out of reach.
+_Avoid_: puppet list, inventory, fleet. Not _configuration replay_, which this file records as `registry replay`.
+
+**Control ConfigMap**:
+The one object the panel may write for a puppet. An operator creates it once and never in Git: RBAC cannot scope `create` by name, and Argo's `selfHeal` would revert a tracked object to its committed content.
+_Avoid_: config object, settings map, state store
+
 ## Watching it run
 
 **Journal**:

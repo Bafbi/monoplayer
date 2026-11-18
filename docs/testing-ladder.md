@@ -89,6 +89,9 @@ the task that covers the area you changed.
 | `mise run verify:driver` | `check`, `driver:build`, `driver:scenario` (SSH tunnel, the gate Paper) | `tools/driver/`, `src/driver/` |
 | `mise run verify:deploy` | `check`, `image:build:no-push` (publishes nothing; `mise run image:build` is the publish path) | `Dockerfile`, `deploy/` |
 
+`src/panel/` needs no extra rung: `mise run check` covers it, and its page is
+served from a checkout by `mise run panel:run` (loopback only, no cluster).
+
 `verify:driver` does not compose `driver:parity`. The parity lane needs a target
 the operator stands up first, the dev lane through two port-forwards and a
 reverse SSH tunnel, and two more client launches. Run it by name; the driver

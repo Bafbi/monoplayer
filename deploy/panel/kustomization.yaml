@@ -1,0 +1,22 @@
+# The panel's whole GitOps state.
+#
+# deploy/argocd/panel.yaml syncs this directory into monoplayer-panel. role.yaml
+# and rolebinding.yaml land in the puppet's namespace instead: RBAC is namespaced,
+# and a Role can only grant on the namespace it lives in.
+#
+# The image is not pinned here. .github/workflows/image.yaml rewrites the digest
+# pin in deploy/manifests/kustomization.yaml and nowhere else, so the panel tracks
+# the moving `main` tag on the `deploy` branch too. docs/panel.md records what that
+# costs.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - registry.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - role.yaml
+  - rolebinding.yaml
