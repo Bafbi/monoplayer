@@ -11,10 +11,13 @@ import path from 'node:path'
 
 import {
   DESIRED_VERSION,
+  createBackendMoveTick,
   createControlDocument,
   dialIntent,
   dialTargetFor,
-  parseDesiredTarget
+  moveDue,
+  parseDesiredTarget,
+  revertAfterRestore
 } from '../../src/service/control.js'
 
 const PLAYER = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
@@ -42,9 +45,14 @@ function writeDesired (file, backend) {
 
 test('#229 desired.json parses to one host and port, and every refusal is named', () => {
   assert.deepEqual(parseDesiredTarget(JSON.stringify({ version: 1, backend: { host: '10.0.0.9', port: 25566 } })),
-    { target: { host: '10.0.0.9', port: 25566 }, reason: null })
+    { target: { host: '10.0.0.9', port: 25566, changedAt: null }, reason: null })
+  assert.equal(
+    parseDesiredTarget(JSON.stringify({ version: 1, backend: { host: 'a', port: 1 }, changedAt: '2026-11-18T00:00:00.000Z' }))
+      .target.changedAt,
+    '2026-11-18T00:00:00.000Z',
+    '#233: the operator intent\'s stamp rides along, so a rewrite of the same address is a new intent')
   assert.deepEqual(parseDesiredTarget(JSON.stringify({ version: 1, backend: { host: ' 10.0.0.9 ', port: 25566 } })).target,
-    { host: '10.0.0.9', port: 25566 }, 'a host is trimmed, because a configmap edit leaves whitespace')
+    { host: '10.0.0.9', port: 25566, changedAt: null }, 'a host is trimmed, because a configmap edit leaves whitespace')
 
   assert.equal(parseDesiredTarget('{').reason, 'not_json')
   assert.equal(parseDesiredTarget('null').reason, 'not_an_object')
@@ -71,10 +79,12 @@ test('#229 the desired backend is read per connect, so a rewrite takes effect on
   const file = path.join(dir, 'desired.json')
   writeDesired(file, { host: '127.0.0.1', port: 25566 })
   const document = createControlDocument({ file, allowBackendSwitch: true })
-  assert.deepEqual(document.desiredTarget(), { host: '127.0.0.1', port: 25566 })
+  assert.deepEqual(document.desiredTarget(),
+    { host: '127.0.0.1', port: 25566, changedAt: '2026-11-17T00:00:00.000Z' })
 
   writeDesired(file, { host: '127.0.0.1', port: 25567 })
-  assert.deepEqual(document.desiredTarget(), { host: '127.0.0.1', port: 25567 },
+  assert.deepEqual(document.desiredTarget(),
+    { host: '127.0.0.1', port: 25567, changedAt: '2026-11-17T00:00:00.000Z' },
     'the file is the authority, not a value cached at startup')
 })
 
@@ -137,8 +147,44 @@ test('#229 a followed transfer wins, a desired backend never moves an attached c
   assert.deepEqual(dialTargetFor({ desired: displayed, current }), { target: displayed, source: 'desired' })
   assert.deepEqual(dialTargetFor({ desired: displayed, current, attached: true }),
     { target: current, source: 'current' },
-    'moving a live session is the last ticket in the epic, not this one')
+    'a reconnect is not an operator act, so it never moves an attached client')
   assert.deepEqual(dialTargetFor({ current }), { target: current, source: 'current' })
+})
+
+test('#233 an operator move is the one path that takes a desired backend onto an attached client', () => {
+  const current = { host: '127.0.0.1', port: 25565 }
+  const move = { host: '127.0.0.1', port: 25566, changedAt: '2026-11-18T00:00:00.000Z' }
+
+  assert.deepEqual(dialTargetFor({ operator: move, desired: move, current, attached: true }),
+    { target: { host: '127.0.0.1', port: 25566 }, source: 'operator' },
+    'the core started this one, so it dials it even with a client attached')
+  assert.deepEqual(dialTargetFor({ operator: move, current }), { target: { host: '127.0.0.1', port: 25566 }, source: 'operator' },
+    'and with nobody attached it is still the move, not the desired backend')
+  assert.deepEqual(dialTargetFor({ transfer: { host: '127.0.0.1', port: 1 }, operator: move, current }),
+    { target: { host: '127.0.0.1', port: 1 }, source: 'transfer' },
+    'a transfer still wins: it is the server talking')
+})
+
+test('#233 the heartbeat starts a move for a new document, and never twice for the same one', () => {
+  const current = { host: '127.0.0.1', port: 25565 }
+  const first = { host: '127.0.0.1', port: 25566, changedAt: '2026-11-18T00:00:00.000Z' }
+
+  assert.deepEqual(moveDue({ current }), { move: null, reason: 'no_desired' },
+    'no document is not a move, and the switch being off reaches here the same way')
+  assert.deepEqual(moveDue({ desired: { ...current, changedAt: null }, current }), { move: null, reason: 'in_use' },
+    'a document naming the backend in use is not a move')
+  assert.deepEqual(moveDue({ desired: first, current }),
+    { move: { host: '127.0.0.1', port: 25566, changedAt: '2026-11-18T00:00:00.000Z' }, reason: null })
+  assert.deepEqual(moveDue({ desired: first, current, attempted: first }), { move: null, reason: 'already_attempted' },
+    'a failed move is not started again on the next tick: each attempt costs a configuration round')
+  assert.deepEqual(moveDue({
+    desired: { ...first, changedAt: '2026-11-18T00:05:00.000Z' },
+    current,
+    attempted: first
+  }), {
+    move: { host: '127.0.0.1', port: 25566, changedAt: '2026-11-18T00:05:00.000Z' },
+    reason: null
+  }, 'a rewrite is a new operator intent, so the retry stays available')
 })
 
 test('#229 a control whitelist that cannot be parsed is named, and denies instead of crashing', () => {
@@ -200,4 +246,83 @@ test('#229 two control files that fail the same way are two named lines', () => 
     [whitelistFile], 'the whitelist is named')
   assert.deepEqual(lines.filter(line => line.event === 'controlRejected').map(line => line.fields.file),
     [file], 'and the desired file is named with it')
+})
+
+test('#233 the heartbeat tick starts one move per document, and never the one that failed', () => {
+  const current = { host: '127.0.0.1', port: 25565 }
+  let desired = { host: '127.0.0.1', port: 25566, changedAt: '2026-11-18T00:00:00.000Z' }
+  const calls = []
+  const lines = []
+  let refusal = null
+  const core = {
+    startBackendMove ({ target, reason }) {
+      calls.push({ target, reason })
+      if (refusal !== null) return { started: false, reason: refusal }
+      return { started: true, target, kind: 'operator' }
+    }
+  }
+  const tick = createBackendMoveTick({
+    core,
+    control: { desiredTarget: () => desired },
+    log: (event, fields) => lines.push({ event, fields }),
+    current: () => current
+  })
+
+  tick.tick()
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].target, { host: '127.0.0.1', port: 25566, changedAt: '2026-11-18T00:00:00.000Z' })
+  assert.equal(calls[0].reason, 'heartbeat')
+
+  tick.tick()
+  tick.tick()
+  assert.equal(calls.length, 1, 'the same document is not a second move')
+  assert.equal(lines.filter(line => line.event === 'backendMoveNotRetried').length, 1,
+    'and the silence is a named line, once')
+
+  // The operator rewrites the same address: a new intent, so it is attempted.
+  desired = { ...desired, changedAt: '2026-11-18T00:10:00.000Z' }
+  tick.tick()
+  assert.equal(calls.length, 2, 'a rewrite is a new document')
+
+  // A refusal spent nothing, so the next tick asks again.
+  refusal = 'client_not_in_play'
+  desired = { host: '127.0.0.1', port: 25567, changedAt: '2026-11-18T00:20:00.000Z' }
+  tick.tick()
+  assert.equal(lines.filter(line => line.event === 'backendMoveDeferred').length, 1)
+  refusal = null
+  tick.tick()
+  assert.equal(calls.length, 4, 'the deferred document is tried again on the next tick')
+})
+
+test('#233 a document that names the backend in use is not a move, and an unchanged one is not either', () => {
+  const current = { host: '127.0.0.1', port: 25565 }
+  const calls = []
+  let desired = { host: '127.0.0.1', port: 25565, changedAt: '2026-11-18T00:00:00.000Z' }
+  const tick = createBackendMoveTick({
+    core: { startBackendMove: options => { calls.push(options); return { started: true } } },
+    control: { desiredTarget: () => desired },
+    current: () => current
+  })
+
+  tick.tick()
+  assert.equal(calls.length, 0, 'the puppet is already where the document points')
+
+  // The switch off reads the same way: desiredTarget() returns null, once named.
+  desired = null
+  tick.tick()
+  assert.equal(calls.length, 0)
+  assert.equal(tick.attempted, null)
+})
+
+
+test('#233 a restored move reverts the dial for every kind that moved the session', () => {
+  // The one case that must not revert is a reconfigure: the same connection
+  // restarting its configuration phase never left the server. Reading anything
+  // else as "keep the target" re-dials the server that never answered, with the
+  // client attached, for as long as the process lives.
+  assert.equal(revertAfterRestore({ kind: 'transfer' }), true)
+  assert.equal(revertAfterRestore({ kind: 'operator' }), true, 'an operator move is one of them')
+  assert.equal(revertAfterRestore({ kind: 'reconfigure' }), false)
+  assert.equal(revertAfterRestore({ kind: null }), true, 'an unknown kind is not a reason to keep a dead target')
+  assert.equal(revertAfterRestore(), true)
 })
