@@ -19,9 +19,9 @@ is recorded in Git without adding commits to `main`. Argo tracks `deploy`. One
 Application, one project, two namespaces: the Application's source is
 `deploy/kustomization.yaml`, which includes `deploy/manifests` (the proxy, in
 `monoplayer`) and `deploy/panel` (the ops panel, in `monoplayer-panel`). One
-merge deploys both. The proxy's image is pinned by digest, never by a moving tag;
-the panel runs the moving `main` tag until #234 pins it too, and
-[panel.md](panel.md) records what that costs.
+merge deploys both. Both images are pinned by digest in the same commit, never by
+a moving tag: the workflow appends an `images:` pin to each child kustomization,
+and no kustomization on `main` carries one.
 
 The dev and gate lanes are not in this Application, and cannot be. `mise run
 dev:image` repoints the dev Deployment at a branch build, and `mise run gate:up`

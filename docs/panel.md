@@ -173,9 +173,11 @@ started as `node src/panel/start.js`. No second Dockerfile and no second build:
 `.dockerignore` ships `src/` except the rungs, so `src/panel/` is in the image.
 
 `.github/workflows/image.yaml` appends its digest pin to
-`deploy/manifests/kustomization.yaml` and nowhere else. On the `deploy` branch the
-proxy therefore runs a pinned digest and the panel runs the moving `main` tag, so
-the two can be a build apart after a merge. Nothing the panel does today depends on
-being the same build as the proxy: it reads a ConfigMap the proxy does not write
-yet. When the write routes land, pinning `deploy/panel/kustomization.yaml` too is a
-one-line change to that workflow.
+`deploy/panel/kustomization.yaml` in the same commit it pins the proxy (#234). On
+the `deploy` branch both trees therefore run one pinned build, and the two can
+never be a build apart. On `main` neither carries a pin.
+
+That is not cosmetic. Before #234 the panel ran the moving `main` tag with
+`imagePullPolicy: IfNotPresent`, so a node that had cached the tag kept running a
+build the checkout did not contain: the pod crashlooped on a module its image
+never shipped, and the manifest looked correct.
