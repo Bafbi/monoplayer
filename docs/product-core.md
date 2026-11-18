@@ -522,6 +522,47 @@ never replayed.
   `chat: 'commands'` speaks the human's commands and drops their chat text.
   `chat: 'off'` blocks both directions. `MONOPLAYER_CHAT` overrides the config.
 
+### The runtime control document (`config.control`, #229)
+
+Two files an operator changes without a deploy:
+
+| Path | Shape | Read |
+| --- | --- | --- |
+| `attachWhitelistFile` | `{version, players:[{uuid,name,addedAt}]}` | at each login |
+| `control.file` (`desired.json`) | `{version:1, backend:{host,port}, changedAt, changedBy}` | before each backend connect |
+
+`control.file` is the switch. With it `null`, the compiled default, the attach
+whitelist is the startup snapshot it has always been, `desired.json` is never
+opened, and no lane changes behaviour. Setting it turns on both reads: the
+whitelist reload and the desired backend are one idea applied to two files, and
+the two files live in the same ConfigMap a panel writes.
+
+The whitelist is read through `createWhitelistStore` (`src/custody/store.js`), in
+the shape it already has, with `reloadEachUse` on. The core's login review takes
+a provider (`createFrontIdentity`), and the front leg's own check reads the same
+store instance, so a UUID added to the file is allowed at the next login and no
+gate decides from a stale list. The array stays the default for every lane that
+never sets the switch.
+
+An empty whitelist on a control lane is a warning (`whitelistEmpty`) and the
+service starts. A static lane still exits 2, as it always did: on a control lane
+that exit would crash-loop the pod on the same file, and the file is the one
+thing the operator can fix.
+
+A desired backend is read once before the first dial and again before each
+reconnect. It applies only while no player is attached, because moving a live
+session is its own ticket in the epic, and a followed transfer wins over it. With
+`control.allowBackendSwitch` false, the lane writes `controlSwitchRefused` once
+and stays on the configured backend.
+
+Neither file reaches `loadConfig`: the path is config, the contents are runtime
+state. An absent `desired.json` is the normal state before a panel writes one
+and is silent. A file that is there but cannot be read or parsed is named once,
+per file (`controlUnreadable` with its error code, or `controlRejected` with its
+reason), and ignored, and the lane keeps the value it had. `control.file` set
+also replaces a `config.attachWhitelist` array, so the file is the only authority
+rather than one of two.
+
 ### Session invariants (`session.js`)
 
 - A retained transfer (`transferring`) keeps `detachCount` unchanged: the

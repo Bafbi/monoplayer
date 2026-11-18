@@ -216,6 +216,17 @@ Common:
 - `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
   `WORKDIR`) or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/config/attach-whitelist.json`
+- `MONOPLAYER_CONTROL_FILE`: the path to `desired.json`, the runtime control
+  document, for example `/control/desired.json` on a volume a later ticket
+  mounts beside `/config`. No manifest mounts one yet, so the variable is unset
+  today and the lane is static. Setting it also makes the attach whitelist
+  reload at each login, so an operator's edit is allowed on the next attempt
+  with no restart. An absent `desired.json` is not an error; a file that is there
+  but unreadable or malformed is named in the log and ignored.
+- `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH` (default `0`): `1` honours a
+  `desired.json` on the next backend connect, and only while no player is
+  attached. `0` writes `controlSwitchRefused` once and stays on
+  `MONOPLAYER_BACKEND_HOST`. A value other than `1` or `0` is named and ignored.
 - `MONOPLAYER_PREAUTH_MAX_CONNECTIONS` (default `16`): the total concurrent
   connections the front accepts between a socket and the attach whitelist's
   accept. It is on by default, so exposing the port is not a switch to

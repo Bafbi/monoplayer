@@ -12,11 +12,25 @@
 import fs from 'node:fs'
 
 import { scanSecrets, redactSecrets, tagForValue } from '../observability/secrets.js'
-import { createTokenCustody } from './cache.js'
+import { createTokenCustody, readCacheFile } from './cache.js'
 import { createMsaAuth, describeIdentity } from './msa.js'
 
 // Cache-file meta projection. These readers walk the JSON structures but
 // never copy token values out — only obtainedOn / expires_in style facts.
+//
+// #229: the heartbeat reads the same projection through accountTokenExpiry, so
+// the expiry an operator sees in the pod log and the one this report prints
+// cannot disagree.
+export function accountTokenExpiry ({ dir, account = null, readFile = fs.readFileSync } = {}) {
+  try {
+    return msExpiry(readCacheFile(dir, account, 'mca', readFile)?.mca)
+  } catch {
+    // A directory that is not there, or a cache file that is not JSON, means the
+    // same thing to a reader: unknown. It is null, never a guess.
+    return null
+  }
+}
+
 function msExpiry (token) {
   if (!token || typeof token !== 'object') return null
   const obtainedOn = typeof token.obtainedOn === 'number' ? token.obtainedOn : null

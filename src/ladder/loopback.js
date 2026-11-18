@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O52 (including O11b and O24b) are the contract
+// Assertions R0 and O1-O53 (including O11b and O24b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -26,6 +26,7 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createJournal, readJournal, readManifests } from '../observability/journal.js'
 import { REPLAY_DOMAINS } from '../core/replay-summary.js'
 import { createBot } from './bot.js'
+import { createControlDocument } from '../service/control.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
@@ -132,6 +133,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #217: the packet journal O52 reads, in its own temporary directory.
   let journalDir = null
   let journal = null
+  // #229: the control document's rig. Its own directory, its own front,
+  // backend and core, because the assertion changes a file mid-run and the
+  // main rig's whitelist is a frozen array.
+  let controlDir = null
+  let controlBase = null
+  let controlFront = null
+  let controlBackend = null
+  let controlCore = null
+  let controlBot1 = null
+  let controlBot2 = null
 
   const evidence = {
     frontPort: null,
@@ -145,7 +156,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     bot: { playPrefix: [], leftovers: null, errors: null },
     preAuthWindow: null,
     preAuthDeadline: null,
-    attachRecord: null
+    attachRecord: null,
+    controlDocument: null
   }
 
   const log = (event, fields = {}) => {
@@ -2530,13 +2542,151 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.journal
     )
 
+    // --- O53: the control document's whitelist reloads at each login (#229) ---
+    // The point of the control document is an edit an operator can make without a
+    // deploy and without a restart, and the whitelist is the half a refusal can
+    // prove. Two gates decide a login: the core's login review and the front
+    // leg's own store, so a unit test of either proves half. This rig writes the
+    // file, refuses a real socket, adds that UUID to the file on disk, and joins
+    // again on the same process, with no restart and no reconnect.
+    controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-control-'))
+    const controlWhitelistFile = path.join(controlDir, 'attach-whitelist.json')
+    const controlDesiredFile = path.join(controlDir, 'desired.json')
+    const firstUuid = offlineUuid('Attach')
+    const lateUuid = offlineUuid('Second')
+    const writeControlWhitelist = uuids => fs.writeFileSync(controlWhitelistFile, JSON.stringify({
+      version: 1,
+      players: uuids.map(uuid => ({ uuid, name: null, addedAt: new Date().toISOString() }))
+    }, null, 2) + '\n')
+    writeControlWhitelist([firstUuid])
+
+    // The product's own reader, pointed at a temporary directory. The rig does not
+    // reimplement the file: O53 is about the reload the service performs.
+    const controlDocument = createControlDocument({
+      file: controlDesiredFile,
+      whitelistFile: controlWhitelistFile,
+      allowBackendSwitch: true,
+      log
+    })
+    controlBase = await createFakeBackend({ port: 0, logStream: null })
+    controlBackend = createOfflineBackendLeg({
+      host: '127.0.0.1',
+      port: controlBase.port,
+      version: VERSION,
+      username: 'GlowSquidye',
+      log
+    })
+    const controlWire = createWireChecker({ version: VERSION })
+    controlFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: VERSION,
+      whitelistStore: controlDocument.whitelistStore,
+      getSnapshotConfig: () => controlCore.cache.snapshot().config,
+      wireCheck: payload => controlWire.check(payload),
+      wireMode: 'throw',
+      log
+    })
+    controlCore = createMonoplayer({
+      config: loadConfig({
+        version: VERSION,
+        attachWhitelist: [],
+        front: { host: '127.0.0.1', port: 0 },
+        backend: { host: '127.0.0.1', port: controlBase.port },
+        puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') },
+        control: { file: controlDesiredFile }
+      }),
+      backendLeg: controlBackend,
+      frontLeg: controlFront,
+      clock: {
+        now: Date.now,
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout
+      },
+      logStream: { write: line => log('controlCore', { line }) },
+      whitelistSource: controlDocument.attachWhitelist
+    })
+    controlFront.setCoreAttachConfiguring(({ name, uuid }) => controlCore.attachConfiguringPlayer({ name, uuid }))
+    controlFront.setConfiguringHandler(({ name }) => controlCore.configuringReady({ name }))
+    controlFront.setClientSettingsHandler(settings => controlCore.noteClientSettings(settings))
+    controlFront.setCoreAttach(({ name, uuid }) => controlCore.attachPlayer({ name, uuid, includeConfig: false }))
+    controlCore.start()
+    await controlBackend.connect()
+    const controlReadiness = await waitForReady({ core: controlCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+    if (!controlReadiness.warm) throw new Error('the control-document rig did not warm')
+    const controlBound = await controlFront.listen()
+    const controlPort = controlBound.port ?? controlFront.port
+
+    // The login the whitelist refuses. A real socket: it reaches both gates, and
+    // neither holds this UUID because it is not in the file.
+    const deniedMark = logs.length
+    controlBot1 = createBot({ port: controlPort, username: 'Second' })
+    await withTimeout(controlBot1.ended, 10_000, 'the refused login ended')
+    const deniedEvents = coreLogEvents(deniedMark, 'controlCore')
+      .filter(entry => entry.event === 'attachDenied')
+    const loginsBefore = controlCore.session.backendLogins
+
+    // The operator's edit, and nothing else: no restart, no second core, no
+    // reconnect. The file is the only thing that changes.
+    writeControlWhitelist([firstUuid, lateUuid])
+    const reloaded = controlDocument.attachWhitelist()
+
+    controlBot2 = createBot({ port: controlPort, username: 'Second' })
+    // Bounded, and recorded rather than thrown: if the second login fails on a
+    // loaded machine, the report has to say which gate refused it. A throw here
+    // would end the run with a reason nobody can read.
+    const secondReady = await withTimeout(
+      controlBot2.ready().then(() => true, () => false),
+      20_000,
+      'the second login'
+    ).catch(() => false)
+    const attachedAfterEdit = await settleUntil(() => controlCore.attached === true, 10_000)
+    const secondDenials = coreLogEvents(deniedMark, 'controlCore')
+      .filter(entry => entry.event === 'attachDenied')
+      .map(entry => entry.reason)
+
+    evidence.controlDocument = {
+      file: controlWhitelistFile,
+      deniedReason: deniedEvents.map(entry => entry.reason),
+      deniedEnded: controlBot1.received.ended,
+      deniedSuccess: controlBot1.received.success,
+      deniedCount: controlFront.metrics.denied,
+      reloaded,
+      allowed: controlFront.metrics.allowed,
+      attached: attachedAfterEdit,
+      secondReady,
+      secondDenials,
+      secondEnded: controlBot2.received.ended,
+      backendLogins: { before: loginsBefore, after: controlCore.session.backendLogins },
+      allowedSuccess: controlBot2.received.success !== null
+    }
+
+    check(
+      'O53',
+      'a login the control whitelist refuses is allowed on the next attempt once the file gains its UUID, with no restart',
+      deniedEvents.length === 1 &&
+        deniedEvents[0].reason === 'not_whitelisted' &&
+        controlBot1.received.ended !== null &&
+        controlBot1.received.success === null &&
+        controlFront.metrics.denied === 1 &&
+        reloaded.includes(lateUuid) &&
+        secondDenials.length === 1 &&
+        secondDenials[0] === 'not_whitelisted' &&
+        secondReady === true &&
+        controlFront.metrics.allowed === 1 &&
+        attachedAfterEdit === true &&
+        controlBot2.received.success !== null &&
+        controlCore.session.backendLogins === loginsBefore,
+      evidence.controlDocument
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
@@ -2544,6 +2694,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await capFront?.close?.() } catch { /* best effort */ }
     try { await deadlineFront?.close?.() } catch { /* best effort */ }
     try { await attachFront?.close?.() } catch { /* best effort */ }
+    try { await controlFront?.close?.() } catch { /* best effort */ }
+    try { await controlBackend?.close?.() } catch { /* best effort */ }
+    try { await controlBase?.close?.() } catch { /* best effort */ }
     try { await attachBackend?.close?.() } catch { /* best effort */ }
     try { await attachBase?.close?.() } catch { /* best effort */ }
     try { await front?.close?.() } catch { /* best effort */ }
@@ -2568,6 +2721,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { journal?.close?.() } catch { /* best effort */ }
     if (!failed) {
       try { if (journalDir) fs.rmSync(journalDir, { recursive: true, force: true }) } catch { /* best effort */ }
+      // The control directory holds the two files O53 edited. A passing run
+      // leaves nothing behind; a failing one keeps them for the report.
+      try { if (controlDir) fs.rmSync(controlDir, { recursive: true, force: true }) } catch { /* best effort */ }
     }
 
     if (failed && exitCode === 0) exitCode = 1

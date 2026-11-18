@@ -84,6 +84,14 @@ export function createWhitelistStore ({
   existsSync = fs.existsSync,
   beforeRename = null,
   role = 'attach',
+  // #229: re-read the file at each read, so a control document an operator edits
+  // between two logins takes effect on the next one. Off by default: a lane that
+  // never set config.control.file keeps the single read it always did.
+  reloadEachUse = false,
+  // #229: told when the file cannot be read or parsed, so a control lane can name
+  // the file instead of denying every login in silence. Every other lane ignores
+  // it, which is what it has always done.
+  onLoadError = null,
   knownOtherRoleUuids = () => [],
 } = {}) {
   let doc = null
@@ -91,10 +99,22 @@ export function createWhitelistStore ({
   function load () {
     try {
       doc = parsePlayers(JSON.parse(String(readFile(String(file), 'utf8'))))
-    } catch {
+      if (doc === null) {
+        // Valid JSON of the wrong shape is an empty whitelist and a named file,
+        // not a crash on the first login.
+        doc = { version: WHITELIST_VERSION, players: [] }
+        report('invalid_shape')
+      }
+    } catch (error) {
       doc = { version: WHITELIST_VERSION, players: [] }
+      report(error?.code ?? 'invalid_json')
     }
     return doc
+  }
+
+  function report (code) {
+    if (typeof onLoadError !== 'function') return
+    try { onLoadError({ file: String(file), code }) } catch { /* a listener must not break a login */ }
   }
 
   function persist () {
@@ -102,11 +122,13 @@ export function createWhitelistStore ({
   }
 
   function list () {
+    if (reloadEachUse) doc = null
     doc ??= load()
     return [...doc.players]
   }
 
   function find (identifier) {
+    if (reloadEachUse) doc = null
     doc ??= load()
     const byUuid = normalizeUuid(identifier)
     if (byUuid) return doc.players.find(player => player.uuid === byUuid) ?? null

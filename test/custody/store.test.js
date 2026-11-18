@@ -187,3 +187,22 @@ test('name lookup: invalid names and exhausted failures are reported as failures
   assert.equal(await createNameLookup({ fetchImpl: async () => ({ status: 500, json: async () => ({}) }) })('Bafbi').then(r => r.failed), true)
   assert.equal(await createNameLookup({ fetchImpl: async () => ({ status: 200, json: async () => ({}) }) })('B@d Name'), null)
 })
+
+// #229: a control lane's store re-reads the file at each login. Every other
+// lane keeps the one read it has always done, which is what keeps an edited
+// `.secrets/attach-whitelist.json` from changing a lane that never opted in.
+test('#229 reloadEachUse re-reads at each read, and the default keeps one', () => {
+  const file = tmpFile('reload')
+  fs.writeFileSync(file, JSON.stringify({ version: 1, players: [{ uuid: PLAYER.dashed }] }))
+
+  const reloading = createWhitelistStore({ file, reloadEachUse: true })
+  assert.equal(reloading.has(PLAYER.dashed), true)
+  fs.writeFileSync(file, JSON.stringify({ version: 1, players: [{ uuid: '5b1f7d7d-0000-4000-8000-000000000001' }] }))
+  assert.equal(reloading.has('5b1f7d7d-0000-4000-8000-000000000001'), true, 'a UUID added on disk is seen')
+  assert.equal(reloading.has(PLAYER.dashed), false, 'and a UUID removed on disk is gone')
+
+  const cached = createWhitelistStore({ file })
+  assert.equal(cached.has('5b1f7d7d-0000-4000-8000-000000000001'), true)
+  fs.writeFileSync(file, JSON.stringify({ version: 1, players: [] }))
+  assert.equal(cached.has('5b1f7d7d-0000-4000-8000-000000000001'), true, 'a lane that did not opt in keeps its snapshot')
+})
