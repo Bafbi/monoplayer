@@ -1,0 +1,43 @@
+# The panel's whole authority over the puppet's namespace.
+#
+# A Role per managed namespace, never a ClusterRole: the panel's reach is the
+# namespaces its registry names, and a ClusterRole would reach every namespace in
+# the cluster including argocd. One puppet lives in one namespace today, so there
+# is one Role; a second puppet in a second namespace gets a second Role, and
+# test/tooling/panel-manifests.test.js requires one Role per namespace the
+# registry names, with `resourceNames` equal to that namespace's control
+# ConfigMaps.
+#
+# No `create` verb anywhere, by design. RBAC cannot scope create by name, so a
+# create grant on configmaps would be a grant to invent any ConfigMap in
+# monoplayer. No `delete` either: the panel corrects a document, it does not
+# remove one. No `secrets`, and no wildcard resource: the custody volume and the
+# GHCR pull secret are not the panel's to read.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: panel-control
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/name: panel
+    app.kubernetes.io/part-of: monoplayer
+rules:
+  # The one write target, named by the registry. The operator created it
+  # (docs/panel.md); the panel only ever patches the document inside it.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["monoplayer-control"]
+    verbs: ["get", "patch", "update"]
+  # Reads: this ticket's page makes none, and the info view (#231) reads the
+  # puppet's pod and its log. get and list only.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # Readiness only: whether the puppet's Deployment has a ready replica.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]

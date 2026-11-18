@@ -94,8 +94,9 @@ Where to look: a decision lives in `src/core/` (pure), the wiring in `src/servic
 | `src/spike/` | The frozen protocol spike. It grows no features. |
 | `src/driver/`, `tools/driver/` | Fabric client driver, and the scenario runner `src/driver/run.js`. A G0 pass needs two passed reports and the human unmodded witness, so `--verify-g0` is not the whole check. |
 | `src/testbed/`, `deploy/testbed/` | The two-Paper transfer testbed. |
+| `src/panel/`, `deploy/panel/` | The ops panel on the tailnet: `start.js` the entrypoint, `server.js` the three routes, `registry.js` the registry document. Its own Argo Application (`deploy/argocd/panel.yaml`) and its runbook (`docs/panel.md`). |
 | `deploy/` | Manifests and Argo CD. `scripts/build-image.sh` publishes the image. |
-| `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` covers `tools/` and `mise.toml`; `test/support/` holds the shared fake-integration rig, `harness.js`, and no test of its own. |
+| `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` covers `tools/`, `mise.toml`, and the manifests under `deploy/`; `test/support/` holds the shared fake-integration rig, `harness.js`, and no test of its own. |
 
 Facts an agent cannot look up:
 
