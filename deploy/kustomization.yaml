@@ -1,0 +1,22 @@
+# The one GitOps tree: the live puppet and its panel, synced by one Argo CD
+# Application, so a merge to main deploys both and nothing else.
+#
+# deploy/manifests and deploy/panel each keep a kustomization of their own,
+# because each owns one namespace. This file says only that both belong to the
+# same deploy.
+#
+# The image workflow appends `images:` to deploy/manifests/kustomization.yaml on
+# the bot-owned `deploy` branch. A child's image pin applies to that child's
+# resources, so the proxy is pinned by digest and the panel tracks the moving
+# `main` tag until #234 pins it too; docs/panel.md records what that costs.
+#
+# The dev and gate lanes are deliberately not here. docs/deployment.md says why:
+# a branch image and a sleeping gate both depend on a human applying the tree,
+# and selfHeal would undo each of them within minutes.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - manifests
+  - panel

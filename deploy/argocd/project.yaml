@@ -1,8 +1,16 @@
 # The one Argo CD project for this app.
 #
 # Applied by the operator, not by the app itself: Argo needs the project before
-# it can accept the Application. It allows exactly one source repository and one
-# destination namespace, plus the Namespace object itself.
+# it can accept the Application. It allows exactly one source repository and the
+# two namespaces the tree creates objects in, plus the Namespace objects
+# themselves.
+#
+# The kind lists are explicit, not wildcards. Argo refuses to sync a kind its
+# project does not name, so a wildcard would let any object into these two
+# namespaces: the reach the panel's Role exists to bound, granted to the
+# Application instead. Adding a kind means adding a line here, and
+# test/tooling/panel-manifests.test.js reads this file and fails when the tree
+# holds a kind the list does not.
 
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
@@ -10,15 +18,29 @@ metadata:
   name: monoplayer
   namespace: argocd
 spec:
-  description: Monoplayer puppet proxy
+  description: The Monoplayer puppet proxy and its ops panel
   sourceRepos:
     - https://github.com/Bafbi/monoplayer.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: monoplayer
+    - server: https://kubernetes.default.svc
+      namespace: monoplayer-panel
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
   namespaceResourceWhitelist:
-    - group: "*"
-      kind: "*"
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: apps
+      kind: Deployment
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
