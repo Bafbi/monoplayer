@@ -177,7 +177,9 @@ The runner builds:
 
 - `R0` readiness is warm from `chunk_batch_finished` (never `forceWarm`).
 - `O1` the first attach is allowed once, no denials, and the front leg is
-  `offline-front-leg` with no `.secrets` whitelist store.
+  `offline-front-leg` with no `.secrets` whitelist store. O53's leg is the one
+  offline leg that holds a store, and it holds one built on its own temporary
+  control directory, never on `.secrets`.
 - `O2` the fake backend saw one login and `core.session.backendLogins` is 1.
 - `O3` no `encryption_begin`, `compress`, or `success` frame was replayed into
   play, and the core counted at least two ignored non-play frames.
@@ -430,6 +432,22 @@ first dial and its target warms in five seconds.
   empty. The events shard holds the `liveReady` record the rig wrote, because the
   core writes no lifecycle event and this rung does not run `start-live`, which
   does.
+- `O53` a login the control document's whitelist refuses is allowed on the next
+  attempt once the file gains that UUID, with no restart (#229). The reload is
+  the whole point of the ticket: an operator adds a player through the panel and
+  the next login sees it. Two gates decide a login, the core's login review and
+  the front leg's own store, so a unit test of either proves half. The rig is its
+  own, with a temporary control directory, a fake backend, the product core, and
+  an `offline-front-leg` holding the control document's store. `Second` logs in
+  while the file lists only `Attach`: the core writes one `attachDenied` with
+  reason `not_whitelisted`, the front counts one denial, the socket ends, and no
+  login success frame ever arrives. The bot's own end reason is `socketClosed`,
+  so the reason a reader checks is the core's line and the front's counter. The rig
+  then rewrites `attach-whitelist.json` with both UUIDs and changes nothing else.
+  The same player logs in again on the same process and reaches play: one allow,
+  `core.attached` true, a login success frame, and `backendLogins` unchanged
+  across the edit, so the reload neither restarted the lane nor re-dialled the
+  backend.
 
 
 ## The client parity rung

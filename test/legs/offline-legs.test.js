@@ -450,3 +450,26 @@ test('#205 the front legs carry the pre-auth deadline, and refuse one that bound
     )
   }
 })
+
+// #229: the control document's reload reaches the legs through a whitelist
+// store, so a leg given one reads it instead of a frozen array. A store that
+// cannot answer is refused at construction, not at the first login.
+test('#229 both front legs accept a whitelist store, and refuse one that cannot answer', () => {
+  const store = { file: '/control/attach-whitelist.json', has: () => true }
+  const offline = createOfflineFrontLeg({ whitelistStore: store, getSnapshotConfig: snapshot, wireMode: 'off', log: noop })
+  assert.equal(offline.kind, 'offline-front-leg')
+  assert.equal(offline.checkStoreFile, store.file, 'the leg reports the file its check reads')
+
+  const live = createLiveFrontLeg({
+    attachWhitelistFile: '/control/attach-whitelist.json',
+    whitelistStore: store,
+    getSnapshotConfig: snapshot,
+    wireMode: 'off',
+    log: noop
+  })
+  assert.equal(live.kind, 'live-front-leg')
+  assert.equal(live.checkStoreFile, store.file)
+
+  assert.throws(() => createOfflineFrontLeg({ whitelistStore: {}, getSnapshotConfig: snapshot }), TypeError)
+  assert.throws(() => createLiveFrontLeg({ attachWhitelistFile: '/x', whitelistStore: {}, getSnapshotConfig: snapshot }), TypeError)
+})
