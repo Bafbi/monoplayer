@@ -1,0 +1,13 @@
+# The one build-script decision this repo makes, recorded where pnpm 11 asks for
+# it. The Tailwind CLI is a dev dependency, and it depends on @parcel/watcher for
+# its --watch mode. mise run panel:css never watches, so the native binary is not
+# built: a refused build is faster, smaller, and one fewer thing compiled per
+# install.
+#
+# Without this file the decision is unrecorded, and pnpm treats an ignored build
+# script as a failure (ERR_PNPM_IGNORED_BUILDS): "pnpm install --frozen-lockfile"
+# exits 1 on a fresh checkout, and the gate goes red on a machine that has never
+# installed before. It cannot break the image, which installs with --prod and
+# never sees the dev dependencies.
+allowBuilds:
+  '@parcel/watcher': false

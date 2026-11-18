@@ -1,0 +1,290 @@
+{
+  "version": 1,
+  "puppets": [
+    {
+      "name": "glowsquidye",
+      "namespace": "monoplayer",
+      "deployment": "monoplayer",
+      "controlConfigMap": "monoplayer-control",
+      "frontHostname": "glowsquidye.tail41e568.ts.net",
+      "backend": "play2.excalia.fr:25565",
+      "allowBackendSwitch": true
+    },
+    {
+      "name": "quiet",
+      "namespace": "monoplayer",
+      "deployment": "monoplayer-quiet",
+      "controlConfigMap": "monoplayer-quiet-control",
+      "frontHostname": "glowsquidye.tail41e568.ts.net",
+      "backend": "play2.excalia.fr:25565",
+      "allowBackendSwitch": false
+    }
+  ],
+  "facts": {
+    "glowsquidye": {
+      "name": "glowsquidye",
+      "namespace": "monoplayer",
+      "deployment": "monoplayer",
+      "controlConfigMap": "monoplayer-control",
+      "frontHostname": "glowsquidye.tail41e568.ts.net",
+      "observedAt": "2026-11-18T10:37:24.906Z",
+      "pod": {
+        "name": "monoplayer-84855d7f8b-5h5bd",
+        "phase": "Running",
+        "ready": true,
+        "readyReason": null,
+        "readyMessage": null,
+        "startedAt": "2026-11-18T09:00:00.000Z",
+        "ageSeconds": 5845,
+        "restarts": 0
+      },
+      "state": {
+        "state": "serving",
+        "reason": "serving: the newest heartbeat was written 12 s ago, and the interval is 30 s"
+      },
+      "backend": {
+        "effective": {
+          "value": "play2.excalia.fr:25565",
+          "source": "start",
+          "at": "2026-11-18T09:00:00.000Z"
+        },
+        "lastDial": null,
+        "configured": {
+          "value": "play2.excalia.fr:25565",
+          "source": "start",
+          "at": "2026-11-18T09:00:00.000Z"
+        },
+        "registry": {
+          "value": "play2.excalia.fr:25565",
+          "source": "registry",
+          "at": null
+        }
+      },
+      "caps": {
+        "preAuthMaxConnections": 3,
+        "preAuthDeadlineMs": 15000,
+        "journalMaxBytes": 67108864,
+        "journalMaxTotalBytes": 268435456,
+        "journalMaxAgeMs": 172800000,
+        "source": "Deployment env",
+        "at": null
+      },
+      "start": {
+        "at": "2026-11-18T09:00:00.000Z",
+        "version": "0.11.0",
+        "front": "0.0.0.0:25565",
+        "control": {
+          "file": "/etc/monoplayer/control",
+          "allowBackendSwitch": true,
+          "whitelistReload": true
+        }
+      },
+      "whitelist": {
+        "count": 2,
+        "at": "2026-11-18T09:00:00.000Z",
+        "source": "startLive"
+      },
+      "preAuth": {
+        "maxConnections": 3,
+        "maxConnectionsAt": "2026-11-18T10:00:00.000Z",
+        "deadlineMs": 15000,
+        "deadlineMsAt": "2026-11-18T10:10:00.000Z"
+      },
+      "heartbeat": {
+        "at": "2026-11-18T10:37:12.906Z",
+        "ageSeconds": 12,
+        "stale": false,
+        "intervalSeconds": 30,
+        "attached": false,
+        "warm": true,
+        "backendLogins": 2,
+        "front": {
+          "allowed": 1,
+          "attaches": 1,
+          "denied": 0,
+          "preAuthRefused": 3,
+          "preAuthExpired": 0,
+          "preAuthInWindow": 0,
+          "policyRefused": 0,
+          "stateRefused": 0
+        },
+        "sizes": {
+          "prefix": 360,
+          "config": 34,
+          "chunks": 166,
+          "blocks": 0,
+          "entities": 10,
+          "inventories": 0,
+          "latest": 1,
+          "generic": 512
+        },
+        "chunkBytes": 2243099,
+        "journal": {
+          "enabled": true,
+          "disabledReason": null,
+          "dir": "/var/lib/monoplayer/journal",
+          "file": "/var/lib/monoplayer/journal/journal-2026-11-18T10-frames-1.ndjson",
+          "frames": 51260,
+          "events": 2,
+          "bytes": 6000000,
+          "sealed": 3,
+          "pruned": 1,
+          "prunedBytes": 1000,
+          "dirBytes": 7000000
+        },
+        "wire": {
+          "checked": 0,
+          "rejected": 0
+        },
+        "telemetry": {
+          "enabled": true,
+          "requests": 1484,
+          "retries": 0,
+          "failures": 0,
+          "queuedSeries": 67,
+          "queuedLogRecords": 0,
+          "droppedLogs": 0,
+          "droppedMetrics": 0,
+          "lastError": null
+        },
+        "account": {
+          "alias": "GlowSquidye",
+          "expiresAt": 1798502400000,
+          "expiresAtDate": "2026-12-29T00:00:00.000Z",
+          "expiresInDays": 40.6,
+          "expired": false,
+          "warning": null
+        }
+      },
+      "attach": {
+        "at": "2026-11-18T10:30:00.000Z",
+        "name": "Bafbi",
+        "reason": "attach",
+        "replayed": 120,
+        "tookMs": 42,
+        "domains": {
+          "config": 0,
+          "prefix": 30,
+          "chunks": 40,
+          "blocks": 0,
+          "entities": 5,
+          "inventories": 2,
+          "latest": 1,
+          "generic": 42
+        },
+        "withoutSpawn": 0
+      },
+      "tail": {
+        "lines": 5,
+        "unreadable": 0,
+        "heartbeats": 1
+      }
+    },
+    "quiet": {
+      "name": "quiet",
+      "namespace": "monoplayer",
+      "deployment": "monoplayer-quiet",
+      "controlConfigMap": "monoplayer-quiet-control",
+      "frontHostname": "glowsquidye.tail41e568.ts.net",
+      "observedAt": "2026-11-18T10:37:24.906Z",
+      "pod": {
+        "name": "monoplayer-quiet-7c9f4b6d2-x8kql",
+        "phase": "Running",
+        "ready": true,
+        "readyReason": null,
+        "readyMessage": null,
+        "startedAt": "2026-11-18T09:00:00.000Z",
+        "ageSeconds": 5845,
+        "restarts": 0
+      },
+      "state": {
+        "state": "no-heartbeat",
+        "reason": "no heartbeat in the last 1 lines of monoplayer-quiet-7c9f4b6d2-x8kql: the newest line is 2026-11-18T09:41:00.000Z, 3385 s old, and a heartbeat is written every 30 s"
+      },
+      "backend": {
+        "effective": {
+          "value": "hub.excalia.fr:25565",
+          "source": "start",
+          "at": "2026-11-18T09:41:00.000Z"
+        },
+        "lastDial": null,
+        "configured": {
+          "value": "hub.excalia.fr:25565",
+          "source": "start",
+          "at": "2026-11-18T09:41:00.000Z"
+        },
+        "registry": {
+          "value": "play2.excalia.fr:25565",
+          "source": "registry",
+          "at": null
+        }
+      },
+      "caps": {
+        "preAuthMaxConnections": 3,
+        "preAuthDeadlineMs": 15000,
+        "journalMaxBytes": 67108864,
+        "journalMaxTotalBytes": 268435456,
+        "journalMaxAgeMs": 172800000,
+        "source": "Deployment env",
+        "at": null
+      },
+      "start": {
+        "at": "2026-11-18T09:41:00.000Z",
+        "version": "0.11.0",
+        "front": "0.0.0.0:25565",
+        "control": {
+          "file": "/etc/monoplayer/control",
+          "allowBackendSwitch": true,
+          "whitelistReload": true
+        }
+      },
+      "whitelist": {
+        "count": 0,
+        "at": "2026-11-18T09:41:00.000Z",
+        "source": "startLive"
+      },
+      "preAuth": {
+        "maxConnections": null,
+        "maxConnectionsAt": null,
+        "deadlineMs": null,
+        "deadlineMsAt": null
+      },
+      "heartbeat": null,
+      "attach": null,
+      "tail": {
+        "lines": 1,
+        "unreadable": 0,
+        "heartbeats": 0
+      }
+    }
+  },
+  "whitelist": {
+    "glowsquidye": {
+      "resourceVersion": "41221",
+      "puppetUuid": "11111111-2222-4333-8444-555555555555",
+      "document": {
+        "version": 1,
+        "players": [
+          {
+            "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
+            "name": "Bafbi",
+            "addedAt": "2026-11-17T09:12:00.000Z"
+          },
+          {
+            "uuid": "424ac88b-7531-3224-8934-922380568a46",
+            "name": "Second",
+            "addedAt": "2026-11-18T08:02:11.000Z"
+          }
+        ]
+      }
+    },
+    "quiet": {
+      "resourceVersion": "7",
+      "puppetUuid": "99999999-8888-4777-8666-555555555555",
+      "document": {
+        "version": 1,
+        "players": []
+      }
+    }
+  }
+}
