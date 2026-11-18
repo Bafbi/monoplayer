@@ -26,6 +26,7 @@ import { parseRegistry } from '../../src/panel/registry.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const PANEL = path.join(ROOT, 'deploy', 'panel')
+const MANIFESTS = path.join(ROOT, 'deploy', 'manifests')
 const ARGOCD = path.join(ROOT, 'deploy', 'argocd')
 
 const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8')
@@ -346,6 +347,10 @@ function entriesUnder (text, key) {
 
 const files = fs.readdirSync(PANEL).filter(name => name.endsWith('.yaml')).sort()
 const documents = documentsIn(PANEL, files)
+// The proxy's tree too: one Application syncs both, and its project has to allow
+// every kind either tree holds.
+const manifestsDocuments = documentsIn(MANIFESTS,
+  fs.readdirSync(MANIFESTS).filter(name => name.endsWith('.yaml')).sort())
 const registry = parseRegistry(read(PANEL, 'registry.yaml'))
 
 test('the panel manifests keep the write scope the registry names', () => {
@@ -459,19 +464,27 @@ test('the guard refuses an unreadable rule line instead of skipping it', () => {
     'a block-style list is a manifest this guard cannot judge, so it fails rather than passing silently')
 })
 
-// --- the Application, and the project that allows it ---
+// --- one Application, one project, two namespaces ---
 
-test('the panel Application syncs deploy/panel, and its project allows every namespace it touches', () => {
-  const application = fs.readFileSync(path.join(ARGOCD, 'panel.yaml'), 'utf8')
-  const project = fs.readFileSync(path.join(ARGOCD, 'panel-project.yaml'), 'utf8')
+// The panel does not get an Application of its own: one deploy means one
+// Application over deploy/kustomization.yaml. These assertions are what keep it
+// that way. A second Application, a source that stops being the root
+// kustomization, a tree the root does not include, or a project that forgets the
+// panel's namespace is a red gate, not a review comment.
 
-  assert.equal(scalar(application, 'kind'), 'Application')
-  assert.match(section(application, 0, 'spec'), /^ {2}project: monoplayer-panel$/m)
-  assert.match(application, /^ {4}repoURL: (\S+)$/m)
-  assert.match(application, /^ {4}targetRevision: (\S+)$/m)
-  assert.match(application, /^ {4}path: (\S+)$/m)
-  assert.match(application, /^ {2}namespace: (\S+)$/m)
+test('one Application syncs the root tree, and its project allows both namespaces', () => {
+  const argoFiles = fs.readdirSync(ARGOCD).filter(name => name.endsWith('.yaml')).sort()
+  const applications = argoFiles
+    .map(name => ({ name, text: read(ARGOCD, name) }))
+    .filter(file => scalar(file.text, 'kind') === 'Application')
+  assert.deepEqual(applications.map(file => file.name), ['application.yaml'],
+    'deploy/argocd holds exactly one Application: the panel rides the proxy deploy')
 
+  const application = applications[0].text
+  const project = read(ARGOCD, 'project.yaml')
+  assert.equal(scalar(project, 'kind'), 'AppProject')
+
+  assert.match(section(application, 0, 'spec'), /^ {2}project: monoplayer$/m)
   const source = {
     repoURL: (application.match(/^ {4}repoURL: (\S+)$/m) ?? [])[1],
     targetRevision: (application.match(/^ {4}targetRevision: (\S+)$/m) ?? [])[1],
@@ -479,19 +492,27 @@ test('the panel Application syncs deploy/panel, and its project allows every nam
   }
   assert.equal(source.repoURL, (project.match(/^ {4}- (\S+)$/m) ?? [])[1],
     'the project allows exactly the repository the Application clones')
-  assert.equal(source.path, 'deploy/panel', 'the Application syncs the panel tree')
+  assert.equal(source.path, 'deploy', 'the Application syncs the root kustomization')
   // One branch is the deploy truth: the image workflow rewrites `deploy`, and an
   // Application that tracked `main` would run a tree no digest commit describes.
   assert.equal(source.targetRevision, 'deploy')
 
-  // Prune and selfHeal, because a panel that is not synced is a panel nobody can
-  // reproduce: docs/panel.md says the operator applies it once.
+  // The root tree has to reach both directories, or the panel is manifests nobody
+  // applies while the Application still reads healthy.
+  const rootKustomization = read(ROOT, 'deploy', 'kustomization.yaml')
+  for (const directory of ['manifests', 'panel']) {
+    assert.match(rootKustomization, new RegExp('^  - ' + directory + '$', 'm'),
+      'deploy/kustomization.yaml does not include ' + directory)
+  }
+
+  // Prune and selfHeal, because a tree that is not synced is a deploy nobody can
+  // reproduce.
   const sync = section(application, 2, 'syncPolicy')
   assert.match(sync, /^ {6}prune: true$/m)
   assert.match(sync, /^ {6}selfHeal: true$/m)
 
-  // RBAC is namespaced, so the Role lands in the puppet's namespace and the
-  // Deployment in the panel's. Both have to be allowed, and nothing else.
+  // RBAC is namespaced, so the panel's Role lands in the puppet's namespace and
+  // its Deployment in its own. Both have to be allowed, and nothing else.
   const destinations = [...section(project, 2, 'destinations').matchAll(/^ {6}namespace: (\S+)$/gm)]
     .map(match => match[1])
   const declared = new Set(documents.map(document => document.namespace).filter(Boolean))
@@ -503,40 +524,41 @@ test('the panel Application syncs deploy/panel, and its project allows every nam
   }
   assert.equal(new Set(destinations).size, destinations.length, 'the project names a destination twice')
 
-  // Nothing cluster-scoped beyond the Namespace the panel owns.
+  // Nothing cluster-scoped beyond the Namespace each tree owns.
   const cluster = [...section(project, 2, 'clusterResourceWhitelist').matchAll(/^ {6}kind: (\S+)$/gm)]
     .map(match => match[1])
   assert.deepEqual(cluster, ['Namespace'],
-    'the panel project may create a Namespace and no other cluster-scoped object')
+    'the project may create a Namespace and no other cluster-scoped object')
 
-  // Every namespaced kind the tree holds is whitelisted, and nothing else is. Argo
-  // refuses to sync a kind its project does not name, so a wildcard here would be
-  // the project allowing any object in the namespace it was given: the reach the
-  // Role exists to bound, granted to the Application instead.
+  // Every namespaced kind either tree holds is whitelisted, and nothing else is.
+  // Argo refuses a kind its project does not name, so a wildcard here would hand
+  // the Application the reach the panel's Role exists to bound.
   const allowed = entriesUnder(project, 'namespaceResourceWhitelist')
-  assert.ok(allowed.length > 0, 'the project whitelists the kinds the panel tree holds')
+  assert.ok(allowed.length > 0, 'the project whitelists the kinds the trees hold')
   for (const entry of allowed) {
     assert.notEqual(entry.group, '*', 'the project whitelists every API group')
     assert.notEqual(entry.kind, '*', 'the project whitelists every kind')
   }
   const held = new Map()
-  for (const document of documents) {
-    // Two exemptions, both named. A Kustomization is the tree's own assembly, not
-    // an object Argo creates. A Namespace is cluster-scoped and covered by
-    // clusterResourceWhitelist above. Any other kind belongs in the list below.
-    if (document.kind === 'Kustomization' || document.kind === 'Namespace') continue
-    const group = (document.apiVersion ?? '').includes('/') ? document.apiVersion.split('/')[0] : ''
-    held.set(group + '/' + document.kind, { group, kind: document.kind })
+  for (const tree of [documents, manifestsDocuments]) {
+    for (const document of tree) {
+      // Two exemptions, both named. A Kustomization is the tree's own assembly,
+      // not an object Argo creates. A Namespace is cluster-scoped and covered by
+      // clusterResourceWhitelist above.
+      if (document.kind === 'Kustomization' || document.kind === 'Namespace') continue
+      const group = (document.apiVersion ?? '').includes('/') ? document.apiVersion.split('/')[0] : ''
+      held.set(group + '/' + document.kind, { group, kind: document.kind })
+    }
   }
   for (const [key, entry] of held) {
     assert.ok(
       allowed.some(allowing => allowing.group === entry.group && allowing.kind === entry.kind),
-      'the panel project does not whitelist ' + key + ', which deploy/panel creates'
+      'the project does not whitelist ' + key + ', which a tree creates'
     )
   }
   for (const entry of allowed) {
     assert.ok(held.has(entry.group + '/' + entry.kind),
-      'the panel project whitelists ' + entry.group + '/' + entry.kind + ', which deploy/panel never creates')
+      'the project whitelists ' + entry.group + '/' + entry.kind + ', which no tree creates')
   }
 
   // The ServiceAccount token is the one privilege boundary, so the namespace that

@@ -16,18 +16,27 @@ moving `ghcr.io/bafbi/monoplayer:main` tag and carry no digest, so nothing on
 main goes stale. `deploy` is bot-owned: the workflow force-pushes it as `main`
 plus an `images:` digest pin for the image it just built, so the running image
 is recorded in Git without adding commits to `main`. Argo tracks `deploy`. One
-Application, one project, one namespace. The deployed image is pinned by
-digest, never by a moving tag — for the proxy. The panel (`deploy/panel`, #230)
-is its own Application and runs the moving `main` tag until #234 pins it too;
+Application, one project, two namespaces: the Application's source is
+`deploy/kustomization.yaml`, which includes `deploy/manifests` (the proxy, in
+`monoplayer`) and `deploy/panel` (the ops panel, in `monoplayer-panel`). One
+merge deploys both. The proxy's image is pinned by digest, never by a moving tag;
+the panel runs the moving `main` tag until #234 pins it too, and
 [panel.md](panel.md) records what that costs.
+
+The dev and gate lanes are not in this Application, and cannot be. `mise run
+dev:image` repoints the dev Deployment at a branch build, and `mise run gate:up`
+wakes rows the gate tree commits at `replicas: 0`. `selfHeal` would undo both
+within minutes of the next sync. Those lanes keep their own runbooks.
 
 ## What lives where
 
 | Path | Contents |
 |---|---|
+| `deploy/kustomization.yaml` | The Application's source: `manifests` and `panel`, one deploy |
 | `deploy/manifests/` | Kustomization: namespace, attach whitelist ConfigMap, custody PVC, Deployment, Tailscale Service, playit tunnel agent |
+| `deploy/panel/` | Kustomization: the ops panel, its registry, its scoped Role and RoleBinding |
 | `deploy/manifests/playit-agent.yaml` | The public route (#202): one playit.gg agent. Runbook: [public-access.md](public-access.md), decision: [the ADR](adr/public-access-goes-through-a-tcp-tunnel.md) |
-| `deploy/argocd/project.yaml` | AppProject `monoplayer`: one source repo, one destination namespace |
+| `deploy/argocd/project.yaml` | AppProject `monoplayer`: one source repo, the two destination namespaces, and the kinds it may create |
 | `deploy/argocd/application.yaml` | Application `monoplayer` |
 | `.github/workflows/image.yaml` | Build, push to GHCR, commit the digest |
 | `.github/workflows/image-retention.yaml` | Delete the image tags no lane can name |
