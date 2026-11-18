@@ -12,7 +12,7 @@ import http from 'node:http'
 
 import { activity } from '../../src/panel/activity.js'
 import { deploymentCaps, ReadRefused } from '../../src/panel/kube.js'
-import { renderPage } from '../../src/panel/page.js'
+import { renderPage } from '../../src/panel/views/page.js'
 import { createPanelHandler } from '../../src/panel/server.js'
 
 const puppet = {
@@ -420,9 +420,15 @@ test('/ is the card for each puppet, under the timestamp of every record', async
       'monoplayer-control', 'glowsquidye.tail41e568.ts.net']) {
       assert.ok(page.includes(text), 'the page shows ' + text)
     }
-    // One page, no asset the browser has to fetch: the panel is reached over a
-    // tailnet and nothing else serves its files.
-    assert.doesNotMatch(page, /<(script|link|img)\b/i, 'the page loads no external asset')
+    // Every asset the page loads is served by the panel itself. The tailnet
+    // Service is the only thing answering on that name, so a stylesheet, a script,
+    // a font or an icon fetched from anywhere else is a request that fails on the
+    // one network this page is opened from (#248).
+    const urls = [...page.matchAll(/\b(?:src|href)="([^"]+)"/g)].map(match => match[1])
+    assert.ok(urls.length >= 4, 'the page loads its stylesheet, htmx, its sse extension and its own script')
+    for (const url of urls) {
+      assert.match(url, /^\/static\//, url + ' is served by the panel, not fetched from elsewhere')
+    }
     assert.match(page, /1 puppet\b/)
   } finally {
     await close()

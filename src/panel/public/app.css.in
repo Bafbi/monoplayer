@@ -1,0 +1,246 @@
+/* The panel's stylesheet source, and the whole of its 2.5D look (#248).
+   mise run panel:css compiles it into app.css, which is committed and served by
+   src/panel/assets.js.
+
+   Two promises hold this file together:
+
+   1. No Mojang asset is in it. The blocks are clipped polygons over a repeating
+      gradient, the palette is a grass/dirt/stone one chosen by hand, and the only
+      font is VT323, which ships under the OFL beside it. Nothing here is a
+      texture, an icon, or the Minecraft font.
+   2. It reads on a phone. One column, a scene that scales with the viewport,
+      inputs tall enough for a thumb, and no width that assumes a desktop.
+
+   Tailwind is compiled, not fetched: the bundle is a build artefact committed to
+   the tree so the image ships a stylesheet and no compiler, and lint recompiles it
+   to prove the two are the same file. */
+
+@import "tailwindcss" source(none);
+@source "../views";
+@source "../public/panel.js";
+
+@font-face {
+  font-family: "VT323";
+  src: url("/static/fonts/VT323-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  /* The font is one static weight, so there is nothing to synthesize and nothing
+     to block the first paint for. */
+  font-display: swap;
+}
+
+@theme {
+  /* The palette: grass, dirt, stone, and the dark the page sits on. Three greens,
+     two dirts, three stones, and the near-black every edge is drawn in. */
+  --color-grass: #74b24a;
+  --color-grass-dark: #4f7f33;
+  --color-dirt: #7a5230;
+  --color-dirt-dark: #5d3f24;
+  --color-stone: #9a9a9a;
+  --color-stone-dark: #646464;
+  --color-sand: #c8a35a;
+  --color-clay: #a4583f;
+  --color-bedrock: #3a3a3a;
+  --color-night: #0f1510;
+  --color-panel: #16201a;
+  --color-ink: #e8f0dc;
+  --color-ink-dim: #a9b8a0;
+  --font-pixel: "VT323", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html {
+    /* The page is dark by choice: it is read beside a terminal, and the palette
+       reads as blocks on a night field rather than as a document. */
+    color-scheme: dark;
+    background-color: var(--color-night);
+  }
+
+  body {
+    font-family: var(--font-pixel);
+    font-size: 21px;
+    line-height: 1.35;
+    color: var(--color-ink);
+    margin: 0 auto;
+    max-width: 52rem;
+    padding: 0.75rem 0.75rem 2rem;
+    background-color: var(--color-night);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  h1, h2, h3, h4 { margin: 0; font-weight: 400; letter-spacing: 0.02em; }
+  h1 { font-size: 1.75rem; }
+  h2 { font-size: 1.5rem; }
+  h3 { font-size: 1.05rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-ink-dim); margin: 1rem 0 0.25rem; }
+  /* A record's own timestamp is not a heading: it keeps the case it was written in,
+     because 2026-11-18T10:37:12.906Z in capitals is a different string. */
+  h3 time, h3 .note { text-transform: none; letter-spacing: 0; color: var(--color-ink-dim); font-size: 0.85em; }
+  h4 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-ink-dim); margin: 0.6rem 0 0.15rem; }
+
+  /* Every edge is square. There is no border-radius anywhere in this sheet: a
+     rounded corner is the one thing that stops reading as a block. */
+  * { border-radius: 0; }
+
+  time, code, dd { font-family: var(--font-pixel); font-variant-ligatures: none; }
+  code { color: var(--color-grass); overflow-wrap: anywhere; }
+  time { color: var(--color-ink-dim); font-size: 0.9em; }
+}
+
+@layer components {
+  .top { border-bottom: 2px solid var(--color-grass-dark); padding-bottom: 0.5rem; margin-bottom: 0.5rem; }
+  .count { margin: 0.25rem 0 0; color: var(--color-ink-dim); font-size: 0.95rem; }
+
+  .card {
+    border: 2px solid var(--color-grass-dark);
+    background-color: var(--color-panel);
+    padding: 0.6rem 0.7rem 0.8rem;
+    margin: 1rem 0;
+    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
+  }
+  .card > .name { color: var(--color-grass); }
+
+  /* The row wrapper is display: contents, so dt and dd are the grid items and the
+     two columns line up. Without it each wrapper is one grid item and the pairs
+     flow into the columns, which reads as a label beside the wrong value. */
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.1rem 0.9rem; margin: 0; }
+  dl > div { display: contents; }
+  dt { color: var(--color-ink-dim); }
+  dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+
+  .state {
+    display: inline-block;
+    border: 2px solid currentColor;
+    padding: 0 0.35rem;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    vertical-align: 0.1rem;
+  }
+  .state.serving { color: var(--color-grass); }
+  .state.stale { color: var(--color-sand); }
+  .state.not-ready, .state.no-heartbeat, .state.no-pod { color: var(--color-clay); }
+  .state.read-refused, .state.log-refused { color: #d06b5a; }
+
+  .state-line { margin: 0.35rem 0 0.1rem; }
+  .reason { color: var(--color-ink); }
+
+  /* --- the scene -------------------------------------------------------- */
+
+  .stage {
+    position: relative;
+    height: 9.5rem;
+    margin: 0.25rem 0 0;
+    overflow: hidden;
+  }
+
+  /* The ground: a grass diamond under the blocks, drawn as a 8px checker so it
+     reads as a field of blocks rather than as a gradient. */
+  .ground {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 21rem;
+    height: 21rem;
+    transform: translate(-50%, -50%);
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    background-image: repeating-conic-gradient(
+      var(--color-grass-dark) 0% 25%,
+      #35602a 0% 50%
+    );
+    background-size: 10px 10px;
+    opacity: 0.5;
+    image-rendering: pixelated;
+  }
+
+  .stage .row {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+  }
+
+  /* One block: a dark cube whose three faces are clipped out of a square, inset by
+     the 2px the cube's own background shows as the edge. The geometry is a true
+     isometric diamond, so the three sit on the ground plane. */
+  .cube {
+    position: relative;
+    width: 4.5rem;
+    height: 4.5rem;
+    background-color: #0b1109;
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5);
+  }
+  .cube .face {
+    position: absolute;
+    inset: 2px;
+    display: block;
+    background-image:
+      repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.12) 0 1px, transparent 1px 5px),
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 5px);
+    /* The faces are drawn by gradients. When a 16px texture lands beside this
+       file, this is the rule that keeps it from blurring at 4x. */
+    image-rendering: pixelated;
+  }
+  .face.top { clip-path: polygon(50% 0, 100% 26%, 50% 52%, 0 26%); background-color: var(--top, var(--color-grass)); }
+  .face.left { clip-path: polygon(0 26%, 50% 52%, 50% 100%, 0 74%); background-color: var(--left, var(--color-dirt)); }
+  .face.right { clip-path: polygon(100% 26%, 50% 52%, 50% 100%, 100% 74%); background-color: var(--right, var(--color-dirt-dark)); }
+
+  .cube--grass { --top: var(--color-grass); --left: var(--color-dirt); --right: var(--color-dirt-dark); }
+  .cube--sand { --top: var(--color-sand); --left: var(--color-dirt); --right: var(--color-dirt-dark); }
+  .cube--clay { --top: var(--color-clay); --left: var(--color-dirt-dark); --right: #46281a; }
+  .cube--bedrock { --top: var(--color-bedrock); --left: #2a2a2a; --right: #1e1e1e; }
+  .cube--stone { --top: var(--color-stone); --left: var(--color-stone-dark); --right: #4c4c4c; }
+  .cube--dirt { --top: var(--color-dirt); --left: var(--color-dirt-dark); --right: #46281a; }
+
+  /* --- the writing ------------------------------------------------------ */
+
+  .actions { border-top: 2px solid var(--color-grass-dark); margin-top: 0.75rem; padding-top: 0.25rem; }
+
+  .write { display: grid; gap: 0.4rem; margin: 0.4rem 0 0; }
+  .write label { display: grid; gap: 0.1rem; color: var(--color-ink-dim); font-size: 0.95rem; }
+  .write input {
+    font: inherit;
+    color: var(--color-ink);
+    background-color: #0b1109;
+    border: 2px solid var(--color-stone-dark);
+    padding: 0.25rem 0.4rem;
+    /* A thumb, not a cursor: 44 device pixels is the smallest target worth
+       aiming at, and this is a page opened on a phone. */
+    min-height: 2.75rem;
+  }
+  .write input:focus-visible { outline: 2px solid var(--color-grass); outline-offset: 1px; }
+  .write button {
+    font: inherit;
+    color: var(--color-night);
+    background-color: var(--color-grass);
+    border: 2px solid var(--color-grass-dark);
+    padding: 0.3rem 0.6rem;
+    min-height: 2.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  .write button:disabled { background-color: var(--color-stone-dark); border-color: #4c4c4c; cursor: progress; }
+
+  .result:empty { display: none; }
+  .result { border-left: 3px solid var(--color-grass); padding: 0.2rem 0 0.2rem 0.5rem; margin: 0.2rem 0 0; }
+  .result[data-outcome="refused"] { border-left-color: var(--color-clay); }
+
+  .note { color: var(--color-ink-dim); font-size: 0.9rem; margin: 0.2rem 0 0; }
+  .refused { border-left: 3px solid var(--color-clay); padding-left: 0.5rem; margin: 0.4rem 0 0; }
+  .warn { border-left: 3px solid var(--color-sand); padding-left: 0.5rem; margin: 0.3rem 0 0; color: var(--color-sand); }
+  .read { color: var(--color-ink-dim); font-size: 0.9rem; margin: 0.75rem 0 0; }
+
+  /* A phone is how this page is opened. One column of facts, a smaller scene, and
+     no horizontal squeeze on a value that has to be read in full. */
+  @media (max-width: 30rem) {
+    .stage { height: 7.5rem; }
+    .cube { width: 3.5rem; height: 3.5rem; }
+    dl { grid-template-columns: 1fr; gap: 0; }
+    dt { margin-top: 0.35rem; font-size: 0.9rem; }
+    dd { padding-bottom: 0.1rem; }
+    .ground { width: 16rem; height: 16rem; }
+    body { font-size: 20px; }
+  }
+}
