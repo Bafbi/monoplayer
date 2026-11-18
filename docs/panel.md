@@ -12,6 +12,62 @@ public route and no bearer token: the tailnet is the transport and the tailnet A
 is the authorization, so whoever may reach that device may read the page. The
 panel is never published through the playit tunnel ([public-access.md](public-access.md)).
 
+## What the page shows
+
+Per puppet, one card: what it is doing, read from the records the puppet already
+writes to its JSONL log on stdout. Read-only, and the card adds no state anywhere.
+
+The panel makes three reads to fill a card:
+
+| Read | Request |
+| --- | --- |
+| the Deployment's pod selector | `GET /apis/apps/v1/namespaces/<ns>/deployments/<deployment>` |
+| the pods that selector matches | `GET /api/v1/namespaces/<ns>/pods?labelSelector=…` |
+| the log of the pod that serves | `GET /api/v1/namespaces/<ns>/pods/<pod>/log?container=monoplayer&tailLines=400` |
+
+The records are the ones [telemetry.md](telemetry.md) documents: `heartbeat` every
+30 s, `startLive` once at start, `attach` once per attach, and the
+`preAuthRefused` and `preAuthExpired` lines the pre-auth window writes when it
+bites.
+
+**Every number carries the timestamp of the line it came from.** The `Heartbeat`
+heading prints the record's own `t`, and every row under it is that record's. The
+page's read time is printed once, at the bottom, labelled `read at`; nothing else
+is rendered as "now". A heartbeat older than three intervals says so in words. A
+stale record shown as live is the failure this page exists to prevent.
+
+**A puppet that is not serving says why**, in one of six sentences:
+
+| State | Sentence |
+| --- | --- |
+| `read-refused` | `read refused: …`, with the status the API server answered |
+| `no-pod` | `no pod: Deployment <namespace>/<name> has no pod …` |
+| `not-ready` | `pod not ready: <pod> is not Ready (<reason>) …` |
+| `log-refused` | `log fetch refused: …` |
+| `no-heartbeat` | `no heartbeat in the last N lines of <pod> …`, with the newest line's timestamp |
+| `serving` | `serving: the newest heartbeat was written N s ago …` |
+
+Two facts are stated only by the lines that carry them, and the card says so
+rather than guessing:
+
+- **The attach whitelist's size and the effective backend** come from the
+  `startLive` record. The tail is 400 lines, so a pod older than that has no start
+  record in it: the card prints `unknown, and no start record is in the tail`, and
+  shows the registry's own backend beside it, labelled `registry` with no
+  timestamp. A successful `backendReconnect` line moves the effective backend,
+  because a puppet that followed a transfer is not where it started.
+- **`preAuth.maxConnections` and `preAuth.deadlineMs` are not in the heartbeat.**
+  A refusal line carries the cap, an expiry line carries the deadline, so each cap
+  is shown with the timestamp of the last line that stated it, and as unknown when
+  no line has.
+
+`account.expiresAt` is projected from the custody cache at each heartbeat, so the
+card's date is at most 30 s old. Inside seven days the card adds a warning
+sentence. `null` means the custody cache does not say, which is not "no expiry".
+
+`GET /api/puppets/<name>` serves the same facts as one JSON object, for an agent
+that would rather not parse the page. A name the registry does not hold is a 404.
+
 ## What the panel can and cannot touch
 
 It writes one object per puppet, and the registry names it. Everything else it
@@ -37,10 +93,9 @@ And, by design:
   grants `create`, `delete`, `secrets` or a wildcard, or when the Service stops
   being the tailscale class.
 
-Today the page and its JSON route read the registry only, so none of those verbs
-is exercised yet: the write routes are the next tickets of
-[epic #228](https://github.com/Bafbi/monoplayer/issues/228). The Role is declared
-now so the scope is reviewable now, and it is inert until then.
+The page uses the three read rules today. The write rule is declared and not yet
+exercised: the write routes are the next tickets of
+[epic #228](https://github.com/Bafbi/monoplayer/issues/228).
 
 ## It ships with the proxy
 
@@ -140,9 +195,12 @@ name still resolves and refuses; removing the tree removes the name with it.
 ## Check it
 
 ```bash
-curl http://monoplayer.tail41e568.ts.net:8080/healthz   # {"ok":true}
-curl http://monoplayer.tail41e568.ts.net:8080/api/puppets
+curl http://monoplayer.tail41e568.ts.net:8080/healthz             # {"ok":true}
+curl http://monoplayer.tail41e568.ts.net:8080/api/puppets         # the registry
+curl http://monoplayer.tail41e568.ts.net:8080/api/puppets/glowsquidye
 ```
+
+The third is one puppet's facts, the same object the card is rendered from.
 
 `/healthz` never reads the registry, so it answers while the document is broken and
 the two content routes return 500 with the reason. The first log line of the pod
@@ -165,6 +223,12 @@ mise run panel:run    # http://127.0.0.1:8080
 
 It reads `deploy/panel/registry.yaml` through the same parser the pod uses, so a
 registry edit is visible here before it is merged.
+
+A panel run from a checkout has no ServiceAccount token, so every card reads
+`read refused: no service account token at
+/var/run/secrets/kubernetes.io/serviceaccount/token` and the registry facts are
+still on it. That sentence is the point: a panel that cannot read the cluster
+names the read that failed instead of showing a spinner.
 
 ## The image, and one known skew
 
