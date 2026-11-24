@@ -204,6 +204,10 @@ run = "scripts/gate-lane.sh down"
 description = "Report what the gate lane runs and what is ready, so a reader can see whether the lane was left up."
 run = "scripts/gate-lane.sh status"
 
+[tasks.lanes]
+description = "List every gate lane on the cluster with its age and the worktree that owns it. Add -- --reap to delete the lanes idle past the window (MONOPLAYER_GATE_IDLE_WINDOW, six hours by default), and -- --window SECONDS to set that window for one run."
+run = "scripts/gate-lane.sh lanes"
+
 [tasks."observer:run"]
 description = "Run the server-view report: the direct baseline join and the puppet join on paper-conduct, the gate-serving Paper, compared (#12)."
 depends = ["install", "observer:build"]

@@ -2,9 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: paper
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper
     app.kubernetes.io/part-of: monoplayer
 spec:
   # 0 at rest: `mise run gate:up` wakes this, and `gate:down` puts it back (#115).
@@ -13,11 +13,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: monoplayer-gate-b-paper
+      app.kubernetes.io/name: monoplayer-gate-__instance__-paper
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: monoplayer-gate-b-paper
+        app.kubernetes.io/name: monoplayer-gate-__instance__-paper
         app.kubernetes.io/part-of: monoplayer
     spec:
       containers:
@@ -64,7 +64,7 @@ spec:
             - name: RCON_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: gate-b-rcon
+                  name: gate-__instance__-rcon
                   key: password
           ports:
             - name: minecraft
@@ -99,14 +99,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: paper
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper
     app.kubernetes.io/part-of: monoplayer
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper
   ports:
     - name: minecraft
       port: 25565
@@ -119,17 +119,17 @@ apiVersion: v1
 kind: Service
 metadata:
   name: paper-g0
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper
     app.kubernetes.io/part-of: monoplayer
   annotations:
-    tailscale.com/hostname: monoplayer-gate-b-paper
+    tailscale.com/hostname: monoplayer-gate-__instance__-paper
 spec:
   type: LoadBalancer
   loadBalancerClass: tailscale
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-paper
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper
   ports:
     - name: minecraft
       port: 25565

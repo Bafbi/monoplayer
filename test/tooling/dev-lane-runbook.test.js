@@ -53,10 +53,12 @@ function firstUse (text, task) {
 test('AGENTS.md carries the rule, because that is what an agent reads', () => {
   const lanes = section(AGENTS, 'Lanes')
 
-  // The three lanes, by the namespace each manifest declares.
+  // The three lanes, by the namespace each manifest declares. The gate lane is one
+  // per worktree, so its row names the shape and the task that lists them (#279).
   assert.match(lanes, /`monoplayer`/, 'the live namespace is named')
   assert.match(lanes, /monoplayer-dev/, 'the dev namespace is named')
-  assert.match(lanes, /monoplayer-gate-b/, 'the gate Paper is named')
+  assert.match(lanes, /monoplayer-gate-<instance>/, 'the gate lane is named, and that it is one per worktree')
+  assert.match(lanes, /mise run lanes/, 'with the task that lists every lane')
 
   // The rule itself.
   assert.match(lanes, /Never take the live lane down, scale it, patch it, or restart it for a test/,

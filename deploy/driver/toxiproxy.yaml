@@ -16,10 +16,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: gate-b-toxiproxy-proxies
-  namespace: monoplayer-gate-b
+  name: gate-__instance__-toxiproxy-proxies
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
     app.kubernetes.io/part-of: monoplayer
 data:
   proxies.json: |
@@ -42,9 +42,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: toxiproxy
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
     app.kubernetes.io/part-of: monoplayer
 spec:
   # 0 at rest: `mise run gate:up` wakes this, and `gate:down` puts it back (#115).
@@ -53,11 +53,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+      app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+        app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
         app.kubernetes.io/part-of: monoplayer
     spec:
       containers:
@@ -99,7 +99,7 @@ spec:
       volumes:
         - name: proxies
           configMap:
-            name: gate-b-toxiproxy-proxies
+            name: gate-__instance__-toxiproxy-proxies
             items:
               - key: proxies.json
                 path: proxies.json
@@ -109,14 +109,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: toxiproxy
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
     app.kubernetes.io/part-of: monoplayer
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
   ports:
     - name: px-velocity
       port: 25570
@@ -130,14 +130,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: toxiproxy-api
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
     app.kubernetes.io/part-of: monoplayer
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-toxiproxy
+    app.kubernetes.io/name: monoplayer-gate-__instance__-toxiproxy
   ports:
     - name: api
       port: 8474
