@@ -512,6 +512,20 @@ export async function startLive ({ argv = [], io = process } = {}) {
       })
       telemetry.metric('monoplayer.picker_picks', 1, { server: pick.server?.name ?? null })
     },
+    // #266: the answer to a chosen server's own dialog. Recorded, not acted on:
+    // the verb names a body this lane does not connect from the configuration
+    // phase, and #267 is the ticket that changes that.
+    onPickerVerb: verb => {
+      log('pickerVerbRecorded', {
+        verb: verb.verb,
+        server: verb.server?.name ?? null,
+        slug: verb.slug,
+        id: verb.id,
+        uuid: verb.uuid,
+        username: verb.name
+      })
+      telemetry.metric('monoplayer.picker_verbs', 1, { verb: verb.verb, server: verb.server?.name ?? null })
+    },
     wireCheck: payload => wire.check(payload),
     wireMode: 'warn',
     chat: cfg.chat,
