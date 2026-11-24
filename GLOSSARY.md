@@ -1,15 +1,45 @@
 # Monoplayer
 
-Monoplayer holds one Minecraft account's session open on a server and lets whitelisted players attach to that session and play through it.
+Monoplayer holds one Minecraft account's sessions open on many servers at once, and lets whitelisted players claim one of them to play through it, or watch it.
+
+## The model
+
+**Account**:
+One Minecraft identity: one profile and one refresh-token chain, held in custody. It owns every body it has logged in on, and the one Monoplayer holds is the puppet.
+_Avoid_: user, player, login, alt
+
+**Body**:
+One session of the account on one game server: the connection that server sees, and the player it sees standing in its world. A body outlives every claim, and there is at most one per allowed server.
+_Avoid_: backend session, puppet session, character, alt
+
+**Claim**:
+One attaching player's exclusive control of a body, held by the connection that made it and released when that connection ends. The player who holds it is the body's driver, and any other player watching the body is a spectator.
+_Avoid_: lease, lock, slot, seat, take
+
+**Driver**:
+The attaching player who holds a body's claim, and so drives it. Their movement moves the body, their commands are spoken as the puppet, and their chat text is dropped.
+_Avoid_: controller, owner, player in control, operator
+
+**Spectator**:
+An attaching player who watches a body without control. They receive the body's world and the body itself, and nothing they send reaches the server.
+_Avoid_: viewer, watcher, observer, audience
+
+**Picker**:
+The configuration-phase dialog an attaching player lands in before they have a body: one entry per allowed server, labelled with that server's body and who is driving it. Picking a server opens its own dialog, which claims that body, watches it, or disconnects it.
+_Avoid_: lobby, menu, server list, hub, browser
+
+**Allowed server**:
+One game server an attaching player may pick in the picker. The list of them is a key of the control document, so adding one is a panel edit and not a deploy.
+_Avoid_: whitelisted server, approved server, server whitelist, target
 
 ## Accounts and identity
 
 **Puppet**:
-The Minecraft account whose session Monoplayer holds on a server. Nobody plays it directly while Monoplayer holds it.
+The Minecraft account whose bodies Monoplayer holds. Nobody plays it directly while Monoplayer holds it.
 _Avoid_: bot, alt, proxy account, puppet client
 
 **Attaching player**:
-The person who connects to Monoplayer to play through the puppet's session, and the Minecraft account they use for it.
+The person who connects to the front leg, and the Minecraft account they use for it, who drives a body by claiming it or watches it as a spectator.
 _Avoid_: client, user, guest, second player
 
 **Custody**:
@@ -41,7 +71,7 @@ The game server's own whitelist, which names the puppet and does not name the at
 _Avoid_: server whitelist, whitelist
 
 **Attach check**:
-The two steps an attaching player passes before play: the whitelist review, then session verification.
+The two steps an attaching player passes before they drive a body: the whitelist review, then session verification.
 _Avoid_: attach gate, auth gate, login gate
 
 **Whitelist review**:
@@ -55,7 +85,7 @@ _Avoid_: hasJoined check, auth check
 ## The proxy
 
 **Service**:
-The running Monoplayer process: config, core, both legs, custody, and the CLI. It holds one puppet session open and serves one attach at a time.
+The running Monoplayer process: config, core, both legs, custody, and the CLI. It holds the account's bodies open and serves one claim per body, with any number of spectators.
 _Avoid_: app, daemon, the proxy, the bot
 
 **Control document**:
@@ -63,11 +93,11 @@ The two files an operator edits between deploys, named by `config.control.file` 
 _Avoid_: control file, runtime config, feature flag, control dialog
 
 **Desired backend**:
-The host and port in `desired.json`: where the next backend connect should go. It applies on the next connect, and only while no player is attached, because a reconnect is not an operator's act. Moving a session that has a player on it is the backend move, which the same document starts from the heartbeat. With `control.allowBackendSwitch` off, the lane names the file once and stays on its configured backend, whoever is attached.
+_Superseded by_ the allowed-server list: a body's server is the one a player picked. Until then, the host and port in `desired.json`: where the next backend connect should go. It applies on the next connect, and only while no player is attached, because a reconnect is not an operator's act. Moving a session that has a player on it is the backend move, which the same document starts from the heartbeat. With `control.allowBackendSwitch` off, the lane names the file once and stays on its configured backend, whoever is attached.
 _Avoid_: target server, new backend, switch
 
 **Backend move**:
-An operator pointing a puppet at another backend by writing `desired.json`, and the puppet carrying it out on its heartbeat. It is not a transfer: no server asked for it, and the target is dialled with a fresh login rather than a transfer intent. With a player attached, the player keeps their connection through it, and the move counts in the reconfiguration counters because it is that machine running. With nobody attached, the puppet moves alone, no reconfiguration happens, and only the `backendMove` log line records it. A failed move puts the player back on the backend they came from.
+_Superseded by_ the picker's claim: the front connects a body when a player picks it, so no operator moves a running one. Until then, an operator points a puppet at another backend by writing `desired.json`, and the puppet carries it out on its heartbeat. It is not a transfer: no server asked for it, and the target is dialled with a fresh login rather than a transfer intent. With a player attached, the player keeps their connection through it, and the move counts in the reconfiguration counters because it is that machine running. With nobody attached, the puppet moves alone, no reconfiguration happens, and only the `backendMove` log line records it. A failed move puts the player back on the backend they came from.
 _Avoid_: hot swap, live migration, transfer, redirect
 
 **Testbed front**:
@@ -87,7 +117,7 @@ The playit.gg tunnel's address, the one way to the front from outside the tailne
 _Avoid_: public door, public address, ingress, port forward
 
 **Backend leg**:
-Monoplayer's client-side connection: the socket that holds the puppet's session on the game server, authenticated as the puppet.
+Monoplayer's client-side connection: the socket that holds one body's session on its game server, authenticated as the puppet.
 _Avoid_: backend, puppet leg, egress
 
 **Offline leg**:
@@ -95,19 +125,19 @@ A front leg or backend leg that runs on loopback without Microsoft auth, using v
 _Avoid_: test leg, fake leg, dev mode
 
 **Core**:
-The pure engine between the two legs: session state, the state cache, the clientbound policy, attach synthesis, identity, and relay decisions. It owns no socket and no clock.
+The pure engine between the two legs: the picker, the claim, each body's session state and state cache, the clientbound policy, what each client has been sent, identity, and relay decisions. It owns no socket and no clock.
 _Avoid_: engine, proxy core, relay
 
 **Backend session**:
-The puppet's authenticated connection to one game server. One backend session means one backend login, and it outlives every attach.
+_Superseded by_ body, one per server. The code's word for a body today: the puppet's authenticated connection to one game server, which outlives every attach.
 _Avoid_: puppet session, connection, login
 
 **Session state**:
-The stage a backend session is in. The stages are boot (no connection), warm (a complete join is cached), configuring (a player attached before the join is cached), attached (a player is playing through it), detached (no player, session alive), transferring (a player following the puppet to another server), reconnecting (one retry pending), and failed (the retry budget is spent).
+The stage a body is in. The stages are boot (no connection), warm (a complete join is cached), configuring (a player connected before the join is cached), attached (a driver holds the claim), detached (nobody is driving it, and the body is alive), transferring (the driver is following the body to another server), reconnecting (one retry pending), and failed (the retry budget is spent).
 _Avoid_: status, phase
 
 **Warm**:
-The state in which the state cache holds a complete join for the current backend session, so an attach can be served from it.
+The state in which the state cache holds a complete join for the current body, so a claim can be served from it.
 _Avoid_: ready, primed, loaded
 
 **Warm fallback**:
@@ -115,15 +145,15 @@ Declaring the join prefix settled at its current edge when the backend never mar
 _Avoid_: forced warm, grace window
 
 **Attach-ready**:
-Warm with no attaching player in the way, so the attach check can pass.
+Warm with no claim on the body, so the attach check can pass.
 _Avoid_: ready, healthy
 
 **Attach**:
-One attaching player taking over the puppet's session through the front leg and receiving the attach stream.
+An attaching player's connection to the front leg, authenticated as that player. Driving a body or watching one is a role the claim decides, not a property of the attach.
 _Avoid_: join, connect, takeover
 
 **Attach slot**:
-The single place for one attaching player. A second connection is denied while the slot is held.
+_Superseded by_ claim, one per body. Today the code admits one attaching player and denies a second connection; the claim replaces it.
 _Avoid_: client slot, seat
 
 **Pre-auth window**:
@@ -131,15 +161,15 @@ The stretch of a front-leg connection from the accepted socket to the moment the
 _Avoid_: auth window, login window, flood window, connection queue
 
 **Detach**:
-The attaching player's connection ending while the backend session survives.
+An attaching player's connection to the front leg ending while the body survives. It is the normal case: the body stays, and another player may claim it or watch it.
 _Avoid_: disconnect, logout
 
 **Backend fault**:
-The backend session ending without a deliberate teardown: a socket end, a kick, a timeout, or a server restart.
+A body's connection ending without a deliberate teardown: a socket end, a kick, a timeout, or a server restart.
 _Avoid_: crash, outage, disconnect
 
 **Reconnect**:
-Re-establishing the backend session after a fault, with at most one attempt pending at a time and a capped backoff.
+Re-establishing a body's connection after a fault, with at most one attempt pending at a time and a capped backoff.
 _Avoid_: retry, reconnect loop
 
 **Reconfiguration**:
@@ -147,7 +177,7 @@ The client's own configuration phase restarting on the connection it holds, serv
 _Avoid_: config reload, rejoin, reconnect
 
 **Seamless transfer**:
-A followed transfer that keeps the attaching client's connection and lands it in the target's play state through a reconfiguration. On by default (`transfer.keepConnection: true`).
+A followed transfer that keeps the driver's connection and lands it in the target's play state through a reconfiguration. On by default (`transfer.keepConnection: true`).
 _Avoid_: hot swap, live migration
 
 **Transfer**:
@@ -155,7 +185,7 @@ A server instruction, sent on the puppet's connection, to move the session to an
 _Avoid_: redirect, handoff, switch
 
 **Transfer follow**:
-Monoplayer's decision to move the puppet to a transfer's target rather than pass the transfer to the attaching player. With a client attached, the client follows on its own connection (see seamless transfer); with nobody attached, the puppet moves alone.
+Monoplayer's decision to move the puppet to a transfer's target rather than pass the transfer to the driver. With a driver on the body, the driver follows on their own connection (see seamless transfer); with no driver, the puppet moves alone.
 _Avoid_: redirect follow, migration
 
 **Follow budget**:
@@ -181,35 +211,35 @@ One of six outcomes the clientbound policy returns for a frame. State caches, re
 _Avoid_: action, verdict
 
 **Control dialog**:
-A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the player who answers it, and their answer goes back to the server as the puppet's own frame. It shares nothing with the control document but the adjective.
+A server question that a player answers: `show_dialog` and `clear_dialog` in play or in configuration, and `code_of_conduct` in configuration. It crosses to the driver who answers it, and their answer goes back to the server as the puppet's own frame. It shares nothing with the control document but the adjective.
 _Avoid_: prompt, popup, form, UI, control
 
 **Dialog codec**:
-The two halves of a control dialog's wire form, and the rule that decides whether the puppet may answer one: the reader that lists a `show_dialog`'s actions and chooses one, the encoder that builds the `custom_click_action` body, and the per-dialog decision that refuses a play dialog and stands down while a player is attached. The leg asks that question once per dialog, counts the answers against its cap, and writes the frame.
+The two halves of a control dialog's wire form, and the rule that decides whether the puppet may answer one: the reader that lists a `show_dialog`'s actions and chooses one, the encoder that builds the `custom_click_action` body, and the per-dialog decision that refuses a play dialog and stands down while a body has a driver. The leg asks that question once per dialog, counts the answers against its cap, and writes the frame.
 _Avoid_: dialog helper, dialog utils
 
 **Resource pack**:
-A control frame the server pushes once per connection with `add_resource_pack` and withdraws with `remove_resource_pack` — one pack by UUID, or every pack when the UUID is absent. It is the player's to accept or decline, and their `resource_pack_receive` reaches the server as the puppet's own frame, in each stage the client sends, while the puppet is in the state that frame was sent in. With no player attached, the puppet accepts and loads.
+A control frame the server pushes once per connection with `add_resource_pack` and withdraws with `remove_resource_pack` — one pack by UUID, or every pack when the UUID is absent. It is the driver's to accept or decline, and their `resource_pack_receive` reaches the server as the puppet's own frame, in each stage the client sends, while the puppet is in the state that frame was sent in. With no driver on the body, the puppet accepts and loads.
 _Avoid_: texture pack, pack request, pack push
 
 **Pending resource pack**:
-A pack the backend sent that a client can still be shown. Monoplayer holds one copy per pack UUID outside the state cache, because the server sends a pack once and a later player would otherwise get nothing. `remove_resource_pack` drops it, a backend teardown or a failed transfer drops it, and a player's answer never does.
+A pack the backend sent that a client can still be shown. Monoplayer holds one copy per pack UUID outside the state cache, because the server sends a pack once and a later player would otherwise get nothing. `remove_resource_pack` drops it, a backend teardown or a failed transfer drops it, and a driver's answer never does.
 _Avoid_: pack cache, pack queue
 
 **Pending dialog**:
-The last control dialog no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog`, on the player's answer, or when the puppet answers a configuration gate the last player left, and re-sends it when a player attaches in its phase.
+The last control dialog on a body that no player has answered. Monoplayer holds it, replaces it when a newer one arrives, drops it on `clear_dialog`, on the driver's answer, or when the puppet answers a configuration gate the last driver left, and re-sends it when the body is claimed in that phase.
 _Avoid_: dialog queue, dialog cache
 
 **Play dialog**:
-A control dialog the backend asks in the play phase. It belongs to the player: the attached client answers it or it waits, and the puppet never clicks one, attached or not. `MONOPLAYER_DIALOG_ACTION` does not cover it.
+A control dialog the backend asks in the play phase. It belongs to the driver, who answers it or leaves it waiting, and the puppet never clicks one, driven or not. `MONOPLAYER_DIALOG_ACTION` does not cover it.
 _Avoid_: play gate, in-game dialog
 
 **Configuration gate**:
-A control dialog the backend asks in the configuration phase, including the code of conduct. A headless puppet may answer one with `MONOPLAYER_DIALOG_ACTION`; an attached player always gets it instead.
+A control dialog the backend asks in the configuration phase, including the code of conduct. A headless puppet may answer one with `MONOPLAYER_DIALOG_ACTION`; a driver always gets it instead.
 _Avoid_: config dialog, join gate
 
 **Gate fallback**:
-The puppet's own answer to a configuration gate while no player is attached: it accepts the gate and logs `codeOfConductAccepted`. A gate the protocol library answers itself, the code of conduct, always takes this path when no player holds the slot; a gate with buttons is `MONOPLAYER_DIALOG_ACTION`'s. While a player is attached the gate is theirs and there is no timeout. The fallback also applies when the last player detaches with the gate still open and the puppet still in configuration, because that is the same condition becoming true.
+The puppet's own answer to a configuration gate while nobody drives the body: it accepts the gate and logs `codeOfConductAccepted`. A gate the protocol library answers itself, the code of conduct, always takes this path when no player drives the body; a gate with buttons is `MONOPLAYER_DIALOG_ACTION`'s. While a driver holds the claim the gate is theirs and there is no timeout. The fallback also applies when the last driver detaches with the gate still open and the puppet still in configuration, because that is the same condition becoming true.
 _Avoid_: auto-accept, gate timeout
 
 **Per-leg frame**:
@@ -217,11 +247,11 @@ A frame that belongs to the connection that received it, such as a keep-alive, a
 _Avoid_: connection frame, local frame
 
 **State cache**:
-The bounded store of clientbound frames from the backend session, split by the kind of state it holds so that an attach is rebuilt from state rather than from a frame history.
+The bounded store of clientbound frames from one body, split by the kind of state it holds so that a joining player is served from state rather than from a frame history. A body has one, shared by its driver and its spectators, so a replay is computed once per body.
 _Avoid_: frame cache, buffer, ring
 
 **Entity slot**:
-One addressable piece of one entity's cached state: a metadata index, one effect, the removal, or one other entity frame that carries a whole value. A slot holds the newest raw frame for its key, so an attach replays each piece once, at its last value, and a body always replays beside the spawn that gave it a model.
+One addressable piece of one entity's cached state: a metadata index, one effect, the removal, or one other entity frame that carries a whole value. A slot holds the newest raw frame for its key, so an attach replays each piece once, at its last value, and an entity always replays beside the spawn that gave it a model.
 _Avoid_: entry, cell, field
 
 **Join prefix**:
@@ -229,15 +259,15 @@ The ordered frames of a join, captured verbatim until warm, that every later att
 _Avoid_: login prefix, join sequence
 
 **Configuration replay**:
-The cached configuration-phase frames replayed to a new attaching player in place of the server's own configuration phase.
+A body's cached configuration-phase frames, replayed to a joining player in place of the server's own configuration phase. The picker's frames are not a replay: the front writes them, with no backend behind them.
 _Avoid_: config replay, registry replay
 
 **Play state**:
-The protocol phase after configuration, where the world and its players exist. A client's `player_info` entries belong to one play state. A new play state starts with none, and both a fresh connection and a reconfiguration create one.
+The protocol phase after configuration, where a body's world and its players exist. A client's `player_info` entries belong to one play state. A new play state starts with none, and a fresh connection, a reconfiguration, and a pick each create one.
 _Avoid_: world state, in-game
 
 **Attach stream**:
-The ordered clientbound frames Monoplayer sends for one attach: configuration replay, join prefix, one synthesized position, then the rest of the cached state.
+The ordered clientbound frames Monoplayer sends to one player: configuration replay, join prefix, one synthesized position, then the rest of the body's cached state. A driver and the body's spectators receive the same stream, and it survives a body's reconnect.
 _Avoid_: replay, join packet, attach payload
 
 **Synthesized position**:
@@ -245,31 +275,31 @@ The one position frame per attach that Monoplayer writes itself, at the puppet's
 _Avoid_: fake position, snap
 
 **Pose**:
-The puppet's last known position and rotation, taken from backend teleports and from the attaching player's movement.
+The puppet's last known position and rotation, taken from backend teleports and from the driver's movement.
 _Avoid_: location, coordinates
 
 **Serverbound drop**:
-A frame from the attaching player that Monoplayer answers or discards instead of forwarding, because it belongs to a connection rather than to the session.
+A frame from the driver that Monoplayer answers or discards instead of forwarding, because it belongs to a connection rather than to the session.
 _Avoid_: filter, blocked packet
 
 **Speak**:
-To send the attaching player's message or command text on the backend leg as the puppet, signing it with the puppet's profile keys and its own last-seen window. The proxy never forwards the player's chat frame: its signature and window belong to the player's connection.
+To send the driver's message or command text on the backend leg as the puppet, signing it with the puppet's profile keys and its own last-seen window. The proxy never forwards the player's chat frame: its signature and window belong to the player's connection.
 _Avoid_: forward chat, proxy chat, relay chat
 
 **Chat mode**:
-The `config.chat` setting. `read-only` (the default) relays the server's chat and drops the player's text; `commands` speaks the player's commands and still drops their chat text; `full` also speaks the player's chat text and relays the server's signed player chat; `off` blocks both directions.
+The `config.chat` setting. `read-only` (the default) relays the server's chat and drops the driver's text; `commands` speaks the driver's commands and still drops their chat text; `full` also speaks the driver's chat text and relays the server's signed player chat; `off` blocks both directions.
 _Avoid_: mute, disable chat
 
 **Read-only chat**:
-The `read-only` chat mode: the attaching player sees the server's chat and cannot speak. `system_chat` and `profileless_chat` are relayed; the player's own chat text and the server's signed `player_chat` stay off.
+The `read-only` chat mode: the driver sees the server's chat and cannot speak. `system_chat` and `profileless_chat` are relayed; the player's own chat text and the server's signed `player_chat` stay off.
 _Avoid_: muted chat, one-way chat
 
 **Commands chat**:
-The `commands` chat mode: the attaching player's commands are spoken as the puppet, so `/profil`, `/msg`, and `/tp` reach the server, and their open chat text is dropped. Its clientbound side is read-only chat, so a reply the server sends as `player_chat` does not reach them.
+The `commands` chat mode: the driver's commands are spoken as the puppet, so `/profil`, `/msg`, and `/tp` reach the server, and their open chat text is dropped. Its clientbound side is read-only chat, so a reply the server sends as `player_chat` does not reach them.
 _Avoid_: command-only chat, slash mode
 
 **Proxy notice**:
-A message Monoplayer writes to the attaching player in its own voice, such as a refused transfer. It rides a synthetic advancement built to show a toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
+A message Monoplayer writes to the driver in its own voice, such as a refused transfer. It rides a synthetic advancement built to show a toast, added and removed in the same call so the client's advancement state is unchanged afterwards, and falls back to local system chat when the toast frame cannot be written.
 _Avoid_: local chat, notice toast
 
 **Wire check**:
@@ -327,7 +357,7 @@ One named claim that a check makes and that fails the run when false.
 _Avoid_: test case, expectation
 
 **State parity**:
-The check that the state an attaching player decoded equals the state the attach stream claimed to replay.
+The check that the state a driver decoded equals the state the attach stream claimed to replay.
 _Avoid_: equivalence check, replay diff
 
 **Validation row**:
