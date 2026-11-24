@@ -67,7 +67,22 @@ single lane take it as `MONOPLAYER_GATE_NAMESPACE` until #282 lands:
 
 ```bash
 MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run online:cluster
+MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run observer:run
 ```
+
+The driver takes the lane by two flags instead, because its join address and its
+RCON target are separate values (`src/driver/run.js`), and `mise run
+driver:scenario` forwards no arguments:
+
+```bash
+L=$(scripts/gate-lane.sh name)
+node src/driver/run.js --runs 2 \
+  --rcon-namespace $L --server $L-paper.tail41e568.ts.net:25565
+```
+
+That is the task's own command with the lane named. One run at a time on the
+display host: the rung relaunches one Prism instance over SSH and drives its
+keyboard, so a second run would drive one client.
 
 `mise run lanes` is what makes a crashed run visible instead of invisible. One
 row per lane: the namespace, how long since it last ran `up` or `down`, its pod
@@ -182,8 +197,9 @@ The namespace, the labels, the Secrets and the two tailnet hostnames are derived
 now, which is what #277, #278 and #279 did. The tree spells a placeholder, and one
 instance names all of them. Every row left in the table still migrates by hand, when
 the change that reads it arrives. The copies in `src/driver/`,
-`scripts/online-cluster.sh` and `tools/` keep the old name until #281 and #282 land.
-`docs/testing-ladder.md` keeps it until #281 rewrites its rows.
+`scripts/online-cluster.sh` and `tools/` keep the old name until #282 and #301 land.
+Until they do, the rungs name it and the docs say which lane they dial, so a run
+that wants its own lane names it.
 
 ## Paper G0 backend
 

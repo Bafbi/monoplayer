@@ -114,6 +114,37 @@ mise run dev:custody:status            # uuid, alias, files, lock state
 mise run dev:custody:status -- --refresh   # the silent refresh, guarded
 ```
 
+## One run at a time on this lane
+
+This is not a gate lane. It has no instance, no derived name and no reaper:
+`monoplayer-dev` is one namespace for every worktree, and the dev account outlives
+every run. Two agents get two gate lanes, and one dev lane unless one of them
+names another namespace by hand.
+
+`MONOPLAYER_DEV_NAMESPACE` names another namespace by hand. Nothing derives it and
+nothing reaps it, because the claim holds the only copy of one account: a reaper
+that deleted an idle dev lane would delete a refresh chain somebody has to approve
+again.
+
+So a dev run never goes beside another dev run. Three things make the second one
+unsafe rather than slow:
+
+- the proxy is one replica with the `Recreate` strategy, holding one
+  `ReadWriteOnce` claim, so the lane has one writer of one account;
+- `mise run dev:up` applies `deploy/dev`, whose Deployment carries
+  `ghcr.io/bafbi/monoplayer:main`, so a second `up` drops a branch pin from under
+  the first run; and `mise run dev:down` deletes the Deployment that run is using;
+- one account joins one dev Paper, and a server kicks the first session when the
+  same account opens two.
+
+Every run above rungs 0-2 that needs this lane serialises on that.
+`docs/testing-ladder.md` says which runs are doorways to it.
+
+The lane's two Secrets are its own, and neither name carries an instance because
+the lane has none. `mise run dev:up` generates `dev-rcon` when it is absent, and
+`ghcr-pull` is copied once from the live lane. `mise run dev:down` keeps both.
+`mise run dev:down -- --purge` deletes the namespace, and the Secrets with it.
+
 ## When the volume is empty
 
 The proxy waits for an account before it starts: its `wait-custody` init
