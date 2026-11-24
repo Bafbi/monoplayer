@@ -106,14 +106,28 @@ const SHIM = [
   'printf \'shim %s\n\' "$*" >&2',
   'state="$KUBECTL_STATE"',
   'count () { n=0; [ -f "$state/$1" ] && n=$(cat "$state/$1"); echo $((n+1)) > "$state/$1"; printf \'%s\' "$n"; }',
+  // The word after "secret" in an argv: every Secret call the script makes is
+  // `-n <ns> <verb> secret <name>`, so this reads the script's intent without
+  // parsing its output.
+  'arg_after () { local n=$1 prev="" w; shift; for w in "$@"; do [ "$prev" = "$n" ] && { printf "%s" "$w"; return; }; prev=$w; done; }',
+  // The Secrets a case says are absent are the ones up has to generate. A list of
+  // names, or "all", keeps one switch for every Secret in the lane.
+  'absent () { case " ${KUBECTL_SECRET_MISSING:-} " in *" all "*) return 0 ;; *" $1 "*) return 0 ;; esac; return 1; }',
   'case " $* " in',
   // An apply reconciles the tree, so a case's awake row only reads as awake before one.
   // Removing that marker makes the read-after-apply ordering fail, which is the point.
   '  *" apply -k "*) cat > /dev/null; touch "$state/applied"; printf \'configured\n\'; exit 0 ;;',
   '  *" scale "*) printf \'scaled\n\'; exit 0 ;;',
-  // One named Secret can be missing, so a case can prove which Deployment reads
-  // which, rather than only that the check exists.
-  '  *" get secret "*) if [ -n "${KUBECTL_SECRET_MISSING:-}" ]; then case " $* " in *" $KUBECTL_SECRET_MISSING "*) printf \'not found\n\' >&2; exit 1 ;; esac; fi; exit 0 ;;',
+  // A Secret that exists is answered as it is: up must not touch it. A missing one
+  // answers the way kubectl does, which is what sends up down the generate path.
+  '  *" get secret "*) name=$(arg_after secret "$@"); if absent "$name"; then printf \'Error from server (NotFound): secrets "%s" not found\n\' "$name" >&2; exit 1; fi; exit 0 ;;',
+  // A generated Secret reaches kubectl on stdin, so a case reads exactly what up
+  // wrote without up ever printing a value.
+  // `printf "%s\\n" ---`, not `printf ---`: bash reads a format that starts with a
+  // dash as an option and prints nothing, so the marker would vanish.
+  '  *" apply -f -"*) { printf "%s\\n" ---; cat; } >> "$state/secrets.yaml"; printf \'configured\n\'; exit 0 ;;',
+  // A selector that matches nothing is what a lane with a hand-made Secret sees.
+  '  *" delete secret "*) printf \'No resources found\n\' >&2; exit 0 ;;',
   // A readiness read answers empty until the case lets it answer 1. The counter
   // is per call, so "not ready yet" is a first read rather than a fixed answer.
   // The two replica reads, answered apart: spec.replicas is what the lane claims, and
@@ -162,6 +176,26 @@ function run (where, args = [], env = {}) {
     ? fs.readFileSync(where.log, 'utf8').trim().split('\n').filter(Boolean)
     : []
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
+}
+
+// The Secrets a run generated. The shim keeps the YAML each `apply -f -` was fed,
+// so a case reads the value the run wrote without the run ever printing it.
+function uploads (where) {
+  const file = path.join(where.state, 'secrets.yaml')
+  if (!fs.existsSync(file)) return []
+  return fs.readFileSync(file, 'utf8').split(/^---$/m).filter(block => block.trim()).map(block => ({
+    name: block.match(/^  name: (\S+)$/m)[1],
+    namespace: block.match(/^  namespace: (\S+)$/m)[1],
+    managedBy: block.match(/app\.kubernetes\.io\/managed-by: (\S+)/)?.[1] ?? null,
+    key: block.match(/^stringData:\n  (\S+): /m)[1],
+    value: block.match(/^stringData:\n  \S+: (\S+)$/m)[1]
+  }))
+}
+
+// A run in which no Secret exists, so up has to make every one it needs.
+function generated (where, args, env = {}) {
+  const result = run(where, args, { KUBECTL_SECRET_MISSING: 'all', ...env })
+  return { ...result, made: uploads(where) }
 }
 
 // The deployments one scale call names, and the count it asks for.
@@ -254,9 +288,13 @@ test('gate:down takes the whole lane to 0 and waits for the pods to go', () => {
   const listings = calls.filter(line => /get pods/.test(line)).length
   assert.ok(listings > gateWorkloads().length, 'the pods are read more than once: ' + listings)
   assert.match(output, /waiting up to 180s for their pods to go/)
-  // Nothing is deleted: the Secrets are hand-created (deploy/driver/README.md)
-  // and the emptyDir worlds die with their pods either way.
-  assert.equal(calls.some(line => /\bdelete\b/.test(line)), false, 'no delete: ' + calls.join(' | '))
+  // The one delete a stop makes is of the Secrets up generated, and it is by label
+  // (#278). No workload, Service or ConfigMap goes: the emptyDir worlds die with
+  // their pods either way.
+  for (const line of calls.filter(call => /\bdelete\b/.test(call))) {
+    assert.match(line, / delete secret -l app\.kubernetes\.io\/managed-by=gate-lane --ignore-not-found$/,
+      'a stop deletes generated Secrets and nothing else: ' + line)
+  }
   assert.match(output, /emptyDir/, 'the task says the world is gone, so a reader expects the cold start')
 })
 
@@ -282,15 +320,87 @@ test('the live and dev namespaces are refused before kubectl runs', () => {
   }
 })
 
-test('a missing hand-created Secret is named before the wait, not after it', () => {
-  // gate-b-rcon and gate-b-velocity are made by an operator, never by the tree.
-  // Without them the pods sit in CreateContainerConfigError and gate:up would
-  // spend its whole budget on a lane that cannot start.
-  const { status, output, calls } = run(space(), ['up'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
-  assert.equal(status, 2, output)
-  assert.match(output, /gate-b-rcon/)
-  assert.match(output, /deploy\/driver\/README\.md/)
-  assert.equal(calls.some(line => / scale /.test(line)), false, 'nothing is woken: ' + calls.join(' | '))
+test('a lane whose Secrets are absent makes random ones, and the value never leaves stdin', () => {
+  // #278: a lane that has never run was blocked on an operator hand-making an RCON
+  // password. paper-m4 reads both Secrets, so it is the one row that makes a run
+  // create both.
+  const where = space()
+  const { status, output, calls, made } = generated(where, ['up', 'paper-m4'])
+  assert.equal(status, 0, output)
+
+  assert.deepEqual(made.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'])
+  assert.deepEqual(made.map(secret => secret.key).sort(), ['forwarding-secret', 'password'])
+  assert.deepEqual([...new Set(made.map(secret => secret.namespace))], ['monoplayer-gate-b'], 'both land in the lane')
+  for (const secret of made) {
+    assert.match(secret.value, /^[0-9a-f]{32}$/, secret.name + ' holds a 16-byte random value')
+    // The rule that outranks the ticket: a value reaches neither a log line nor an
+    // argv. `create secret --from-literal` would fail both.
+    assert.equal(calls.some(line => line.includes(secret.value)), false, secret.name + ' value is in an argv')
+    assert.equal(output.includes(secret.value), false, secret.name + ' value is on a printed line')
+  }
+  assert.notEqual(made[0].value, made[1].value, 'two Secrets, two values')
+  assert.match(output, /created the random Secret gate-b-rcon \(password\)/)
+  assert.match(output, /created the random Secret gate-b-velocity \(forwarding-secret\)/)
+  // Created before the wake: a pod that starts without its Secret sits in
+  // CreateContainerConfigError, which reads like a slow boot.
+  const created = calls.findIndex(line => / apply -f -/.test(line))
+  const woken = calls.findIndex(line => / scale /.test(line))
+  assert.ok(created >= 0 && created < woken, 'the Secrets land before the scale: ' + calls.join(' | '))
+})
+
+test('a Secret that already exists is used as it is, and the run says so once', () => {
+  // An operator's Secret outlives every up. Nothing here is created over it, and
+  // the run says what it left alone in one line rather than one per Secret.
+  const where = space()
+  const { status, output, calls } = run(where, ['up', 'paper-m4'])
+  assert.equal(status, 0, output)
+  assert.equal(calls.some(line => / apply -f -/.test(line)), false, 'nothing is generated: ' + calls.join(' | '))
+
+  const said = output.split('\n').filter(line => /this lane already has/.test(line))
+  assert.equal(said.length, 1, 'said once, not once per Secret: ' + said.join(' | '))
+  assert.match(said[0], /gate-b-rcon/)
+  assert.match(said[0], /gate-b-velocity/)
+})
+
+test('the Secret a lane generates follows the Deployment that reads it', () => {
+  // The map: the three Papers take the RCON password, and Velocity and the Paper
+  // behind it take the forwarding secret. Generating one nothing reads is a value
+  // nobody uses; skipping one a row reads is CreateContainerConfigError.
+  const only = args => generated(space(), args).made.map(secret => secret.name).sort()
+  assert.deepEqual(only(['up', 'paper']), ['gate-b-rcon'])
+  assert.deepEqual(only(['up', 'paper-conduct']), ['gate-b-rcon'])
+  assert.deepEqual(only(['up', 'velocity']), ['gate-b-velocity'])
+  assert.deepEqual(only(['up', 'paper-m4']), ['gate-b-rcon', 'gate-b-velocity'])
+})
+
+test('the Secrets the lane generates are the two its Deployments mount', () => {
+  // One list in two places: the secretKeyRef in the manifests, and the name and key
+  // the script generates. A generated Secret nothing mounts is a value nobody reads.
+  const mounted = [...new Set(driverManifests().flatMap(({ text }) =>
+    [...text.matchAll(/secretKeyRef:\n\s+name: (gate-b-\S+)\n\s+key: (\S+)/g)].map(match => match[1] + ' ' + match[2])))]
+  assert.deepEqual(mounted.sort(), ['gate-b-rcon password', 'gate-b-velocity forwarding-secret'], 'the tree mounts these two')
+  const made = generated(space(), ['up', 'paper-m4']).made.map(secret => secret.name + ' ' + secret.key).sort()
+  assert.deepEqual(made, mounted, 'the generated pair is exactly the mounted pair')
+})
+
+test('gate:down deletes the Secrets it generated, and a hand-made one is out of its reach', () => {
+  // The label up writes is the selector down deletes by, so a Secret an operator
+  // made carries no label, is never overwritten, and is never deleted. A lane that
+  // was never up has nothing to select, and --ignore-not-found makes that a no-op.
+  const where = space()
+  const { made } = generated(where, ['up', 'paper-m4'])
+  assert.ok(made.length > 0, 'the lane generated its Secrets')
+  for (const secret of made) {
+    assert.equal(secret.managedBy, 'gate-lane', secret.name + ' is marked as this script\'s')
+  }
+
+  const { status, output, calls } = run(where, ['down'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)),
+    ['-n monoplayer-gate-b delete secret -l app.kubernetes.io/managed-by=gate-lane --ignore-not-found'],
+    'one delete, by the label up wrote: ' + calls.join(' | '))
+  assert.match(output, /deleted every Secret this lane generated/)
+  assert.match(output, /operator made has no app\.kubernetes\.io\/managed-by=gate-lane label/, 'and says why a hand-made one stayed')
 })
 
 test('a second up does not stop the row the first one woke', () => {
@@ -332,39 +442,6 @@ test('status is read-only, and it is refused the live lane too', () => {
 // instance now, so there is nothing left to disagree with; what a name has to
 // satisfy is that the render can derive it at all, which the cases above and below
 // pin. The old case asserted the limitation the ticket removes.
-
-test('the Secret check follows the Deployment that reads it', () => {
-  // deploy/driver is the map: the three Papers take RCON_PASSWORD from
-  // gate-b-rcon, velocity mounts gate-b-velocity, and paper-m4 reads it again for the
-  // forwarding override. Checking the wrong one either refuses a lane that would have
-  // started or spends the whole budget on a pod in CreateContainerConfigError.
-  const rcon = run(space(), ['up', 'paper', 'paper-conduct'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
-  assert.equal(rcon.status, 2, rcon.output)
-  assert.match(rcon.output, /gate-b-rcon/)
-
-  const velocity = run(space(), ['up', 'velocity'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
-  assert.equal(velocity.status, 2, velocity.output)
-  assert.match(velocity.output, /gate-b-velocity/)
-
-  // A Paper with no proxy in front of it never wants the forwarding secret.
-  const paper = run(space(), ['up', 'paper'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
-  assert.equal(paper.status, 0, paper.output)
-
-  // paper-m4 is behind Velocity, so it needs both, and the forwarding one is the
-  // binding constraint once RCON is there.
-  const m4 = run(space(), ['up', 'paper-m4'], { KUBECTL_SECRET_MISSING: 'gate-b-velocity' })
-  assert.equal(m4.status, 2, m4.output)
-  assert.match(m4.output, /gate-b-velocity/)
-
-  // paper-m4 is a Paper, so it reads RCON as well as the forwarding secret.
-  const m4Rcon = run(space(), ['up', 'paper-m4'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
-  assert.equal(m4Rcon.status, 2, m4Rcon.output)
-  assert.match(m4Rcon.output, /gate-b-rcon/)
-
-  // Velocity reads no RCON.
-  const noRcon = run(space(), ['up', 'velocity'], { KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
-  assert.equal(noRcon.status, 0, noRcon.output)
-})
 
 test('mise offers the lifecycle, and the lint rung sees the script', () => {
   const toml = read('mise.toml')
@@ -540,21 +617,16 @@ test('render refuses a directory that already holds something', () => {
 })
 
 
-test('a renamed lane checks its own Secrets, not the ones it shipped with', () => {
-  // The tree asks for gate-<instance>-rcon and gate-<instance>-velocity once it is
-  // rendered. up has to name the same ones, or a renamed lane is refused for a
-  // Secret it never reads, and the lane the render describes can never start.
-  const own = run(space(), ['up', 'paper'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x', KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
-  assert.equal(own.status, 0, own.output)
-
-  const missing = run(space(), ['up', 'paper'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x', KUBECTL_SECRET_MISSING: 'gate-x-rcon' })
-  assert.equal(missing.status, 2, missing.output)
-  assert.match(missing.output, /gate-x-rcon/, 'the refusal names the Secret this lane reads')
-  assert.doesNotMatch(missing.output, /gate-b-rcon/, 'and not the one the tree shipped with')
-
-  const velocity = run(space(), ['up', 'velocity'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x', KUBECTL_SECRET_MISSING: 'gate-x-velocity' })
-  assert.equal(velocity.status, 2, velocity.output)
-  assert.match(velocity.output, /gate-x-velocity/)
+test('a renamed lane generates its own Secrets, and nothing it writes names gate-b', () => {
+  // The render asks for gate-<instance>-rcon and gate-<instance>-velocity, so the
+  // Secrets this lane makes have to carry the same instance, or the lane the render
+  // describes starts in CreateContainerConfigError on a Secret it never reads.
+  const where = space()
+  const { made } = generated(where, ['up', 'paper-m4'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  assert.deepEqual(made.map(secret => secret.name).sort(), ['gate-x-rcon', 'gate-x-velocity'])
+  assert.deepEqual([...new Set(made.map(secret => secret.namespace))], ['monoplayer-gate-x'])
+  assert.doesNotMatch(fs.readFileSync(path.join(where.state, 'secrets.yaml'), 'utf8'), /gate-b/,
+    'the write names this lane only')
 })
 
 test('two instances render different objects, not just non-referring ones', () => {

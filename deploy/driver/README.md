@@ -35,8 +35,9 @@ pod, and Paper downloads its server and writes a flat one again. The 240-310 s i
 [docs/testing-ladder.md](../../docs/testing-ladder.md) is the other wait, a Paper that
 is already up and restarts with the observer plugin, and `observer:run` owns it.
 
-`gate:down` deletes nothing, so the Deployments, the Services, the ConfigMaps and the
-hand-created Secrets survive. The next `up` costs the same cold start and nothing else.
+`gate:down` deletes the Secrets `gate:up` generated, so a stopped lane leaves no value
+behind. The Deployments, the Services, the ConfigMaps and any Secret an operator made
+survive, and the next `up` costs the same cold start and nothing else.
 
 `gate:up` wakes `paper` and `paper-conduct`, the two rows a rung drives. Name the
 others to wake them: `mise run gate:up -- velocity paper-m4 toxiproxy`. A row that
@@ -84,13 +85,23 @@ else is the kind of stale name the ADR exists to avoid.
 
 Two boundaries to keep in mind.
 
-The lane's Secrets are still made by an operator. A render asks for
-`gate-<instance>-rcon` and `gate-<instance>-velocity`, so `gate:up` refuses a lane on
-another instance until those exist. #278 generates them, and the names already match.
+The lane makes its own Secrets. `gate:up` creates `gate-<instance>-rcon` (key
+`password`) and `gate-<instance>-velocity` (key `forwarding-secret`) with random values
+when they are absent, and only for the rows it wakes: the three Papers take the RCON
+password, and Velocity and the Paper behind it take the forwarding secret.
+`gate:down` deletes the Secrets this lane generated, and only those.
+
+A Secret that already exists is used as it is, whatever made it. This script never
+overwrites one, and `gate:up` says once per run which ones it found. A generated Secret
+carries the label `app.kubernetes.io/managed-by: gate-lane`, which is the selector
+`gate:down` deletes by; a Secret an operator made carries no such label, so it survives
+every `down`. To have a lane regenerate its Secrets, delete them and run `gate:up`.
 
 `paper-hub` and `paper-sky` from `deploy/testbed` live in `monoplayer-gate-b` beside
 this lane. They belong to the transfer testbed. A lane on another instance does not
-take them with it, and nothing here scales them.
+take them with it, and nothing here scales them. Both read `gate-b-rcon` from this
+namespace, so a `gate:down` that removed a generated one leaves them without it until
+the next `gate:up`; the testbed owns its own Secret, not this lane.
 
 ## Names this tree does not rename
 
@@ -105,7 +116,7 @@ Each needs its own migration step:
 |---|---|---|
 | namespace `monoplayer-gate-b` | every manifest here | create the new namespace, re-apply, delete the old |
 | labels `app.kubernetes.io/name: monoplayer-gate-b-*` | every manifest here | selector change: recreate the workloads |
-| Secrets `gate-b-rcon`, `gate-b-velocity` | cluster only | copy the value into the new Secret |
+| Secrets `gate-b-rcon`, `gate-b-velocity` | cluster only | a new instance generates its own; copy a hand-made value only to keep a password |
 | Tailscale hostnames `monoplayer-gate-b-paper`, `-velocity` | Services with annotations | republish under a new hostname |
 | server motd `Monoplayer Gate B` | `velocity.yaml` | a config value players see |
 | Prism instances `gate-b-player`, `gate-b-player-fabric` | display host | clone into a new instance id |
@@ -123,24 +134,14 @@ join directly. It is deliberately ephemeral (`emptyDir`), online-mode, and
 secure-profile. The RCON password is a cluster Secret, never a manifest value.
 
 ```bash
-# 1. Namespace + workload. The Secret must exist first.
-kubectl create namespace monoplayer-gate-b --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n monoplayer-gate-b create secret generic gate-b-rcon \
-  --from-literal=password="$(openssl rand -hex 16)" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# For the M4 lane, also create gate-b-velocity (see the M4 section) before
-# step 2, or the velocity/paper-m4 pods will fail with
-# CreateContainerConfigError.
-
-# 2. Apply the tree and wake the backend. The task says what it waits for, and a
-#    cold start is 90 s.
+# 1. Apply the tree, generate the lane's Secrets and wake the backend. The task says
+#    what it waits for, and a cold start is 90 s.
 mise run gate:up
 
-# 3. Watch it download Paper 26.2 and boot.
+# 2. Watch it download Paper 26.2 and boot.
 kubectl -n monoplayer-gate-b logs deploy/paper --tail=100
 
-# 4. Tailscale endpoint for the display host.
+# 3. Tailscale endpoint for the display host.
 kubectl -n monoplayer-gate-b get svc paper-g0 -w
 ```
 
@@ -184,16 +185,12 @@ which is its own run.
 `velocity.yaml` (Velocity 4.3.1 b45, online-mode, modern forwarding),
 `paper-m4.yaml` (Paper 26.1.2 b74, offline, puppet-only whitelist),
 `toxiproxy.yaml` (puppet-leg faults). Full bring-up, smoke and teardown
-commands (including the `gate-b-velocity` forwarding-secret, which is created
-by `kubectl` and never committed) are in the M4 runbook:
+commands (and the `gate-b-velocity` forwarding secret, which `gate:up` generates
+when it is absent and no manifest ever holds) are in the M4 runbook:
 
 ```bash
-# Secret (operator, once). VALUES NEVER GO INTO GIT OR THE MANIFESTS.
-kubectl -n monoplayer-gate-b create secret generic gate-b-velocity \
-  --from-literal=forwarding-secret="$(openssl rand -hex 16)" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# The three M4 rows, awake together. `mise run gate:down` puts them back.
+# The three M4 rows, awake together. `gate:up` creates the two Secrets the rows read
+# when they are absent, and `mise run gate:down` puts the rows back and removes them.
 mise run gate:up -- velocity paper-m4 toxiproxy
 ```
 
