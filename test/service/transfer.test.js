@@ -4,6 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { loadConfig } from '../../src/service/monoplayer.js'
+import { pickSlug } from '../../src/core/picker.js'
 import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -172,6 +173,56 @@ test('the same connection lands on the target: configuration, finish, login, sta
   assert.equal(rig.core.session.backendLogins, 2)
   assert.equal(rig.core.session.detachCount, 0, 'the client never detached')
   assert.deepEqual(rig.frontLeg.endReasons(), [])
+})
+
+test("#260 a move dials another body, and the target's frames land in that body's cache", () => {
+  const rig = makeSeamless()
+  warmBackend(rig)
+  attach(rig)
+  const sourceBody = pickSlug(rig.core.config.backend.host + ':' + rig.core.config.backend.port)
+  const sourceCache = rig.core.cache
+  assert.equal(rig.core.bodies.stats().count, 1, 'one body before the move')
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  const targetBody = pickSlug('sky-2.excalia.fr:25565')
+  assert.notEqual(targetBody, sourceBody, 'the target is another server, so another body')
+  assert.equal(rig.core.cache, rig.core.bodies.cacheFor(targetBody), 'the dial made the target body the served one')
+  assert.notEqual(rig.core.cache, sourceCache, 'and its cache is not the source body\'s')
+
+  landOnTarget(rig)
+
+  // The target's join is in the target body's cache. The source body keeps the
+  // empty cache its teardown left, and the session serves the target.
+  assert.equal(rig.core.cache.snapshot().prefix.some(frame => frame.name === 'login'), true)
+  assert.equal(rig.core.cache.warm, true)
+  assert.equal(sourceCache.warm, false, 'the source body\'s session ended, so its cache went with it')
+  assert.deepEqual(sourceCache.snapshot().prefix, [])
+  assert.deepEqual([...rig.core.bodies.stats().bodies].sort(), [sourceBody, targetBody].sort())
+})
+
+test("#260 a failed move puts the snapshot back in its own body's cache, and releases the target's", () => {
+  const rig = makeSeamless()
+  warmBackend(rig)
+  attach(rig)
+  const sourceCache = rig.core.cache
+  const before = sourceCache.snapshot()
+
+  rig.backendLeg.deliver({ state: 'play', ...transfer() })
+  rig.clock.tick(1000)
+  const targetCache = rig.core.cache
+  assert.notEqual(targetCache, sourceCache)
+  // The target answers one frame, then dies: its body has state, and that state is
+  // nobody's once the client is restored onto the source body.
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  rig.core.abortTransfer('target_unreachable')
+
+  assert.equal(rig.core.cache, sourceCache, 'the session serves the source body again')
+  assert.deepEqual(sourceCache.snapshot().prefix.map(frame => frame.name),
+    before.prefix.map(frame => frame.name), 'the snapshot is back in the body it came from')
+  assert.equal(sourceCache.warm, true)
+  assert.equal(targetCache.warm, false, 'the target body\'s cache is released with its session')
+  assert.deepEqual(targetCache.snapshot().prefix, [])
 })
 
 test('a target that never answers is restored on the round the intent opened', () => {

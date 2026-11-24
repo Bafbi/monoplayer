@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O58 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
+// Assertions R0 and O1-O59 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -19,6 +19,8 @@ import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js
 import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
 import { detail, flag, waitFor, withTimeout } from '../service/cli.js'
 import { createOfflineBackendLeg } from '../legs/live-backend.js'
+import { createBodyCaches } from '../core/body-caches.js'
+import { replayFrames } from '../core/join-synth.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { waitForReady } from '../service/readiness.js'
 import { offlineUuid } from '../legs/offline-identity.js'
@@ -169,6 +171,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #258: the picker rig's own body, and the client that claims it.
   let pickerBodyFake = null
   let pickerBot5 = null
+  // #260: two bodies of one account at once, each with its own real backend leg,
+  // for the cache-ownership assertion. Nothing is delivered to a client here.
+  let bodyFakeA = null
+  let bodyFakeB = null
+  let bodyLegA = null
+  let bodyLegB = null
 
   const evidence = {
     frontPort: null,
@@ -184,7 +192,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     preAuthDeadline: null,
     attachRecord: null,
     controlDocument: null,
-    backendMove: null
+    backendMove: null,
+    bodyCaches: null
   }
 
   const log = (event, fields = {}) => {
@@ -3665,6 +3674,213 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.landing
     )
 
+    // --- O59: a body owns its state cache, and one body's fault leaves the other intact (#260) ---
+    // Two bodies of one account at once, with no client delivered to either:
+    // per-channel delivery is #269, and one session per body is #261. This asserts
+    // the cache's ownership, on real frames over real sockets. Two offline backend
+    // legs hold the account, one per body. Each writes into its own body's cache
+    // through the product's registry. Then one body's session ends. The other body's
+    // cache must be the one it already had, byte for byte, and must still take
+    // frames.
+    const bodyCaches = createBodyCaches({ bounds: { maxBlocks: 8 } })
+    bodyFakeA = await createFakeBackend({
+      port: 0,
+      version: VERSION,
+      spawn: { x: 2.5, y: 70, z: 4.5 },
+      chunks: 'empty',
+      logStream: null
+    })
+    bodyFakeB = await createFakeBackend({
+      port: 0,
+      version: VERSION,
+      spawn: { x: -6.5, y: 64, z: 8.5 },
+      chunks: 'empty',
+      logStream: null
+    })
+    const bodyNameA = '127.0.0.1:' + bodyFakeA.port
+    const bodyNameB = '127.0.0.1:' + bodyFakeB.port
+    const bodyA = pickSlug(bodyNameA)
+    const bodyB = pickSlug(bodyNameB)
+    const bodyFrames = { [bodyA]: 0, [bodyB]: 0 }
+    bodyLegA = createOfflineBackendLeg({
+      host: '127.0.0.1', port: bodyFakeA.port, version: VERSION, username: 'GlowSquidye', log
+    })
+    bodyLegB = createOfflineBackendLeg({
+      host: '127.0.0.1', port: bodyFakeB.port, version: VERSION, username: 'GlowSquidye', log
+    })
+    for (const [body, leg] of [[bodyA, bodyLegA], [bodyB, bodyLegB]]) {
+      // This is the wiring the composition root does for its one leg. The body's
+      // cache is where that body's frames go. The body decides that, not whichever
+      // reader happens to be looking.
+      leg.setFrameHandler(frame => {
+        bodyFrames[body]++
+        bodyCaches.cacheFor(body).push(frame.state, frame.name, frame.buffer, frame.data)
+      })
+    }
+    await Promise.all([bodyLegA.connect(), bodyLegB.connect()])
+    await waitFor(
+      () => bodyCaches.cacheFor(bodyA).warm && bodyCaches.cacheFor(bodyB).warm,
+      'two bodies warm at once, one cache each',
+      20_000
+    )
+    const cacheA = bodyCaches.cacheFor(bodyA)
+    const cacheB = bodyCaches.cacheFor(bodyB)
+    // One entity and one block each, and different ones: two caches cannot be one
+    // cache by accident.
+    bodyFakeA.sendSpawnEntity({ entityId: 21 })
+    bodyFakeB.sendSpawnEntity({ entityId: 22 })
+    bodyFakeA.sendBlockChange({ x: 1, y: 2, z: 3 })
+    bodyFakeB.sendBlockChange({ x: 9, y: 8, z: 7 })
+    await waitFor(
+      () => cacheA.stats().sizes.entities === 1 && cacheB.stats().sizes.entities === 1 &&
+        cacheA.stats().sizes.blocks === 1 && cacheB.stats().sizes.blocks === 1,
+      "each body's own entity and block in its own cache",
+      10_000
+    )
+    const snapshotA = cacheA.snapshot()
+    const snapshotB = cacheB.snapshot()
+    const replayA = replayFrames(snapshotA)
+      .filter(frame => frame.name === 'spawn_entity')
+      .map(frame => frame.data.entityId)
+    const replayB = replayFrames(snapshotB)
+      .filter(frame => frame.name === 'spawn_entity')
+      .map(frame => frame.data.entityId)
+
+    // The capture counter is the cache's own. A frame one body receives must not
+    // advance the other's counter, or the entity/generic merge join-synth builds on
+    // capture order would interleave two worlds.
+    const seqBBefore = cacheB.snapshot().frameSeq
+    bodyFakeA.sendBlockChange({ x: 4, y: 5, z: 6 })
+    await waitFor(() => cacheA.stats().sizes.blocks === 2, 'the second block frame at the first body', 10_000)
+    const seqBAfter = cacheB.snapshot().frameSeq
+
+    // The fault. Body A's session ends. The composition root's rule is that the
+    // cache of the body that ended is reset: reset, not discarded, and never
+    // another body's.
+    const bodyBBeforeFault = cacheB.snapshot()
+    bodyLegA.end()
+    await waitFor(() => bodyLegA.ended === true, "the first body's session to end", 10_000)
+    cacheA.reset()
+    const bodyBAfterFault = cacheB.snapshot()
+    const bodyAAfterFault = cacheA.snapshot()
+    // And the survivor is not merely unchanged: it still takes frames, in its own
+    // domains, after the other body died.
+    bodyFakeB.sendBlockChange({ x: 11, y: 12, z: 13 })
+    await waitFor(
+      () => cacheB.stats().sizes.blocks === 2,
+      'the surviving body still taking frames after the other body ended',
+      10_000
+    )
+    const bodyBAfterPush = cacheB.snapshot()
+
+    // The product's own wiring, read on the picker core this run already landed a
+    // claim on. The cache the client is served from is the claimed body's. Every
+    // other body the core dialled kept a cache of its own, and the claim put no
+    // frame into it. Two of those are here. One is the lane's configured backend,
+    // which a picker lane never dials. The other is the row whose dial the kernel
+    // refused in O56. Both were dialled and neither answered, so both are empty.
+    const pickerBodies = pickerCore.bodies.stats()
+    const pickerClaimed = pickerCore.claimedBody
+    const pickerOther = pickerBodies.bodies
+      .filter(body => body !== pickerClaimed)
+      .map(body => {
+        const other = pickerCore.bodies.get(body)
+        return { body, warm: other.warm, prefix: other.snapshot().prefix.length }
+      })
+    const pickerLaneBody = pickSlug(pickerServerName)
+    const pickerRefusedBody = pickerCore.bodies.get(pickerLaneBody)
+
+    evidence.bodyCaches = {
+      bodies: [bodyNameA, bodyNameB],
+      logins: [bodyFakeA.received.logins, bodyFakeB.received.logins],
+      distinctCaches: cacheA !== cacheB,
+      sameBodySameCache: bodyCaches.cacheFor(bodyA) === cacheA && bodyCaches.cacheFor(bodyB) === cacheB,
+      frames: { ...bodyFrames },
+      first: {
+        entities: snapshotA.entities.map(frame => frame.data.entityId),
+        blocks: snapshotA.blocks.map(frame => frame.data.location),
+        replayed: replayA,
+        seq: snapshotA.frameSeq
+      },
+      second: {
+        entities: snapshotB.entities.map(frame => frame.data.entityId),
+        blocks: snapshotB.blocks.map(frame => frame.data.location),
+        replayed: replayB,
+        seq: snapshotB.frameSeq
+      },
+      seqIndependent: { before: seqBBefore, after: seqBAfter },
+      fault: {
+        ended: bodyLegA.ended,
+        faulted: {
+          warm: bodyAAfterFault.warm,
+          prefix: bodyAAfterFault.prefix.length,
+          entities: bodyAAfterFault.entities.length,
+          blocks: bodyAAfterFault.blocks.length
+        },
+        survived: {
+          warm: bodyBAfterFault.warm,
+          // Deep equality through the wire shape: every entry keeps its buffer and
+          // its sequence, so a byte that moved shows.
+          unchanged: JSON.stringify(bodyBAfterFault) === JSON.stringify(bodyBBeforeFault),
+          blocks: bodyBAfterFault.blocks.map(frame => frame.data.location),
+          afterPush: bodyBAfterPush.blocks.map(frame => frame.data.location)
+        }
+      },
+      core: {
+        bodies: pickerBodies.bodies,
+        count: pickerBodies.count,
+        claimed: pickerClaimed,
+        cacheIsClaimed: pickerCore.cache === pickerCore.bodies.cacheFor(pickerClaimed),
+        refusedRow: pickerRefusedBody === null
+          ? null
+          : {
+              warm: pickerRefusedBody.warm,
+              prefix: pickerRefusedBody.snapshot().prefix.length
+            },
+        others: pickerOther
+      }
+    }
+    check(
+      'O59',
+      "a body owns its state cache: two bodies of one account hold their own state at once, and one body's fault leaves the other body's cache and session intact",
+      bodyFakeA.received.logins === 1 &&
+        bodyFakeB.received.logins === 1 &&
+        cacheA !== cacheB &&
+        bodyCaches.cacheFor(bodyA) === cacheA &&
+        bodyCaches.cacheFor(bodyB) === cacheB &&
+        snapshotA.entities.length === 1 &&
+        snapshotB.entities.length === 1 &&
+        snapshotA.entities[0].data.entityId === 21 &&
+        snapshotB.entities[0].data.entityId === 22 &&
+        snapshotA.blocks.length === 1 &&
+        snapshotB.blocks.length === 1 &&
+        snapshotA.blocks[0].data.location.x === 1 &&
+        snapshotB.blocks[0].data.location.x === 9 &&
+        replayA.join(',') === '21' &&
+        replayB.join(',') === '22' &&
+        seqBBefore === seqBAfter &&
+        bodyLegA.ended === true &&
+        bodyAAfterFault.warm === false &&
+        bodyAAfterFault.prefix.length === 0 &&
+        bodyAAfterFault.entities.length === 0 &&
+        bodyAAfterFault.blocks.length === 0 &&
+        bodyBAfterFault.warm === true &&
+        JSON.stringify(bodyBAfterFault) === JSON.stringify(bodyBBeforeFault) &&
+        bodyBAfterPush.blocks.length === 2 &&
+        bodyBAfterPush.blocks[1].data.location.x === 11 &&
+        pickerClaimed === pickSlug(pickerBodyName) &&
+        // Three caches, one per body: the lane's configured body, the row O56
+        // claimed and never reached, and the body O58 landed. Only the landed one
+        // holds state.
+        pickerBodies.count === 3 &&
+        pickerOther.length === 2 &&
+        pickerOther.every(other => other.warm === false && other.prefix === 0) &&
+        pickerRefusedBody !== null &&
+        pickerRefusedBody.snapshot().config.length === 0 &&
+        pickerCore.cache === pickerCore.bodies.cacheFor(pickerClaimed),
+      evidence.bodyCaches
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
@@ -3685,6 +3901,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await pickerFront?.close?.() } catch { /* best effort */ }
     try { await pickerBackend?.close?.() } catch { /* best effort */ }
     try { await pickerBodyFake?.close?.() } catch { /* best effort */ }
+    try { bodyLegA?.end?.() } catch { /* best effort */ }
+    try { bodyLegB?.end?.() } catch { /* best effort */ }
+    try { await bodyFakeA?.close?.() } catch { /* best effort */ }
+    try { await bodyFakeB?.close?.() } catch { /* best effort */ }
     try { await operatorFront?.close?.() } catch { /* best effort */ }
     try { await operatorBackend?.close?.() } catch { /* best effort */ }
     try { await operatorBase?.close?.() } catch { /* best effort */ }
