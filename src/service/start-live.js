@@ -120,12 +120,12 @@ export function createPickerServerReader ({ control, log = () => {} } = {}) {
   // than once, and an operator needs one line per answer, not one per read. The
   // names are compared as one JSON array, because a host can hold a separator a
   // joined string would read as another row.
-  let said = null
+  let lastAnswer = null
   return function pickerServerRows () {
     const offered = pickerOfferedRows(control.allowedServers)
     const answer = offered.source + '|' + JSON.stringify(offered.rows.map(row => row.name))
-    if (answer !== said) {
-      said = answer
+    if (answer !== lastAnswer) {
+      lastAnswer = answer
       log('pickerOffered', { source: offered.source, servers: offered.rows.length })
     }
     return offered.rows

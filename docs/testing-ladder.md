@@ -739,9 +739,8 @@ first dial and its target warms in five seconds.
   `controlRejected` line carrying that file and `reason: not_json`. The seed answers
   rather than an empty dialog. A ninth client reads exactly the seed's one row,
   labelled with its address, and nothing is dialled for it. Then the live file is
-  edited the way the panel writes it, with the row of the body a driver holds and a
-  spectator watches removed. A tenth client reads a list of exactly the remaining
-  row. The driven body is the one the edit found: the same claim, the same cache
+  edited the way the panel writes it. The row removed is the body a driver holds and
+  a spectator watches. A tenth client reads a list of exactly the remaining row. The driven body is the one the edit found: the same claim, the same cache
   instance, the same one dial, the same two channels on that body. Neither client
   ended and neither was kicked.
 
@@ -750,8 +749,8 @@ first dial and its target warms in five seconds.
   address the row names (`pickSlug(pickTarget(row).host + ':' + port)`). So one
   server is one body id.
 
-  What it cannot prove: a row whose name spells its address another way, because no
-  allowed-server file can spell a port that way and a leading zero is not JSON.
+  What it cannot prove: a row whose name spells its address another way. No
+  allowed-server file can spell a port that way, because a leading zero is not JSON.
   `pickerRows` normalises whatever name a lane hands it, and
   `test/core/picker.test.js` is where that is proven. A live file that is absent
   rather than broken, and a seed that is missing, are

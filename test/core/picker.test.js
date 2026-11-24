@@ -272,7 +272,7 @@ test('#266 a verb this lane cannot carry is refused in words that name it', () =
 test('#265 a row is offered under the canonical address its claim dials', () => {
   // #260 keys a body's cache by pickSlug(host + ':' + port) of the dial. A claim
   // labels its body by pickSlug(row.name). A row whose name spells the same address
-  // another way would give one server two body ids, so the row is normalised where
+  // another way would give one server two body ids. So the row is normalised where
   // it is read: one cache, one claim, one server.
   const [port] = pickerRows([{ name: 'paper:025565', state: 'down' }])
   assert.equal(port.name, 'paper:25565')
