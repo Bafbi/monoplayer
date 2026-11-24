@@ -127,3 +127,30 @@ test('the attach custody is copied back, so one live copy remains', () => {
   const written = JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8'))
   assert.deepEqual(written, {}, 'the rotated copy replaced the local one')
 })
+
+// --- the backend a run defaults to is the gate lane it was told about (#277) ---
+
+// Before #277 the gate lane was one namespace and the online rung's default backend
+// was written out by hand: paper.monoplayer-gate-b.svc.cluster.local. A lane with an
+// instance of its own needs that host to follow, or a renamed lane's rung dials the
+// default lane while it reads custody from the deployment it was pointed at.
+
+test("the default backend follows the gate lane, and today's value when none is named", () => {
+  const space = workspace()
+  const { calls } = run(space)
+  assert.ok(
+    calls.some(line => line.includes('MONOPLAYER_BACKEND_HOST=paper.monoplayer-gate-b.svc.cluster.local')),
+    "the default is still today's host: " + calls.join(' | ')
+  )
+})
+
+test('a renamed gate lane dials its own backend', () => {
+  const space = workspace()
+  const { calls, output } = run(space, { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  const dialled = calls.find(line => line.includes('MONOPLAYER_BACKEND_HOST='))
+  assert.ok(dialled, 'the rung was given a backend: ' + calls.join(' | ') + ' output: ' + output)
+  assert.match(dialled, /MONOPLAYER_BACKEND_HOST=paper\.monoplayer-gate-x\.svc\.cluster\.local/,
+    'the lane named decides the backend, not the lane that shipped: ' + dialled)
+  assert.doesNotMatch(dialled, /monoplayer-gate-b/, 'a renamed lane must not dial the default lane: ' + dialled)
+})
+
