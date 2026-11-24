@@ -329,9 +329,9 @@ listing the lane's allowed servers.
   way: the client reads the list again, titled with the body that did not answer.
   Its claim still stands, because a claim belongs to the connection (#267), so the
   client may click `Claim` again. A second claim on a body that is connected and not
-  yet warm waits on that body again, rather than dialling a second one or refusing a
-  client the picker just invited. A body that accepted every frame and then refused
-  the finish is the one case the client is ended in words instead.
+  yet warm waits on that body again. It does not dial a second body, and it does not
+  refuse a client the picker just invited. A body that accepted every frame and then
+  refused the finish is the one case the client is ended in words instead.
 - **What the landing does not prove (#258, #268).** The client receives a second
   registry round inside one configuration phase: the baseline's set, then the
   body's. Whether a vanilla client accepts that is unmeasured here, because the only
