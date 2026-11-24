@@ -98,11 +98,11 @@ test('#267 the refusal sentence names the body, the server and the driver', () =
       server: 'gate-paper:25565',
       holder: 'Attach'
     }),
-    'Monoplayer: gate-paper:25565 is already driven by Attach. A body has one driver.'
+    'Monoplayer: gate-paper:25565 is already claimed by Attach. A body has one claim.'
   )
   assert.equal(
     claimRefusalText({ reason: CLAIM_REFUSAL.HELD, server: 'sky:25565', driving: 'gate-paper:25565' }),
-    'Monoplayer: you are already driving gate-paper:25565. Leave it before you claim sky:25565.'
+    'Monoplayer: you already hold a claim on gate-paper:25565. Leave it before you claim sky:25565.'
   )
 })
 

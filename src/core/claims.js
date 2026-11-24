@@ -17,22 +17,24 @@
 // Nothing here reads a clock, logs, or touches a socket. The caller passes the
 // moment it recorded, and writes the sentence a refusal gets.
 export const CLAIM_REFUSAL = {
-  // The body is driven by another connection.
+  // The body is claimed by another connection.
   TAKEN: 'body_claimed',
   // This connection already drives a body, so it cannot take a second.
   HELD: 'already_driving'
 }
 
 // A refusal, as one sentence a log and a client can both carry. It names the
-// server the client asked for, and the part of the contention it hit.
+// server the client asked for, and the part of the contention it hit. It says
+// "claimed", never "driven": a claim is recorded, and no body is delivered to it
+// until #269.
 export function claimRefusalText ({ reason = null, server = null, holder = null, driving = null } = {}) {
   const named = server === null ? 'that server' : server
   switch (reason) {
     case CLAIM_REFUSAL.TAKEN:
-      return 'Monoplayer: ' + named + ' is already driven by ' + (holder ?? 'another player') +
-        '. A body has one driver.'
+      return 'Monoplayer: ' + named + ' is already claimed by ' + (holder ?? 'another player') +
+        '. A body has one claim.'
     case CLAIM_REFUSAL.HELD:
-      return 'Monoplayer: you are already driving ' + (driving ?? 'another body') +
+      return 'Monoplayer: you already hold a claim on ' + (driving ?? 'another body') +
         '. Leave it before you claim ' + named + '.'
     default:
       return 'Monoplayer: ' + named + ' cannot be claimed.'
@@ -47,7 +49,7 @@ function requiredString (value, field) {
 }
 
 // A claim as a caller sees it: its own field map, so a reader cannot write into
-// the record the board holds.
+// the record the leg holds.
 function claimView (record) {
   return {
     body: record.body,

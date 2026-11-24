@@ -305,9 +305,9 @@ listing the lane's allowed servers.
   client is shown that server's own dialog. The answer to it is recorded too.
 - **The claim is recorded at the pick, not at login (#267).** The client that
   clicks `Claim` takes the body the frame names, and `src/core/claims.js` records
-  it. Two rules hold: a body carries one claim, and a connection carries one claim.
-  A second claim on a driven body is refused with one sentence naming its driver, so
-  two people never share a body's controls. The holder is the connection, so the
+  it. Two rules hold. A body carries one claim. A connection carries one claim. A
+  second claim on a claimed body is refused with one sentence naming the player who
+  holds it, so two people never share a body's controls. The holder is the connection, so the
   claim ends when that connection ends and a client that never clicks `Claim` holds
   nothing. The old attach slot keeps what it had: the claim decides who may drive a
   body, the slot decides who is delivered one, and #269 deletes the slot once a

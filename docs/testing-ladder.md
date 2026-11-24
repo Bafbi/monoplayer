@@ -529,8 +529,9 @@ first dial and its target warms in five seconds.
   The client is not answered with a `disconnect` any more: a claim is recorded, so
   the client stays in the configuration phase, and what a claim contends with is
   O57. The verb and the server both ride in the id, so the leg keeps no
-  per-connection state about which dialog a client is looking at. Wiring a claim to
-  a body is #269's. What this proves is the round trip.
+  per-connection state about which dialog a client is looking at. Delivering the
+  body a claim names is #269's, not recording the claim. What this proves is the
+  round trip.
 - `O56b` an unknown verb is refused, named, and answered (#266). The second 26.2 bot
   sends `monoplayer:teleport/gate-paper_25565` in the configuration state. The front
   refuses it and logs one sentence that names the verb and the verbs it does offer.
@@ -547,13 +548,15 @@ first dial and its target warms in five seconds.
   and it is proven by a click for that reason.
 - `O57` the pick records an exclusive claim, and a second claim on that body is
   refused by name (#267). The first 26.2 bot took `gate-paper:25565` in O56 and is
-  still connected, so it drives that body. A fourth bot reads the picker while that
-  claim stands — the picker is not a claim, so it takes no attach slot — picks the
-  same server, and clicks `Claim`. The front's claim board holds exactly one claim:
-  on that body, naming `Attach` as its driver. The refusal is one sentence naming
-  `Attach`, and the rival gets a configuration `disconnect` rather than a silent
-  nothing. The claimant is still connected when the refusal is read, which is what
-  "held by the connection" means: the click does not spend the claim. Four picker
+  still connected, so it holds that body. A fourth bot reads the picker while that
+  claim stands, which it may, because the picker is not a claim and takes no attach
+  slot. It picks the same server and clicks `Claim`. The claims the front holds are
+  then exactly one, on that body, and they name `Attach`. The refusal is one
+  sentence naming `Attach`, and the rival gets a configuration `disconnect` rather
+  than a silent nothing. The claimant is still connected when the refusal is read,
+  which is what "held by the connection" means: the click does not spend the claim.
+  A client that has read the picker and not claimed holds nothing, and the claims
+  are read again after the rival's pick, which takes nothing either. Four picker
   joins, one claim and no attach, so the core's session is untouched.
 
   What it cannot prove: that the claiming client is delivered the body. No body is
