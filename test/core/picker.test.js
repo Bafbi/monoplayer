@@ -132,8 +132,8 @@ test('#257 rows keep the name the config gave and the slug the wire takes', () =
 const server = { name: 'gate-paper:25565', state: 'down', driver: null }
 
 // The frame a client sends for one verb. The writer is the one the protocol bot
-// uses (src/core/dialog-codec.js), so the reader is proven against the bytes a
-// client-like sender really puts on the wire, not against a fixture this test
+// uses (src/core/dialog-codec.js). The reader is therefore proven against the bytes
+// a client-like sender really puts on the wire, and not against a fixture this test
 // chose.
 const clickFor = (id, state = 'configuration') => buildCustomClickAction({ state, id })
 
