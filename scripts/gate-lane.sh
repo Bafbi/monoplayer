@@ -174,11 +174,14 @@ rendered_namespace () {
 # Instance b is today's lane, and the substitution is then the empty one. An
 # ordinary up applies exactly what deploy/driver holds.
 render () {
-  local dir=$1 file
-  # The target belongs to the caller: an empty one, or none. Deleting a directory
-  # this function did not create would take whatever else was in it.
+  local dir=$1 file entries
+  # The target belongs to the caller, so anything already in it is theirs. The
+  # listing and its status are read apart: a directory this cannot read must not
+  # look empty, or the copy below would overwrite what it could not see.
   mkdir -p "$dir"
-  [ -z "$(ls -A "$dir")" ] \
+  entries=$(ls -A "$dir") \
+    || die "refusing to render into $dir: it cannot be listed, so the render cannot tell what it would overwrite"
+  [ -z "$entries" ] \
     || die "refusing to render into $dir: it is not empty, and the render would overwrite what is there"
   cp -R "$MANIFESTS"/. "$dir"/
   if [ "$INSTANCE" = b ]; then return 0; fi

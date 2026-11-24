@@ -81,6 +81,16 @@ done
 
 command -v kubectl >/dev/null || die 'kubectl is not on PATH'
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# The default backend is derived from the lane above, so this variable decides which
+# server the rung dials. The product and the dev lane are never a gate lane: naming
+# one would point a validation run at a live backend, which AGENTS.md forbids
+# outright. gate-lane.sh carries the fuller rule, including the prefix the tree
+# renders from; this is the part that must never be missed.
+if [ "$GATE_NAMESPACE" = "$NAMESPACE" ] || [ "$GATE_NAMESPACE" = monoplayer ] \
+  || [ "$GATE_NAMESPACE" = monoplayer-dev ]; then
+  die "refusing \"${GATE_NAMESPACE}\" as the gate lane: a validation run only ever measures a lane this repo deploys, and that name is the live or the dev lane" 2
+fi
 [ -f "$ROOT/$RUNG" ] || die "no such rung: $RUNG"
 # Only the online rung writes a report; another module's exit status is its
 # whole result.
