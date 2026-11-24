@@ -31,6 +31,8 @@ import { createTransferFollowController } from '../core/transfer-follow.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
+import { baselineRegistryNames, readConfigurationBaseline } from '../legs/configuration-baseline.js'
+import { chooseDialogAction } from '../core/dialog-codec.js'
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
@@ -154,6 +156,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let operatorBackend = null
   let operatorCore = null
   let operatorBot = null
+  // #257: the picker rig. No backend, no cluster, and its own 26.2 wire checker,
+  // because the baseline is a recording of a Paper 26.2 configuration phase.
+  let pickerFront = null
+  let pickerBackend = null
+  let pickerCore = null
+  let pickerBot = null
+  let pickerBot2 = null
 
   const evidence = {
     frontPort: null,
@@ -2999,13 +3008,187 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.backendMoveFailed
     )
 
+    // --- O55: a join with no backend gets the picker, and a pick is recorded (#257) ---
+    // The gate the whole epic rests on. No backend is connected — this rig never
+    // dials one — and the client must still reach a screen it can answer. The
+    // configuration phase it gets is the committed recording of a real Paper 26.2
+    // build 135 (src/legs/configuration-baseline/26.2.json), served byte for byte,
+    // and the picker is the dialog the front authors and holds the phase open for.
+    //
+    // This is the rung's only 26.2 rig, so it builds its own wire checker: the
+    // configuration packet ids are the same in 26.1 and 26.2, but the play login is
+    // not, and one checker cannot read both.
+    const pickerVersion = '26.2'
+    const pickerBaseline = readConfigurationBaseline()
+    if (pickerBaseline === null) throw new Error('the committed configuration baseline is missing')
+    const pickerWire = createWireChecker({ version: pickerVersion })
+    const pickerWireChecks = []
+    const pickerServerName = 'gate-paper:25565'
+    const pickerPicks = []
+    pickerBackend = createOfflineBackendLeg({
+      host: '127.0.0.1',
+      // A port nothing listens on, and the rig never dials it: this ticket's whole
+      // property is that the service does not connect an allowed server until
+      // someone claims one, and nothing claims yet (#267).
+      port: await freePort(),
+      version: pickerVersion,
+      username: 'GlowSquidye',
+      log
+    })
+    pickerFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: pickerVersion,
+      offlineWhitelist,
+      // No cached backend configuration exists, and none is invented: the front's
+      // cached replay path must find nothing here.
+      getSnapshotConfig: () => pickerCore?.cache.snapshot().config ?? [],
+      configurationBaseline: pickerBaseline,
+      pickerServers: () => [{ name: pickerServerName, state: 'down', driver: null }],
+      onPickerPick: pick => pickerPicks.push(pick),
+      wireCheck: payload => {
+        const outcome = pickerWire.check(payload)
+        pickerWireChecks.push({ state: payload.state, name: payload.name, ok: outcome.ok === true })
+        return outcome
+      },
+      wireMode: 'throw',
+      log
+    })
+    pickerCore = createMonoplayer({
+      config: loadConfig({
+        version: pickerVersion,
+        // The one switch that lets a login with no backend through, and the reason
+        // the front may serve a picker at all.
+        picker: true,
+        attachWhitelist: offlineWhitelist,
+        front: { host: '127.0.0.1', port: 0 },
+        backend: { host: '127.0.0.1', port: pickerBackend.port ?? 1 },
+        puppet: { username: 'GlowSquidye', uuid: puppetUuid }
+      }),
+      backendLeg: pickerBackend,
+      frontLeg: pickerFront,
+      clock: { now: Date.now, setTimeout, clearTimeout },
+      logStream: { write: line => log('pickerCore', { line }) }
+    })
+    // Wires the front's login decision to the core. Without it the front would run
+    // only its own whitelist check and never hear `picker: true`.
+    pickerCore.start()
+    const pickerBound = await pickerFront.listen()
+    evidence.picker = {
+      version: pickerVersion,
+      baseline: {
+        frames: pickerBaseline.frames.length,
+        replay: pickerBaseline.replayFrames.length,
+        registries: baselineRegistryNames(pickerBaseline).length,
+        capturedAt: pickerBaseline.capturedFrom.at ?? null,
+        lane: pickerBaseline.capturedFrom.lane ?? null,
+        paperBuild: pickerBaseline.capturedFrom.paperBuild ?? null
+      },
+      frontPort: pickerBound.port,
+      server: pickerServerName
+    }
+
+    pickerBot = createBot({ port: pickerBound.port, username: 'Attach', version: pickerVersion })
+    await pickerBot.waitFor(() => pickerBot.received.dialogs.length === 1, 'the picker dialog at the client', 15_000)
+    // A second client reads the picker at the same time: the picker is not an
+    // attach, so it takes no slot and the first client does not hold one.
+    pickerBot2 = createBot({ port: pickerBound.port, username: 'Second', version: pickerVersion })
+    await pickerBot2.waitFor(() => pickerBot2.received.dialogs.length === 1, 'the picker dialog at the second client', 15_000)
+
+    // What the client actually read, out of the frame it received: the id the
+    // dialog carried, not a constant this rung chose. That is the codec answer.
+    const pickerAction = chooseDialogAction(pickerBot.received.dialogs[0], 'first')
+    const pickerFrameNames = pickerBot.received.names
+      .filter(frame => frame.state === 'configuration')
+      .map(frame => frame.name)
+    const pickerRead = {
+      action: pickerAction === null ? null : { id: pickerAction.id, label: pickerAction.label },
+      configuration: pickerFrameNames,
+      registries: pickerFrameNames.filter(name => name === 'registry_data').length,
+      tags: pickerFrameNames.includes('tags'),
+      knownPacks: pickerFrameNames.includes('select_known_packs'),
+      featureFlags: pickerFrameNames.includes('feature_flags'),
+      finished: pickerFrameNames.includes('finish_configuration'),
+      leftovers: pickerBot.received.leftovers.length,
+      errors: [...pickerBot.received.errors],
+      mode: pickerFront.lastConfigMode
+    }
+    if (pickerAction !== null) {
+      // A click built from the frame the client received, in the phase the client
+      // is in. The library's own writer omits the payload's length prefix, so the
+      // bot's answer is the vanilla layout (src/core/picker.js).
+      pickerBot.answerDialog(pickerAction.id, null, 'configuration')
+      await pickerBot.waitFor(
+        () => pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+        'the refusal a pick gets while nothing can be entered',
+        15_000
+      )
+    }
+    await waitFor(() => pickerPicks.length === 1, 'the pick to reach the service', 10_000)
+    evidence.picker.pick = {
+      ...pickerRead,
+      reported: pickerPicks[0] ?? null,
+      ended: pickerBot.received.ended === null ? null : String(pickerBot.received.ended).slice(0, 120),
+      secondClient: {
+        dialogs: pickerBot2.received.dialogs.length,
+        configuration: pickerBot2.received.names
+          .filter(frame => frame.state === 'configuration')
+          .map(frame => frame.name)
+          .slice(0, 3),
+        leftovers: pickerBot2.received.leftovers.length,
+        ended: pickerBot2.received.ended === null ? null : String(pickerBot2.received.ended).slice(0, 120)
+      },
+      wire: {
+        frames: pickerWireChecks.length,
+        rejected: pickerWireChecks.filter(result => !result.ok).length,
+        registries: pickerWireChecks.filter(result => result.name === 'registry_data').length
+      },
+      metrics: {
+        pickers: pickerFront.metrics.pickers,
+        picks: pickerFront.metrics.pickerPicks,
+        attaches: pickerCore.metrics.attaches,
+        denials: pickerCore.metrics.denials
+      }
+    }
+    check(
+      'O55',
+      'a join with no backend receives the recorded configuration baseline and the picker, and its pick is recorded',
+      pickerRead.registries === evidence.picker.baseline.registries &&
+        pickerRead.tags === true &&
+        pickerRead.knownPacks === true &&
+        pickerRead.featureFlags === true &&
+        pickerRead.finished === false &&
+        pickerRead.leftovers === 0 &&
+        pickerRead.errors.length === 0 &&
+        pickerRead.mode === 'baseline' &&
+        pickerAction !== null &&
+        pickerAction.id === 'monoplayer:pick/gate-paper_25565' &&
+        pickerPicks.length === 1 &&
+        pickerPicks[0].id === pickerAction.id &&
+        pickerPicks[0].server?.name === pickerServerName &&
+        pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        evidence.picker.pick.wire.rejected === 0 &&
+        evidence.picker.pick.metrics.picks === 1 &&
+        evidence.picker.pick.metrics.attaches === 0 &&
+        pickerCore.attached === false,
+      evidence.picker.pick
+    )
+    check(
+      'O55b',
+      'a second client reads the picker at the same time: the picker takes no attach slot',
+      pickerBot2.received.dialogs.length === 1 &&
+        pickerBot2.received.leftovers.length === 0 &&
+        pickerFront.metrics.pickers === 2,
+      evidence.picker.pick.secondClient
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
@@ -3016,6 +3199,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await controlFront?.close?.() } catch { /* best effort */ }
     try { await controlBackend?.close?.() } catch { /* best effort */ }
     try { await controlBase?.close?.() } catch { /* best effort */ }
+    try { await pickerFront?.close?.() } catch { /* best effort */ }
+    try { await pickerBackend?.close?.() } catch { /* best effort */ }
     try { await operatorFront?.close?.() } catch { /* best effort */ }
     try { await operatorBackend?.close?.() } catch { /* best effort */ }
     try { await operatorBase?.close?.() } catch { /* best effort */ }

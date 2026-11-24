@@ -170,6 +170,7 @@ Every cumulative field counts from the start of the process except the top-level
 | `account.alias` | gauge | The puppet's account alias as resolved at startup, or `null` when the lane runs on the raw `cacheDir` override, which resolves no account. It is a string: gauge means the value at this instant, as it does for the numeric fields beside it. |
 | `account.expiresAt` | gauge | Epoch milliseconds when the puppet's Minecraft (`mca`) token expires: the cache's `obtainedOn` plus `expires_in`, the same projection `node src/custody/cli.js status` prints. Read at each heartbeat, so a token refresh moves it. `null` when the custody cache does not say, which is not the same as "no expiry". |
 | `front.denied`, `front.allowed`, `front.attaches` | cumulative | Login-start denials, allows, and attaches. |
+| `front.pickers`, `front.pickerPicks` | cumulative | Joins a picker was served to because the lane had no backend session, and picks the picker recorded (#257). A picker join is not a denial, so `front.denied` does not count it and these two are its only counters. |
 | `front.policyRefused`, `front.stateRefused` | cumulative | Clientbound frames the policy refused to pass to the client, and frames refused because the client's protocol state could not parse them. |
 | `front.reconfigurations`, `front.reconfigured` | cumulative | Reconfiguration attempts and completions. |
 | `front.reconfigurationFramesFlushed`, `front.reconfigurationFramesDropped` | cumulative | Held configuration frames flushed when the client acknowledged, and held frames dropped when the queue overflowed. |
@@ -235,6 +236,16 @@ a heartbeat.
 The panel reads them to name the effective backend and the whitelist's size. A
 400-line log tail usually predates a pod's start, so a start record is absent from
 a tail more often than not.
+
+A picker join writes its own four records, and they are the whole story of one
+client that never reached a backend (#257): `pickerServed` (the recording's frame
+count and the number of servers offered), `pickerDialog` (the action ids the
+client was given), `pickerPick` (the id the client answered, the server it maps
+to, and whether that server was on the list), and `pickerPickRecorded` from the
+service, which is the pick as product state rather than as a frame. A picker that
+collapses on the way writes one of `pickerEmpty`, `pickerDialogFailed`,
+`pickerUnavailable`, or `pickerPickIgnored` with the reason, and the client is
+ended with a configuration `disconnect` the log names.
 
 ## Packet journal
 

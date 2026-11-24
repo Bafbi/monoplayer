@@ -10,7 +10,7 @@ cheapest rung that can fail for the defect you are chasing.
 |---|---|---|---|---|---|
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers, and the front leg's status answer over a loopback socket (#200); no auth | socket framing beyond the status handshake, leg wiring, real timers, backend behavior |
-| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, and an operator's move from the control document, landing and failed (#233); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline and answers the picker (#257); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, the same-connection reconfiguration, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering and vanilla acceptance of the reconfiguration; the run takes the live front offline, so the operator starts it |
 | 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
@@ -488,6 +488,33 @@ first dial and its target warms in five seconds.
   `start-live`; what it adds over O54 is that the restore leaves a client that is
   still on its socket and a session that comes back, not that the service's own
   revert is exercised.
+- `O55` a join with no backend receives the recorded configuration baseline and
+  the picker, and its pick is recorded (#257). The rung's only 26.2 rig: its own
+  `createOfflineFrontLeg`, its own `createWireChecker({ version: '26.2' })`, and
+  two 26.2 protocol bots. No backend is connected and the rig never dials one, so
+  the front's cached replay path finds nothing: the frames the client reads are
+  `src/legs/configuration-baseline/26.2.json`, the committed recording of the gate
+  lane's Paper 26.2 build 135, served byte for byte. The client reads all 29
+  `registry_data` frames plus `select_known_packs`, `feature_flags` and `tags`,
+  with no leftover bytes and no wire rejection, and - the point of the picker - no
+  `finish_configuration`: the phase stays open. The dialog that lands on it is
+  authored by `src/core/picker.js` and carries one action per allowed server; the
+  assertion reads the action id out of the frame the client received, has the bot
+  answer it in the configuration state, and requires the service to report that
+  same id with the server it named. The pick rides in the action `id`, never in
+  `additions`. `front.lastConfigMode` is `baseline`, the core attaches nothing,
+  and the client is ended with a configuration `disconnect` that says why.
+
+  What it cannot prove: that a vanilla 26.2 client accepts the registry set. The
+  protocol bot is not a vanilla oracle, and rung 4 is the only place one runs. What
+  it does establish is that the bytes are a real server's, that they parse in the
+  configuration state under the strict wire checker, and that no frame the front
+  invented is in the phase.
+- `O55b` a second client reads the picker at the same time, because the picker
+  takes no attach slot (#257). Two 26.2 bots hold the picker at once, each with a
+  dialog and no leftover bytes, and the front counts two picker joins and no
+  attach. The single-attach rule is unchanged for a real attach: this is the
+  property that makes a picker reachable while one client is reading it.
 
 
 ## The client parity rung
