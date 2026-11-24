@@ -8,7 +8,7 @@ Three cluster lanes, and two rules that outrank a test.
 |---|---|---|---|
 | live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the puppet account GlowSquidye, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
-| gate Paper | `monoplayer-gate-b` | the Paper that the online rung, the driver lane, and the transfer testbed run against; `paper-conduct` is its gate-serving sibling, which the observer measures. The lane rests at 0 replicas | anyone; it is disposable, and `mise run gate:up` and `mise run gate:down` are how it is woken and stopped |
+| gate lane | `monoplayer-gate-<instance>`, one per worktree | the Papers the online rung, the driver lane and the transfer testbed run against. `paper-conduct` is the gate-serving sibling the observer measures. The instance is the worktree's short commit and a short hash of its path, so two checkouts at one commit are two lanes. `mise run lanes` lists every lane with its age and the worktree that owns it. A lane rests at 0 replicas | anyone. It is disposable, and `mise run gate:up` and `mise run gate:down` wake and stop one |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
 That covers `kubectl -n monoplayer scale`, `patch`, `delete a workload`,
@@ -45,12 +45,13 @@ that leaves the deployment serving.
 `docs/testing-ladder.md` gives each run its cost and its blast radius.
 `deploy/dev/README.md` is the dev lane runbook, `deploy/driver/README.md` the gate's.
 
-**The gate lane sleeps.** Its five Deployments commit `replicas: 0`, so a bare
-`kubectl apply -k deploy/driver` wakes nothing and stops whatever was awake, because
-apply reconciles every row to the tree. Only `mise run gate:up` should apply. It
-applies the tree, wakes the rows a rung drives (`paper`, `paper-conduct`), and waits
-up to 900 s while saying so. A cold start is 90 s, because every gate world is an
-`emptyDir` that died with its pod. `mise run gate:down` puts it back to 0 and waits for
+**The gate lane sleeps.** Its five Deployments commit `replicas: 0`. The tree spells
+its lane as `gate-__instance__`, so a bare `kubectl apply -k deploy/driver` is
+refused. Only `mise run gate:up` applies, and it applies the render that names this
+worktree's lane. It wakes the rows a rung drives (`paper`, `paper-conduct`) and waits
+up to 900 s while saying so. `mise run lanes` lists every lane, and
+`mise run lanes -- --reap` deletes the ones idle past six hours. A cold start is
+90 s, because every gate world is an `emptyDir` that died with its pod. `mise run gate:down` puts it back to 0 and waits for
 the pods to go. No rung drives `velocity`, `paper-m4` or `toxiproxy`, so they stay off
 even after `gate:up`. `mise run gate:up -- velocity paper-m4 toxiproxy` wakes all three.
 

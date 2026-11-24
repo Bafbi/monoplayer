@@ -1,7 +1,11 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: monoplayer-gate-b
+  name: monoplayer-gate-__instance__
   labels:
     app.kubernetes.io/part-of: monoplayer
-    monoplayer.eu/environment: gate-b
+    # The lane selector. `mise run lanes` and the reaper read this label and no
+    # other, so neither can list or delete the live namespace or the dev lane: they
+    # carry app.kubernetes.io/part-of alone (#279).
+    app.kubernetes.io/component: gate-lane
+    monoplayer.eu/environment: gate-__instance__

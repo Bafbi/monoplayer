@@ -1,8 +1,8 @@
-# The gate lane, and a template for one. This tree names the lane
-# monoplayer-gate-b wherever the lane is named, so a second instance is one
-# substitution: scripts/gate-lane.sh render writes the copy a lane applies, and
-# deploy/driver/README.md says why. Instance b is today's lane, and the copy is
-# then this directory byte for byte.
+# The gate lane, as a template. This tree spells gate-__instance__ wherever a lane is
+# named, so a lane is one substitution: scripts/gate-lane.sh render writes the copy a
+# lane applies, and deploy/driver/README.md says why. The placeholder is not a valid
+# object name, so this directory cannot be applied as it is: a lane exists only through
+# the script that derives its name from the worktree that asked for it (#279).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
