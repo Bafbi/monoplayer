@@ -263,9 +263,9 @@ socket's occupancy; the per-source limits that answer a flood arrive with #204.
 ### The configuration baseline and the picker (#257)
 
 A lane with no backend session has no configuration phase to replay, and a client
-that joins it would otherwise be refused. `MONOPLAYER_PICKER=1` changes that one
-case and nothing else: a whitelisted client is held in the configuration phase and
-shown a dialog listing the lane's allowed servers.
+that joins it is refused. `MONOPLAYER_PICKER=1` changes that one case and nothing
+else. A whitelisted client is held in the configuration phase and shown a dialog
+listing the lane's allowed servers.
 
 - **The phase is a recording, never a construction.** `minecraft-protocol` writes
   registry frames only from `options.registryCodec`, and the codec it can write is
@@ -274,7 +274,7 @@ shown a dialog listing the lane's allowed servers.
   26.2 client that receives it finishes configuration and then fails on the first
   holder it cannot resolve. `src/legs/configuration-baseline/26.2.json` is the
   gate lane's Paper 26.2 build 135 configuration phase, recorded byte for byte by
-  `src/ladder/capture-config.js`; two captures of the same server are identical.
+  `src/ladder/capture-config.js`. Two captures of the same server are identical.
   `src/legs/configuration-baseline.js` validates it and hands the frames to the
   front leg, which serves them in recorded order and never edits one.
 - **The phase stays open.** The recording carries a `finish_configuration` and the
@@ -287,9 +287,19 @@ shown a dialog listing the lane's allowed servers.
   omits the length prefix: the library's writer and reader both disagree with the
   wire. The id survives in both, and `additions` does not, which is why the pick is
   never carried there.
+- **The dialog is Minecraft's own shape, checked against Minecraft's codec.** The
+  front authors a `minecraft:multi_action` dialog: a string `title`, `columns`,
+  `can_close_with_escape` false, and one action button per server whose
+  `label`/`width` sit inline and whose action is `minecraft:dynamic/custom` with
+  an `id`. Paper 26.2 loads the same dialog as a datapack registry entry, and its
+  `RegistryDataLoader` refuses one with no `title` while loading this one
+  unchanged, which is how the shape was checked without a client. The
+  configuration phase carries the dialog inline (`CONTEXT_FREE_STREAM_CODEC` in
+  the 26.2 client), so no `minecraft:dialog` entry is needed, and clicking a
+  custom action in that phase sends `ServerboundCustomClickActionPacket`.
 - **Nothing is attached.** A picker join takes no attach slot and never reaches
-  the core's session, so several clients may read the picker at once, and the core
-  counts it as `attach_picker`, not as a denial. Until #267 lands, a pick is
+  the core's session, so several clients may read the picker at once. The core
+  counts the join as `attach_picker`, not as a denial. Until #267 lands, a pick is
   recorded and the client is ended with a configuration `disconnect` that says the
   lane cannot enter a body yet.
 - **One switch, off by default.** `MONOPLAYER_PICKER` is read once at startup and

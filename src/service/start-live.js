@@ -493,8 +493,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
     preAuth: cfg.preAuth,
     getSnapshotConfig: () => core.cache.snapshot().config,
     // #257: the picker's configuration phase, and the list it offers. The
-    // recording is committed protocol data (src/legs/configuration-baseline.js);
-    // a lane with no fixture on disk refuses a picker join rather than inventing
+    // recording is committed protocol data (src/legs/configuration-baseline.js).
+    // A lane with no fixture on disk refuses a picker join rather than inventing
     // one. The list is the one backend this lane is configured with, because the
     // allowed-server list is #267's key and this ticket adds no config surface:
     // the row says `down`, because with no session there is no body standing.

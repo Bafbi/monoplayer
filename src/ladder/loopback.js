@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O54 (including O11b, O24b, O41b and O54b) are the contract
+// Assertions R0 and O1-O55 (including O11b, O24b, O41b, O54b and O55b) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -3009,8 +3009,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // --- O55: a join with no backend gets the picker, and a pick is recorded (#257) ---
-    // The gate the whole epic rests on. No backend is connected — this rig never
-    // dials one — and the client must still reach a screen it can answer. The
+    // The gate the whole epic rests on. No backend is connected, and this rig
+    // never dials one, so the client must still reach a screen it can answer. The
     // configuration phase it gets is the committed recording of a real Paper 26.2
     // build 135 (src/legs/configuration-baseline/26.2.json), served byte for byte,
     // and the picker is the dialog the front authors and holds the phase open for.

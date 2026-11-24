@@ -134,7 +134,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   // list of servers it may enter, and until #267 a pick lands nowhere: the front
   // serves the configuration baseline, shows the dialog, records the pick, and
   // refuses the entry with a message. With this off, a join with no backend is
-  // refused at login with the reason it always gave — `backend_not_ready`.
+  // refused at login with the reason it always gave, `backend_not_ready`.
   //
   // The front leg's own baseline is the other half: `picker` with no
   // configurationBaseline refuses the join instead of inventing one, so a lane

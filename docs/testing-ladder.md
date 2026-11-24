@@ -496,10 +496,11 @@ first dial and its target warms in five seconds.
   `src/legs/configuration-baseline/26.2.json`, the committed recording of the gate
   lane's Paper 26.2 build 135, served byte for byte. The client reads all 29
   `registry_data` frames plus `select_known_packs`, `feature_flags` and `tags`,
-  with no leftover bytes and no wire rejection, and - the point of the picker - no
-  `finish_configuration`: the phase stays open. The dialog that lands on it is
-  authored by `src/core/picker.js` and carries one action per allowed server; the
-  assertion reads the action id out of the frame the client received, has the bot
+  with no leftover bytes and no wire rejection, and no
+  `finish_configuration`. The phase stays open, which is the point of the picker.
+  The dialog that lands on it is authored by `src/core/picker.js` and carries one
+  action per allowed server. The assertion reads the action id out of the frame the
+  client received, has the bot
   answer it in the configuration state, and requires the service to report that
   same id with the server it named. The pick rides in the action `id`, never in
   `additions`. `front.lastConfigMode` is `baseline`, the core attaches nothing,
