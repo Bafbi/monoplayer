@@ -109,6 +109,14 @@ spec:
               value: /control/attach-whitelist.json
             - name: MONOPLAYER_CONTROL_FILE
               value: /control/desired.json
+            # #262: the allowed-server list the picker offers, and the copy Git
+            # commits that answers when the live key is absent or unreadable. Its
+            # own switch, so it is read whether or not a desired document is named.
+            # The seed is mounted at /config, which nothing else reads.
+            - name: MONOPLAYER_ALLOWED_SERVERS
+              value: /control/allowed-servers.json
+            - name: MONOPLAYER_ALLOWED_SERVERS_SEED
+              value: /config/allowed-servers.json
             # The panel may move this puppet's backend, and an attached player
             # keeps their connection through the move (#233). This is the one
             # switch that lets an operator action reach the live session with no
