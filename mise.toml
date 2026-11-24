@@ -45,13 +45,15 @@ wait_for = ["check"]
 run = "node src/ladder/client-parity.js || node src/ladder/next-rung.js parity:run $?"
 
 [tasks.online]
-description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet and a backend this repo deploys, named in MONOPLAYER_BACKEND_HOST)."
+description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet, a backend this repo deploys named in MONOPLAYER_BACKEND_HOST, and the account lease, which needs kubectl)."
 depends = ["install"]
 wait_for = ["check"]
-run = "node src/ladder/online.js || node src/ladder/next-rung.js online $?"
+# The account is one refresh chain, so the bare rung takes the lease too (#280). Both
+# forms of the rung then exclude each other, and neither waits for a human.
+run = "scripts/online-cluster.sh hold node src/ladder/online.js || node src/ladder/next-rung.js online $?"
 
 [tasks."online:cluster"]
-description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving."
+description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving. It holds the account lease, so a second run waits or is refused (#280)."
 run = "scripts/online-cluster.sh"
 
 [tasks."panel:css"]
