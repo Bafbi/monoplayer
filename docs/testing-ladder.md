@@ -525,11 +525,13 @@ first dial and its target warms in five seconds.
   `monoplayer:disconnect/…`, read out of the frame rather than chosen by the rung.
   The bot clicks `Claim` in the configuration state. The assertion requires the
   service to report verb `claim` with the id the frame carried and the server it
-  named. It also requires the client to be answered with a configuration
-  `disconnect`, and the front to count one server dialog and one verb. The verb and
-  the server both ride in the id, so the leg keeps no per-connection state about
-  which dialog a client is looking at. Wiring a claim to a body is #267's. What this
-  proves is the round trip.
+  named, and the front to count one server dialog, one verb and one claim (#267).
+  The client is not answered with a `disconnect` any more: a claim is recorded, so
+  the client stays in the configuration phase, and what a claim contends with is
+  O57. The verb and the server both ride in the id, so the leg keeps no
+  per-connection state about which dialog a client is looking at. Delivering the
+  body a claim names is #269's, not recording the claim. What this proves is the
+  round trip.
 - `O56b` an unknown verb is refused, named, and answered (#266). The second 26.2 bot
   sends `monoplayer:teleport/gate-paper_25565` in the configuration state. The front
   refuses it and logs one sentence that names the verb and the verbs it does offer.
@@ -541,9 +543,25 @@ first dial and its target warms in five seconds.
 - `O56c` disconnect is carried out (#266). A third 26.2 bot picks, then clicks
   `Disconnect` out of the frame it received. The front reports verb `disconnect`
   with that id and the server it named, and ends the client's configuration with a
-  `disconnect` frame. Claim and spectate are refused in words because the body they
-  act on is #267's. This is the one verb the dialog layer can complete on its own,
+  `disconnect` frame. Spectate is refused in words, because nothing watches a body
+  from this phase. This is the one verb the dialog layer can complete on its own,
   and it is proven by a click for that reason.
+- `O57` the pick records an exclusive claim, and a second claim on that body is
+  refused by name (#267). The first 26.2 bot claimed `gate-paper:25565` in O56 and
+  is still connected, so it holds that body. A fourth bot reads the picker while that
+  claim stands, which it may, because the picker is not a claim and takes no attach
+  slot. It picks the same server and clicks `Claim`. The claims the front holds are
+  then exactly one, on that body, and they name `Attach`. The refusal is one
+  sentence naming `Attach`, and the rival gets a configuration `disconnect` rather
+  than a silent nothing. The claimant is still connected when the refusal is read,
+  which is what "held by the connection" means: the click does not spend the claim.
+  A client that has read the picker and not claimed holds nothing, and the claims
+  are read again after the rival's pick, which takes nothing either. Four picker
+  joins, one claim and no attach, so the core's session is untouched.
+
+  What it cannot prove: that the claiming client is delivered the body. No body is
+  connected on this rig, and a claim has no channel to deliver one through until
+  #269. Delivery is still the front leg's attach slot, and #260 and #269 replace it.
 
 
 ## The client parity rung

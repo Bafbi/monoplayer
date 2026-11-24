@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O56 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
+// Assertions R0 and O1-O57 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -164,6 +164,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot = null
   let pickerBot2 = null
   let pickerBot3 = null
+  let pickerBot4 = null
 
   const evidence = {
     frontPort: null,
@@ -3027,17 +3028,18 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const pickerServerName = 'gate-paper:25565'
     const pickerPicks = []
     // #266: the verbs the front reports from the chosen server's dialog. The
-    // second level's answer is a claim here. Claim is the verb the dialog layer can
-    // read and cannot carry, because the body it would act on is #267's.
+    // second level's answer is a claim here. #267: a claim is recorded against the
+    // body the frame names; spectate is still read and refused.
     const pickerVerbs = []
-    // Three clients, so this rig has its own whitelist: the other rigs take the
+    // Four clients, so this rig has its own whitelist: the other rigs take the
     // shared pair, and a name they do not know would change what they can refuse.
-    const pickerWhitelist = [offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third')]
+    const pickerWhitelist = [offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth')]
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
-      // A port nothing listens on, and the rig never dials it: this ticket's whole
-      // property is that the service does not connect an allowed server until
-      // someone claims one, and nothing claims yet (#267).
+      // A port nothing listens on, and the rig never dials it: this rig's whole
+      // property is that the service serves the picker without a backend. #267
+      // records the claim a client makes, and still connects nothing: delivery of a
+      // body is #269's.
       port: await freePort(),
       version: pickerVersion,
       username: 'GlowSquidye',
@@ -3131,7 +3133,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     await waitFor(() => pickerPicks.length === 1, 'the pick to reach the service', 10_000)
     // #266: the pick opens that server's own dialog, and the phase stays open for
     // it. Nothing is entered: the second dialog is the whole of what a pick does
-    // until #267 wires the verbs to a body.
+    // until #269 gives a claim a channel to deliver a body through.
     await pickerBot.waitFor(
       () => pickerBot.received.dialogs.length === 2,
       'the chosen server\'s dialog after a pick',
@@ -3158,11 +3160,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const serverRead = readServerDialog(pickerBot.received.dialogs[1])
     const claimAction = chooseDialogAction(pickerBot.received.dialogs[1], 'claim')
     if (claimAction !== null) pickerBot.answerDialog(claimAction.id, null, 'configuration')
-    await pickerBot.waitFor(
-      () => pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
-      'the answer a claim gets while no body can be claimed',
-      15_000
-    )
+    // #267: a claim is recorded instead of refused, so the client stays in the
+    // phase. What the claim contends with, and what a second claim gets, is O57.
+    await waitFor(() => pickerFront.metrics.pickerClaims === 1, 'the claim to be recorded', 10_000)
     await waitFor(() => pickerVerbs.length === 1, 'the verb to reach the service', 10_000)
     // #266: an unknown verb is refused and named, and the client is answered
     // rather than left in a dialog. The second client is in the same phase with no
@@ -3264,9 +3264,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         pickerVerbs[0].id === claimAction.id &&
         pickerVerbs[0].slug === 'gate-paper_25565' &&
         pickerVerbs[0].server?.name === pickerServerName &&
-        pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerBot.received.ended === null &&
         pickerFront.metrics.pickerServerDialogs === 1 &&
         pickerFront.metrics.pickerVerbs === 1 &&
+        pickerFront.metrics.pickerClaims === 1 &&
         pickerCore.attached === false,
       evidence.picker.serverDialog
     )
@@ -3336,13 +3337,120 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.disconnect
     )
 
+    // #267: the claim, and what it contends with. The first client claimed the body
+    // in O56 and is still connected, so it holds it. A fourth client reads the picker
+    // while that claim stands, which it may, because the picker is not a claim and
+    // takes no attach slot. It picks the same body and clicks Claim. The refusal
+    // names the player who holds it, and the claimant is untouched on its own
+    // connection.
+    //
+    // What this does not prove: that the claiming client is delivered the body. No
+    // body is connected from this phase, and a claim has no channel to deliver
+    // through until #269. The delivery path is still the front leg's attach slot.
+    pickerBot4 = createBot({ port: pickerBound.port, username: 'Fourth', version: pickerVersion })
+    await pickerBot4.waitFor(
+      () => pickerBot4.received.dialogs.length === 1,
+      'the picker at a fourth client while a claim stands',
+      15_000
+    )
+    // A client that has read the picker and not claimed holds nothing: the claims are
+    // still the first client's alone. Read here, before this client clicks anything.
+    const claimsWhileReading = pickerFront.claims
+    const fourthRead = {
+      dialogs: pickerBot4.received.dialogs.length,
+      configuration: pickerBot4.received.names
+        .filter(frame => frame.state === 'configuration')
+        .map(frame => frame.name)
+        .slice(0, 3),
+      leftovers: pickerBot4.received.leftovers.length
+    }
+    const fourthPick = chooseDialogAction(pickerBot4.received.dialogs[0], 'first')
+    if (fourthPick !== null) pickerBot4.answerDialog(fourthPick.id, null, 'configuration')
+    await pickerBot4.waitFor(
+      () => pickerBot4.received.dialogs.length === 2,
+      "the chosen server's dialog at the fourth client",
+      15_000
+    )
+    // A pick opens a dialog and claims nothing, so the same holds one level down.
+    const claimsAfterPick = pickerFront.claims
+    const fourthClaim = chooseDialogAction(pickerBot4.received.dialogs[1], 'claim')
+    if (fourthClaim !== null) pickerBot4.answerDialog(fourthClaim.id, null, 'configuration')
+    await pickerBot4.waitFor(
+      () => pickerBot4.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the refusal a second claim on a claimed body gets',
+      15_000
+    )
+    const claimGrants = logs
+      .filter(entry => entry.event === 'pickerClaim')
+      .map(entry => entry.fields)
+    const claimRefusals = logs
+      .filter(entry => entry.event === 'pickerClaimRefused')
+      .map(entry => entry.fields)
+    const claimHeld = pickerFront.claims
+    evidence.picker.claim = {
+      held: claimHeld,
+      whileReading: claimsWhileReading,
+      afterPick: claimsAfterPick,
+      granted: claimGrants,
+      refused: claimRefusals,
+      claimant: {
+        dialogs: pickerBot.received.dialogs.length,
+        ended: pickerBot.received.ended === null ? null : String(pickerBot.received.ended).slice(0, 160)
+      },
+      rival: {
+        ...fourthRead,
+        pick: fourthPick === null ? null : { id: fourthPick.id, label: fourthPick.label },
+        chosen: fourthClaim === null ? null : { id: fourthClaim.id, label: fourthClaim.label },
+        ended: pickerBot4.received.ended === null ? null : String(pickerBot4.received.ended).slice(0, 160)
+      },
+      metrics: {
+        pickers: pickerFront.metrics.pickers,
+        claims: pickerFront.metrics.pickerClaims,
+        refusals: pickerFront.metrics.pickerRefusals,
+        picks: pickerFront.metrics.pickerPicks,
+        attaches: pickerCore.metrics.attaches
+      }
+    }
+    check(
+      'O57',
+      'the pick records an exclusive claim: a second claim on a claimed body is refused by name, and the picker stays open',
+      claimHeld.length === 1 &&
+        claimsWhileReading.length === 1 &&
+        claimsWhileReading[0].name === 'Attach' &&
+        claimsAfterPick.length === 1 &&
+        claimsAfterPick[0].name === 'Attach' &&
+        claimHeld[0].body === 'gate-paper_25565' &&
+        claimHeld[0].server === pickerServerName &&
+        claimHeld[0].name === 'Attach' &&
+        claimGrants.length === 1 &&
+        claimGrants[0].granted === true &&
+        claimGrants[0].claimedBy === 'Attach' &&
+        claimRefusals.length === 1 &&
+        claimRefusals[0].reason === 'body_claimed' &&
+        claimRefusals[0].claimedBy === 'Attach' &&
+        /already claimed by Attach/.test(String(claimRefusals[0].text ?? '')) &&
+        fourthRead.dialogs === 1 &&
+        fourthRead.leftovers === 0 &&
+        fourthPick !== null &&
+        fourthPick.id === 'monoplayer:pick/gate-paper_25565' &&
+        fourthClaim !== null &&
+        fourthClaim.id === 'monoplayer:claim/gate-paper_25565' &&
+        pickerBot4.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerBot.received.ended === null &&
+        pickerFront.claims.length === 1 &&
+        pickerFront.metrics.pickerClaims === 1 &&
+        pickerFront.metrics.pickers === 4 &&
+        pickerCore.attached === false,
+      evidence.picker.claim
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
