@@ -41,6 +41,7 @@ within minutes of the next sync. Those lanes keep their own runbooks.
 | `.github/workflows/image.yaml` | Build, push to GHCR, commit the digest |
 | `.github/workflows/image-retention.yaml` | Delete the image tags no lane can name |
 | `deploy/pins.txt` | Image pins no manifest carries, kept by the retention job |
+| `Lease monoplayer-online-account` | Not in git. The account lease the online rung holds (#280): one object in `monoplayer`, naming the run's lane, its branch and its pid, and empty between runs. No manifest declares it, so a sync neither creates nor prunes it; [testing-ladder.md](testing-ladder.md#the-account-lease) is the runbook |
 | `Dockerfile` | The runtime image: Node, the proxy, the 26.2 data patch |
 
 ## One-time cluster bootstrap
@@ -280,6 +281,13 @@ See `docs/telemetry.md` for the signals and the journal layout.
 
 - **One replica, `Recreate`.** The backend login is a rolling refresh-token
   chain; two writers would race it. The custody claim is `ReadWriteOnce`.
+- **The account lease is a run's, not the deployment's.** One Minecraft identity
+  is one refresh chain, so a run that uses it takes `Lease
+  monoplayer-online-account` in `monoplayer` first and releases it on exit
+  (#280). The object is the only thing a run writes in the live namespace: holding
+  it never scales, patches, restarts or deletes a workload, and the deployment
+  keeps serving throughout. A lease expires on its own, so a killed run cannot
+  hold the account for ever.
 - **The custody PVC is never pruned.** The PVC and the namespace carry
   `argocd.argoproj.io/sync-options: Delete=false,Prune=false`, so removing the
   Application or the manifest does not delete the tokens.
