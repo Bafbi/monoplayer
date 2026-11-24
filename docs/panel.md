@@ -443,9 +443,9 @@ remove a different server. The document is:
 }
 ```
 
-A host is a hostname of at least two labels or an IPv4 address: no scheme, no port
-inside the host, no trailing dot, no bare single label. A port is an integer from 1
-to 65535. A body that sends `"25565"` as text is refused rather than coerced, so the
+A host is a hostname of at least two labels or an IPv4 address, with every octet
+between 0 and 255: no scheme, no port inside the host, no trailing dot, no bare single
+label. A port is an integer from 1 to 65535. A body that sends `"25565"` as text is refused rather than coerced, so the
 file the lane reads never holds a port as a string.
 
 | Answer | Meaning |
@@ -489,10 +489,11 @@ Four refusals are deliberate:
   Removing a server stops it being offered, and a body already running on it is left
   alone until its claim ends.
 
-**A write is stored, and nothing reads it yet.** The picker that offers this list is
+**A write is stored, and nothing offers it to a client yet.** The lane reads the file
+for its own start record; the picker that puts a row on a joining player's screen is
 #265, so until that lands the list is written and offered to nobody, and every answer
-says so in `takesEffect`. The lane's start record already reports the key, inside its
-`control` object:
+says which of the two it is in `takesEffect`. The start record reports the key, inside
+its `control` object:
 
 ```json
 "allowedServers": {
@@ -513,10 +514,10 @@ history:
 `panelAllowedServerRemove` is its twin. The address is the tailnet peer, which is the
 only actor the panel can name.
 
-The live key is not in Git, so the 200 also carries the `data:` block of
-`deploy/manifests/configmap.yaml` to paste, under `yaml` and `pasteInto`. Replace that
-file's `allowed-servers.json` key when a change should survive the next deploy: the
-seed is what an unedited lane offers, and what a first write is built on.
+The live key is not in Git, so the 200 also carries a `data:` block holding this one
+key, under `yaml`, with `pasteInto` naming `deploy/manifests/configmap.yaml`. Replace
+that file's `allowed-servers.json` key with it when a change should survive the next
+deploy: the seed is what an unedited lane offers, and what a first write is built on.
 
 ## It ships with the proxy
 

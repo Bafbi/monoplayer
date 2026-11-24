@@ -445,5 +445,22 @@ test('#262 a list nobody named is off, and two files that both fail are named by
   assert.deepEqual(lines.map(line => [line.event, line.fields.file, line.fields.reason]),
     [['controlRejected', broken, 'version'], ['controlRejected', seedFile, 'duplicate']],
     'both files are named, and each with its own reason')
+
+  // A seed the lane named and the mount did not deliver is not the normal state: the
+  // live key's absence is, because the operator has not written it yet.
+  const absentLines = []
+  const absentSeed = path.join(controlDir('seed-missing'), 'allowed-servers.json')
+  const absent = createControlDocument({
+    allowedServersFile: path.join(controlDir('allowed-missing'), 'allowed-servers.json'),
+    allowedServersSeedFile: absentSeed,
+    log: (event, fields) => absentLines.push({ event, fields })
+  })
+  assert.deepEqual(absent.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(absentLines.map(line => [line.event, line.fields.code]),
+    [['controlUnreadable', 'ENOENT']],
+    'a seed that is not mounted is one named line, not silence')
+  assert.equal(absentLines[0].fields.file, absentSeed, 'the line names the seed')
+  absent.allowedServers()
+  assert.equal(absentLines.length, 1, 'and one line is enough, however often the list is asked for')
 })
 

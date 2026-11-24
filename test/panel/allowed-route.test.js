@@ -12,10 +12,7 @@
 // panel wrote" (#265) is asserted against the code that will read it.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import http from 'node:http'
-import os from 'node:os'
-import path from 'node:path'
 
 import { createPanelHandler } from '../../src/panel/server.js'
 import { mergePatchBody, ReadRefused, WriteRefused } from '../../src/panel/kube.js'
@@ -121,18 +118,22 @@ async function panel ({ cluster: made = cluster(), puppets = [puppet()], kuberne
     url: 'http://127.0.0.1:' + port,
     state: made.state,
     lines: () => lines,
-    // The lane's own reader, over the text the patch left behind.
-    laneReads: (seedText = null) => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-allowed-'))
-      const file = path.join(dir, 'allowed-servers.json')
-      const seedFile = path.join(dir, 'seed.json')
-      fs.writeFileSync(file, made.state.text)
-      if (seedText !== null) fs.writeFileSync(seedFile, seedText)
-      return createControlDocument({
-        allowedServersFile: file,
-        allowedServersSeedFile: seedText === null ? null : seedFile
-      }).allowedServers()
-    },
+    // The lane's own reader, over the text the patch left behind. No temporary file:
+    // the document is a string already, and `readFile` is the seam
+    // `createControlDocument` takes.
+    laneReads: () => createControlDocument({
+      allowedServersFile: '/control/allowed-servers.json',
+      allowedServersSeedFile: '/config/allowed-servers.json',
+      readFile: file => {
+        const present = file.startsWith('/control') ? made.state.liveKey === true : made.state.seedKey === true
+        if (!present) {
+          const missing = new Error('ENOENT: no such file or directory')
+          missing.code = 'ENOENT'
+          throw missing
+        }
+        return file.startsWith('/control') ? made.state.text : made.state.seed
+      }
+    }).allowedServers(),
     close: () => new Promise(resolve => server.close(resolve))
   }
 }
@@ -195,9 +196,11 @@ test('POST adds one server, and the lane\'s own reader sees it', async () => {
     assert.equal(body.changed, true)
     assert.equal(body.count, 2)
     assert.equal(body.source, 'control')
-    // The window is the next offer, not the next boot. #265 is what reads it, so the
-    // answer may not promise an offer that does not exist yet.
-    assert.match(body.takesEffect, /no lane reads this key yet/)
+    // The window is the next offer, not the next boot. The lane already reads the key
+    // for its start record, and the picker that offers it is #265, so the answer may
+    // neither promise an offer that does not exist nor deny the read that does.
+    assert.match(body.takesEffect, /nothing offers the list to a client yet/)
+    assert.match(body.takesEffect, /start record/)
     assert.match(body.takesEffect, /#265/)
 
     const audit = rig.lines().find(line => line.event === 'panelAllowedServerAdd')
@@ -281,7 +284,10 @@ test('an address the dialog could not name is refused before it is stored', asyn
       { host: 'paper.example.net', port: '25565' },
       { host: 'paper.example.net' },
       { port: 25565 },
-      { host: '', port: 25565 }
+      { host: '', port: 25565 },
+      // Four dot-separated groups is not an address: an octet has a range.
+      { host: '999.999.999.999', port: 25565 },
+      { host: '10.0.0.256', port: 25565 }
     ]) {
       const response = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', body)
       assert.equal(response.status, 400, JSON.stringify(body) + ' is refused')
