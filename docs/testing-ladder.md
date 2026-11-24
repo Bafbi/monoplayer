@@ -129,10 +129,28 @@ or queues with `--lease-wait`. The lease is released on a clean exit and on a
 failure.
 
 The lease lasts `MONOPLAYER_LEASE_DURATION` seconds, 900 by default, and is renewed
-every third of that while the run goes. A run that is killed outright therefore
-holds the account for at most that long, and a lease that has expired is taken
-without asking. `scripts/online-cluster.sh` holds the defaults and the rest of the
+every third of that while the run goes. A lease that has expired is taken without
+asking. `scripts/online-cluster.sh` holds the defaults and the rest of the
 `MONOPLAYER_LEASE_*` variables.
+
+Two ways a run can end without releasing the lease, and what happens:
+
+- **A run killed with `SIGKILL` runs no exit handler.** The renewal loop outlives it,
+  notices its parent is gone, and releases the lease. It checks `/proc/<pid>/stat`,
+  because a zombie still answers `kill -0`.
+- **Another run takes the lease, either after it expired or by a wrong clock.** This
+  run stops with `SIGTERM` and says so, rather than carry on as a second writer on
+  one refresh chain. The expiry is judged by the reader's own clock compared with the
+  `renewTime` the holder wrote, so two machines more than a few minutes apart can
+  disagree about a live lease. The renewal interval is a third of the duration for
+  that reason.
+
+The lease needs `get`, `create` and `replace` on `coordination.k8s.io/leases` in the
+namespace. That is the same cluster and the same credential the rung already holds:
+it creates a pod, reads the Deployment and the custody, so it is not a narrower
+permission. A role that grants only `pods` and `deployments` would need those three
+verbs added before `mise run online` works, and the script says so, naming the verbs,
+instead of starting without a lease.
 
 Three things the lease does not cover. The deployment's own proxy keeps refreshing
 the puppet while it serves, which is what one-account-one-writer-one-replica is
