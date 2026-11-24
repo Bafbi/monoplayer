@@ -668,16 +668,15 @@ first dial and its target warms in five seconds.
   second body's snapshot is byte for byte the one it had, and its warm flag is
   still set. Its fake's next block change still lands in its block domain. The
   picker core this run already landed a claim on is read too. The cache the client
-  is served from is the claimed body's. The two bodies it dialled and never
-  reached each kept an empty cache of their own: the lane's configured backend,
-  which a picker lane never dials, and the row whose dial O56's claim had refused.
+  is served from is the claimed body's. The two bodies it dialled and never reached
+  each kept an empty cache. They are the lane's configured backend, which a picker
+  lane never dials, and the row whose dial O56's claim had refused.
 
   What it cannot prove: that two clients are delivered at once, one per body,
   each reading its own body's cache. That is per-channel delivery, #269, and a
   session per body, #261: the two bodies here are held at the leg, not delivered.
-  It also cannot prove two sessions of one account on one server, because a
-  server kicks the session it already has, and these are two fakes, so two
-  servers.
+  It also cannot prove two sessions of one account on one server. A server kicks
+  the session it already has, and these are two fakes, so two servers.
 
 
 ## The client parity rung

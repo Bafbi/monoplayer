@@ -9,8 +9,12 @@ import assert from 'node:assert/strict'
 import { pickSlug } from '../../src/core/picker.js'
 import { makeCore } from '../support/harness.js'
 
-// The body a claim names, and the address its row carried.
-const CLAIMED_BODY = { body: 'paper_25565', target: { host: '127.0.0.1', port: 25565 } }
+// The body a claim names, and the address its row carried. The address is a server
+// the lane's configured backend is not, so "the claimed body's cache" and "the
+// lane's own body" are two different caches.
+const CLAIMED_BODY = { body: 'paper_25565', target: { host: '127.0.0.1', port: 25566 } }
+// #260: the core keys a body's cache by the server the dial names.
+const CLAIMED_SERVER = pickSlug(CLAIMED_BODY.target.host + ':' + CLAIMED_BODY.target.port)
 
 // A body the core can release a client on: its configuration is cached, its play
 // login has landed, and its warm marker has been seen. That is the same pair of
@@ -69,9 +73,9 @@ test('#258 the claim dials the body it names, and another body after it is refus
   // #260: the cache the body's frames landed in is that body's. The lane's
   // configured body keeps a cache of its own, and the claim put no frame in it.
   const configured = pickSlug(core.config.backend.host + ':' + core.config.backend.port)
-  assert.notEqual(CLAIMED_BODY.body, configured, 'the claim names a body that is not the lane\'s own')
-  assert.equal(core.cache, core.bodies.cacheFor(CLAIMED_BODY.body))
-  assert.deepEqual([...core.bodies.stats().bodies].sort(), [CLAIMED_BODY.body, configured].sort())
+  assert.notEqual(CLAIMED_SERVER, configured, 'the claim dials a server that is not the lane\'s own')
+  assert.equal(core.cache, core.bodies.cacheFor(CLAIMED_SERVER), 'the frames are the dialled server\'s body')
+  assert.deepEqual([...core.bodies.stats().bodies].sort(), [CLAIMED_SERVER, configured].sort())
   assert.deepEqual(core.bodies.cacheFor(configured).snapshot().prefix, [],
     'the lane\'s own body holds none of the claimed body\'s frames')
   assert.equal(core.bodies.cacheFor(configured).warm, false)
@@ -85,7 +89,7 @@ test('#258 the claim dials the body it names, and another body after it is refus
   assert.equal(second.body, CLAIMED_BODY.body)
   assert.equal(backendLeg.dialledTargets().length, 1, 'the refused claim dialled nothing')
   assert.equal(core.bodies.get('sky'), null, 'and no second body was given a cache')
-  assert.equal(core.cache, core.bodies.cacheFor(CLAIMED_BODY.body), 'the serving body\'s cache is unchanged')
+  assert.equal(core.cache, core.bodies.cacheFor(CLAIMED_SERVER), 'the serving body\'s cache is unchanged')
 })
 
 test('#258 a body that ended before it warmed does not hold the next claim', async () => {
@@ -139,7 +143,7 @@ test('#258 the same body may be redialled after its session faulted, and another
   assert.equal(core.cache, bodyCache, 'one body, one cache: a redial does not open a second')
   assert.equal(bodyCache.warm, true, 'and the new join warmed the same cache')
   assert.deepEqual([...core.bodies.stats().bodies].sort(),
-    [CLAIMED_BODY.body, pickSlug(core.config.backend.host + ':' + core.config.backend.port)].sort(),
+    [CLAIMED_SERVER, pickSlug(core.config.backend.host + ':' + core.config.backend.port)].sort(),
     'the redial added no body: the two caches are the lane\'s own body and the claimed one')
 
   // A different body is still refused, because one session serves one body.
