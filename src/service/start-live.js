@@ -32,6 +32,11 @@
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
 //                                                       commands, full, or off
+//   MONOPLAYER_PICKER                                   1 holds a joining client in
+//                                                       configuration and shows it the
+//                                                       server picker when the lane has
+//                                                       no backend; a pick is recorded
+//                                                       and refused until #267 (default 0)
 //   MONOPLAYER_TRANSFER_KEEP_CONNECTION                 1 keeps the client's
 //                                                       connection through a
 //                                                       transfer (#22); off by default
@@ -78,6 +83,7 @@ import { accountTokenExpiry } from '../custody/status.js'
 import { normalizeUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../legs/live-backend.js'
 import { createLiveFrontLeg } from '../legs/live-front.js'
+import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createTelemetry } from '../observability/telemetry.js'
@@ -144,6 +150,14 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   }
   if (Object.keys(control).length) out.control = control
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
+  // #257: the picker. Only "1" and "0" are read, so a typo leaves the lane
+  // refusing a backendless join the way it always did.
+  const pickerRaw = env.MONOPLAYER_PICKER
+  if (pickerRaw === '1' || pickerRaw === '0') {
+    out.picker = pickerRaw === '1'
+  } else if (pickerRaw !== undefined && pickerRaw !== '') {
+    warn('MONOPLAYER_PICKER must be 1 or 0; ignoring ' + pickerRaw)
+  }
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   if (env.MONOPLAYER_CHAT) out.chat = env.MONOPLAYER_CHAT
   // The kept connection (#22) is on in the defaults; this switch lets a lane
@@ -461,6 +475,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // runs it in warn mode first: a checker bug must not kick a real player, but
   // every failure is logged and counted in front.wireStats.
   const wire = createWireChecker({ version: cfg.version })
+  // #257: the configuration phase this lane can serve when no backend is
+  // connected. Read once, and only when the picker is on: a lane that never serves
+  // a picker pays nothing for the recording, and a corrupt one cannot stop a lane
+  // that would never have used it.
+  const baseline = cfg.picker === true ? readConfigurationBaseline() : null
   const front = createLiveFrontLeg({
     host: cfg.front.host,
     port: cfg.front.port,
@@ -473,6 +492,26 @@ export async function startLive ({ argv = [], io = process } = {}) {
     // #201: the total cap on the sockets inside the pre-auth window.
     preAuth: cfg.preAuth,
     getSnapshotConfig: () => core.cache.snapshot().config,
+    // #257: the picker's configuration phase, and the list it offers. The
+    // recording is committed protocol data (src/legs/configuration-baseline.js);
+    // a lane with no fixture on disk refuses a picker join rather than inventing
+    // one. The list is the one backend this lane is configured with, because the
+    // allowed-server list is #267's key and this ticket adds no config surface:
+    // the row says `down`, because with no session there is no body standing.
+    configurationBaseline: baseline,
+    pickerServers: cfg.picker === true
+      ? () => [{ name: cfg.backend.host + ':' + cfg.backend.port, state: 'down', driver: null }]
+      : null,
+    onPickerPick: pick => {
+      log('pickerPickRecorded', {
+        server: pick.server?.name ?? null,
+        slug: pick.slug,
+        id: pick.id,
+        uuid: pick.uuid,
+        username: pick.name
+      })
+      telemetry.metric('monoplayer.picker_picks', 1, { server: pick.server?.name ?? null })
+    },
     wireCheck: payload => wire.check(payload),
     wireMode: 'warn',
     chat: cfg.chat,
@@ -785,6 +824,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
     version: cfg.version,
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
+    // #257: whether a join with no backend is served a picker, and whether this
+    // process found a recording to serve it with. The second is the difference
+    // between a picker and a refusal, and it is a file that ships with the image.
+    picker: cfg.picker,
+    pickerBaseline: baseline === null ? null : baseline.version,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: `${startupTarget.host}:${startupTarget.port}`,
     backendConfigured: `${configuredTarget.host}:${configuredTarget.port}`,

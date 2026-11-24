@@ -260,6 +260,47 @@ A sustained flood is not ended by this. An attacker who reconnects every 30 s
 still closes the window for the moments it is full. The deadline bounds one
 socket's occupancy; the per-source limits that answer a flood arrive with #204.
 
+### The configuration baseline and the picker (#257)
+
+A lane with no backend session has no configuration phase to replay, and a client
+that joins it would otherwise be refused. `MONOPLAYER_PICKER=1` changes that one
+case and nothing else: a whitelisted client is held in the configuration phase and
+shown a dialog listing the lane's allowed servers.
+
+- **The phase is a recording, never a construction.** `minecraft-protocol` writes
+  registry frames only from `options.registryCodec`, and the codec it can write is
+  the one vendored in minecraft-data: no registry tags, and for 26.2 one registry
+  short of what a server sends (`minecraft:sulfur_cube_archetype`). A vanilla
+  26.2 client that receives it finishes configuration and then fails on the first
+  holder it cannot resolve. `src/legs/configuration-baseline/26.2.json` is the
+  gate lane's Paper 26.2 build 135 configuration phase, recorded byte for byte by
+  `src/ladder/capture-config.js`; two captures of the same server are identical.
+  `src/legs/configuration-baseline.js` validates it and hands the frames to the
+  front leg, which serves them in recorded order and never edits one.
+- **The phase stays open.** The recording carries a `finish_configuration` and the
+  front does not send it: the picker dialog is the phase. A client that answered
+  with `finish_configuration` would enter a world that does not exist.
+- **The pick rides in the action id.** `src/core/picker.js` builds a
+  `minecraft:multi_action` dialog with one `minecraft:dynamic/custom` action per
+  server, and reads the answer out of the frame's first field. The vanilla answer
+  is `Identifier id, lengthPrefixed(optional anonymous NBT)`, while minecraft-data
+  omits the length prefix: the library's writer and reader both disagree with the
+  wire. The id survives in both, and `additions` does not, which is why the pick is
+  never carried there.
+- **Nothing is attached.** A picker join takes no attach slot and never reaches
+  the core's session, so several clients may read the picker at once, and the core
+  counts it as `attach_picker`, not as a denial. Until #267 lands, a pick is
+  recorded and the client is ended with a configuration `disconnect` that says the
+  lane cannot enter a body yet.
+- **One switch, off by default.** `MONOPLAYER_PICKER` is read once at startup and
+  validated. With it off, or with no baseline on disk, a join with no backend is
+  refused with `backend_not_ready`, exactly as before.
+
+The gate for the whole epic is answered at rung 2 by `O55`: a 26.2 client reads
+the recording, gets the dialog, clicks one action, and the service records that
+id with the server it named. What no rung proves is that a vanilla 26.2 client
+accepts the registry set; that is rung 4's question.
+
 ### Control dialogs (#16)
 
 A control dialog is the server asking the player a question. Monoplayer relays

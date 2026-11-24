@@ -69,6 +69,8 @@ import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
+import { pickRefusalText, pickerDialogParams, pickerRows, readPickAction } from '../core/picker.js'
+import { baselineFramesFor } from './configuration-baseline.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // The configuration prefix the cache holds is bounded at 1024 frames, so a
@@ -87,6 +89,15 @@ export function createConfigPathInterceptor ({
   isConfigurationState,
   cachedConfigFrames,
   finishName = 'finish_configuration',
+  // #257: the configuration phase to serve when there is no backend at all —
+  // the picker. `baselineConfigFrames` is a recording of a real server's phase
+  // (src/legs/configuration-baseline.js), and it is served instead of the cached
+  // one, in the state that has no backend to replay: the picker's. The phase is
+  // deliberately left open: `onBaselineFrames` runs once the frames are on the
+  // wire, and the caller sends the dialog there. No finish frame goes out,
+  // because the dialog is the phase.
+  baselineConfigFrames = [],
+  onBaselineFrames = null,
   // The library's generated registry_data is a fallback for fakes and the
   // offline rung. The live path must never serve it: it carries no registry
   // tags, so a 26.2 client fails registry loading and crashes. Set false to
@@ -108,11 +119,15 @@ export function createConfigPathInterceptor ({
   if (typeof writeRaw !== 'function') throw new TypeError('writeRaw is required')
   if (typeof isConfigurationState !== 'function') throw new TypeError('isConfigurationState is required')
   if (!Array.isArray(cachedConfigFrames)) throw new TypeError('cachedConfigFrames must be an array')
+  if (!Array.isArray(baselineConfigFrames)) throw new TypeError('baselineConfigFrames must be an array')
+  if (onBaselineFrames !== null && typeof onBaselineFrames !== 'function') {
+    throw new TypeError('onBaselineFrames must be null or a function')
+  }
 
   let resolved = false
   let notified = false
   const stashed = [] // library-authored registry_data params (fallback only)
-  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, unavailable: 0, finishedByCore: 0 }
+  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, baselineFrames: 0, unavailable: 0, finishedByCore: 0 }
 
   // #16: the client is in its configuration phase now. One notification per
   // connection, whichever path resolves first.
@@ -129,6 +144,18 @@ export function createConfigPathInterceptor ({
     // the library's finish write is dropped and the phase stays open.
     if (live) return
     resolved = true
+    if (baselineConfigFrames.length > 0) {
+      // #257: the picker. The recording is the phase, in its recorded order and
+      // as recorded bytes; the finish stays unwritten so the client remains in
+      // configuration with the dialog on screen.
+      for (const frame of baselineConfigFrames) {
+        if (frame.name === finishName) continue // the recording carries the server's; the picker never sends one
+        writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
+        stats.baselineFrames++
+      }
+      onBaselineFrames?.()
+      return
+    }
     if (cachedConfigFrames.length > 0) {
       for (const frame of cachedConfigFrames) {
         if (frame.name === finishName) continue // finish goes out exactly once, from the call site below
@@ -183,7 +210,10 @@ export function createConfigPathInterceptor ({
     get resolved () { return resolved },
     get replayMode () {
       if (live) return 'live_stream'
-      return resolved && cachedConfigFrames.length > 0 ? 'cached_replay' : resolved ? 'library_fallback' : 'pending'
+      if (!resolved) return 'pending'
+      if (baselineConfigFrames.length > 0) return 'baseline'
+      if (cachedConfigFrames.length > 0) return 'cached_replay'
+      return 'library_fallback'
     },
     stats
   }
@@ -314,7 +344,10 @@ function evaluateCoreDecision (coreDecision) {
   if (decision.allowed !== true) {
     return { ok: false, reason: decision.reason ?? 'core_denied' }
   }
-  return { ok: true, reason: null }
+  // #257: the core may allow a login that has no backend to attach to, and say so
+  // with `picker: true`. The flag is carried, not inferred: the front serves the
+  // picker only where the core decided it may.
+  return { ok: true, reason: null, picker: decision.picker === true, phase: decision.phase ?? null }
 }
 
 function decideViaCheck ({ client, store = null, check, coreDecision = null } = {}) {
@@ -333,7 +366,13 @@ function decideViaCheck ({ client, store = null, check, coreDecision = null } = 
   if (!decision || decision.ok !== true) {
     return { ok: false, reason: decision?.reason ?? 'check_denied' }
   }
-  return { ok: true, reason: null, uuid: decision.uuid ?? null, username: decision.username ?? null }
+  return {
+    ok: true,
+    reason: null,
+    uuid: decision.uuid ?? null,
+    username: decision.username ?? null,
+    picker: core.picker === true
+  }
 }
 
 // Pure online attach decision: core loginStart (fail closed), then the real
@@ -401,6 +440,16 @@ function createFrontLeg ({
   check,
   store,
   getSnapshotConfig,
+  // #257: the picker. `configurationBaseline` is a parsed recording of a real
+  // server's configuration phase (src/legs/configuration-baseline.js), and
+  // `pickerServers` is the allowed list this leg offers when the core says there
+  // is no backend to attach to. Both absent means the lane behaves exactly as it
+  // did: a join with no backend is refused. `onPickerPick` reports a pick, and
+  // the leg answers the client itself either way, because a configuration phase
+  // has nowhere to hand a client until #267 lands.
+  configurationBaseline = null,
+  pickerServers = null,
+  onPickerPick = null,
   // #201: the total connection cap on the pre-auth window.
   preAuth: preAuthOptions = {},
   log,
@@ -422,6 +471,19 @@ function createFrontLeg ({
   }
   if (dumpRaw !== null && typeof dumpRaw !== 'function') throw new TypeError('dumpRaw must be null or a function')
   if (dumpFramed !== null && typeof dumpFramed !== 'function') throw new TypeError('dumpFramed must be null or a function')
+  if (pickerServers !== null && typeof pickerServers !== 'function') {
+    throw new TypeError('pickerServers must be null or a function returning rows')
+  }
+  if (onPickerPick !== null && typeof onPickerPick !== 'function') {
+    throw new TypeError('onPickerPick must be null or a function')
+  }
+  // #257: the frames this leg can serve a picker with, resolved once, because the
+  // recording and this leg's protocol version are both fixed at construction. A
+  // null here is not an error: it is a lane that has no picker, and its joins are
+  // refused exactly as they were before.
+  const pickerFrames = configurationBaseline === null
+    ? null
+    : baselineFramesFor(configurationBaseline, { version })
 
   let loginStartHandler = null // core check 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
@@ -439,7 +501,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   // #201: the total connection cap, and #205: the deadline on the same window.
@@ -676,6 +738,16 @@ function createFrontLeg ({
       whitelist: store?.file ?? null
     })
 
+    // #257: the core's decision said this join has no backend to attach to, and
+    // this leg holds the picker. The picker is not an attach: it takes no slot,
+    // so two clients may read it at once, and it never reaches the core's
+    // session. Its interceptor is installed here, inside the synchronous
+    // beforeLogin window and before any of the library's configuration writes.
+    if (decision.picker === true) {
+      servePicker(client)
+      return
+    }
+
     // Install the cached-config interceptor BEFORE loginClient's subsequent
     // writes/completion (we are inside the synchronous beforeLogin window).
     const interceptor = installConfigInterceptor(client)
@@ -737,19 +809,25 @@ function createFrontLeg ({
     attached = client
   }
 
-  function installConfigInterceptor (client) {
+  function installConfigInterceptor (client, { picker = null } = {}) {
     // Read the snapshot per connection: a backend cache reset must never be
     // masked by a stale per-listen memo. Connection-control frames (a config
     // transfer, a cookie, a dialog, the code of conduct) never replay.
-    const cachedConfigFrames = getSnapshotConfig().filter(
+    //
+    // #257: a picker client gets the baseline and nothing else. Its cached
+    // frames, if the cache holds any, belong to a body nobody claimed, and
+    // serving them would put the client in that body's world without a claim.
+    const cachedConfigFrames = picker !== null ? [] : getSnapshotConfig().filter(
       frame => typeof frame?.name === 'string' &&
         Buffer.isBuffer(frame.buffer) &&
         clientboundPolicy('configuration', frame.name).decision !== 'block'
     )
 
-    const live = cachedConfigFrames.length === 0
+    const live = picker === null && cachedConfigFrames.length === 0
     const interceptor = createConfigPathInterceptor({
       live,
+      baselineConfigFrames: picker ?? [],
+      onBaselineFrames: picker === null ? null : () => sendPickerDialog(client),
       write: client.write.bind(client),
       // Every clientbound raw byte we push to the attaching client, in order.
       writeRaw: (buffer, meta) => {
@@ -780,9 +858,126 @@ function createFrontLeg ({
       }
     })
     client.write = interceptor.write
-    clients.set(client, { interceptor })
+    clients.set(client, { interceptor, picker: picker !== null })
     lastInterceptor = interceptor
     return interceptor
+  }
+
+  // #257: the picker's own rows, from the caller's list. A throw there is a bug
+  // in the lane's configuration, not a reason to leave a client in the dark: the
+  // leg reports an empty list, and an empty picker closes the connection with a
+  // reason instead of showing a dialog with no buttons.
+  function pickerServerRows () {
+    try {
+      return pickerRows(pickerServers() ?? [])
+    } catch (error) {
+      log('pickerServersError', { error: String(error?.message ?? error).slice(0, 200) })
+      return []
+    }
+  }
+
+  // #257: a join with no backend, on a leg that holds a baseline. The client is
+  // held in configuration and shown the picker; nothing is attached, so the
+  // second-attach slot stays free and the core's session is untouched.
+  function servePicker (client) {
+    if (pickerFrames === null || pickerServers === null) {
+      metrics.denied++
+      log('attachDenied', { username: client.username ?? null, reason: 'picker_unavailable' })
+      denyConnection(client, 'picker_unavailable')
+      return
+    }
+    // Installed before any of the library's configuration writes, and before the
+    // dialog: the frames go out from the library's finish hook, and the dialog
+    // goes out right after them.
+    installConfigInterceptor(client, { picker: pickerFrames })
+    metrics.pickers++
+    log('pickerServed', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      frames: pickerFrames.length,
+      servers: pickerServerRows().length
+    })
+  }
+
+  // The frames are on the wire and the client can parse a dialog now. The dialog
+  // is the phase: no finish_configuration follows it.
+  function sendPickerDialog (client) {
+    const rows = pickerServerRows()
+    if (rows.length === 0) {
+      log('pickerEmpty', { username: client.username ?? null })
+      endConfiguration(client, 'picker_empty', pickRefusalText({ server: null }))
+      return
+    }
+    let written = false
+    try {
+      // A configuration-phase show_dialog carries the dialog inline
+      // (CONTEXT_FREE_STREAM_CODEC in the 26.2 client), so no registry entry is
+      // involved and this leg can author one.
+      client.write('show_dialog', pickerDialogParams({ rows }))
+      written = true
+    } catch (error) {
+      log('pickerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    log('pickerDialog', {
+      username: client.username ?? null,
+      servers: rows.length,
+      actions: rows.map(row => row.id)
+    })
+    if (!written) endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: null }))
+  }
+
+  // The client answered the picker. The pick is the whole result of this ticket:
+  // it is reported to the caller, and the client is told plainly that nothing
+  // can be landed in yet (#267 is the ticket that makes a pick connect a body).
+  function handlePickerPick (client, buffer) {
+    const action = readPickAction(buffer)
+    if (action === null) {
+      // Not a pick: another dialog's action, or a frame this leg cannot read. The
+      // picker stays on screen, so the client can still choose.
+      log('pickerPickIgnored', { username: client.username ?? null, reason: 'not_a_pick' })
+      return
+    }
+    const rows = pickerServerRows()
+    const picked = rows.find(row => row.slug === action.slug) ?? null
+    metrics.pickerPicks++
+    log('pickerPick', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      id: action.id,
+      slug: action.slug,
+      server: picked === null ? null : picked.name,
+      known: picked !== null
+    })
+    try {
+      onPickerPick?.({
+        id: action.id,
+        slug: action.slug,
+        server: picked === null ? null : { ...picked },
+        uuid: client.uuid ?? null,
+        name: client.username ?? null
+      })
+    } catch (error) {
+      log('pickerPickHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    endConfiguration(client, 'pick_refused', pickRefusalText({ server: picked === null ? null : picked.name }))
+  }
+
+  // Leave configuration with a message. The library's own end() writes nothing in
+  // this state (its override covers login and play only), so the frame is
+  // written here and the socket is ended after it. A client that is told why it
+  // is leaving is the whole difference between a refusal and a hang.
+  function endConfiguration (client, reason, text) {
+    try {
+      client.write('disconnect', { reason: { type: 'string', value: text } })
+    } catch (error) {
+      log('configurationDisconnectFailed', { reason, error: String(error?.message ?? error).slice(0, 200) })
+    }
+    log('configurationEnded', { reason, username: client.username ?? null })
+    try {
+      client.end('picker: ' + reason)
+    } catch {
+      destroyQuietly(client)
+    }
   }
 
   // The client reached play. Hand the attach to the core: replay the join
@@ -822,6 +1017,14 @@ function createFrontLeg ({
       decoded.state = meta.state
     })
     client.on('raw', (buffer, meta) => {
+      // #257: a picker client has no backend. Nothing it says can be relayed, and
+      // the one frame this leg wants from it is the click on the dialog.
+      if (clients.get(client)?.picker === true) {
+        if (meta.state === 'configuration' && meta.name === 'custom_click_action') {
+          handlePickerPick(client, buffer)
+        }
+        return
+      }
       // #16: a configuration-phase frame reaches the core as well. The human's
       // dialog answers belong to the puppet's session, and the core's own drop
       // rules (classifyServerbound) keep this connection's handshake per-leg.
@@ -1133,6 +1336,12 @@ export function createLiveFrontLeg (options = {}) {
     // login. Null keeps the one startup read every other lane has always done.
     whitelistStore = null,
     getSnapshotConfig,
+    // #257: the picker's configuration baseline and its allowed list. Neither is
+    // defaulted here: a lane that sets no baseline keeps refusing a join that has
+    // no backend, exactly as before.
+    configurationBaseline = null,
+    pickerServers = null,
+    onPickerPick = null,
     // #201: the total connection cap on the pre-auth window.
     preAuth = {},
     log = () => {},
@@ -1162,6 +1371,9 @@ export function createLiveFrontLeg (options = {}) {
     check: createAttachCheck({ log: () => {} }),
     store: whitelistStore ?? createWhitelistStore({ file: attachWhitelistFile }),
     getSnapshotConfig,
+    configurationBaseline,
+    pickerServers,
+    onPickerPick,
     preAuth,
     log,
     wireCheck,
@@ -1182,6 +1394,12 @@ export function createOfflineFrontLeg (options = {}) {
     // array, because it is the file that reloads at each login.
     whitelistStore = null,
     getSnapshotConfig,
+    // #257: the picker's configuration baseline and its allowed list, forwarded
+    // like every other option so the offline rig proves the same code the lane
+    // runs.
+    configurationBaseline = null,
+    pickerServers = null,
+    onPickerPick = null,
     // #201: the total connection cap on the pre-auth window.
     preAuth = {},
     log = () => {},
@@ -1228,6 +1446,9 @@ export function createOfflineFrontLeg (options = {}) {
     check: createOfflineAttachCheck({ whitelist }),
     store: whitelistStore,
     getSnapshotConfig,
+    configurationBaseline,
+    pickerServers,
+    onPickerPick,
     preAuth,
     log,
     wireCheck,

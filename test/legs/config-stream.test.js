@@ -59,3 +59,59 @@ test('cached mode still replays what it has and is unaffected by live', () => {
   assert.equal(r.writes[0].name, 'finish_configuration')
   assert.equal(r.interceptor.replayMode, 'cached_replay')
 })
+
+// #257: the picker. With no backend connected there is nothing to replay and
+// nothing to stream, so the front serves the committed configuration baseline
+// and keeps the client in configuration: the dialog is the phase, and the phase
+// ends at the pick, not at a finish frame the client was never shown a world
+// for.
+function pickerRig ({ baseline = null, cached = [] } = {}) {
+  const writes = []
+  const raws = []
+  const events = []
+  const interceptor = createConfigPathInterceptor({
+    write: (name, params) => writes.push({ name, params }),
+    writeRaw: (buffer, meta) => raws.push({ buffer, meta }),
+    isConfigurationState: () => true,
+    cachedConfigFrames: cached,
+    baselineConfigFrames: baseline,
+    onBaselineFrames: () => events.push('baseline'),
+    live: false,
+    allowLibraryFallback: false,
+    onUnavailable: () => events.push('unavailable')
+  })
+  return { interceptor, writes, raws, events }
+}
+
+test('#257 the baseline replays the recording and keeps the phase open', () => {
+  const baseline = [
+    { name: 'feature_flags', buffer: Buffer.from('f') },
+    { name: 'registry_data', buffer: Buffer.from('r') },
+    { name: 'tags', buffer: Buffer.from('t') }
+  ]
+  const r = pickerRig({ baseline })
+  r.interceptor.write('registry_data', { codec: {} })
+  r.interceptor.write('finish_configuration', {})
+  assert.equal(r.interceptor.replayMode, 'baseline')
+  assert.deepEqual(r.raws.map(frame => frame.meta), [
+    { state: 'configuration', name: 'feature_flags' },
+    { state: 'configuration', name: 'registry_data' },
+    { state: 'configuration', name: 'tags' }
+  ], 'the recording goes out in its own order, as configuration frames')
+  assert.deepEqual(r.writes, [], 'the library finish is dropped: the phase stays open for the picker')
+  assert.deepEqual(r.events, ['baseline'], 'the dialog hook fires once, after the frames')
+  assert.equal(r.interceptor.stats.baselineFrames, 3)
+  assert.equal(r.interceptor.stats.replayedConfigFrames, 0, 'the library registry is not a fallback here')
+  assert.equal(r.interceptor.stats.unavailable, 0)
+})
+
+test('#257 a baseline for another protocol version is not a baseline', () => {
+  // The choice of baseline is the leg's (baselineFramesFor returns null for a
+  // version it does not have), so an empty baseline is what the interceptor sees
+  // and it must behave exactly as it did before: unavailable, never the library.
+  const r = pickerRig({ baseline: [] })
+  r.interceptor.write('finish_configuration', {})
+  assert.deepEqual(r.raws, [])
+  assert.deepEqual(r.events, ['unavailable'], 'no dialog, and no invented frames, without a baseline')
+  assert.equal(r.interceptor.stats.baselineFrames, 0)
+})

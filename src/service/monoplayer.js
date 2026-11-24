@@ -130,6 +130,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   }),
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
+  // #257: the picker. Off, because a lane that turns it on promises the client a
+  // list of servers it may enter, and until #267 a pick lands nowhere: the front
+  // serves the configuration baseline, shows the dialog, records the pick, and
+  // refuses the entry with a message. With this off, a join with no backend is
+  // refused at login with the reason it always gave — `backend_not_ready`.
+  //
+  // The front leg's own baseline is the other half: `picker` with no
+  // configurationBaseline refuses the join instead of inventing one, so a lane
+  // cannot promise a picker it cannot show.
+  picker: false,
   // #229: the runtime control document an operator edits between deploys.
   // `file` is the only switch. It names desired.json, the file that moves the
   // puppet's backend, and setting it also turns on the attach whitelist's reload
@@ -245,6 +255,9 @@ export function loadConfig (doc = {}) {
   }
   if (!CHAT_MODES.has(merged.chat)) {
     throw new TypeError("config.chat must be 'full', 'commands', 'read-only', or 'off'")
+  }
+  if (typeof merged.picker !== 'boolean') {
+    throw new TypeError('config.picker must be a boolean')
   }
   if (typeof merged.transfer.follow !== 'boolean') {
     throw new TypeError('config.transfer.follow must be a boolean')
@@ -630,6 +643,18 @@ export function createMonoplayer ({
     // and lands in play when the backend logs in.
     const canAttachConfiguring = backendConfiguring && session.state === STATES.BOOT
     if (!session.isAttachReady() && session.state !== STATES.ATTACHED && !canAttachConfiguring) {
+      // #257: the picker. A whitelisted client may join a lane with no backend
+      // when the lane offers one, and it is not a denial: nothing is attached,
+      // the session is untouched, and the front leg serves the configuration
+      // baseline and the dialog. `picker: true` is the whole permission, and the
+      // front serves nothing it was not given, so a core without the switch keeps
+      // answering `backend_not_ready`.
+      if (cfg.picker === true) {
+        log('attachPicker', { uuid: payload.uuid, name: payload.name, state: session.state })
+        emit('attach_picker', { uuid: payload.uuid, name: payload.name, phase: decision.phase })
+        telemetry.metric('monoplayer.pickers', 1, { player: payload.name })
+        return { ...decision, allowed: true, phase: 'picker', picker: true }
+      }
       const denied = {
         allowed: false,
         reason: 'backend_not_ready',
@@ -2755,6 +2780,9 @@ Config (JSON via --config, then env, then defaults):
                                                       configured backend (default 0)
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
+  MONOPLAYER_PICKER                                   1 serves a joining client the recorded configuration
+                                                      baseline and the server picker when the lane has no
+                                                      backend, and records the pick (default 0)
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity

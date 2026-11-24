@@ -306,8 +306,10 @@ export function createBot ({
     // #16: answer a dialog the way a client does. The library's own writer for
     // this packet omits the payload's length prefix, so the body comes from the
     // dialog codec both this bot and the puppet leg use, and is written raw.
-    answerDialog (id, additions = null) {
-      const body = buildCustomClickAction({ state: 'play', id, additions })
+    // #257: the phase decides the packet id, so a picker answer in configuration
+    // is the same conversation with the configuration id.
+    answerDialog (id, additions = null, state = 'play') {
+      const body = buildCustomClickAction({ state, id, additions })
       if (body === null) throw new Error(`cannot build a dialog answer for ${JSON.stringify(id)}`)
       client.writeRaw(body)
     },
