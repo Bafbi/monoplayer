@@ -57,10 +57,11 @@
 # Environment:
 #   MONOPLAYER_CLUSTER_NAMESPACE   namespace            (default monoplayer)
 #   MONOPLAYER_DEPLOYMENT          deployment to read    (default monoplayer)
-#   MONOPLAYER_GATE_NAMESPACE      the gate lane        (default monoplayer-gate-b),
-#                                                        which the default backend
-#                                                        host is derived from (#277)
-#   MONOPLAYER_BACKEND_HOST        backend host         (default the gate Paper)
+#   MONOPLAYER_GATE_NAMESPACE      the gate lane        (default: this worktree's
+#                                                        lane, from scripts/gate-lane.sh
+#                                                        name), which the default backend
+#                                                        host and the lease both name (#301)
+#   MONOPLAYER_BACKEND_HOST        backend host         (default this lane's Paper)
 #   MONOPLAYER_BACKEND_PORT        backend port         (default 25565)
 #   MONOPLAYER_FRONT_HOST          proxy front host     (passed to the rung, empty by default)
 #   MONOPLAYER_FRONT_PORT          proxy front port     (passed to the rung, empty by default)
@@ -80,10 +81,10 @@ set -euo pipefail
 NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
 DEPLOYMENT=${MONOPLAYER_DEPLOYMENT:-monoplayer}
 # The gate lane this run measures, which is not where the pod runs: NAMESPACE above
-# is the live lane holding the custody the rung reads. The default backend follows
-# the lane, so naming another instance does not dial the one that shipped (#277).
-GATE_NAMESPACE=${MONOPLAYER_GATE_NAMESPACE:-monoplayer-gate-b}
-BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper.$GATE_NAMESPACE.svc.cluster.local}
+# is the live lane holding the custody the rung reads. Both are filled in below, after
+# ROOT is known, from the one lane the run names (#301).
+GATE_NAMESPACE=''
+BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-}
 BACKEND_PORT=${MONOPLAYER_BACKEND_PORT:-25565}
 SECRETS=${MONOPLAYER_SECRETS_SOURCE:-.secrets}
 ATTACH_ALIAS=${MONOPLAYER_ATTACH_ACCOUNT:-bafbi}
@@ -142,6 +143,37 @@ done
 command -v kubectl >/dev/null || die 'kubectl is not on PATH'
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
+# --- the one lane this run names (#301) ---------------------------------------
+#
+# The lane is the run's identity in the account lease. It is also the Paper the run
+# dials. Both read the value below, so the two cannot disagree. They did once. The lease
+# holder named this worktree's lane (#279). The backend defaulted to the lane that
+# shipped, which `gate:up` never woke (#301).
+#
+# gate-lane.sh owns the name, so nothing here spells one. It derives the lane from this
+# worktree: monoplayer-gate-<commit>-<path hash>. It honours MONOPLAYER_GATE_NAMESPACE
+# when an operator names a lane by hand, and it refuses a name that is not a lane. Its
+# refusal is this run's too. The sentence reaches the reader as it is written, because a
+# command substitution captures stdout and that message is on stderr. A refusal here
+# costs no cluster call.
+#
+# A validation run only ever measures a lane this repo deploys (AGENTS.md). The product
+# and the dev lane are never a gate lane. That is checked before the derivation, so the
+# refusal is this script's sentence and not gate-lane.sh's. gate-lane.sh's rule is about
+# the lanes it scales and deletes.
+NAMED_LANE=${MONOPLAYER_GATE_NAMESPACE:-}
+if [ "$NAMED_LANE" = monoplayer ] || [ "$NAMED_LANE" = monoplayer-dev ] ||
+  { [ -n "$NAMED_LANE" ] && [ "$NAMED_LANE" = "$NAMESPACE" ]; }; then
+  die "refusing \"${NAMED_LANE}\" as the gate lane: a validation run only ever measures a lane this repo deploys, and that name is the live or the dev lane" 2
+fi
+GATE_NAMESPACE=$(bash "$ROOT/scripts/gate-lane.sh" name) ||
+  die 'cannot name the lane this run measures and holds the account for: scripts/gate-lane.sh name failed above, and a run that cannot name its lane would dial a backend nobody can say is its own' 2
+#
+# MONOPLAYER_BACKEND_HOST and --backend-host are the caller's override, not a second
+# lane. A run handed one dials where it was told. The lease still names the lane this
+# worktree measures. scripts/observer-report.sh derives that host from its own lane.
+[ -n "$BACKEND_HOST" ] || BACKEND_HOST=paper.$GATE_NAMESPACE.svc.cluster.local
+
 # --- the account lease (#280) -------------------------------------------------
 #
 # One run uses the account at a time. The lease is a Kubernetes Lease, because the
@@ -175,20 +207,18 @@ lease_check_numbers () {
   [ "$LEASE_RENEW_INTERVAL" -ge 1 ] || LEASE_RENEW_INTERVAL=1
 }
 
-# Who holds the account, in words a person reads: the lane this worktree derives
-# (#279), the branch it is on, and the pid. The pid is what keeps two runs in one
-# worktree from reading each other's holder identity as their own, and the lane is
-# what tells the next reader whose run they are waiting for.
+# Who holds the account, in words a person reads: the lane this run measures, the branch
+# it is on, and the pid. The lane is this worktree's unless an operator named one (#279,
+# #301). The pid keeps two runs in one worktree from reading each other's holder identity
+# as their own. The lane tells the next reader whose run they are waiting for.
 lease_holder () {
-  local lane branch text
-  lane=$(bash "$ROOT/scripts/gate-lane.sh" name) ||
-    die 'cannot name the lane this run would hold the account for: scripts/gate-lane.sh name failed above, so the lease would name nobody' 2
+  local branch text
   branch=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=''
   if [ -z "$branch" ] || [ "$branch" = HEAD ]; then
     branch="detached at $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf 'an unknown commit')"
   fi
   # 128 is what a holder identity is read at; anything longer is a hash nobody reads.
-  text=$(printf '%s on %s (pid %s)' "$lane" "$branch" "$$")
+  text=$(printf '%s on %s (pid %s)' "$GATE_NAMESPACE" "$branch" "$$")
   printf '%s' "${text:0:128}"
 }
 
@@ -530,15 +560,6 @@ if [ "$HOLD" = 1 ]; then
   hold "${HOLD_COMMAND[@]}"
 fi
 
-# The default backend is derived from the lane above, so this variable decides which
-# server the rung dials. The product and the dev lane are never a gate lane: naming
-# one would point a validation run at a live backend, which AGENTS.md forbids
-# outright. gate-lane.sh carries the fuller rule, including the prefix the tree
-# renders from; this is the part that must never be missed.
-if [ "$GATE_NAMESPACE" = "$NAMESPACE" ] || [ "$GATE_NAMESPACE" = monoplayer ] \
-  || [ "$GATE_NAMESPACE" = monoplayer-dev ]; then
-  die "refusing \"${GATE_NAMESPACE}\" as the gate lane: a validation run only ever measures a lane this repo deploys, and that name is the live or the dev lane" 2
-fi
 [ -f "$ROOT/$RUNG" ] || die "no such rung: $RUNG"
 # Only the online rung writes a report; another module's exit status is its
 # whole result.

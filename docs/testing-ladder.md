@@ -40,7 +40,7 @@ may change. The rung decides what it proves.
 | rungs 0-2 | `mise run check` | none: this machine | seconds | nothing outside the working copy | yes, except while another row adds a loopback assertion |
 | client-parity rung, 2a | `mise run parity:run` | none: this machine, two bots and a fake backend | about 5 seconds | nothing outside the working copy | yes, in the offline form |
 | observer, the server's view | `mise run observer:run` | `paper-conduct`, the gate-serving sibling of the gate Paper, in `monoplayer-gate-b` unless `MONOPLAYER_GATE_NAMESPACE` names another lane, plus throwaway pods in `monoplayer` that mount the live claim read-only | minutes, and up to 10 minutes when the gate Paper's restart is slow: the container took 240 s to 310 s to come back on the gate Paper, 26.2 build 135, and 40 s from a freshly created pod; paper-conduct has not been timed on its own | installs the plugin into `paper-conduct` and restarts it, and runs two joins from pods in the live namespace. It refuses to measure the live lane itself. A restart that outlasts the start budget is reported as a start that did not finish, and the joins never run. The budget is `MONOPLAYER_OBSERVER_START_TIMEOUT`; `scripts/observer-report.sh` holds its default | no, each of its two joins takes the account lease |
-| online rung, from a pod | `mise run online:cluster` (the gate lane must be awake and named: `mise run gate:up`, then `MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name)`) | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart. It takes the account lease first, which is one `Lease` object named `monoplayer-online-account` in `monoplayer`: a Lease is not a workload, so no scale, patch or restart is involved | no, it takes the account lease |
+| online rung, from a pod | `mise run online:cluster` (the gate lane must be awake: `mise run gate:up`, and the run names this worktree's lane in its lease and in the Paper it dials) | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart. It takes the account lease first, which is one `Lease` object named `monoplayer-online-account` in `monoplayer`: a Lease is not a workload, so no scale, patch or restart is involved | no, it takes the account lease |
 | online rung, bare | `mise run online` | this machine's copy of the account chain, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session. `mise run online:cluster` is the form that leaves the deployment serving. It holds the same account lease, so it needs `kubectl` and cluster access even though the rung itself runs here | no, it takes the account lease |
 | the gate lane itself | `mise run gate:up`, `mise run gate:down` | `monoplayer-gate-<instance>`, this worktree's lane, which is not in Argo CD | `up` waits up to 900 s and says so first; a cold start is 90 s | every gate workload's replica count. It applies the tree and scales; it deletes nothing, so the Secrets and the objects stay. The `emptyDir` worlds go with their pods | one lane per worktree, and no two runs inside one |
 | driver lane, rung 4 | `mise run driver:scenario` | the gate Paper, on its Tailscale host, and the display host | tens of minutes | the gate Paper's world and a real client. The deployment keeps serving | no, the display host carries one client, and both rungs use one account |
@@ -95,15 +95,15 @@ run. The scarce resource is the refresh chain, not the namespace.
 **The lane is the worktree's.** `scripts/gate-lane.sh name` prints this worktree's
 lane, and `gate:up`, `gate:down` and `gate:status` act on that lane and no other,
 so two worktrees never stop each other's rows. Two runs in one worktree do:
-`gate:up` re-applies the tree, and `gate:down` scales all five rows. The three runs
-that drive the gate Paper still default to the literal lane `monoplayer-gate-b`
-(`scripts/online-cluster.sh`, `scripts/observer-report.sh`, `src/driver/run.js`),
-so name yours:
+`gate:up` re-applies the tree, and `gate:down` scales all five rows. The online rung
+takes this lane and no other: its lease and the Paper it dials are one name (#301), so
+`mise run online:cluster` needs no variable. Two runs still default to the literal
+lane `monoplayer-gate-b` (`scripts/observer-report.sh`, `src/driver/run.js`), so
+name yours:
 
-    MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run online:cluster
+    MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run observer:run
 
-#282 moves the observer rung and the driver onto the derived lane, and #301 moves
-the online rung's default backend with them.
+#282 moves the observer rung and the driver onto the derived lane.
 
 **The loopback assertion numbers are one sequence.** An id is a bullet in
 [the assertion contract](#loopback-assertion-contract) and a `check('O<n>', …)`

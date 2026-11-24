@@ -62,11 +62,12 @@ mise run lanes                # every lane: its age, its pods, and its worktree
 mise run lanes -- --reap      # delete the lanes idle past the window
 ```
 
-`name` prints one line, so a shell can pass it on. The rungs that still name a
-single lane take it as `MONOPLAYER_GATE_NAMESPACE` until #282 lands:
+`name` prints one line, so a shell can pass it on. The online rung needs no such
+help: `mise run online:cluster` names this lane in its lease and dials its Paper
+(#301). The rungs that still name a single lane take it as
+`MONOPLAYER_GATE_NAMESPACE` until #282 lands:
 
 ```bash
-MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run online:cluster
 MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run observer:run
 ```
 
@@ -196,10 +197,9 @@ Each needs its own migration step:
 The namespace, the labels, the Secrets and the two tailnet hostnames are derived
 now, which is what #277, #278 and #279 did. The tree spells a placeholder, and one
 instance names all of them. Every row left in the table still migrates by hand, when
-the change that reads it arrives. The copies in `src/driver/`,
-`scripts/online-cluster.sh` and `tools/` keep the old name until #282 and #301 land.
-Until they do, the rungs name it and the docs say which lane they dial, so a run
-that wants its own lane names it.
+the change that reads it arrives. The copies in `src/driver/` and `tools/` keep
+the old name until #282 lands. Until they do, the rungs name it and the docs say
+which lane they dial, so a run that wants its own lane names it.
 
 ## Paper G0 backend
 
