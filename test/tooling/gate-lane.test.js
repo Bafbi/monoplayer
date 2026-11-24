@@ -587,7 +587,9 @@ test("the render with no instance named is this worktree's lane", () => {
   assert.match(renderedFile('namespace.yaml'), new RegExp('^  name: ' + LANE + '$', 'm'),
     'the namespace is the lane this worktree derives, not a name in the tree')
   for (const name of files) {
-    assert.doesNotMatch(renderedFile(name), /__instance__|gate-b/, name + ' kept a placeholder or the old lane')
+    // The old default lane, spelled to its end: a derived instance may begin with
+    // `b`, as CI's merge commit does, and a bare `gate-b` would match that lane.
+    assert.doesNotMatch(renderedFile(name), /__instance__|monoplayer-gate-b([^a-z0-9-]|$)/, name + ' kept a placeholder or the old lane')
   }
 })
 
