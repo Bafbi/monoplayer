@@ -9,9 +9,16 @@
 //
 // **This key has a fallback the other two do not.** A missing or unreadable
 // attach whitelist denies a login, which is safe and loud. A missing or unreadable
-// server list offers a joining player nothing, so the copy Git commits answers.
-// That is why a write whose live key is absent starts from the seed: an add built
-// on an empty document would silently stop offering every committed server.
+// server list offers a joining player nothing, so **the lane** offers the copy Git
+// commits instead.
+//
+// This module falls back on an absent key and refuses on a broken one, and the two
+// are different facts. A live key that exists and does not parse is a 500 naming the
+// file: a panel that listed the seed there would hide the file that needs fixing
+// behind an answer that looks normal, and every write would refuse anyway, because a
+// rewrite of that document is the one thing this module will not do. An absent key is
+// the normal state before the first edit, so a write starts from the seed: an add
+// built on an empty document would silently stop offering every committed server.
 //
 // Every answer names what a caller has to fix:
 //
