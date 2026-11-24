@@ -476,9 +476,8 @@ function createFrontLeg ({
   // is no backend to attach to. Both absent means the lane behaves exactly as it
   // did: a join with no backend is refused. `onPickerPick` reports a pick, and
   // `onPickerVerb` reports the answer to the chosen server's dialog (#266), and a
-  // claim on that server's body is recorded here (#267). The leg answers the client
-  // itself either way, because a claim has no channel to hand a client a body
-  // through until #269.
+  // claim on that server's body is recorded here (#267), and a granted claim is
+  // what dials that body and lands the client in it (#258).
   configurationBaseline = null,
   pickerServers = null,
   onPickerPick = null,
@@ -1126,8 +1125,8 @@ function createFrontLeg ({
 
   // A granted claim is the one thing that dials a body. The click closed the
   // client's dialog and left the phase open, so the client is parked while the
-  // address the row named is dialled: nothing else is on screen, and nothing was
-  // connected before this click, which is why the picker serves its own
+  // address the row named is dialled. Nothing else is on screen. Nothing was
+  // connected before this click either, which is why the picker serves its own
   // configuration phase rather than warming a body eagerly (Q6).
   function landClaimedBody (client, server, claim) {
     const target = pickTarget(server.name)
@@ -1140,17 +1139,8 @@ function createFrontLeg ({
       target: target === null ? null : target.host + ':' + target.port
     })
     if (target === null) {
-      // A row this lane offers but cannot read as an address. The claim stands
-      // (it is the connection's, #267) and the client is told in words.
-      metrics.claimRestored++
-      log('pickerClaimRestored', {
-        username: client.username ?? null,
-        uuid: client.uuid ?? null,
-        body: claim.body,
-        server: claim.server,
-        reason: 'no_address'
-      })
-      sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+      // A row this lane offers but cannot read as an address.
+      restoreClaimedPicker(client, claim, 'no_address')
       return
     }
     let pending = null
@@ -1176,6 +1166,25 @@ function createFrontLeg ({
     )
   }
 
+  // The body did not let the client in, in any of the three ways that happens: an
+  // address its row cannot give, a dial refused or never warmed, and a warm body
+  // with nothing cached. One place answers all three, so the count, the log line
+  // and the sentence cannot drift apart. The client reads the list again, titled
+  // with the body that did not answer, and its claim stands (#267), so it may click
+  // Claim again.
+  function restoreClaimedPicker (client, claim, reason, detail = null) {
+    metrics.claimRestored++
+    log('pickerClaimRestored', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      body: claim.body,
+      server: claim.server,
+      reason,
+      detail
+    })
+    sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+  }
+
   // The dial answered. A body that is up continues the client's own phase; one
   // that is not offers the list again. A client that left while the body dialled
   // holds nothing, and its claim went with the connection, so there is nothing to
@@ -1191,16 +1200,7 @@ function createFrontLeg ({
       return
     }
     if (outcome.connected !== true) {
-      metrics.claimRestored++
-      log('pickerClaimRestored', {
-        username: client.username ?? null,
-        uuid: client.uuid ?? null,
-        body: claim.body,
-        server: claim.server,
-        reason: outcome.reason ?? 'body_unreachable',
-        detail: outcome.detail ?? null
-      })
-      sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+      restoreClaimedPicker(client, claim, outcome.reason ?? 'body_unreachable', outcome.detail ?? null)
       return
     }
     landClaimedClient(client, claim, outcome)
@@ -1218,17 +1218,9 @@ function createFrontLeg ({
     // drops it for the same reason and writes the library's own.
     const frames = replayableConfigFrames().filter(frame => frame.name !== 'finish_configuration')
     if (frames.length === 0) {
-      // A body the core called ready with nothing cached is a body no client can
-      // be put into. It is refused in the same words as an unreachable one.
-      metrics.claimRestored++
-      log('pickerClaimRestored', {
-        username: client.username ?? null,
-        uuid: client.uuid ?? null,
-        body: claim.body,
-        server: claim.server,
-        reason: 'no_cached_configuration'
-      })
-      sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+      // A body the core reports warm with nothing cached is a body no client can
+      // be put into, and it is answered like an unreachable one.
+      restoreClaimedPicker(client, claim, 'no_cached_configuration')
       return
     }
     let written = 0
