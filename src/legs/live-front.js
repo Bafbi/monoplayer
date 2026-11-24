@@ -1072,16 +1072,7 @@ function createFrontLeg ({
         server: { ...server },
         uuid: client.uuid ?? null,
         name: client.username ?? null,
-        claim: claimed === null
-          ? null
-          : {
-              granted: claimed.ok,
-              repeated: claimed.repeated === true,
-              reason: claimed.reason,
-              body: claimed.claim?.body ?? null,
-              server: claimed.claim?.server ?? null,
-              driver: claimed.claim?.name ?? null
-            }
+        claim: claimed === null ? null : claimReport(claimed)
       })
     } catch (error) {
       log('pickerVerbHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
@@ -1106,6 +1097,17 @@ function createFrontLeg ({
     endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
   }
 
+  // #267: the claim as the callback and the log both read it. One mapper, so the
+  // report a caller receives and the line an operator reads cannot drift apart.
+  function claimReport (outcome) {
+    return {
+      granted: outcome.ok,
+      repeated: outcome.repeated === true,
+      reason: outcome.reason,
+      claimedBy: outcome.claim?.name ?? null
+    }
+  }
+
   // #267: one claim, recorded where the client answers. The refusal carries the
   // claim that stands in the way, and the sentence for it, so the caller answers
   // the client and this stays the one place a claim is taken.
@@ -1122,10 +1124,7 @@ function createFrontLeg ({
       uuid: client.uuid ?? null,
       body: server.slug,
       server: server.name,
-      granted: outcome.ok,
-      repeated: outcome.repeated === true,
-      reason: outcome.reason,
-      driver: outcome.claim?.name ?? null
+      ...claimReport(outcome)
     }
     if (outcome.ok) {
       if (outcome.repeated !== true) metrics.pickerClaims++
@@ -1320,7 +1319,7 @@ function createFrontLeg ({
           uuid: client.uuid ?? null,
           body: released.body,
           server: released.server,
-          driver: released.name,
+          claimedBy: released.name,
           reason: String(reason).slice(0, 160)
         })
       }
