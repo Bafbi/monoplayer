@@ -14,6 +14,7 @@ const puppet = (overrides = {}) => ({
   namespace: 'monoplayer',
   deployment: 'monoplayer',
   controlConfigMap: 'monoplayer-control',
+  seedConfigMap: 'monoplayer-config',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
   allowBackendSwitch: true,
@@ -54,6 +55,12 @@ test('a document the panel cannot act on is refused with the field that broke it
     ['a misspelled key', document([puppet({ controlConfigmap: 'monoplayer-control' })]), /controlConfigmap/],
     ['a missing write target', document([{ ...puppet(), controlConfigMap: undefined }]), /controlConfigMap/],
     ['a write target that is not a name', document([puppet({ controlConfigMap: 'Monoplayer_Control' })]), /controlConfigMap/],
+    ['a missing seed', document([{ ...puppet(), seedConfigMap: undefined }]), /seedConfigMap/],
+    ['a seed that is not a name', document([puppet({ seedConfigMap: 'Monoplayer_Config' })]), /seedConfigMap/],
+    // The seed is the copy Git owns. A row that names the object the panel writes
+    // would read back the key it just found absent, and the fallback would answer
+    // an empty list while looking wired.
+    ['a seed that is the write target', document([puppet({ seedConfigMap: 'monoplayer-control' })]), /seedConfigMap/],
     ['a namespace that is not a name', document([puppet({ namespace: 'Monoplayer' })]), /namespace/],
     ['a backend with no port', document([puppet({ backend: 'play2.excalia.fr' })]), /backend/],
     ['a backend port out of range', document([puppet({ backend: 'play2.excalia.fr:70000' })]), /backend/],

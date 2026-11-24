@@ -6,7 +6,7 @@
 # is one Role; a second puppet in a second namespace gets a second Role, and
 # test/tooling/panel-manifests.test.js requires one Role per namespace the
 # registry names, with `resourceNames` equal to that namespace's control
-# ConfigMaps.
+# ConfigMaps in the write rule and its seed ConfigMaps in the `get`-only rule.
 #
 # No `create` verb anywhere, by design. RBAC cannot scope create by name, so a
 # create grant on configmaps would be a grant to invent any ConfigMap in
@@ -29,6 +29,18 @@ rules:
     resources: ["configmaps"]
     resourceNames: ["monoplayer-control"]
     verbs: ["get", "patch", "update"]
+  # The seed the panel reads and never writes (#262): the allowed-server list Git
+  # commits, which answers when the live key is absent. `get` alone. This object is
+  # Argo's, so a write to it would be reverted by the next sync, and a grant to write
+  # it would be a grant the panel has no route for.
+  #
+  # The registry names this object as `seedConfigMap`, and
+  # test/tooling/panel-manifests.test.js fails when the two lists disagree. A second
+  # puppet in a second namespace gets its own Role with its own pair.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["monoplayer-config"]
+    verbs: ["get"]
   # Reads: this ticket's page makes none, and the info view (#231) reads the
   # puppet's pod and its log. get and list only.
   - apiGroups: [""]
