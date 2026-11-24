@@ -9,11 +9,14 @@
 # direction.
 #
 # `seedConfigMap` is the copy Git commits (#262). One control key has a fallback:
-# when the allowed-server list is absent or unreadable, the lane offers the list
-# this object holds, and the panel lists and edits from it rather than from an
-# empty document. It is a read because it is Argo's: a write to it would be
-# reverted by the next sync, which is the whole reason the control ConfigMap is
-# not in Git.
+# the lane offers the list this object holds whenever the live key is absent or
+# unreadable, and the panel lists and edits from it when the live key is absent, so
+# a first write is built on the committed list rather than on an empty document. A
+# live key that exists and does not parse is refused by name instead, so the file
+# that needs fixing is not hidden behind a list that looks normal.
+#
+# It is a read because it is Argo's: a write to it would be reverted by the next
+# sync, which is the whole reason the control ConfigMap is not in Git.
 #
 # `allowBackendSwitch` is whether this puppet may be pointed at another backend
 # from the panel (#233). It is the panel's own declaration, not the fence: the

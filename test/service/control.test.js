@@ -366,6 +366,14 @@ test('#262 allowed-servers.json parses to host and port, and every refusal is na
   assert.equal(parseAllowedServers(JSON.stringify({ version: 2, servers: [] })).reason, 'version')
   assert.equal(parseAllowedServers(JSON.stringify({ version: 1 })).reason, 'servers')
   assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: {} })).reason, 'servers')
+  // A document is not re-validated against the dial rule on its way to the picker.
+  // The route that writes it refuses a host no dial reaches, so a bad one is there
+  // only by hand; the lane reads what the operator wrote, and the panel lists it so
+  // that entry can be removed rather than refusing a document it could not repair.
+  // Only the document's shape is refused on a read.
+  assert.deepEqual(
+    parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '999.999.999.999', port: 25565 }] })).servers,
+    [{ host: '999.999.999.999', port: 25565 }])
   assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: ['paper'] })).reason, 'server')
   assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '', port: 1 }] })).reason, 'host')
   assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '   ', port: 1 }] })).reason, 'host')

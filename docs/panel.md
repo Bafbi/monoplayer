@@ -208,16 +208,17 @@ And, by design:
 The page uses the three read rules and the `get` on the control ConfigMap. Five
 routes exercise the write rule, and they patch one object: `desired.json` for
 `POST /api/puppets/:name/backend`, `attach-whitelist.json` for the two attach
-whitelist writes, and `allowed-servers.json` for the three allowed-server ones. Each
+whitelist writes, and `allowed-servers.json` for the two allowed-server writes. Each
 patches its own key, and a merge patch of one key leaves the others where they were.
 
 The seed rule is `get` alone, and it exists because one key has a fallback. A
-missing or unreadable attach whitelist denies every login, which is safe and loud.
-A missing or unreadable server list offers a joining player nothing, so the list Git
-commits answers instead. The panel reads that copy, so it lists the servers a lane is
-actually offering rather than an empty list, and it builds the first write on the
-copy rather than on nothing. `test/tooling/panel-manifests.test.js` keeps the two
-`resourceNames` lists in step with the registry in both directions.
+missing or unreadable attach whitelist denies every login, which is safe and loud. A
+missing or unreadable server list offers a joining player nothing, so the list Git
+commits answers instead. While the live key is absent the panel reads the same copy,
+so it lists the servers the lane is offering rather than an empty list, and it builds
+the first write on that copy rather than on nothing.
+`test/tooling/panel-manifests.test.js` keeps the two `resourceNames` lists in step
+with the registry in both directions.
 
 ## Point a puppet at another backend
 
@@ -445,8 +446,16 @@ remove a different server. The document is:
 
 A host is a hostname of at least two labels or an IPv4 address, with every octet
 between 0 and 255: no scheme, no port inside the host, no trailing dot, no bare single
-label. A port is an integer from 1 to 65535. A body that sends `"25565"` as text is refused rather than coerced, so the
-file the lane reads never holds a port as a string.
+label. A port is an integer from 1 to 65535. A body that sends `"25565"` as text is
+refused rather than coerced, so the file the lane reads never holds a port as a
+string.
+
+Those rules are what the route accepts on a **write**. A document already in the
+ConfigMap is read as written: the lane dials what the operator put there, so a host no
+dial reaches fails at the socket under its own name instead of taking the whole list
+down at boot, and the panel lists such an entry instead of refusing to show a document
+it could then not repair. Only the document's shape is refused on a read, never the
+reachability of one host in it.
 
 | Answer | Meaning |
 |---|---|
@@ -461,18 +470,25 @@ file the lane reads never holds a port as a string.
 
 **This key has a fallback, and the other two do not.** A missing or unreadable
 attach whitelist denies every login: safe, and loud. A missing or unreadable server
-list offers a joining player nothing, so the copy Git commits answers instead. Two
-consequences follow, and both are visible in the answers:
+list offers a joining player nothing, so **the lane** offers the copy Git commits
+instead. Two consequences follow, and both are visible in the answers:
 
 - **`GET` says which file answered.** `source` is `control` for the live key and
   `seed` for `deploy/manifests/configmap.yaml`, which the lane mounts at `/config` and
   `MONOPLAYER_ALLOWED_SERVERS_SEED` names. `none` means neither file holds a list.
 - **The first write is built on the seed.** Adding a server while the live key is
-  absent writes the seed's entries and the new one, because the lane was offering
+  **absent** writes the seed's entries and the new one, because the lane is offering
   the seed and a write that started from an empty document would silently stop
   offering every committed server.
 
-Four refusals are deliberate:
+The panel falls back on an absent key and refuses on a broken one, and that is
+deliberate: a live key that exists and does not parse is a 500 that names the file, not
+a list of the seed. Showing the seed there would hide the file that needs fixing behind
+an answer that looks normal, and every write would refuse anyway. The lane keeps serving
+the seed while that file is broken, so the operator has one file to repair and no
+outage.
+
+Four rules are deliberate, and each is a decision rather than an accident:
 
 - **A document that does not parse is never rewritten.** The answer is a 500 with the
   refusal, and the key is left byte for byte. That holds for the live key and for the
@@ -491,9 +507,9 @@ Four refusals are deliberate:
 
 **A write is stored, and nothing offers it to a client yet.** The lane reads the file
 for its own start record; the picker that puts a row on a joining player's screen is
-#265, so until that lands the list is written and offered to nobody, and every answer
-says which of the two it is in `takesEffect`. The start record reports the key, inside
-its `control` object:
+#265, so until that lands the list is stored and offered to nobody, and **every write
+answer** says which of the two it is in `takesEffect`. The start record reports the
+key, inside its `control` object:
 
 ```json
 "allowedServers": {
