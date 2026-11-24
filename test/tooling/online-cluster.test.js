@@ -154,3 +154,26 @@ test('a renamed gate lane dials its own backend', () => {
   assert.doesNotMatch(dialled, /monoplayer-gate-b/, 'a renamed lane must not dial the default lane: ' + dialled)
 })
 
+
+// --- the lane named is never the live or dev lane (#277, AGENTS.md) ---
+
+// The default backend is derived from MONOPLAYER_GATE_NAMESPACE now, so the variable
+// decides which server this rung dials. AGENTS.md is absolute: no lane script may
+// name the live namespace as a target. observer-report.sh already refuses it. This
+// one derived a host from it and refused nothing, so a stray variable pointed the
+// online rung at the product's own backend.
+
+test('a gate lane naming the live or dev namespace is refused before anything runs', () => {
+  for (const namespace of ['monoplayer', 'monoplayer-dev']) {
+    const space = workspace()
+    const { status, output, calls } = run(space, { MONOPLAYER_GATE_NAMESPACE: namespace })
+    assert.equal(status, 2, output)
+    assert.match(output, /refusing/)
+    assert.equal(
+      calls.some(line => line.includes('paper.' + namespace + '.svc.cluster.local')),
+      false,
+      'refusing "' + namespace + '" dialled it anyway: ' + calls.join(' | ')
+    )
+  }
+})
+

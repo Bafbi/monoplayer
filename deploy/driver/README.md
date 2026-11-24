@@ -73,7 +73,14 @@ kubectl kustomize /tmp/gate-x
 ```
 
 The instance must be a DNS-1123 label, because it names a namespace and part of a
-label value.
+label value. It is at most 33 characters, which keeps the longest label value this
+lane writes, `app.kubernetes.io/name: monoplayer-gate-<instance>-paper-conduct`, inside
+63.
+
+The namespace's own `monoplayer.eu/environment: gate-b` label follows the instance too,
+so a renamed lane says `gate-x` there. Nothing selects on it. It is a label for a human
+reading `kubectl get namespace`, and leaving it at `gate-b` in a lane called something
+else is the kind of stale name the ADR exists to avoid.
 
 Two boundaries to keep in mind.
 

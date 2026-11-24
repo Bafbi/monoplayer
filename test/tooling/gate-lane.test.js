@@ -436,9 +436,9 @@ test('the render with no instance named reproduces the tree byte for byte', () =
 })
 
 test('an instance renames every place the lane spells its name', () => {
-  // The nine sites that are not a prefixed label are the ones a field-path
-  // transform cannot reach: the Secret names, the ConfigMap names, the mount path
-  // and the toml value that names it, and the namespace's own environment label.
+  // A field-path transform cannot reach these: the Secret names, the ConfigMap
+  // names, the mount path, the toml value that names it, and the namespace's own
+  // environment label. The substitution reaches all five.
   const where = space()
   const dir = path.join(where.root, 'render-x')
   const { status, output, files, read } = rendered(where, dir, { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
