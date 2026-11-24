@@ -6,14 +6,14 @@
 //
 // Where the pick rides. The vanilla answer frame is
 //   Identifier id, lengthPrefixed(optional anonymous NBT) payload
-// (net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket;
-// the dialog's own action type is `minecraft:dynamic/custom` with fields `id`
+// (net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket).
+// The dialog's own action type is `minecraft:dynamic/custom`, with fields `id`
 // and optional `additions`, read out of ClientboundShowDialogPacket's codec in
-// the 26.2 client). minecraft-data's packet shape omits the length prefix, so
-// the library's own writer produces a frame a server misreads, and its reader
+// the 26.2 client. minecraft-data's packet shape omits the length prefix, so the
+// library's own writer produces a frame a server misreads, and its reader
 // misreads a frame a client sends with a payload. The id is the first field and
-// survives both, so the pick rides in the id — never in `additions`. That
-// decision was taken on the ticket (#257, first comment) and this module is
+// survives both, so the pick rides in the id and never in `additions`. That
+// decision was taken on the ticket (#257, first comment), and this module is
 // where it is enforced: `readPickAction` parses the vanilla layout itself and
 // reads nothing else.
 //
@@ -24,13 +24,13 @@
 // `minecraft:dialog` registry a real Paper 26.2 sends, which is inside the
 // committed baseline (src/legs/configuration-baseline/26.2.json): its
 // `exit_action` carries `label` and `width` inline, which is the same flattening.
-import { encodeVarInt } from './client-settings.js'
+import { decodeVarInt, encodeVarInt } from './client-settings.js'
 
 export const PICK_NAMESPACE = 'monoplayer:pick'
 export const PICK_DIALOG_TYPE = 'minecraft:multi_action'
 export const PICK_ACTION_TYPE = 'minecraft:dynamic/custom'
 // The configuration-state packet id of `custom_click_action`. The play state
-// uses 0x44; the picker only ever runs in configuration.
+// uses 0x44. The picker only ever runs in configuration.
 const CONFIGURATION_CLICK_PACKET_ID = 0x08
 
 // A resource location path segment, so a server label survives as an id: lower
@@ -73,7 +73,7 @@ export function pickerRows (rows = []) {
 
 // The dialog as the NBT the show_dialog frame carries. Pure: the caller writes
 // it, so a test can compare the tree without a socket.
-export function pickerDialog ({ rows = [], title = 'Choose a server', columns = 1 } = {}) {
+export function pickerDialog ({ rows = [], title = 'Choose a server' } = {}) {
   // A list of compounds carries each element as the compound's own key map, not
   // as a { type, value } node: prismarine-nbt's list writer takes the element map
   // and writes each key. A wrapped element is written as an empty compound and
@@ -99,7 +99,9 @@ export function pickerDialog ({ rows = [], title = 'Choose a server', columns = 
       // A picker that Esc closes would leave the client in a configuration phase
       // with nothing on screen: the dialog is the whole phase here.
       can_close_with_escape: { type: 'byte', value: 0 },
-      columns: { type: 'int', value: Math.max(1, Math.trunc(columns)) },
+      // One column: the allowed list is short, and a second column is a design
+      // decision no ticket has made.
+      columns: { type: 'int', value: 1 },
       actions: {
         type: 'list',
         value: { type: 'compound', value: buttons }
@@ -109,25 +111,11 @@ export function pickerDialog ({ rows = [], title = 'Choose a server', columns = 
 }
 
 // The packet params for a configuration-state show_dialog. The configuration
-// field is a plain anonymousNbt, so the compound is the params' own value; the
+// field is a plain anonymousNbt, so the compound is the params' own value. The
 // play state's field is a registry-entry holder with an inline branch named
 // `data`, which is a different shape for a different state.
 export function pickerDialogParams (options) {
   return { dialog: pickerDialog(options) }
-}
-
-function readVarInt (buffer, offset) {
-  let value = 0
-  let shift = 0
-  let index = offset
-  while (index < buffer.length) {
-    const byte = buffer[index++]
-    value |= (byte & 0x7f) << shift
-    if ((byte & 0x80) === 0) return { value: value >>> 0, offset: index }
-    shift += 7
-    if (shift > 35) return null
-  }
-  return null
 }
 
 // Read the pick out of a serverbound `custom_click_action` frame, in the vanilla
@@ -135,11 +123,13 @@ function readVarInt (buffer, offset) {
 // a caller cannot mistake an unrelated click for a pick.
 export function readPickAction (buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 3) return null
-  const id = readVarInt(buffer, 0)
+  // The one VarInt reader in core (src/core/client-settings.js), so this parse
+  // and the encoder that built the frame cannot drift.
+  const id = decodeVarInt(buffer, 0)
   if (id === null || id.value !== CONFIGURATION_CLICK_PACKET_ID) return null
-  const length = readVarInt(buffer, id.offset)
+  const length = decodeVarInt(buffer, id.bytes)
   if (length === null || length.value === 0) return null
-  const start = length.offset
+  const start = id.bytes + length.bytes
   const end = start + length.value
   if (end > buffer.length) return null
   let identifier
@@ -170,8 +160,8 @@ export function buildPickAnswer ({ name } = {}) {
 }
 
 // What the client is told after a pick, until a pick lands somewhere. #267 is
-// the ticket that makes a pick connect a body; until it lands there is nothing
-// to enter, and a client left staring at a dialog is worse than one that is told
+// the ticket that makes a pick connect a body. Until it lands there is nothing to
+// enter, and a client left staring at a dialog is worse than one that is told
 // why it cannot.
 export function pickRefusalText ({ server = null } = {}) {
   const named = server === null ? 'that server' : server

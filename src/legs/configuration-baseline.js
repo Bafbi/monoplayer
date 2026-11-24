@@ -13,15 +13,16 @@
 //
 // What the fixture is: every clientbound configuration frame one join received
 // from the gate lane's Paper 26.2 build 135, in order, as the bytes that
-// connection carried. src/ladder/capture-config.js records it; its header holds
-// the command to refresh it. Two captures of the same server are byte-identical,
-// so the file is evidence and not a snapshot of a mood.
+// connection carried. src/ladder/capture-config.js records it, and its header
+// holds the command to refresh it. Two captures of the same server are
+// byte-identical, so the file is evidence and not a snapshot of a mood.
 //
 // What the module does not do: decode a frame, reorder one, or add one. A frame
 // the server did not send is exactly the failure this file exists to avoid.
 import fs from 'node:fs'
 
 import { clientboundPolicy } from '../core/clientbound-policy.js'
+import { decodeVarInt } from '../core/client-settings.js'
 
 // The frame that ends the phase. The baseline carries the server's, and the
 // front never serves it: the picker keeps the client in configuration on
@@ -169,16 +170,13 @@ export function baselineRegistryNames (baseline) {
 // server's bytes and nothing here needs to look inside it.
 function registryNameOf (buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 3) return null
-  let offset = 1 // the packet id
-  let length = 0
-  let shift = 0
-  while (offset < buffer.length) {
-    const byte = buffer[offset++]
-    length |= (byte & 0x7f) << shift
-    if ((byte & 0x80) === 0) break
-    shift += 7
-    if (shift > 28) return null
-  }
-  if (length <= 0 || offset + length > buffer.length) return null
-  return buffer.toString('utf8', offset, offset + length)
+  // The frame's own id byte comes first, then a VarInt length and the
+  // identifier. Decoded with the one VarInt reader in core
+  // (src/core/client-settings.js), like every other length on the wire.
+  const length = decodeVarInt(buffer, 1)
+  if (length === null || length.value <= 0) return null
+  const start = 1 + length.bytes
+  const end = start + length.value
+  if (end > buffer.length) return null
+  return buffer.toString('utf8', start, end)
 }

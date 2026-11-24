@@ -89,8 +89,8 @@ export function createConfigPathInterceptor ({
   isConfigurationState,
   cachedConfigFrames,
   finishName = 'finish_configuration',
-  // #257: the configuration phase to serve when there is no backend at all —
-  // the picker. `baselineConfigFrames` is a recording of a real server's phase
+  // #257: the configuration phase to serve when there is no backend at all,
+  // which is the picker. `baselineConfigFrames` is a recording of a real server's phase
   // (src/legs/configuration-baseline.js), and it is served instead of the cached
   // one, in the state that has no backend to replay: the picker's. The phase is
   // deliberately left open: `onBaselineFrames` runs once the frames are on the
@@ -146,10 +146,11 @@ export function createConfigPathInterceptor ({
     resolved = true
     if (baselineConfigFrames.length > 0) {
       // #257: the picker. The recording is the phase, in its recorded order and
-      // as recorded bytes; the finish stays unwritten so the client remains in
+      // as recorded bytes. The finish stays unwritten, so the client remains in
       // configuration with the dialog on screen.
       for (const frame of baselineConfigFrames) {
-        if (frame.name === finishName) continue // the recording carries the server's; the picker never sends one
+        // The recording carries the server's finish. The picker never sends one.
+        if (frame.name === finishName) continue
         writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
         stats.baselineFrames++
       }

@@ -53,7 +53,7 @@ test('#257 the dialog is a multi_action with one custom action per server', () =
   assert.equal(buttons[0].action.value.id.value, 'monoplayer:pick/gate-paper_25565')
   assert.equal(buttons[1].label.value, 'sky - claimed (Bafbi)')
   // The configuration phase carries the dialog inline, so the compound is the
-  // field's own value; the play state wraps it in a holder's data branch.
+  // field's own value. The play state wraps it in a holder's data branch.
   assert.equal(pickerDialogParams({ rows }).dialog.type, 'compound')
 })
 
