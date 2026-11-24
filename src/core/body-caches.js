@@ -11,8 +11,8 @@
 // driver and the body's spectators share one replay. Two bodies share nothing.
 //
 // There is no body cap. A lane offers one body per allowed server, so the allowed
-// server list is the bound (docs/adr/one-account-many-bodies.md: caps wait for the
-// per-body numbers and are configuration when they land).
+// server list is the bound. Caps wait for the per-body numbers and are
+// configuration when they land (docs/adr/one-account-many-bodies.md).
 //
 // Purity: no sockets, no timers, no I/O. createStateCache copies the bounds it is
 // given, so two bodies do not share a bound either.
