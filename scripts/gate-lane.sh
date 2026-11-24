@@ -2,6 +2,8 @@
 # The gate lane's lifecycle (#115): wake it for a run, put it back to sleep, or
 # report what it is doing.
 #
+#   scripts/gate-lane.sh render DIR
+#                                 write the tree this lane would apply into DIR
 #   scripts/gate-lane.sh up [DEPLOYMENT...]
 #                                 apply deploy/driver, wake the deployments
 #                                 named (default: the two rows a rung drives),
@@ -29,8 +31,18 @@
 # gate-b-velocity are created by an operator, never by this tree, and a down that
 # deleted them would leave the next up in CreateContainerConfigError.
 #
+# The lane's instance is one value (#277). The tree in deploy/driver names the
+# lane monoplayer-gate-b in the namespace object, in every app.kubernetes.io/name
+# label and selector, in the Secret and ConfigMap names, in the two tailnet
+# hostnames, and in one path inside velocity.toml. render() substitutes the
+# instance into all of it, so the manifests and the label this script looks pods
+# up by cannot disagree: a renamed lane reads its own pods. Instance b is today's
+# lane, and the substitution is then the empty one, so an ordinary up applies byte
+# for byte what a reader of deploy/driver sees.
+#
 # Environment:
-#   MONOPLAYER_GATE_NAMESPACE    the gate namespace          (default monoplayer-gate-b)
+#   MONOPLAYER_GATE_NAMESPACE    the gate lane's namespace (default monoplayer-gate-b).
+#                                The instance is what follows monoplayer-gate-.
 #   MONOPLAYER_CLUSTER_NAMESPACE the live namespace          (default monoplayer)
 #   MONOPLAYER_GATE_READY_TIMEOUT seconds up waits for ready (default 900)
 #   MONOPLAYER_GATE_STOP_TIMEOUT  seconds down waits         (default 180)
@@ -48,11 +60,11 @@ READY_TIMEOUT=${MONOPLAYER_GATE_READY_TIMEOUT:-900}
 STOP_TIMEOUT=${MONOPLAYER_GATE_STOP_TIMEOUT:-180}
 POLL=${MONOPLAYER_GATE_POLL:-5}
 MANIFESTS=$ROOT/deploy/driver
-# Every manifest in the tree pins its namespace, so the apply target and the scale
-# target have to be the same namespace or the two halves of a command disagree.
-# awk with an exit reads one line and no more: a piped head would let sed take a
-# SIGPIPE, and pipefail would turn that into a silent death.
-MANIFEST_NAMESPACE=$(awk '/^  name: /{print $2; exit}' "$MANIFESTS/namespace.yaml")
+# The one value every name in the lane comes from. The tree spells today's
+# instance, b, so the substitution below replaces `gate-b`.
+GATE_PREFIX=monoplayer-gate-
+INSTANCE=${GATE_NAMESPACE#"$GATE_PREFIX"}
+RENDER=''
 
 # Every Deployment deploy/driver declares. down covers all five; up wakes the two
 # a rung drives unless it is told which ones it needs.
@@ -84,6 +96,19 @@ guard () {
     || [ "$GATE_NAMESPACE" = monoplayer ] || [ "$GATE_NAMESPACE" = monoplayer-dev ]; then
     die "refusing \"${GATE_NAMESPACE}\" as the gate namespace: this script scales, and the gate is the only disposable lane"
   fi
+  # The render substitutes the instance into a tree that spells monoplayer-gate-b,
+  # so a name that does not follow the prefix leaves the tree's spelling with
+  # nothing to substitute, and the render would quietly apply the default lane.
+  case "$GATE_NAMESPACE" in
+    "$GATE_PREFIX"?*) : ;;
+    *) die "refusing \"${GATE_NAMESPACE}\": the gate lane is ${GATE_PREFIX}<instance>, and that suffix is the one value every name in the lane is derived from" ;;
+  esac
+  # The instance becomes part of a namespace and of an app.kubernetes.io/name
+  # value, so it is a DNS-1123 label. That is also what makes the sed in render()
+  # safe: no character it would read as syntax can reach it.
+  case "$INSTANCE" in
+    *[!a-z0-9-]*|-*|*-) die "refusing \"${GATE_NAMESPACE}\": the instance \"${INSTANCE}\" is not a DNS-1123 label, so it cannot name a namespace or a label value" ;;
+  esac
 }
 
 known () {
@@ -121,19 +146,35 @@ current_replicas () {
 }
 
 pods_of () {
-  kubectl -n "$GATE_NAMESPACE" get pods -l "app.kubernetes.io/name=monoplayer-gate-b-$1" -o name || true
+  kubectl -n "$GATE_NAMESPACE" get pods -l "app.kubernetes.io/name=$GATE_NAMESPACE-$1" -o name || true
 }
 
-# The tree pins its namespace in every manifest, so an apply target and a scale
-# target that disagree would split one command across two lanes.
-require_manifest_namespace () {
-  [ "$GATE_NAMESPACE" = "$MANIFEST_NAMESPACE" ] \
-    || die "deploy/driver applies to $MANIFEST_NAMESPACE and this run would scale $GATE_NAMESPACE: they are one lane, so name the same namespace"
+# The lane a rendered tree belongs to. awk with an exit reads one line and no
+# more: a piped head would let sed take a SIGPIPE, and pipefail would turn that
+# into a silent death. This reads the render and not the tree, because the render
+# is what gets applied; the two are compared in up, not assumed equal.
+rendered_namespace () {
+  awk '/^  name: /{print $2; exit}' "$1/namespace.yaml"
+}
+
+# The tree is the template. One substitution reaches the namespace object, every
+# label and selector, the Secret and ConfigMap names, the tailnet hostnames and the
+# path inside velocity.toml, so a rename cannot half-land. Instance b is today's
+# lane and the substitution is then the empty one, which is why an ordinary up
+# applies exactly what deploy/driver holds.
+render () {
+  local dir=$1 file
+  rm -rf "$dir"
+  cp -R "$MANIFESTS" "$dir"
+  if [ "$INSTANCE" = b ]; then return 0; fi
+  for file in "$dir"/*.yaml; do
+    sed "s/gate-b/gate-$INSTANCE/g" "$file" > "$file.new"
+    mv "$file.new" "$file"
+  done
 }
 
 up () {
   guard
-  require_manifest_namespace
   local names="${*:-$DRIVEN_WORKLOADS}" name pending start deadline awake='' wake
   for name in $names; do
     known "$name" || die "unknown gate deployment \"$name\": the gate workloads are $GATE_WORKLOADS"
@@ -146,8 +187,18 @@ up () {
   done
   awake=${awake# }
 
-  kubectl apply -k "$MANIFESTS" >/dev/null
-  say "applied deploy/driver to $GATE_NAMESPACE"
+  # The render is what gets applied, so the lane it renders and the lane this run
+  # scales are read back from it. One function produced both, and the check is what
+  # proves it did.
+  RENDER=$(mktemp -d)
+  trap 'rm -rf "$RENDER"' EXIT
+  render "$RENDER"
+  [ "$(rendered_namespace "$RENDER")" = "$GATE_NAMESPACE" ] \
+    || die "the render spells $(rendered_namespace "$RENDER") and this run would scale $GATE_NAMESPACE: they are one lane, so name the same namespace"
+  say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $GATE_NAMESPACE-"
+
+  kubectl apply -k "$RENDER" >/dev/null
+  say "applied the render of deploy/driver to $GATE_NAMESPACE"
 
   wake=$names
   for name in $awake; do
@@ -196,7 +247,6 @@ up () {
 
 down () {
   guard
-  require_manifest_namespace
   local name left start deadline
   # By name, never by app.kubernetes.io/part-of: paper-hub and paper-sky carry
   # that label too, and they are the transfer testbed's.
@@ -226,7 +276,7 @@ down () {
 
 status () {
   local name replicas ready
-  say "gate namespace $GATE_NAMESPACE"
+  say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $GATE_NAMESPACE-"
   for name in $GATE_WORKLOADS; do
     replicas=$(kubectl -n "$GATE_NAMESPACE" get deploy "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null) || replicas=''
     ready=$(ready_replicas "$name")
@@ -239,8 +289,11 @@ case "${1:-}" in
   up) shift; up "$@" ;;
   down) down ;;
   status) guard; status ;;
+  # What this lane would apply, without a cluster: a renamed lane's objects exist
+  # nowhere in git, so this is the way to read them back.
+  render) [ -n "${2:-}" ] || die 'usage: scripts/gate-lane.sh render DIR' 2; guard; render "$2"; say "rendered gate lane $GATE_NAMESPACE (instance $INSTANCE) into $2" ;;
   # The whole comment block, whatever its length, so a new header line cannot
   # silently push the exit codes out of the help.
   -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
-  *) die 'usage: scripts/gate-lane.sh up [DEPLOYMENT...]|down|status' ;;
+  *) die 'usage: scripts/gate-lane.sh up [DEPLOYMENT...]|down|status|render DIR' ;;
 esac

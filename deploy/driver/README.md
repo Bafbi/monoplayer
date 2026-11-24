@@ -48,6 +48,37 @@ those three, which is why they stay off.
 interval between checks, and the two waits are `MONOPLAYER_GATE_READY_TIMEOUT` and
 `MONOPLAYER_GATE_STOP_TIMEOUT`.
 
+## One tree, one lane, one value
+
+The tree in this directory is a **template**, not a lane. It names the lane
+`monoplayer-gate-b` everywhere the lane is named: the namespace object, every
+`app.kubernetes.io/name` label and selector, the Secret and ConfigMap names, the two
+tailnet hostnames, and one path inside `velocity.toml`.
+
+`MONOPLAYER_GATE_NAMESPACE` names the lane, and the instance is what follows
+`monoplayer-gate-`. `gate:up` copies the tree, substitutes the instance, and applies
+that copy, so a rename reaches every one of those places at once and the label
+`gate:status` and `gate:down` look pods up by cannot disagree with the manifests.
+
+Instance `b` is today's lane, and the substitution is then the empty one: an ordinary
+`gate:up` applies byte for byte what this directory holds, which
+`test/tooling/gate-lane.test.js` pins. To read what another lane would apply:
+
+```bash
+scripts/gate-lane.sh render /tmp/gate-x    # with MONOPLAYER_GATE_NAMESPACE=monoplayer-gate-x
+kubectl kustomize /tmp/gate-x
+```
+
+The instance must be a DNS-1123 label, because it names a namespace and part of a
+label value.
+
+Two boundaries to keep in mind. The lane's Secrets are still made by an operator and
+still carry the `gate-b` names this tree asks for, so a lane on another instance
+starts its pods in `CreateContainerConfigError` until #278 generates per-lane
+Secrets. And `paper-hub` and `paper-sky` from `deploy/testbed` live in
+`monoplayer-gate-b` beside this lane: they are the transfer testbed's, a lane on
+another instance does not take them with it, and nothing here scales them.
+
 ## Names this tree does not rename
 
 Renaming these would recreate live cluster objects or break the display host,
@@ -61,6 +92,11 @@ Each needs its own migration step:
 |---|---|---|
 | namespace `monoplayer-gate-b` | every manifest here | create the new namespace, re-apply, delete the old |
 | labels `app.kubernetes.io/name: monoplayer-gate-b-*` | every manifest here | selector change: recreate the workloads |
+
+The namespace and the label prefix are the two this tree can now derive from one
+value (#277, "One tree, one lane, one value" above): naming another instance moves
+both together. The remaining rows still migrate by hand, when the change that reads
+them arrives.
 | Secrets `gate-b-rcon`, `gate-b-velocity` | cluster only | copy the value into the new Secret |
 | Tailscale hostnames `monoplayer-gate-b-paper`, `-velocity` | Services with annotations | republish under a new hostname |
 | server motd `Monoplayer Gate B` | `velocity.yaml` | a config value players see |

@@ -34,6 +34,9 @@
 # Environment:
 #   MONOPLAYER_CLUSTER_NAMESPACE   namespace            (default monoplayer)
 #   MONOPLAYER_DEPLOYMENT          deployment to read    (default monoplayer)
+#   MONOPLAYER_GATE_NAMESPACE      the gate lane        (default monoplayer-gate-b),
+#                                                        which the default backend
+#                                                        host is derived from (#277)
 #   MONOPLAYER_BACKEND_HOST        backend host         (default the gate Paper)
 #   MONOPLAYER_BACKEND_PORT        backend port         (default 25565)
 #   MONOPLAYER_FRONT_HOST          proxy front host     (passed to the rung, empty by default)
@@ -47,7 +50,11 @@ set -euo pipefail
 
 NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
 DEPLOYMENT=${MONOPLAYER_DEPLOYMENT:-monoplayer}
-BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper.monoplayer-gate-b.svc.cluster.local}
+# The gate lane this run measures, which is not where the pod runs: NAMESPACE above
+# is the live lane holding the custody the rung reads. The default backend follows
+# the lane, so naming another instance does not dial the one that shipped (#277).
+GATE_NAMESPACE=${MONOPLAYER_GATE_NAMESPACE:-monoplayer-gate-b}
+BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper.$GATE_NAMESPACE.svc.cluster.local}
 BACKEND_PORT=${MONOPLAYER_BACKEND_PORT:-25565}
 SECRETS=${MONOPLAYER_SECRETS_SOURCE:-.secrets}
 ATTACH_ALIAS=${MONOPLAYER_ATTACH_ACCOUNT:-bafbi}
