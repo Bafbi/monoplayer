@@ -406,6 +406,9 @@ export function createMonoplayer ({
     transfersBlocked: 0,
     transfersFollowed: 0,
     transfersRefused: 0,
+    claimDials: 0,
+    claimDialsFailed: 0,
+    claimBodies: 0,
     noticesSent: 0,
     noticeFallbacks: 0,
     // #99: one `player_info` frame per attach that gives the human's own UUID
@@ -517,6 +520,11 @@ export function createMonoplayer ({
   let transferNoticeSent = false // one refusal notice per attach
   let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let pendingTransfer = null // target for the next reconnect_due
+  // #258: the one body this session has dialled for a picker claim, or null. It is
+  // a slot rather than a map on purpose: a second body's frames arriving while the
+  // first is delivered is the per-body cache of #260, and a session that refuses
+  // the second claim is better than one that mixes two bodies' state.
+  let claimedBody = null
   // #233: the target an operator move dials on the next reconnect_due. It is a
   // second slot rather than a flag on the first because the two dials differ in
   // dialect: a transfer asks for the transfer handshake and keeps its cookies, an
@@ -1954,6 +1962,130 @@ export function createMonoplayer ({
     return { attached: true, replayed: synthesized.counts.replayed, frames: synthesized.frames }
   }
 
+// --- #258: the landing, from the claim to the body ---
+
+  // How long a claimed body has to reach the state a client can be released on:
+  // its configuration and join prefix cached and its play login landed. Bounded
+  // because the client is on a loading screen: a body that misses it gets the
+  // picker back rather than a promise nobody keeps.
+  const CLAIM_WARM_TIMEOUT_MS = 30_000
+
+  // One wait on the injected clock. The core's default clock is inert, and an
+  // inert clock cannot wait: the caller is told so instead of being held forever,
+  // which is the difference between a refused landing and a hung one.
+  function sleepOnClock (ms) {
+    return new Promise(resolve => {
+      const handle = clock.setTimeout(() => resolve(true), ms)
+      if (handle === null || handle === undefined) resolve(false)
+    })
+  }
+
+  // The body is ready when a warm attach would be accepted: its play login has
+  // landed and its configuration and join prefix are in the cache. The same two
+  // conditions the warm attach gate reads, so a claim cannot release a client that
+  // an ordinary attach would refuse.
+  async function awaitBodyWarm ({ timeoutMs = CLAIM_WARM_TIMEOUT_MS, pollMs = 50 } = {}) {
+    const deadline = clock.now() + timeoutMs
+    for (;;) {
+      const stats = cache.stats()
+      const readiness = {
+        state: session.state,
+        warm: stats.warm === true,
+        configFrames: stats.sizes.config,
+        prefixFrames: stats.sizes.prefix
+      }
+      if (session.isAttachReady() && stats.sizes.config > 0 && stats.sizes.prefix > 0) {
+        return { ready: true, reason: null, ...readiness }
+      }
+      if (clock.now() >= deadline) return { ready: false, reason: 'body_not_warm', ...readiness }
+      const waited = await sleepOnClock(pollMs)
+      if (!waited) return { ready: false, reason: 'no_wait', ...readiness }
+    }
+  }
+
+  // A granted claim asks for the body the frame named, and this is the only place
+  // the puppet dials on a claim: with nobody claiming, nothing is connected (Q6).
+  // One body at a time; two is #260. Losing the body afterwards is its lifecycle
+  // (#261), not this path: a dial that never opened a session fails here, and a
+  // fault after the landing is the reconnect machine's.
+  async function connectClaimedBody ({ body = null, server = null, target = null, name = null } = {}) {
+    if (cfg.picker !== true) return { connected: false, reason: 'picker_off', body }
+    if (claimedBody !== null) {
+      log('claimDialRefused', { body, reason: 'one_body', claimed: claimedBody })
+      return { connected: false, reason: 'one_body', body: claimedBody }
+    }
+    if (session.state !== STATES.BOOT && session.state !== STATES.FAILED) {
+      log('claimDialRefused', { body, reason: 'session_busy', state: session.state })
+      return { connected: false, reason: 'session_busy', body }
+    }
+    if (target === null || typeof target?.host !== 'string' || !Number.isInteger(target?.port)) {
+      log('claimDialRefused', { body, reason: 'no_target' })
+      return { connected: false, reason: 'no_target', body }
+    }
+    const dial = { host: target.host, port: target.port }
+    // A claim is a fresh login on a server that never saw the puppet: no transfer
+    // handshake and no cookies from another body (#233's dialect split, the
+    // operator arm).
+    try {
+      backendLeg.setTarget(dial, { keepCookies: false, transfer: false })
+    } catch (error) {
+      metrics.claimDialsFailed++
+      log('claimDialRefused', {
+        body,
+        host: dial.host,
+        port: dial.port,
+        reason: 'target_refused',
+        error: String(error?.message ?? error).slice(0, 200)
+      })
+      return { connected: false, reason: 'target_refused', body }
+    }
+    metrics.claimDials++
+    log('claimDial', { body, server, host: dial.host, port: dial.port, name })
+    // The body's own first dial. The session goes back to boot for it, so a claim
+    // after a fault runs the same path as a claim on a lane that started cold.
+    session.backendConnecting({ initial: true })
+    try {
+      await backendLeg.connect()
+    } catch (error) {
+      metrics.claimDialsFailed++
+      log('claimDialFailed', {
+        body,
+        host: dial.host,
+        port: dial.port,
+        reason: 'connect_failed',
+        error: String(error?.message ?? error).slice(0, 200)
+      })
+      return { connected: false, reason: 'connect_failed', body }
+    }
+    const warm = await awaitBodyWarm()
+    if (!warm.ready) {
+      metrics.claimDialsFailed++
+      log('claimDialFailed', {
+        body,
+        host: dial.host,
+        port: dial.port,
+        reason: warm.reason,
+        state: warm.state,
+        configFrames: warm.configFrames,
+        prefixFrames: warm.prefixFrames
+      })
+      return { connected: false, reason: warm.reason, body, warm }
+    }
+    claimedBody = body
+    metrics.claimBodies++
+    log('claimBodyReady', {
+      body,
+      server,
+      host: dial.host,
+      port: dial.port,
+      state: warm.state,
+      warm: warm.warm,
+      configFrames: warm.configFrames,
+      prefixFrames: warm.prefixFrames
+    })
+    return { connected: true, reason: null, body, target: dial, warm }
+  }
+
   function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
     // #16: the front reports play-ready for a client that attached during the
     // puppet's configuration. It is already attached, so it must not go
@@ -2405,6 +2537,14 @@ export function createMonoplayer ({
       })
     }
 
+    // #258: the landing. A granted claim is what dials a body, so the front asks
+    // the core for one and the core owns the dial and the warm wait. A leg with no
+    // picker wiring keeps refusing the claim it never receives, and a lane with
+    // `picker` off refuses every landing (`picker_off`).
+    if (typeof frontLeg.setConnectClaimedBody === 'function') {
+      frontLeg.setConnectClaimedBody(payload => connectClaimedBody(payload))
+    }
+
     log('start', { whitelist: identity.whoAmI().whitelist, puppet: cfg.puppet, started: true })
     emit('start')
   }
@@ -2716,6 +2856,9 @@ export function createMonoplayer ({
     attachPlayer,
     detachPlayer,
     abortTransfer,
+    // #258: the landing. The front leg calls this when a claim is granted, and it
+    // is the only place a claim dials a body.
+    connectClaimedBody,
     // #233: the operator's move, driven from the control document rather than a
     // packet. The orchestrator calls it when its heartbeat sees a desired backend
     // that is not the one in use.
@@ -2743,6 +2886,8 @@ export function createMonoplayer ({
     get targetLoginReady () { return targetLoginReady },
     get restoring () { return restoreReplayPending },
     get backendSessionOpen () { return backendSessionOpen },
+    // #258: the body a claim landed, or null. One at a time (#260 owns two).
+    get claimedBody () { return claimedBody },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }
   }

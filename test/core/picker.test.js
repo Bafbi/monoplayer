@@ -12,8 +12,11 @@ import {
   PICK_NAMESPACE,
   PICK_VERBS,
   buildPickAnswer,
+  claimFailureText,
+  claimRestoreTitle,
   pickIdFor,
   pickRefusalText,
+  pickTarget,
   pickSlug,
   pickerDialog,
   pickerDialogParams,
@@ -136,6 +139,42 @@ const server = { name: 'gate-paper:25565', state: 'down', driver: null }
 // a client-like sender really puts on the wire, and not against a fixture this test
 // chose.
 const clickFor = (id, state = 'configuration') => buildCustomClickAction({ state, id })
+
+test('#258 a picker row names the address a claim lands the client on', () => {
+  assert.deepEqual(pickTarget('gate-paper:25565'), { host: 'gate-paper', port: 25565 })
+  assert.deepEqual(pickTarget('127.0.0.1:25566'), { host: '127.0.0.1', port: 25566 })
+  // A bracketed IPv6 address keeps its colons and loses its brackets: the socket
+  // layer takes the address, not the URL form.
+  assert.deepEqual(pickTarget('[::1]:25565'), { host: '::1', port: 25565 })
+  // Everything that is not an address is refused rather than guessed at. A row
+  // that dialled a host called "paper" would hide a bad config behind a hang.
+  assert.equal(pickTarget('paper'), null)
+  assert.equal(pickTarget('paper:'), null)
+  assert.equal(pickTarget(':25565'), null)
+  assert.equal(pickTarget('paper:not-a-port'), null)
+  assert.equal(pickTarget('paper:0'), null)
+  assert.equal(pickTarget('paper:70000'), null)
+  assert.equal(pickTarget(''), null)
+  assert.equal(pickTarget(null), null)
+})
+
+test('#258 the picker a refused landing returns to names the body that did not answer', () => {
+  assert.equal(claimRestoreTitle({ server: 'paper:25565' }), 'Choose a server - paper:25565 did not answer')
+  assert.equal(claimRestoreTitle({}), 'Choose a server - that server did not answer')
+  // The one case a client is ended rather than offered the list again says what
+  // happened without repeating the title's words.
+  assert.equal(claimFailureText({ server: 'paper:25565' }),
+    'Monoplayer: paper:25565 accepted the connection and could not be entered.')
+  assert.equal(claimFailureText({}), 'Monoplayer: that server accepted the connection and could not be entered.')
+})
+
+test('#258 a row with no address is offered and cannot be landed', () => {
+  const [row] = pickerRows([{ name: 'sky', state: 'down' }])
+  assert.equal(pickTarget(row.name), null)
+  // The label and the id still work: a lane that offers a row it cannot dial
+  // refuses the claim, and the picker still shows it.
+  assert.equal(row.id, PICK_NAMESPACE + '/sky')
+})
 
 test('#266 the server dialog offers claim, spectate and disconnect', () => {
   const dialog = serverDialog({ server })

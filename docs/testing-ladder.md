@@ -10,7 +10,7 @@ cheapest rung that can fail for the defect you are chasing.
 |---|---|---|---|---|---|
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers, and the front leg's status answer over a loopback socket (#200); no auth | socket framing beyond the status handshake, leg wiring, real timers, backend behavior |
-| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog and answers it (#257, #266); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog, answers it, and lands a claiming client in the body it named (#257, #266, #258); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, the same-connection reconfiguration, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering and vanilla acceptance of the reconfiguration; the run takes the live front offline, so the operator starts it |
 | 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
@@ -491,7 +491,7 @@ first dial and its target warms in five seconds.
 - `O55` a join with no backend receives the recorded configuration baseline and
   the picker, and its pick is recorded (#257). The rung's only 26.2 rig: its own
   `createOfflineFrontLeg`, its own `createWireChecker({ version: '26.2' })`, and
-  two 26.2 protocol bots. No backend is connected and the rig never dials one, so
+  five 26.2 protocol bots. Nothing is dialled while the picker is read, so
   the front's cached replay path finds nothing: the frames the client reads are
   `src/legs/configuration-baseline/26.2.json`, the committed recording of the gate
   lane's Paper 26.2 build 135, served byte for byte. The client reads all 29
@@ -507,6 +507,10 @@ first dial and its target warms in five seconds.
   A pick no longer ends the connection: it opens the server's own dialog, which is
   O56.
 
+  The rig lists two rows. The first names a port nothing listens on, so a claim on
+  it is a dial the kernel refuses; the second names a real 26.2 fake body, which is
+  the one O58 lands a client in.
+
   What it cannot prove: that a vanilla 26.2 client accepts the registry set. The
   protocol bot is not a vanilla oracle, and rung 4 is the only place one runs. What
   it does establish is that the bytes are a real server's, that they parse in the
@@ -517,23 +521,28 @@ first dial and its target warms in five seconds.
   dialog and no leftover bytes, and the front counts two picker joins and no
   attach. The single-attach rule is unchanged for a real attach: this is the
   property that makes a picker reachable while one client is reading it.
-- `O56` a pick opens that server's own dialog, and its answer is read back from the
-  frame the client sent (#266). The same 26.2 bot that picked reads a second
-  `show_dialog`. Its title is `gate-paper:25565 - down`, it has one column, no
-  escape, and three custom actions: `Claim`, `Spectate` and `Disconnect`. Their ids
-  are `monoplayer:claim/gate-paper_25565`, `monoplayer:spectate/…` and
-  `monoplayer:disconnect/…`, read out of the frame rather than chosen by the rung.
-  The bot clicks `Claim` in the configuration state. The assertion requires the
-  service to report verb `claim` with the id the frame carried and the server it
-  named, and the front to count one server dialog, one verb and one claim (#267).
-  The client is not answered with a `disconnect` any more: a claim is recorded, so
-  the client stays in the configuration phase, and what a claim contends with is
-  O57. The verb and the server both ride in the id, so the leg keeps no
-  per-connection state about which dialog a client is looking at. Delivering the
-  body a claim names is #269's, not recording the claim. What this proves is the
-  round trip.
+- `O56` a pick opens that server's own dialog, its answer is read back from the
+  frame the client sent, and a body that refuses the dial gives the picker back
+  (#266, #258). The same 26.2 bot that picked reads a second `show_dialog`. Its
+  title is the row's name and state, it has one column, no escape, and three custom
+  actions: `Claim`, `Spectate` and `Disconnect`. Their ids come from `verbIdFor`
+  for the row the lane offered, and the assertion reads them out of the frame the
+  client received rather than choosing them. The bot clicks `Claim` in the
+  configuration state, and the assertion requires the service to report verb
+  `claim` with the id the frame carried and the server it named, and the front to
+  count one server dialog, one verb and one claim (#267). The verb and the server
+  both ride in the id, so the leg keeps no per-connection state about which dialog a
+  client is looking at.
+
+  #258: the claim is also the one thing that dials a body, and this row's port
+  answers nothing, so the dial is refused. The client is not left in a dialog nobody
+  will read: it reads a third `show_dialog`, the list it started at, titled
+  `Choose a server - <row> did not answer`. Its claim still stands, because a claim
+  belongs to the connection and the click did not spend it (#267), and its
+  connection is still open. The reachable body in the other row counts no logins, so
+  a refused landing dialled nothing else.
 - `O56b` an unknown verb is refused, named, and answered (#266). The second 26.2 bot
-  sends `monoplayer:teleport/gate-paper_25565` in the configuration state. The front
+  sends `monoplayer:teleport/<the offered row's slug>` in the configuration state. The front
   refuses it and logs one sentence that names the verb and the verbs it does offer.
   It reports no verb to the caller and ends the client with a configuration
   `disconnect`, so the client is not left in a dialog. A malformed id
@@ -547,10 +556,10 @@ first dial and its target warms in five seconds.
   from this phase. This is the one verb the dialog layer can complete on its own,
   and it is proven by a click for that reason.
 - `O57` the pick records an exclusive claim, and a second claim on that body is
-  refused by name (#267). The first 26.2 bot claimed `gate-paper:25565` in O56 and
-  is still connected, so it holds that body. A fourth bot reads the picker while that
-  claim stands, which it may, because the picker is not a claim and takes no attach
-  slot. It picks the same server and clicks `Claim`. The claims the front holds are
+  refused by name (#267). The first 26.2 bot claimed the row whose port answers
+  nothing in O56 and is still connected, so it holds that body, and it is back at
+  the picker holding it. A fourth bot reads the picker while that claim stands,
+  which it may, because the picker is not a claim and takes no attach slot. It picks the same server and clicks `Claim`. The claims the front holds are
   then exactly one, on that body, and they name `Attach`. The refusal is one
   sentence naming `Attach`, and the rival gets a configuration `disconnect` rather
   than a silent nothing. The claimant is still connected when the refusal is read,
@@ -559,9 +568,33 @@ first dial and its target warms in five seconds.
   are read again after the rival's pick, which takes nothing either. Four picker
   joins, one claim and no attach, so the core's session is untouched.
 
-  What it cannot prove: that the claiming client is delivered the body. No body is
-  connected on this rig, and a claim has no channel to deliver one through until
-  #269. Delivery is still the front leg's attach slot, and #260 and #269 replace it.
+  What it cannot prove: that the claiming client is delivered the body, because the
+  body claimed here never came up. The landing is O58's. Delivery still runs through
+  the front leg's attach slot, and #269 replaces it.
+- `O58` a claim lands the client in the body it named: the body is dialled only
+  for that claim, and its play state arrives on the connection the client already
+  held (#258). A fifth 26.2 bot reads the same picker, picks the row that names a
+  real 26.2 fake body, and clicks `Claim`. The fake counts zero logins before that
+  click, which is the no-dial rule (Q6) made visible: with nobody claiming, nothing
+  is connected. It counts one afterwards, and the backend leg's target is that
+  body's port rather than the configured backend the lane started with, so the
+  claim chose the body instead of inheriting a warm one. The client's play login
+  then arrives on the socket it already held: the body's own configuration frames
+  continue the phase the baseline opened, one `finish_configuration` ends it, and
+  the core's replay follows. The position it holds is that body's own spawn, which
+  no other body in the run sends. The assertion requires one login at the body, the
+  body's spawn at the client, `session.state === 'attached'`, one front attach, and
+  the body recorded as claimed.
+
+  What it cannot prove: that a vanilla 26.2 client accepts a second registry round
+  inside one configuration phase. The body is a `minecraft-protocol` fake whose
+  configuration is the library's own, `prismarine-chunk` has no 26.2
+  implementation, and the body therefore sends a chunk batch with nothing in it
+  (`chunks: 'empty'`). This proves the selected body's play join and its spawn,
+  never its terrain, and never a real client's acceptance of two registry sets in
+  one phase. That is rung 4's question, and #268's: if a real client refuses the
+  second round, the fallback is a one-frame limbo through the same-connection
+  reconfiguration machine, and this rung reports which path ran.
 
 
 ## The client parity rung
