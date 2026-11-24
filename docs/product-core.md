@@ -287,16 +287,18 @@ listing the lane's allowed servers.
   omits the length prefix: the library's writer and reader both disagree with the
   wire. The id survives in both, and `additions` does not, which is why the pick is
   never carried there.
-- **The dialog is Minecraft's own shape, checked against Minecraft's codec.** The
-  front authors a `minecraft:multi_action` dialog: a string `title`, `columns`,
-  `can_close_with_escape` false, and one action button per server whose
-  `label`/`width` sit inline and whose action is `minecraft:dynamic/custom` with
-  an `id`. Paper 26.2 loads the same dialog as a datapack registry entry, and its
-  `RegistryDataLoader` refuses one with no `title` while loading this one
-  unchanged, which is how the shape was checked without a client. The
-  configuration phase carries the dialog inline (`CONTEXT_FREE_STREAM_CODEC` in
-  the 26.2 client), so no `minecraft:dialog` entry is needed, and clicking a
-  custom action in that phase sends `ServerboundCustomClickActionPacket`.
+- **The dialog is Minecraft's own shape.** The front authors a
+  `minecraft:multi_action` dialog. It carries a string `title`, one column, and
+  `can_close_with_escape` false. Each server is one action button, with its label
+  and width written inline beside an action of type `minecraft:dynamic/custom`.
+  Paper 26.2 loads the same dialog as a datapack registry entry, and its
+  `RegistryDataLoader` refuses a copy with no `title`. Loading this one unchanged
+  is how the shape was checked without a client.
+- **That phase carries a dialog inline.** The 26.2 client reads the configuration
+  `show_dialog` with `CONTEXT_FREE_STREAM_CODEC`, so no `minecraft:dialog` entry is
+  needed. Its `ClientConfigurationPacketListenerImpl$2` extends
+  `CommonDialogAccess`, so a custom action is clickable there and only command
+  actions are inert.
 - **Nothing is attached.** A picker join takes no attach slot and never reaches
   the core's session, so several clients may read the picker at once. The core
   counts the join as `attach_picker`, not as a denial. Until #267 lands, a pick is
