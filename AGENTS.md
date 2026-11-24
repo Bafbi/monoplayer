@@ -8,7 +8,7 @@ Three cluster lanes, and two rules that outrank a test.
 |---|---|---|---|
 | live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the puppet account GlowSquidye, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
-| gate lane | `monoplayer-gate-<instance>`, one per worktree | the Papers the online rung, the driver lane and the transfer testbed run against. `paper-conduct` is the gate-serving sibling the observer measures. The instance is the worktree's short commit and a short hash of its path, so two checkouts at one commit are two lanes. `mise run lanes` lists every lane with its age and the worktree that owns it. A lane rests at 0 replicas | anyone. It is disposable, and `mise run gate:up` and `mise run gate:down` wake and stop one |
+| gate lane | `monoplayer-gate-<instance>`, one per worktree | the Papers the online rung and the driver lane run against. `paper-conduct` is the gate-serving sibling the observer measures. The instance is the worktree's short commit and a short hash of its path, so two checkouts at one commit are two lanes, and `scripts/gate-lane.sh name` prints this worktree's. `mise run lanes` lists every lane `gate:up` made, with its age and the worktree that owns it. The transfer testbed's Papers are not one: they sit in the fixed `monoplayer-gate-b` namespace, which no lane command lists or reaps. A lane rests at 0 replicas | anyone. It is disposable, and `mise run gate:up` and `mise run gate:down` wake and stop one |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
 That covers `kubectl -n monoplayer scale`, `patch`, `delete a workload`,
@@ -36,10 +36,10 @@ that leaves the deployment serving.
 |---|---|
 | the gate, offline, seconds | `mise run check` |
 | a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join`. The tag must come from the branch workflow's GHCR build: `mise run image:build` publishes to Zot, whose host the dev namespace cannot resolve. |
-| the online rung, with the deployment still serving | `mise run gate:up`, then `mise run online:cluster` |
+| the online rung, with the deployment still serving | `mise run gate:up`, then `MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run online:cluster`. Without the variable the rung dials `monoplayer-gate-b`, which is not the lane `gate:up` woke (#301) |
 | a clientbound comparison, direct against proxied | `mise run parity:run` |
-| the server's view of a join | `mise run gate:up`, then `mise run observer:run`, then `mise run gate:down` |
-| the real client | `mise run gate:up`, then `mise run driver:scenario`, against the gate Paper |
+| the server's view of a join | `mise run gate:up`, then `MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run observer:run`, then `mise run gate:down`. Each of its two joins takes the account lease, though the install and the restart do not (#282) |
+| the real client | `mise run gate:up`, then `mise run driver:scenario`. That rung joins `monoplayer-gate-b` and reads RCON there unless `--server` and `--rcon-namespace` name your lane, and the task forwards no arguments, so `deploy/driver/README.md` holds the command (#282) |
 | the transfer path | nothing: it takes the live front offline, so ask a human |
 
 `docs/testing-ladder.md` gives each run its cost and its blast radius.
@@ -49,11 +49,20 @@ that leaves the deployment serving.
 its lane as `gate-__instance__`, so a bare `kubectl apply -k deploy/driver` is
 refused. Only `mise run gate:up` applies, and it applies the render that names this
 worktree's lane. It wakes the rows a rung drives (`paper`, `paper-conduct`) and waits
-up to 900 s while saying so. `mise run lanes` lists every lane, and
-`mise run lanes -- --reap` deletes the ones idle past six hours. A cold start is
+up to 900 s while saying so. `mise run lanes` lists every lane those commands made,
+and `mise run lanes -- --reap` deletes the ones idle past six hours. A cold start is
 90 s, because every gate world is an `emptyDir` that died with its pod. `mise run gate:down` puts it back to 0 and waits for
 the pods to go. No rung drives `velocity`, `paper-m4` or `toxiproxy`, so they stay off
 even after `gate:up`. `mise run gate:up -- velocity paper-m4 toxiproxy` wakes all three.
+
+**A lane is this worktree's, and one run uses it at a time.** `scripts/gate-lane.sh name`
+prints it, one line. Two runs in one worktree share that lane, so one
+`mise run gate:down` stops both. Three commands still default to the literal lane
+`monoplayer-gate-b`: `mise run online:cluster` and `mise run observer:run` take
+`MONOPLAYER_GATE_NAMESPACE`, and `mise run driver:scenario` takes `--server` and
+`--rcon-namespace` (#282, #301). Anything that uses the real account takes the lease
+`monoplayer-online-account` while it does: one object for every worktree on the
+cluster. `docs/testing-ladder.md` answers this rung by rung, beside the lane table.
 
 ## Tools
 
@@ -102,7 +111,7 @@ Where to look: a decision lives in `src/core/` (pure), the wiring in `src/servic
 Facts an agent cannot look up:
 
 - **The gate**: before you report a change done, run `mise run check`. It runs lint, the unit tests, and the offline loopback, and it writes `.reports/loopback-report.json`. Quote that path and its assertion count.
-- **A loopback assertion is numbered above the current highest, and its bullet lands in `docs/testing-ladder.md` in the same commit.** `test/ladder/loopback-contract.test.js` compares the two lists and fails otherwise. An undocumented assertion that reaches `main` breaks the image build, not just the gate.
+- **A loopback assertion is numbered above the current highest, and its bullet lands in `docs/testing-ladder.md` in the same commit.** `test/ladder/loopback-contract.test.js` compares the two lists and fails otherwise. An undocumented assertion that reaches `main` breaks the image build, not just the gate. Add them one row at a time: the ids are one sequence for the whole repository, so two rows that each add one claim the same next number and edit the same bullet list.
 - **The effective config**: `node src/service/monoplayer.js --print-config` prints the resolved document and exits. Do not reconstruct it from manifests by hand.
 - **The config surface is one function.** Every `MONOPLAYER_*` variable is enumerated in `envOverlay` in `src/service/start-live.js`, and nothing else reads `process.env`. A name that appears in a guard message but not in that function looks wired and is not.
 - **The switches are config, not flags.** They are read once at startup and validated by `loadConfig`, which throws on a bad value rather than starting misconfigured. A feature-flag system was considered and declined: one service, one language, eight keys, and a compiled default for each. Do not propose one again without saying what changed.
