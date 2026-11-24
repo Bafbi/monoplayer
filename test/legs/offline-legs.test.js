@@ -13,7 +13,7 @@ import {
   createOfflineFrontLeg,
   decideOnlineAttach,
   emitCheckedRaw,
-  shouldDenySecondAttach
+  reportsClientInformation
 } from '../../src/legs/live-front.js'
 import { createLiveBackendLeg, createOfflineBackendLeg } from '../../src/legs/live-backend.js'
 
@@ -320,12 +320,12 @@ test('interceptor + wire throw keeps a bad cached frame off the client', () => {
   assert.equal(stats.rejected, 1)
 })
 
-test('second attach is denied before verification', () => {
-  const first = {}
-  const second = {}
-  assert.equal(shouldDenySecondAttach(null, first), false)
-  assert.equal(shouldDenySecondAttach(first, first), false)
-  assert.equal(shouldDenySecondAttach(first, second), true)
+test('a second attach is not denied by a slot: the channel role decides', () => {
+  // #269: the attach slot is gone. What is left is which client information the
+  // core hears, and that is the channel's role.
+  assert.equal(reportsClientInformation({ role: 'driver', state: 'configuration' }), true)
+  assert.equal(reportsClientInformation({ role: 'spectator', state: 'configuration' }), false)
+  assert.equal(reportsClientInformation({ role: null, state: 'configuration' }), false)
 })
 
 test('online attach decision fails closed on a thrown or non-allow core decision', () => {
