@@ -131,10 +131,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   attachWhitelist: Object.freeze([]),
   attachWhitelistFile: '.secrets/attach-whitelist.json',
   // #257: the picker. Off, because a lane that turns it on promises the client a
-  // list of servers it may enter, and until #267 a pick lands nowhere: the front
-  // serves the configuration baseline, shows the dialog, records the pick, and
-  // refuses the entry with a message. With this off, a join with no backend is
-  // refused at login with the reason it always gave, `backend_not_ready`.
+  // list of servers it may enter, and no entry is delivered yet: the front serves
+  // the configuration baseline, shows the dialog, records the pick, and records a
+  // claim against the body it names (#267). Delivery of that body is #269's. With
+  // this off, a join with no backend is refused at login with the reason it always
+  // gave, `backend_not_ready`.
   //
   // The front leg's own baseline is the other half: `picker` with no
   // configurationBaseline refuses the join instead of inventing one, so a lane
