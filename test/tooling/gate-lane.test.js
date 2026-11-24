@@ -167,6 +167,9 @@ const SHIM = [
   // namespace's annotations, so a case writes the lane it wants read.
   '  *" get namespaces "*) [ -f "$state/lanes" ] && cat "$state/lanes"; exit 0 ;;',
   '  *" get namespace "*) ns=$(arg_after namespace "$@")',
+  // A read that fails for any other reason is not an absence, so a case can make the
+  // probe answer a Forbidden the way kubectl would.
+  '    if [ -n "${KUBECTL_NAMESPACE_READ_ERROR:-}" ]; then printf \'Error from server (Forbidden): namespaces "%s" is forbidden\\n\' "$ns" >&2; exit 1; fi',
   // A lane that exists answers its own name. A case that wants a lane nobody created yet
   // writes the absent marker, which is the first up on a new commit's lane.
   '    case " $* " in *" -o name"*) [ -f "$state/$ns.absent" ] || printf \'namespace/%s\\n\' "$ns"; exit 0 ;; esac',
@@ -984,6 +987,75 @@ test('a lane holding anything this script did not make is never reaped', () => {
   assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'nothing this script did not make is deleted')
   assert.match(output, new RegExp('keeping ' + tenant + ': it runs paper-hub, which the gate tree does not declare'))
   assert.match(output, new RegExp('keeping ' + operator + ': it holds secret/gate-ccccccc-222222-rcon'))
+})
+
+test('a lane namespace this run cannot read stops it, instead of reading as absent', () => {
+  // A Forbidden or a timeout is not an absence. Reading one as an absence lets down
+  // report a lane as stopped while its pods still run, which is #278's rule for a Secret
+  // and the same rule here.
+  const where = space()
+  const stopped = run(where, ['down'], { KUBECTL_NAMESPACE_READ_ERROR: '1' })
+  assert.equal(stopped.status, 2, stopped.output)
+  assert.match(stopped.output, new RegExp('cannot read the namespace ' + LANE))
+  assert.equal(stopped.calls.some(line => / scale /.test(line)), false, 'nothing was scaled: ' + stopped.calls.join(' | '))
+
+  const reported = run(space(), ['status'], { KUBECTL_NAMESPACE_READ_ERROR: '1' })
+  assert.equal(reported.status, 2, reported.output)
+  assert.match(reported.output, new RegExp('cannot read the namespace ' + LANE))
+})
+
+test('status on a lane that does not exist says so, and reads no rows', () => {
+  const where = space()
+  fs.writeFileSync(path.join(where.state, LANE + '.absent'), '1')
+  const { status, output, calls } = run(where, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, new RegExp('this lane does not exist on the cluster: the next gate:up creates it'))
+  assert.equal(calls.some(line => / get deploy /.test(line)), false, 'no rows were read: ' + calls.join(' | '))
+})
+
+test('two lanes on one cluster, and one lane stops only its own', () => {
+  // The ticket's acceptance criteria, at this seam: two worktrees wake their own lanes,
+  // each status reads its own rows, and one lane's down never names the other.
+  const where = space()
+  const one = checkout(path.join(where.root, 'one'))
+  const two = checkout(path.join(where.root, 'two'))
+  const laneOf = dir => 'monoplayer-gate-' + instanceOf(dir.dir, dir.commit)
+  const mine = [laneOf(one), laneOf(two)]
+  assert.notEqual(mine[0], mine[1], 'two checkouts, two lanes')
+  // The shim appends to one log, so a case that reads several commands has to cut it
+  // first. Otherwise the second command's calls carry the first one's.
+  const runFresh = (args, env) => { fs.writeFileSync(where.log, ''); return run(where, args, env) }
+
+  const woken = mine.map((lane, index) => {
+    const { status, output, calls } = runFresh(['up'], { MONOPLAYER_GATE_WORKTREE: index === 0 ? one.dir : two.dir })
+    assert.equal(status, 0, output)
+    assert.match(output, new RegExp('gate lane ' + lane + ': instance'), 'the run woke its own lane')
+    return calls
+  })
+  for (const [index, calls] of woken.entries()) {
+    const other = mine[1 - index]
+    for (const line of calls) {
+      assert.doesNotMatch(line, new RegExp(other), 'one lane named the other while waking: ' + line)
+    }
+  }
+
+  // Each status reports its own lane and its own rows.
+  const reported = mine.map((lane, index) => {
+    const { status, output, calls } = runFresh(['status'], { MONOPLAYER_GATE_WORKTREE: index === 0 ? one.dir : two.dir })
+    assert.equal(status, 0, output)
+    assert.match(output, new RegExp('gate lane ' + lane + ': instance'))
+    for (const line of calls) assert.doesNotMatch(line, new RegExp(mine[1 - index]), 'status read the other lane: ' + line)
+    return calls
+  })
+  assert.ok(reported.every(calls => calls.some(line => / get deploy /.test(line))), 'each status read rows')
+
+  // And one lane's down stops that lane only.
+  const stopped = runFresh(['down'], { MONOPLAYER_GATE_WORKTREE: two.dir })
+  assert.equal(stopped.status, 0, stopped.output)
+  assert.ok(stopped.calls.some(line => line.includes('-n ' + mine[1])), 'it scaled its own lane: ' + stopped.calls.join(' | '))
+  for (const line of stopped.calls) {
+    assert.doesNotMatch(line, new RegExp(mine[0]), 'the down reached the other lane: ' + line)
+  }
 })
 
 test('a lane already on its way out is reported, not asked for twice', () => {

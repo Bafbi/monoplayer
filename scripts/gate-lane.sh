@@ -311,10 +311,18 @@ pods_of () {
 }
 
 # Whether this worktree's lane exists on the cluster. A lane is named after a commit, so
-# a commit makes a new one, and the first command against it may be the one that creates
-# it. One probe lets the two commands that need a lane say so, instead of dying on
-# kubectl's NotFound.
-lane_exists () { [ -n "$(kubectl get namespace "$GATE_NAMESPACE" -o name 2>/dev/null)" ]; }
+# a commit makes a new one. The first command against it may be the one that creates it.
+# One probe lets the commands that need a lane say so.
+#
+# A read that fails for any other reason stops the run. A Forbidden or a timeout is not an
+# absence: reading one as an absence lets down report a lane as stopped while it still
+# runs, which is #278's rule for a Secret and the same rule here.
+lane_exists () {
+  local found
+  found=$(kubectl get namespace "$GATE_NAMESPACE" -o name --ignore-not-found) ||
+    die "cannot read the namespace $GATE_NAMESPACE: this run will not guess whether the lane exists"
+  [ -n "$found" ]
+}
 
 # One annotation of one namespace, or nothing. A dotted annotation key needs its dot
 # escaped in jsonpath, which is the one backslash in this script. A lane whose
@@ -511,6 +519,9 @@ status () {
   need_kubectl
   local name replicas ready worktree commit touched age now
   say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $LANE_LABEL-"
+  # A commit makes a new lane, so this worktree may have none yet. Saying that beats
+  # reading five Deployments out of a namespace that does not exist.
+  lane_exists || { say "  this lane does not exist on the cluster: the next gate:up creates it"; return 0; }
   worktree=$(lane_annotation "$GATE_NAMESPACE" "$ANNOTATION_WORKTREE")
   if [ -n "$worktree" ]; then
     commit=$(lane_annotation "$GATE_NAMESPACE" "$ANNOTATION_COMMIT")
