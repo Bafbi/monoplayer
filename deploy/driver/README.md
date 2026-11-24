@@ -48,6 +48,50 @@ those three, which is why they stay off.
 interval between checks, and the two waits are `MONOPLAYER_GATE_READY_TIMEOUT` and
 `MONOPLAYER_GATE_STOP_TIMEOUT`.
 
+## One tree, one lane, one value
+
+The tree in this directory is a **template**, not a lane. It spells today's lane,
+`monoplayer-gate-b`, everywhere the lane is named. That covers the namespace object,
+every `app.kubernetes.io/name` label and selector, the Secret and ConfigMap names,
+the two tailnet hostnames, and one path inside `velocity.toml`.
+
+`MONOPLAYER_GATE_NAMESPACE` names the lane. The instance is what follows
+`monoplayer-gate-`. `gate:up` copies the tree, substitutes the instance, and applies
+that copy.
+
+So one rename reaches every one of those places. The label that `gate:status` and
+`gate:down` look pods up by comes from the same value, so it cannot disagree with
+the manifests.
+
+Instance `b` is today's lane, and the substitution is then the empty one: an ordinary
+`gate:up` applies byte for byte what this directory holds, which
+`test/tooling/gate-lane.test.js` pins. To read what another lane would apply:
+
+```bash
+scripts/gate-lane.sh render /tmp/gate-x    # with MONOPLAYER_GATE_NAMESPACE=monoplayer-gate-x
+kubectl kustomize /tmp/gate-x
+```
+
+The instance must be a DNS-1123 label, because it names a namespace and part of a
+label value. It is at most 33 characters, which keeps the longest label value this
+lane writes, `app.kubernetes.io/name: monoplayer-gate-<instance>-paper-conduct`, inside
+63.
+
+The namespace's own `monoplayer.eu/environment: gate-b` label follows the instance too,
+so a renamed lane says `gate-x` there. Nothing selects on it. It is a label for a human
+reading `kubectl get namespace`, and leaving it at `gate-b` in a lane called something
+else is the kind of stale name the ADR exists to avoid.
+
+Two boundaries to keep in mind.
+
+The lane's Secrets are still made by an operator. A render asks for
+`gate-<instance>-rcon` and `gate-<instance>-velocity`, so `gate:up` refuses a lane on
+another instance until those exist. #278 generates them, and the names already match.
+
+`paper-hub` and `paper-sky` from `deploy/testbed` live in `monoplayer-gate-b` beside
+this lane. They belong to the transfer testbed. A lane on another instance does not
+take them with it, and nothing here scales them.
+
 ## Names this tree does not rename
 
 Renaming these would recreate live cluster objects or break the display host,
@@ -66,6 +110,11 @@ Each needs its own migration step:
 | server motd `Monoplayer Gate B` | `velocity.yaml` | a config value players see |
 | Prism instances `gate-b-player`, `gate-b-player-fabric` | display host | clone into a new instance id |
 | `GATEB_*` environment variables, `gateb.*` JVM properties, window title `Monoplayer Gate B` | operator shell, launch flags, Hyprland rule | rename together, in one operator run |
+
+The first two rows are now derived. Naming another instance in
+`MONOPLAYER_GATE_NAMESPACE` moves the namespace and the label prefix together, which
+is what #277 added ("One tree, one lane, one value" above). Every other row still
+migrates by hand, when the change that reads it arrives.
 
 ## Paper G0 backend
 
