@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O57 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
+// Assertions R0 and O1-O58 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -33,6 +33,7 @@ import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 import { baselineRegistryNames, readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { chooseDialogAction } from '../core/dialog-codec.js'
+import { pickIdFor, pickSlug, verbIdFor } from '../core/picker.js'
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
@@ -165,6 +166,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot2 = null
   let pickerBot3 = null
   let pickerBot4 = null
+  // #258: the picker rig's own body, and the client that claims it.
+  let pickerBodyFake = null
+  let pickerBot5 = null
 
   const evidence = {
     frontPort: null,
@@ -3025,22 +3029,41 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (pickerBaseline === null) throw new Error('the committed configuration baseline is missing')
     const pickerWire = createWireChecker({ version: pickerVersion })
     const pickerWireChecks = []
-    const pickerServerName = 'gate-paper:25565'
+    // #258: two rows, and the difference between them is the whole rig. The first
+    // names a port nothing listens on: claiming it is a dial the kernel refuses, so
+    // the client is offered the list again and its claim stands. The second names a
+    // real 26.2 fake, so claiming it lands the client inside that body.
+    const pickerServerName = '127.0.0.1:' + await freePort()
+    const pickerBodySpawn = { x: 42.5, y: 65, z: -42.5 }
+    pickerBodyFake = await createFakeBackend({
+      port: 0,
+      version: pickerVersion,
+      // prismarine-chunk has no 26.2 implementation: this body sends the batch's
+      // start and finish with no terrain in it. The client's landing is proven by
+      // this body's play join and its own spawn, never by what it stands on.
+      chunks: 'empty',
+      spawn: pickerBodySpawn,
+      logStream: null
+    })
+    const pickerBodyName = '127.0.0.1:' + pickerBodyFake.port
     const pickerPicks = []
     // #266: the verbs the front reports from the chosen server's dialog. The
     // second level's answer is a claim here. #267: a claim is recorded against the
     // body the frame names; spectate is still read and refused.
     const pickerVerbs = []
-    // Four clients, so this rig has its own whitelist: the other rigs take the
+    // Five clients, so this rig has its own whitelist: the other rigs take the
     // shared pair, and a name they do not know would change what they can refuse.
-    const pickerWhitelist = [offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth')]
+    // The fifth is the one that claims a body this lane can reach (#258).
+    const pickerWhitelist = [
+      offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth'), offlineUuid('Pilot')
+    ]
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
-      // A port nothing listens on, and the rig never dials it: this rig's whole
-      // property is that the service serves the picker without a backend. #267
-      // records the claim a client makes, and still connects nothing: delivery of a
-      // body is #269's.
-      port: await freePort(),
+      // The lane's configured backend, which nothing listens on: with no claim, the
+      // service never dials, and this rig's whole property is a picker with no
+      // session behind it (Q6). #258: the one dial this rig makes is the claim's,
+      // and it goes to the row the frame named, never to this address.
+      port: Number(pickerServerName.slice(pickerServerName.lastIndexOf(':') + 1)),
       version: pickerVersion,
       username: 'GlowSquidye',
       log
@@ -3054,7 +3077,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // cached replay path must find nothing here.
       getSnapshotConfig: () => pickerCore?.cache.snapshot().config ?? [],
       configurationBaseline: pickerBaseline,
-      pickerServers: () => [{ name: pickerServerName, state: 'down', driver: null }],
+      pickerServers: () => [
+        { name: pickerServerName, state: 'down', driver: null },
+        { name: pickerBodyName, state: 'down', driver: null }
+      ],
       onPickerPick: pick => pickerPicks.push(pick),
       onPickerVerb: verb => pickerVerbs.push(verb),
       wireCheck: payload => {
@@ -3084,6 +3110,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // Wires the front's login decision to the core. Without it the front would run
     // only its own whitelist check and never hear `picker: true`.
     pickerCore.start()
+    // #258: the rig stands in for start-live, which is what wires the play-ready
+    // call-in. Without it a landed client reaches playerJoin with no one to take
+    // it, and the leg ends it with `no_core_attached` rather than pretending.
+    pickerFront.setCoreAttach(({ name, uuid }) => pickerCore.attachPlayer({ name, uuid, includeConfig: false }))
     const pickerBound = await pickerFront.listen()
     evidence.picker = {
       version: pickerVersion,
@@ -3159,15 +3189,26 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }
     const serverRead = readServerDialog(pickerBot.received.dialogs[1])
     const claimAction = chooseDialogAction(pickerBot.received.dialogs[1], 'claim')
+    // #258: nothing has been dialled up to this click. The reachable body counts
+    // zero logins while the picker is read, and the claim is the only thing that
+    // changes that.
+    const pickerBodyLoginsBeforeClaim = pickerBodyFake.received.logins
     if (claimAction !== null) pickerBot.answerDialog(claimAction.id, null, 'configuration')
-    // #267: a claim is recorded instead of refused, so the client stays in the
-    // phase. What the claim contends with, and what a second claim gets, is O57.
+    // #267: the claim is recorded where the client answered. #258: it is also the
+    // one thing that dials a body, and this row's port answers nothing, so the
+    // kernel refuses the dial and the client is offered the list again.
     await waitFor(() => pickerFront.metrics.pickerClaims === 1, 'the claim to be recorded', 10_000)
     await waitFor(() => pickerVerbs.length === 1, 'the verb to reach the service', 10_000)
+    await pickerBot.waitFor(
+      () => pickerBot.received.dialogs.length === 3,
+      'the picker again after a body that refused the dial',
+      15_000
+    )
+    const restoreRead = readServerDialog(pickerBot.received.dialogs[2])
     // #266: an unknown verb is refused and named, and the client is answered
     // rather than left in a dialog. The second client is in the same phase with no
     // dialog of its own left to click, so it is the one that sends it.
-    pickerBot2.answerDialog('monoplayer:teleport/gate-paper_25565', null, 'configuration')
+    pickerBot2.answerDialog('monoplayer:teleport/' + pickSlug(pickerServerName), null, 'configuration')
     await pickerBot2.waitFor(
       () => pickerBot2.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
       'the refusal an unknown verb gets',
@@ -3208,6 +3249,20 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       chosen: claimAction === null ? null : { id: claimAction.id, label: claimAction.label, total: claimAction.total },
       reported: pickerVerbs[0] ?? null,
       ended: pickerBot.received.ended === null ? null : String(pickerBot.received.ended).slice(0, 120),
+      // #258: the body the frame named answers nothing on its port, so the claim's
+      // dial is refused and the client is back at the list with its claim standing.
+      restore: {
+        title: restoreRead.title,
+        buttons: restoreRead.buttons.map(button => button.id),
+        dialogs: pickerBot.received.dialogs.length,
+        claims: pickerFront.claims,
+        reached: pickerBodyFake.received.logins,
+        landings: pickerFront.metrics.claimLandings,
+        landed: pickerFront.metrics.claimLanded,
+        restored: pickerFront.metrics.claimRestored,
+        dials: pickerCore.metrics.claimDials,
+        dialsFailed: pickerCore.metrics.claimDialsFailed
+      },
       refused: verbRefusals,
       refusedEnded: pickerBot2.received.ended === null ? null : String(pickerBot2.received.ended).slice(0, 120)
     }
@@ -3223,7 +3278,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         pickerRead.errors.length === 0 &&
         pickerRead.mode === 'baseline' &&
         pickerAction !== null &&
-        pickerAction.id === 'monoplayer:pick/gate-paper_25565' &&
+        pickerAction.id === pickIdFor(pickerServerName) &&
         pickerPicks.length === 1 &&
         pickerPicks[0].id === pickerAction.id &&
         pickerPicks[0].server?.name === pickerServerName &&
@@ -3243,31 +3298,44 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
     check(
       'O56',
-      "a pick opens that server's own dialog, and its answer is read back from the frame the client sent",
+      "a pick opens that server's own dialog, its answer is read back from the frame the client sent, and a body that refuses the dial gives the picker back",
       pickerAction !== null &&
         serverRead.title === pickerServerName + ' - down' &&
         serverRead.escapes === 0 &&
         serverRead.columns === 1 &&
         serverRead.buttons.length === 3 &&
         serverRead.buttons.map(button => button.id).join(',') === [
-          'monoplayer:claim/gate-paper_25565',
-          'monoplayer:spectate/gate-paper_25565',
-          'monoplayer:disconnect/gate-paper_25565'
+          verbIdFor('claim', pickerServerName),
+          verbIdFor('spectate', pickerServerName),
+          verbIdFor('disconnect', pickerServerName)
         ].join(',') &&
         serverRead.buttons.map(button => button.label).join(',') === 'Claim,Spectate,Disconnect' &&
         serverRead.buttons.every(button => button.type === 'minecraft:dynamic/custom') &&
         claimAction !== null &&
-        pickerBot.received.dialogs.length === 2 &&
         pickerBot.received.leftovers.length === 0 &&
         pickerVerbs.length === 1 &&
         pickerVerbs[0].verb === 'claim' &&
         pickerVerbs[0].id === claimAction.id &&
-        pickerVerbs[0].slug === 'gate-paper_25565' &&
+        pickerVerbs[0].slug === pickSlug(pickerServerName) &&
         pickerVerbs[0].server?.name === pickerServerName &&
         pickerBot.received.ended === null &&
         pickerFront.metrics.pickerServerDialogs === 1 &&
         pickerFront.metrics.pickerVerbs === 1 &&
         pickerFront.metrics.pickerClaims === 1 &&
+        // #258: the dial was made, it was refused, and the client is back at the
+        // list with the claim it made still standing. A claim that lands nothing
+        // is a picker, not a limbo.
+        pickerFront.metrics.claimLandings === 1 &&
+        pickerFront.metrics.claimLanded === 0 &&
+        pickerFront.metrics.claimRestored === 1 &&
+        pickerCore.metrics.claimDials === 1 &&
+        pickerCore.metrics.claimDialsFailed === 1 &&
+        pickerCore.claimedBody === null &&
+        restoreRead.title === 'Choose a server - ' + pickerServerName + ' did not answer' &&
+        restoreRead.buttons.length === 2 &&
+        pickerBodyFake.received.logins === pickerBodyLoginsBeforeClaim &&
+        pickerBot.received.dialogs.length === 3 &&
+        pickerFront.claims.length === 1 &&
         pickerCore.attached === false,
       evidence.picker.serverDialog
     )
@@ -3276,7 +3344,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'an unknown verb is refused and named, and the client is answered instead of left in a dialog',
       verbRefusals.length === 1 &&
         verbRefusals[0].verb === 'teleport' &&
-        verbRefusals[0].slug === 'gate-paper_25565' &&
+        verbRefusals[0].slug === pickSlug(pickerServerName) &&
         /teleport/.test(String(verbRefusals[0].text ?? '')) &&
         /claim, spectate and disconnect/.test(String(verbRefusals[0].text ?? '')) &&
         pickerVerbs.length === 1 &&
@@ -3320,9 +3388,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O56c',
       'disconnect is carried out: the client leaves the server it named, and the front says which',
       thirdPick !== null &&
-        thirdPick.id === 'monoplayer:pick/gate-paper_25565' &&
+        thirdPick.id === pickIdFor(pickerServerName) &&
         thirdLeave !== null &&
-        thirdLeave.id === 'monoplayer:disconnect/gate-paper_25565' &&
+        thirdLeave.id === verbIdFor('disconnect', pickerServerName) &&
         thirdLeave.label === 'Disconnect' &&
         pickerVerbs.length === 2 &&
         pickerVerbs[1].verb === 'disconnect' &&
@@ -3344,9 +3412,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // names the player who holds it, and the claimant is untouched on its own
     // connection.
     //
-    // What this does not prove: that the claiming client is delivered the body. No
-    // body is connected from this phase, and a claim has no channel to deliver
-    // through until #269. The delivery path is still the front leg's attach slot.
+    // #258: what this still does not prove is a landing. The body claimed here is
+    // the row whose port answers nothing, so the claimant is back at the picker
+    // holding a body that never came up, and the rival is refused by the claim and
+    // not by a session. The landing is O58's.
     pickerBot4 = createBot({ port: pickerBound.port, username: 'Fourth', version: pickerVersion })
     await pickerBot4.waitFor(
       () => pickerBot4.received.dialogs.length === 1,
@@ -3419,7 +3488,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         claimsWhileReading[0].name === 'Attach' &&
         claimsAfterPick.length === 1 &&
         claimsAfterPick[0].name === 'Attach' &&
-        claimHeld[0].body === 'gate-paper_25565' &&
+        claimHeld[0].body === pickSlug(pickerServerName) &&
         claimHeld[0].server === pickerServerName &&
         claimHeld[0].name === 'Attach' &&
         claimGrants.length === 1 &&
@@ -3432,9 +3501,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         fourthRead.dialogs === 1 &&
         fourthRead.leftovers === 0 &&
         fourthPick !== null &&
-        fourthPick.id === 'monoplayer:pick/gate-paper_25565' &&
+        fourthPick.id === pickIdFor(pickerServerName) &&
         fourthClaim !== null &&
-        fourthClaim.id === 'monoplayer:claim/gate-paper_25565' &&
+        fourthClaim.id === verbIdFor('claim', pickerServerName) &&
         pickerBot4.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
         pickerBot.received.ended === null &&
         pickerFront.claims.length === 1 &&
@@ -3444,13 +3513,130 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.claim
     )
 
+    // --- O58: the claim lands the client in the body it claimed (#258) ---
+    // A fifth client claims the OTHER row: the one with a real 26.2 fake behind it.
+    // The evidence that this is a landing and not a warm body's replay is fourfold.
+    // The fake counts zero logins until the click, so nothing was dialled before a
+    // claim (Q6). It counts one after, and the leg's target is that body's port
+    // rather than the configured backend the lane started with, so the claim chose
+    // the body. The client's play login arrives on the socket it already held,
+    // through the configuration phase the baseline opened. And the position it is
+    // given is this body's own spawn, which no other body in this run sends.
+    //
+    // What it cannot prove: that a vanilla 26.2 client accepts a second registry
+    // round inside one configuration phase. The body is a minecraft-protocol fake
+    // whose configuration is the library's own, and prismarine-chunk has no 26.2
+    // implementation, so this body sends a chunk batch with nothing in it. The
+    // landing's terrain and the client's acceptance are rung 4's and #268's.
+    const pickerBodyLoginsBeforeLanding = pickerBodyFake.received.logins
+    pickerBot5 = createBot({ port: pickerBound.port, username: 'Pilot', version: pickerVersion })
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.dialogs.length === 1,
+      'the picker at the client that will claim a body it can reach',
+      15_000
+    )
+    // The row that names the reachable body: the label carries its address.
+    const landingPick = chooseDialogAction(pickerBot5.received.dialogs[0], pickerBodyName)
+    if (landingPick !== null) pickerBot5.answerDialog(landingPick.id, null, 'configuration')
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.dialogs.length === 2,
+      "the claimed body's own dialog at the fifth client",
+      15_000
+    )
+    const landingClaim = chooseDialogAction(pickerBot5.received.dialogs[1], 'claim')
+    if (landingClaim !== null) pickerBot5.answerDialog(landingClaim.id, null, 'configuration')
+    // The play login is the body's, and it is the frame that says the client was
+    // put into it. Waiting on the fake's count as well ties the client's arrival to
+    // the body it claimed instead of to the fact that some backend is warm.
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.login !== null && pickerBot5.received.positions.length > 0,
+      'the play login of the body the client claimed',
+      30_000
+    )
+    await waitFor(
+      () => pickerCore.attached === true && pickerFront.metrics.attaches === 1,
+      'the core to attach the claiming client to its body',
+      15_000
+    )
+    const landedPosition = pickerBot5.received.positions[pickerBot5.received.positions.length - 1] ?? null
+    const landingConfiguration = pickerBot5.received.names
+      .filter(frame => frame.state === 'configuration')
+      .map(frame => frame.name)
+    evidence.picker.landing = {
+      body: pickerBodyName,
+      claimedRow: pickerServerName,
+      loginsBefore: pickerBodyLoginsBeforeLanding,
+      bodyLogins: pickerBodyFake.received.logins,
+      bodySpawn: pickerBodySpawn,
+      dialTarget: pickerBackend.target,
+      playLogin: pickerBot5.received.login === null
+        ? null
+        : { entityId: pickerBot5.received.login.entityId, worldNames: pickerBot5.received.login.worldNames ?? null },
+      position: landedPosition === null ? null : { x: landedPosition.x, y: landedPosition.y, z: landedPosition.z },
+      configuration: {
+        frames: landingConfiguration.length,
+        registries: landingConfiguration.filter(name => name === 'registry_data').length,
+        finish: landingConfiguration.filter(name => name === 'finish_configuration').length
+      },
+      pick: landingPick === null ? null : { id: landingPick.id, label: landingPick.label },
+      chosen: landingClaim === null ? null : { id: landingClaim.id, label: landingClaim.label },
+      claims: pickerFront.claims,
+      claimedBody: pickerCore.claimedBody,
+      session: pickerCore.session.state,
+      ended: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 160),
+      kick: pickerBot5.received.kick === null ? null : String(JSON.stringify(pickerBot5.received.kick)).slice(0, 160),
+      leftovers: pickerBot5.received.leftovers.length,
+      metrics: {
+        pickers: pickerFront.metrics.pickers,
+        landings: pickerFront.metrics.claimLandings,
+        landed: pickerFront.metrics.claimLanded,
+        restored: pickerFront.metrics.claimRestored,
+        attaches: pickerFront.metrics.attaches,
+        dials: pickerCore.metrics.claimDials,
+        dialsFailed: pickerCore.metrics.claimDialsFailed,
+        bodies: pickerCore.metrics.claimBodies
+      }
+    }
+    check(
+      'O58',
+      'a claim lands the client in the body it named: the body is dialled only for that claim, and its play state arrives on the connection the client already held',
+      landingPick !== null &&
+        landingPick.id === pickIdFor(pickerBodyName) &&
+        landingClaim !== null &&
+        landingClaim.id === verbIdFor('claim', pickerBodyName) &&
+        pickerBodyLoginsBeforeLanding === 0 &&
+        pickerBodyFake.received.logins === 1 &&
+        pickerBackend.target.port === pickerBodyFake.port &&
+        pickerBot5.received.login !== null &&
+        landedPosition !== null &&
+        landedPosition.x === pickerBodySpawn.x &&
+        landedPosition.y === pickerBodySpawn.y &&
+        landedPosition.z === pickerBodySpawn.z &&
+        evidence.picker.landing.configuration.finish === 1 &&
+        pickerBot5.received.ended === null &&
+        pickerBot5.received.kick === null &&
+        pickerBot5.received.leftovers.length === 0 &&
+        pickerCore.claimedBody === pickSlug(pickerBodyName) &&
+        pickerCore.session.state === 'attached' &&
+        pickerCore.attached === true &&
+        pickerFront.metrics.claimLanded === 1 &&
+        pickerFront.metrics.claimRestored === 1 &&
+        pickerFront.metrics.attaches === 1 &&
+        pickerCore.metrics.claimDials === 2 &&
+        pickerCore.metrics.claimDialsFailed === 1 &&
+        pickerCore.metrics.claimBodies === 1 &&
+        pickerFront.claims.length === 2 &&
+        pickerBot.received.ended === null,
+      evidence.picker.landing
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
@@ -3463,6 +3649,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await controlBase?.close?.() } catch { /* best effort */ }
     try { await pickerFront?.close?.() } catch { /* best effort */ }
     try { await pickerBackend?.close?.() } catch { /* best effort */ }
+    try { await pickerBodyFake?.close?.() } catch { /* best effort */ }
     try { await operatorFront?.close?.() } catch { /* best effort */ }
     try { await operatorBackend?.close?.() } catch { /* best effort */ }
     try { await operatorBase?.close?.() } catch { /* best effort */ }

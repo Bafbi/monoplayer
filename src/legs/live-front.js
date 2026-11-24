@@ -33,7 +33,14 @@
 //      picker dialog, and takes no attach slot, so several clients may read it at
 //      once. The click that claims a body is recorded here (#267), at that click
 //      and not at login; the claim is held by the connection and released when the
-//      connection ends. Delivery of the body is #269's.
+//      connection ends.
+//   2c. #258: a granted claim is the one thing that lands a client. The leg asks
+//      the caller to connect the body the frame named, and only then; a body that
+//      answers continues the client's open configuration phase with its own
+//      frames, ends it with one finish frame, and the client reaches playerJoin,
+//      where the core replays that body's play state on the same socket. A body
+//      that refuses the dial offers the list again instead of leaving the client
+//      in a dialog nobody will read.
 //   3. allow — cached configuration replay path: the library's automatic
 //      configuration (segmented registry_data from its own built-in codec,
 //      then finish_configuration) is intercepted via beforeLogin write
@@ -78,11 +85,14 @@ import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbo
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
   PICK_VERBS,
+  claimFailureText,
+  claimRestoreTitle,
   pickRefusalText,
   pickUnknownText,
   pickerDialogParams,
   pickerRows,
   readPickAction,
+  pickTarget,
   readServerAction,
   serverActionProblemText,
   serverDialogParams,
@@ -532,7 +542,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
   // #267: the claims this leg holds, one per body. A claim is recorded where a
   // client answers a body's own dialog, and released when its connection ends. The
@@ -856,6 +866,19 @@ function createFrontLeg ({
     attached = client
   }
 
+  // The body's configuration frames as this leg may send them: the cache's own
+  // configuration snapshot, minus anything the clientbound policy refuses and
+  // minus anything that is not a frame. Both the cached replay at login and the
+  // landing after a claim (#258) read it, so the two phases a client can receive
+  // carry the same set.
+  function replayableConfigFrames () {
+    return getSnapshotConfig().filter(
+      frame => typeof frame?.name === 'string' &&
+        Buffer.isBuffer(frame.buffer) &&
+        clientboundPolicy('configuration', frame.name).decision !== 'block'
+    )
+  }
+
   function installConfigInterceptor (client, { picker = null } = {}) {
     // Read the snapshot per connection: a backend cache reset must never be
     // masked by a stale per-listen memo. Connection-control frames (a config
@@ -864,11 +887,7 @@ function createFrontLeg ({
     // #257: a picker client gets the baseline and nothing else. Its cached
     // frames, if the cache holds any, belong to a body nobody claimed, and
     // serving them would put the client in that body's world without a claim.
-    const cachedConfigFrames = picker !== null ? [] : getSnapshotConfig().filter(
-      frame => typeof frame?.name === 'string' &&
-        Buffer.isBuffer(frame.buffer) &&
-        clientboundPolicy('configuration', frame.name).decision !== 'block'
-    )
+    const cachedConfigFrames = picker !== null ? [] : replayableConfigFrames()
 
     const live = picker === null && cachedConfigFrames.length === 0
     const interceptor = createConfigPathInterceptor({
@@ -948,7 +967,7 @@ function createFrontLeg ({
 
   // The frames are on the wire and the client can parse a dialog now. The dialog
   // is the phase: no finish_configuration follows it.
-  function sendPickerDialog (client) {
+  function sendPickerDialog (client, { title = 'Choose a server' } = {}) {
     const rows = pickerServerRows()
     if (rows.length === 0) {
       log('pickerEmpty', { username: client.username ?? null })
@@ -960,7 +979,7 @@ function createFrontLeg ({
       // A configuration-phase show_dialog carries the dialog inline
       // (CONTEXT_FREE_STREAM_CODEC in the 26.2 client), so no registry entry is
       // involved and this leg can author one.
-      client.write('show_dialog', pickerDialogParams({ rows }))
+      client.write('show_dialog', pickerDialogParams({ rows, title }))
       written = true
     } catch (error) {
       log('pickerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
@@ -968,6 +987,7 @@ function createFrontLeg ({
     log('pickerDialog', {
       username: client.username ?? null,
       servers: rows.length,
+      title,
       actions: rows.map(row => row.id)
     })
     if (!written) endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: null }))
@@ -1085,16 +1105,170 @@ function createFrontLeg ({
       return
     }
     if (claimed !== null) {
-      // A granted claim stands, and the phase stays open: the body it names is not
-      // delivered from here until #269 gives a claim a channel to deliver through.
-      // A refused one is answered with the sentence naming what stands in the way.
-      if (claimed.ok) return
+      // #258: a granted claim is the landing. The body the frame named is dialled
+      // now and the client is put into it; a refused one is answered with the
+      // sentence naming what stands in the way.
+      if (claimed.ok) {
+        // The claim as recorded, not the outcome that carries it: the landing
+        // names the body and the server the view holds.
+        landClaimedBody(client, server, claimed.claim)
+        return
+      }
       endConfiguration(client, 'claim_refused', claimed.text)
       return
     }
     // Spectate acts on a body too, and nothing here watches one yet. So the verb is
     // read, reported, and refused in words that name it.
     endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
+  }
+
+// --- #258: the claim lands the client ---
+
+  // A granted claim is the one thing that dials a body. The click closed the
+  // client's dialog and left the phase open, so the client is parked while the
+  // address the row named is dialled: nothing else is on screen, and nothing was
+  // connected before this click, which is why the picker serves its own
+  // configuration phase rather than warming a body eagerly (Q6).
+  function landClaimedBody (client, server, claim) {
+    const target = pickTarget(server.name)
+    metrics.claimLandings++
+    log('pickerClaimLanding', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      body: claim.body,
+      server: claim.server,
+      target: target === null ? null : target.host + ':' + target.port
+    })
+    if (target === null) {
+      // A row this lane offers but cannot read as an address. The claim stands
+      // (it is the connection's, #267) and the client is told in words.
+      metrics.claimRestored++
+      log('pickerClaimRestored', {
+        username: client.username ?? null,
+        uuid: client.uuid ?? null,
+        body: claim.body,
+        server: claim.server,
+        reason: 'no_address'
+      })
+      sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+      return
+    }
+    let pending = null
+    try {
+      pending = connectClaimedBody === null
+        ? { connected: false, reason: 'no_lander' }
+        : connectClaimedBody({
+          body: claim.body,
+          server: claim.server,
+          target,
+          name: client.username ?? null,
+          uuid: client.uuid ?? null
+        })
+    } catch (error) {
+      pending = { connected: false, reason: 'landing_threw', detail: String(error?.message ?? error).slice(0, 200) }
+    }
+    Promise.resolve(pending).then(
+      outcome => settleClaimedBody(client, claim, outcome ?? { connected: false, reason: 'no_answer' }),
+      error => settleClaimedBody(client, claim, {
+        connected: false,
+        reason: 'landing_rejected',
+        detail: String(error?.message ?? error).slice(0, 200)
+      })
+    )
+  }
+
+  // The dial answered. A body that is up continues the client's own phase; one
+  // that is not offers the list again. A client that left while the body dialled
+  // holds nothing, and its claim went with the connection, so there is nothing to
+  // answer.
+  function settleClaimedBody (client, claim, outcome) {
+    if (clients.get(client)?.ended === true) {
+      log('pickerClaimAbandoned', {
+        username: client.username ?? null,
+        body: claim.body,
+        server: claim.server,
+        reason: outcome?.reason ?? null
+      })
+      return
+    }
+    if (outcome.connected !== true) {
+      metrics.claimRestored++
+      log('pickerClaimRestored', {
+        username: client.username ?? null,
+        uuid: client.uuid ?? null,
+        body: claim.body,
+        server: claim.server,
+        reason: outcome.reason ?? 'body_unreachable',
+        detail: outcome.detail ?? null
+      })
+      sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+      return
+    }
+    landClaimedClient(client, claim, outcome)
+  }
+
+  // The body is up and its configuration is cached. The client's phase, which the
+  // baseline opened and the dialog held, continues with that body's own frames and
+  // ends with the one finish frame a client reads once. The client's answer to it
+  // is what reaches playerJoin, where the core replays this body's play state on
+  // the connection the client already holds.
+  function landClaimedClient (client, claim, outcome) {
+    // The cache holds the body's own finish frame, and the phase ends with exactly
+    // one: a second finish arrives after the client is in play, where its id is
+    // another packet's, and the client reads it as one. The cached replay path
+    // drops it for the same reason and writes the library's own.
+    const frames = replayableConfigFrames().filter(frame => frame.name !== 'finish_configuration')
+    if (frames.length === 0) {
+      // A body the core called ready with nothing cached is a body no client can
+      // be put into. It is refused in the same words as an unreachable one.
+      metrics.claimRestored++
+      log('pickerClaimRestored', {
+        username: client.username ?? null,
+        uuid: client.uuid ?? null,
+        body: claim.body,
+        server: claim.server,
+        reason: 'no_cached_configuration'
+      })
+      sendPickerDialog(client, { title: claimRestoreTitle({ server: claim.server }) })
+      return
+    }
+    let written = 0
+    for (const frame of frames) {
+      const sent = emitCheckedRaw({
+        client,
+        buffer: frame.buffer,
+        meta: { state: 'configuration', name: frame.name },
+        wireCheck,
+        wireMode,
+        stats: wireStats,
+        log
+      })
+      if (sent) written++
+    }
+    // This client is the body's now: the attach slot is what the core's writes are
+    // addressed to, and it is still the one place a delivered body is named
+    // (#269 replaces it).
+    attachCandidate(client)
+    metrics.claimLanded++
+    log('pickerClaimLanded', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      body: claim.body,
+      server: claim.server,
+      target: outcome.target ?? null,
+      frames: written,
+      warm: outcome.warm ?? null
+    })
+    try {
+      client.write('finish_configuration', {})
+    } catch (error) {
+      log('pickerClaimFinishFailed', {
+        body: claim.body,
+        server: claim.server,
+        error: String(error?.message ?? error).slice(0, 200)
+      })
+      endConfiguration(client, 'claim_failed', claimFailureText({ server: claim.server }))
+    }
   }
 
   // #267: the claim as the callback and the log both read it. One mapper, so the
@@ -1214,6 +1388,11 @@ function createFrontLeg ({
     log('attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })
   }
 
+  // #258: the body a claim dials. Set by the core when the lane can serve a
+  // picker, so a role that never wired it refuses the landing in words rather than
+  // waiting for an answer nobody sends.
+  let connectClaimedBody = null
+
   let coreAttach = ({ name, uuid, includeConfig = false } = {}) => ({ attached: false, reason: 'no_core_attached' })
   // The orchestrator injects the core attach calls (keeps this module free of
   // core imports; the core drives the pipeline through the handlers).
@@ -1309,6 +1488,10 @@ function createFrontLeg ({
       if (ctx) {
         ctx.pendingReconfiguration = null
         ctx.reconfiguring = false
+        // #258: a landing that is still dialling when the client leaves writes to
+        // nothing. The claim ends with the connection (#267), so the mark is all
+        // the answer a late dial needs.
+        ctx.ended = true
       }
       // #267: the claim is held by the connection that made it, so it ends with the
       // connection. A client that never claimed releases nothing.
@@ -1435,6 +1618,10 @@ function createFrontLeg ({
     finishConfigurationFrame () { return configurationFinishFrame({ version }) },
     setCoreAttach,
     setCoreAttachConfiguring,
+    // #258: the body a claim dials. The core wires this when it starts, so a leg
+    // built without a core refuses every landing instead of waiting for an answer
+    // nobody sends.
+    setConnectClaimedBody (fn) { connectClaimedBody = typeof fn === 'function' ? fn : null },
     write (name, packet) {
       // Library-serialized packet (the synthesized position). The wire checker
       // guards raw replayed/relayed frames in writeRaw; a packet object cannot
