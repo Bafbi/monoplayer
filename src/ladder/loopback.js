@@ -3115,8 +3115,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // it, and the leg ends it with `no_core_attached` rather than pretending.
     pickerFront.setCoreAttach(({ name, uuid }) => pickerCore.attachPlayer({ name, uuid, includeConfig: false }))
     const pickerBound = await pickerFront.listen()
+    // #258: the no-dial rule, read at the only moment it is about: a picker that
+    // exists and nothing claimed. The backend leg has no connection and never
+    // opened one, so the lane is not warming a body behind the dialog (Q6). O55
+    // asserts this, before any bot has clicked anything.
+    const pickerNoClaim = {
+      connected: pickerBackend.client !== null,
+      ended: pickerBackend.ended,
+      target: pickerBackend.target,
+      bodyLogins: pickerBodyFake.received.logins,
+      dials: pickerCore.metrics.claimDials,
+      claimedBody: pickerCore.claimedBody
+    }
     evidence.picker = {
       version: pickerVersion,
+      noClaim: pickerNoClaim,
       baseline: {
         frames: pickerBaseline.frames.length,
         replay: pickerBaseline.replayFrames.length,
@@ -3241,7 +3254,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         serverDialogs: pickerFront.metrics.pickerServerDialogs,
         verbs: pickerFront.metrics.pickerVerbs,
         attaches: pickerCore.metrics.attaches,
-        denials: pickerCore.metrics.denials
+        denials: pickerCore.metrics.denials,
+        // #258: the lane before any claim existed.
+        noClaim: pickerNoClaim
       }
     }
     evidence.picker.serverDialog = {
@@ -3285,7 +3300,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         evidence.picker.pick.wire.rejected === 0 &&
         evidence.picker.pick.metrics.picks === 1 &&
         evidence.picker.pick.metrics.attaches === 0 &&
-        pickerCore.attached === false,
+        pickerCore.attached === false &&
+        // #258: nobody has claimed yet, and the lane has dialled nothing: the
+        // picker is read with the configured backend untouched.
+        // Read as a snapshot, because this check runs after the claim O56 makes:
+        // what it asserts is the moment a picker existed and nothing had claimed.
+        pickerNoClaim.connected === false &&
+        pickerNoClaim.ended === false &&
+        pickerNoClaim.bodyLogins === 0 &&
+        pickerNoClaim.dials === 0 &&
+        pickerNoClaim.claimedBody === null,
       evidence.picker.pick
     )
     check(
@@ -3578,6 +3602,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         registries: landingConfiguration.filter(name => name === 'registry_data').length,
         finish: landingConfiguration.filter(name => name === 'finish_configuration').length
       },
+      // Which path ran, as the client's own frames say it: the landing continued
+      // the configuration phase the baseline opened, and no `start_configuration`
+      // moved the client out of play and back. The other path (#268's) is the one
+      // that would show that frame.
+      path: {
+        name: 'same_phase',
+        startedConfiguration: pickerBot5.received.names
+          .filter(frame => frame.name === 'start_configuration').length
+      },
       pick: landingPick === null ? null : { id: landingPick.id, label: landingPick.label },
       chosen: landingClaim === null ? null : { id: landingClaim.id, label: landingClaim.label },
       claims: pickerFront.claims,
@@ -3616,6 +3649,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         pickerBot5.received.ended === null &&
         pickerBot5.received.kick === null &&
         pickerBot5.received.leftovers.length === 0 &&
+        // The report says which path ran, and it is the same-phase one: one
+        // finish and no reconfiguration round. #268 owns the other.
+        evidence.picker.landing.path.name === 'same_phase' &&
+        evidence.picker.landing.path.startedConfiguration === 0 &&
         pickerCore.claimedBody === pickSlug(pickerBodyName) &&
         pickerCore.session.state === 'attached' &&
         pickerCore.attached === true &&

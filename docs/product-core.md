@@ -313,16 +313,17 @@ listing the lane's allowed servers.
   the claim decides who may own a body, the slot decides who is delivered one, and
   #269 deletes the slot once a channel holds delivery.
 - **A claim is a landing (#258).** The click that grants a claim is the one thing
-  that dials a body. The front asks the core for the body the frame named, the core
-  points the puppet leg at that address, connects, and waits, bounded, until the
-  body is one a warm attach would accept: its play login has landed and its
+  that dials a body. The front asks the core for the body the frame named. The core
+  points the puppet leg at that address, connects, and waits. The wait is bounded,
+  and it ends when the body is attach-ready: its play login has landed, and its
   configuration and join prefix are cached. Nothing is dialled before a claim, which
   is why a lane nobody claims never opens a backend connection. The client's own
   configuration phase, still open from the baseline, then continues with that body's
   configuration frames, ends with one `finish_configuration`, and the core replays
   the body's play state on the connection the client already held. One body at a
-  time: a second claim while one body is served is refused, and two bodies at once
-  is the per-body cache of #260.
+  time: a claim on a different body is refused, and two bodies at once is the
+  per-body cache of #260. The same body may be dialled again after its session
+  faults, because that is one body and one cache.
 - **A body that does not answer gives the picker back (#258).** A refused dial, a
   body that never warms, and a row whose name is not an address all end the same
   way: the client reads the list again, titled with the body that did not answer.

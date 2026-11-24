@@ -1975,31 +1975,41 @@ export function createMonoplayer ({
   // which is the difference between a refused landing and a hung one.
   function sleepOnClock (ms) {
     return new Promise(resolve => {
+      if (typeof clock?.setTimeout !== 'function') return resolve(false)
       const handle = clock.setTimeout(() => resolve(true), ms)
       if (handle === null || handle === undefined) resolve(false)
     })
   }
 
-  // The body is ready when a warm attach would be accepted: its play login has
-  // landed and its configuration and join prefix are in the cache. The same two
-  // conditions the warm attach gate reads, so a claim cannot release a client that
-  // an ordinary attach would refuse.
+  // The moment, on the injected clock. A core built without one cannot wait at
+  // all, and the landing refuses rather than guessing at a wall clock it was not
+  // given.
+  function clockNow () {
+    return typeof clock?.now === 'function' ? clock.now() : Date.now()
+  }
+
+  // The body is attach-ready when a warm attach would be accepted: its play login
+  // has landed and its configuration and join prefix are in the cache. Those are
+  // the conditions the warm attach gate reads, so a claim cannot release a client
+  // that an ordinary attach would refuse. `marker` is the cache's own warm state,
+  // reported rather than inferred, so a log line can tell "no marker yet" from
+  // "marker seen, nothing to attach with".
   async function awaitBodyWarm ({ timeoutMs = CLAIM_WARM_TIMEOUT_MS, pollMs = 50 } = {}) {
-    const deadline = clock.now() + timeoutMs
+    const deadline = clockNow() + timeoutMs
     for (;;) {
       const stats = cache.stats()
-      const readiness = {
+      const state = {
         state: session.state,
-        warm: stats.warm === true,
+        marker: stats.warm === true,
         configFrames: stats.sizes.config,
         prefixFrames: stats.sizes.prefix
       }
       if (session.isAttachReady() && stats.sizes.config > 0 && stats.sizes.prefix > 0) {
-        return { ready: true, reason: null, ...readiness }
+        return { attachReady: true, reason: null, ...state }
       }
-      if (clock.now() >= deadline) return { ready: false, reason: 'body_not_warm', ...readiness }
+      if (clockNow() >= deadline) return { attachReady: false, reason: 'body_not_warm', ...state }
       const waited = await sleepOnClock(pollMs)
-      if (!waited) return { ready: false, reason: 'no_wait', ...readiness }
+      if (!waited) return { attachReady: false, reason: 'no_wait', ...state }
     }
   }
 
@@ -2010,7 +2020,10 @@ export function createMonoplayer ({
   // fault after the landing is the reconnect machine's.
   async function connectClaimedBody ({ body = null, server = null, target = null, name = null } = {}) {
     if (cfg.picker !== true) return { connected: false, reason: 'picker_off', body }
-    if (claimedBody !== null) {
+    // One body at a time, and the same body is still one: a claim that returns to
+    // the body this session already serves is a redial, not a second cache. A
+    // different body is #260's per-body cache, refused here rather than mixed.
+    if (claimedBody !== null && body !== claimedBody) {
       log('claimDialRefused', { body, reason: 'one_body', claimed: claimedBody })
       return { connected: false, reason: 'one_body', body: claimedBody }
     }
@@ -2057,33 +2070,34 @@ export function createMonoplayer ({
       })
       return { connected: false, reason: 'connect_failed', body }
     }
-    const warm = await awaitBodyWarm()
-    if (!warm.ready) {
+    const bodyWarm = await awaitBodyWarm()
+    if (!bodyWarm.attachReady) {
       metrics.claimDialsFailed++
       log('claimDialFailed', {
         body,
         host: dial.host,
         port: dial.port,
-        reason: warm.reason,
-        state: warm.state,
-        configFrames: warm.configFrames,
-        prefixFrames: warm.prefixFrames
+        reason: bodyWarm.reason,
+        state: bodyWarm.state,
+        marker: bodyWarm.marker,
+        configFrames: bodyWarm.configFrames,
+        prefixFrames: bodyWarm.prefixFrames
       })
-      return { connected: false, reason: warm.reason, body, warm }
+      return { connected: false, reason: bodyWarm.reason, body, warm: bodyWarm }
     }
     claimedBody = body
     metrics.claimBodies++
-    log('claimBodyReady', {
+    log('claimBodyWarm', {
       body,
       server,
       host: dial.host,
       port: dial.port,
-      state: warm.state,
-      warm: warm.warm,
-      configFrames: warm.configFrames,
-      prefixFrames: warm.prefixFrames
+      state: bodyWarm.state,
+      marker: bodyWarm.marker,
+      configFrames: bodyWarm.configFrames,
+      prefixFrames: bodyWarm.prefixFrames
     })
-    return { connected: true, reason: null, body, target: dial, warm }
+    return { connected: true, reason: null, body, target: dial, warm: bodyWarm }
   }
 
   function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
