@@ -168,6 +168,10 @@ export function createControlDocument ({
     if (live.reason === null) return { servers: live.servers, source: 'control' }
     if (!named(allowedServersSeedFile)) return { servers: [], source: 'none' }
     const seed = readAllowedServers(allowedServersSeedFile)
+    // The live key's absence is the normal state. The seed's is not: it is a file
+    // this repository commits and the Deployment mounts, so a seed that is not there
+    // is a mount to fix, and it is named once.
+    if (seed.reason === 'missing') sayOnce('controlUnreadable', { file: allowedServersSeedFile, code: 'ENOENT' })
     if (seed.reason === null) return { servers: seed.servers, source: 'seed' }
     return { servers: [], source: 'none' }
   }
