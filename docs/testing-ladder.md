@@ -511,7 +511,7 @@ first dial and its target warms in five seconds.
   a body nobody reached yet.
 
   The rig lists two rows. The first names a port nothing listens on, so a claim on
-  it is a dial the kernel refuses; the second names a real 26.2 fake body, which is
+  it is a dial the kernel refuses. The second names a real 26.2 fake body, which is
   the one O58 lands a client in.
 
   What it cannot prove: that a vanilla 26.2 client accepts the registry set. The
