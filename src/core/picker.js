@@ -82,14 +82,21 @@ function textComponent (text) {
   return { type: 'string', value: String(text) }
 }
 
-// One button per row. `rows` are { name, state, driver }, the picker's own
-// vocabulary: a body is claimed, unclaimed, or down, and a claimed body names who
-// is driving it.
+// One button per row. `rows` are { name, state, driver, spectators }, the picker's
+// own vocabulary: a body is claimed, unclaimed, or down, a claimed body names who
+// is driving it, and a watched body names how many are watching it (#259).
+//
+// The order is the order a player asks the questions: what is it, is anyone
+// driving it, am I alone if I watch. A body nobody watches says nothing about
+// spectators, because ", 0 watching" is a sentence about a player who is not there.
 export function pickerLabel (row) {
   const name = String(row?.name ?? 'server')
   const state = String(row?.state ?? 'down')
   const driver = row?.driver ? String(row.driver) : null
-  return driver === null ? name + ' - ' + state : name + ' - ' + state + ' (' + driver + ')'
+  const spectators = Number.isInteger(row?.spectators) && row.spectators > 0 ? row.spectators : 0
+  const driving = driver === null ? '' : ' (' + driver + ')'
+  const watching = spectators === 0 ? '' : ', ' + spectators + ' watching'
+  return name + ' - ' + state + driving + watching
 }
 
 // #265: the name a row is offered under is the canonical address its claim
@@ -120,10 +127,29 @@ export function pickerRows (rows = []) {
       name,
       state: String(row?.state ?? 'down'),
       driver: row?.driver ? String(row.driver) : null,
+      // #259: how many watch the body, as the lane counted them. A row the lane
+      // knows nothing about watches nobody.
+      spectators: Number.isInteger(row?.spectators) && row.spectators > 0 ? row.spectators : 0,
       slug: pickSlug(name),
       id: pickIdFor(name)
     }
   })
+}
+
+// #259: a row with what the lane knows about the body it names, composed where
+// the rows are handed out. The state answers the question a player asks first: can I
+// get in. So a body that is not up is `down` whatever a claim still says about it,
+// because a claim outlives a dial that failed (#295) and a row that reads `claimed`
+// about a body nobody can enter sends the player into a refusal. A driver is a fact
+// about an up body, so a claim on a down one names nobody.
+export function pickerRowForBody (row, { up = false, driver = null, spectators = 0 } = {}) {
+  const named = up && typeof driver === 'string' && driver.length > 0 ? driver : null
+  return {
+    ...row,
+    state: up ? (named === null ? 'unclaimed' : 'claimed') : 'down',
+    driver: named,
+    spectators: Number.isInteger(spectators) && spectators > 0 ? spectators : 0
+  }
 }
 
 // #265: the rows a picker lane offers, from the read of the allowed-server list.
@@ -140,8 +166,11 @@ export function pickerOfferedRows (read = null) {
     source: typeof list?.source === 'string' ? list.source : 'none',
     rows: servers.map(server => ({
       name: String(server?.host ?? '') + ':' + String(server?.port ?? ''),
+      // The list names servers, not bodies: what a body is doing is the lane's
+      // answer at the offer (src/legs/live-front.js, `pickerServerRows`).
       state: 'down',
-      driver: null
+      driver: null,
+      spectators: 0
     }))
   }
 }
@@ -316,19 +345,23 @@ export function verbRefusalText ({ verb = null, server = null } = {}) {
   return 'Monoplayer: ' + named + ' was asked for ' + asked + ', and this lane cannot carry a ' + asked + ' yet.'
 }
 
-// #269: the sentence a client gets when it asks to watch a body it cannot watch.
-// A lane that serves no such body, a body with no claim to watch, and a body
-// that is still connecting are three different answers, because they ask the
-// client for three different things: claim it, wait, or pick something else.
+// #259: the sentence a client gets when it asks to watch a body it cannot watch.
+// Each reason asks the player for something different, so each gets its own
+// sentence: nothing is standing on that server yet, so claim it; this lane serves
+// another body; the body is still coming up, so wait; or the body is down, and a
+// claim is what brings it back. A spectator is never told the body has no driver,
+// because a body with no driver is watchable (#259).
 export function spectateRefusalText ({ server = null, reason = null } = {}) {
   const named = server === null ? 'that server' : server
   switch (reason) {
-    case 'no_claim':
-      return 'Monoplayer: nobody is driving ' + named + ', so there is nothing to watch. Claim it to drive it.'
+    case 'no_body':
+      return 'Monoplayer: nobody is on ' + named + ' yet, so there is nothing to watch. Claim it to drive it.'
     case 'body_not_served':
       return 'Monoplayer: this lane is not serving ' + named + '.'
     case 'body_not_warm':
       return 'Monoplayer: ' + named + ' is still connecting. Try watching it again in a moment.'
+    case 'body_down':
+      return 'Monoplayer: ' + named + ' is down, so there is nothing to watch. Claim it to bring it back.'
     case 'picker_off':
       return 'Monoplayer: ' + named + ' cannot be watched on this lane.'
     default:
