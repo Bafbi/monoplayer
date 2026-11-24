@@ -3089,9 +3089,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // #265: the two clients the list assertion joins with, one per edited list.
       offlineUuid('Seeded'), offlineUuid('Late')
     ]
-    // #265: the list the lane offers comes from the allowed-server key (#262), so
-    // the rig writes the two files the lane reads — the live list the panel edits,
-    // and the seed Git commits behind it — and offers them through the product's own
+    // #265: the list the lane offers comes from the allowed-server key (#262). So
+    // the rig writes the two files the lane reads: the live list the panel edits,
+    // and the seed Git commits behind it. It offers them through the product's own
     // reader (src/service/start-live.js). What this rung proves is therefore the
     // offer the service makes, not a list the rig chose.
     pickerControlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-picker-'))
@@ -4299,24 +4299,25 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
     // --- O61: the picker offers the allowed-server list, under the address each row dials (#265) ---
     // The offer has been the live list since O55, because the rig offers rows through
-    // the product's own reader. Two facts are left to prove: the read is per offer and
-    // says which file answered, and a row's name is the address a claim dials, so one
-    // server is one body id. Then the two edits an operator makes: a list that cannot
-    // be parsed falls back to the seed, and a server removed while a body runs on it
-    // stops being offered with that body untouched.
+    // the product's own reader. Two facts are left to prove. The read happens at each
+    // offer and says which file answered. And a row's name is the address a claim
+    // dials, so one server is one body id. Then the two edits an operator makes. A
+    // list that cannot be parsed falls back to the seed. A server removed while a body
+    // runs on it stops being offered, with that body untouched.
     const offeredBefore = logs
       .filter(entry => entry.event === 'pickerOffered')
       .map(entry => entry.fields)
-    // The body O58's driver holds, read before the list is edited. A removal must
-    // leave every field of it alone.
-    const drivenBefore = {
+    // The body O58's driver holds, in the fields the edit must leave alone. Read
+    // twice, once before the list is edited and once after.
+    const drivenSnapshot = () => ({
       claimed: pickerCore.claimedBody,
       cache: pickerCore.cache,
       logins: pickerBodyFake.received.logins,
       dials: pickerCore.metrics.claimDials,
       claims: pickerFront.claims.map(claim => ({ body: claim.body, server: claim.server, name: claim.name })),
       channels: (pickerFront.channels ?? []).map(channel => ({ role: channel.role, name: channel.name, body: channel.body }))
-    }
+    })
+    const drivenBefore = drivenSnapshot()
 
     // A live file that cannot be parsed is named and ignored, and the seed answers.
     // The client is offered the seed's list: not an empty dialog, and not the backend
@@ -4340,14 +4341,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       15_000
     )
     const lateRead = readServerDialog(pickerBot10.received.dialogs[0])
-    const drivenAfter = {
-      claimed: pickerCore.claimedBody,
-      cache: pickerCore.cache,
-      logins: pickerBodyFake.received.logins,
-      dials: pickerCore.metrics.claimDials,
-      claims: pickerFront.claims.map(claim => ({ body: claim.body, server: claim.server, name: claim.name })),
-      channels: (pickerFront.channels ?? []).map(channel => ({ role: channel.role, name: channel.name, body: channel.body }))
-    }
+    const drivenAfter = drivenSnapshot()
     const offeredLines = logs
       .filter(entry => entry.event === 'pickerOffered')
       .map(entry => entry.fields)
@@ -4368,7 +4362,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offered: offeredLines,
       rejected: rejectedLists,
       rows: {
-        opened: 2,
         seeded: seededRead.buttons.map(button => ({ id: button.id, label: button.label })),
         seededTitle: seededRead.title,
         afterRemoval: lateRead.buttons.map(button => ({ id: button.id, label: button.label }))

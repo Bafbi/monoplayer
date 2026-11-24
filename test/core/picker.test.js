@@ -270,10 +270,10 @@ test('#266 a verb this lane cannot carry is refused in words that name it', () =
 // ---- #265: the allowed-server list, and a row's canonical name ----
 
 test('#265 a row is offered under the canonical address its claim dials', () => {
-  // #260 keys a body's cache by pickSlug(host + ':' + port) of the dial, and a
-  // claim labels its body by pickSlug(row.name). A row whose name spells the same
-  // address another way gives one server two body ids, so the row is normalised
-  // where it is read: one cache, one claim, one server.
+  // #260 keys a body's cache by pickSlug(host + ':' + port) of the dial. A claim
+  // labels its body by pickSlug(row.name). A row whose name spells the same address
+  // another way would give one server two body ids, so the row is normalised where
+  // it is read: one cache, one claim, one server.
   const [port] = pickerRows([{ name: 'paper:025565', state: 'down' }])
   assert.equal(port.name, 'paper:25565')
   assert.deepEqual(pickTarget(port.name), { host: 'paper', port: 25565 })
@@ -302,8 +302,8 @@ test('#265 a row is offered under the canonical address its claim dials', () => 
 
 test('#265 the picker offers the allowed-server list, and says which file answered', () => {
   // The shape src/service/control.js answers with: the servers, and the file that
-  // answered. The rows are the picker's own vocabulary, and their names are
-  // addresses because a claim dials the row it names.
+  // answered. The rows are the picker's own vocabulary. Their names are addresses,
+  // because a claim dials the row it names.
   const control = pickerOfferedRows(() => ({
     servers: [{ host: 'paper', port: 25565 }, { host: '127.0.0.1', port: 25566 }],
     source: 'control'

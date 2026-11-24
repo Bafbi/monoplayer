@@ -93,11 +93,11 @@ export function pickerLabel (row) {
 }
 
 // #265: the name a row is offered under is the canonical address its claim
-// dials. A claim labels a body with pickSlug(row.name), while the per-body state
-// cache is keyed by pickSlug(host + ':' + port) of the dial (src/core/body-caches.js,
-// src/service/monoplayer.js). A name that spells one address another way would give
-// one server two body ids and one body's state two caches, so a row is normalised
-// here, where every row a lane offers is read.
+// dials. A claim labels a body with pickSlug(row.name). The per-body state cache is
+// keyed by pickSlug(host + ':' + port) of the dial (src/core/body-caches.js,
+// src/service/monoplayer.js). A name that spells one address another way would
+// give one server two body ids, and one body's state two caches. So a row is
+// normalised here, where every row a lane offers is read.
 function canonicalPickName (name) {
   const target = pickTarget(name)
   // A name that names no address is offered as it was written. The claim refuses
@@ -127,12 +127,12 @@ export function pickerRows (rows = []) {
 }
 
 // #265: the rows a picker lane offers, from the read of the allowed-server list.
-// `read` is src/service/control.js's own answer — the servers, and the file that
-// answered — so a picker lane offers the live file's list, the seed's when the live
-// file cannot answer, and nothing when neither is configured. The row is the
-// picker's vocabulary, and its name is the `host:port` a claim dials: a claim
-// lands the client on the address its row names, so a row that names anything else
-// can be offered and never entered.
+// `read` is src/service/control.js's own answer: the servers, and the file that
+// answered. A picker lane therefore offers the live file's list, the seed's when
+// the live file cannot answer, and nothing when neither is configured. The row is
+// the picker's vocabulary. Its name is the `host:port` a claim dials, because a
+// claim lands the client on the address its row names. A row that names anything
+// else can be offered and never entered.
 export function pickerOfferedRows (read = null) {
   const list = typeof read === 'function' ? read() : null
   const servers = Array.isArray(list?.servers) ? list.servers : []

@@ -110,18 +110,20 @@ import { MAX_DEADLINE_MS, PREAUTH_CLOSE_REASON } from '../core/preauth-window.js
 // volume fail with ENOSPC under another stage. Apart from startLive so the
 // report is observable without a live backend.
 // #265: the rows a picker lane offers. The list is the allowed-server key (#262),
-// read at each offer so a panel edit shows at the next join, and each row is named
-// for the address a claim dials (src/core/picker.js).
+// read at each offer, so a panel edit shows at the next join. Each row is named for
+// the address a claim dials (src/core/picker.js).
 export function createPickerServerReader ({ control, log = () => {} } = {}) {
   if (typeof control?.allowedServers !== 'function') {
     throw new TypeError('createPickerServerReader: control must offer allowedServers')
   }
   // The last answer this lane offered, as one string. A join reads the list more
-  // than once, and an operator needs one line per answer, not one per read.
+  // than once, and an operator needs one line per answer, not one per read. The
+  // names are compared as one JSON array, because a host can hold a separator a
+  // joined string would read as another row.
   let said = null
   return function pickerServerRows () {
     const offered = pickerOfferedRows(control.allowedServers)
-    const answer = offered.source + '|' + offered.rows.map(row => row.name).join(',')
+    const answer = offered.source + '|' + JSON.stringify(offered.rows.map(row => row.name))
     if (answer !== said) {
       said = answer
       log('pickerOffered', { source: offered.source, servers: offered.rows.length })
@@ -434,8 +436,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
     file: cfg.control.file,
     whitelistFile: cfg.attachWhitelistFile,
     // #262: the allowed-server list and the file Git commits behind it. Read here
-    // for the start record below; #265 is what reads it when the picker offers a
-    // server, and nothing else consumes it yet.
+    // for the start record below. #265 is the picker, which reads the same key again
+    // at each offer.
     allowedServersFile: cfg.control.allowedServers ?? null,
     allowedServersSeedFile: cfg.control.allowedServersSeed ?? null,
     allowBackendSwitch: cfg.control.allowBackendSwitch,
@@ -455,7 +457,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // #262: the allowed-server list, read once. The start record says which file
   // answered and how many servers it holds, so an operator can see a seed standing
   // in for an unedited list without opening a file. The picker reads the list again
-  // at each offer (#265); this read is the lane's own report, and it is the same call.
+  // at each offer (#265). This read is the lane's own report, and it is the same
+  // call.
   const allowedServersAtStart = control.allowedServers()
 
   // #229: the desired backend is read once before the first dial, and again
@@ -540,11 +543,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
     // #257: the picker's configuration phase, and the list it offers. The
     // recording is committed protocol data (src/legs/configuration-baseline.js).
     // A lane with no fixture on disk refuses a picker join rather than inventing
-    // one. #265: the list is the allowed-server key (#262), read at each offer, so
-    // a panel edit is what the next join sees and a broken live file falls back to
-    // the seed Git commits rather than offering nothing. A lane with no key offers
-    // nothing: the list is what a picker lane offers, not the backend it dials. The
-    // row says `down`, because with no session there is no body standing.
+    // one. #265: the list is the allowed-server key (#262), read at each offer. A
+    // panel edit is therefore what the next join sees. A broken live file falls back
+    // to the seed Git commits rather than offering nothing. A lane with no key offers
+    // nothing, because the list is what a picker lane offers and not the backend it
+    // dials. The row says `down`, because with no session there is no body standing.
     configurationBaseline: baseline,
     pickerServers: cfg.picker === true ? createPickerServerReader({ control, log }) : null,
     onPickerPick: pick => {
