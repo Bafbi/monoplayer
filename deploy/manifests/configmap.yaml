@@ -1,8 +1,19 @@
-# The attach whitelist. Not a secret: it holds public Minecraft UUIDs.
+# The committed seeds: the attach whitelist, and the allowed-server list (#262).
+# Not a secret: it holds public Minecraft UUIDs and public server addresses.
 #
-# Only Bafbi may attach. GlowSquidye is the puppet and must never appear here.
-# The front checks this file before Login Success; an unlisted account is
-# denied before it reaches play.
+# Two keys, and two different jobs.
+#
+# `attach-whitelist.json` is the list the operator copies into the control
+# ConfigMap once, with `kubectl create configmap --from-file`. Only Bafbi may
+# attach; GlowSquidye is the puppet and must never appear here. The lane reads the
+# copy in `monoplayer-control`, which the panel patches, so an edit here reaches
+# the lane only through that copy.
+#
+# `allowed-servers.json` is read directly: this object is mounted at /config, and
+# MONOPLAYER_ALLOWED_SERVERS_SEED names this key, so it answers whenever the live
+# key in the control ConfigMap is absent or unreadable (#262). It is also the base
+# the panel's first edit is built on, so a first write cannot silently drop the
+# servers listed here.
 
 apiVersion: v1
 kind: ConfigMap
@@ -18,6 +29,16 @@ data:
           "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
           "name": "Bafbi",
           "addedAt": "2026-11-07T13:04:51.092Z"
+        }
+      ]
+    }
+  allowed-servers.json: |
+    {
+      "version": 1,
+      "servers": [
+        {
+          "host": "play2.excalia.fr",
+          "port": 25565
         }
       ]
     }

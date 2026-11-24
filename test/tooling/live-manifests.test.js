@@ -9,6 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { parseAllowedServers } from '../../src/service/control.js'
+
 const MANIFESTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'manifests')
 const read = name => fs.readFileSync(path.join(MANIFESTS, name), 'utf8')
 const manifests = () => fs.readdirSync(MANIFESTS).filter(name => name.endsWith('.yaml') && name !== 'kustomization.yaml')
@@ -67,10 +69,29 @@ test('the lane mounts the control ConfigMap read-only, and optionally', () => {
     'the control volume is mounted writable')
 })
 
+const envOf = name => new Map([...read(name).matchAll(/- name: (MONOPLAYER_[A-Z_]+)\n\s+value: (.*)$/gm)]
+  .map(match => [match[1], match[2].replace(/^"|"$/g, '')]))
+
+// The text of one ConfigMap key, dedented. The same shape `src/panel/registry.js`
+// reads out of the registry, which is where this file's own reader comes from.
+function keyBlock (name, key) {
+  const lines = read(name).split('\n')
+  const start = lines.findIndex(line => line === '  ' + key + ': |')
+  assert.notEqual(start, -1, name + ' holds the key ' + key)
+  const body = []
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.trim() !== '' && line.length - line.trimStart().length <= 2) break
+    body.push(line)
+  }
+  const content = body.filter(line => line.trim() !== '')
+  const dedent = Math.min(...content.map(line => line.length - line.trimStart().length))
+  return body.map(line => line.slice(dedent)).join('\n')
+}
+
 test('the lane reads its control document and its whitelist from the mounted volume', () => {
   const deployment = read('deployment.yaml')
-  const env = new Map([...deployment.matchAll(/- name: (MONOPLAYER_[A-Z_]+)\n\s+value: (.*)$/gm)]
-    .map(match => [match[1], match[2].replace(/^"|"$/g, '')]))
+  const env = envOf('deployment.yaml')
 
   assert.equal(env.get('MONOPLAYER_ATTACH_WHITELIST'), '/control/attach-whitelist.json',
     'the whitelist is not the file the panel patches, so a panel write is ignored at login')
@@ -81,6 +102,43 @@ test('the lane reads its control document and its whitelist from the mounted vol
   // itself rather than a silent behaviour change.
   assert.equal(env.get('MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH'), '1',
     'the backend switch is off; the panel answers 409 and the move route is dead')
+})
+
+test('the lane names the allowed-server list and the seed behind it, and mounts both', () => {
+  const deployment = read('deployment.yaml')
+  const env = envOf('deployment.yaml')
+
+  assert.equal(env.get('MONOPLAYER_ALLOWED_SERVERS'), '/control/allowed-servers.json',
+    'the list is not the key the panel patches, so an operator edit reaches no lane')
+  assert.equal(env.get('MONOPLAYER_ALLOWED_SERVERS_SEED'), '/config/allowed-servers.json',
+    'no seed means a missing live key offers a joining player nothing')
+
+  // Both paths have to be real mounts: a variable naming a file no volume projects is
+  // a lane reading nothing, and the 200 that wrote it reads as wired.
+  const control = /- name: control\n\s+mountPath: (\S+)\n\s+readOnly: true/.exec(deployment)
+  assert.equal(control?.[1], '/control')
+  const seed = /- name: config\n\s+mountPath: (\S+)\n\s+readOnly: true/.exec(deployment)
+  assert.ok(seed, 'the committed seed ConfigMap is mounted read-only')
+  assert.equal(seed[1], '/config', 'the seed path in the variable is the mount above it')
+  const volume = /- name: config\n\s+configMap:\n\s+name: (\S+)/.exec(deployment)
+  assert.equal(volume?.[1], 'monoplayer-config', 'the /config volume is the ConfigMap Git holds')
+})
+
+test('the committed seed is a list the lane can read, and it offers what the lane offers today', () => {
+  const parsed = parseAllowedServers(keyBlock('configmap.yaml', 'allowed-servers.json'))
+  assert.equal(parsed.reason, null, 'the seed this repository ships parses: ' + parsed.reason)
+  assert.ok(parsed.servers.length > 0, 'the seed offers at least one server')
+
+  // #265 reads this list in place of the one row start-live builds from the
+  // configured backend, so the two have to name the same server: a seed that dropped
+  // it would stop offering the lane's only backing server on the day the picker reads
+  // the file.
+  const env = envOf('deployment.yaml')
+  const configured = env.get('MONOPLAYER_BACKEND_HOST') + ':' + env.get('MONOPLAYER_BACKEND_PORT')
+  assert.ok(parsed.servers.some(server => server.host + ':' + server.port === configured),
+    'the seed names the backend the lane is configured with, ' + configured)
+  assert.equal(new Set(parsed.servers.map(server => server.host + ':' + server.port)).size, parsed.servers.length,
+    'the seed offers no server twice')
 })
 // --- the two halves of the backend switch agree ---
 

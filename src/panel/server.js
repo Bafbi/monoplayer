@@ -1,6 +1,6 @@
 // The panel's HTTP surface: the probe, the registry list, its own files, one
 // dispatch line into the puppet cards, one into the stream they hold open, and one
-// into the write route.
+// each into the three routes that write a control key.
 //
 // Nothing here knows about namespaces, tokens, or the API server. The registry
 // arrives as a function, so a test hands in a document and a pod hands in the
@@ -8,10 +8,11 @@
 // arrives the same way, and so do the cards: src/panel/routes/info.js owns every
 // route that reads a pod, src/panel/routes/stream.js owns the live region's
 // stream, src/panel/assets.js owns the files this page loads,
-// src/panel/routes/backend.js owns the one that patches a ConfigMap, and
+// src/panel/routes/backend.js owns the one that patches a ConfigMap,
 // src/panel/routes/whitelist.js owns the three that read and write the attach
-// whitelist, so this file does not grow a branch per feature (#231, #232, #233,
-// #248).
+// whitelist, and src/panel/routes/allowed.js owns the three that read and write the
+// allowed-server list, so this file does not grow a branch per feature (#231, #232,
+// #233, #248, #262).
 //
 // `GET /healthz` never touches the registry. It is the probe, so it has to answer
 // while the registry is broken; a panel that fails its probe when the document
@@ -27,6 +28,7 @@
 //   the GET guard, which refuses every other write method
 //   the panel's own files, then the stream, then the probes and the reads
 
+import { createAllowedRoute } from './routes/allowed.js'
 import { createAssetRoute } from './assets.js'
 import { createBackendRoute } from './routes/backend.js'
 import { createInfoRoutes } from './routes/info.js'
@@ -75,6 +77,8 @@ export function createPanelHandler ({
   const backend = createBackendRoute({ read, kubernetes, log, now })
   // #232: the attach whitelist, the same way again.
   const whitelist = createWhitelistRoute({ read, kubernetes, log, now, lookup })
+  // #262: the allowed-server list, the third control key.
+  const allowed = createAllowedRoute({ read, kubernetes, log, now })
   // #248: the live region's stream.
   const stream = createStreamRoute({ read, kubernetes, recorded, log, now, tickMs, heartbeatMs })
   // #248: the page's own files. The tailnet Service is the only thing answering
@@ -90,6 +94,7 @@ export function createPanelHandler ({
     // refuses every other write method.
     if (backend.match(path) !== null) return backend.handle(req, res, { method, send })
     if (whitelist.match(path) !== null) return whitelist.handle(req, res, { method, send })
+    if (allowed.match(path) !== null) return allowed.handle(req, res, { method, send })
 
     if (method !== 'GET') {
       return send(res, 405, TEXT, 'the panel answers GET only\n', { allow: 'GET' })
