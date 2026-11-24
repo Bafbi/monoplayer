@@ -194,8 +194,10 @@ test('gate:up wakes the rows a rung drives and says how long it will wait', () =
   const where = space()
   const { status, output, calls } = run(where, ['up'])
   assert.equal(status, 0, output)
-  assert.ok(calls.some(line => line.includes('apply -k ' + path.join(ROOT, 'deploy', 'driver'))),
-    'the tree is applied: ' + calls.join(' | '))
+  // The render of the tree is applied, not the tree itself: one substitution names
+  // the lane everywhere the tree spells it (#277). The case below reads the render
+  // back to prove it is not the directory in git.
+  assert.ok(calls.some(line => line.includes('apply -k ')), 'the render of the tree is applied: ' + calls.join(' | '))
   // A cold start is 90 s (#115, measured on the 26.2 gate Paper). A task that waits
   // in silence reads as a hang, so the budget and the cost both come first.
   assert.match(output, /waiting up to 900s/, 'the wait names its budget')
@@ -324,16 +326,12 @@ test('status is read-only, and it is refused the live lane too', () => {
   assert.deepEqual(calls, [], 'nothing was read')
 })
 
-test('a namespace the tree does not apply to is refused', () => {
-  // The manifests pin their namespace, so an override would apply to gate-b and
-  // scale somewhere else. Half-applied lanes are how a test lane grows an owner.
-  for (const verb of ['up', 'down']) {
-    const { status, output, calls } = run(space(), [verb], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-c' })
-    assert.equal(status, 2, output)
-    assert.match(output, /applies to monoplayer-gate-b/)
-    assert.deepEqual(calls, [], verb + ' applied or scaled nothing')
-  }
-})
+// A namespace the tree does not spell used to be refused outright: the manifests
+// pinned monoplayer-gate-b and an override would apply one lane and scale another.
+// #277 replaces that guard with a better one. The tree is rendered from the
+// instance now, so there is nothing left to disagree with; what a name has to
+// satisfy is that the render can derive it at all, which the cases above and below
+// pin. The old case asserted the limitation the ticket removes.
 
 test('the Secret check follows the Deployment that reads it', () => {
   // deploy/driver is the map: the three Papers take RCON_PASSWORD from
@@ -380,5 +378,149 @@ test('mise offers the lifecycle, and the lint rung sees the script', () => {
   const lint = toml.match(/^\[tasks\.lint\][\s\S]*?^run = "(.*)"$/m)
   assert.ok(lint, 'the lint task has a run')
   assert.match(lint[1], /scripts\/gate-lane\.sh/, 'lint syntax-checks the script')
+})
+
+
+// ---------------------------------------------------------------------------
+// The instance: one value, and the whole lane follows (#277)
+//
+// The tree spells the lane monoplayer-gate-b in the namespace, in every
+// app.kubernetes.io/name label and selector, in the Secret and ConfigMap names,
+// in the two tailnet hostnames, and in one path inside velocity.toml. A second
+// validation lane needs its own spelling, derived from one value, or two lanes on
+// one cluster are indistinguishable and status acts on the wrong pods.
+//
+// The render is what gets applied, so these cases read it rather than trusting
+// that the substitution reached everything.
+
+// The tree the script would apply for one instance, written to a directory the
+// case owns. No kubectl: the render is text, and CI installs no cluster client.
+function rendered (where, dir, env = {}) {
+  const result = spawnSync('bash', [SCRIPT, 'render', dir], {
+    cwd: where.root,
+    encoding: 'utf8',
+    input: '',
+    env: {
+      ...process.env,
+      PATH: where.bin + ':' + process.env.PATH,
+      KUBECTL_LOG: where.log,
+      KUBECTL_STATE: where.state,
+      MONOPLAYER_GATE_POLL: '0',
+      ...env
+    }
+  })
+  const files = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter(name => name.endsWith('.yaml')).sort()
+    : []
+  const text = dir2 => fs.readFileSync(path.join(dir, dir2), 'utf8')
+  return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), files, read: text }
+}
+
+const TREE = path.join(ROOT, 'deploy', 'driver')
+
+test('the render with no instance named reproduces the tree byte for byte', () => {
+  // Today's lane is monoplayer-gate-b and no run may change behaviour, so the
+  // default render is the tree itself. Anything else means an ordinary gate:up
+  // applies something a reader of deploy/driver has never seen.
+  const where = space()
+  const dir = path.join(where.root, 'render-b')
+  const { status, output, files } = rendered(where, dir)
+  assert.equal(status, 0, output)
+
+  const tree = fs.readdirSync(TREE).filter(name => name.endsWith('.yaml')).sort()
+  assert.deepEqual(files, tree, 'the render holds the tree and nothing else')
+  for (const name of tree) {
+    assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), fs.readFileSync(path.join(TREE, name), 'utf8'),
+      name + ' differs from the tree it claims to reproduce')
+  }
+})
+
+test('an instance renames every place the lane spells its name', () => {
+  // The nine sites that are not a prefixed label are the ones a field-path
+  // transform cannot reach: the Secret names, the ConfigMap names, the mount path
+  // and the toml value that names it, and the namespace's own environment label.
+  const where = space()
+  const dir = path.join(where.root, 'render-x')
+  const { status, output, files, read } = rendered(where, dir, { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  assert.equal(status, 0, output)
+  assert.ok(files.length > 0, 'the render holds the tree')
+
+  for (const name of files) {
+    assert.doesNotMatch(read(name), /gate-b/, name + ' still names the default lane: ' + (read(name).match(/\S*gate-b\S*/g) ?? []).join(' '))
+  }
+  assert.match(read('namespace.yaml'), /^  name: monoplayer-gate-x$/m, 'the namespace object takes the instance')
+  for (const thing of ['paper', 'paper-conduct', 'paper-m4', 'velocity', 'toxiproxy']) {
+    assert.match(read('velocity.yaml') + read('paper.yaml') + read('paper-conduct.yaml') + read('paper-m4.yaml') + read('toxiproxy.yaml'),
+      new RegExp('app\\.kubernetes\\.io/name: monoplayer-gate-x-' + thing), 'the label prefix of ' + thing + ' takes the instance')
+  }
+  assert.match(read('velocity.yaml'), /forwarding-secret-file = "\/run\/secrets\/gate-x-velocity\/forwarding-secret"/,
+    'the toml value and the mount path move together, which is the pair no field path can split')
+  assert.match(read('velocity.yaml'), /mountPath: \/run\/secrets\/gate-x-velocity/, 'the mount path the toml names')
+  assert.match(read('namespace.yaml'), /monoplayer\.eu\/environment: gate-x/, 'the namespace environment label takes the instance')
+  assert.match(read('paper.yaml'), /tailscale\.com\/hostname: monoplayer-gate-x-paper/, 'a published tailnet name takes the instance')
+})
+
+test('two instances do not address each other', () => {
+  // The collision #276 exists to stop. Two lanes that share a label, a Secret
+  // name or a tailnet hostname are one lane wearing two namespaces.
+  const where = space()
+  const x = rendered(where, path.join(where.root, 'render-x'), { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  const y = rendered(where, path.join(where.root, 'render-y'), { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-y' })
+  assert.equal(x.status, 0, x.output)
+  assert.equal(y.status, 0, y.output)
+
+  const joined = (render, dir) => render.files.map(name => render.read(name)).join('\n')
+  assert.doesNotMatch(joined(x), /monoplayer-gate-y|gate-y-/, 'instance x reaches into y')
+  assert.doesNotMatch(joined(y), /monoplayer-gate-x|gate-x-/, 'instance y reaches into x')
+
+  const host = render => [...joined(render).matchAll(/tailscale\.com\/hostname: (\S+)/g)].map(match => match[1])
+  assert.deepEqual(host(x), ['monoplayer-gate-x-paper', 'monoplayer-gate-x-velocity'], 'x publishes its own tailnet names')
+  assert.deepEqual(host(y), ['monoplayer-gate-y-paper', 'monoplayer-gate-y-velocity'], 'y publishes its own, and not the same two')
+})
+
+test('gate:up applies the render, and the lanes it applies and scales agree', () => {
+  // The apply and the scale are two halves of one command. If the render lands in
+  // one namespace and the scale names another, half a lane exists.
+  const where = space()
+  const { status, output, calls } = run(where, ['up'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  assert.equal(status, 0, output)
+
+  const applied = calls.find(line => line.includes('apply -k '))
+  assert.ok(applied, 'the tree was applied: ' + calls.join(' | '))
+  const appliedDir = applied.split('apply -k ')[1].trim().split(' ')[0]
+  assert.doesNotMatch(appliedDir, new RegExp('^' + TREE + '$'), 'the tree is rendered, not applied as it is in git')
+
+  assert.match(output, /gate lane monoplayer-gate-x/, 'the run says which lane it woke')
+  assert.match(output, /label prefix monoplayer-gate-x-/, 'and the prefix it will look pods up by')
+  for (const line of calls.filter(call => / scale /.test(call))) {
+    assert.match(line, /-n monoplayer-gate-x /, 'every scale names the lane it applied: ' + line)
+  }
+})
+
+test("a stopped lane looks its own pods up, not a neighbour's", () => {
+  // The label lookup was the literal monoplayer-gate-b-<thing>, so a second lane
+  // waiting for its pods to go would read somebody else's and report the wrong
+  // answer. down is the reader that owns that lookup.
+  const where = space()
+  const { status, output, calls } = run(where, ['down'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  assert.equal(status, 0, output)
+
+  const lookups = calls.filter(line => /-l .*app.kubernetes.io\/name/.test(line))
+  assert.ok(lookups.length > 0, 'status looked pods up: ' + calls.join(' | '))
+  for (const line of lookups) {
+    assert.doesNotMatch(line, /monoplayer-gate-b/, 'a renamed lane must not look itself up as gate-b: ' + line)
+  }
+})
+
+test("a namespace outside the gate lane's prefix is refused", () => {
+  // The render substitutes the instance into a tree that spells monoplayer-gate-b.
+  // A name outside that prefix leaves the tree's spelling with nothing to
+  // substitute, so the render would quietly apply the default lane.
+  for (const namespace of ['monoplayer-gate-c-', 'gate-c', 'monoplayer-gateX', 'monoplayer-gate']) {
+    const { status, output, calls } = run(space(), ['up'], { MONOPLAYER_GATE_NAMESPACE: namespace })
+    assert.equal(status, 2, output)
+    assert.match(output, /refusing/)
+    assert.deepEqual(calls, [], 'refusing "' + namespace + '" called no kubectl')
+  }
 })
 

@@ -18,7 +18,7 @@ The tree now names everything after the domain, but names that live outside the 
 
 | Frozen name | Read by | Migrates with |
 |---|---|---|
-| namespace `monoplayer-gate-b`, labels `app.kubernetes.io/name: monoplayer-gate-b-*`, Secrets `gate-b-rcon` and `gate-b-velocity` | Argo CD, kubectl, the operator | the manifests in `deploy/driver/` |
+| namespace `monoplayer-gate-b`, labels `app.kubernetes.io/name: monoplayer-gate-b-*`, Secrets `gate-b-rcon` and `gate-b-velocity` | Argo CD, kubectl, the operator | the manifests in `deploy/driver/`; #277 made the namespace and the label prefix derivable from one instance value, and #278 the Secrets |
 | Tailscale hostnames `monoplayer-gate-b-paper`, `monoplayer-gate-b-velocity` | the driver lane's `--server` default, the display host's launch command | `src/driver/backends.js`, `src/driver/run.js` |
 | Prism instances `gate-b-player` and `gate-b-player-fabric` (the 26.1.2 pair, kept as the G0 record) | the display host, `tools/nath.sh`, `tools/driver/install.sh` | the driver-lane runbook |
 | Prism instances `gate-b-player-262` and `gate-b-player-262-fabric` (the 26.2 pair) | the display host, `src/driver/run.js`, `docs/driver-lane.md` | the driver-lane runbook, in the same display-host step |
