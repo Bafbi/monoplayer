@@ -28,13 +28,15 @@
 // keys and the puppet connection's own last-seen window, and neither belongs to
 // the core.
 //
-//   frontLeg = {                                  // one attaching client
+//   frontLeg = {                                  // a body's channels (#269)
 //     setLoginStartHandler(({ uuid, name }): decision[])   // -> whitelist review
 //     setServerboundHandler(({ state, name, buffer, data }): void)
 //     setDetachHandler(({ reason }): void)
-//     write(name, packet, { synth })              // clientbound, packet level
-//     writeRaw(buffer, meta)                      // clientbound, frame level
-//     end(reason)                                 // kick/deny the client
+//     setSpectateBody({ body, server, name }): { watching, reason }   // optional
+//     setSpectatorAttach({ name, channel }): { watching, frames }     // optional
+//     write(name, packet, { synth, channel })     // clientbound, packet level
+//     writeRaw(buffer, meta, { channel })         // clientbound, frame level
+//     end(reason)                                 // kick/deny every channel
 //     startReconfiguration({ reason }): { started, reason }  // optional (#22)
 //                                                 // the sampling client re-enters
 //                                                 // configuration on its own
@@ -46,6 +48,13 @@
 //
 // A hand-built harness may omit the last two; the core degrades to a state
 // replay at the target's login and logs reconfigurationRestoreNoFinish.
+//
+// A front leg delivers through channels, not through one attachment: its driver
+// and its spectators each hold one, with their own delivery record and client
+// information (src/core/channels.js). A write with no `channel` reaches every
+// channel on the body; a write with one reaches that connection alone, which is how
+// a spectator is handed its body's replay. The last two call-ins are the spectator's
+// and a leg without them refuses that verb in words.
 
 import { WARM_MARKER } from '../core/state-cache.js'
 import { createBodyCaches } from '../core/body-caches.js'
@@ -427,6 +436,10 @@ export function createMonoplayer ({
     claimDials: 0,
     claimDialsFailed: 0,
     claimBodies: 0,
+    // #269: a spectator's own counters. A view is one body replayed to one
+    // channel; an ask is the question the front puts before it opens the channel.
+    spectateAsks: 0,
+    spectatorViews: 0,
     noticesSent: 0,
     noticeFallbacks: 0,
     // #99: one `player_info` frame per attach that gives the human's own UUID
@@ -518,7 +531,9 @@ export function createMonoplayer ({
   const listeners = new Map() // type -> Set<fn>
   const unclassifiedLogged = new Set()
   let started = false
-  let attached = false // a client holds the attach slot (configuring or attached)
+  // #269: a driver is delivered a body. Delivery is the front leg's channels now, so
+  // this is only what the session knows: one driver, one body, one attach.
+  let attached = false // a driver is delivered the body (configuring or attached)
   // #16: the pre-warm early attach. `backendConfiguring` is true from the
   // backend's first configuration frame until its play login. `earlyAttach`
   // holds the client that attached during that window; `pendingEarlyReplay`
@@ -638,7 +653,7 @@ export function createMonoplayer ({
   }
 
   function isAttached () {
-    // #22: a client following a move still holds the attach slot; it is not
+    // #22: a client following a move is still the driver; it is not
     // attachable around, and its frames are the human's.
     return attached && (
       session.state === STATES.ATTACHED ||
@@ -677,7 +692,12 @@ export function createMonoplayer ({
     // its configuration phase. It follows the puppet's configuration stream
     // and lands in play when the backend logs in.
     const canAttachConfiguring = backendConfiguring && session.state === STATES.BOOT
-    if (!session.isAttachReady() && session.state !== STATES.ATTACHED && !canAttachConfiguring) {
+    // #269: a body that already has a driver is not attachable, and a lane with a
+    // picker still serves the picker. The second client's answer is a claim, or a
+    // spectate, on that body, and the claim is what refuses a rival: the login has
+    // to reach the picker instead of a kick, or the claim never gets to decide.
+    const attachable = (session.isAttachReady() || canAttachConfiguring) && !attached
+    if (!attachable) {
       // #257: the picker. A whitelisted client may join a lane with no backend
       // when the lane offers one, and it is not a denial: nothing is attached,
       // the session is untouched, and the front leg serves the configuration
@@ -690,6 +710,10 @@ export function createMonoplayer ({
         telemetry.metric('monoplayer.pickers', 1, { player: payload.name })
         return { ...decision, allowed: true, phase: 'picker', picker: true }
       }
+      // #269: a lane with no picker has no claim for the second client to make.
+      // The login passes and the session answers `already_attached` at the attach,
+      // which is the one authority such a lane has.
+      if (attached) return decision
       const denied = {
         allowed: false,
         reason: 'backend_not_ready',
@@ -2218,6 +2242,71 @@ export function createMonoplayer ({
     return { connected: true, reason: null, body, target: dial, warm: bodyWarm }
   }
 
+  // --- #269: a spectator, and the channel it watches through ---
+
+  // The question the front puts before it opens a spectator's channel: may this
+  // client watch the body its row names? Nothing is dialled, because a spectator
+  // watches a body that already has a session, and the answer is synchronous for
+  // the same reason. Who may spectate, and what it is shown, is #259; the seam is
+  // that delivery is chosen by a channel and not by the one attach slot.
+  function spectateBody ({ body = null, server = null, name = null } = {}) {
+    metrics.spectateAsks++
+    if (cfg.picker !== true) return { watching: false, reason: 'picker_off', body }
+    if (claimedBody === null) return { watching: false, reason: 'no_claim', body }
+    if (body !== null && body !== claimedBody) {
+      // One body at a time is this session's limit, so a row naming another body
+      // is not something there is to watch. A leg per body is #261.
+      log('spectateRefused', { body, server, name, reason: 'body_not_served', claimed: claimedBody })
+      return { watching: false, reason: 'body_not_served', body: claimedBody }
+    }
+    if (session.state !== STATES.ATTACHED || !frontPlayReady) {
+      log('spectateRefused', { body, server, name, reason: 'body_not_warm', state: session.state })
+      return { watching: false, reason: 'body_not_warm', body: claimedBody }
+    }
+    log('spectateAsked', { body: claimedBody, server, name, state: session.state })
+    return { watching: true, reason: null, body: claimedBody, server }
+  }
+
+  // The body's play state, written to one channel. This is the only path that
+  // replays a body to a client that is not its driver: the session, the pose and
+  // the driver's own channel are untouched, because watching is not driving. A
+  // spectator's frames are the same replay an attach would build, so what it sees
+  // is the body as it stands rather than a second login.
+  function spectateView ({ name = null, channel = null } = {}) {
+    if (typeof channel !== 'string' || channel.length === 0) {
+      return { watching: false, reason: 'no_channel' }
+    }
+    if (!isAttached() || !frontPlayReady) {
+      log('spectateViewRefused', { name, channel, reason: 'no_body', state: session.state })
+      return { watching: false, reason: 'no_body' }
+    }
+    const synthesized = synthAttach({
+      snapshot: cache.snapshot(),
+      pose: session.currentPose,
+      teleportId: frontTeleportSeq,
+      includeConfig: false
+    })
+    frontTeleportSeq = synthesized.teleportId
+    let written = 0
+    for (const frame of synthesized.frames) {
+      const sent = frame.synth === 'position'
+        ? frontLeg.write(frame.name, frame.packet, { synth: true, channel }) !== false
+        : frontLeg.writeRaw(frame.buffer, { state: 'play', name: frame.name }, { channel }) !== false
+      if (sent) written++
+    }
+    metrics.spectatorViews++
+    log('spectateView', {
+      name,
+      channel,
+      frames: written,
+      replayed: synthesized.counts.replayed,
+      body: claimedBody,
+      state: session.state
+    })
+    emit('spectate_view', { name, channel, frames: written })
+    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written }
+  }
+
   function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
     // #16: the front reports play-ready for a client that attached during the
     // puppet's configuration. It is already attached, so it must not go
@@ -2683,6 +2772,16 @@ export function createMonoplayer ({
     if (typeof frontLeg.setConnectClaimedBody === 'function') {
       frontLeg.setConnectClaimedBody(payload => connectClaimedBody(payload))
     }
+    // #269: the spectator. A body that is already delivered has nothing to dial, so
+    // the front asks whether it may be watched and hands the client over on its own
+    // channel. A leg without these call-ins refuses the verb in words, exactly as a
+    // leg without the picker refuses a claim.
+    if (typeof frontLeg.setSpectateBody === 'function') {
+      frontLeg.setSpectateBody(payload => spectateBody(payload))
+    }
+    if (typeof frontLeg.setSpectatorAttach === 'function') {
+      frontLeg.setSpectatorAttach(payload => spectateView(payload))
+    }
 
     log('start', { whitelist: identity.whoAmI().whitelist, puppet: cfg.puppet, started: true })
     emit('start')
@@ -3003,6 +3102,11 @@ export function createMonoplayer ({
     // #258: the landing. The front leg calls this when a claim is granted, and it
     // is the only place a claim dials a body.
     connectClaimedBody,
+    // #269: the spectator's two answers. `spectateBody` says whether a row names
+    // the body this session serves, and `spectateView` replays that body to the one
+    // channel that asked.
+    spectateBody,
+    spectateView,
     // #233: the operator's move, driven from the control document rather than a
     // packet. The orchestrator calls it when its heartbeat sees a desired backend
     // that is not the one in use.

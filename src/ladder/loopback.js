@@ -171,6 +171,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #258: the picker rig's own body, and the client that claims it.
   let pickerBodyFake = null
   let pickerBot5 = null
+  // #269: the client that watches the body O58's driver holds, and the client
+  // that tries to claim it while it is held.
+  let pickerBot6 = null
+  let pickerBot7 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -193,7 +197,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     attachRecord: null,
     controlDocument: null,
     backendMove: null,
-    bodyCaches: null
+    bodyCaches: null,
+    channels: null
   }
 
   const log = (event, fields = {}) => {
@@ -945,7 +950,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
     // --- O12: detach keeps the backend session and the pose ---
     // The front denies a second connection before the whitelist gate while a
-    // client holds the attach slot. Detach first so the next check exercises
+    // client drives this lane, and its session is what answers a second one now
+    // (#269). Detach first so the next check exercises
     // the whitelist denial (reason not_whitelisted), not already_attached.
     await bot1.close()
     await waitFor(() => core.attached === false && core.session.state === 'detached', 'detach')
@@ -1380,7 +1386,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'cookie response on the puppet leg'
     )
 
-    await waitFor(() => front.attached === null, 'front attach slot cleared after the kick')
+    await waitFor(() => front.channels.length === 0, 'the front\'s channels cleared after the kick')
     bot4 = createBot({ port: evidence.frontPort, username: 'Attach' })
     await bot4.ready()
     const b4 = bot4.received
@@ -1845,7 +1851,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // now, so the same error produces one line of text and no serialization
     // failure. This runs last because it ends the client.
     const probeMark = logs.length
-    const errorClient = seamlessFront.attached
+    const errorClient = seamlessFront.driver
     errorClient?.emit('error', new Error('loopback_probe'))
     await waitFor(
       () => b5.ended !== null || b5.kick !== null,
@@ -3063,8 +3069,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // Five clients, so this rig has its own whitelist: the other rigs take the
     // shared pair, and a name they do not know would change what they can refuse.
     // The fifth is the one that claims a body this lane can reach (#258).
+    // #269: the sixth and seventh are the spectator and the rival claim.
     const pickerWhitelist = [
-      offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth'), offlineUuid('Pilot')
+      offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth'), offlineUuid('Pilot'),
+      offlineUuid('Watcher'), offlineUuid('Rival')
     ]
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
@@ -3321,7 +3329,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
     check(
       'O55b',
-      'a second client reads the picker at the same time: the picker takes no attach slot',
+      'a second client reads the picker at the same time: a picker join holds no channel',
       pickerBot2.received.dialogs.length === 1 &&
         pickerBot2.received.leftovers.length === 0 &&
         pickerFront.metrics.pickers === 2,
@@ -3439,7 +3447,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // #267: the claim, and what it contends with. The first client claimed the body
     // in O56 and is still connected, so it holds it. A fourth client reads the picker
     // while that claim stands, which it may, because the picker is not a claim and
-    // takes no attach slot. It picks the same body and clicks Claim. The refusal
+    // holds no channel. It picks the same body and clicks Claim. The refusal
     // names the player who holds it, and the claimant is untouched on its own
     // connection.
     //
@@ -3881,13 +3889,326 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.bodyCaches
     )
 
+    // --- O60: a body serves a driver and a spectator, each with its own delivery (#269) ---
+    // O58's driver is still connected and still holds the body. A sixth client reads
+    // the same picker while that claim stands, picks the row the driver is on, and
+    // clicks Spectate. Nothing is dialled for it: the body already has a session, and
+    // a spectator watches that one. The client continues the configuration phase the
+    // baseline opened with that body's own frames, and its play state arrives on the
+    // connection it already held.
+    //
+    // What this proves that no earlier assertion could: two channels on one body. The
+    // driver has been handed everything since it landed, and the spectator only since
+    // it clicked, so their delivery records differ in the count and agree on the last
+    // frame. Each client's own client information stays on its own channel: the
+    // driver's reaches the puppet through the serverbound rewrite, and the spectator's
+    // reaches nothing. What a spectator is shown, and who may spectate, is #259; this
+    // is the seam that delivers it.
+    pickerBot6 = createBot({ port: pickerBound.port, username: 'Watcher', version: pickerVersion })
+    await pickerBot6.waitFor(
+      () => pickerBot6.received.dialogs.length === 1,
+      'the picker at the client that will watch the body',
+      15_000
+    )
+    // A live-only frame before the spectator exists. The driver receives it and no
+    // replay ever carries it, so a spectator's own delivery record can be told from
+    // one that was copied from the driver's.
+    pickerBodyFake.sendSystemChat('before the watcher')
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.systemChat.length === 1,
+      'the live-only frame at the driver, before any spectator',
+      10_000
+    )
+    const watchPick = chooseDialogAction(pickerBot6.received.dialogs[0], pickerBodyName)
+    if (watchPick !== null) pickerBot6.answerDialog(watchPick.id, null, 'configuration')
+    await pickerBot6.waitFor(
+      () => pickerBot6.received.dialogs.length === 2,
+      "the claimed body's dialog at the spectator",
+      15_000
+    )
+    const watchVerb = chooseDialogAction(pickerBot6.received.dialogs[1], 'spectate')
+    const bodyLoginsBeforeWatch = pickerBodyFake.received.logins
+    const backendSettingsBeforeWatch = pickerBodyFake.received.settings.length
+    const poseBeforeWatch = pickerCore.session.currentPose
+    if (watchVerb !== null) pickerBot6.answerDialog(watchVerb.id, null, 'configuration')
+    await pickerBot6.waitFor(
+      () => pickerBot6.received.login !== null && pickerBot6.received.positions.length > 0,
+      'the play state of the body the spectator watches',
+      30_000
+    )
+    await waitFor(() => (pickerFront.channels ?? []).length === 2, 'two channels on one body', 15_000)
+    const watchConfiguration = pickerBot6.received.names
+      .filter(frame => frame.state === 'configuration')
+      .map(frame => frame.name)
+    const watchPosition = pickerBot6.received.positions[pickerBot6.received.positions.length - 1] ?? null
+
+    // The body's live stream reaches both channels: one frame the body sends after
+    // the spectator landed.
+    const liveBlock = { x: 3, y: 64, z: -3 }
+    pickerBodyFake.sendBlockChange(liveBlock)
+    pickerBodyFake.sendSystemChat('after the watcher')
+    await pickerBot6.waitFor(
+      () => pickerBot6.received.systemChat.length === 1,
+      'the live-only frame the spectator was present for',
+      10_000
+    )
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.systemChat.length === 2,
+      'the second live-only frame at the driver',
+      10_000
+    )
+    await pickerBot6.waitFor(
+      () => pickerBot6.received.blockChanges.some(change => change.location?.x === liveBlock.x),
+      'the live frame at the spectator',
+      10_000
+    )
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.blockChanges.some(change => change.location?.x === liveBlock.x),
+      'the live frame at the driver',
+      10_000
+    )
+
+    // Each client's own client information. Both are sent in play, which is the one
+    // state where a driver's change travels the serverbound rewrite and neither is
+    // reported to the core by the front's settings hook.
+    const watcherSettings = { locale: 'fr_fr', viewDistance: 6, chatFlags: 0, chatColors: true, skinParts: 127, mainHand: 1 }
+    const pilotSettings = { locale: 'en_gb', viewDistance: 5, chatFlags: 0, chatColors: true, skinParts: 127, mainHand: 1 }
+    pickerBot6.client.write('settings', watcherSettings)
+    pickerBot5.client.write('settings', pilotSettings)
+    await waitFor(
+      () => {
+        const channelsNow = pickerFront.channels ?? []
+        const watcher = channelsNow.find(channel => channel.role === 'spectator')
+        const pilot = channelsNow.find(channel => channel.role === 'driver')
+        return watcher?.settings?.locale === 'fr_fr' && pilot?.settings?.locale === 'en_gb'
+      },
+      'each channel holding its own client information',
+      10_000
+    )
+    await waitFor(
+      () => pickerBodyFake.received.settings.length > backendSettingsBeforeWatch,
+      "the driver's information at the puppet",
+      10_000
+    )
+    // Read after the driver's own rewrite, which is a forward: what the spectator
+    // sends must add nothing to it.
+    const forwardedBeforeWatch = pickerCore.metrics.serverboundForwarded
+    // A spectator's own input changes nothing: the front drops it before the core's
+    // pipeline, so the body does not move and nothing is forwarded.
+    pickerBot6.sendPosition({ x: 1.5, y: 2.5, z: 3.5 })
+    await waitFor(
+      () => pickerFront.metrics.spectatorFramesDropped >= 1,
+      'the spectator frame the front refused',
+      10_000
+    )
+    const channelsRead = pickerFront.channels ?? []
+    const driverChannel = channelsRead.find(channel => channel.role === 'driver') ?? null
+    const spectatorChannel = channelsRead.find(channel => channel.role === 'spectator') ?? null
+    const backendSettings = pickerBodyFake.received.settings.slice(backendSettingsBeforeWatch)
+    const poseAfterWatch = pickerCore.session.currentPose
+    evidence.channels = {
+      body: pickerBodyName,
+      dialTarget: pickerBackend.target,
+      bodyLogins: { before: bodyLoginsBeforeWatch, after: pickerBodyFake.received.logins },
+      spectator: {
+        pick: watchPick === null ? null : { id: watchPick.id, label: watchPick.label },
+        verb: watchVerb === null ? null : { id: watchVerb.id, label: watchVerb.label },
+        login: pickerBot6.received.login === null ? null : { entityId: pickerBot6.received.login.entityId },
+        position: watchPosition === null ? null : { x: watchPosition.x, y: watchPosition.y, z: watchPosition.z },
+        bodySpawn: pickerBodySpawn,
+        configuration: {
+          frames: watchConfiguration.length,
+          registries: watchConfiguration.filter(name => name === 'registry_data').length,
+          finish: watchConfiguration.filter(name => name === 'finish_configuration').length
+        },
+        blockChange: pickerBot6.received.blockChanges.some(change => change.location?.x === liveBlock.x),
+        liveOnly: pickerBot6.received.systemChat.length,
+        ended: pickerBot6.received.ended === null ? null : String(pickerBot6.received.ended).slice(0, 160),
+        leftovers: pickerBot6.received.leftovers.length
+      },
+      driver: {
+        entityId: pickerBot5.received.login === null ? null : pickerBot5.received.login.entityId,
+        blockChange: pickerBot5.received.blockChanges.some(change => change.location?.x === liveBlock.x),
+        liveOnly: pickerBot5.received.systemChat.length,
+        ended: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 160)
+      },
+      channels: channelsRead.map(channel => ({
+        id: channel.id,
+        role: channel.role,
+        name: channel.name,
+        body: channel.body,
+        delivered: channel.delivered,
+        settings: channel.settings
+      })),
+      settings: {
+        driver: driverChannel?.settings ?? null,
+        spectator: spectatorChannel?.settings ?? null,
+        backend: backendSettings.map(packet => ({ locale: packet.locale, viewDistance: packet.viewDistance }))
+      },
+      input: {
+        forwardedBefore: forwardedBeforeWatch,
+        forwardedAfter: pickerCore.metrics.serverboundForwarded,
+        dropped: pickerFront.metrics.spectatorFramesDropped,
+        poseBefore: poseBeforeWatch,
+        poseAfter: poseAfterWatch
+      },
+      metrics: {
+        pickers: pickerFront.metrics.pickers,
+        spectatorJoins: pickerFront.metrics.spectatorJoins,
+        views: pickerCore.metrics.spectatorViews,
+        attaches: pickerFront.metrics.attaches,
+        attachesCore: pickerCore.metrics.attaches,
+        sessionAttachCount: pickerCore.session.attachCount,
+        dials: pickerCore.metrics.claimDials
+      }
+    }
+    check(
+      'O60',
+      'a body serves a driver and a spectator: two channels on one body, each with its own delivery state and its own client settings',
+      watchPick !== null &&
+        watchPick.id === pickIdFor(pickerBodyName) &&
+        watchVerb !== null &&
+        watchVerb.id === verbIdFor('spectate', pickerBodyName) &&
+        pickerBot6.received.login !== null &&
+        pickerBot6.received.login.entityId === pickerBot5.received.login?.entityId &&
+        watchPosition !== null &&
+        watchPosition.x === pickerBodySpawn.x &&
+        watchPosition.y === pickerBodySpawn.y &&
+        watchPosition.z === pickerBodySpawn.z &&
+        watchConfiguration.filter(name => name === 'finish_configuration').length === 1 &&
+        pickerBot6.received.leftovers.length === 0 &&
+        pickerBot6.received.ended === null &&
+        pickerBot5.received.ended === null &&
+        // No second session: a spectator watches the body that is already up.
+        bodyLoginsBeforeWatch === 1 &&
+        pickerBodyFake.received.logins === 1 &&
+        channelsRead.length === 2 &&
+        driverChannel !== null &&
+        driverChannel.role === 'driver' &&
+        driverChannel.name === 'Pilot' &&
+        spectatorChannel !== null &&
+        spectatorChannel.role === 'spectator' &&
+        spectatorChannel.name === 'Watcher' &&
+        driverChannel.body === pickSlug(pickerBodyName) &&
+        spectatorChannel.body === pickSlug(pickerBodyName) &&
+        // Each has been handed its body's replay once, and they have not been handed
+        // the same number of frames: one landed at O58, the other at O60.
+        driverChannel.delivered.replays === 1 &&
+        spectatorChannel.delivered.replays === 1 &&
+        // One live-only frame was sent before the spectator existed, so its record
+        // cannot be the driver's: the driver received it and the spectator did not,
+        // and no replay carries it.
+        pickerBot5.received.systemChat.length === 2 &&
+        pickerBot6.received.systemChat.length === 1 &&
+        driverChannel.delivered.frames > spectatorChannel.delivered.frames &&
+        spectatorChannel.delivered.frames > 0 &&
+        spectatorChannel.delivered.play > 0 &&
+        driverChannel.delivered.last !== null &&
+        driverChannel.delivered.last.name === 'system_chat' &&
+        spectatorChannel.delivered.last !== null &&
+        spectatorChannel.delivered.last.name === 'system_chat' &&
+        // Its own settings, and only the driver's reach the puppet.
+        driverChannel.settings?.locale === 'en_gb' &&
+        spectatorChannel.settings?.locale === 'fr_fr' &&
+        backendSettings.length === 1 &&
+        backendSettings[0].locale === 'en_gb' &&
+        // A spectator changes nothing.
+        pickerCore.metrics.serverboundForwarded === forwardedBeforeWatch &&
+        pickerFront.metrics.spectatorFramesDropped >= 1 &&
+        JSON.stringify(poseAfterWatch) === JSON.stringify(poseBeforeWatch) &&
+        pickerFront.metrics.spectatorJoins === 1 &&
+        pickerCore.metrics.spectatorViews === 1 &&
+        pickerCore.session.attachCount === 1 &&
+        pickerCore.attached === true &&
+        pickerCore.session.state === 'attached' &&
+        pickerCore.metrics.claimDials === 2,
+      evidence.channels
+    )
+
+    // --- O60b: a second claim on a driven body is refused by the claim (#269) ---
+    // O57 refused a rival claim on a body nothing was delivered to. Here the body is
+    // driven: O58's driver holds it and O60's spectator watches it. The rival reaches
+    // the picker while the body is driven, which is the login route #269 changes: a
+    // lane that serves a body still serves the picker, because the second client's
+    // answer is a claim on that body and the claim is what refuses it. No attach slot
+    // denies it first, and it never reaches the core's attach.
+    pickerBot7 = createBot({ port: pickerBound.port, username: 'Rival', version: pickerVersion })
+    await pickerBot7.waitFor(
+      () => pickerBot7.received.dialogs.length === 1,
+      'the picker at the rival, while the body is driven',
+      15_000
+    )
+    const rivalPick = chooseDialogAction(pickerBot7.received.dialogs[0], pickerBodyName)
+    if (rivalPick !== null) pickerBot7.answerDialog(rivalPick.id, null, 'configuration')
+    await pickerBot7.waitFor(
+      () => pickerBot7.received.dialogs.length === 2,
+      "the driven body's dialog at the rival",
+      15_000
+    )
+    const rivalClaim = chooseDialogAction(pickerBot7.received.dialogs[1], 'claim')
+    if (rivalClaim !== null) pickerBot7.answerDialog(rivalClaim.id, null, 'configuration')
+    await pickerBot7.waitFor(
+      () => pickerBot7.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the refusal a second claim on a driven body gets',
+      15_000
+    )
+    const drivenRefusals = logs
+      .filter(entry => entry.event === 'pickerClaimRefused')
+      .map(entry => entry.fields)
+    const slotDenials = logs.filter(entry =>
+      entry.event === 'attachDenied' && entry.fields?.reason === 'already_attached')
+    const channelsAfterRival = pickerFront.channels ?? []
+    evidence.channels.rival = {
+      pick: rivalPick === null ? null : { id: rivalPick.id, label: rivalPick.label },
+      chosen: rivalClaim === null ? null : { id: rivalClaim.id, label: rivalClaim.label },
+      refusals: drivenRefusals,
+      slotDenials: slotDenials.length,
+      ended: pickerBot7.received.ended === null ? null : String(pickerBot7.received.ended).slice(0, 160),
+      channels: channelsAfterRival.map(channel => ({ role: channel.role, name: channel.name })),
+      driverEnded: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 160),
+      spectatorEnded: pickerBot6.received.ended === null ? null : String(pickerBot6.received.ended).slice(0, 160),
+      metrics: {
+        pickers: pickerFront.metrics.pickers,
+        claims: pickerFront.metrics.pickerClaims,
+        refusals: pickerFront.metrics.pickerRefusals,
+        attaches: pickerFront.metrics.attaches,
+        sessionAttachCount: pickerCore.session.attachCount
+      }
+    }
+    check(
+      'O60b',
+      'a second claim on a body a driver already holds is refused by the claim, not by an attach slot',
+      rivalPick !== null &&
+        rivalPick.id === pickIdFor(pickerBodyName) &&
+        rivalClaim !== null &&
+        rivalClaim.id === verbIdFor('claim', pickerBodyName) &&
+        drivenRefusals.length === 2 &&
+        drivenRefusals[1].reason === 'body_claimed' &&
+        drivenRefusals[1].claimedBy === 'Pilot' &&
+        /already claimed by Pilot/.test(String(drivenRefusals[1].text ?? '')) &&
+        pickerBot7.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        // The slot is gone: nothing denied this client before the claim did.
+        slotDenials.length === 0 &&
+        pickerCore.session.attachCount === 1 &&
+        pickerCore.attached === true &&
+        pickerBot5.received.ended === null &&
+        pickerBot6.received.ended === null &&
+        channelsAfterRival.length === 2 &&
+        channelsAfterRival.filter(channel => channel.role === 'driver').length === 1 &&
+        // Two claims were granted in this run, and neither is the rival's: O56's on
+        // the row that never answered, and O58's on the body it landed in.
+        pickerFront.metrics.pickerClaims === 2 &&
+        pickerFront.metrics.pickers === 7,
+      evidence.channels.rival
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
