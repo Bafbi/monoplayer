@@ -693,10 +693,10 @@ export function createMonoplayer ({
   }
 
   // #259: the body's stream goes out while anybody is in play on it, and a
-  // spectator counts as one. A body whose driver left keeps its session and its state, and
-  // a client watching it should follow the world rather than a frozen replay; the
-  // front drops the write when no channel holds the body, so this is permission to
-  // try, not a promise of a reader.
+  // spectator counts as one. A body whose driver left keeps its session and its
+  // state, and a client watching it should follow the world rather than a frozen
+  // replay. The front drops the write when no channel holds the body, so this is
+  // permission to try, not a promise of a reader.
   function canDeliverPlay () {
     return canRelayPlay() || (spectators.size > 0 && servedBody() !== null)
   }
@@ -2373,9 +2373,9 @@ export function createMonoplayer ({
     }
     // #259: the client has to be told it is watching, or it fights the world it
     // was put in. The replay carried the body's own game mode and abilities from
-    // the cache — both are `latest` frames — so these go after it: on this socket
+    // the cache, both of them `latest` frames, so these go after it. On this socket
     // they are the last word, and they reach no other channel.
-    const told = writeSpectatorMode({ channel })
+    const modeFrames = writeSpectatorMode({ channel })
     spectators.add(channel)
     metrics.spectatorViews++
     log('spectateView', {
@@ -2383,13 +2383,13 @@ export function createMonoplayer ({
       channel,
       frames: written,
       replayed: synthesized.counts.replayed,
-      told,
+      modeFrames,
       body: claimedBody,
       state: session.state,
       attached
     })
-    emit('spectate_view', { name, channel, frames: written, told })
-    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, told }
+    emit('spectate_view', { name, channel, frames: written, modeFrames })
+    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, modeFrames }
   }
 
   // #259: a spectator's channel closed. Its client is gone, so the relay stops when
@@ -2412,21 +2412,21 @@ export function createMonoplayer ({
   // The flags are the ones vanilla sends a spectator: invulnerable (0x01), flying
   // (0x02), flying allowed (0x04). The speeds are the protocol's own defaults.
   function writeSpectatorMode ({ channel }) {
-    let told = 0
+    let written = 0
     try {
       if (frontLeg.write('game_state_change', {
         reason: GAME_MODE_CHANGE_REASON,
         gameMode: GAME_MODE_SPECTATOR
-      }, { channel })) told++
+      }, { channel })) written++
       if (frontLeg.write('abilities', {
         flags: SPECTATOR_ABILITY_FLAGS,
         flyingSpeed: SPECTATOR_FLYING_SPEED,
         walkingSpeed: SPECTATOR_WALKING_SPEED
-      }, { channel })) told++
+      }, { channel })) written++
     } catch (error) {
-      log('spectateToldFailed', { channel, error: String(error?.message ?? error).slice(0, 200) })
+      log('spectateModeRefused', { channel, error: String(error?.message ?? error).slice(0, 200) })
     }
-    return told
+    return written
   }
 
   function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
