@@ -35,12 +35,12 @@
 //      and not at login; the claim is held by the connection and released when the
 //      connection ends.
 //   2c. #258: a granted claim is the one thing that lands a client. The leg asks
-//      the caller to connect the body the frame named, and only then; a body that
-//      answers continues the client's open configuration phase with its own
-//      frames, ends it with one finish frame, and the client reaches playerJoin,
-//      where the core replays that body's play state on the same socket. A body
-//      that refuses the dial offers the list again instead of leaving the client
-//      in a dialog nobody will read.
+//      the caller for the body the frame named, and only after the click. A body
+//      that answers continues the client's open configuration phase with its own
+//      frames and ends it with one finish frame. The client then reaches
+//      playerJoin, where the core replays that body's play state on the socket the
+//      client already holds. A body that refuses the dial offers the list again,
+//      instead of leaving the client in a dialog nobody will read.
 //   3. allow — cached configuration replay path: the library's automatic
 //      configuration (segmented registry_data from its own built-in codec,
 //      then finish_configuration) is intercepted via beforeLogin write
@@ -1161,8 +1161,7 @@ function createFrontLeg ({
           body: claim.body,
           server: claim.server,
           target,
-          name: client.username ?? null,
-          uuid: client.uuid ?? null
+          name: client.username ?? null
         })
     } catch (error) {
       pending = { connected: false, reason: 'landing_threw', detail: String(error?.message ?? error).slice(0, 200) }

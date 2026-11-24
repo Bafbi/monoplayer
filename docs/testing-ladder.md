@@ -505,7 +505,10 @@ first dial and its target warms in five seconds.
   same id with the server it named. The pick rides in the action `id`, never in
   `additions`. `front.lastConfigMode` is `baseline`, and the core attaches nothing.
   A pick no longer ends the connection: it opens the server's own dialog, which is
-  O56.
+  O56. The assertion also reads the lane before any claim exists: the backend leg
+  has no connection, never opened one, and both claim counters are zero. That is the
+  no-dial rule (Q6) at the only moment it is about, rather than a count of logins at
+  a body nobody reached yet.
 
   The rig lists two rows. The first names a port nothing listens on, so a claim on
   it is a dial the kernel refuses; the second names a real 26.2 fake body, which is
@@ -575,10 +578,9 @@ first dial and its target warms in five seconds.
   for that claim, and its play state arrives on the connection the client already
   held (#258). A fifth 26.2 bot reads the same picker, picks the row that names a
   real 26.2 fake body, and clicks `Claim`. The fake counts zero logins before that
-  click, which is the no-dial rule (Q6) made visible: with nobody claiming, nothing
-  is connected. It counts one afterwards, and the backend leg's target is that
-  body's port rather than the configured backend the lane started with, so the
-  claim chose the body instead of inheriting a warm one. The client's play login
+  click, and one afterwards. The backend leg's target is that body's port rather
+  than the configured backend the lane started with, so the claim chose the body
+  instead of inheriting a warm one. The client's play login
   then arrives on the socket it already held: the body's own configuration frames
   continue the phase the baseline opened, one `finish_configuration` ends it, and
   the core's replay follows. The position it holds is that body's own spawn, which
@@ -594,7 +596,11 @@ first dial and its target warms in five seconds.
   never its terrain, and never a real client's acceptance of two registry sets in
   one phase. That is rung 4's question, and #268's: if a real client refuses the
   second round, the fallback is a one-frame limbo through the same-connection
-  reconfiguration machine, and this rung reports which path ran.
+  reconfiguration machine.
+
+  The report says which path ran, out of the client's own frames: this one is
+  `same_phase`, with one finish and no `start_configuration`. The fallback would
+  show that frame, so a later run cannot report the same path by accident.
 
 
 ## The client parity rung
