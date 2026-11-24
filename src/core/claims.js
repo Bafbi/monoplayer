@@ -8,9 +8,10 @@
 //   1. a body holds one claim, and a second claim on it is refused with the claim
 //      that holds it, so the client can be told who holds it;
 //   2. a connection holds one claim, so a client that already holds one cannot
-//      hold a second. That is the attach slot's exclusivity, moved: the claim now
-//      decides who may own a body, and the slot still decides who is delivered one
-//      until #269 gives the claim a channel to deliver through.
+//      hold a second. Both rules were the attach slot's, and the claim is where
+//      they live now: the slot is gone (#269), and a body's delivery is a channel's
+//      (src/core/channels.js), which opens as the driver when this grants the
+//      claim and as a spectator otherwise.
 //
 // The holder is the id the front leg gives a connection, never the socket and
 // never the player's UUID: two connections from one account are two holders.

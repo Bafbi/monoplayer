@@ -12,7 +12,7 @@
 //   0. #201 the pre-auth window. A socket is counted from the moment it is
 //      accepted until the whitelist accepts its resolved UUID. Over the cap the
 //      socket is closed here, before any of the steps below: no login review, no
-//      interceptor, no attach slot. An accepted, authenticated session has left
+//      interceptor, no channel. An accepted, authenticated session has left
 //      the window, so the cap can never refuse one. #205: the same window has a
 //      deadline. A connection still in it when its timer fires is destroyed, so
 //      a socket that never speaks cannot hold a slot until its peer closes.
@@ -21,20 +21,28 @@
 //      BEFORE our synchronous beforeLogin hook runs). Offline: the library
 //      sets client.uuid to the vanilla offline UUID (MD5 of
 //      "OfflinePlayer:<name>").
-//   2. beforeLogin (synchronous; createServer option): deny a second attach
-//      before any verification, then run the core login decision (fail closed)
-//      and the mode's check. Deny = client.end('attach denied (...)'): the
+//   2. beforeLogin (synchronous; createServer option): run the core login decision
+//      (fail closed) and the mode's check. A second client is not denied here: a lane
+//      that offers a picker sends it to the picker, where the claim refuses it, and a
+//      lane with no picker lets the session answer `already_attached` at the attach
+//      (#269). Deny = client.end('attach denied (...)'): the
 //      Server.end override writes the login-state disconnect then ends the
 //      serializer chain, so the library's follow-up compress/success writes in
 //      loginClient are mechanically dropped (client.write no-ops on an ended
 //      serializer).
 //   2b. #257/#267: a login the core allowed with no backend to attach to
 //      (`picker: true`) is served the recorded configuration baseline and the
-//      picker dialog, and takes no attach slot, so several clients may read it at
-//      once. The click that claims a body is recorded here (#267), at that click
-//      and not at login; the claim is held by the connection and released when the
-//      connection ends.
-//   2c. #258: a granted claim is the one thing that lands a client. The leg asks
+//      picker dialog. The click that claims a body is recorded here (#267), at that
+//      click and not at login; the claim is held by the connection and released when
+//      the connection ends.
+//   2c. #269: delivery is a channel's, not a slot's. A channel is one
+//      connection's delivery of one body: its role, what it has been sent, and its
+//      own client information (src/core/channels.js). A body's driver and its
+//      spectators are channels on that body, and every frame this leg writes goes to
+//      all of them. A second claim on a driven body is refused by the claim, and a
+//      spectator's frames never reach the core.
+//
+//   2d. #258: a granted claim is the one thing that lands a client. The leg asks
 //      the caller for the body the frame named, and only after the click. A body
 //      that answers continues the client's open configuration phase with its own
 //      frames and ends it with one finish frame. The client then reaches
@@ -58,9 +66,11 @@
 //      belongs to the front leg (omitted via the join-synth option).
 //   5. serverbound play frames (raw buffer + decoded data) go to the core's
 //      setServerboundHandler pipeline; client end/error go to the core detach.
-//   6. the client's Client Information (`settings`) is reported to the core as
-//      it arrives, in configuration or play (#18). The core owns what the
-//      backend sees: the human's fields with the backend's view distance cap.
+//   6. a client's Client Information (`settings`) is recorded on its own channel as
+//      it arrives (#269). Only the driver's is reported to the core, and only outside
+//      play (#18): a play-state change travels the serverbound pipeline, and a
+//      spectator's settings reach nothing. The core owns what the backend sees: the
+//      driver's fields with the backend's view distance cap.
 //   7. #22: the core may ask the attached client to re-enter configuration on
 //      the same connection (`startReconfiguration`). The leg writes the
 //      play-state `start_configuration` and holds the core's configuration
@@ -81,6 +91,7 @@ import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CLAIM_REFUSAL, claimRefusalText, createClaims } from '../core/claims.js'
+import { CHANNEL_ROLES, createChannels } from '../core/channels.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
@@ -96,6 +107,7 @@ import {
   readServerAction,
   serverActionProblemText,
   serverDialogParams,
+  spectateRefusalText,
   verbIdFor,
   verbRefusalText
 } from '../core/picker.js'
@@ -338,20 +350,16 @@ export function emitCheckedRaw ({
   return true
 }
 
-// The attach slot holds one client. A second connection must be denied before
-// verification, not kicked after configuration.
-export function shouldDenySecondAttach (attached, client) {
-  return Boolean(attached && attached !== client)
-}
-
-// Which client information frames the core hears about. Two rules:
-//   - only the client that holds the attach slot, so a racing or denied
-//     connection can never overwrite the playing human's fields;
+// #269: which channel's client information the core hears about. Two rules, and
+// they are the whole decision:
+//   - only the driver's, because the fields the puppet sends are the driving
+//     client's. A spectator's information is its own and is recorded on its own
+//     channel, so one client can never overwrite another's;
 //   - only outside play, because a play-state change travels the normal
 //     serverbound pipeline, where the core rewrites it with the view distance
 //     cap. Reporting it here too would write the packet to the backend twice.
-export function shouldReportClientSettings ({ attached, client, state = null }) {
-  if (!attached || attached !== client) return false
+export function reportsClientInformation ({ role = null, state = null } = {}) {
+  if (role !== CHANNEL_ROLES.DRIVER) return false
   return state !== 'play'
 }
 
@@ -532,7 +540,12 @@ function createFrontLeg ({
   let configuringHandler = null // core call-in: the client entered configuration (#16)
   let reconfiguredHandler = null // core call-in: the client re-entered play (#22)
   let errorHandler = null
-  let attached = null // the one client through the pipeline (check pass or attached)
+  // #269: a spectator's two call-ins. `spectateBody` answers whether a row names a
+  // body this lane can watch, and `spectatorAttach` hands that body's play state to
+  // the spectator's own channel. Both absent is a lane with no spectator, and its
+  // Spectate verb is refused in words.
+  let spectateBodyHandler = null
+  let spectatorAttachHandler = null
 
   const wireStats = { checked: 0, rejected: 0, lastFailure: null }
 
@@ -541,8 +554,15 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
-  const clients = new Map() // Client -> { interceptor }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0 }
+  const clients = new Map() // Client -> { interceptor, channel }
+  // #269: the channels this leg delivers through (src/core/channels.js). A channel
+  // is one connection's delivery of one body: its role, what it has been sent, and
+  // its own client information. The claim decides who may drive a body
+  // (src/core/claims.js); a channel is what each connection is handed, and the
+  // attach slot is gone with the one pointer that used to be all three.
+  const channels = createChannels()
+  const clientByChannel = new Map() // channel id -> the socket that holds it
   // #267: the claims this leg holds, one per body. A claim is recorded where a
   // client answers a body's own dialog, and released when its connection ends. The
   // holder is an id this leg gives a connection, so the board holds no socket and
@@ -709,7 +729,7 @@ function createFrontLeg ({
       server.on('connection', client => {
         // #201: the cap is checked first. A refused connection never reaches the
         // login review below, so nothing of this leg is allocated for it: no
-        // interceptor, no attach slot, no serverbound pipeline. The socket is
+        // interceptor, no channel, no serverbound pipeline. The socket is
         // destroyed rather than ended, because ending it waits on the library's
         // 30 s close timeout and a flood would sit in that wait.
         const admission = admitPreAuthWindow(client)
@@ -761,14 +781,6 @@ function createFrontLeg ({
     const uuid = client.uuid
     log('frontLoginReview', { username, uuid: uuid ?? null, onlineMode, verifier })
 
-    // Early second-attach deny: before any verification or configuration.
-    if (shouldDenySecondAttach(attached, client)) {
-      metrics.denied++
-      log('attachDenied', { username, uuid: uuid ?? null, reason: 'already_attached' })
-      denyConnection(client, 'already_attached')
-      return
-    }
-
     const decision = decideViaCheck({
       client,
       store,
@@ -808,10 +820,12 @@ function createFrontLeg ({
     // writes/completion (we are inside the synchronous beforeLogin window).
     const interceptor = installConfigInterceptor(client)
 
-    // Own the client slot first: the core's early attach streams the cached
-    // configuration frames straight back through writeRaw, and a second
-    // connection is denied at the next check.
-    attachCandidate(client)
+    // #269: own the channel first, because the core's early attach streams the
+    // cached configuration frames straight back through writeRaw and this client's
+    // configuration information is reported on the channel it holds. A lane that
+    // already has a driver opens nothing here: the session answers the second
+    // client at the attach, which is the one authority such a lane has.
+    openChannel(client, { role: CHANNEL_ROLES.DRIVER })
 
     // #16: no cached configuration means the puppet is still configuring. The
     // client attaches early and follows the live stream; the core refuses when
@@ -858,11 +872,116 @@ function createFrontLeg ({
     }
   }
 
-  // The attach slot is claimed at check-pass time so a second racing client
-  // is denied up-front rather than kicked at playerJoin.
-  function attachCandidate (client) {
-    if (attached && attached !== client) return // first client still holds the slot
-    attached = client
+  // --- #269: the channels, and the sockets they belong to ---
+
+  // Open a channel for a connection. The claim has already refused a rival, so a
+  // second driver here is a programming error rather than a second authority: it is
+  // counted and refused with the channel that holds the body.
+  function openChannel (client, { role, body = null, name = null } = {}) {
+    const outcome = channels.open({
+      id: holderFor(client),
+      body,
+      role,
+      name: name ?? client.username ?? null,
+      at: Date.now()
+    })
+    if (!outcome.ok) {
+      metrics.channelRefused++
+      log('channelRefused', {
+        username: client.username ?? null,
+        uuid: client.uuid ?? null,
+        role,
+        body,
+        reason: outcome.reason,
+        heldBy: outcome.channel?.name ?? null
+      })
+      return null
+    }
+    clientByChannel.set(outcome.channel.id, client)
+    const ctx = clients.get(client)
+    if (ctx) ctx.channel = outcome.channel.id
+    log('channelOpen', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      channel: outcome.channel.id,
+      role: outcome.channel.role,
+      body: outcome.channel.body
+    })
+    return outcome.channel
+  }
+
+  // The channel a connection holds, or null. Read from the holder id, so a channel
+  // that closed is a connection holding nothing.
+  function channelFor (client) {
+    const id = holderIds.get(client)
+    return id === undefined ? null : channels.of(id)
+  }
+
+  function closeChannel (client) {
+    const id = holderIds.get(client)
+    if (id === undefined) return null
+    const closed = channels.close(id)
+    if (closed === null) return null
+    clientByChannel.delete(id)
+    log('channelClosed', {
+      username: client.username ?? null,
+      channel: closed.id,
+      role: closed.role,
+      body: closed.body,
+      frames: closed.delivered.frames
+    })
+    return closed
+  }
+
+  function clientOfChannel (id) {
+    return typeof id === 'string' ? clientByChannel.get(id) ?? null : null
+  }
+
+  // One clientbound write, to every channel on the body or to one of them. The two
+  // callers differ only in what they hand a client, so the addressing and the count of
+  // deliveries live here (#269).
+  function deliverEach (channel, deliver) {
+    if (channel !== null) return deliver(clientOfChannel(channel)) ? 1 : 0
+    let sent = 0
+    for (const target of deliveryTargets()) {
+      if (deliver(target.client)) sent++
+    }
+    return sent
+  }
+
+  // The socket that drives the body this leg serves. A reconfiguration and the
+  // wire's one-start-per-round are the driver's; a spectator is handed the result
+  // like any other body stream.
+  function driverClient () {
+    const driver = channels.driverChannel()
+    return driver === null ? null : clientOfChannel(driver.id)
+  }
+
+  // The sockets one clientbound frame goes to: the body's driver, and every
+  // spectator watching that body. One body at a time is this leg's limit, so the
+  // driver's channel is what names the body; a leg per body is #261.
+  function deliveryTargets () {
+    const driver = channels.driverChannel()
+    if (driver === null) return []
+    const targets = []
+    for (const channel of channels.on(driver.body)) {
+      const client = clientByChannel.get(channel.id)
+      if (client !== undefined) targets.push({ client, channel })
+    }
+    return targets
+  }
+
+  // One frame reached one channel. The counter is the channel's, so a spectator
+  // that arrived mid-stream is never reported as having seen what the driver saw.
+  function noteDelivered (client, meta, { replay = false } = {}) {
+    const channel = channelFor(client)
+    if (channel === null) return
+    channels.noteDelivery({
+      id: channel.id,
+      state: meta?.state === 'configuration' ? 'configuration' : 'play',
+      name: typeof meta?.name === 'string' ? meta.name : null
+    })
+    if (replay) channels.markReplay(channel.id)
   }
 
   // The body's configuration frames as this leg may send them: the cache's own
@@ -943,7 +1062,8 @@ function createFrontLeg ({
 
   // #257: a join with no backend, on a leg that holds a baseline. The client is
   // held in configuration and shown the picker; nothing is attached, so the
-  // second-attach slot stays free and the core's session is untouched.
+  // body stays with its driver: a picker client holds no channel and the core's
+  // session is untouched.
   function servePicker (client) {
     if (pickerFrames === null || pickerServers === null) {
       metrics.denied++
@@ -1116,8 +1236,10 @@ function createFrontLeg ({
       endConfiguration(client, 'claim_refused', claimed.text)
       return
     }
-    // Spectate acts on a body too, and nothing here watches one yet. So the verb is
-    // read, reported, and refused in words that name it.
+    // #269: `spectate` is refused here in words, and the delivery it will use exists
+    // below (`spectate`). What a spectator is told, whether an unclaimed body may be
+    // watched, and what the picker shows about watchers are #259's, so this verb does
+    // not answer for them.
     endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
   }
 
@@ -1212,34 +1334,20 @@ function createFrontLeg ({
   // is what reaches playerJoin, where the core replays this body's play state on
   // the connection the client already holds.
   function landClaimedClient (client, claim, outcome) {
-    // The cache holds the body's own finish frame, and the phase ends with exactly
-    // one: a second finish arrives after the client is in play, where its id is
-    // another packet's, and the client reads it as one. The cached replay path
-    // drops it for the same reason and writes the library's own.
-    const frames = replayableConfigFrames().filter(frame => frame.name !== 'finish_configuration')
-    if (frames.length === 0) {
+    // The channel opens before the body's frames go out, so every one of them is
+    // counted on the channel that received it: a landing that fails half way must
+    // leave a record of what the client was sent (#269).
+    const channel = openChannel(client, { role: CHANNEL_ROLES.DRIVER, body: claim.body })
+    const sent = sendBodyConfiguration(client)
+    if (sent.frames === 0) {
       // A body the core reports warm with nothing cached is a body no client can
       // be put into, and it is answered like an unreachable one.
+      if (channel !== null) closeChannel(client)
       restoreClaimedPicker(client, claim, 'no_cached_configuration')
       return
     }
-    let written = 0
-    for (const frame of frames) {
-      const sent = emitCheckedRaw({
-        client,
-        buffer: frame.buffer,
-        meta: { state: 'configuration', name: frame.name },
-        wireCheck,
-        wireMode,
-        stats: wireStats,
-        log
-      })
-      if (sent) written++
-    }
-    // This client is the body's now: the attach slot is what the core's writes are
-    // addressed to, and it is still the one place a delivered body is named
-    // (#269 replaces it).
-    attachCandidate(client)
+    const written = sent.written
+    leavePicker(client)
     metrics.claimLanded++
     log('pickerClaimLanded', {
       username: client.username ?? null,
@@ -1260,6 +1368,106 @@ function createFrontLeg ({
       })
       endConfiguration(client, 'claim_failed', claimFailureText({ server: claim.server }))
     }
+  }
+
+  // #269: the dialog is over. Once a client is landed in a body it is a channel on
+  // that body and not a picker client, so its frames take the serverbound path: the
+  // driver's to the core, a spectator's dropped as a spectator's. A picker client's
+  // frames are dialog clicks and nothing else, which is why a landing that kept the
+  // flag would leave its driver unable to drive.
+  function leavePicker (client) {
+    const ctx = clients.get(client)
+    if (ctx) ctx.picker = false
+  }
+
+  // #269: land a client this leg holds in a body as that body's spectator. The core
+  // owns the body, so it answers whether the body this call names is the one it
+  // serves; the leg then opens the client's spectator channel and continues its own
+  // configuration phase with that body's frames, exactly as a landing does. Nothing
+  // is asked of the client and nothing is sent to it on a refusal: the call answers
+  // with the sentence to give it, and the caller that asked (the picker's Spectate,
+  // #259) decides how to say it. Three reasons have three sentences, because "claim
+  // it first", "wait" and "this lane is not serving it" ask for different things.
+  function landSpectator (client, { body = null, server = null } = {}) {
+    const named = server ?? body
+    const answer = spectateBodyHandler === null
+      ? { watching: false, reason: 'no_spectator_sink' }
+      : spectateBodyHandler({ body, server: named, name: client.username ?? null })
+    const refused = reason => ({
+      watching: false,
+      reason,
+      text: spectateRefusalText({ server: named, reason })
+    })
+    if (answer?.watching !== true) {
+      metrics.pickerRefusals++
+      const outcome = refused(answer?.reason ?? 'unwatchable')
+      log('spectateRefused', {
+        username: client.username ?? null,
+        body,
+        server: named,
+        reason: outcome.reason,
+        text: outcome.text
+      })
+      return outcome
+    }
+    const channel = openChannel(client, {
+      role: CHANNEL_ROLES.SPECTATOR,
+      body: typeof answer.body === 'string' ? answer.body : body
+    })
+    if (channel === null) return refused('channel_refused')
+    const sent = sendBodyConfiguration(client)
+    if (sent.frames === 0) {
+      closeChannel(client)
+      return refused('no_cached_configuration')
+    }
+    leavePicker(client)
+    metrics.spectateLandings++
+    log('spectateLanded', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      channel: channel.id,
+      body: channel.body,
+      server: named,
+      frames: sent.written
+    })
+    try {
+      client.write('finish_configuration', {})
+    } catch (error) {
+      log('spectateFinishFailed', {
+        body: channel.body,
+        server: named,
+        error: String(error?.message ?? error).slice(0, 200)
+      })
+      return refused('finish_failed')
+    }
+    return { watching: true, reason: null, text: null, channel: channel.id, body: channel.body, frames: sent.written }
+  }
+
+  // #269: a body's own configuration frames, in the phase the baseline opened and
+  // the dialog held. The cache holds the body's finish frame and the phase ends
+  // with exactly one, so it is dropped here: a second finish arrives after the
+  // client is in play, where its id is another packet's, and the client reads it
+  // as one. A claim and a spectator both enter a body this way, which is why it is
+  // one function: the frames a client receives must not depend on its role.
+  function sendBodyConfiguration (client) {
+    const frames = replayableConfigFrames().filter(frame => frame.name !== 'finish_configuration')
+    let written = 0
+    for (const frame of frames) {
+      const sent = emitCheckedRaw({
+        client,
+        buffer: frame.buffer,
+        meta: { state: 'configuration', name: frame.name },
+        wireCheck,
+        wireMode,
+        stats: wireStats,
+        log
+      })
+      if (sent) {
+        written++
+        noteDelivered(client, { state: 'configuration', name: frame.name })
+      }
+    }
+    return { frames: frames.length, written }
   }
 
   // #267: the claim as the callback and the log both read it. One mapper, so the
@@ -1363,11 +1571,52 @@ function createFrontLeg ({
   // prefix + warm state (configuration frames are omitted — the front leg
   // owns the configuration phase).
   function onClientJoined (client) {
-    if (shouldDenySecondAttach(attached, client)) {
-      log('frontRejected', { reason: 'already_attached', username: client.username })
-      client.end('attach denied (already attached)')
+    const channel = channelFor(client)
+    // #269: a spectator is not an attach. The body is already delivered to its
+    // driver, so the client is handed that body's play state on its own channel and
+    // the session is not touched: watching is not driving, and a second attach would
+    // make it one.
+    if (channel !== null && channel.role === CHANNEL_ROLES.SPECTATOR) {
+      const watched = spectatorAttachHandler === null
+        ? { watching: false, reason: 'no_spectator_sink' }
+        : spectatorAttachHandler({
+          name: client.username ?? null,
+          uuid: client.uuid ?? null,
+          channel: channel.id
+        })
+      if (watched?.watching !== true) {
+        log('spectateFailed', {
+          username: client.username ?? null,
+          uuid: client.uuid ?? null,
+          body: channel.body,
+          reason: watched?.reason ?? 'no_answer'
+        })
+        try { client.end(`spectate refused (${watched?.reason ?? 'no_answer'})`) } catch { /* already gone */ }
+        return
+      }
+      channels.markReplay(channel.id)
+      metrics.spectatorJoins++
+      log('spectated', {
+        username: client.username ?? null,
+        uuid: client.uuid ?? null,
+        channel: channel.id,
+        body: channel.body,
+        frames: watched.frames ?? null,
+        replayed: watched.replayed ?? null
+      })
       return
     }
+    // The driver, and a client this lane admitted without one. The core's session is
+    // the one authority left: it answers `already_attached` when a driver already
+    // holds the body, and a lane that refuses its client is a lane whose session said
+    // no (#269: the claim refuses a rival in a picker lane, and the session does it
+    // where there is no claim to make).
+    // The channel has to exist before the core replays: the replay is written
+    // synchronously, and it goes to the channels this leg holds. A client the session
+    // accepts without one — its login was admitted while another connection still held
+    // the body, and that connection failed before the core answered this one — gets its
+    // channel here, or its replay would be written to no socket at all.
+    const held = channelFor(client) ?? openChannel(client, { role: CHANNEL_ROLES.DRIVER })
     const outcome = coreAttach({ name: client.username, uuid: client.uuid })
 
     if (!outcome.attached) {
@@ -1375,6 +1624,9 @@ function createFrontLeg ({
       client.end(`attach denied (${outcome.reason})`)
       return
     }
+    // The core just replayed the body's play state on this socket, so this channel has
+    // been handed its one replay.
+    if (held !== null) channels.markReplay(held.id)
     metrics.attaches++
     log('attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })
   }
@@ -1407,6 +1659,16 @@ function createFrontLeg ({
         if (meta.state === 'configuration' && meta.name === 'custom_click_action') {
           handlePickerClick(client, buffer)
         }
+        return
+      }
+      // #269: a spectator changes nothing. Its frames never reach the core's
+      // pipeline, so nothing it sends can drive the body, speak as the puppet, or
+      // answer a dialog on the body's behalf. Counted, because a client whose input
+      // is refused should be able to say so.
+      const channel = channelFor(client)
+      if (channel !== null && channel.role === CHANNEL_ROLES.SPECTATOR) {
+        metrics.spectatorFramesDropped++
+        log('spectatorFrameDropped', { username: client.username ?? null, state: meta.state, name: meta.name })
         return
       }
       // #16: a configuration-phase frame reaches the core as well. The human's
@@ -1497,12 +1759,20 @@ function createFrontLeg ({
           reason: String(reason).slice(0, 160)
         })
       }
-      if (attached === client) {
-        attached = null
-        log('frontDetach', { reason: String(reason).slice(0, 160), attached: true })
+      // #269: the channel ends with its connection. The driver's channel closing is a
+      // detach, because the body outlives the player; a spectator's is the end of a
+      // watcher and nothing else, since the body was never the spectator's.
+      const closed = closeChannel(client)
+      if (closed !== null && closed.role === CHANNEL_ROLES.DRIVER) {
+        log('frontDetach', { reason: String(reason).slice(0, 160), attached: true, channels: channels.size })
         detachHandler?.({ reason: String(reason) })
-      } else if (clients.has(client)) {
-        log('frontClientEnd', { reason: String(reason).slice(0, 160), attached: false })
+      } else if (closed !== null || clients.has(client)) {
+        log('frontClientEnd', {
+          reason: String(reason).slice(0, 160),
+          attached: false,
+          role: closed === null ? null : closed.role,
+          channels: channels.size
+        })
       }
     })
     client.on('error', err => {
@@ -1516,7 +1786,27 @@ function createFrontLeg ({
     // core decides what the backend sees.
     client.on('settings', (data, meta) => {
       const state = meta?.state ?? client.state ?? null
-      if (!shouldReportClientSettings({ attached, client, state })) {
+      const channel = channelFor(client)
+      // #269: every channel records its own information, so two clients on one body
+      // hold two records and neither can overwrite the other. Only the driver's
+      // reaches the core, and only outside play (#18): a play-state change travels
+      // the serverbound pipeline, where the core rewrites it with the backend's cap.
+      if (channel === null) {
+        log('clientInformationNoChannel', { username: client.username ?? null, state })
+        return
+      }
+      channels.settings(channel.id, data, { at: Date.now() })
+      if (channel.role !== CHANNEL_ROLES.DRIVER) {
+        metrics.spectatorSettings++
+        log('spectatorClientInformation', {
+          username: client.username ?? null,
+          state,
+          channel: channel.id,
+          locale: data?.locale ?? null
+        })
+        return
+      }
+      if (!reportsClientInformation({ role: channel.role, state })) {
         log('clientInformationNotReported', { username: client.username ?? null, state })
         return
       }
@@ -1540,18 +1830,21 @@ function createFrontLeg ({
   // first would read the answer through the configuration table as an unknown
   // packet.
   function startReconfiguration ({ reason = 'transfer' } = {}) {
-    if (!attached) return { started: false, reason: 'no_client' }
-    const ctx = clients.get(attached)
+    // A reconfiguration is the driver's: it is the body's own connection, and a
+    // spectator is handed the restored state like any other body stream (#269).
+    const driver = driverClient()
+    if (!driver) return { started: false, reason: 'no_client' }
+    const ctx = clients.get(driver)
     if (ctx?.pendingReconfiguration) {
       log('frontReconfigureRefused', { reason: 'already_reconfiguring' })
       return { started: false, reason: 'already_reconfiguring' }
     }
-    if (attached.state !== 'play') {
-      log('frontReconfigureRefused', { reason: 'client_not_in_play', state: attached.state })
-      return { started: false, reason: 'client_not_in_play', state: attached.state }
+    if (driver.state !== 'play') {
+      log('frontReconfigureRefused', { reason: 'client_not_in_play', state: driver.state })
+      return { started: false, reason: 'client_not_in_play', state: driver.state }
     }
     try {
-      attached.write('start_configuration', {})
+      driver.write('start_configuration', {})
     } catch (error) {
       log('frontReconfigureWriteFailed', { error: String(error?.message ?? error).slice(0, 200) })
       return { started: false, reason: 'write_failed' }
@@ -1561,7 +1854,7 @@ function createFrontLeg ({
       ctx.reconfiguring = false
     }
     metrics.reconfigurations++
-    log('frontReconfiguration', { reason, username: attached.username ?? null })
+    log('frontReconfiguration', { reason, username: driver.username ?? null })
     return { started: true, reason }
   }
 
@@ -1580,7 +1873,8 @@ function createFrontLeg ({
     }
     ctx.reconfiguring = true
     for (const frame of pending.frames) {
-      emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log })
+      const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log })
+      if (sent) noteDelivered(client, frame.meta)
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
     log('frontReconfigurationAcknowledged', {
@@ -1589,6 +1883,89 @@ function createFrontLeg ({
       droppedFrames: pending.dropped
     })
     return { acknowledged: true, flushed: pending.frames.length }
+  }
+
+  // --- #269: delivery, one channel at a time ---
+
+  // The library-serialized packet path (the synthesized position, the skin, a
+  // notice). The wire checker guards raw frames in writeRawTo; a packet object
+  // cannot carry trailing bytes.
+  function writePacketTo (client, name, packet) {
+    if (!client || typeof client.write !== 'function') return false
+    client.write(name, packet)
+    noteDelivered(client, { state: client.state === 'configuration' ? 'configuration' : 'play', name })
+    return true
+  }
+
+  // One frame, to one client. Everything on this path is per socket — the
+  // clientbound policy backstop, the reconfiguration hold, the state check, the wire
+  // check — so a body with two channels does the work twice, and neither client can
+  // be handed a frame in a state it cannot parse.
+  function writeRawTo (client, buffer, meta = null) {
+    if (!client) return false
+    // Last-write check: even if the core router regresses, a frame the
+    // clientbound policy blocks never reaches the client. The cache and
+    // router already drop these; this is the independent backstop. It takes
+    // the chat mode so it refuses what the router refuses (#19).
+    if (meta && (meta.state === 'play' || meta.state === 'configuration')) {
+      if (!mayCrossToFront(meta.state, meta.name, { chat: chatMode })) {
+        const policy = clientboundPolicy(meta.state, meta.name)
+        metrics.policyRefused++
+        log('clientboundRefused', {
+          state: meta.state,
+          name: meta.name,
+          unknown: policy.unknown === true
+        })
+        return false
+      }
+    }
+    // #22: the reconfiguration is waiting for the client's play-state
+    // configuration_acknowledged. The client cannot parse a configuration
+    // frame before that, so hold them in order and flush them on the ack.
+    const pending = clients.get(client)?.pendingReconfiguration
+    if (pending && client.state === 'play' && meta?.state === 'configuration') {
+      pending.frames.push({ buffer, meta })
+      while (pending.frames.length > MAX_PENDING_RECONFIGURATION_FRAMES) {
+        // Drop the newest: the earliest frames carry the registries the rest
+        // of the round depends on. A queue this deep means the client never
+        // acknowledged, and the core's configuration deadline ends the round.
+        pending.frames.pop()
+        pending.dropped++
+        metrics.reconfigurationFramesDropped++
+      }
+      if (pending.dropped > 0 && !pending.overflowLogged) {
+        pending.overflowLogged = true
+        log('frontReconfigurationOverflow', { dropped: pending.dropped })
+      }
+      return true
+    }
+    // #16: a relayed frame must reach the client in a state it can parse. A
+    // configuration frame written while the client is still in login is read
+    // as a login packet, which kills the connection. Refuse and log instead.
+    if (meta?.state && client.state && meta.state !== client.state) {
+      metrics.stateRefused++
+      log('clientboundStateMismatch', {
+        name: meta.name,
+        frameState: meta.state,
+        clientState: client.state
+      })
+      return false
+    }
+    if (dumpRaw) {
+      dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
+    }
+    // #16: the core's own finish_configuration ends the client's
+    // configuration phase. The interceptor must drop the library's deferred
+    // finish so the client never sees two of them.
+    if (meta?.state === 'configuration' && meta?.name === 'finish_configuration') {
+      const ctx = clients.get(client)
+      if (ctx?.interceptor?.finishFromCore()) {
+        log('configFinishedByCore', { username: client.username ?? null })
+      }
+    }
+    const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
+    if (sent) noteDelivered(client, meta)
+    return sent
   }
 
   return {
@@ -1613,81 +1990,55 @@ function createFrontLeg ({
     // built without a core refuses every landing instead of waiting for an answer
     // nobody sends.
     setConnectClaimedBody (fn) { connectClaimedBody = typeof fn === 'function' ? fn : null },
-    write (name, packet) {
-      // Library-serialized packet (the synthesized position). The wire checker
-      // guards raw replayed/relayed frames in writeRaw; a packet object cannot
-      // carry trailing bytes.
-      attached?.write(name, packet)
+    // #269: the spectator's two call-ins. The core wires them in its own start(), so
+    // a leg built without a core refuses the Spectate verb in words instead of
+    // waiting for an answer nobody sends.
+    setSpectateBody (fn) { spectateBodyHandler = typeof fn === 'function' ? fn : null },
+    setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
+    // #269: land one of this leg's connections in a body as its spectator, and answer
+    // with what happened. The player is named rather than the socket because the
+    // caller is the lane's, not the socket's: #259 wires the picker's Spectate to
+    // this, and a rung stands in for it until then. A refusal carries the sentence for
+    // the client, so the surface that shows it stays the caller's to decide.
+    spectate ({ username = null, body = null, server = null } = {}) {
+      const client = typeof username === 'string'
+        ? [...clients.keys()].find(entry => entry.username === username) ?? null
+        : null
+      if (client === null) {
+        return {
+          watching: false,
+          reason: 'no_client',
+          text: spectateRefusalText({ server: server ?? body })
+        }
+      }
+      return landSpectator(client, { body, server })
     },
-    writeRaw (buffer, meta = null) {
-      if (!attached) return false
-      // Last-write check: even if the core router regresses, a frame the
-      // clientbound policy blocks never reaches the client. The cache and
-      // router already drop these; this is the independent backstop. It takes
-      // the chat mode so it refuses what the router refuses (#19).
-      if (meta && (meta.state === 'play' || meta.state === 'configuration')) {
-        if (!mayCrossToFront(meta.state, meta.name, { chat: chatMode })) {
-          const policy = clientboundPolicy(meta.state, meta.name)
-          metrics.policyRefused++
-          log('clientboundRefused', {
-            state: meta.state,
-            name: meta.name,
-            unknown: policy.unknown === true
-          })
-          return false
-        }
-      }
-      // #22: the reconfiguration is waiting for the client's play-state
-      // configuration_acknowledged. The client cannot parse a configuration
-      // frame before that, so hold them in order and flush them on the ack.
-      const pending = clients.get(attached)?.pendingReconfiguration
-      if (pending && attached.state === 'play' && meta?.state === 'configuration') {
-        pending.frames.push({ buffer, meta })
-        while (pending.frames.length > MAX_PENDING_RECONFIGURATION_FRAMES) {
-          // Drop the newest: the earliest frames carry the registries the rest
-          // of the round depends on. A queue this deep means the client never
-          // acknowledged, and the core's configuration deadline ends the round.
-          pending.frames.pop()
-          pending.dropped++
-          metrics.reconfigurationFramesDropped++
-        }
-        if (pending.dropped > 0 && !pending.overflowLogged) {
-          pending.overflowLogged = true
-          log('frontReconfigurationOverflow', { dropped: pending.dropped })
-        }
-        return true
-      }
-      // #16: a relayed frame must reach the client in a state it can parse. A
-      // configuration frame written while the client is still in login is read
-      // as a login packet, which kills the connection. Refuse and log instead.
-      if (meta?.state && attached?.state && meta.state !== attached.state) {
-        metrics.stateRefused++
-        log('clientboundStateMismatch', {
-          name: meta.name,
-          frameState: meta.state,
-          clientState: attached.state
-        })
-        return false
-      }
-      if (dumpRaw) {
-        dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
-      }
-      // #16: the core's own finish_configuration ends the client's
-      // configuration phase. The interceptor must drop the library's deferred
-      // finish so the client never sees two of them.
-      if (meta?.state === 'configuration' && meta?.name === 'finish_configuration') {
-        const ctx = clients.get(attached)
-        if (ctx?.interceptor?.finishFromCore()) {
-          log('configFinishedByCore', { username: attached.username ?? null })
-        }
-      }
-      return emitCheckedRaw({ client: attached, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
+    // #269: a clientbound write goes to the body's channels: its driver, and every
+    // spectator watching that body. `channel` addresses one of them, which is what a
+    // spectator's own replay uses so the driver is never handed it twice.
+    write (name, packet, { channel = null } = {}) {
+      return deliverEach(channel, client => writePacketTo(client, name, packet)) > 0
+    },
+    writeRaw (buffer, meta = null, { channel = null } = {}) {
+      return deliverEach(channel, client => writeRawTo(client, buffer, meta)) > 0
     },
     end (reason) {
-      try { attached?.end(reason) } catch { /* client already gone */ }
+      // A body that ends ends every channel watching it: the driver and its
+      // spectators hold connections to a body that is gone.
+      for (const channel of channels.snapshot()) {
+        const client = clientOfChannel(channel.id)
+        try { client?.end(reason) } catch { /* client already gone */ }
+      }
     },
     get listening () { return Boolean(server) },
-    get attached () { return attached ?? null },
+    // #269: the channels this leg holds, one record per connection delivered a
+    // body: its role, what it has been sent, and its own client information. A lane
+    // that never lands a client keeps this empty.
+    get channels () { return channels.snapshot() },
+    // The socket the body is delivered to. A caller that needs the connection rather
+    // than its delivery record reads this; it is the driver's channel's client, and
+    // null when nobody holds the body.
+    get driver () { return driverClient() },
     // #267: the claims this leg holds, one per body. A lane that never serves a
     // picker never records one, so this stays empty there.
     get claims () { return claims.snapshot() },
