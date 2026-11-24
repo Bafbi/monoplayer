@@ -301,3 +301,26 @@ test('#229 loadConfig refuses a control document path that cannot name a file', 
   assert.throws(() => loadConfig({ control: { allowBackendSwitch: 'yes' } }), /control\.allowBackendSwitch/)
   assert.equal(loadConfig({ control: { file: '/control/desired.json' } }).control.file, '/control/desired.json')
 })
+
+// #262: the allowed-server list. Its own file, its own two paths, and its own
+// switch: a picker lane offers a list with no desired document at all.
+test('#262 MONOPLAYER_ALLOWED_SERVERS names the list, and its seed names the copy Git holds', () => {
+  const out = envOverlay({}, {
+    MONOPLAYER_ALLOWED_SERVERS: '/control/allowed-servers.json',
+    MONOPLAYER_ALLOWED_SERVERS_SEED: '/config/allowed-servers.json'
+  })
+  assert.equal(out.control.allowedServers, '/control/allowed-servers.json')
+  assert.equal(out.control.allowedServersSeed, '/config/allowed-servers.json')
+  assert.equal(loadConfig(out).control.allowedServers, '/control/allowed-servers.json',
+    'the resolved document carries the path the lane reads')
+})
+
+test('#262 the list is read without the desired document, and one unset path leaves the file it names alone', () => {
+  const out = envOverlay({}, { MONOPLAYER_ALLOWED_SERVERS: '/control/allowed-servers.json' })
+  assert.equal(out.control.file, undefined, 'one control key does not require another')
+  assert.equal(out.control.allowedServersSeed, undefined)
+
+  const doc = { control: { file: '/control/desired.json', allowedServers: '/control/allowed-servers.json' } }
+  assert.deepEqual(envOverlay(doc, {}).control, doc.control, 'an unset variable is not a removal')
+})
+

@@ -22,7 +22,7 @@ export const REGISTRY_KEY = 'puppets.json'
 
 // Alphabetical, so the message that lists the expected fields reads the same
 // wherever it is printed.
-const FIELDS = ['allowBackendSwitch', 'backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace']
+const FIELDS = ['allowBackendSwitch', 'backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace', 'seedConfigMap']
 
 // A name the API server accepts for a namespace, a Deployment, or a ConfigMap.
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
@@ -116,9 +116,9 @@ function puppet (entry, index, seen) {
   for (const key of FIELDS) {
     if (!(key in entry)) throw new Error('registry: ' + where + ' has no ' + key)
   }
-  // The four names the API server must accept, because three of them are the
-  // address of an object and the fourth names the puppet.
-  for (const key of ['name', 'namespace', 'deployment', 'controlConfigMap']) {
+  // The five names the API server must accept, because four of them are the
+  // address of an object and the fifth names the puppet.
+  for (const key of ['name', 'namespace', 'deployment', 'controlConfigMap', 'seedConfigMap']) {
     const value = entry[key]
     if (typeof value !== 'string' || value.length > 63 || !DNS_LABEL.test(value)) {
       throw new Error('registry: ' + where + '.' + key + ' must be a lowercase DNS label of at most 63 characters, not ' + quote(value))
@@ -149,12 +149,20 @@ function puppet (entry, index, seen) {
     throw new Error('registry: two puppets write ' + target + ', and one control ConfigMap has one owner')
   }
   seen.targets.add(target)
+  // #262: the seed is the copy Git commits, and the panel only reads it. A row that
+  // named the object it writes would read back the key it just found absent, so the
+  // fallback would answer an empty list while the manifest looked wired.
+  if (entry.seedConfigMap === entry.controlConfigMap) {
+    throw new Error('registry: ' + where + '.seedConfigMap must be the copy Git commits, and it names ' +
+      'controlConfigMap ' + quote(entry.controlConfigMap) + ', which the panel writes')
+  }
 
   return {
     name: entry.name,
     namespace: entry.namespace,
     deployment: entry.deployment,
     controlConfigMap: entry.controlConfigMap,
+    seedConfigMap: entry.seedConfigMap,
     frontHostname: entry.frontHostname,
     backend,
     allowBackendSwitch: entry.allowBackendSwitch

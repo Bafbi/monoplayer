@@ -1,9 +1,9 @@
 # Run the panel
 
-The panel is one page, its own assets, one stream and two JSON routes on the tailnet,
-showing what each puppet it may touch is doing and which control ConfigMap it may
-write for it. It runs beside the proxy, not inside it: same image, second entrypoint,
-its own namespace.
+The panel is one page, its own assets, one stream and the JSON routes an agent reads
+on the tailnet, showing what each puppet it may touch is doing, which control
+ConfigMap it may write for it, and which copy Git commits it falls back to. It runs
+beside the proxy, not inside it: same image, second entrypoint, its own namespace.
 
 | Route | Answers |
 |---|---|
@@ -15,6 +15,9 @@ its own namespace.
 | `GET /api/puppets/<name>/whitelist` | the attach whitelist, as JSON |
 | `POST /api/puppets/<name>/whitelist` | add one entry, by uuid or by name |
 | `DELETE /api/puppets/<name>/whitelist/<uuid>` | remove one entry |
+| `GET /api/puppets/<name>/allowed-servers` | the allowed-server list, as JSON |
+| `POST /api/puppets/<name>/allowed-servers` | add one server, by host and port |
+| `DELETE /api/puppets/<name>/allowed-servers/<host>:<port>` | remove one server |
 | `GET /static/…` | the page's own files: the stylesheet, htmx, the font |
 | `GET /healthz` | the probe, which never reads the registry |
 
@@ -183,7 +186,8 @@ holds is a read.
 
 | Object | Verbs | Where |
 |---|---|---|
-| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: two keys, `desired.json` and `attach-whitelist.json` |
+| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: three keys, `desired.json`, `attach-whitelist.json` and `allowed-servers.json` |
+| the seed ConfigMaps the registry names | `get` | each puppet's namespace: the `allowed-servers.json` copy Git commits, which answers when the live key cannot |
 | `pods`, `pods/log` | `get`, `list` | each puppet's namespace |
 | `deployments` | `get`, `list` | each puppet's namespace: the pod selector, the pods' readiness, and the caps its environment sets |
 
@@ -201,11 +205,19 @@ And, by design:
   grants `create`, `delete`, `secrets` or a wildcard, or when the Service stops
   being the tailscale class.
 
-The page uses the three read rules and the `get` on the control ConfigMap. Three
+The page uses the three read rules and the `get` on the control ConfigMap. Five
 routes exercise the write rule, and they patch one object: `desired.json` for
-`POST /api/puppets/:name/backend`, and `attach-whitelist.json` for the two attach
-whitelist writes. Each patches its own key, and a merge patch of one key leaves the
-other where it was.
+`POST /api/puppets/:name/backend`, `attach-whitelist.json` for the two attach
+whitelist writes, and `allowed-servers.json` for the three allowed-server ones. Each
+patches its own key, and a merge patch of one key leaves the others where they were.
+
+The seed rule is `get` alone, and it exists because one key has a fallback. A
+missing or unreadable attach whitelist denies every login, which is safe and loud.
+A missing or unreadable server list offers a joining player nothing, so the list Git
+commits answers instead. The panel reads that copy, so it lists the servers a lane is
+actually offering rather than an empty list, and it builds the first write on the
+copy rather than on nothing. `test/tooling/panel-manifests.test.js` keeps the two
+`resourceNames` lists in step with the registry in both directions.
 
 ## Point a puppet at another backend
 
@@ -392,18 +404,119 @@ The control ConfigMap is not in Git, so the 200 also carries the `data:` block o
 that file's `data` block with it when a change should survive the next deploy.
 Then delete the ConfigMap the panel patched, because the two copies now disagree.
 
-**The write lands in a document the lane may not read yet.** A puppet reads this key
-only when `MONOPLAYER_ATTACH_WHITELIST` names it, and
-`deploy/manifests/deployment.yaml` names `/config/attach-whitelist.json`, the
-ConfigMap in Git. So on the deployed lane today a write lands in a document nothing
-opens, and the 200 means "written", not "read". Pointing the lane at the control
-volume is one manifest edit, and it belongs in the same change as the registry row.
-Check it before you trust an answer:
+**The write lands in a document the lane reads, and only while its variable names
+that file.** A puppet reads this key only when `MONOPLAYER_ATTACH_WHITELIST` names it,
+and `deploy/manifests/deployment.yaml` names `/control/attach-whitelist.json`, the
+copy the panel patches. So a write is read at the next login. A lane whose variable
+names another file — `/config/attach-whitelist.json`, the ConfigMap in Git, which is
+the file the whitelist shipped as before #229 — reads none of it, and its 200 means
+"written", not "read". Check it before you trust an answer:
 
 ```bash
 kubectl -n monoplayer get deployment monoplayer \
   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MONOPLAYER_ATTACH_WHITELIST")].value}'
 ```
+
+## Add or remove an allowed server
+
+An allowed server is one game server the picker offers a joining player
+([GLOSSARY.md](../GLOSSARY.md)). The list is a third key of the same control
+ConfigMap, `allowed-servers.json`, and it is its own file: its own environment
+variable, its own reader, and its own route. It is not a field of `desired.json`.
+
+```bash
+curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers
+curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers \
+  -H 'content-type: application/json' -d '{"host": "paper.example.net", "port": 25565}'
+curl -X DELETE http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers/paper.example.net:25565
+```
+
+The removal takes the `host:port` address the row is called, so a host rename cannot
+remove a different server. The document is:
+
+```json
+{
+  "version": 1,
+  "servers": [
+    { "host": "paper.example.net", "port": 25565, "addedAt": "2026-11-23T12:00:00.000Z" }
+  ]
+}
+```
+
+A host is a hostname of at least two labels or an IPv4 address: no scheme, no port
+inside the host, no trailing dot, no bare single label. A port is an integer from 1
+to 65535. A body that sends `"25565"` as text is refused rather than coerced, so the
+file the lane reads never holds a port as a string.
+
+| Answer | Meaning |
+|---|---|
+| 200 | written, or already the document you asked for |
+| 400 | a body that is not JSON or does not declare itself JSON, an address a dial cannot target, or a path segment that is not `host:port` or not valid percent-encoding |
+| 404 | no such puppet in the registry, or no such address in the list |
+| 405 | a verb this route does not take, with `allow` naming the ones it does |
+| 409 | the write lost three races |
+| 413 | a body over 4 KiB |
+| 500 | the registry could not be read, or the live or seed document could not be parsed |
+| 503 | no cluster client, the cluster refused the read or the patch, or the seed ConfigMap could not be read |
+
+**This key has a fallback, and the other two do not.** A missing or unreadable
+attach whitelist denies every login: safe, and loud. A missing or unreadable server
+list offers a joining player nothing, so the copy Git commits answers instead. Two
+consequences follow, and both are visible in the answers:
+
+- **`GET` says which file answered.** `source` is `control` for the live key and
+  `seed` for `deploy/manifests/configmap.yaml`, which the lane mounts at `/config` and
+  `MONOPLAYER_ALLOWED_SERVERS_SEED` names. `none` means neither file holds a list.
+- **The first write is built on the seed.** Adding a server while the live key is
+  absent writes the seed's entries and the new one, because the lane was offering
+  the seed and a write that started from an empty document would silently stop
+  offering every committed server.
+
+Four refusals are deliberate:
+
+- **A document that does not parse is never rewritten.** The answer is a 500 with the
+  refusal, and the key is left byte for byte. That holds for the live key and for the
+  seed, and the seed's refusal names the seed object so the operator knows which file
+  to fix.
+- **A lost race is re-read, not clobbered.** The patch carries the
+  `resourceVersion` it read, and the panel patches at most three times, each attempt
+  over a fresh read, before it reports the conflict by name. The other writer's
+  entries survive.
+- **The seed is read and never written.** The panel's Role grants `get` on it and
+  nothing else, because that object is Argo's: a write to it would be reverted by the
+  next sync, which is the same reason the control ConfigMap is not in Git.
+- **Nothing here stops a session.** This route writes one key of one ConfigMap.
+  Removing a server stops it being offered, and a body already running on it is left
+  alone until its claim ends.
+
+**A write is stored, and nothing reads it yet.** The picker that offers this list is
+#265, so until that lands the list is written and offered to nobody, and every answer
+says so in `takesEffect`. The lane's start record already reports the key, inside its
+`control` object:
+
+```json
+"allowedServers": {
+  "file": "/control/allowed-servers.json",
+  "seed": "/config/allowed-servers.json",
+  "source": "seed",
+  "count": 1
+}
+```
+
+Every write leaves one JSONL line on the panel's log, because the ConfigMap keeps no
+history:
+
+```json
+{"t":"2026-11-23T12:00:00.000Z","event":"panelAllowedServerAdd","puppet":"glowsquidye","namespace":"monoplayer","controlConfigMap":"monoplayer-control","key":"allowed-servers.json","server":"paper.example.net:25565","source":"seed","count":2,"changed":true,"attempts":1,"address":"100.64.0.9"}
+```
+
+`panelAllowedServerRemove` is its twin. The address is the tailnet peer, which is the
+only actor the panel can name.
+
+The live key is not in Git, so the 200 also carries the `data:` block of
+`deploy/manifests/configmap.yaml` to paste, under `yaml` and `pasteInto`. Replace that
+file's `allowed-servers.json` key when a change should survive the next deploy: the
+seed is what an unedited lane offers, and what a first write is built on.
 
 ## It ships with the proxy
 
@@ -450,6 +563,11 @@ Two prerequisites are not in Git, and each is one command:
    `changedAt` that never meant anything. The panel creates the key on its first
    move.
 
+   **Do not seed `allowed-servers.json` either.** That key has a fallback the
+   whitelist does not: the lane offers the copy Git commits, mounted at `/config`,
+   while the live key is absent, and the panel's first write is built on that copy.
+   An empty live key would be a second list to keep in step for nothing.
+
    **The order matters.** The Deployment mounts this object at `/control` with
    `optional: true`, so a missing object does not keep the pod from starting — it
    starts and denies every login, because its whitelist is the file that is not
@@ -462,7 +580,15 @@ Two prerequisites are not in Git, and each is one command:
 
 The registry is `deploy/panel/registry.yaml`: a ConfigMap whose `puppets.json` key
 names, per puppet, its `name`, `namespace`, `deployment`, `controlConfigMap`,
-`frontHostname`, `backend` and `allowBackendSwitch`. Edit it on `main` and merge.
+`seedConfigMap`, `frontHostname`, `backend` and `allowBackendSwitch`. Edit it on
+`main` and merge.
+
+`controlConfigMap` is the object the panel writes. `seedConfigMap` is the object it
+reads and never writes: the copy Git commits, which answers when the live
+`allowed-servers.json` key is absent. `deploy/panel/role.yaml` grants `get`, `patch`
+and `update` on the first and `get` alone on the second, and
+`test/tooling/panel-manifests.test.js` fails the gate when either list disagrees with
+this document.
 
 The pod mounts the ConfigMap and reads the file on every request, so an edit
 reaches the page within a minute of the kubelet rewriting the projection. No
@@ -472,7 +598,8 @@ detail.
 
 `src/panel/registry.js` refuses a document it cannot act on, and the panel fails
 its start with the field that broke it — a misspelled key, a name that is not a DNS
-label, a backend with no port, two puppets writing one ConfigMap. A document that
+label, a backend with no port, two puppets writing one ConfigMap, or a
+`seedConfigMap` that names the object the panel writes. A document that
 passes is a document the panel will act on.
 
 Adding a puppet in a new namespace means four things, and the gate enforces the
