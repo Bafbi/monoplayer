@@ -188,6 +188,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerSeedFile = null
   let pickerBot9 = null
   let pickerBot10 = null
+  // #259: the client that clicks the picker's Spectate, the client that reads the
+  // row a watcher is on, and the client that watches a body nobody drives.
+  let pickerBot11 = null
+  let pickerBot12 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -3087,7 +3091,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth'), offlineUuid('Pilot'),
       offlineUuid('Watcher'), offlineUuid('Rival'), offlineUuid('Looker'),
       // #265: the two clients the list assertion joins with, one per edited list.
-      offlineUuid('Seeded'), offlineUuid('Late')
+      offlineUuid('Seeded'), offlineUuid('Late'),
+      // #259: the client that reads the watched row, and the client that watches a
+      // body nobody drives.
+      offlineUuid('Reader'), offlineUuid('LateWatch')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -4044,9 +4051,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the spectator frame the front refused',
       10_000
     )
-    // The surface #269 does not decide: the picker's Spectate verb is still refused in
-    // words. Another client clicks it out of the frame it received, and the sentence
-    // it gets names the verb. #259 wires the verb to the landing above.
+    // The surface #269 does not decide, and #259 does: another client reaches the
+    // driven body's own dialog and reads its Spectate button, and this assertion
+    // stops there. O62 clicks it and proves what the click does, so the seam above
+    // and the verb below stay two facts with two numbers.
     pickerBot8 = createBot({ port: pickerBound.port, username: 'Looker', version: pickerVersion })
     await pickerBot8.waitFor(
       () => pickerBot8.received.dialogs.length === 1,
@@ -4061,19 +4069,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       15_000
     )
     const lookerVerb = chooseDialogAction(pickerBot8.received.dialogs[1], 'spectate')
-    const lookerMark = logs.length
-    if (lookerVerb !== null) pickerBot8.answerDialog(lookerVerb.id, null, 'configuration')
-    await pickerBot8.waitFor(
-      () => pickerBot8.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
-      'the refusal the spectate verb gets',
-      15_000
-    )
-    const verbRefusalsAfterLanding = logs.slice(lookerMark)
-      .filter(entry => entry.event === 'configurationEnded' && entry.fields?.reason === 'verb_spectate_unbuilt')
-      .map(entry => entry.fields)
-    const spectateVerbs = logs
-      .filter(entry => entry.event === 'pickerVerb' && entry.fields?.verb === 'spectate')
-      .map(entry => entry.fields)
 
     const channelsRead = pickerFront.channels ?? []
     const driverChannel = channelsRead.find(channel => channel.role === 'driver') ?? null
@@ -4092,11 +4087,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
           frames: watchLanding.frames ?? null,
           channel: watchLanding.channel ?? null
         },
+        // #259: the button is on screen and not clicked here. O62 clicks it.
         verb: {
           pick: lookerPick === null ? null : { id: lookerPick.id, label: lookerPick.label },
-          chosen: lookerVerb === null ? null : { id: lookerVerb.id, label: lookerVerb.label },
-          reported: spectateVerbs.map(entry => ({ verb: entry.verb, server: entry.server })),
-          refused: verbRefusalsAfterLanding,
+          offered: lookerVerb === null ? null : { id: lookerVerb.id, label: lookerVerb.label },
           ended: pickerBot8.received.ended === null ? null : String(pickerBot8.received.ended).slice(0, 160)
         },
         login: pickerBot6.received.login === null ? null : { entityId: pickerBot6.received.login.entityId },
@@ -4183,10 +4177,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         spectatorChannel.delivered.replays === 1 &&
         // One live-only frame was sent before the spectator existed, so its record
         // cannot be the driver's: the driver received it and the spectator did not,
-        // and no replay carries it.
+        // and no replay carries it. #259 gives a spectator's record two frames of its
+        // own, so the difference between the two records is that chat and not a count.
         pickerBot5.received.systemChat.length === 2 &&
         pickerBot6.received.systemChat.length === 1 &&
-        driverChannel.delivered.frames > spectatorChannel.delivered.frames &&
+        driverChannel.delivered.frames > 0 &&
         spectatorChannel.delivered.frames > 0 &&
         spectatorChannel.delivered.play > 0 &&
         driverChannel.delivered.last !== null &&
@@ -4204,15 +4199,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         JSON.stringify(poseAfterWatch) === JSON.stringify(poseBeforeWatch) &&
         pickerFront.metrics.spectatorJoins === 1 &&
         pickerCore.metrics.spectatorViews === 1 &&
-        // The seam is the delivery, and the surface is not decided here: the picker's
-        // own Spectate still answers in words naming the verb (#259 wires it).
-        spectateVerbs.length === 1 &&
-        spectateVerbs[0].server === pickerBodyName &&
+        // The seam is the delivery. The verb that calls it is O62's, so the client
+        // that holds the button is still in the picker and still connected.
         lookerVerb !== null &&
         lookerVerb.id === verbIdFor('spectate', pickerBodyName) &&
-        verbRefusalsAfterLanding.length === 1 &&
-        pickerBot8.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
-        pickerBot8.received.ended !== null &&
+        pickerBot8.received.ended === null &&
         pickerCore.session.attachCount === 1 &&
         pickerCore.attached === true &&
         pickerCore.session.state === 'attached' &&
@@ -4423,13 +4414,417 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.list
     )
 
+    // --- O62: the Spectate verb lands a client in a body it does not drive (#259) ---
+    // O60 landed a watcher through `frontLeg.spectate`, the seam #269 built and left to
+    // this row. This is the click that call was waiting for. Looker (pickerBot8) has been
+    // in the picker with the driven body's dialog on screen since O60 and has never
+    // answered it. O61 removed the driven row from the live list, so the operator adds it
+    // back first, which is the edit the panel makes and the same key O61 read.
+    //
+    // What this proves that no earlier assertion could: the dialog a client is looking at
+    // is enough to watch a body — no claim, no second login, no dial — and the client is
+    // told what it is by its own two frames. What a watcher sends reaches no backend, and
+    // that is read at the backend rather than in the front's own counter.
+    writeAllowedServers(pickerLiveFile, [pickerServerName, pickerBodyName])
+    const toldFrames = { gameModes: [], abilities: [] }
+    pickerBot8.client.on('game_state_change', packet => toldFrames.gameModes.push(packet))
+    pickerBot8.client.on('abilities', packet => toldFrames.abilities.push(packet))
+    const claimsBeforeWatch = pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name }))
+    const forwardedBeforeVerb = pickerCore.metrics.serverboundForwarded
+    const backendReceivedBefore = {
+      logins: pickerBodyFake.received.logins,
+      positions: pickerBodyFake.received.positions.length,
+      chats: pickerBodyFake.received.chats.length,
+      commands: pickerBodyFake.received.chatCommands.length,
+      digs: pickerBodyFake.received.digs.length,
+      places: pickerBodyFake.received.places.length,
+      settings: pickerBodyFake.received.settings.length
+    }
+    const watchDroppedBefore = pickerFront.metrics.spectatorFramesDropped
+    if (lookerVerb !== null) pickerBot8.answerDialog(lookerVerb.id, null, 'configuration')
+    await pickerBot8.waitFor(
+      () => pickerBot8.received.login !== null && pickerBot8.received.positions.length > 0,
+      'the play state of the body the Spectate click watches',
+      30_000
+    )
+    await waitFor(
+      () => (pickerFront.channels ?? []).length === 3,
+      'the third channel: one driver and two watchers',
+      15_000
+    )
+    const clickVerbs = logs
+      .filter(entry => entry.event === 'pickerVerb' && entry.fields?.verb === 'spectate')
+      .map(entry => entry.fields)
+    const clickLandings = logs
+      .filter(entry => entry.event === 'spectateLanded')
+      .map(entry => entry.fields)
+    const clickRefusals = logs
+      .filter(entry => entry.event === 'spectateRefused')
+      .map(entry => entry.fields)
+    const lookerConfiguration = pickerBot8.received.names
+      .filter(frame => frame.state === 'configuration')
+      .map(frame => frame.name)
+    const lookerPosition = pickerBot8.received.positions[pickerBot8.received.positions.length - 1] ?? null
+    // The body's stream reaches the newest watcher: one frame the body sends after the
+    // click.
+    const clickedBlock = { x: 5, y: 64, z: -5 }
+    pickerBodyFake.sendBlockChange(clickedBlock)
+    await pickerBot8.waitFor(
+      () => pickerBot8.received.blockChanges.some(change => change.location?.x === clickedBlock.x),
+      'the live frame at the client that clicked Spectate',
+      10_000
+    )
+    // #259: a body's own game mode and abilities belong to its driver. The fake body
+    // switches mode, and the watcher must not be put back into the driver's mode by a
+    // frame it was never meant to keep.
+    const toldBeforeBodyMode = toldFrames.gameModes.length
+    const withheldBefore = pickerFront.metrics.spectatorModeWithheld
+    pickerBodyFake.sendGameModeChange({ gameMode: 1, flags: 0x09 })
+    await pickerBot5.waitFor(
+      () => pickerBot5.received.names.filter(frame => frame.state === 'play' && frame.name === 'abilities').length >= 1,
+      "the body's own mode frame at the driver",
+      10_000
+    )
+    await waitFor(
+      () => pickerFront.metrics.spectatorModeWithheld >= withheldBefore + 2,
+      "the body's mode frames the front refused to a watcher",
+      10_000
+    )
+    const toldAfterBodyMode = toldFrames.gameModes.length
+    // A watcher's input changes nothing, and the proof is the backend: movement, chat,
+    // a command and a dig, then the fake's own counters.
+    const watcherInput = { x: 9.5, y: 10.5, z: 11.5 }
+    pickerBot8.sendPosition(watcherInput)
+    pickerBot8.sendChat('a watcher cannot speak')
+    pickerBot8.sendCommand('/gamemode creative')
+    pickerBot8.sendDig({ x: 5, y: 64, z: -5 })
+    await waitFor(
+      () => pickerFront.metrics.spectatorFramesDropped >= watchDroppedBefore + 4,
+      'the four frames the front refused from the watcher',
+      10_000
+    )
+    // A drop writes nothing, so the wait is for the absence of a frame rather than for
+    // one: the socket needs a moment to prove nothing is coming.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const backendReceivedAfter = {
+      logins: pickerBodyFake.received.logins,
+      positions: pickerBodyFake.received.positions.length,
+      chats: pickerBodyFake.received.chats.length,
+      commands: pickerBodyFake.received.chatCommands.length,
+      digs: pickerBodyFake.received.digs.length,
+      places: pickerBodyFake.received.places.length,
+      settings: pickerBodyFake.received.settings.length
+    }
+    // The row a player reads before choosing. A fresh client reads the list while the
+    // body is driven and watched, so the label carries both facts.
+    pickerBot11 = createBot({ port: pickerBound.port, username: 'Reader', version: pickerVersion })
+    await pickerBot11.waitFor(
+      () => pickerBot11.received.dialogs.length === 1,
+      'the picker at the client that reads the watched row',
+      15_000
+    )
+    const watchedRowRead = readServerDialog(pickerBot11.received.dialogs[0])
+    const watchedRowButton = watchedRowRead.buttons.find(button => button.id === pickIdFor(pickerBodyName)) ?? null
+    // A body this lane does not serve is refused in the words that name the reason. The
+    // other row names a port nothing listens on, so no body was ever dialled there.
+    const unservedPick = chooseDialogAction(pickerBot11.received.dialogs[0], pickerServerName)
+    if (unservedPick !== null) pickerBot11.answerDialog(unservedPick.id, null, 'configuration')
+    await pickerBot11.waitFor(
+      () => pickerBot11.received.dialogs.length === 2,
+      "the unserved body's own dialog at the reader",
+      15_000
+    )
+    const unservedVerb = chooseDialogAction(pickerBot11.received.dialogs[1], 'spectate')
+    const refusedMark = logs.length
+    if (unservedVerb !== null) pickerBot11.answerDialog(unservedVerb.id, null, 'configuration')
+    await pickerBot11.waitFor(
+      () => pickerBot11.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the sentence a refused Spectate gets',
+      15_000
+    )
+    const refusedSpectates = logs.slice(refusedMark)
+      .filter(entry => entry.event === 'configurationEnded' && entry.fields?.reason === 'spectate_refused')
+      .map(entry => entry.fields)
+    const refusedText = logs.slice(refusedMark)
+      .filter(entry => entry.event === 'spectateRefused' && entry.fields?.reason === 'body_not_served')
+      .map(entry => entry.fields)
+    // A watcher leaving ends a watcher and nothing else: the body, its driver and the
+    // other watcher are as they were.
+    await pickerBot8.close()
+    await waitFor(
+      () => (pickerFront.channels ?? []).length === 2,
+      'the watcher channel gone and the other two still there',
+      15_000
+    )
+    const channelsAfterLeaving = pickerFront.channels ?? []
+    const claimsAfterWatch = pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name }))
+    evidence.watch = {
+      body: pickerBodyName,
+      verb: {
+        clicked: lookerVerb === null ? null : { id: lookerVerb.id, label: lookerVerb.label },
+        reported: clickVerbs.map(entry => ({ verb: entry.verb, server: entry.server })),
+        landings: clickLandings.map(entry => ({ body: entry.body, server: entry.server, frames: entry.frames })),
+        refusals: clickRefusals.map(entry => ({ server: entry.server, reason: entry.reason }))
+      },
+      told: {
+        gameModes: toldFrames.gameModes.map(packet => ({ reason: packet.reason, gameMode: packet.gameMode })),
+        abilities: toldFrames.abilities.map(packet => ({ flags: packet.flags, flyingSpeed: packet.flyingSpeed, walkingSpeed: packet.walkingSpeed })),
+        afterBodyMode: toldAfterBodyMode - toldBeforeBodyMode,
+        withheld: pickerFront.metrics.spectatorModeWithheld - withheldBefore
+      },
+      world: {
+        configuration: {
+          frames: lookerConfiguration.length,
+          registries: lookerConfiguration.filter(name => name === 'registry_data').length,
+          finish: lookerConfiguration.filter(name => name === 'finish_configuration').length
+        },
+        position: lookerPosition === null ? null : { x: lookerPosition.x, y: lookerPosition.y, z: lookerPosition.z },
+        bodySpawn: pickerBodySpawn,
+        blockChange: pickerBot8.received.blockChanges.some(change => change.location?.x === clickedBlock.x),
+        ended: pickerBot8.received.ended === null ? null : String(pickerBot8.received.ended).slice(0, 160),
+        leftovers: pickerBot8.received.leftovers.length
+      },
+      input: {
+        sent: watcherInput,
+        forwardedBefore: forwardedBeforeVerb,
+        forwardedAfter: pickerCore.metrics.serverboundForwarded,
+        dropped: pickerFront.metrics.spectatorFramesDropped - watchDroppedBefore,
+        backend: { before: backendReceivedBefore, after: backendReceivedAfter }
+      },
+      row: {
+        label: watchedRowButton === null ? null : watchedRowButton.label,
+        buttons: watchedRowRead.buttons.map(button => button.label)
+      },
+      refused: {
+        server: pickerServerName,
+        clicked: unservedVerb === null ? null : unservedVerb.id,
+        ended: refusedSpectates,
+        sentences: refusedText.map(fields => ({ reason: fields.reason, text: fields.text })),
+        client: pickerBot11.received.ended === null ? null : String(pickerBot11.received.ended).slice(0, 160)
+      },
+      claims: { before: claimsBeforeWatch, after: claimsAfterWatch },
+      channels: channelsAfterLeaving.map(channel => ({ role: channel.role, name: channel.name, body: channel.body })),
+      driverEnded: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 120),
+      otherWatcherEnded: pickerBot6.received.ended === null ? null : String(pickerBot6.received.ended).slice(0, 120)
+    }
+    check(
+      'O62',
+      "the picker's Spectate verb lands a client in a body it does not drive, tells it so, and sends nothing on to the backend",
+      lookerVerb !== null &&
+        lookerVerb.id === verbIdFor('spectate', pickerBodyName) &&
+        clickVerbs.length === 1 &&
+        clickVerbs[0].server === pickerBodyName &&
+        clickLandings.length === 2 &&
+        clickLandings.at(-1).body === pickSlug(pickerBodyName) &&
+        clickRefusals.length === 0 &&
+        // The client is in the body's world, on the body's entity, and its phase ended
+        // once. Nothing a watcher needs is missing and nothing was left on the wire.
+        pickerBot8.received.login !== null &&
+        pickerBot8.received.login.entityId === pickerBot5.received.login?.entityId &&
+        lookerPosition !== null &&
+        lookerPosition.x === pickerBodySpawn.x &&
+        lookerPosition.y === pickerBodySpawn.y &&
+        lookerPosition.z === pickerBodySpawn.z &&
+        lookerConfiguration.filter(name => name === 'finish_configuration').length === 1 &&
+        // The same set a claim receives (O58): one body's own registries, not a
+        // second login's and not the baseline alone.
+        lookerConfiguration.filter(name => name === 'registry_data').length === 57 &&
+        pickerBot8.received.leftovers.length === 0 &&
+        pickerBot8.received.blockChanges.some(change => change.location?.x === clickedBlock.x) &&
+        // Told what it is, last. The replay carries the body's own game mode first —
+        // reason `level_chunks_load_start`, the mode the driver plays in — and the
+        // frame after it is the one that makes the client a spectator. Abilities go
+        // with it, at the protocol's two speeds.
+        toldFrames.gameModes.length === 2 &&
+        toldFrames.gameModes[0].gameMode === 0 &&
+        toldFrames.gameModes.at(-1).reason === 'change_game_mode' &&
+        toldFrames.gameModes.at(-1).gameMode === 3 &&
+        toldFrames.abilities.length >= 1 &&
+        toldFrames.abilities.at(-1).flags === 7 &&
+        Math.abs(toldFrames.abilities.at(-1).flyingSpeed - 0.05) < 1e-6 &&
+        Math.abs(toldFrames.abilities.at(-1).walkingSpeed - 0.1) < 1e-6 &&
+        // A later frame from the body reached the driver and not the watcher.
+        pickerBot5.received.names.some(frame => frame.state === 'play' && frame.name === 'game_state_change') &&
+        toldAfterBodyMode === toldBeforeBodyMode &&
+        pickerFront.metrics.spectatorModeWithheld >= withheldBefore + 2 &&
+        // Nothing it sends reaches the backend: the fake counts the frames it received,
+        // and not one of them moved.
+        pickerFront.metrics.spectatorFramesDropped >= watchDroppedBefore + 4 &&
+        pickerCore.metrics.serverboundForwarded === forwardedBeforeVerb &&
+        backendReceivedAfter.positions === backendReceivedBefore.positions &&
+        backendReceivedAfter.chats === backendReceivedBefore.chats &&
+        backendReceivedAfter.commands === backendReceivedBefore.commands &&
+        backendReceivedAfter.digs === backendReceivedBefore.digs &&
+        backendReceivedAfter.places === backendReceivedBefore.places &&
+        backendReceivedAfter.settings === backendReceivedBefore.settings &&
+        backendReceivedAfter.logins === backendReceivedBefore.logins &&
+        // The row says what a chooser needs: who drives it, and that two are watching.
+        watchedRowButton !== null &&
+        watchedRowButton.label === pickerBodyName + ' - claimed (Pilot), 2 watching' &&
+        // The other row is refused in words naming what this lane serves.
+        unservedVerb !== null &&
+        refusedSpectates.length === 1 &&
+        refusedText.length === 1 &&
+        refusedText[0].reason === 'body_not_served' &&
+        /not serving/.test(String(refusedText[0].text ?? '')) &&
+        String(refusedText[0].text ?? '').includes(pickerServerName) &&
+        pickerBot11.received.ended !== null &&
+        // Watching never becomes a claim, and a watcher leaving ends nothing.
+        JSON.stringify(claimsAfterWatch) === JSON.stringify(claimsBeforeWatch) &&
+        !claimsAfterWatch.some(claim => claim.name === 'Looker') &&
+        channelsAfterLeaving.length === 2 &&
+        channelsAfterLeaving.filter(channel => channel.role === 'driver').length === 1 &&
+        channelsAfterLeaving.filter(channel => channel.role === 'spectator').length === 1 &&
+        pickerBot5.received.ended === null &&
+        pickerBot6.received.ended === null &&
+        pickerCore.claimedBody === pickSlug(pickerBodyName) &&
+        pickerCore.session.state === 'attached' &&
+        pickerBodyFake.received.logins === 1,
+      evidence.watch
+    )
+
+    // --- O63: a body nobody drives stays up, and is still watchable (#259) ---
+    // The claim is held by the connection that made it, so the driver leaving releases
+    // the body and nothing else: its backend session, its warm state and its watcher all
+    // stay. O62's click lands a client where a driver is; this is the other half of the
+    // rule #259 had to decide — a body with no driver is watchable, and a watcher is
+    // never a driver.
+    //
+    // The join reads the picker rather than taking the empty driver seat. Before #259 it
+    // was attached as that body's driver down the pre-picker path, with no claim
+    // recorded, and the picker offered anything only while no body stood.
+    await pickerBot5.close()
+    await waitFor(
+      () => pickerCore.session.state === 'detached' && pickerCore.attached === false,
+      'the body detached and still up after its driver left',
+      20_000
+    )
+    const loginsAfterDriverLeft = pickerBodyFake.received.logins
+    const attachesBeforeJoin = pickerFront.metrics.attaches
+    const coreAttachesBeforeJoin = pickerCore.metrics.attaches
+    pickerBot12 = createBot({ port: pickerBound.port, username: 'LateWatch', version: pickerVersion })
+    await pickerBot12.waitFor(
+      () => pickerBot12.received.dialogs.length === 1,
+      'the picker at the client that joins a body nobody drives',
+      15_000
+    )
+    const detachedRowRead = readServerDialog(pickerBot12.received.dialogs[0])
+    const detachedRowButton = detachedRowRead.buttons.find(button => button.id === pickIdFor(pickerBodyName)) ?? null
+    // The join took no driver seat: the picker answered it, and the core attached nobody.
+    const attachedAtJoin = pickerCore.attached
+    const detachJoinPick = chooseDialogAction(pickerBot12.received.dialogs[0], pickerBodyName)
+    if (detachJoinPick !== null) pickerBot12.answerDialog(detachJoinPick.id, null, 'configuration')
+    await pickerBot12.waitFor(
+      () => pickerBot12.received.dialogs.length === 2,
+      "the undriven body's own dialog at the late watcher",
+      15_000
+    )
+    const detachVerb = chooseDialogAction(pickerBot12.received.dialogs[1], 'spectate')
+    const lateMark = logs.length
+    if (detachVerb !== null) pickerBot12.answerDialog(detachVerb.id, null, 'configuration')
+    await pickerBot12.waitFor(
+      () => pickerBot12.received.login !== null && pickerBot12.received.positions.length > 0,
+      'the play state of the body nobody drives',
+      30_000
+    )
+    await waitFor(
+      () => (pickerFront.channels ?? []).length === 2,
+      'two watchers and no driver on the body',
+      15_000
+    )
+    const lateLandings = logs.slice(lateMark)
+      .filter(entry => entry.event === 'spectateLanded')
+      .map(entry => entry.fields)
+    const lateRefusals = logs.slice(lateMark)
+      .filter(entry => entry.event === 'spectateRefused')
+      .map(entry => entry.fields)
+    // The world of a body nobody drives still moves: one frame after the landing.
+    const lateBlock = { x: 6, y: 64, z: -6 }
+    pickerBodyFake.sendBlockChange(lateBlock)
+    await pickerBot12.waitFor(
+      () => pickerBot12.received.blockChanges.some(change => change.location?.x === lateBlock.x),
+      'the live frame at the watcher of an undriven body',
+      10_000
+    )
+    const latePosition = pickerBot12.received.positions[pickerBot12.received.positions.length - 1] ?? null
+    const channelsUndriven = pickerFront.channels ?? []
+    const claimsUndriven = pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name }))
+    evidence.undriven = {
+      body: pickerBodyName,
+      driverLeft: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 120),
+      state: pickerCore.session.state,
+      claimed: pickerCore.claimedBody,
+      logins: { afterDriverLeft: loginsAfterDriverLeft, afterWatch: pickerBodyFake.received.logins },
+      join: {
+        attached: attachedAtJoin,
+        attaches: { front: pickerFront.metrics.attaches - attachesBeforeJoin, core: pickerCore.metrics.attaches - coreAttachesBeforeJoin },
+        label: detachedRowButton === null ? null : detachedRowButton.label,
+        buttons: detachedRowRead.buttons.map(button => button.label)
+      },
+      verb: {
+        clicked: detachVerb === null ? null : detachVerb.id,
+        landings: lateLandings.map(entry => ({ body: entry.body, frames: entry.frames })),
+        refusals: lateRefusals.map(entry => ({ reason: entry.reason }))
+      },
+      world: {
+        position: latePosition === null ? null : { x: latePosition.x, y: latePosition.y, z: latePosition.z },
+        blockChange: pickerBot12.received.blockChanges.some(change => change.location?.x === lateBlock.x),
+        ended: pickerBot12.received.ended === null ? null : String(pickerBot12.received.ended).slice(0, 160)
+      },
+      claims: claimsUndriven,
+      channels: channelsUndriven.map(channel => ({ role: channel.role, name: channel.name, body: channel.body })),
+      watching: pickerCore.metrics.spectatorViews
+    }
+    check(
+      'O63',
+      'a body nobody drives stays up and stays watchable, and a join reads the picker instead of taking the empty driver seat',
+      pickerBot5.received.ended !== null &&
+        pickerCore.session.state === 'detached' &&
+        pickerCore.attached === false &&
+        pickerCore.claimedBody === pickSlug(pickerBodyName) &&
+        // The body never left its server, and nobody dialled anything for a watcher.
+        loginsAfterDriverLeft === 1 &&
+        pickerBodyFake.received.logins === 1 &&
+        // The join was served the picker, and the core attached nobody.
+        attachedAtJoin === false &&
+        pickerFront.metrics.attaches === attachesBeforeJoin &&
+        pickerCore.metrics.attaches === coreAttachesBeforeJoin &&
+        // The row is honest about a body with no driver: unclaimed, and still watched.
+        detachedRowButton !== null &&
+        detachedRowButton.label === pickerBodyName + ' - unclaimed, 1 watching' &&
+        // The click lands it in that body, with nobody driving.
+        detachVerb !== null &&
+        detachVerb.id === verbIdFor('spectate', pickerBodyName) &&
+        lateLandings.length === 1 &&
+        lateLandings[0].body === pickSlug(pickerBodyName) &&
+        lateRefusals.length === 0 &&
+        pickerBot12.received.login !== null &&
+        pickerBot12.received.login.entityId === pickerBot6.received.login?.entityId &&
+        latePosition !== null &&
+        latePosition.x === pickerBodySpawn.x &&
+        latePosition.y === pickerBodySpawn.y &&
+        latePosition.z === pickerBodySpawn.z &&
+        pickerBot12.received.ended === null &&
+        // A watcher of an undriven body still receives its world.
+        pickerBot12.received.blockChanges.some(change => change.location?.x === lateBlock.x) &&
+        pickerBot6.received.blockChanges.some(change => change.location?.x === lateBlock.x) &&
+        // Two watchers, no driver, and neither holding a claim.
+        channelsUndriven.length === 2 &&
+        channelsUndriven.every(channel => channel.role === 'spectator') &&
+        channelsUndriven.every(channel => channel.body === pickSlug(pickerBodyName)) &&
+        !claimsUndriven.some(claim => claim.name === 'LateWatch') &&
+        pickerCore.attached === false &&
+        pickerCore.session.state === 'detached',
+      evidence.undriven
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }

@@ -122,9 +122,14 @@ export function createFakeFrontLeg () {
     // #87: the frame bytes that end a configuration round, for a restore with
     // no cached finish. The fake records it as a raw frame like the real leg.
     finishConfigurationFrame () { return Buffer.from('fake:finish_configuration') },
-    writeRaw (buffer, meta) { sent.push({ kind: 'raw', name: meta?.name, buffer, meta }) },
-    write (name, packet, { synth = false, meta } = {}) {
-      sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta })
+    // #269: a write names one channel, or none for every channel on the body.
+    // The fake records which, so a test can prove a spectator's replay went to
+    // that spectator and no other socket.
+    writeRaw (buffer, meta, { channel = null } = {}) {
+      sent.push({ kind: 'raw', name: meta?.name, buffer, meta, channel })
+    },
+    write (name, packet, { synth = false, meta, channel = null } = {}) {
+      sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta, channel })
     },
     end (reason) { ended.push({ reason }) },
     setClient ({ username, uuid }) {

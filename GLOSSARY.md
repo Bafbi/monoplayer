@@ -21,15 +21,15 @@ The attaching player who holds a body's claim, and so drives it. Their movement 
 _Avoid_: controller, owner, player in control, operator
 
 **Spectator**:
-An attaching player who watches a body without control. They receive the body's world and the body itself, and nothing they send reaches the server.
+An attaching player who watches a body without control. They receive the body's world and the body itself, and nothing they send reaches the server. Any attaching player the lane admits may watch any body it serves and has up, whether or not a driver holds it: the whitelist is who may watch, and no driver is asked. A watcher's client is told what it is — spectator game mode, and the abilities that go with it — and a frame from the body never puts it back in the driver's mode.
 _Avoid_: viewer, watcher, observer, audience
 
 **Channel**:
-One attaching player's delivery of one body: whether they are its driver or a spectator, what they have been sent, and their own client settings. A body's frames go to every channel on that body, and the channel is what keeps two clients on one body apart. A spectator's channel receives the body's stream and sends nothing to the server.
+One attaching player's delivery of one body: whether they are its driver or a spectator, what they have been sent, and their own client settings. A body's frames go to every channel on that body, and the channel is what keeps two clients on one body apart. A spectator's channel receives the body's stream and sends nothing to the server: its frames are dropped at the front, before the backend leg.
 _Avoid_: connection, socket, session, slot, seat
 
 **Picker**:
-The configuration-phase dialog an attaching player lands in before they have a body: one entry per allowed server, labelled with that server's body and who is driving it. Picking a server opens its own dialog, which claims that body, watches it, or disconnects it.
+The configuration-phase dialog an attaching player lands in before they have a body: one entry per allowed server, labelled with that server's body, who is driving it, and how many are watching it. Picking a server opens its own dialog, which claims that body, watches it, or disconnects it. On a lane with the picker, every admitted join is served the picker: a claim is the only way into a body.
 _Avoid_: lobby, menu, server list, hub, browser
 
 **Allowed server**:
@@ -267,7 +267,7 @@ The protocol phase after configuration, where a body's world and its players exi
 _Avoid_: world state, in-game
 
 **Attach stream**:
-The ordered clientbound frames Monoplayer sends to one player: configuration replay, join prefix, one synthesized position, then the rest of the body's cached state. A driver and the body's spectators receive the same stream, and it survives a body's reconnect.
+The ordered clientbound frames Monoplayer sends to one player: configuration replay, join prefix, one synthesized position, then the rest of the body's cached state. A driver and the body's spectators receive the same stream, except for the frames that say what their own client is — a spectator is told its game mode and abilities last, and the body's own mode frames never reach it. It survives a body's reconnect.
 _Avoid_: replay, join packet, attach payload
 
 **Synthesized position**:
