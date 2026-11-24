@@ -66,6 +66,24 @@ test('#260 the lane serves its configured backend as one body, and core.cache is
   assert.equal(rig.core.bodies.cacheFor(configured).warm, true, 'the warm marker landed in that body\'s cache')
 })
 
+test("#260 the first frame of a session binds the body the leg was pointed at", () => {
+  const rig = makeCore()
+  const configured = pickSlug(rig.core.config.backend.host + ':' + rig.core.config.backend.port)
+  const dialled = pickSlug('127.0.0.1:25599')
+  assert.equal(rig.core.bodies.stats().count, 1, 'the lane starts on its configured body')
+
+  // The orchestrator points the leg at a target of its own: the control document's
+  // startup target, or a desired backend on a detached reconnect. No move field
+  // names it (#229), so the leg's target is the only record of the dial.
+  rig.backendLeg.setTarget({ host: '127.0.0.1', port: 25599 })
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+
+  assert.equal(rig.core.cache, rig.core.bodies.cacheFor(dialled), 'the frame is cached under the server it came from')
+  assert.deepEqual(rig.core.bodies.get(configured).snapshot().config, [],
+    'the configured body keeps no frame of another body')
+  assert.deepEqual([...rig.core.bodies.stats().bodies].sort(), [configured, dialled].sort())
+})
+
 // #98: the pack is the human's answer, and the held copy is what a later client
 // receives. Nothing about the pack goes through the state cache.
 test('a resource pack reaches an attached client and the puppet does not answer it', () => {
