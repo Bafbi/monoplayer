@@ -415,8 +415,8 @@ listing the lane's allowed servers.
 - **The list is the allowed-server key (#265).** The picker offers the servers in
   `allowed-servers.json`, read at each offer through `control.allowedServers()`. A
   panel edit is therefore what the next join sees, with no restart. A live file that
-  cannot be parsed is named and ignored, and the copy Git commits answers in its
-  place: a broken list must not leave a client in a dialog with no buttons. A lane
+  cannot be parsed is named and ignored. The copy Git commits answers in its place,
+  because a broken list must not leave a client in a dialog with no buttons. A lane
   with no such key offers nothing, because the list is what a picker lane offers and
   not the backend it dials. Each row's name is the canonical `host:port` its claim
   dials. A claim labels a body with the row's slug, while the body's state cache is

@@ -4378,8 +4378,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     check(
       'O61',
       'the picker offers the allowed-server list at each offer, falls back to the seed it names, and a row is one body id',
-      // The offer at O55 came from the live file, and the lane said so once: a join
-      // reads the list more than once and the operator reads one line.
+      // The offer at O55 came from the live file, and the lane said so once. A join
+      // reads the list more than once, and the operator reads one line.
       offeredBefore.length === 1 &&
         offeredBefore[0].source === 'control' &&
         offeredBefore[0].servers === 2 &&

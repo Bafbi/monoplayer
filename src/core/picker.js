@@ -103,16 +103,16 @@ function canonicalPickName (name) {
   // A name that names no address is offered as it was written. The claim refuses
   // it in words, and rewriting it would be a guess at which server was meant.
   if (target === null) return String(name ?? '')
-  // A bracketed IPv6 address is written the way a URL writes one and dialled the
-  // way the socket layer takes one, so the name parses back to the address it
-  // dials.
+  // A bracketed IPv6 address is written the way a URL writes one, and the socket
+  // layer takes the address without its brackets. The name keeps the brackets, so
+  // it parses back to the address it dials.
   const host = target.host.indexOf(':') === -1 ? target.host : '[' + target.host + ']'
   return host + ':' + target.port
 }
 
 export function pickerRows (rows = []) {
   return rows.map(row => {
-    // One name per row: the slug and the id are read from the name this row is
+    // One name per row. The slug and the id are read from the name this row is
     // offered under, never from the one its lane handed over. A claim records the
     // slug, so a row whose slug came from another spelling is the split above.
     const name = canonicalPickName(row?.name ?? 'server')
