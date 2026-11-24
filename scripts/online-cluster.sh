@@ -195,15 +195,17 @@ lease_holder () {
 # The lease as it is, or nothing when there is none. A read that fails for any other
 # reason is not an absence: a run that cannot tell whether the account is taken does
 # not start (strict), and one that is already ending says so and leaves the lease to
-# expire (lenient). That is the rule gate-lane.sh states for an unreadable lane.
+# expire (lenient). That is the rule gate-lane.sh states for an unreadable lane, and
+# it is why the error comes from one read rather than from a second call: a lease that
+# changed between two calls would be read two ways.
 lease_load () {
   local level=${1:-strict} out err
   LEASE_JSON=''
-  if out=$(kubectl -n "$(lease_ns)" get lease "$LEASE_NAME" -o json 2>/dev/null); then
+  if out=$(kubectl -n "$(lease_ns)" get lease "$LEASE_NAME" -o json 2>"$LEASE_STATE/read.err"); then
     LEASE_JSON=$out
     return 0
   fi
-  err=$(kubectl -n "$(lease_ns)" get lease "$LEASE_NAME" -o json 2>&1 >/dev/null) || true
+  err=$(cat "$LEASE_STATE/read.err")
   case "$err" in *NotFound*) return 0 ;; esac
   err=${err%%$'\n'*}
   if [ "$level" = lenient ]; then
@@ -370,7 +372,6 @@ lease_acquire () {
   local attempts=0 deadline=0
   lease_check_numbers
   guard_lease_namespace "$(lease_ns)"
-  command -v kubectl >/dev/null || die 'kubectl is not on PATH'
   [ -n "$LEASE_HOLDER" ] || LEASE_HOLDER=$(lease_holder)
   [ "$LEASE_WAIT" = 0 ] || deadline=$(( $(date +%s) + LEASE_WAIT ))
   while : ; do
@@ -405,26 +406,56 @@ lease_acquire () {
   done
 }
 
-# One renewal. A failed renewal is not a failed run: the flag goes away, the lease
-# expires, and the run is told it is no longer exclusive rather than killed mid-join.
+# One renewal. A read or a write that failed is a tick to skip, not a lost lease: the
+# account is only in danger once another run holds the lease.
 lease_renew_once () {
-  lease_load lenient || return 1
+  lease_load lenient || return 0
   lease_decide renew
   case "$LEASE_ACTION" in
-    replace) lease_write replace ;;
+    replace) lease_write replace || return 0 ;;
     lost)
+      # Another run has the account now. Two runs on one refresh chain is the thing the
+      # lease exists to prevent, so this one stops instead of going on as a second writer.
+      LEASE_HELD=''
       rm -f "$LEASE_STATE/held"
-      say "the account lease $(lease_ns)/$LEASE_NAME is no longer this run's: \"${LEASE_OTHER:-nobody}\" holds it now. This run continues, and its account is no longer its own"
+      say "the account lease $(lease_ns)/$LEASE_NAME is no longer this run's: \"${LEASE_OTHER:-nobody}\" holds it. Stopping, because two runs must not write one refresh chain"
       return 1 ;;
-    *) say "the renewal decision answered \"$LEASE_ACTION\", so this run stops renewing and the lease expires on its own"; return 1 ;;
+    *) say "the renewal decision answered \"$LEASE_ACTION\", so this tick was skipped"; return 0 ;;
   esac
 }
 
+# Whether the run this loop belongs to is gone. kill -0 is not enough on Linux: a
+# process whose parent was killed with SIGKILL stays a zombie until something reaps
+# it, and kill -0 still finds it. /proc reports the state. A machine without /proc
+# falls back to kill -0, which is what macOS and a terminal's own shell need anyway.
+parent_gone () {
+  local pid=$1 state
+  if [ -r "/proc/$pid/stat" ]; then
+    state=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $1}') || state=''
+    case "$state" in ''|Z) return 0 ;; esac
+    return 1
+  fi
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+# The loop outlives the run, because it must. Three ways out: the run released the
+# lease, the run is gone without running its EXIT trap (SIGKILL), or another run has
+# taken the lease, which ends the run.
 lease_renew_loop () {
+  local parent=$$
   while [ -f "$LEASE_STATE/held" ]; do
     sleep "$LEASE_RENEW_INTERVAL" || exit 0
+    if parent_gone "$parent"; then
+      LEASE_RENEW_PID=''
+      lease_release
+      exit 0
+    fi
     [ -f "$LEASE_STATE/held" ] || exit 0
-    lease_renew_once || exit 0
+    if ! lease_renew_once; then
+      # A run that carries on here is a second writer on one refresh chain.
+      kill -TERM "$parent" 2>/dev/null || true
+      exit 0
+    fi
   done
 }
 
@@ -482,7 +513,7 @@ hold () {
   local status=0
   [ $# -gt 0 ] || die 'hold needs a command: scripts/online-cluster.sh hold [--lease-wait SECONDS] CMD [ARG...]' 2
   [ -d "$SECRETS/accounts" ] ||
-    die "no accounts in $SECRETS/accounts; run mise run secrets:link first, because the account this run holds the lease for lives there" 2
+    die "no accounts in $SECRETS/accounts. Run mise run secrets:link first, because the account this run holds the lease for lives there" 2
   LEASE_STATE=$(mktemp -d)
   LEASE_WRITE=$LEASE_STATE/lease.json
   trap on_exit EXIT
