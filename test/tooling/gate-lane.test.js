@@ -412,8 +412,8 @@ function rendered (where, dir, env = {}) {
   const files = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter(name => name.endsWith('.yaml')).sort()
     : []
-  const text = dir2 => fs.readFileSync(path.join(dir, dir2), 'utf8')
-  return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), files, read: text }
+  const read = file => fs.readFileSync(path.join(dir, file), 'utf8')
+  return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), files, read }
 }
 
 const TREE = path.join(ROOT, 'deploy', 'driver')
@@ -522,5 +522,63 @@ test("a namespace outside the gate lane's prefix is refused", () => {
     assert.match(output, /refusing/)
     assert.deepEqual(calls, [], 'refusing "' + namespace + '" called no kubectl')
   }
+})
+
+
+test('render refuses a directory that already holds something', () => {
+  // The render target belongs to the caller: `render DIR` is user-facing, and a
+  // copy that overwrote a full directory would take whatever else was in it.
+  const where = space()
+  const dir = path.join(where.root, 'busy')
+  fs.mkdirSync(dir)
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'mine')
+
+  const { status, output } = rendered(where, dir)
+  assert.equal(status, 2, output)
+  assert.match(output, /not empty/)
+  assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'mine', 'the file the caller put there survived')
+})
+
+
+test('a renamed lane checks its own Secrets, not the ones it shipped with', () => {
+  // The tree asks for gate-<instance>-rcon and gate-<instance>-velocity once it is
+  // rendered. up has to name the same ones, or a renamed lane is refused for a
+  // Secret it never reads, and the lane the render describes can never start.
+  const own = run(space(), ['up', 'paper'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x', KUBECTL_SECRET_MISSING: 'gate-b-rcon' })
+  assert.equal(own.status, 0, own.output)
+
+  const missing = run(space(), ['up', 'paper'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x', KUBECTL_SECRET_MISSING: 'gate-x-rcon' })
+  assert.equal(missing.status, 2, missing.output)
+  assert.match(missing.output, /gate-x-rcon/, 'the refusal names the Secret this lane reads')
+  assert.doesNotMatch(missing.output, /gate-b-rcon/, 'and not the one the tree shipped with')
+
+  const velocity = run(space(), ['up', 'velocity'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x', KUBECTL_SECRET_MISSING: 'gate-x-velocity' })
+  assert.equal(velocity.status, 2, velocity.output)
+  assert.match(velocity.output, /gate-x-velocity/)
+})
+
+test('two instances render different objects, not just non-referring ones', () => {
+  // "Do not address each other" is half the claim. The other half is that a second
+  // instance is a second lane at all: its namespace and every label value differ.
+  const where = space()
+  const x = rendered(where, path.join(where.root, 'render-x'), { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  const y = rendered(where, path.join(where.root, 'render-y'), { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-y' })
+  assert.equal(x.status, 0, x.output)
+  assert.equal(y.status, 0, y.output)
+
+  assert.notEqual(x.read('namespace.yaml'), y.read('namespace.yaml'), 'the two namespaces are two objects')
+  assert.notEqual(x.read('paper.yaml'), y.read('paper.yaml'), 'and the workloads differ')
+})
+
+test('an instance too long for a label value is refused before it renders', () => {
+  // app.kubernetes.io/name: monoplayer-gate-<instance>-paper-conduct has to fit in
+  // 63 characters. Refusing the name here names the name; letting it through names
+  // a manifest line one apply later.
+  const long = run(space(), ['up'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-' + 'a'.repeat(34) })
+  assert.equal(long.status, 2, long.output)
+  assert.match(long.output, /63-character label value/)
+
+  const fits = run(space(), ['up'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-' + 'a'.repeat(33) })
+  assert.equal(fits.status, 0, fits.output)
 })
 

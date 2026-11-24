@@ -31,14 +31,10 @@
 # gate-b-velocity are created by an operator, never by this tree, and a down that
 # deleted them would leave the next up in CreateContainerConfigError.
 #
-# The lane's instance is one value (#277). The tree in deploy/driver names the
-# lane monoplayer-gate-b in the namespace object, in every app.kubernetes.io/name
-# label and selector, in the Secret and ConfigMap names, in the two tailnet
-# hostnames, and in one path inside velocity.toml. render() substitutes the
-# instance into all of it, so the manifests and the label this script looks pods
-# up by cannot disagree: a renamed lane reads its own pods. Instance b is today's
-# lane, and the substitution is then the empty one, so an ordinary up applies byte
-# for byte what a reader of deploy/driver sees.
+# The lane's instance is one value (#277). The tree in deploy/driver names today's
+# lane, monoplayer-gate-b, everywhere the lane is named, and render() substitutes
+# the instance into all of it. So the manifests and the label this script looks
+# pods up by cannot disagree: a renamed lane reads its own pods.
 #
 # Environment:
 #   MONOPLAYER_GATE_NAMESPACE    the gate lane's namespace (default monoplayer-gate-b).
@@ -59,12 +55,19 @@ LIVE_NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
 READY_TIMEOUT=${MONOPLAYER_GATE_READY_TIMEOUT:-900}
 STOP_TIMEOUT=${MONOPLAYER_GATE_STOP_TIMEOUT:-180}
 POLL=${MONOPLAYER_GATE_POLL:-5}
+# 63, the longest a label value may be, minus "monoplayer-gate-" (16) and
+# "-paper-conduct" (14), the longest thing this lane labels.
+INSTANCE_MAX=33
 MANIFESTS=$ROOT/deploy/driver
 # The one value every name in the lane comes from. The tree spells today's
 # instance, b, so the substitution below replaces `gate-b`.
 GATE_PREFIX=monoplayer-gate-
 INSTANCE=${GATE_NAMESPACE#"$GATE_PREFIX"}
-RENDER=''
+# The tree spells the lane two ways: monoplayer-gate-b-<thing> for the namespace,
+# the labels and the tailnet hostnames, and gate-b-<name> for the Secrets and the
+# ConfigMaps. Both derive here, once, so no caller can spell one and mean the other.
+LANE_LABEL=$GATE_PREFIX$INSTANCE
+LANE_NAME=gate-$INSTANCE
 
 # Every Deployment deploy/driver declares. down covers all five; up wakes the two
 # a rung drives unless it is told which ones it needs.
@@ -109,6 +112,13 @@ guard () {
   case "$INSTANCE" in
     *[!a-z0-9-]*|-*|*-) die "refusing \"${GATE_NAMESPACE}\": the instance \"${INSTANCE}\" is not a DNS-1123 label, so it cannot name a namespace or a label value" ;;
   esac
+  # A label value is at most 63 characters, and the longest one this lane writes is
+  # app.kubernetes.io/name: monoplayer-gate-<instance>-paper-conduct. A longer
+  # instance would render a tree that kubectl refuses, one apply later and with a
+  # message about the manifest rather than about the name that caused it.
+  if [ "${#INSTANCE}" -gt "$INSTANCE_MAX" ]; then
+    die "refusing \"${GATE_NAMESPACE}\": the instance is ${#INSTANCE} characters and the limit is $INSTANCE_MAX, which keeps monoplayer-gate-<instance>-paper-conduct inside the 63-character label value"
+  fi
 }
 
 known () {
@@ -146,29 +156,34 @@ current_replicas () {
 }
 
 pods_of () {
-  kubectl -n "$GATE_NAMESPACE" get pods -l "app.kubernetes.io/name=$GATE_NAMESPACE-$1" -o name || true
+  kubectl -n "$GATE_NAMESPACE" get pods -l "app.kubernetes.io/name=$LANE_LABEL-$1" -o name || true
 }
 
-# The lane a rendered tree belongs to. awk with an exit reads one line and no
-# more: a piped head would let sed take a SIGPIPE, and pipefail would turn that
-# into a silent death. This reads the render and not the tree, because the render
-# is what gets applied; the two are compared in up, not assumed equal.
+# The lane a rendered tree belongs to. It reads the render, not the tree, because
+# the render is what gets applied. up compares the two rather than assuming they
+# agree. awk with an exit reads one line and no more. A piped head would let sed
+# take a SIGPIPE, and pipefail would turn that into a silent death.
 rendered_namespace () {
   awk '/^  name: /{print $2; exit}' "$1/namespace.yaml"
 }
 
 # The tree is the template. One substitution reaches the namespace object, every
 # label and selector, the Secret and ConfigMap names, the tailnet hostnames and the
-# path inside velocity.toml, so a rename cannot half-land. Instance b is today's
-# lane and the substitution is then the empty one, which is why an ordinary up
-# applies exactly what deploy/driver holds.
+# path inside velocity.toml. That is why a rename cannot half-land.
+#
+# Instance b is today's lane, and the substitution is then the empty one. An
+# ordinary up applies exactly what deploy/driver holds.
 render () {
   local dir=$1 file
-  rm -rf "$dir"
-  cp -R "$MANIFESTS" "$dir"
+  # The target belongs to the caller: an empty one, or none. Deleting a directory
+  # this function did not create would take whatever else was in it.
+  mkdir -p "$dir"
+  [ -z "$(ls -A "$dir")" ] \
+    || die "refusing to render into $dir: it is not empty, and the render would overwrite what is there"
+  cp -R "$MANIFESTS"/. "$dir"/
   if [ "$INSTANCE" = b ]; then return 0; fi
   for file in "$dir"/*.yaml; do
-    sed "s/gate-b/gate-$INSTANCE/g" "$file" > "$file.new"
+    sed "s/gate-b/$LANE_NAME/g" "$file" > "$file.new"
     mv "$file.new" "$file"
   done
 }
@@ -188,14 +203,14 @@ up () {
   awake=${awake# }
 
   # The render is what gets applied, so the lane it renders and the lane this run
-  # scales are read back from it. One function produced both, and the check is what
+  # scales are read back from it. One value produced both, and this check is what
   # proves it did.
   RENDER=$(mktemp -d)
   trap 'rm -rf "$RENDER"' EXIT
   render "$RENDER"
   [ "$(rendered_namespace "$RENDER")" = "$GATE_NAMESPACE" ] \
     || die "the render spells $(rendered_namespace "$RENDER") and this run would scale $GATE_NAMESPACE: they are one lane, so name the same namespace"
-  say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $GATE_NAMESPACE-"
+  say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $LANE_LABEL-"
 
   kubectl apply -k "$RENDER" >/dev/null
   say "applied the render of deploy/driver to $GATE_NAMESPACE"
@@ -210,10 +225,10 @@ up () {
   # The Secret each Deployment reads: RCON on the three Papers, and the forwarding
   # secret on Velocity and on the Paper behind it (paper-m4).
   case " $names " in
-    *" paper "*|*" paper-conduct "*|*" paper-m4 "*) require_secret gate-b-rcon ;;
+    *" paper "*|*" paper-conduct "*|*" paper-m4 "*) require_secret "$LANE_NAME-rcon" ;;
   esac
   case " $names " in
-    *" velocity "*|*" paper-m4 "*) require_secret gate-b-velocity ;;
+    *" velocity "*|*" paper-m4 "*) require_secret "$LANE_NAME-velocity" ;;
   esac
 
   # shellcheck disable=SC2086
@@ -276,7 +291,7 @@ down () {
 
 status () {
   local name replicas ready
-  say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $GATE_NAMESPACE-"
+  say "gate lane $GATE_NAMESPACE: instance $INSTANCE, label prefix $LANE_LABEL-"
   for name in $GATE_WORKLOADS; do
     replicas=$(kubectl -n "$GATE_NAMESPACE" get deploy "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null) || replicas=''
     ready=$(ready_replicas "$name")
