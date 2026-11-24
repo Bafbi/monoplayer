@@ -259,16 +259,37 @@ export function serverActionProblemText (action) {
   }
 }
 
-// A verb this lane reads and cannot carry yet. `disconnect` is the one verb the
+// A verb this lane reads and cannot carry. `disconnect` is the one verb the
 // dialog layer can honour, so it is not refused here: the client leaves, and its
 // configuration `disconnect` frame says which server it left (#266). `claim` is
 // no longer one of them: #267 records a claim where the client answers
 // (src/core/claims.js), and its refusal has its own sentence there. `spectate`
-// still acts on a body nothing watches from this phase, so this is what it gets.
+// is one the lane carries since #269, and it has its own refusal below; what
+// reaches here is a verb no lane offers yet.
 export function verbRefusalText ({ verb = null, server = null } = {}) {
   const named = server === null ? 'that server' : server
   const asked = verb === null ? 'that' : verb
   return 'Monoplayer: ' + named + ' was asked for ' + asked + ', and this lane cannot carry a ' + asked + ' yet.'
+}
+
+// #269: the sentence a client gets when it asks to watch a body it cannot watch.
+// A lane that serves no such body, a body with no claim to watch, and a body
+// that is still connecting are three different answers, because they ask the
+// client for three different things: claim it, wait, or pick something else.
+export function spectateRefusalText ({ server = null, reason = null } = {}) {
+  const named = server === null ? 'that server' : server
+  switch (reason) {
+    case 'no_claim':
+      return 'Monoplayer: nobody is driving ' + named + ', so there is nothing to watch. Claim it to drive it.'
+    case 'body_not_served':
+      return 'Monoplayer: this lane is not serving ' + named + '.'
+    case 'body_not_warm':
+      return 'Monoplayer: ' + named + ' is still connecting. Try watching it again in a moment.'
+    case 'picker_off':
+      return 'Monoplayer: ' + named + ' cannot be watched on this lane.'
+    default:
+      return 'Monoplayer: ' + named + ' cannot be watched right now.'
+  }
 }
 
 // The frame the picker's answer rides in, built for the front's own tests and

@@ -24,6 +24,10 @@ _Avoid_: controller, owner, player in control, operator
 An attaching player who watches a body without control. They receive the body's world and the body itself, and nothing they send reaches the server.
 _Avoid_: viewer, watcher, observer, audience
 
+**Channel**:
+One attaching player's delivery of one body: whether they are its driver or a spectator, what they have been sent, and their own client settings. A body's frames go to every channel on that body, and the channel is what keeps two clients on one body apart. A spectator's channel receives the body's stream and sends nothing to the server.
+_Avoid_: connection, socket, session, slot, seat
+
 **Picker**:
 The configuration-phase dialog an attaching player lands in before they have a body: one entry per allowed server, labelled with that server's body and who is driving it. Picking a server opens its own dialog, which claims that body, watches it, or disconnects it.
 _Avoid_: lobby, menu, server list, hub, browser
@@ -151,10 +155,6 @@ _Avoid_: ready, healthy
 **Attach**:
 An attaching player's connection to the front leg, authenticated as that player. Driving a body or watching one is a role the claim decides, not a property of the attach.
 _Avoid_: join, connect, takeover
-
-**Attach slot**:
-_Superseded by_ claim, one per body. The claim now decides who may drive a body, and a second claim on a driven body is refused by the claim (#267). The slot still decides who is delivered a body, and #269 deletes it once a channel carries delivery.
-_Avoid_: client slot, seat
 
 **Pre-auth window**:
 The stretch of a front-leg connection from the accepted socket to the moment the attach whitelist accepts the resolved UUID. A connection past that point is an attach, and no pre-auth limit looks at it again. `preAuth.maxConnections` bounds how many connections sit in the window at once, and `preAuth.deadlineMs` bounds how long one may stay. A connection denied before the whitelist accepts it stays counted until its socket ends, because a denial is not the accept the window is defined by.

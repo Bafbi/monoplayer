@@ -229,7 +229,7 @@ has accepted it. Past that point the connection is a session, and the count neve
 looks at it again. The window is bounded by `preAuth.maxConnections` (16 by
 default), and the leg closes a connection over it before any of its own state
 exists for that connection: no login review, no configuration interceptor, no
-attach slot.
+channel.
 
 The limit is a connection total rather than a rate or a per-source figure. A
 TCP tunnel may present its own address instead of the client's, and a count does
@@ -324,8 +324,8 @@ listing the lane's allowed servers.
   needed. Its `ClientConfigurationPacketListenerImpl$2` extends
   `CommonDialogAccess`, so a custom action is clickable there and only command
   actions are inert.
-- **Nothing is attached.** A picker join takes no attach slot and never reaches
-  the core's session, so several clients may read the picker at once. The core
+- **Nothing is attached.** A picker join holds no channel and never reaches the
+  core's session, so several clients may read the picker at once. The core
   counts the join as `attach_picker`, not as a denial. A pick is recorded and the
   client is shown that server's own dialog. The answer to it is recorded too.
 - **The claim is recorded at the pick, not at login (#267).** The client that
@@ -334,9 +334,11 @@ listing the lane's allowed servers.
   second claim on a claimed body is refused with one sentence naming the player who
   holds it, so two people never share a body's controls. The holder is the
   connection, so the claim ends when that connection ends. A client that never
-  clicks `Claim` therefore holds nothing. The old attach slot keeps what it had:
-  the claim decides who may own a body, the slot decides who is delivered one, and
-  #269 deletes the slot once a channel holds delivery.
+  clicks `Claim` therefore holds nothing. Delivery is a channel's (#269): a grant
+  opens the driver's channel on that body, and a body's frames go to every channel
+  on it. The attach slot is gone, so a second claim on a driven body is refused by
+  the claim rather than by an earlier admission check, and the Spectate verb lands a
+  channel too: the body's play state, on that connection, with nothing dialled.
 - **A claim is a landing (#258).** The click that grants a claim is the one thing
   that dials a body. The front asks the core for the body the frame named. The core
   points the puppet leg at that address, connects, and waits. The wait is bounded,
@@ -391,8 +393,11 @@ listing the lane's allowed servers.
 - **A verb is read, reported, then answered (#266).** Claim, spectate and
   disconnect all act on a body. `claim` records the claim (#267), and
   `disconnect` is honoured: the client goes, and its configuration `disconnect`
-  frame says which server it left. Spectate acts on a body nothing watches from
-  this phase, so it is reported and answered with a sentence that names the verb.
+  frame says which server it left. `spectate` is a channel on a body that already
+  has a session (#269): the core answers whether this row names the body it serves,
+  and the client is handed that body's play state on its own channel. A body with no
+  claim, a row naming another body, and a body still connecting are three refusals
+  with three sentences, because they ask the client for three different things.
 - **An unreadable answer is refused, never guessed at (#266).** `readServerAction`
   returns a reason rather than a null: `not_a_click`, `unknown_id`, `malformed` or
   `unknown_verb`. `serverActionProblemText` turns that reason into one sentence
@@ -407,6 +412,10 @@ listing the lane's allowed servers.
 - **One switch, off by default.** `MONOPLAYER_PICKER` is read once at startup and
   validated. With it off, or with no baseline on disk, a join with no backend is
   refused with `backend_not_ready`, exactly as before.
+
+What a spectator is shown, and who may spectate, is #259. #269 builds only the
+seam: a body's frames go to every channel on it, and a channel is not a driver by
+default.
 
 The gate for the whole epic is answered at rung 2 by `O55`, `O56` and `O56b`. A
 26.2 client reads the recording, gets the dialog, and clicks one action. It then
@@ -823,19 +832,33 @@ backendLeg = {                    // = the GlowSquidye puppet session
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
 
-frontLeg = {                      // one attaching client (Bafbi)
+frontLeg = {                      // a body's channels: its driver and its spectators (#269)
   setLoginStartHandler(payload => decision)   // -> createMonoplayer().processLoginStart
                                               //    denied => end(uuid-deny) BEFORE Login Success
   setServerboundHandler(({ state, name, buffer, data }) => {})
-  setDetachHandler(({ reason }) => {})
+  setDetachHandler(({ reason }) => {})        // the driver's channel ended; the body survives
   setClientSettingsHandler(settings => {})    // -> createMonoplayer().noteClientSettings
-                                              //    the human's Client Information, read-only
+                                              //    the driver's Client Information, read-only
   setConfiguringHandler(({ name }) => {})     // -> createMonoplayer().configuringReady
                                               //    the client entered its own configuration
                                               //    phase (#16)
-  write(name, packet, { synth }), writeRaw(buffer, meta)
-  end(reason)                     // deny/kick/close
+  setSpectateBody({ body, server, name })     // optional (#269):
+                                              //    -> createMonoplayer().spectateBody
+                                              //    may this client watch the body it named
+  setSpectatorAttach({ name, channel })       // optional (#269):
+                                              //    -> createMonoplayer().spectateView
+                                              //    the body's play state, on that one channel
+  write(name, packet, { synth, channel }), writeRaw(buffer, meta, { channel })
+  end(reason)                     // deny/kick/close, to every channel
 }
+
+A write without `channel` goes to every channel on the body: its driver, and the
+spectators watching it. A write with one goes to that connection alone, which is
+how a spectator is handed its body's replay without the driver receiving it twice.
+The leg keeps one channel per connection: its role, what it has been sent, and its
+own client information (`src/core/channels.js`). The claim decides who drives
+(`src/core/claims.js`); a channel is what each connection is handed, and a
+spectator's frames never reach the core's pipeline.
 ```
 
 The front leg calls, in order: `core.processLoginStart` (the whitelist review),
