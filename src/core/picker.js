@@ -57,6 +57,27 @@ export function pickIdFor (name) {
   return PICK_NAMESPACE + '/' + pickSlug(name)
 }
 
+// #258: the address a row names. A row's name is the backend it points at
+// ("paper:25565"), and a claim lands the client on that body, so the leg needs
+// the address out of the label. The slug is lossy (the colon becomes `_` and a
+// host keeps its case), so this reads the name and never the id. Null for a name
+// that is not an address: a lane whose row cannot be dialled refuses the claim
+// in words rather than dialling a host called "paper".
+export function pickTarget (name) {
+  const raw = String(name ?? '')
+  const colon = raw.lastIndexOf(':')
+  if (colon <= 0 || colon === raw.length - 1) return null
+  // A bracketed IPv6 address is written the way a URL writes one and dialled the
+  // way the socket layer takes one.
+  const host = raw.startsWith('[') && raw.slice(0, colon).endsWith(']')
+    ? raw.slice(1, colon - 1)
+    : raw.slice(0, colon)
+  const port = Number(raw.slice(colon + 1))
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null
+  if (host.length === 0) return null
+  return { host, port }
+}
+
 function textComponent (text) {
   return { type: 'string', value: String(text) }
 }
@@ -273,11 +294,28 @@ export function pickUnknownText ({ id = null } = {}) {
   return 'Monoplayer: ' + named + ' names no server this lane offers.'
 }
 
-// What the client is told when the picker cannot go on: no servers to offer, or no
-// baseline to serve. A pick that names an offered server opens that server's dialog
-// (#266), so this is no longer what a pick gets. It is the sentence for a lane that
-// cannot offer a body at all, and #269 does not change it.
+// #258: the list a client comes back to when the body it claimed did not let it
+// in. The title names that body, so a failed landing is a choice the client can
+// make again rather than a dialog nobody will read.
+export function claimRestoreTitle ({ server = null } = {}) {
+  const named = server === null ? 'that server' : server
+  return 'Choose a server - ' + named + ' did not answer'
+}
+
+// #258: the sentence a client gets when its claim was granted and the body could
+// not be entered. The one case the client is ended rather than offered the list
+// again is a body that answered every frame and then refused the finish.
+export function claimFailureText ({ server = null } = {}) {
+  const named = server === null ? 'that server' : server
+  return 'Monoplayer: ' + named + ' accepted the connection and could not be entered.'
+}
+
+// What the client is told when the picker cannot go on: no servers to offer, or a
+// dialog that could not be written. A pick that names an offered server opens that
+// server's dialog (#266), and a claim on it dials that body (#258), so neither of
+// those is what this sentence is for. It is for a lane that cannot show the list at
+// all.
 export function pickRefusalText ({ server = null } = {}) {
   const named = server === null ? 'that server' : server
-  return 'Monoplayer: ' + named + ' was recorded, but this lane cannot connect a body yet.'
+  return 'Monoplayer: ' + named + ' could not be offered on this lane.'
 }
