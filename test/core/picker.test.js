@@ -21,6 +21,7 @@ import {
   pickerDialog,
   pickerDialogParams,
   pickerLabel,
+  pickerOfferedRows,
   pickerRows,
   readPickAction,
   readServerAction,
@@ -119,6 +120,8 @@ test('#257 the refusal says what happened, and names the server', () => {
   assert.match(pickRefusalText({}), /could not be offered on this lane/)
 })
 
+// #265: the name a row is offered under is the address its claim dials, so a
+// name that is already canonical is left alone.
 test('#257 rows keep the name the config gave and the slug the wire takes', () => {
   assert.deepEqual(pickerRows([{ name: 'gate-paper:25565', state: 'down' }]), [{
     name: 'gate-paper:25565',
@@ -262,4 +265,68 @@ test('#266 a verb this lane cannot carry is refused in words that name it', () =
   assert.match(verbRefusalText({ verb: 'spectate', server: 'sky' }), /spectate/)
   // Every refusal says it is the lane, not the client, that cannot go further.
   assert.match(verbRefusalText({ verb: 'claim', server: 'sky' }), /cannot/)
+})
+
+// ---- #265: the allowed-server list, and a row's canonical name ----
+
+test('#265 a row is offered under the canonical address its claim dials', () => {
+  // #260 keys a body's cache by pickSlug(host + ':' + port) of the dial. A claim
+  // labels its body by pickSlug(row.name). A row whose name spells the same address
+  // another way would give one server two body ids. So the row is normalised where
+  // it is read: one cache, one claim, one server.
+  const [port] = pickerRows([{ name: 'paper:025565', state: 'down' }])
+  assert.equal(port.name, 'paper:25565')
+  assert.deepEqual(pickTarget(port.name), { host: 'paper', port: 25565 })
+  assert.equal(port.slug, pickSlug('paper:25565'))
+  assert.equal(port.id, pickIdFor('paper:25565'))
+
+  // The name reads back to the address a socket takes, so a bracketed IPv6 row
+  // stays bracketed and its slug does not carry a second colon.
+  const [six] = pickerRows([{ name: '[::1]:025565', state: 'down' }])
+  assert.equal(six.name, '[::1]:25565')
+  assert.deepEqual(pickTarget(six.name), { host: '::1', port: 25565 })
+  assert.equal(six.slug, pickSlug('[::1]:25565'))
+
+  // A host keeps the case the operator wrote: pickSlug lowercases, so two cases
+  // are already one body id.
+  const [dns] = pickerRows([{ name: 'Paper.Excalia.FR:25565', state: 'down' }])
+  assert.equal(dns.name, 'Paper.Excalia.FR:25565')
+  assert.equal(dns.slug, pickSlug('paper.excalia.fr:25565'))
+
+  // A name that names no address is offered as it was written. It is refused at
+  // the claim, in words, rather than rewritten into a guess.
+  const [notAddress] = pickerRows([{ name: 'sky', state: 'down' }])
+  assert.equal(notAddress.name, 'sky')
+  assert.equal(pickTarget(notAddress.name), null)
+})
+
+test('#265 the picker offers the allowed-server list, and says which file answered', () => {
+  // The shape src/service/control.js answers with: the servers, and the file that
+  // answered. The rows are the picker's own vocabulary. Their names are addresses,
+  // because a claim dials the row it names.
+  const control = pickerOfferedRows(() => ({
+    servers: [{ host: 'paper', port: 25565 }, { host: '127.0.0.1', port: 25566 }],
+    source: 'control'
+  }))
+  assert.deepEqual(control, {
+    source: 'control',
+    rows: [
+      { name: 'paper:25565', state: 'down', driver: null },
+      { name: '127.0.0.1:25566', state: 'down', driver: null }
+    ]
+  })
+
+  // The seed answers when the live file cannot, and the source says so.
+  assert.deepEqual(pickerOfferedRows(() => ({ servers: [{ host: 'sky', port: 25565 }], source: 'seed' })), {
+    source: 'seed',
+    rows: [{ name: 'sky:25565', state: 'down', driver: null }]
+  })
+
+  // A lane with no allowed-server key offers nothing, and says that too rather
+  // than inventing the configured backend.
+  assert.deepEqual(pickerOfferedRows(null), { source: 'none', rows: [] })
+  assert.deepEqual(pickerOfferedRows(() => ({ servers: [], source: 'none' })), { source: 'none', rows: [] })
+  // A reader that answers with no list is the broken-file case: the picker has
+  // nothing to offer, and no throw reaches the join.
+  assert.deepEqual(pickerOfferedRows(() => ({ servers: null, source: 'none' })), { source: 'none', rows: [] })
 })
