@@ -3337,8 +3337,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.disconnect
     )
 
-    // #267: the claim, and what it contends with. The first client took the body in
-    // O56 and is still connected, so it holds it. A fourth client reads the picker
+    // #267: the claim, and what it contends with. The first client claimed the body
+    // in O56 and is still connected, so it holds it. A fourth client reads the picker
     // while that claim stands, which it may, because the picker is not a claim and
     // takes no attach slot. It picks the same body and clicks Claim. The refusal
     // names the player who holds it, and the claimant is untouched on its own
@@ -3371,13 +3371,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       "the chosen server's dialog at the fourth client",
       15_000
     )
-    // A pick opens a dialog and takes nothing, so the same holds one level down.
+    // A pick opens a dialog and claims nothing, so the same holds one level down.
     const claimsAfterPick = pickerFront.claims
     const fourthClaim = chooseDialogAction(pickerBot4.received.dialogs[1], 'claim')
     if (fourthClaim !== null) pickerBot4.answerDialog(fourthClaim.id, null, 'configuration')
     await pickerBot4.waitFor(
       () => pickerBot4.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
-      'the refusal a second claim on a driven body gets',
+      'the refusal a second claim on a claimed body gets',
       15_000
     )
     const claimGrants = logs
@@ -3413,7 +3413,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }
     check(
       'O57',
-      'the pick records an exclusive claim: a second claim on a driven body is refused by name, and the picker stays open',
+      'the pick records an exclusive claim: a second claim on a claimed body is refused by name, and the picker stays open',
       claimHeld.length === 1 &&
         claimsWhileReading.length === 1 &&
         claimsWhileReading[0].name === 'Attach' &&

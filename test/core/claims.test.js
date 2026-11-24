@@ -15,7 +15,7 @@ import {
 
 const BODY = { body: 'gate-paper_25565', server: 'gate-paper:25565' }
 
-test('#267 a claim on an unclaimed body is granted and names the driver', () => {
+test('#267 a claim on an unclaimed body is granted and names who holds it', () => {
   const claims = createClaims()
   const outcome = claims.claim({ ...BODY, holder: 'c1', name: 'Attach', at: 1000 })
 
@@ -35,7 +35,7 @@ test('#267 a claim on an unclaimed body is granted and names the driver', () => 
   assert.deepEqual(claims.snapshot(), [outcome.claim], 'the snapshot is the board, and the claim is a copy')
 })
 
-test('#267 a second claim on one body is refused, and the refusal names who drives it', () => {
+test('#267 a second claim on one body is refused, and the refusal names who holds it', () => {
   const claims = createClaims()
   claims.claim({ ...BODY, holder: 'c1', name: 'Attach', at: 1000 })
 
@@ -44,20 +44,20 @@ test('#267 a second claim on one body is refused, and the refusal names who driv
   assert.equal(refused.ok, false)
   assert.equal(refused.reason, CLAIM_REFUSAL.TAKEN)
   assert.equal(refused.claim.holder, 'c1', 'the refusal carries the claim that stands in the way')
-  assert.equal(refused.claim.name, 'Attach', 'so the client can be told who is driving it')
+  assert.equal(refused.claim.name, 'Attach', 'so the client can be told who holds it')
   assert.equal(claims.claimOn('gate-paper_25565').holder, 'c1', 'the first claim is untouched')
   assert.equal(claims.claimOf('c2'), null, 'a refused claim is not held')
   assert.equal(claims.size, 1)
 })
 
-test('#267 the holder may claim the body again: one click is not a second driver', () => {
+test('#267 the holder may claim the body again: one click is not a second claim', () => {
   const claims = createClaims()
   const first = claims.claim({ ...BODY, holder: 'c1', name: 'Attach', at: 1000 })
   const again = claims.claim({ ...BODY, holder: 'c1', name: 'Attach', at: 2000 })
 
   assert.equal(again.ok, true, 'a repeated click from the holder is not a contention')
   assert.equal(again.repeated, true)
-  assert.deepEqual(again.claim, first.claim, 'the claim keeps the moment it was taken')
+  assert.deepEqual(again.claim, first.claim, 'the claim keeps the moment it was recorded')
   assert.equal(claims.size, 1)
 })
 
@@ -69,7 +69,7 @@ test('#267 one connection holds one claim: claiming a second body is refused', (
 
   assert.equal(refused.ok, false)
   assert.equal(refused.reason, CLAIM_REFUSAL.HELD)
-  assert.equal(refused.claim.body, 'gate-paper_25565', 'the refusal names the body this connection already drives')
+  assert.equal(refused.claim.body, 'gate-paper_25565', 'the refusal names the body this connection already holds')
   assert.equal(claims.isClaimed('sky'), false)
   assert.equal(claims.size, 1)
 })
@@ -85,13 +85,13 @@ test('#267 a claim is released when the connection that made it ends, and only t
   assert.equal(claims.release('c1'), null, 'a connection that holds nothing releases nothing')
   assert.equal(claims.size, 1)
 
-  // The body is free, so the next player takes it: that is a detach, not a move.
+  // The body is free, so the next player claims it: that is a detach, not a move.
   const next = claims.claim({ ...BODY, holder: 'c3', name: 'Third', at: 3000 })
   assert.equal(next.ok, true)
   assert.equal(claims.claimOn('gate-paper_25565').name, 'Third')
 })
 
-test('#267 the refusal sentence names the body, the server and the driver', () => {
+test('#267 the refusal sentence names the body, the server and who holds it', () => {
   assert.equal(
     claimRefusalText({
       reason: CLAIM_REFUSAL.TAKEN,
@@ -101,8 +101,8 @@ test('#267 the refusal sentence names the body, the server and the driver', () =
     'Monoplayer: gate-paper:25565 is already claimed by Attach. A body has one claim.'
   )
   assert.equal(
-    claimRefusalText({ reason: CLAIM_REFUSAL.HELD, server: 'sky:25565', driving: 'gate-paper:25565' }),
-    'Monoplayer: you already hold a claim on gate-paper:25565. Leave it before you claim sky:25565.'
+    claimRefusalText({ reason: CLAIM_REFUSAL.HELD, server: 'sky:25565', claimed: 'gate-paper:25565' }),
+    'Monoplayer: you already hold a claim on gate-paper:25565. This connection cannot claim sky:25565 and ends here. Reconnect to claim that server.'
   )
 })
 
