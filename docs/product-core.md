@@ -32,6 +32,7 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 | Module | Role | Purity |
 |---|---|---|
 | `src/core/state-cache.js` | Bounded state cache: join prefix + configuration replay prefix + per-domain warm state | pure |
+| `src/core/body-caches.js` | The cache each body owns: one state cache per body, created on its first dial and shared by that body's readers | pure |
 | `src/core/join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
 | `src/core/preauth-window.js` | The count of sockets inside the pre-auth window, and the total cap on it (#201) | pure |
 | `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
@@ -97,6 +98,30 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
   `ping_response`, `nbt_query_response`), and every blocked connection-control
   frame. Chat is relayed live, never replayed; the chat mode decides which of
   the three frames crosses.
+
+### One cache per body (`body-caches`)
+
+The cache belongs to a body, not to the process. `src/core/body-caches.js`
+creates one state cache per body. Every read of that body answers with the same
+instance, so a body's driver and its spectators share one replay. Two bodies
+share nothing: no frame, no bound, and no capture counter. That counter orders
+the entity and generic merge, so two bodies must not interleave into it.
+
+There is no body cap. A lane offers one body per allowed server, so the allowed
+server list is the bound. Caps wait for the per-body numbers, and they are
+configuration when they land (`docs/adr/one-account-many-bodies.md`).
+
+A body's fault resets that body's cache and no other. The composition root's
+teardown resets the cache of the body whose session ended. A sibling body's
+snapshot, warm flag and sequence numbers are untouched.
+
+A dial names the body it serves. A move dials another server, so it dials that
+server's body. A failed move puts the snapshot back in the body the move started
+on, and releases the target body's cache with the target's session.
+
+What still serves one body at a time is the session, not the cache: a session
+holds one backend connection. A leg per body is #261, and a channel that
+delivers a body to a client is #269.
 
 ### Attach stream order (`join-synth.synthAttach`)
 
@@ -321,9 +346,12 @@ listing the lane's allowed servers.
   configuration phase is still open from the baseline, so it continues with that
   body's configuration frames and ends with one `finish_configuration`. The core
   then replays the body's play state on the connection the client already held.
-  One body at a time: a claim on a different body is refused, and two bodies at once
-  is the per-body cache of #260. The same body may be dialled again after its
-  session faults, because that is one body and one cache.
+  Each body owns its state cache (#260), so the frames the dial brings land in that
+  body's cache and no other's. One body is still served at a time, because the
+  session holds one backend connection: a claim on a different body is refused
+  until a body gets a leg of its own (#261) and a channel to be delivered through
+  (#269). The same body may be dialled again after its session faults, because that
+  is one body and one cache.
 - **A body that does not answer gives the picker back (#258).** A refused dial, a
   body that never warms, and a row whose name is not an address all end the same
   way: the client reads the list again, titled with the body that did not answer.

@@ -47,7 +47,9 @@
 // A hand-built harness may omit the last two; the core degrades to a state
 // replay at the target's login and logs reconfigurationRestoreNoFinish.
 
-import { createStateCache, WARM_MARKER } from '../core/state-cache.js'
+import { WARM_MARKER } from '../core/state-cache.js'
+import { createBodyCaches } from '../core/body-caches.js'
+import { pickSlug } from '../core/picker.js'
 import {
   FABRIC_BRAND,
   brandFrame,
@@ -348,7 +350,17 @@ export function createMonoplayer ({
 
   const cfg = config
 
-  const cache = createStateCache(cfg.bounds)
+  // #260: one state cache per body, owned here as a registry. A body's cache is
+  // its world's state. It is shared by whoever is later delivered that body, and
+  // by nobody else. The lane's own body — the configured backend, with no claim
+  // behind it — is named the way a claim names a body. So a claim on that same
+  // server lands on the cache the lane already warmed, not on a second one. A
+  // body's session is still one per process: a leg per body is #261, and
+  // per-channel delivery is #269.
+  const bodies = createBodyCaches({ bounds: cfg.bounds })
+  const configuredBody = pickSlug(cfg.backend.host + ':' + cfg.backend.port)
+  let activeBody = configuredBody
+  let cache = bodies.cacheFor(activeBody)
   const identity = createFrontIdentity({
     attachWhitelist: whitelistSource ?? cfg.attachWhitelist,
     puppetProfile: cfg.puppet
@@ -370,6 +382,12 @@ export function createMonoplayer ({
       // The dial starts now: the ended leg's late end event, if any, arrives
       // before this and must not be read as the target faulting (#22).
       legHandover = false
+      // #260: a move names another server, so it names another body, and the
+      // frames it brings are that body's. Any other reconnect dials the body the
+      // session already serves, so its cache stays. A restore has already put the
+      // session back on the body it came from (failTransfer).
+      const dialled = target ?? moveTarget
+      if (dialled !== null) activateBody(bodyKeyFor(dialled))
       // #22: after a restore the cache holds the snapshot the client was put
       // back on. The returning backend is a fresh session, and its frames must
       // not append to that snapshot: the client already has it, and a later
@@ -521,9 +539,9 @@ export function createMonoplayer ({
   let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let pendingTransfer = null // target for the next reconnect_due
   // #258: the one body this session has dialled for a picker claim, or null. It is
-  // a slot rather than a map on purpose: a second body's frames arriving while the
-  // first is delivered is the per-body cache of #260, and a session that refuses
-  // the second claim is better than one that mixes two bodies' state.
+  // a slot rather than a map because the session holds one backend connection.
+  // #260 gave each body its own cache, so what still refuses a second body is the
+  // session and not the cache. A leg per body is #261, and delivery is #269.
   let claimedBody = null
   // The body this session dialled for a claim, and the address it dialled. It is
   // what lets a second claim on the same body wait again instead of dialling a
@@ -543,8 +561,12 @@ export function createMonoplayer ({
   // configuration phase on the connection it kept, `targetLoginReady` that the
   // new session's play login has landed, and `attachedName` the human the
   // replay is built for.
-  const move = createTransfer({ session, cache })
+  let move = createTransfer({ session, cache })
   let moveKind = null
+  // #260: the body a kept move started on. Its snapshot is that body's state, so a
+  // target that fails leaves the snapshot there and the returning dial starts
+  // another body's session.
+  let moveBody = null
   let clientReconfiguring = false
   let targetLoginReady = false
   let restoreReplayPending = false
@@ -1192,6 +1214,7 @@ export function createMonoplayer ({
       log('backendDown', { reason, frontEnded: false, outcome, repeated: true })
       return outcome
     }
+    // #260: the cache of the body whose session ended, and no other body's.
     cache.reset()
     // #233: a reset under a move names the move, so an operator's reset is not
     // filed under a transfer nobody sent. A retained teardown with no move is
@@ -1343,8 +1366,14 @@ export function createMonoplayer ({
   // lets it rejoin the warm target.
   function beginKeptMove ({ target, kind, reason }) {
     if (!cfg.transfer.keepConnection || !isAttached()) return { began: false }
+    // #260: an idle transfer is bound to the active body's cache before it begins.
+    // One left bound to a body an earlier move left behind would snapshot the
+    // wrong state.
+    if (move.phase === 'idle') move = createTransfer({ session, cache })
     const begun = move.begin({ target, kind, reason })
     if (begun.began !== true) return { began: false, reason: begun.reason }
+    // #260: the snapshot the move now holds is this body's state.
+    moveBody = activeBody
     moveKind = kind
     clientReconfiguring = false
     clientLeftPlay = false
@@ -1670,6 +1699,14 @@ export function createMonoplayer ({
     const outcome = move.fail({ reason })
     if (outcome.failed !== true) return { restored: false, state: session.state }
     moveKind = null
+    // #260: the target's session ends here, so its body's cache goes with it. The
+    // snapshot went back into the body the move started on. The client is on that
+    // state again, so the session serves that body from now on. A reconfiguration
+    // is one body, so nothing moves.
+    if (activeBody !== moveBody) {
+      cache.reset()
+      activateBody(moveBody)
+    }
     // #87: the move owns no backend session past this point. The target's leg is
     // ended here so the reconnect back to the configured backend can dial — a
     // leg keeps its client until it is ended, and a connected leg refuses a new
@@ -1968,6 +2005,45 @@ export function createMonoplayer ({
 
 // --- #258: the landing, from the claim to the body ---
 
+  // #260: the body this session serves, and so the cache it writes. Every frame
+  // the backend leg delivers belongs to the body the session dialled. The binding
+  // is made at the dial, the only place that knows which body the next frame
+  // belongs to. The leg holds one connection, so one body is live at a time: a
+  // frame can only be the body that connection serves. Two live bodies wait on a
+  // leg per body (#261) and a channel to deliver through (#269). A body the
+  // session already serves is the same binding: one body, one cache, whichever
+  // path named it.
+  // #260: the body the leg is pointed at, read from the leg rather than assumed.
+  // A claim and a move activate their body where they dial. The orchestrator also
+  // dials targets of its own: the control document's startup target, and a desired
+  // backend on a detached reconnect. Those name no move, so the first frame of the
+  // session is where the core learns which body it serves. A leg that cannot name
+  // its target leaves the binding alone.
+  function syncDialledBody () {
+    const target = backendLeg.target
+    if (target === null || typeof target?.host !== 'string' || !Number.isInteger(target?.port)) return cache
+    return activateBody(bodyKeyFor(target))
+  }
+
+  // #260: one body key, from the server a dial names. A claim, a move and a first
+  // frame all ask this, so one server cannot be spelled two ways.
+  function bodyKeyFor (target) {
+    return pickSlug(target.host + ':' + target.port)
+  }
+
+  function activateBody (body) {
+    if (activeBody === body) return cache
+    activeBody = body
+    cache = bodies.cacheFor(body)
+    // A move keeps the transfer it started, because that transfer holds the
+    // snapshot a failed target is restored to (#22). That covers the move in
+    // flight and the restore still waiting for its dial. Any other switch starts a
+    // transfer on the cache it will snapshot.
+    if (moveKind === null && move.phase === 'idle') move = createTransfer({ session, cache })
+    log('bodyCache', { body, bodies: bodies.stats().count })
+    return cache
+  }
+
   // How long a claimed body has to reach the state a client can be released on:
   // its configuration and join prefix cached and its play login landed. Bounded
   // because the client is on a loading screen: a body that misses it gets the
@@ -2019,15 +2095,18 @@ export function createMonoplayer ({
 
   // A granted claim asks for the body the frame named, and this is the only place
   // the puppet dials on a claim: with nobody claiming, nothing is connected (Q6).
-  // One body at a time; two is #260. Losing the body afterwards is its lifecycle
-  // (#261), not this path: a dial that never opened a session fails here, and a
-  // fault after the landing is the reconnect machine's.
+  // One body at a time, because the session holds one backend connection. The
+  // cache is already the body's (#260). A body per connection waits on #261, with
+  // #269's delivery. Losing the body afterwards is its lifecycle, not this path.
+  // A dial that never opened a session fails here, and a fault after the landing
+  // is the reconnect machine's (#261).
   async function connectClaimedBody ({ body = null, server = null, target = null, name = null } = {}) {
     if (cfg.picker !== true) return { connected: false, reason: 'picker_off', body }
     // One body at a time, and the same body is still one. A claim that returns to
-    // the body this session already dialled waits on that body again instead of
-    // opening a second cache. A different body is #260's per-body cache, refused
-    // here rather than mixed.
+    // the body this session already dialled waits on that body again. A different
+    // body is refused because the session holds one backend connection. The cache
+    // can tell two bodies apart, but a leg per body is #261 and a channel to
+    // deliver through is #269.
     const serving = claimDial?.body ?? claimedBody
     if (serving !== null && body !== serving) {
       log('claimDialRefused', { body, reason: 'one_body', claimed: serving })
@@ -2073,6 +2152,14 @@ export function createMonoplayer ({
       })
       return { connected: false, reason: 'target_refused', body }
     }
+    // #260: the body owns the cache, so the frames this dial brings land in this
+    // body's cache and no other's. The body is the server the dial names, not the
+    // label the front's row printed. A picker row's name is its address, so the two
+    // agree, and a move reads the same key from its target. A name that spells one
+    // address two ways would split one body's cache in two, so a row's name must be
+    // its canonical address (#265). The binding is made before the socket opens,
+    // because the body's first frame can arrive before connect() resolves.
+    activateBody(bodyKeyFor(dial))
     metrics.claimDials++
     claimDial = { body, target: { ...dial } }
     log('claimDial', { body, server, host: dial.host, port: dial.port, name })
@@ -2332,6 +2419,9 @@ export function createMonoplayer ({
         metrics.lateFramesAfterHandover++
         return
       }
+      // #260: the first frame of a session binds its body's cache, which is where a
+      // dial the orchestrator made on its own is learned.
+      if (!backendSessionOpen) syncDialledBody()
       backendSessionOpen = true
       // Exact packet journal + one frame counter per backend frame. Lifecycle
       // log records come only from the log() funnel, never one per frame.
@@ -2888,7 +2978,12 @@ export function createMonoplayer ({
   const handle = {
     version: cfg.version,
     config: cfg,
-    cache,
+    // The cache of the body this session is serving, read at the call because a
+    // claim rebinds it (#260). A lane with no claim serves its configured body.
+    get cache () { return cache },
+    // The registry, so a rung or the panel can name every body the process holds
+    // a cache for instead of assuming there is one.
+    bodies,
     identity,
     session,
     metrics,
@@ -2935,7 +3030,8 @@ export function createMonoplayer ({
     get targetLoginReady () { return targetLoginReady },
     get restoring () { return restoreReplayPending },
     get backendSessionOpen () { return backendSessionOpen },
-    // #258: the body a claim landed, or null. One at a time (#260 owns two).
+    // #258: the body a claim landed, or null. One body per session: a second
+    // body's session is #261 and its delivery is #269.
     get claimedBody () { return claimedBody },
     get backendLeg () { return backendLeg },
     get frontLeg () { return frontLeg }
