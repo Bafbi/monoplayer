@@ -69,7 +69,19 @@ import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
-import { pickRefusalText, pickerDialogParams, pickerRows, readPickAction } from '../core/picker.js'
+import {
+  PICK_VERBS,
+  pickRefusalText,
+  pickUnknownText,
+  pickerDialogParams,
+  pickerRows,
+  readPickAction,
+  readServerAction,
+  serverActionProblemText,
+  serverDialogParams,
+  verbIdFor,
+  verbRefusalText
+} from '../core/picker.js'
 import { baselineFramesFor } from './configuration-baseline.js'
 
 const WIRE_MODES = new Set(['throw', 'warn', 'off'])
@@ -446,11 +458,15 @@ function createFrontLeg ({
   // `pickerServers` is the allowed list this leg offers when the core says there
   // is no backend to attach to. Both absent means the lane behaves exactly as it
   // did: a join with no backend is refused. `onPickerPick` reports a pick, and
-  // the leg answers the client itself either way, because a configuration phase
-  // has nowhere to hand a client until #267 lands.
+  // `onPickerVerb` reports the answer to the chosen server's dialog (#266). The leg
+  // answers the client itself either way, because a configuration phase has nowhere
+  // to hand a client until #267 lands.
   configurationBaseline = null,
   pickerServers = null,
   onPickerPick = null,
+  // #266: the answer to a chosen server's own dialog, which is claim, spectate or
+  // disconnect, with the server it names.
+  onPickerVerb = null,
   // #201: the total connection cap on the pre-auth window.
   preAuth: preAuthOptions = {},
   log,
@@ -485,6 +501,12 @@ function createFrontLeg ({
   const pickerFrames = configurationBaseline === null
     ? null
     : baselineFramesFor(configurationBaseline, { version })
+  // #266: `onPickerVerb` reports the answer to a chosen server's own dialog, the
+  // way `onPickerPick` reports the pick. Neither connects anything: the dialog
+  // layer reads the choice, and #267 is the ticket that acts on one.
+  if (onPickerVerb !== null && typeof onPickerVerb !== 'function') {
+    throw new TypeError('onPickerVerb must be null or a function')
+  }
 
   let loginStartHandler = null // core check 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
@@ -502,7 +524,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerRefusals: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
 
   // #201: the total connection cap, and #205: the deadline on the same window.
@@ -927,17 +949,119 @@ function createFrontLeg ({
     if (!written) endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: null }))
   }
 
-  // The client answered the picker. The pick is the whole result of this ticket:
-  // it is reported to the caller, and the client is told plainly that nothing
-  // can be landed in yet (#267 is the ticket that makes a pick connect a body).
-  function handlePickerPick (client, buffer) {
-    const action = readPickAction(buffer)
-    if (action === null) {
-      // Not a pick: another dialog's action, or a frame this leg cannot read. The
-      // picker stays on screen, so the client can still choose.
+  // #266: one click on a dialog this leg authored, at either level. The level is
+  // the id's namespace, not a connection's memory. A pick names a server, and a verb
+  // names a verb and a server, so the frame alone says which dialog it answers.
+  // Nothing has to be kept in step, which is what lets two clients hold the picker
+  // at once (O55b).
+  function handlePickerClick (client, buffer) {
+    const pick = readPickAction(buffer)
+    if (pick !== null) {
+      handlePickerPick(client, pick)
+      return
+    }
+    const action = readServerAction(buffer)
+    if (action.ok === true) {
+      handlePickerVerb(client, action)
+      return
+    }
+    if (action.reason === 'not_a_click') {
+      // Not a click this leg can read at all: another packet's bytes, or a frame
+      // that is not a configuration click. The dialog stays on screen, so the
+      // client can still choose (#257).
       log('pickerPickIgnored', { username: client.username ?? null, reason: 'not_a_pick' })
       return
     }
+    // Ours to read and it did not read. The click is refused with the sentence
+    // that says what was wrong, and the client is answered. A client left in a
+    // dialog nobody will read is worse off than one that is told why.
+    metrics.pickerRefusals++
+    const text = serverActionProblemText(action)
+    log('pickerVerbRefused', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      id: action.id,
+      verb: action.verb,
+      slug: action.slug,
+      reason: action.reason,
+      text
+    })
+    endConfiguration(client, 'picker_refused', text)
+  }
+
+  // The client picked a server. The pick is reported to the caller, and the same
+  // client gets that server's own dialog. A pick is the first half of a choice, not
+  // the end of the connection (#266).
+  function sendServerDialog (client, server) {
+    let written = false
+    try {
+      client.write('show_dialog', serverDialogParams({ server }))
+      written = true
+    } catch (error) {
+      log('pickerServerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    if (written) metrics.pickerServerDialogs++
+    log('pickerServerDialog', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      server: server.name,
+      slug: server.slug,
+      verbs: PICK_VERBS.map(verb => verbIdFor(verb, server.name))
+    })
+    if (!written) {
+      metrics.pickerRefusals++
+      endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: server.name }))
+    }
+  }
+
+  // #266: the answer to a server's own dialog. The verb and the server both ride in
+  // the frame. This is therefore the server the client clicked, not one the leg
+  // remembered.
+  function handlePickerVerb (client, action) {
+    const server = pickerServerRows().find(row => row.slug === action.slug) ?? null
+    const fields = {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      id: action.id,
+      verb: action.verb,
+      slug: action.slug,
+      server: server === null ? null : server.name
+    }
+    if (server === null) {
+      metrics.pickerRefusals++
+      const text = pickUnknownText({ id: action.id })
+      log('pickerVerbRefused', { ...fields, reason: 'unknown_server', text })
+      endConfiguration(client, 'verb_refused', text)
+      return
+    }
+    metrics.pickerVerbs++
+    log('pickerVerb', fields)
+    try {
+      onPickerVerb?.({
+        id: action.id,
+        verb: action.verb,
+        slug: action.slug,
+        server: { ...server },
+        uuid: client.uuid ?? null,
+        name: client.username ?? null
+      })
+    } catch (error) {
+      log('pickerVerbHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    if (action.verb === 'disconnect') {
+      // The one verb the dialog layer can carry out itself: the client asked to
+      // leave, and there is no body to leave from. It goes, and the frame that
+      // ends its configuration says which server it left.
+      endConfiguration(client, 'verb_disconnect', 'Monoplayer: you left ' + server.name + '.')
+      return
+    }
+    // Claim and spectate act on a body. No body is connected from this phase until
+    // #267 wires a pick to one, so the verb is read, reported, and refused in words
+    // that name it. Nothing is invented here for it.
+    endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
+  }
+
+  function handlePickerPick (client, action) {
     const rows = pickerServerRows()
     const picked = rows.find(row => row.slug === action.slug) ?? null
     metrics.pickerPicks++
@@ -960,7 +1084,15 @@ function createFrontLeg ({
     } catch (error) {
       log('pickerPickHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
     }
-    endConfiguration(client, 'pick_refused', pickRefusalText({ server: picked === null ? null : picked.name }))
+    if (picked === null) {
+      // The dialog on screen is older than the list it came from.
+      metrics.pickerRefusals++
+      const text = pickUnknownText({ id: action.id })
+      log('pickerPickRefused', { username: client.username ?? null, id: action.id, slug: action.slug, text })
+      endConfiguration(client, 'pick_refused', text)
+      return
+    }
+    sendServerDialog(client, picked)
   }
 
   // Leave configuration with a message. The library's own end() writes nothing in
@@ -1022,7 +1154,7 @@ function createFrontLeg ({
       // the one frame this leg wants from it is the click on the dialog.
       if (clients.get(client)?.picker === true) {
         if (meta.state === 'configuration' && meta.name === 'custom_click_action') {
-          handlePickerPick(client, buffer)
+          handlePickerClick(client, buffer)
         }
         return
       }
@@ -1339,10 +1471,12 @@ export function createLiveFrontLeg (options = {}) {
     getSnapshotConfig,
     // #257: the picker's configuration baseline and its allowed list. Neither is
     // defaulted here: a lane that sets no baseline keeps refusing a join that has
-    // no backend, exactly as before.
+    // no backend, exactly as before. #266: `onPickerVerb` reports the answer to a
+    // chosen server's own dialog.
     configurationBaseline = null,
     pickerServers = null,
     onPickerPick = null,
+    onPickerVerb = null,
     // #201: the total connection cap on the pre-auth window.
     preAuth = {},
     log = () => {},
@@ -1375,6 +1509,7 @@ export function createLiveFrontLeg (options = {}) {
     configurationBaseline,
     pickerServers,
     onPickerPick,
+    onPickerVerb,
     preAuth,
     log,
     wireCheck,
@@ -1397,10 +1532,11 @@ export function createOfflineFrontLeg (options = {}) {
     getSnapshotConfig,
     // #257: the picker's configuration baseline and its allowed list, forwarded
     // like every other option so the offline rig proves the same code the lane
-    // runs.
+    // runs. #266: `onPickerVerb` is forwarded with them.
     configurationBaseline = null,
     pickerServers = null,
     onPickerPick = null,
+    onPickerVerb = null,
     // #201: the total connection cap on the pre-auth window.
     preAuth = {},
     log = () => {},
@@ -1450,6 +1586,7 @@ export function createOfflineFrontLeg (options = {}) {
     configurationBaseline,
     pickerServers,
     onPickerPick,
+    onPickerVerb,
     preAuth,
     log,
     wireCheck,
