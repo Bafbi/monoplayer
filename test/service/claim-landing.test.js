@@ -71,6 +71,36 @@ test('#258 the claim dials the body it names, and another body after it is refus
   assert.equal(backendLeg.dialledTargets().length, 1, 'the refused claim dialled nothing')
 })
 
+test('#258 the same body may be redialled after its session faulted, and another body may not', async () => {
+  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  const first = core.connectClaimedBody(PARTY)
+  await Promise.resolve()
+  warmABody(backendLeg)
+  clock.tick(50)
+  assert.equal((await first).connected, true)
+
+  // The body's session faults with nobody attached: the cache goes, the session
+  // arms its reconnect, and the claim on that body is still the one this session
+  // serves. Coming back to it is a redial of the same body, not a second cache.
+  backendLeg.deliverEnd({ reason: 'body_fault' })
+  assert.equal(core.session.state, 'reconnecting')
+  clock.tick(1000)
+  assert.equal(core.session.state, 'boot')
+  assert.equal(core.claimedBody, PARTY.body)
+
+  const again = core.connectClaimedBody(PARTY)
+  await Promise.resolve()
+  warmABody(backendLeg)
+  clock.tick(50)
+  assert.equal((await again).connected, true)
+  assert.equal(core.metrics.claimDials, 2)
+
+  // A different body is still refused: one body per session is #260's edge.
+  const other = await core.connectClaimedBody({ body: 'sky', target: { host: '127.0.0.1', port: 25566 } })
+  assert.equal(other.connected, false)
+  assert.equal(other.reason, 'one_body')
+})
+
 test('#258 a body that never warms is refused in bounded time, not held forever', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
   const dial = core.connectClaimedBody(PARTY)
