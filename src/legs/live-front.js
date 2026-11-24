@@ -28,6 +28,12 @@
 //      serializer chain, so the library's follow-up compress/success writes in
 //      loginClient are mechanically dropped (client.write no-ops on an ended
 //      serializer).
+//   2b. #257/#267: a login the core allowed with no backend to attach to
+//      (`picker: true`) is served the recorded configuration baseline and the
+//      picker dialog, and takes no attach slot, so several clients may read it at
+//      once. The click that claims a body is recorded here (#267), at that click
+//      and not at login; the claim is held by the connection and released when the
+//      connection ends. Delivery of the body is #269's.
 //   3. allow — cached configuration replay path: the library's automatic
 //      configuration (segmented registry_data from its own built-in codec,
 //      then finish_configuration) is intercepted via beforeLogin write
@@ -67,6 +73,7 @@ import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
+import { CLAIM_REFUSAL, claimRefusalText, createClaims } from '../core/claims.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
@@ -458,9 +465,10 @@ function createFrontLeg ({
   // `pickerServers` is the allowed list this leg offers when the core says there
   // is no backend to attach to. Both absent means the lane behaves exactly as it
   // did: a join with no backend is refused. `onPickerPick` reports a pick, and
-  // `onPickerVerb` reports the answer to the chosen server's dialog (#266). The leg
-  // answers the client itself either way, because a configuration phase has nowhere
-  // to hand a client until #267 lands.
+  // `onPickerVerb` reports the answer to the chosen server's dialog (#266), and a
+  // claim on that server's body is recorded here (#267). The leg answers the client
+  // itself either way, because a claim has no channel to hand a client a body
+  // through until #269.
   configurationBaseline = null,
   pickerServers = null,
   onPickerPick = null,
@@ -503,7 +511,7 @@ function createFrontLeg ({
     : baselineFramesFor(configurationBaseline, { version })
   // #266: `onPickerVerb` reports the answer to a chosen server's own dialog, the
   // way `onPickerPick` reports the pick. Neither connects anything: the dialog
-  // layer reads the choice, and #267 is the ticket that acts on one.
+  // layer reads the choice, and #267 records a claim from it.
   if (onPickerVerb !== null && typeof onPickerVerb !== 'function') {
     throw new TypeError('onPickerVerb must be null or a function')
   }
@@ -524,8 +532,24 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerRefusals: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0 }
   const clients = new Map() // Client -> { interceptor }
+  // #267: the claims this leg holds, one per body. A claim is recorded where a
+  // client answers a body's own dialog, and released when its connection ends. The
+  // holder is an id this leg gives a connection, so the board holds no socket and
+  // two connections from one account are two holders.
+  const claims = createClaims()
+  const holderIds = new WeakMap()
+  let holderSeq = 0
+  function holderFor (client) {
+    let id = holderIds.get(client)
+    if (id === undefined) {
+      holderSeq += 1
+      id = 'holder-' + holderSeq
+      holderIds.set(client, id)
+    }
+    return id
+  }
 
   // #201: the total connection cap, and #205: the deadline on the same window.
   // The window is the one the spec bounds: from the accepted socket to the attach
@@ -1036,6 +1060,10 @@ function createFrontLeg ({
     }
     metrics.pickerVerbs++
     log('pickerVerb', fields)
+    // #267: the claim is recorded here, where the client answers a body's own
+    // dialog, and not at login. The frame names the body, so the contention is over
+    // that body and not over who logged in first.
+    const claimed = action.verb === 'claim' ? recordClaim(client, server) : null
     try {
       onPickerVerb?.({
         id: action.id,
@@ -1043,7 +1071,17 @@ function createFrontLeg ({
         slug: action.slug,
         server: { ...server },
         uuid: client.uuid ?? null,
-        name: client.username ?? null
+        name: client.username ?? null,
+        claim: claimed === null
+          ? null
+          : {
+              granted: claimed.ok,
+              repeated: claimed.repeated === true,
+              reason: claimed.reason,
+              body: claimed.claim?.body ?? null,
+              server: claimed.claim?.server ?? null,
+              driver: claimed.claim?.name ?? null
+            }
       })
     } catch (error) {
       log('pickerVerbHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
@@ -1055,10 +1093,54 @@ function createFrontLeg ({
       endConfiguration(client, 'verb_disconnect', 'Monoplayer: you left ' + server.name + '.')
       return
     }
-    // Claim and spectate act on a body. No body is connected from this phase until
-    // #267 wires a pick to one, so the verb is read, reported, and refused in words
-    // that name it. Nothing is invented here for it.
+    if (claimed !== null) {
+      // A granted claim stands, and the phase stays open: the body it names is not
+      // delivered from here until #269 gives a claim a channel to deliver through.
+      // A refused one is answered with the sentence naming what stands in the way.
+      if (claimed.ok) return
+      endConfiguration(client, 'claim_refused', claimed.text)
+      return
+    }
+    // Spectate acts on a body too, and nothing here watches one yet. So the verb is
+    // read, reported, and refused in words that name it.
     endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
+  }
+
+  // #267: one claim, recorded where the client answers. The refusal carries the
+  // claim that stands in the way, and the sentence for it, so the caller answers
+  // the client and this stays the one place a claim is taken.
+  function recordClaim (client, server) {
+    const outcome = claims.claim({
+      body: server.slug,
+      server: server.name,
+      holder: holderFor(client),
+      name: client.username ?? null,
+      at: Date.now()
+    })
+    const fields = {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      body: server.slug,
+      server: server.name,
+      granted: outcome.ok,
+      repeated: outcome.repeated === true,
+      reason: outcome.reason,
+      driver: outcome.claim?.name ?? null
+    }
+    if (outcome.ok) {
+      if (outcome.repeated !== true) metrics.pickerClaims++
+      log('pickerClaim', fields)
+      return { ...outcome, text: null }
+    }
+    metrics.pickerRefusals++
+    const text = claimRefusalText({
+      reason: outcome.reason,
+      server: server.name,
+      holder: outcome.claim?.name ?? null,
+      driving: outcome.reason === CLAIM_REFUSAL.HELD ? outcome.claim?.server ?? null : null
+    })
+    log('pickerClaimRefused', { ...fields, text })
+    return { ...outcome, text }
   }
 
   function handlePickerPick (client, action) {
@@ -1228,6 +1310,19 @@ function createFrontLeg ({
       if (ctx) {
         ctx.pendingReconfiguration = null
         ctx.reconfiguring = false
+      }
+      // #267: the claim is held by the connection that made it, so it ends with the
+      // connection. A client that never claimed releases nothing.
+      const released = claims.release(holderIds.get(client))
+      if (released !== null) {
+        log('pickerClaimReleased', {
+          username: client.username ?? null,
+          uuid: client.uuid ?? null,
+          body: released.body,
+          server: released.server,
+          driver: released.name,
+          reason: String(reason).slice(0, 160)
+        })
       }
       if (attached === client) {
         attached = null
@@ -1416,6 +1511,9 @@ function createFrontLeg ({
     },
     get listening () { return Boolean(server) },
     get attached () { return attached ?? null },
+    // #267: the claims this leg holds, as the driver of each body. A lane that
+    // never serves a picker never records one, so this stays empty there.
+    get claims () { return claims.snapshot() },
     // The window's own numbers are read live, so the leg keeps no copy of a count
     // the policy already holds.
     get metrics () {
