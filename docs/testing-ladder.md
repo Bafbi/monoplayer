@@ -683,19 +683,22 @@ first dial and its target warms in five seconds.
 - `O60` a body serves a driver and a spectator: two channels on one body, each
   with its own delivery state and its own client information (#269). O58's driver
   is still connected and still holds the body. A sixth 26.2 bot reads the same
-  picker, picks the row the driver is on, and clicks `Spectate`. Nothing is dialled
-  for it: the fake body counts the same one login it had, because a spectator
-  watches a body that already has a session. The client continues the
-  configuration phase the baseline opened with that body's own frames, ends it with
-  one `finish_configuration`, and its play login arrives on the connection it
-  already held, at the body's own spawn.
+  picker, picks the row the driver is on, and the rig then lands it as that body's
+  spectator through `frontLeg.spectate({ username, body })` — the call #259 wires
+  the picker's Spectate verb to. This rung stands in for that row; it does not
+  decide it. Nothing is dialled: the fake body counts the same one login it had,
+  because a spectator watches a body that already has a session. The client
+  continues the configuration phase the baseline opened with that body's own
+  frames, ends it with one `finish_configuration`, and its play login arrives on
+  the connection it already held, at the body's own spawn.
 
-  Then the body sends one block change, and both clients receive it: the live
-  stream of a body reaches every channel on that body. The front's channels are
-  read as records, not counters. There are two, and the driver comes first. Both
-  are on the claimed body's slug, both have been handed their body's replay once,
-  and their delivery counts differ, because one landed at O58 and the other at
-  O60. Their `last` frame is the block change each of them just received.
+  Then the body sends one block change and one live-only `system_chat`. Both
+  clients receive them, and a second `system_chat` sent before the spectator
+  existed is in the driver's record only: no replay carries a live-only frame. The
+  front's channels are read as records, not counters. There are two, and the
+  driver comes first. Both are on the claimed body's slug, both have been handed
+  their body's replay once, and their delivery counts differ. Their `last` frame
+  is the `system_chat` each was sent.
 
   Each client's own client information stays on its own channel. Both are sent in
   play, which is the state where the front's settings hook reports nothing and the
@@ -705,9 +708,11 @@ first dial and its target warms in five seconds.
   spectator sends moves nothing: the front drops it before the core's pipeline, the
   core forwards nothing, and the session pose is byte for byte the one it had.
 
-  What it cannot prove: that what a spectator is shown is right, or who may
-  spectate. That is #259. This is the seam that decides it: a body's frames go to
-  every channel on that body, and a channel is not a driver by default.
+  The surface is not decided here. An eighth bot reads the driven body's dialog and
+  clicks `Spectate` itself: the front reports the verb and answers in words naming
+  it, and the client is disconnected. That sentence is what #259 replaces with the
+  landing above, and #259 also owns what a spectator is told, whether an unclaimed
+  body may be watched, and what the picker shows about watchers.
 - `O60b` a second claim on a body a driver already holds is refused by the claim,
   not by an attach slot (#269). O57 refused a rival on a body nothing was delivered
   to. Here the body is driven: O58's driver holds it and O60's spectator watches

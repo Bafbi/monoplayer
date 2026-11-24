@@ -32,8 +32,10 @@
 //     setLoginStartHandler(({ uuid, name }): decision[])   // -> whitelist review
 //     setServerboundHandler(({ state, name, buffer, data }): void)
 //     setDetachHandler(({ reason }): void)
-//     setSpectateBody({ body, server, name }): { watching, reason }   // optional
-//     setSpectatorAttach({ name, channel }): { watching, frames }     // optional
+//     setSpectateBody(fn)                         // optional: fn({ body, server, name })
+//                                                 //   -> { watching, reason }
+//     setSpectatorAttach(fn)                      // optional: fn({ name, channel })
+//                                                 //   -> { watching, frames, replayed }
 //     write(name, packet, { synth, channel })     // clientbound, packet level
 //     writeRaw(buffer, meta, { channel })         // clientbound, frame level
 //     end(reason)                                 // kick/deny every channel

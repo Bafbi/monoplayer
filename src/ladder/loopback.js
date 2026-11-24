@@ -171,10 +171,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #258: the picker rig's own body, and the client that claims it.
   let pickerBodyFake = null
   let pickerBot5 = null
-  // #269: the client that watches the body O58's driver holds, and the client
-  // that tries to claim it while it is held.
+  // #269: the client that watches the body O58's driver holds, the client that
+  // asks to watch it through the picker's own verb, and the client that tries to
+  // claim it while it is held.
   let pickerBot6 = null
   let pickerBot7 = null
+  let pickerBot8 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -3072,7 +3074,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // #269: the sixth and seventh are the spectator and the rival claim.
     const pickerWhitelist = [
       offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth'), offlineUuid('Pilot'),
-      offlineUuid('Watcher'), offlineUuid('Rival')
+      offlineUuid('Watcher'), offlineUuid('Rival'), offlineUuid('Looker')
     ]
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
@@ -3891,19 +3893,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
     // --- O60: a body serves a driver and a spectator, each with its own delivery (#269) ---
     // O58's driver is still connected and still holds the body. A sixth client reads
-    // the same picker while that claim stands, picks the row the driver is on, and
-    // clicks Spectate. Nothing is dialled for it: the body already has a session, and
-    // a spectator watches that one. The client continues the configuration phase the
-    // baseline opened with that body's own frames, and its play state arrives on the
-    // connection it already held.
+    // the same picker while that claim stands and picks the row the driver is on. The
+    // rig then lands it as that body's spectator through the leg's own call, the one
+    // #259 wires the Spectate verb to: this rung stands in for that row rather than
+    // deciding it. Nothing is dialled: the body already has a session, and a spectator
+    // watches that one. The client continues the configuration phase the baseline
+    // opened with that body's own frames, and its play state arrives on the connection
+    // it already held.
     //
     // What this proves that no earlier assertion could: two channels on one body. The
     // driver has been handed everything since it landed, and the spectator only since
-    // it clicked, so their delivery records differ in the count and agree on the last
-    // frame. Each client's own client information stays on its own channel: the
-    // driver's reaches the puppet through the serverbound rewrite, and the spectator's
-    // reaches nothing. What a spectator is shown, and who may spectate, is #259; this
-    // is the seam that delivers it.
+    // it was landed, so their delivery records differ. Each client's own client
+    // information stays on its own channel: the driver's reaches the puppet through
+    // the serverbound rewrite, and the spectator's reaches nothing. What a spectator
+    // is shown, who may spectate, and what the picker offers stay #259's: the verb is
+    // still refused in words, and this assertion reads that refusal too.
     pickerBot6 = createBot({ port: pickerBound.port, username: 'Watcher', version: pickerVersion })
     await pickerBot6.waitFor(
       () => pickerBot6.received.dialogs.length === 1,
@@ -3926,11 +3930,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       "the claimed body's dialog at the spectator",
       15_000
     )
-    const watchVerb = chooseDialogAction(pickerBot6.received.dialogs[1], 'spectate')
     const bodyLoginsBeforeWatch = pickerBodyFake.received.logins
     const backendSettingsBeforeWatch = pickerBodyFake.received.settings.length
     const poseBeforeWatch = pickerCore.session.currentPose
-    if (watchVerb !== null) pickerBot6.answerDialog(watchVerb.id, null, 'configuration')
+    // The seam, driven by the rig. The verb that will call it is #259's.
+    const watchLanding = pickerFront.spectate({
+      username: 'Watcher',
+      body: pickSlug(pickerBodyName),
+      server: pickerBodyName
+    })
     await pickerBot6.waitFor(
       () => pickerBot6.received.login !== null && pickerBot6.received.positions.length > 0,
       'the play state of the body the spectator watches',
@@ -4001,6 +4009,37 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the spectator frame the front refused',
       10_000
     )
+    // The surface #269 does not decide: the picker's Spectate verb is still refused in
+    // words. Another client clicks it out of the frame it received, and the sentence
+    // it gets names the verb. #259 wires the verb to the landing above.
+    pickerBot8 = createBot({ port: pickerBound.port, username: 'Looker', version: pickerVersion })
+    await pickerBot8.waitFor(
+      () => pickerBot8.received.dialogs.length === 1,
+      'the picker at the client that will ask to spectate',
+      15_000
+    )
+    const lookerPick = chooseDialogAction(pickerBot8.received.dialogs[0], pickerBodyName)
+    if (lookerPick !== null) pickerBot8.answerDialog(lookerPick.id, null, 'configuration')
+    await pickerBot8.waitFor(
+      () => pickerBot8.received.dialogs.length === 2,
+      "the driven body's dialog at the client that asks to spectate",
+      15_000
+    )
+    const lookerVerb = chooseDialogAction(pickerBot8.received.dialogs[1], 'spectate')
+    const lookerMark = logs.length
+    if (lookerVerb !== null) pickerBot8.answerDialog(lookerVerb.id, null, 'configuration')
+    await pickerBot8.waitFor(
+      () => pickerBot8.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the refusal the spectate verb gets',
+      15_000
+    )
+    const verbRefusalsAfterLanding = logs.slice(lookerMark)
+      .filter(entry => entry.event === 'configurationEnded' && entry.fields?.reason === 'verb_spectate_unbuilt')
+      .map(entry => entry.fields)
+    const spectateVerbs = logs
+      .filter(entry => entry.event === 'pickerVerb' && entry.fields?.verb === 'spectate')
+      .map(entry => entry.fields)
+
     const channelsRead = pickerFront.channels ?? []
     const driverChannel = channelsRead.find(channel => channel.role === 'driver') ?? null
     const spectatorChannel = channelsRead.find(channel => channel.role === 'spectator') ?? null
@@ -4012,7 +4051,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       bodyLogins: { before: bodyLoginsBeforeWatch, after: pickerBodyFake.received.logins },
       spectator: {
         pick: watchPick === null ? null : { id: watchPick.id, label: watchPick.label },
-        verb: watchVerb === null ? null : { id: watchVerb.id, label: watchVerb.label },
+        landing: {
+          watching: watchLanding.watching === true,
+          reason: watchLanding.reason ?? null,
+          frames: watchLanding.frames ?? null,
+          channel: watchLanding.channel ?? null
+        },
+        verb: {
+          pick: lookerPick === null ? null : { id: lookerPick.id, label: lookerPick.label },
+          chosen: lookerVerb === null ? null : { id: lookerVerb.id, label: lookerVerb.label },
+          reported: spectateVerbs.map(entry => ({ verb: entry.verb, server: entry.server })),
+          refused: verbRefusalsAfterLanding,
+          ended: pickerBot8.received.ended === null ? null : String(pickerBot8.received.ended).slice(0, 160)
+        },
         login: pickerBot6.received.login === null ? null : { entityId: pickerBot6.received.login.entityId },
         position: watchPosition === null ? null : { x: watchPosition.x, y: watchPosition.y, z: watchPosition.z },
         bodySpawn: pickerBodySpawn,
@@ -4067,8 +4118,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'a body serves a driver and a spectator: two channels on one body, each with its own delivery state and its own client settings',
       watchPick !== null &&
         watchPick.id === pickIdFor(pickerBodyName) &&
-        watchVerb !== null &&
-        watchVerb.id === verbIdFor('spectate', pickerBodyName) &&
+        watchLanding.watching === true &&
+        watchLanding.reason === null &&
         pickerBot6.received.login !== null &&
         pickerBot6.received.login.entityId === pickerBot5.received.login?.entityId &&
         watchPosition !== null &&
@@ -4118,6 +4169,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         JSON.stringify(poseAfterWatch) === JSON.stringify(poseBeforeWatch) &&
         pickerFront.metrics.spectatorJoins === 1 &&
         pickerCore.metrics.spectatorViews === 1 &&
+        // The seam is the delivery, and the surface is not decided here: the picker's
+        // own Spectate still answers in words naming the verb (#259 wires it).
+        spectateVerbs.length === 1 &&
+        spectateVerbs[0].server === pickerBodyName &&
+        lookerVerb !== null &&
+        lookerVerb.id === verbIdFor('spectate', pickerBodyName) &&
+        verbRefusalsAfterLanding.length === 1 &&
+        pickerBot8.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerBot8.received.ended !== null &&
         pickerCore.session.attachCount === 1 &&
         pickerCore.attached === true &&
         pickerCore.session.state === 'attached' &&
@@ -4198,7 +4258,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // Two claims were granted in this run, and neither is the rival's: O56's on
         // the row that never answered, and O58's on the body it landed in.
         pickerFront.metrics.pickerClaims === 2 &&
-        pickerFront.metrics.pickers === 7,
+        pickerFront.metrics.pickers === 8,
       evidence.channels.rival
     )
 
@@ -4208,7 +4268,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
