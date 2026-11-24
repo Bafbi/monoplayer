@@ -118,16 +118,21 @@ const SHIM = [
   // Removing that marker makes the read-after-apply ordering fail, which is the point.
   '  *" apply -k "*) cat > /dev/null; touch "$state/applied"; printf \'configured\n\'; exit 0 ;;',
   '  *" scale "*) printf \'scaled\n\'; exit 0 ;;',
-  // A Secret that exists is answered as it is: up must not touch it. A missing one
-  // answers the way kubectl does, which is what sends up down the generate path.
-  '  *" get secret "*) name=$(arg_after secret "$@"); if absent "$name"; then printf \'Error from server (NotFound): secrets "%s" not found\n\' "$name" >&2; exit 1; fi; exit 0 ;;',
+  // A Secret that exists is answered as it is: up must leave it alone. A missing one
+  // answers the way kubectl does with and without --ignore-not-found, which is the
+  // difference between "absent" and "this read failed".
+  '  *" get secret "*) name=$(arg_after secret "$@")',
+  '    if [ -n "${KUBECTL_SECRET_READ_ERROR:-}" ]; then printf \'Error from server (Forbidden): secrets "%s" is forbidden\n\' "$name" >&2; exit 1; fi',
+  '    if absent "$name"; then case " $* " in *" --ignore-not-found "*) exit 0 ;; esac; printf \'Error from server (NotFound): secrets "%s" not found\n\' "$name" >&2; exit 1; fi',
+  '    printf \'secret/%s\n\' "$name"; exit 0 ;;',
   // A generated Secret reaches kubectl on stdin, so a case reads exactly what up
   // wrote without up ever printing a value.
   // `printf "%s\\n" ---`, not `printf ---`: bash reads a format that starts with a
   // dash as an option and prints nothing, so the marker would vanish.
   '  *" apply -f -"*) { printf "%s\\n" ---; cat; } >> "$state/secrets.yaml"; printf \'configured\n\'; exit 0 ;;',
-  // A selector that matches nothing is what a lane with a hand-made Secret sees.
-  '  *" delete secret "*) printf \'No resources found\n\' >&2; exit 0 ;;',
+  // A lane with nothing to delete fails without the flag and is a no-op with it, so
+  // a case proves the delete tolerates absence instead of reading the script.
+  '  *" delete secret "*) case " $* " in *" --ignore-not-found "*) printf \'No resources found\n\' >&2; exit 0 ;; esac; printf \'Error from server (NotFound): nothing to delete\n\' >&2; exit 1 ;;',
   // A readiness read answers empty until the case lets it answer 1. The counter
   // is per call, so "not ready yet" is a first read rather than a fixed answer.
   // The two replica reads, answered apart: spec.replicas is what the lane claims, and
@@ -362,6 +367,29 @@ test('a Secret that already exists is used as it is, and the run says so once', 
   assert.match(said[0], /gate-b-velocity/)
 })
 
+test('a Secret read that fails stops the run instead of overwriting what is there', () => {
+  // A Forbidden or a timeout is not an absence (#278 review). Reading one as an
+  // absence would make the create below rewrite a Secret an operator made, and label
+  // it as this script's, so the next down would delete it too.
+  const where = space()
+  const { status, output, calls } = run(where, ['up', 'paper'], { KUBECTL_SECRET_READ_ERROR: '1' })
+  assert.equal(status, 2, output)
+  assert.match(output, /cannot read the Secret gate-b-rcon/)
+  assert.match(output, /a wrong guess overwrites it/)
+  assert.equal(calls.some(line => / apply -f -/.test(line)), false, 'nothing is created: ' + calls.join(' | '))
+  assert.equal(calls.some(line => / scale /.test(line)), false, 'and nothing is woken: ' + calls.join(' | '))
+})
+
+test('a row this run re-wakes gets the Secret it reads', () => {
+  // up re-wakes a row another run left awake, so that row is in the wake list too. The
+  // Secret check follows the wake list: a row scaled to 1 without its Secret starts in
+  // CreateContainerConfigError, whether this run asked for it or found it awake.
+  const where = space()
+  const { made } = generated(where, ['up', 'paper'], { KUBECTL_AWAKE: 'velocity' })
+  assert.deepEqual(made.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'],
+    'the awake forwarding row gets its Secret as well')
+})
+
 test('the Secret a lane generates follows the Deployment that reads it', () => {
   // The map: the three Papers take the RCON password, and Velocity and the Paper
   // behind it take the forwarding secret. Generating one nothing reads is a value
@@ -384,9 +412,8 @@ test('the Secrets the lane generates are the two its Deployments mount', () => {
 })
 
 test('gate:down deletes the Secrets it generated, and a hand-made one is out of its reach', () => {
-  // The label up writes is the selector down deletes by, so a Secret an operator
-  // made carries no label, is never overwritten, and is never deleted. A lane that
-  // was never up has nothing to select, and --ignore-not-found makes that a no-op.
+  // The label up writes is the selector down deletes by, so an operator's Secret
+  // carries no label, is never overwritten, and is never deleted.
   const where = space()
   const { made } = generated(where, ['up', 'paper-m4'])
   assert.ok(made.length > 0, 'the lane generated its Secrets')
@@ -400,7 +427,14 @@ test('gate:down deletes the Secrets it generated, and a hand-made one is out of 
     ['-n monoplayer-gate-b delete secret -l app.kubernetes.io/managed-by=gate-lane --ignore-not-found'],
     'one delete, by the label up wrote: ' + calls.join(' | '))
   assert.match(output, /deleted every Secret this lane generated/)
-  assert.match(output, /operator made has no app\.kubernetes\.io\/managed-by=gate-lane label/, 'and says why a hand-made one stayed')
+  assert.match(output, /an operator's Secret has no app\.kubernetes\.io\/managed-by=gate-lane label/, "and says why an operator's one stayed")
+
+  // A lane that was never up has nothing to select. The shim fails a delete that
+  // matches nothing unless it carries --ignore-not-found, so this case proves the
+  // flag rather than reading it off the script.
+  const never = run(space(), ['down'], { KUBECTL_SECRET_MISSING: 'all' })
+  assert.equal(never.status, 0, never.output)
+  assert.match(never.output, /deleted every Secret this lane generated/)
 })
 
 test('a second up does not stop the row the first one woke', () => {
