@@ -3338,10 +3338,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // #267: the claim, and what it contends with. The first client took the body in
-    // O56 and is still connected, so it drives it. A fourth client reads the picker
-    // while that claim stands — the picker is not a claim, and it takes no attach
-    // slot — picks the same body, and clicks Claim. The refusal names the driver,
-    // and the claimant is untouched on its own connection.
+    // O56 and is still connected, so it holds it. A fourth client reads the picker
+    // while that claim stands, which it may, because the picker is not a claim and
+    // takes no attach slot. It picks the same body and clicks Claim. The refusal
+    // names the player who holds it, and the claimant is untouched on its own
+    // connection.
     //
     // What this does not prove: that the claiming client is delivered the body. No
     // body is connected from this phase, and a claim has no channel to deliver
@@ -3352,6 +3353,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the picker at a fourth client while a claim stands',
       15_000
     )
+    // A client that has read the picker and not claimed holds nothing: the claims are
+    // still the first client's alone. Read here, before this client clicks anything.
+    const claimsWhileReading = pickerFront.claims
     const fourthRead = {
       dialogs: pickerBot4.received.dialogs.length,
       configuration: pickerBot4.received.names
@@ -3367,6 +3371,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       "the chosen server's dialog at the fourth client",
       15_000
     )
+    // A pick opens a dialog and takes nothing, so the same holds one level down.
+    const claimsAfterPick = pickerFront.claims
     const fourthClaim = chooseDialogAction(pickerBot4.received.dialogs[1], 'claim')
     if (fourthClaim !== null) pickerBot4.answerDialog(fourthClaim.id, null, 'configuration')
     await pickerBot4.waitFor(
@@ -3383,6 +3389,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const claimHeld = pickerFront.claims
     evidence.picker.claim = {
       held: claimHeld,
+      whileReading: claimsWhileReading,
+      afterPick: claimsAfterPick,
       granted: claimGrants,
       refused: claimRefusals,
       claimant: {
@@ -3407,16 +3415,20 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O57',
       'the pick records an exclusive claim: a second claim on a driven body is refused by name, and the picker stays open',
       claimHeld.length === 1 &&
+        claimsWhileReading.length === 1 &&
+        claimsWhileReading[0].name === 'Attach' &&
+        claimsAfterPick.length === 1 &&
+        claimsAfterPick[0].name === 'Attach' &&
         claimHeld[0].body === 'gate-paper_25565' &&
         claimHeld[0].server === pickerServerName &&
         claimHeld[0].name === 'Attach' &&
         claimGrants.length === 1 &&
         claimGrants[0].granted === true &&
-        claimGrants[0].driver === 'Attach' &&
+        claimGrants[0].claimedBy === 'Attach' &&
         claimRefusals.length === 1 &&
         claimRefusals[0].reason === 'body_claimed' &&
-        claimRefusals[0].driver === 'Attach' &&
-        /already driven by Attach/.test(String(claimRefusals[0].text ?? '')) &&
+        claimRefusals[0].claimedBy === 'Attach' &&
+        /already claimed by Attach/.test(String(claimRefusals[0].text ?? '')) &&
         fourthRead.dialogs === 1 &&
         fourthRead.leftovers === 0 &&
         fourthPick !== null &&

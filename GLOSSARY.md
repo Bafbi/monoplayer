@@ -13,7 +13,7 @@ One session of the account on one game server: the connection that server sees, 
 _Avoid_: backend session, puppet session, character, alt
 
 **Claim**:
-One attaching player's exclusive control of a body, held by the connection that made it and released when that connection ends. The player who holds it is the body's driver, and any other player watching the body is a spectator. A body carries one claim, and a second claim on it is refused with the name of the player who drives it. A connection carries one claim, so a player already driving a body cannot take a second. The picker records the claim where the player answers a body's dialog, so a client that never answers one holds nothing.
+One attaching player's exclusive control of a body, held by the connection that made it and released when that connection ends. The player who holds it is the body's driver, and any other player watching the body is a spectator. A body carries one claim, and a second claim on it is refused with the name of the player who holds it. A connection carries one claim, so a client that already holds one cannot take a second. The picker records the claim where the player answers a body's dialog, so a client that never answers one holds nothing.
 _Avoid_: lease, lock, slot, seat, take
 
 **Driver**:
