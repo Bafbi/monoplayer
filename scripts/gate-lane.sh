@@ -22,14 +22,18 @@
 # A cold start pays Paper's download and a flat-world write into a fresh emptyDir,
 # because every gate volume dies with its pod. Measured at 90 s on the 26.2 gate
 # Paper (#115). up says how long it will wait before it waits, so a long silence is
-# not read as a hang. down leaves the Deployments, the Services, the ConfigMaps and
-# the Secrets in place, so the next up costs the same cold start and nothing else.
+# not read as a hang. down leaves the Deployments, the Services and the ConfigMaps
+# in place, so the next up costs the same cold start and nothing else.
+#
+# The lane's two Secrets are its own (#278). up creates gate-<instance>-rcon and
+# gate-<instance>-velocity with random values when they are absent. down deletes the
+# ones up created. So a first run needs no operator, and a stopped lane leaves no Secret
+# behind. An operator's Secret is used as it is and kept: this script never overwrites
+# one and never deletes one. down tells the two apart by the label up writes.
 #
 # What it never does: touch the live lane (monoplayer) or the dev lane
-# (monoplayer-dev); delete anything; or scale paper-hub and paper-sky, which are
-# the transfer testbed's and share this namespace. Secrets gate-b-rcon and
-# gate-b-velocity are created by an operator, never by this tree, and a down that
-# deleted them would leave the next up in CreateContainerConfigError.
+# (monoplayer-dev); delete a workload, a Service or a ConfigMap; or scale paper-hub
+# and paper-sky, which are the transfer testbed's and share this namespace.
 #
 # The lane's instance is one value (#277). The tree in deploy/driver names today's
 # lane, monoplayer-gate-b, everywhere the lane is named, and render() substitutes
@@ -80,6 +84,14 @@ LANE_NAME=gate-$INSTANCE
 GATE_WORKLOADS="paper paper-conduct paper-m4 velocity toxiproxy"
 DRIVEN_WORKLOADS="paper paper-conduct"
 
+# The two Secrets a lane reads, in the order up creates them.
+SECRET_ROLES="rcon velocity"
+# The label up stamps on a generated Secret, one literal split into the halves a write
+# and a selector need. down deletes by this selector and by nothing else.
+GENERATED_LABEL=app.kubernetes.io/managed-by=gate-lane
+GENERATED_LABEL_KEY=${GENERATED_LABEL%%=*}
+GENERATED_LABEL_VALUE=${GENERATED_LABEL#*=}
+
 # Measured on the 26.2 gate Paper (#115), from a scale to 0 until the pod reports
 # ready. The 240-310 s in the docs is a different wait: a Paper that is already up
 # and restarts with the observer plugin, counted until the plugin logs that its
@@ -129,11 +141,77 @@ known () {
   return 1
 }
 
-# The two Secrets an operator creates by hand. A pod that lacks one sits in
-# CreateContainerConfigError, which reads like a slow boot unless it is named.
-require_secret () {
-  kubectl -n "$GATE_NAMESPACE" get secret "$1" >/dev/null 2>&1 \
-    || die "no $1 Secret in $GATE_NAMESPACE: create it once, in an operator run, as deploy/driver/README.md shows"
+# A role's Secret in two parts, the key and the rows: the three Papers read
+# RCON_PASSWORD out of gate-<instance>-rcon, and Velocity and paper-m4 read
+# PAPER_VELOCITY_SECRET out of gate-<instance>-velocity. A row this run wakes without
+# its Secret starts in CreateContainerConfigError, which reads like a slow boot.
+secret_parts () {
+  case "$1" in
+    rcon) printf 'password:paper paper-conduct paper-m4' ;;
+    velocity) printf 'forwarding-secret:velocity paper-m4' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Whether this lane's Secret is there. A read that fails for any other reason stops the
+# run: a Forbidden or a timeout is not an absence, and reading one as an absence would
+# let the create below overwrite a Secret an operator made, which is the one thing this
+# must never do.
+secret_exists () {
+  local found
+  found=$(kubectl -n "$GATE_NAMESPACE" get secret "$1" --ignore-not-found -o name) \
+    || die "cannot read the Secret $1 in $GATE_NAMESPACE: this run will not guess whether it exists, and a wrong guess overwrites it"
+  [ -n "$found" ]
+}
+
+# A random value, written straight to kubectl's stdin. It is in no argv and on no
+# printed line: `create secret --from-literal` would put it in the process list of
+# this machine, and no manifest may hold it at all.
+create_secret () {
+  local name=$1 key=$2 value
+  command -v openssl >/dev/null \
+    || die "openssl is not on PATH, and a generated Secret value has to be random"
+  value=$(openssl rand -hex 16)
+  kubectl -n "$GATE_NAMESPACE" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: $name
+  namespace: $GATE_NAMESPACE
+  labels:
+    $GENERATED_LABEL_KEY: $GENERATED_LABEL_VALUE
+type: Opaque
+stringData:
+  $key: $value
+EOF
+  say "created the random Secret $name ($key)"
+}
+
+# The Secrets the rows this run wakes read. A lane that cannot exist without a human is
+# the reason a second lane cannot exist (#278). A Secret that is already there is used as
+# it is, whatever made it, and one line names the ones this run found, because two lines
+# read as two decisions where there was one.
+ensure_secrets () {
+  local waking=$1 role parts key readers reader name found=''
+  for role in $SECRET_ROLES; do
+    parts=$(secret_parts "$role") \
+      || die "unknown gate Secret role \"$role\": the lane reads $SECRET_ROLES"
+    key=${parts%%:*}
+    readers=${parts#*:}
+    for reader in $readers; do
+      case " $waking " in
+        *" $reader "*)
+          name=$LANE_NAME-$role
+          if secret_exists "$name"; then
+            found="$found $name"
+          else
+            create_secret "$name" "$key"
+          fi
+          break ;;
+      esac
+    done
+  done
+  [ -z "$found" ] || say "using the Secret(s) this lane already has:$found. This script never overwrites one."
 }
 
 # kubectl's own error stays visible: "deploy/paper not found" is the answer a
@@ -223,16 +301,11 @@ up () {
     case " $wake " in *" $name "*) : ;; *) wake="$wake $name" ;; esac
   done
 
-  # Checked after the apply, because the apply is what creates the namespace on a
-  # fresh cluster, and before the scale, so a lane that cannot start fails now.
-  # The Secret each Deployment reads: RCON on the three Papers, and the forwarding
-  # secret on Velocity and on the Paper behind it (paper-m4).
-  case " $names " in
-    *" paper "*|*" paper-conduct "*|*" paper-m4 "*) require_secret "$LANE_NAME-rcon" ;;
-  esac
-  case " $names " in
-    *" velocity "*|*" paper-m4 "*) require_secret "$LANE_NAME-velocity" ;;
-  esac
+  # Done after the apply, because the apply is what creates the namespace on a fresh
+  # cluster, and before the scale, so no pod starts without the Secret it reads. The
+  # rows are the ones this run wakes, and that list includes a row it re-wakes after
+  # the apply.
+  ensure_secrets "$wake"
 
   # shellcheck disable=SC2086
   kubectl -n "$GATE_NAMESPACE" scale deploy $wake --replicas=1 >/dev/null
@@ -287,7 +360,13 @@ down () {
     sleep "$POLL"
   done
 
-  say "the lane is off after $(( $(date +%s) - start ))s: the Deployments, Services, ConfigMaps and Secrets stay"
+  say "the lane is off after $(( $(date +%s) - start ))s: the Deployments, Services and ConfigMaps stay"
+  # What up generated goes with the lane, so a stopped lane leaves no Secret behind
+  # for the next run to trust. The selector is the label up wrote, and an operator's
+  # Secret carries no label, so it survives this line. A lane that was never up has
+  # nothing to select, which --ignore-not-found makes a no-op.
+  kubectl -n "$GATE_NAMESPACE" delete secret -l "$GENERATED_LABEL" --ignore-not-found >/dev/null
+  say "deleted every Secret this lane generated: an operator's Secret has no $GENERATED_LABEL label, so it stays"
   # The fact a reader needs before the next up. Every gate volume is an emptyDir.
   say "every gate world is emptyDir and went with its pod: the next up pays the full cold start ($COLD_START)"
 }
