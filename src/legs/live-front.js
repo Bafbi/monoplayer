@@ -1611,6 +1611,12 @@ function createFrontLeg ({
     // holds the body, and a lane that refuses its client is a lane whose session said
     // no (#269: the claim refuses a rival in a picker lane, and the session does it
     // where there is no claim to make).
+    // The channel has to exist before the core replays: the replay is written
+    // synchronously, and it goes to the channels this leg holds. A client the session
+    // accepts without one — its login was admitted while another connection still held
+    // the body, and that connection failed before the core answered this one — gets its
+    // channel here, or its replay would be written to no socket at all.
+    const held = channelFor(client) ?? openChannel(client, { role: CHANNEL_ROLES.DRIVER })
     const outcome = coreAttach({ name: client.username, uuid: client.uuid })
 
     if (!outcome.attached) {
@@ -1619,11 +1625,7 @@ function createFrontLeg ({
       return
     }
     // The core just replayed the body's play state on this socket, so this channel has
-    // been handed its one replay. A client the session accepted without a channel —
-    // its login was admitted while another connection still held the body, and that
-    // connection failed before the core answered this one — gets its channel here, or
-    // the replay would have been written to no socket at all.
-    const held = channelFor(client) ?? openChannel(client, { role: CHANNEL_ROLES.DRIVER })
+    // been handed its one replay.
     if (held !== null) channels.markReplay(held.id)
     metrics.attaches++
     log('attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })

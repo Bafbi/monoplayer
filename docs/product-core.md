@@ -337,8 +337,10 @@ listing the lane's allowed servers.
   clicks `Claim` therefore holds nothing. Delivery is a channel's (#269): a grant
   opens the driver's channel on that body, and a body's frames go to every channel
   on it. The attach slot is gone, so a second claim on a driven body is refused by
-  the claim rather than by an earlier admission check, and the Spectate verb lands a
-  channel too: the body's play state, on that connection, with nothing dialled.
+  the claim rather than by an earlier admission check. A spectator's delivery exists
+  beside it (#269): the body's play state, on that connection, with nothing dialled,
+  landed through `frontLeg.spectate`. The picker's Spectate verb is still refused in
+  words, and #259 wires it.
 - **A claim is a landing (#258).** The click that grants a claim is the one thing
   that dials a body. The front asks the core for the body the frame named. The core
   points the puppet leg at that address, connects, and waits. The wait is bounded,
