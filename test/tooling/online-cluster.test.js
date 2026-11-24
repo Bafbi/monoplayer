@@ -18,6 +18,19 @@ const SCRIPT = path.join(
 const PUPPET = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 
+// The lane this worktree's rung derives (#279), mirrored the way gate-lane.test.js
+// mirrors it: a script that typed a name instead of deriving one could not match.
+const WORKTREE = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'))
+const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
+const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
+const LANE = 'monoplayer-gate-' + COMMIT + '-' + (crc(WORKTREE) % 0x1000000).toString(16).padStart(6, '0')
+const BRANCH = (() => {
+  const name = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
+  if (name !== 'HEAD') return name
+  const sha = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
+  return 'detached at ' + sha
+})()
+
 // The shim answers the calls the script makes, records every argv, and lets a
 // case choose the token state and the rung's exit status. The uuids arrive as
 // environment so the shim needs no substitution.
@@ -164,12 +177,12 @@ test('the attach custody is copied back, so one live copy remains', () => {
 // instance of its own needs that host to follow, or a renamed lane's rung dials the
 // default lane while it reads custody from the deployment it was pointed at.
 
-test("the default backend follows the gate lane, and today's value when none is named", () => {
+test("the default backend is this worktree's lane when none is named", () => {
   const space = workspace()
   const { calls } = run(space)
   assert.ok(
-    calls.some(line => line.includes('MONOPLAYER_BACKEND_HOST=paper.monoplayer-gate-b.svc.cluster.local')),
-    "the default is still today's host: " + calls.join(' | ')
+    calls.some(line => line.includes('MONOPLAYER_BACKEND_HOST=paper.' + LANE + '.svc.cluster.local')),
+    "the default dials this worktree's lane: " + calls.join(' | ')
   )
 })
 
@@ -181,6 +194,9 @@ test('a renamed gate lane dials its own backend', () => {
   assert.match(dialled, /MONOPLAYER_BACKEND_HOST=paper\.monoplayer-gate-x\.svc\.cluster\.local/,
     'the lane named decides the backend, not the lane that shipped: ' + dialled)
   assert.doesNotMatch(dialled, /monoplayer-gate-b/, 'a renamed lane must not dial the default lane: ' + dialled)
+  // A lane named by hand is still one lane: the lease a run takes for it says so too.
+  assert.ok(leasesWritten(space)[0].spec.holderIdentity.startsWith('monoplayer-gate-x on '),
+    'the lease names the lane the backend dials: ' + leasesWritten(space)[0].spec.holderIdentity)
 })
 
 
@@ -206,6 +222,46 @@ test('a gate lane naming the live or dev namespace is refused before anything ru
   }
 })
 
+
+// --- one lane per run (#301) ---
+
+// The lease holder identity names the lane a run holds the account for (#279). The
+// message says which lane the run measures. The default backend was still the lane that
+// shipped, so one run named two. The holder said this worktree's lane, and the rung
+// dialled `monoplayer-gate-b`, a lane `gate:up` never wakes. The failure then read as a
+// dead backend rather than as a wrong name.
+
+test('a default run names one lane in its lease and in the backend it dials', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+
+  const dialled = calls.find(line => line.includes('MONOPLAYER_BACKEND_HOST='))
+  assert.ok(dialled, 'the rung was given a backend: ' + calls.join(' | '))
+  assert.match(dialled, new RegExp('MONOPLAYER_BACKEND_HOST=paper\\.' + LANE + '\\.svc\\.cluster\\.local'),
+    "the backend is this worktree's lane: " + dialled)
+
+  const taken = leasesWritten(space)[0]
+  assert.ok(taken, 'the run took the lease: ' + output)
+  assert.ok(taken.spec.holderIdentity.startsWith(LANE + ' on '),
+    'the same lane holds the account: ' + taken.spec.holderIdentity)
+})
+
+// gate-lane.sh names the lane. When it cannot, it exits non-zero with a sentence a
+// reader can act on. This script passes that sentence through instead of swallowing it
+// in a command substitution. The reason is what tells a reader how to name a lane by
+// hand.
+test('a lane that cannot be derived refuses, and keeps the sentence that says how', () => {
+  const space = workspace()
+  const notGit = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-not-git-'))
+  const { status, output, calls } = run(space, { MONOPLAYER_GATE_WORKTREE: notGit })
+
+  assert.equal(status, 2, output)
+  assert.match(output, /cannot derive this worktree's lane/)
+  assert.match(output, /Set MONOPLAYER_GATE_NAMESPACE to name one by hand/)
+  assert.equal(calls.some(line => line.includes('online.js')), false, 'nothing dialled: ' + calls.join(' | '))
+  assert.deepEqual(leasesWritten(space), [], 'and no lease taken for a lane it could not name')
+})
 
 // --- the account lease (#280) -------------------------------------------------
 //
@@ -234,19 +290,6 @@ function held (spec = {}) {
     }
   }, null, 2)
 }
-
-// The lane this worktree's rung derives (#279), mirrored the way gate-lane.test.js
-// mirrors it: a script that typed a name instead of deriving one could not match.
-const WORKTREE = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'))
-const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
-const LANE = 'monoplayer-gate-' + COMMIT + '-' + (crc(WORKTREE) % 0x1000000).toString(16).padStart(6, '0')
-const BRANCH = (() => {
-  const name = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-  if (name !== 'HEAD') return name
-  const sha = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-  return 'detached at ' + sha
-})()
 
 // The holder a refusal has to name, as a regex: the lane, the branch, and the pid.
 const OTHER_HOLDER = /on feat\/another \(pid 4242\)/
