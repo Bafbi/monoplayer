@@ -1,6 +1,7 @@
-// The gate lane's lifecycle (#115). The lane is `monoplayer-gate-b`: real Papers,
-// a Velocity, and a toxiproxy. It is not in Argo CD, no rung scales it, and the
-// resting state used to be 6 GiB of servers nothing was driving.
+// The gate lane's lifecycle (#115, #279). A lane is a namespace of real Papers, a
+// Velocity, and a toxiproxy, named after the worktree that asked for it. It is not
+// in Argo CD, no rung scales it, and the resting state used to be 6 GiB of servers
+// nothing was driving.
 //
 // Nothing here reaches a cluster: the manifest cases read the files, and the
 // script cases replace kubectl with a shim that records every argv.
@@ -14,6 +15,22 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
+
+// The lane this worktree's script derives (#279): the worktree's short commit, then
+// a short hash of its path, so two checkouts at one commit are two lanes. The mirror
+// is the point of the cases below: a script that types a name instead of deriving
+// one cannot match it.
+//
+// `pwd -P` in the script, `realpathSync` here: one worktree has one path, so it
+// hashes to one lane however the caller spelled its way in.
+const WORKTREE = fs.realpathSync(ROOT)
+const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
+const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
+const pathHash = dir => (crc(dir) % 0x1000000).toString(16).padStart(6, '0')
+const instanceOf = (dir, commit) => commit + '-' + pathHash(dir)
+const INSTANCE = instanceOf(WORKTREE, COMMIT)
+const LANE = 'monoplayer-gate-' + INSTANCE
+const LANE_SECRET = role => 'gate-' + INSTANCE + '-' + role
 
 const TOXIPROXY = read('deploy/driver/toxiproxy.yaml')
 
@@ -141,7 +158,24 @@ const SHIM = [
   '  *".spec.replicas"*) awake="${KUBECTL_AWAKE:-none}"; if [ -f "$state/applied" ]; then printf \'0\'; exit 0; fi; case " $* " in *" $awake "*) printf \'1\' ;; *) printf \'0\' ;; esac; exit 0 ;;',
   '  *"readyReplicas"*) if [ "$(count ready)" -lt "${KUBECTL_READY_AFTER:-0}" ]; then exit 0; fi; printf \'1\'; exit 0 ;;',
   // The pod listing a stop waits on: a pod on the first listing, none after.
-  '  *" get pods "*) if [ "${KUBECTL_PODS_STUCK:-0}" = 1 ]; then printf \'pod/gate-stuck\n\'; exit 0; fi; if [ "$(count pods)" -lt 1 ]; then printf \'pod/gate-abc\n\'; fi; exit 0 ;;',
+  // A lane the listing reads has its own pod count, so one shim can answer for two
+  // namespaces at once. A namespace with no file keeps the stop-wait behaviour below.
+  '  *" get pods "*) ns=$(arg_after -n "$@")',
+  '    if [ -n "$ns" ] && [ -f "$state/$ns.pods" ]; then n=$(cat "$state/$ns.pods"); i=0; while [ "$i" -lt "$n" ]; do printf \'pod/p%s\n\' "$i"; i=$((i+1)); done; exit 0; fi',
+  '    if [ "${KUBECTL_PODS_STUCK:-0}" = 1 ]; then printf \'pod/gate-stuck\n\'; exit 0; fi; if [ "$(count pods)" -lt 1 ]; then printf \'pod/gate-abc\n\'; fi; exit 0 ;;',
+  // The lane listing and the reaper: the namespaces the cluster offers, then one
+  // namespace's annotations, so a case writes the lane it wants read.
+  '  *" get namespaces "*) [ -f "$state/lanes" ] && cat "$state/lanes"; exit 0 ;;',
+  '  *" get namespace "*) ns=$(arg_after namespace "$@")',
+  // A lane that exists answers its own name. A case that wants a lane nobody created yet
+  // writes the absent marker, which is the first up on a new commit's lane.
+  '    case " $* " in *" -o name"*) [ -f "$state/$ns.absent" ] || printf \'namespace/%s\\n\' "$ns"; exit 0 ;; esac',
+  '    case "$*" in *lane-touched*) field=touched ;; *lane-worktree*) field=worktree ;; *lane-commit*) field=commit ;; *status.phase*) field=phase ;; *) field=other ;; esac',
+  '    [ -f "$state/$ns.$field" ] && cat "$state/$ns.$field"; exit 0 ;;',
+  // The Deployments a lane runs, and the Secrets in it this script did not make: the
+  // two things that say the namespace is more than the gate tree before a reap.
+  '  *" get deploy -o name"*) ns=$(arg_after -n "$@"); [ -f "$state/$ns.deploys" ] && cat "$state/$ns.deploys"; exit 0 ;;',
+  '  *" get secrets "*) ns=$(arg_after -n "$@"); case " $* " in *"!app.kubernetes.io/managed-by"*) [ -f "$state/$ns.operator" ] && cat "$state/$ns.operator" ;; esac; exit 0 ;;',
   '  *" get deploy "*) printf \'1\'; exit 0 ;;',
   '  *) exit 0 ;;',
   'esac',
@@ -329,9 +363,10 @@ test('a lane whose Secrets are absent makes random ones, and the value never lea
   const { status, output, calls, secrets } = generatedSecrets(where, ['up', 'paper-m4'])
   assert.equal(status, 0, output)
 
-  assert.deepEqual(secrets.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'])
+  assert.deepEqual(secrets.map(secret => secret.name).sort(), [LANE_SECRET('rcon'), LANE_SECRET('velocity')],
+    'the names carry the instance this worktree derives: ' + LANE)
   assert.deepEqual(secrets.map(secret => secret.key).sort(), ['forwarding-secret', 'password'])
-  assert.deepEqual([...new Set(secrets.map(secret => secret.namespace))], ['monoplayer-gate-b'], 'both land in the lane')
+  assert.deepEqual([...new Set(secrets.map(secret => secret.namespace))], [LANE], 'both land in the lane')
   for (const secret of secrets) {
     assert.match(secret.value, /^[0-9a-f]{32}$/, secret.name + ' holds a 16-byte random value')
     // The rule that outranks the ticket: a value reaches neither a log line nor an
@@ -340,8 +375,8 @@ test('a lane whose Secrets are absent makes random ones, and the value never lea
     assert.equal(output.includes(secret.value), false, secret.name + ' value is on a printed line')
   }
   assert.notEqual(secrets[0].value, secrets[1].value, 'two Secrets, two values')
-  assert.match(output, /created the random Secret gate-b-rcon \(password\)/)
-  assert.match(output, /created the random Secret gate-b-velocity \(forwarding-secret\)/)
+  assert.match(output, new RegExp('created the random Secret ' + LANE_SECRET('rcon') + ' \\(password\\)'))
+  assert.match(output, new RegExp('created the random Secret ' + LANE_SECRET('velocity') + ' \\(forwarding-secret\\)'))
   // Created before the wake: a pod that starts without its Secret sits in
   // CreateContainerConfigError, which reads like a slow boot.
   const created = calls.findIndex(line => / apply -f -/.test(line))
@@ -359,8 +394,8 @@ test('a Secret that already exists is used as it is, and the run says so once', 
 
   const said = output.split('\n').filter(line => /this lane already has/.test(line))
   assert.equal(said.length, 1, 'said once, not once per Secret: ' + said.join(' | '))
-  assert.match(said[0], /gate-b-rcon/)
-  assert.match(said[0], /gate-b-velocity/)
+  assert.match(said[0], new RegExp(LANE_SECRET('rcon')))
+  assert.match(said[0], new RegExp(LANE_SECRET('velocity')))
 })
 
 test('a Secret read that fails stops the run instead of overwriting what is there', () => {
@@ -370,7 +405,7 @@ test('a Secret read that fails stops the run instead of overwriting what is ther
   const where = space()
   const { status, output, calls } = run(where, ['up', 'paper'], { KUBECTL_SECRET_READ_ERROR: '1' })
   assert.equal(status, 2, output)
-  assert.match(output, /cannot read the Secret gate-b-rcon/)
+  assert.match(output, new RegExp('cannot read the Secret ' + LANE_SECRET('rcon')))
   assert.match(output, /a wrong guess overwrites it/)
   assert.equal(calls.some(line => / apply -f -/.test(line)), false, 'nothing is created: ' + calls.join(' | '))
   assert.equal(calls.some(line => / scale /.test(line)), false, 'and nothing is woken: ' + calls.join(' | '))
@@ -382,7 +417,7 @@ test('a row this run re-wakes gets the Secret it reads', () => {
   // CreateContainerConfigError, whether this run asked for it or found it awake.
   const where = space()
   const { secrets } = generatedSecrets(where, ['up', 'paper'], { KUBECTL_AWAKE: 'velocity' })
-  assert.deepEqual(secrets.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'],
+  assert.deepEqual(secrets.map(secret => secret.name).sort(), [LANE_SECRET('rcon'), LANE_SECRET('velocity')],
     'the awake forwarding row gets its Secret as well')
 })
 
@@ -391,18 +426,25 @@ test('the Secret a lane generates follows the Deployment that reads it', () => {
   // behind it take the forwarding secret. Generating one nothing reads is a value
   // nobody uses; skipping one a row reads is CreateContainerConfigError.
   const only = args => generatedSecrets(space(), args).secrets.map(secret => secret.name).sort()
-  assert.deepEqual(only(['up', 'paper']), ['gate-b-rcon'])
-  assert.deepEqual(only(['up', 'paper-conduct']), ['gate-b-rcon'])
-  assert.deepEqual(only(['up', 'velocity']), ['gate-b-velocity'])
-  assert.deepEqual(only(['up', 'paper-m4']), ['gate-b-rcon', 'gate-b-velocity'])
+  assert.deepEqual(only(['up', 'paper']), [LANE_SECRET('rcon')])
+  assert.deepEqual(only(['up', 'paper-conduct']), [LANE_SECRET('rcon')])
+  assert.deepEqual(only(['up', 'velocity']), [LANE_SECRET('velocity')])
+  assert.deepEqual(only(['up', 'paper-m4']), [LANE_SECRET('rcon'), LANE_SECRET('velocity')])
 })
 
 test('the Secrets the lane generates are the two its Deployments mount', () => {
   // One list in two places: the secretKeyRef in the manifests, and the name and key
   // the script generates. A generated Secret nothing mounts is a value nobody reads.
-  const mounted = [...new Set(driverManifests().flatMap(({ text }) =>
-    [...text.matchAll(/secretKeyRef:\n\s+name: (gate-b-\S+)\n\s+key: (\S+)/g)].map(match => match[1] + ' ' + match[2])))]
-  assert.deepEqual(mounted.sort(), ['gate-b-rcon password', 'gate-b-velocity forwarding-secret'], 'the tree mounts these two')
+  // The tree holds the placeholder now, so the pair a lane mounts is read from the
+  // render: those names are the ones the lane's Secrets have to carry.
+  const where = space()
+  const dir = path.join(where.root, 'render')
+  const { status, output, files, read: renderedFile } = rendered(where, dir)
+  assert.equal(status, 0, output)
+  const mounted = [...new Set(files.flatMap(name =>
+    [...renderedFile(name).matchAll(/secretKeyRef:\n\s+name: (\S+)\n\s+key: (\S+)/g)].map(match => match[1] + ' ' + match[2])))]
+  assert.deepEqual(mounted.sort(), [LANE_SECRET('rcon') + ' password', LANE_SECRET('velocity') + ' forwarding-secret'],
+    "the tree mounts these two, under this lane's names")
   const generated = generatedSecrets(space(), ['up', 'paper-m4']).secrets.map(secret => secret.name + ' ' + secret.key).sort()
   assert.deepEqual(generated, mounted, 'the generated pair is exactly the mounted pair')
 })
@@ -420,8 +462,8 @@ test('gate:down deletes the Secrets it generated, and a hand-made one is out of 
   const { status, output, calls } = run(where, ['down'])
   assert.equal(status, 0, output)
   assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)),
-    ['-n monoplayer-gate-b delete secret -l app.kubernetes.io/managed-by=gate-lane --ignore-not-found'],
-    'one delete, by the label up wrote: ' + calls.join(' | '))
+    ['-n ' + LANE + ' delete secret -l app.kubernetes.io/managed-by=gate-lane --ignore-not-found'],
+    'one delete, by the label up wrote, in this lane only: ' + calls.join(' | '))
   assert.match(output, /deleted every Secret this lane generated/)
   assert.match(output, /an operator's Secret has no app\.kubernetes\.io\/managed-by=gate-lane label/, "and says why an operator's one stayed")
 
@@ -478,6 +520,8 @@ test('mise offers the lifecycle, and the lint rung sees the script', () => {
   assert.match(toml, /^\[tasks\."gate:up"\]$/m, 'gate:up')
   assert.match(toml, /^\[tasks\."gate:down"\]$/m, 'gate:down')
   assert.match(toml, /^\[tasks\."gate:status"\]$/m, 'gate:status')
+  assert.match(toml, /^\[tasks\.lanes\]$/m, 'lanes')
+  assert.match(toml, /run = "scripts\/gate-lane\.sh lanes"/, 'lanes runs the script')
   assert.match(toml, /run = "scripts\/gate-lane\.sh up"/, 'gate:up runs the script')
   assert.match(toml, /run = "scripts\/gate-lane\.sh down"/, 'gate:down runs the script')
   // The lint task lists the shell scripts by hand, so a new one is silently
@@ -489,13 +533,14 @@ test('mise offers the lifecycle, and the lint rung sees the script', () => {
 
 
 // ---------------------------------------------------------------------------
-// The instance: one value, and the whole lane follows (#277)
+// The instance: one value derived from the worktree, and the whole lane follows
+// (#277, #279)
 //
-// The tree spells the lane monoplayer-gate-b in the namespace, in every
-// app.kubernetes.io/name label and selector, in the Secret and ConfigMap names,
-// in the two tailnet hostnames, and in one path inside velocity.toml. A second
-// validation lane needs its own spelling, derived from one value, or two lanes on
-// one cluster are indistinguishable and status acts on the wrong pods.
+// The tree spells the lane gate-__instance__ in the namespace, in every
+// app.kubernetes.io/name label and selector, in the Secret and ConfigMap names, in
+// the two tailnet hostnames, and in one path inside velocity.toml. The instance is
+// the worktree's short commit and a short hash of its path, so two checkouts at one
+// commit are two lanes, and a lane is never typed.
 //
 // The render is what gets applied, so these cases read it rather than trusting
 // that the substitution reached everything.
@@ -525,20 +570,21 @@ function rendered (where, dir, env = {}) {
 
 const TREE = path.join(ROOT, 'deploy', 'driver')
 
-test('the render with no instance named reproduces the tree byte for byte', () => {
-  // Today's lane is monoplayer-gate-b and no run may change behaviour, so the
-  // default render is the tree itself. Anything else means an ordinary gate:up
-  // applies something a reader of deploy/driver has never seen.
+test("the render with no instance named is this worktree's lane", () => {
+  // The default used to be the tree byte for byte, because the tree spelled the one
+  // lane that existed. It spells no lane now, so the default is the instance the
+  // worktree derives: an ordinary gate:up applies a lane traceable to this checkout.
   const where = space()
-  const dir = path.join(where.root, 'render-b')
-  const { status, output, files } = rendered(where, dir)
+  const dir = path.join(where.root, 'render-default')
+  const { status, output, files, read: renderedFile } = rendered(where, dir)
   assert.equal(status, 0, output)
 
   const tree = fs.readdirSync(TREE).filter(name => name.endsWith('.yaml')).sort()
   assert.deepEqual(files, tree, 'the render holds the tree and nothing else')
-  for (const name of tree) {
-    assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), fs.readFileSync(path.join(TREE, name), 'utf8'),
-      name + ' differs from the tree it claims to reproduce')
+  assert.match(renderedFile('namespace.yaml'), new RegExp('^  name: ' + LANE + '$', 'm'),
+    'the namespace is the lane this worktree derives, not a name in the tree')
+  for (const name of files) {
+    assert.doesNotMatch(renderedFile(name), /__instance__|gate-b/, name + ' kept a placeholder or the old lane')
   }
 })
 
@@ -565,6 +611,27 @@ test('an instance renames every place the lane spells its name', () => {
   assert.match(read('velocity.yaml'), /mountPath: \/run\/secrets\/gate-x-velocity/, 'the mount path the toml names')
   assert.match(read('namespace.yaml'), /monoplayer\.eu\/environment: gate-x/, 'the namespace environment label takes the instance')
   assert.match(read('paper.yaml'), /tailscale\.com\/hostname: monoplayer-gate-x-paper/, 'a published tailnet name takes the instance')
+})
+
+test('the tree carries a placeholder, so no render can land in a typed lane', () => {
+  // #279: the contract half. The literal is gone from the tree and from the script,
+  // so a lane's name can only come from the derivation. A tree that spells a lane
+  // applies that lane whoever runs it, which is what two agents cannot have.
+  // gate-lane is the lane selector's value, not a lane's name.
+  const spellings = new Set(driverManifests()
+    .flatMap(({ text }) => text.match(/gate-[a-z0-9_-]+/g) ?? [])
+    .filter(spelling => spelling !== 'gate-lane'))
+  assert.ok(spellings.size > 0, 'the tree still names its lane somewhere')
+  for (const spelling of spellings) {
+    assert.match(spelling, /^gate-__instance__/, 'every lane name in the tree is the placeholder plus a suffix: ' + spelling)
+  }
+  assert.doesNotMatch(script(), /gate-b/, 'the script carries no lane name either')
+  // The two spellings the tree has to keep: monoplayer-gate-<instance> for the
+  // namespace, the labels and the tailnet names, and gate-<instance> for the Secrets
+  // and the ConfigMaps. One placeholder covers both, which is why a rename cannot
+  // half-land.
+  assert.match(read('deploy/driver/namespace.yaml'), /name: monoplayer-gate-__instance__/)
+  assert.match(read('deploy/driver/velocity.yaml'), /secretName: gate-__instance__-velocity/)
 })
 
 test('two instances do not address each other', () => {
@@ -683,4 +750,285 @@ test('an instance too long for a label value is refused before it renders', () =
   const fits = run(space(), ['up'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-' + 'a'.repeat(33) })
   assert.equal(fits.status, 0, fits.output)
 })
+
+// ---------------------------------------------------------------------------
+// The lane belongs to a worktree (#279)
+//
+// Every name comes from one derivation, so the cases here never type an instance:
+// they compute the lane the way the script has to, and a script that hardcodes one
+// fails them. Two checkouts at one commit are two lanes, which is the case a fixed
+// name cannot serve and the reason the derivation includes the path.
+
+test('name prints the lane this worktree derives, and nothing else', () => {
+  const { status, output } = run(space(), ['name'])
+  assert.equal(status, 0, output)
+  assert.equal(output.trim(), LANE, 'one line, no prefix, so a shell can pass it on: MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name)')
+  assert.match(INSTANCE, /^[0-9a-f]{7,}-[0-9a-f]{6}$/, 'the short commit, a dash, and the short hash of the path')
+
+  // It prints a namespace, so it passes the same guard every other command does. A name
+  // command that could print the live lane would aim a rung at the product.
+  for (const live of ['monoplayer', 'monoplayer-dev']) {
+    const refused = run(space(), ['name'], { MONOPLAYER_GATE_NAMESPACE: live })
+    assert.equal(refused.status, 2, refused.output)
+    assert.match(refused.output, new RegExp('refusing "' + live + '"'), 'name refuses the live namespace')
+  }
+})
+
+test('a lane that does not exist yet is created by up, and stopping it is not a failure', () => {
+  // A lane is named after a commit, so a commit makes a new one, and the first command
+  // against it may be the one that creates it. Neither command can die on kubectl's
+  // NotFound and call it the lane's fault.
+  const where = space()
+  fs.writeFileSync(path.join(where.state, LANE + '.absent'), '1')
+  const up = run(where, ['up'])
+  assert.equal(up.status, 0, up.output)
+  assert.match(up.output, new RegExp('lane ' + LANE + ' does not exist yet: the apply below creates it'))
+
+  const stopped = space()
+  fs.writeFileSync(path.join(stopped.state, LANE + '.absent'), '1')
+  const down = run(stopped, ['down'])
+  assert.equal(down.status, 0, down.output)
+  assert.match(down.output, new RegExp('gate lane ' + LANE + ' does not exist: nothing to stop'))
+  assert.equal(down.calls.some(line => / scale /.test(line)), false, 'nothing was scaled: ' + down.calls.join(' | '))
+})
+
+test('a worktree that is not a git checkout has no lane, and the refusal says why', () => {
+  // The commit is half the name. A directory with no HEAD cannot be traced to a
+  // checkout, so guessing one would make a lane nobody can find by commit.
+  const where = space()
+  const bare = path.join(where.root, 'not-a-repo')
+  fs.mkdirSync(bare)
+  const { status, output, calls } = run(where, ['status'], { MONOPLAYER_GATE_WORKTREE: bare })
+  assert.equal(status, 2, output)
+  assert.match(output, /not a git checkout/)
+  assert.match(output, /MONOPLAYER_GATE_NAMESPACE/)
+  assert.deepEqual(calls, [], 'a refused derivation calls no kubectl')
+})
+
+// A git checkout at one fixed commit, so two of these are the same commit at two
+// paths: the case the derivation exists for.
+function checkout (dir) {
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'README'), 'one tree, two checkouts\n')
+  const git = args => spawnSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'gate', GIT_AUTHOR_EMAIL: 'gate@example.invalid',
+      GIT_COMMITTER_NAME: 'gate', GIT_COMMITTER_EMAIL: 'gate@example.invalid',
+      GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z'
+    }
+  })
+  assert.equal(git(['init', '--quiet']).status, 0)
+  assert.equal(git(['add', 'README']).status, 0)
+  const commit = git(['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'one commit'])
+  assert.equal(commit.status, 0, commit.stderr)
+  return { dir, commit: git(['rev-parse', '--short=7', 'HEAD']).stdout.trim() }
+}
+
+test('two checkouts at one commit are two lanes, rendered from one tree', () => {
+  // The ticket names this case: same commit, different path, two lanes that cannot
+  // be mistaken for each other. Both renders come from deploy/driver, so what differs
+  // is the derivation and nothing else.
+  const where = space()
+  const one = checkout(path.join(where.root, 'one'))
+  const two = checkout(path.join(where.root, 'two'))
+  assert.equal(one.commit, two.commit, 'the fixture has to be one commit at two paths, or it proves nothing')
+
+  const lane = (checkout, name) => ({
+    checkout,
+    instance: instanceOf(checkout.dir, checkout.commit),
+    render: rendered(where, path.join(where.root, name), { MONOPLAYER_GATE_WORKTREE: checkout.dir })
+  })
+  const a = lane(one, 'render-one')
+  const b = lane(two, 'render-two')
+  assert.equal(a.render.status, 0, a.render.output)
+  assert.equal(b.render.status, 0, b.render.output)
+
+  assert.match(a.instance, new RegExp('^' + one.commit + '-'), 'both lanes start with the shared commit')
+  assert.match(b.instance, new RegExp('^' + two.commit + '-'), 'both lanes start with the shared commit')
+  assert.notEqual(a.instance, b.instance, 'and the short path hash tells them apart')
+
+  const text = render => render.files.map(render.read).join('\n')
+  assert.match(a.render.read('namespace.yaml'), new RegExp('name: monoplayer-gate-' + a.instance + '$', 'm'))
+  assert.match(b.render.read('namespace.yaml'), new RegExp('name: monoplayer-gate-' + b.instance + '$', 'm'))
+  for (const [mine, other] of [[a, b], [b, a]]) {
+    assert.doesNotMatch(text(mine.render), new RegExp('gate-' + other.instance + '(?![0-9a-f])'),
+      'one lane rendered from the tree names the other: ' + mine.instance + ' vs ' + other.instance)
+  }
+})
+
+test('gate:up stamps the lane with the worktree and the commit that own it', () => {
+  // The listing and the reaper read this and nothing else. A lane that cannot say
+  // which worktree asked for it is a lane nobody can find once the run is gone.
+  const where = space()
+  const { status, output, calls } = run(where, ['up'])
+  assert.equal(status, 0, output)
+
+  const stamps = calls.filter(line => /(^| )annotate namespace /.test(line))
+  assert.equal(stamps.length, 2, 'stamped when the lane wakes, and again when it is ready: ' + calls.join(' | '))
+  for (const stamp of stamps) {
+    assert.match(stamp, new RegExp(LANE + ' --overwrite'), 'the lane it stamped is the lane it woke')
+    assert.ok(stamp.includes(WORKTREE), 'the worktree that owns the lane is on it: ' + stamp)
+    assert.ok(stamp.includes(COMMIT), 'with the commit the lane was derived from: ' + stamp)
+    assert.match(stamp, /lane-touched=\d+/, 'and the clock the reaper reads')
+  }
+  // The second stamp is the one a long run needs: the clock is the end of the run, not
+  // its start, so a lane that has just gone quiet does not read as ancient.
+  const lastStamp = calls.reduce((found, line, index) => (/annotate namespace/.test(line) ? index : found), -1)
+  const wake = calls.findIndex(line => /scale deploy .* --replicas=1/.test(line))
+  assert.ok(wake >= 0, 'the rows were woken: ' + calls.join(' | '))
+  const polledBefore = calls.slice(wake, lastStamp).filter(line => /readyReplicas/.test(line)).length
+  assert.ok(polledBefore >= drivenWorkloads().length,
+    'the clock is set after the run reported ready, not before it: ' + polledBefore + ' reads' + '\n' + calls.join(' | '))
+})
+
+test("status names the lane's owner, and points at the listing", () => {
+  // A lane is derived from a commit, so a commit moves a worktree to a new lane. The
+  // reader needs to know where the old one is, and that command is the answer.
+  const where = space()
+  fs.writeFileSync(path.join(where.state, LANE + '.worktree'), '/home/agent/checkout')
+  fs.writeFileSync(path.join(where.state, LANE + '.commit'), 'abc1234')
+  fs.writeFileSync(path.join(where.state, LANE + '.touched'), String(Math.floor(Date.now() / 1000) - 600))
+
+  const { status, output } = run(where, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /owned by \/home\/agent\/checkout at abc1234/)
+  assert.match(output, /every lane: mise run lanes/)
+})
+
+// One lane's state, as the cluster would hold it: the two annotations up writes, and
+// the pods, Deployments and Secrets of the namespace. The shim reads these files.
+function laneState (where, name, { touched, worktree, commit = 'abc1234', pods = 0, deploys = null, operator = null }) {
+  const write = (suffix, value) => fs.writeFileSync(path.join(where.state, name + '.' + suffix), String(value))
+  write('touched', touched)
+  write('worktree', worktree)
+  write('commit', commit)
+  write('pods', pods)
+  write('deploys', deploys ?? gateWorkloads().map(name => 'deployment.apps/' + name).join('\n'))
+  if (operator) write('operator', operator)
+  return name
+}
+
+const laneList = (where, names) => fs.writeFileSync(path.join(where.state, 'lanes'), names.map(name => 'namespace/' + name).join('\n') + '\n')
+
+test('lanes lists every lane with its age and the worktree that owns it', () => {
+  // The task that makes a crashed run visible instead of invisible.
+  const where = space()
+  const now = Math.floor(Date.now() / 1000)
+  const idle = laneState(where, 'monoplayer-gate-aaaaaaa-111111', { touched: now - 10800, worktree: '/home/agent/one' })
+  const awake = laneState(where, 'monoplayer-gate-aaaaaaa-222222', { touched: now - 60, worktree: '/home/agent/two', pods: 2 })
+  laneList(where, [idle, awake])
+
+  const { status, output, calls } = run(where, ['lanes'])
+  assert.equal(status, 0, output)
+  assert.match(output, new RegExp(idle + '\\s+3h00m\\s+0\\s+/home/agent/one'), 'an idle lane, its age and its owner: ' + output)
+  assert.match(output, new RegExp(awake + '\\s+1m\\s+2\\s+/home/agent/two'), 'and an awake one')
+  assert.match(output, /2 lane\(s\), 1 awake/)
+  assert.equal(calls.some(line => / scale | apply | delete | patch /.test(line)), false, 'the listing writes nothing: ' + calls.join(' | '))
+})
+
+test('lanes says so when no lane exists, instead of printing an empty table', () => {
+  const { status, output } = run(space(), ['lanes'])
+  assert.equal(status, 0, output)
+  assert.match(output, /no gate lanes/)
+  assert.match(output, new RegExp(LANE), 'and names the lane this worktree would make')
+})
+
+test('a lane idle past the window is reaped, and an awake or young one is not', () => {
+  const where = space()
+  const now = Math.floor(Date.now() / 1000)
+  const old = laneState(where, 'monoplayer-gate-bbbbbbb-111111', { touched: now - 7200, worktree: '/w/old' })
+  const awake = laneState(where, 'monoplayer-gate-bbbbbbb-222222', { touched: now - 7200, worktree: '/w/awake', pods: 2 })
+  const young = laneState(where, 'monoplayer-gate-bbbbbbb-333333', { touched: now - 30, worktree: '/w/young' })
+  laneList(where, [old, awake, young])
+
+  const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '3600'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), ['delete namespace ' + old + ' --wait=false'],
+    'one delete, the idle lane only: ' + calls.join(' | '))
+  assert.match(output, new RegExp('reaped ' + old))
+  assert.match(output, new RegExp('keeping ' + awake + ': 2 pod\\(s\\) running'))
+  assert.match(output, new RegExp('keeping ' + young + ': touched 3[01]s ago, and the window is 3600s'))
+})
+
+test('lanes without --reap deletes nothing, however idle a lane is', () => {
+  const where = space()
+  const old = laneState(where, 'monoplayer-gate-ddddddd-111111', { touched: 1, worktree: '/w/ancient' })
+  laneList(where, [old])
+  const { status, output, calls } = run(where, ['lanes'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'the listing is a read: ' + calls.join(' | '))
+})
+
+test('a lane holding anything this script did not make is never reaped', () => {
+  // The transfer testbed's paper-hub and paper-sky are tenants of a gate namespace
+  // (#283), and an operator's Secret carries no managed-by label (#278). Deleting a
+  // namespace is not this script's to do when either is in it.
+  const where = space()
+  const now = Math.floor(Date.now() / 1000)
+  const tenant = laneState(where, 'monoplayer-gate-ccccccc-111111', {
+    touched: now - 7200,
+    worktree: '/w/testbed',
+    deploys: 'deployment.apps/paper\ndeployment.apps/paper-hub'
+  })
+  const operator = laneState(where, 'monoplayer-gate-ccccccc-222222', {
+    touched: now - 7200,
+    worktree: '/w/operator',
+    operator: 'secret/gate-ccccccc-222222-rcon'
+  })
+  laneList(where, [tenant, operator])
+
+  const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '3600'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'nothing this script did not make is deleted')
+  assert.match(output, new RegExp('keeping ' + tenant + ': it runs paper-hub, which the gate tree does not declare'))
+  assert.match(output, new RegExp('keeping ' + operator + ': it holds secret/gate-ccccccc-222222-rcon'))
+})
+
+test('a lane already on its way out is reported, not asked for twice', () => {
+  // kubectl delete namespace returns when the API accepts it, and the objects take a
+  // few seconds to go. A listing seconds later must say so, or a reaper reads as one
+  // that did nothing.
+  const where = space()
+  const now = Math.floor(Date.now() / 1000)
+  const going = laneState(where, 'monoplayer-gate-fffffff-111111', { touched: now - 7200, worktree: '/w/gone' })
+  fs.writeFileSync(path.join(where.state, going + '.phase'), 'Terminating')
+  laneList(where, [going])
+
+  const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '3600'])
+  assert.equal(status, 0, output)
+  const row = output.split('\n').find(line => line.startsWith(going))
+  assert.ok(row, 'the lane has a row: ' + output)
+  assert.ok(row.includes('/w/gone (deleting)'), 'the row says it is going: ' + row)
+  assert.deepEqual(calls.filter(line => /\\bdelete\\b/.test(line)), [], 'a lane already deleting is not deleted again')
+  assert.match(output, new RegExp('already deleting, so nothing here would reap it again: ' + going))
+})
+
+test('a lane nobody dated is never reaped', () => {
+  // No lane-touched is no age, and a lane whose age is unknown is not idle.
+  const where = space()
+  const undated = laneState(where, 'monoplayer-gate-eeeeeee-111111', { touched: '', worktree: '/w/undated' })
+  laneList(where, [undated])
+  const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '1'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'an undated lane is kept')
+  assert.match(output, new RegExp('keeping ' + undated + ': no monoplayer.eu/lane-touched annotation'))
+})
+
+test('a lane list that offers the live namespace is refused before anything is deleted', () => {
+  // The ban is the one rule that outranks the ticket. A label selector is not a
+  // promise: this case hands the script the two namespaces it must never reach, and a
+  // reap that deletes either is the end of the product or the dev lane.
+  for (const live of ['monoplayer', 'monoplayer-dev']) {
+    const where = space()
+    const spoiled = laneState(where, live, { touched: 1, worktree: '/w/live' })
+    laneList(where, [spoiled])
+    const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '1'])
+    assert.equal(status, 2, output)
+    assert.match(output, new RegExp('refusing "' + live + '"'))
+    assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'nothing was deleted')
+  }
+})
+
 
