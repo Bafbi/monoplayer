@@ -547,8 +547,8 @@ first dial and its target warms in five seconds.
   from this phase. This is the one verb the dialog layer can complete on its own,
   and it is proven by a click for that reason.
 - `O57` the pick records an exclusive claim, and a second claim on that body is
-  refused by name (#267). The first 26.2 bot took `gate-paper:25565` in O56 and is
-  still connected, so it holds that body. A fourth bot reads the picker while that
+  refused by name (#267). The first 26.2 bot claimed `gate-paper:25565` in O56 and
+  is still connected, so it holds that body. A fourth bot reads the picker while that
   claim stands, which it may, because the picker is not a claim and takes no attach
   slot. It picks the same server and clicks `Claim`. The claims the front holds are
   then exactly one, on that body, and they name `Attach`. The refusal is one

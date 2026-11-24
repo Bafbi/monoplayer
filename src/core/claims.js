@@ -6,11 +6,11 @@
 //
 // Two rules, and they are the whole module:
 //   1. a body holds one claim, and a second claim on it is refused with the claim
-//      that holds it, so the client can be told who is driving it;
-//   2. a connection holds one claim, so a client that already drives a body cannot
-//      take a second one. That is the attach slot's exclusivity, moved: the claim
-//      now decides who may drive a body, and the slot still decides who is
-//      delivered one until #269 gives the claim a channel to deliver through.
+//      that holds it, so the client can be told who holds it;
+//   2. a connection holds one claim, so a client that already holds one cannot
+//      hold a second. That is the attach slot's exclusivity, moved: the claim now
+//      decides who may own a body, and the slot still decides who is delivered one
+//      until #269 gives the claim a channel to deliver through.
 //
 // The holder is the id the front leg gives a connection, never the socket and
 // never the player's UUID: two connections from one account are two holders.
@@ -19,23 +19,23 @@
 export const CLAIM_REFUSAL = {
   // The body is claimed by another connection.
   TAKEN: 'body_claimed',
-  // This connection already drives a body, so it cannot take a second.
-  HELD: 'already_driving'
+  // This connection already holds a claim, so it cannot hold a second.
+  HELD: 'claim_held'
 }
 
 // A refusal, as one sentence a log and a client can both carry. It names the
 // server the client asked for, and the part of the contention it hit. It says
 // "claimed", never "driven": a claim is recorded, and no body is delivered to it
 // until #269.
-export function claimRefusalText ({ reason = null, server = null, holder = null, driving = null } = {}) {
+export function claimRefusalText ({ reason = null, server = null, holder = null, claimed = null } = {}) {
   const named = server === null ? 'that server' : server
   switch (reason) {
     case CLAIM_REFUSAL.TAKEN:
       return 'Monoplayer: ' + named + ' is already claimed by ' + (holder ?? 'another player') +
         '. A body has one claim.'
     case CLAIM_REFUSAL.HELD:
-      return 'Monoplayer: you already hold a claim on ' + (driving ?? 'another body') +
-        '. Leave it before you claim ' + named + '.'
+      return 'Monoplayer: you already hold a claim on ' + (claimed ?? 'another body') +
+        '. This connection cannot claim ' + named + ' and ends here. Reconnect to claim that server.'
     default:
       return 'Monoplayer: ' + named + ' cannot be claimed.'
   }
@@ -64,7 +64,7 @@ export function createClaims () {
   const byBody = new Map() // body slug -> claim
   const byHolder = new Map() // holder id -> the one claim it holds
 
-  // Take a claim on a body, or answer with the claim that refused it. Granted:
+  // Record a claim on a body, or answer with the claim that refused it. Granted:
   // { ok: true, reason: null, repeated, claim }. Refused: { ok: false, reason,
   // claim }, where the claim is the one that stands in the way: the incumbent's
   // for TAKEN, this connection's own for HELD.
@@ -74,7 +74,7 @@ export function createClaims () {
 
     const onBody = byBody.get(body)
     if (onBody !== undefined) {
-      // The holder clicking again is one driver, not a second one.
+      // The holder clicking again is one claim, not a second one.
       if (onBody.holder === holder) {
         return { ok: true, reason: null, repeated: true, claim: claimView(onBody) }
       }
