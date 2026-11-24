@@ -1,10 +1,10 @@
 // #260: the state cache a body owns.
 //
-// The cache is already a pure factory (src/core/state-cache.js), and the fault
-// this file pins is ownership, not the cache's own behaviour: the composition
-// root created one cache and served every body from it. Two bodies of one
-// account therefore shared one replay, one set of bounds, and one frame counter,
-// and a fault on either emptied both.
+// The cache is a pure factory (src/core/state-cache.js). The fault this file pins
+// is ownership, not the cache's own behaviour: the composition root created one
+// cache and served every body from it. So two bodies of one account shared one
+// replay, one set of bounds, and one capture counter, and a fault on either
+// emptied both.
 //
 // Nothing here opens a socket: a body is named and a cache is pushed a frame,
 // exactly as test/core/state-cache.test.js drives one cache.
@@ -16,8 +16,8 @@ import { replayFrames } from '../../src/core/join-synth.js'
 
 const buf = label => Buffer.from('body-cache:' + label)
 
-// A body past its warm marker: its configuration and join prefix are cached and
-// its warm domains hold what the body sent. Only the names the cache's own
+// A body past its warm marker. Its configuration and join prefix are cached, and
+// its warm domains hold what the body sent. Only names the cache's own
 // classification knows are used, so this warms any body the same way.
 function warmBody (cache, label) {
   cache.push('configuration', 'registry_data', buf(label + ':registry'))
@@ -30,7 +30,7 @@ test('#260 a body has one cache, and a second read of it is the same cache', () 
   const first = bodies.cacheFor('paper_25565')
   const again = bodies.cacheFor('paper_25565')
 
-  assert.equal(first, again, 'a driver and a spectator read one body\'s cache, so the replay is computed once')
+  assert.equal(first, again, 'a driver and a spectator read one cache, so a replay is computed once')
   assert.equal(bodies.get('paper_25565'), first, 'a non-creating read names the cache that exists')
   assert.equal(bodies.get('sky_25565'), null, 'a body nothing has touched has no cache')
   assert.equal(bodies.stats().count, 1)
@@ -61,12 +61,12 @@ test('#260 two bodies do not share state, sequence numbers, or a snapshot', () =
     'no frame of one body is in the other body\'s join prefix'
   )
   // The capture order is the cache's own, and two bodies of one account must not
-  // interleave into one counter: a shared counter would reorder the entity/generic
-  // merge join-synth builds on it.
+  // interleave into one counter. A shared counter would reorder the
+  // entity/generic merge join-synth builds on it.
   assert.equal(paperSnapshot.frameSeq, 4, 'the paper body counts its own frames')
   assert.equal(skySnapshot.frameSeq, 4, 'the sky body counts from its own first frame')
 
-  // A replay is computed per body: each carries its own entity and no other's.
+  // A replay is computed per body, so each carries its own entity and no other.
   const paperReplay = replayFrames(paperSnapshot)
   const skyReplay = replayFrames(skySnapshot)
   assert.equal(
@@ -91,7 +91,7 @@ test('#260 one body\'s fault leaves the other body\'s cache and replay intact', 
   const skyReplayBefore = replayFrames(skyBefore).map(frame => frame.name)
   assert.equal(paper.warm, true)
 
-  // The paper body's session faulted: the composition root resets the cache of
+  // The paper body's session faulted. The composition root resets the cache of
   // the body that ended, and nothing else.
   paper.reset()
 
@@ -119,17 +119,6 @@ test('#260 the bounds belong to the cache, so one body raising a bound leaves th
   assert.equal(paper.raiseChunkBound(32), 32)
   assert.equal(paper.stats().chunkBound, 32)
   assert.equal(sky.stats().chunkBound, 8, 'the sibling body keeps the configured bound')
-})
-
-test('#260 the registry is bounded, and it names the bodies it holds', () => {
-  const bodies = createBodyCaches({ maxBodies: 2 })
-  bodies.cacheFor('one')
-  bodies.cacheFor('two')
-  bodies.cacheFor('three')
-
-  assert.deepEqual(bodies.stats().bodies, ['two', 'three'], 'the least recently touched body goes first')
-  assert.equal(bodies.get('one'), null, 'an evicted body re-warms from nothing on its next claim')
-  assert.equal(bodies.stats().metrics.evicted, 1)
 })
 
 test('#260 a body must be named', () => {

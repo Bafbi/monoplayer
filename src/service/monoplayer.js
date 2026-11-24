@@ -350,14 +350,13 @@ export function createMonoplayer ({
 
   const cfg = config
 
-  // #260: one state cache per body, owned here as a registry rather than created
-  // once for the process. A body's cache is its world's state, shared by whoever
-  // is later delivered that body, a driver and its spectators, and by nobody else.
-  // The lane's own body — the configured backend, with no claim behind it — is
-  // named the way a claim names a body, so a claim on that same server lands on
-  // the cache the lane already warmed instead of a second one. A body's session is
-  // still one per process: a leg per body is #261, and per-channel delivery is
-  // #269.
+  // #260: one state cache per body, owned here as a registry. A body's cache is
+  // its world's state. It is shared by whoever is later delivered that body, and
+  // by nobody else. The lane's own body — the configured backend, with no claim
+  // behind it — is named the way a claim names a body. So a claim on that same
+  // server lands on the cache the lane already warmed, not on a second one. A
+  // body's session is still one per process: a leg per body is #261, and
+  // per-channel delivery is #269.
   const bodies = createBodyCaches({ bounds: cfg.bounds })
   const configuredBody = pickSlug(cfg.backend.host + ':' + cfg.backend.port)
   let activeBody = configuredBody
@@ -383,6 +382,12 @@ export function createMonoplayer ({
       // The dial starts now: the ended leg's late end event, if any, arrives
       // before this and must not be read as the target faulting (#22).
       legHandover = false
+      // #260: a move names another server, so it names another body, and the
+      // frames it brings are that body's. Any other reconnect dials the body the
+      // session already serves, so its cache stays. A restore has already put the
+      // session back on the body it came from (failTransfer).
+      const dialled = target ?? moveTarget
+      if (dialled !== null) activateBody(pickSlug(dialled.host + ':' + dialled.port))
       // #22: after a restore the cache holds the snapshot the client was put
       // back on. The returning backend is a fresh session, and its frames must
       // not append to that snapshot: the client already has it, and a later
@@ -558,6 +563,10 @@ export function createMonoplayer ({
   // replay is built for.
   let move = createTransfer({ session, cache })
   let moveKind = null
+  // #260: the body a kept move started on. Its snapshot is that body's state, so a
+  // target that fails leaves the snapshot there and the returning dial starts
+  // another body's session.
+  let moveBody = null
   let clientReconfiguring = false
   let targetLoginReady = false
   let restoreReplayPending = false
@@ -1357,8 +1366,14 @@ export function createMonoplayer ({
   // lets it rejoin the warm target.
   function beginKeptMove ({ target, kind, reason }) {
     if (!cfg.transfer.keepConnection || !isAttached()) return { began: false }
+    // #260: a move snapshots the body the session serves now. A transfer left
+    // bound to a body an earlier move left behind would snapshot the wrong state,
+    // so an idle transfer is bound to the active body's cache before it begins.
+    if (move.phase === 'idle') move = createTransfer({ session, cache })
     const begun = move.begin({ target, kind, reason })
     if (begun.began !== true) return { began: false, reason: begun.reason }
+    // #260: the snapshot the move now holds is this body's state.
+    moveBody = activeBody
     moveKind = kind
     clientReconfiguring = false
     clientLeftPlay = false
@@ -1684,6 +1699,14 @@ export function createMonoplayer ({
     const outcome = move.fail({ reason })
     if (outcome.failed !== true) return { restored: false, state: session.state }
     moveKind = null
+    // #260: the target's session ends here, so its body's cache goes with it. The
+    // snapshot was restored into the body the move started on, and that state is
+    // the client's again, so the session serves that body from now on. A
+    // reconfiguration is one body, so nothing moves.
+    if (activeBody !== moveBody) {
+      cache.reset()
+      activateBody(moveBody)
+    }
     // #87: the move owns no backend session past this point. The target's leg is
     // ended here so the reconnect back to the configured backend can dial — a
     // leg keeps its client until it is ended, and a connected leg refuses a new
@@ -1983,20 +2006,22 @@ export function createMonoplayer ({
 // --- #258: the landing, from the claim to the body ---
 
   // #260: the body this session serves, and so the cache it writes. Every frame
-  // the backend leg delivers belongs to the body the session dialled, so the
-  // binding is made at the dial, which is the only place that knows which body the
-  // next frame belongs to, and nowhere else. The leg holds one connection, so one
-  // body is live at a time: a frame can only be the body that connection serves.
-  // Two live bodies wait on a leg per body (#261) and a channel to deliver through
-  // (#269). A body the session already serves is the same binding, one body and
-  // one cache whichever path named it. The move is rebound with the cache because
-  // a move snapshots one cache and restores into it (#22); carrying the previous
-  // body's move would let a failed move restore the wrong body's state.
+  // the backend leg delivers belongs to the body the session dialled. The binding
+  // is made at the dial, the only place that knows which body the next frame
+  // belongs to. The leg holds one connection, so one body is live at a time: a
+  // frame can only be the body that connection serves. Two live bodies wait on a
+  // leg per body (#261) and a channel to deliver through (#269). A body the
+  // session already serves is the same binding: one body, one cache, whichever
+  // path named it.
   function activateBody (body) {
     if (activeBody === body) return cache
     activeBody = body
     cache = bodies.cacheFor(body)
-    move = createTransfer({ session, cache })
+    // A move keeps the transfer it started, because that transfer holds the
+    // snapshot a failed target is restored to (#22). That covers the move in
+    // flight and the restore still waiting for its dial. Any other switch starts a
+    // transfer on the cache it will snapshot.
+    if (moveKind === null && move.phase === 'idle') move = createTransfer({ session, cache })
     log('bodyCache', { body, bodies: bodies.stats().count })
     return cache
   }
