@@ -2407,10 +2407,7 @@ export function createMonoplayer ({
   // carries verbatim from the body, and this later change. Abilities are a
   // separate frame the client keeps its own copy of. A spectator in survival's
   // abilities can fall, take damage, and open a crafting grid on a body it may
-  // not touch.
-  //
-  // The flags are the ones vanilla sends a spectator: invulnerable (0x01), flying
-  // (0x02), flying allowed (0x04). The speeds are the protocol's own defaults.
+  // not touch. The values are the constants at the top of this file.
   function writeSpectatorMode ({ channel }) {
     let written = 0
     try {

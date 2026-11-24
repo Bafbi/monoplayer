@@ -4431,7 +4431,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     pickerBot8.client.on('abilities', packet => toldFrames.abilities.push(packet))
     const claimsBeforeWatch = pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name }))
     const forwardedBeforeVerb = pickerCore.metrics.serverboundForwarded
-    const backendReceivedBefore = {
+    // The fake backend's own counters as one record, read before the click and after
+    // the spectator's input. One reader, so the two reads cannot drift apart.
+    const backendReceived = () => ({
       logins: pickerBodyFake.received.logins,
       positions: pickerBodyFake.received.positions.length,
       chats: pickerBodyFake.received.chats.length,
@@ -4439,7 +4441,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       digs: pickerBodyFake.received.digs.length,
       places: pickerBodyFake.received.places.length,
       settings: pickerBodyFake.received.settings.length
-    }
+    })
+    const backendReceivedBefore = backendReceived()
     const watchDroppedBefore = pickerFront.metrics.spectatorFramesDropped
     if (lookerVerb !== null) pickerBot8.answerDialog(lookerVerb.id, null, 'configuration')
     await pickerBot8.waitFor(
@@ -4506,15 +4509,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // A drop writes nothing, so the wait is for the absence of a frame rather than for
     // one: the socket needs a moment to prove nothing is coming.
     await new Promise(resolve => setTimeout(resolve, 300))
-    const backendReceivedAfter = {
-      logins: pickerBodyFake.received.logins,
-      positions: pickerBodyFake.received.positions.length,
-      chats: pickerBodyFake.received.chats.length,
-      commands: pickerBodyFake.received.chatCommands.length,
-      digs: pickerBodyFake.received.digs.length,
-      places: pickerBodyFake.received.places.length,
-      settings: pickerBodyFake.received.settings.length
-    }
+    const backendReceivedAfter = backendReceived()
     // The row a player reads before choosing. A fresh client reads the list while the
     // body is driven and watched, so the label carries both facts.
     pickerBot11 = createBot({ port: pickerBound.port, username: 'Reader', version: pickerVersion })
