@@ -697,8 +697,9 @@ first dial and its target warms in five seconds.
   existed is in the driver's record only: no replay carries a live-only frame. The
   front's channels are read as records, not counters. There are two, and the
   driver comes first. Both are on the claimed body's slug, both have been handed
-  their body's replay once, and their delivery counts differ. Their `last` frame
-  is the `system_chat` each was sent.
+  their body's replay once, and they are two records and not one: the chat above is
+  what separates them, because `#259` gives a spectator's record two frames of its
+  own. Their `last` frame is the `system_chat` each was sent.
 
   Each client's own client information stays on its own channel. Both are sent in
   play, which is the state where the front's settings hook reports nothing and the
@@ -708,11 +709,10 @@ first dial and its target warms in five seconds.
   spectator sends moves nothing: the front drops it before the core's pipeline, the
   core forwards nothing, and the session pose is byte for byte the one it had.
 
-  The surface is not decided here. An eighth bot reads the driven body's dialog and
-  clicks `Spectate` itself: the front reports the verb and answers in words naming
-  it, and the client is disconnected. That sentence is what #259 replaces with the
-  landing above, and #259 also owns what a spectator is told, whether an unclaimed
-  body may be watched, and what the picker shows about watchers.
+  The surface is not decided here: an eighth bot reaches the driven body's own
+  dialog and reads its `Spectate` button, and this assertion stops there. `O62`
+  clicks that button and proves what the click does, so the seam above and the verb
+  below stay two facts with two numbers.
 - `O60b` a second claim on a body a driver already holds is refused by the claim,
   not by an attach slot (#269). O57 refused a rival on a body nothing was delivered
   to. Here the body is driven: O58's driver holds it and O60's spectator watches
@@ -755,6 +755,70 @@ first dial and its target warms in five seconds.
   `test/core/picker.test.js` is where that is proven. A live file that is absent
   rather than broken, and a seed that is missing, are
   `test/service/control.test.js`'s.
+- `O62` the picker's Spectate verb lands a client in a body it does not drive, tells
+  its client so, and sends nothing on to the backend (#259). O60 landed a watcher
+  through `frontLeg.spectate`, the seam #269 built and left to this row. This is the
+  click that call was waiting for: the eighth bot has been in the picker with the
+  driven body's dialog on screen since O60 and has never answered it. O61 removed the
+  driven row from the live list, so the operator adds it back first, which is the edit
+  the panel makes.
+
+  Clicking that button is enough. Nothing is dialled: the fake body counts the one
+  login it had. The client's configuration phase continues with that body's frames,
+  ends with one `finish_configuration`, and its play login arrives on the connection
+  it already held, on the body's own entity and at the body's own spawn, with no
+  leftover bytes. The front's channels are three: one driver and two watchers. A
+  block change the body sends afterwards reaches both watchers.
+
+  The client is told what it is, and the assertion reads it off the wire rather than
+  from a log. One `game_state_change` arrives with reason 3 (`change_game_mode`) and
+  game mode 3, and one `abilities` with the flags vanilla sends a spectator:
+  invulnerable, flying, and flying allowed, at the protocol's own two speeds. The
+  body then switches mode itself. That frame reaches the driver and not the watcher,
+  and the front counts the two it withheld: a watcher's mode is what the core wrote
+  when it landed, not what the body does next.
+
+  A watcher changes nothing, and the proof is the far end of the socket. It sends a
+  position, a chat line, a command and a dig. The front drops all four, the core
+  forwards nothing, the session pose is unchanged, and the fake backend's own
+  counters — logins, positions, chats, commands, digs, places, settings — are the
+  numbers it had before the click. A counter in the front would only say the front
+  believes it dropped them.
+
+  The row is read as a client reads it. A fresh join lists the driven body as
+  `<address> - claimed (Pilot), 2 watching`: the driver from the claim, the watchers
+  from the channels on that body. The same client then picks the row whose port
+  answers nothing and clicks `Spectate`. That is refused in one sentence naming the
+  server and saying this lane is not serving it, and the client is disconnected
+  rather than left in a dialog.
+
+  Nothing here became a claim: the front's claims are byte for byte the ones it held
+  before the click, and none of them names the watcher. A watcher leaving ends a
+  watcher and nothing else: its channel goes, the driver and the other watcher stay,
+  and the body is still attached to the same claim.
+- `O63` a body nobody drives stays up and stays watchable, and a join reads the
+  picker instead of taking the empty driver seat (#259). A claim is held by the
+  connection that made it, so O62's driver leaving releases the body and nothing
+  else: its backend session, its warm state and its watcher all stay. The fake body
+  counts the same one login. The session is `detached`, `claimedBody` still names the
+  body, and no client is attached.
+
+  A twelfth client joins. It reads the picker, and the core attaches nobody: before
+  #259 this join was attached as that body's driver down the pre-picker path, with no
+  claim recorded, which is also why the picker only ever offered anything while no
+  body stood. Its row says `<address> - unclaimed, 1 watching`, which is a body a
+  client may watch and not a body that is down.
+
+  It picks that row and clicks `Spectate`. Nothing is dialled, and the client lands in
+  the body nobody drives: the body's entity, the body's last pose, and a block change
+  the body sends afterwards reaches both watchers, so a driverless body is followed
+  rather than frozen. The front holds two channels, both watchers, both on the body's
+  slug, and neither holding a claim. The session stays `detached`: watching is not
+  driving.
+
+  What neither assertion can prove: that a vanilla client draws a body it does not
+  drive. Both clients here are protocol bots, and #268 owns the measurement a real
+  client makes of a second registry round and of the body's own entity stream.
 
 ## The client parity rung
 

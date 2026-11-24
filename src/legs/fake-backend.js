@@ -519,6 +519,17 @@ export async function createFakeBackend ({
     log('sendSystemChat', { message })
   }
 
+  // #259: the body's own game mode and abilities, the two frames that say what a
+  // player is in the world as. A body sends them whenever its mode changes, and a
+  // rung needs one to prove a watcher's client is not put back in the driver's mode.
+  function sendGameModeChange ({ gameMode = 0, reason = 3, flags = 0 } = {}) {
+    for (const client of Object.values(server.clients)) {
+      client.write('game_state_change', { reason, gameMode })
+      client.write('abilities', { flags, flyingSpeed: 0.05, walkingSpeed: 0.1 })
+    }
+    log('sendGameModeChange', { gameMode, reason })
+  }
+
   // A server transfer directive: the packet that must never reach the
   // attaching client (see the 2026-11-08 Skyblock incident).
   function sendTransfer (host = 'sky-2.excalia.fr', port = 25565) {
@@ -566,6 +577,7 @@ export async function createFakeBackend ({
     sendEquipmentBundle,
     sendPlayerChat,
     sendSystemChat,
+    sendGameModeChange,
     sendTransfer,
     sendStoreCookie,
     sendCookieRequest,

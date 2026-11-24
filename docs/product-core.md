@@ -338,9 +338,8 @@ listing the lane's allowed servers.
   opens the driver's channel on that body, and a body's frames go to every channel
   on it. The attach slot is gone, so a second claim on a driven body is refused by
   the claim rather than by an earlier admission check. A spectator's delivery exists
-  beside it (#269): the body's play state, on that connection, with nothing dialled,
-  landed through `frontLeg.spectate`. The picker's Spectate verb is still refused in
-  words, and #259 wires it.
+  beside it (#269, #259): the body's play state, on that connection, with nothing
+  dialled, landed by the picker's own Spectate verb.
 - **A claim is a landing (#258).** The click that grants a claim is the one thing
   that dials a body. The front asks the core for the body the frame named. The core
   points the puppet leg at that address, connects, and waits. The wait is bounded,
@@ -395,12 +394,41 @@ listing the lane's allowed servers.
 - **A verb is read, reported, then answered (#266).** Claim, spectate and
   disconnect all act on a body. `claim` records the claim (#267), and
   `disconnect` is honoured: the client goes, and its configuration `disconnect`
-  frame says which server it left. `spectate` is refused in words here, and the
-  delivery it will use exists (#269): a body's play state, on that client's own
-  channel, with the core answering whether the row names the body it serves. A body
-  with no claim, a row naming another body, and a body still connecting are three
-  refusals with three sentences. What a spectator is told, whether an unclaimed body
-  may be watched, and what the picker shows about watchers are #259's.
+  frame says which server it left. `spectate` is the third landing (#259): the
+  click opens that client's spectator channel, continues its configuration phase
+  with the body's own frames, and hands it the body's play state, with nothing
+  dialled. A lane that serves no body yet, a row naming another body, a body still
+  connecting and a body that is down are four refusals with four sentences, each
+  asking the player for something different.
+- **Who may watch a body, and what a watcher is (#259).** Any client the lane's
+  identity gate admitted may watch any body the lane serves and has up, whether a
+  driver holds it or not. No driver is asked for consent: the whitelist is the one
+  authority a lane has, a watcher cannot change the body, and a request the driver
+  must answer would put a dialog in front of a player who is mid-game and need a
+  default for the one who never answers. A body with no driver is the ordinary case
+  rather than an error — a claim is released when its connection ends while the body
+  keeps its backend session — so the ordinary case is watchable.
+- **A watcher's client is told what it is (#259).** The replay carries the body's own
+  game mode and abilities, because those are `latest` frames in the body's cache. So
+  two frames go to that channel after the replay: `game_state_change` with reason 3
+  and game mode 3, then `abilities` with the flags vanilla sends a spectator
+  (invulnerable, flying, flying allowed) at the protocol's two speeds. They are the
+  last word on that socket. A later frame from the body reaches the driver and never
+  a watcher's channel, so the body's next mode change cannot put a watcher back in
+  the driver's world.
+- **The picker is the door on a lane that has one (#259).** Every admitted join is
+  served the picker, whatever the session is doing, because a claim is the only thing
+  that puts a client into a body. Before this, a join while a warm body stood with
+  nobody driving it was attached as that body's driver down the pre-picker path with
+  no claim recorded: the body was driven by a player the claim registry had never
+  heard of, and nobody could watch it. A lane without the picker is unchanged, and
+  that is the live lane.
+- **A row says what a chooser needs (#259).** The row carries the body's state —
+  claimed, unclaimed, or down — the driver's name from the claim, and how many
+  channels on that body are spectators. A row is read at every dialog, so a claim
+  made a moment ago is on the next one. A body the lane serves and has up with nobody
+  holding it is `unclaimed`, which is the state a watcher can join; everything else
+  is `down`.
 - **An unreadable answer is refused, never guessed at (#266).** `readServerAction`
   returns a reason rather than a null: `not_a_click`, `unknown_id`, `malformed` or
   `unknown_verb`. `serverActionProblemText` turns that reason into one sentence
@@ -426,10 +454,10 @@ listing the lane's allowed servers.
   validated. With it off, or with no baseline on disk, a join with no backend is
   refused with `backend_not_ready`, exactly as before.
 
-What a spectator is shown, and who may spectate, is #259. #269 builds only the
-seam: a body's frames go to every channel on it, a channel is not a driver by
-default, and `frontLeg.spectate({ username, body })` lands a client as a spectator.
-#259 wires the picker's Spectate to it.
+#269 built the seam for a watcher and #259 finished it: a body's frames go to every
+channel on it, a channel is not a driver by default, and the picker's Spectate verb
+lands a client through `landSpectator` without a claim, a dial or a second login.
+`O62` proves the click, and `O63` proves a body nobody drives is still watchable.
 
 The gate for the whole epic is answered at rung 2 by `O55`, `O56` and `O56b`. A
 26.2 client reads the recording, gets the dialog, and clicks one action. It then

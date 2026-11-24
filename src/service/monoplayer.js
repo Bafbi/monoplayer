@@ -342,6 +342,20 @@ const NOOP_JOURNAL = Object.freeze({
   stats: () => ({ enabled: false })
 })
 
+// #259: what a watcher's client is told about itself. Minecraft carries a player's
+// game mode in two frames, and both are needed: `game_state_change` is the change
+// (reason 3 is `change_game_mode`, and the mode is a float, 3 for spectator), and
+// `abilities` is the flags the client keeps its own copy of. The flags are the ones
+// vanilla sends a spectator: invulnerable (0x01), flying (0x02), flying allowed
+// (0x04). The speeds are the protocol's own defaults. Proof of the field names:
+// `node tools/protocol.mjs frame 26.1 play toClient game_state_change` and `... abilities`;
+// 26.2 declares the same two frames unchanged.
+const GAME_MODE_CHANGE_REASON = 3
+const GAME_MODE_SPECTATOR = 3
+const SPECTATOR_ABILITY_FLAGS = 0x07
+const SPECTATOR_FLYING_SPEED = 0.05
+const SPECTATOR_WALKING_SPEED = 0.1
+
 export function createMonoplayer ({
   config = loadConfig(),
   backendLeg,
@@ -545,6 +559,11 @@ export function createMonoplayer ({
   let earlyAttach = null
   let pendingEarlyReplay = null
   let frontPlayReady = false
+  // #259: the watchers whose channel has been handed its body and has not gone.
+  // The front owns the channels, so it is the front that says when one closes; this
+  // is only what the relay needs to know: is anybody watching a body whose driver
+  // is not there.
+  let activeSpectators = 0
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
   // #18: the last human's client information. It survives a detach, like a
@@ -671,6 +690,15 @@ export function createMonoplayer ({
     return attached && session.state === STATES.ATTACHED && frontPlayReady
   }
 
+  // #259: the body's stream goes out while anybody is in play on it, and a
+  // watcher counts. A body whose driver left keeps its session and its state, and
+  // a client watching it should follow the world rather than a frozen replay; the
+  // front drops the write when no channel holds the body, so this is permission to
+  // try, not a promise of a reader.
+  function canDeliverPlay () {
+    return canRelayPlay() || (activeSpectators > 0 && servedBody() !== null)
+  }
+
   // --- front-leg login pipeline (pure decisions; adapter owns kick/close IO) ---
 
   // Whitelist review: Login Start. Denied here, i.e. strictly before
@@ -694,27 +722,30 @@ export function createMonoplayer ({
     // its configuration phase. It follows the puppet's configuration stream
     // and lands in play when the backend logs in.
     const canAttachConfiguring = backendConfiguring && session.state === STATES.BOOT
-    // #269: a body that already has a driver is not attachable, and a lane with a
-    // picker still serves the picker. The second client's answer is a claim, or a
-    // spectate, on that body, and the claim is what refuses a rival: the login has
-    // to reach the picker instead of a kick, or the claim never gets to decide.
+    // #257/#259: on a lane with a picker, the picker is the door. Every admitted
+    // join reads it, whatever the session is doing, because the claim is the only
+    // thing that puts a client into a body.
+    //
+    // #269 left this to the attached case, so a join while a warm body stood with
+    // nobody driving it was attached as that body's driver down the pre-picker path
+    // with no claim recorded. Two things followed: the body was driven by a player
+    // the claim registry had never heard of, and nobody could watch it, because a
+    // watcher's row names a body the picker never offered. Serving the picker first
+    // fixes both, and it is what the epic says the picker is for (docs/product-core.md).
+    if (cfg.picker === true) {
+      log('attachPicker', { uuid: payload.uuid, name: payload.name, state: session.state, attached })
+      emit('attach_picker', { uuid: payload.uuid, name: payload.name, phase: decision.phase })
+      telemetry.metric('monoplayer.pickers', 1, { player: payload.name })
+      return { ...decision, allowed: true, phase: 'picker', picker: true }
+    }
+    // #269: a body that already has a driver is not attachable. The second client on
+    // a lane without the picker has no claim to make, so the session answers at the
+    // attach, which is the one authority such a lane has.
     const attachable = (session.isAttachReady() || canAttachConfiguring) && !attached
     if (!attachable) {
-      // #257: the picker. A whitelisted client may join a lane with no backend
-      // when the lane offers one, and it is not a denial: nothing is attached,
-      // the session is untouched, and the front leg serves the configuration
-      // baseline and the dialog. `picker: true` is the whole permission, and the
-      // front serves nothing it was not given, so a core without the switch keeps
-      // answering `backend_not_ready`.
-      if (cfg.picker === true) {
-        log('attachPicker', { uuid: payload.uuid, name: payload.name, state: session.state })
-        emit('attach_picker', { uuid: payload.uuid, name: payload.name, phase: decision.phase })
-        telemetry.metric('monoplayer.pickers', 1, { player: payload.name })
-        return { ...decision, allowed: true, phase: 'picker', picker: true }
-      }
-      // #269: a lane with no picker has no claim for the second client to make.
-      // The login passes and the session answers `already_attached` at the attach,
-      // which is the one authority such a lane has.
+      // #269: a lane with no picker has no claim for a second client to make, so
+      // its login passes and the session answers `already_attached` at the attach.
+      // A join with no body at all is a denial the front turns into a clear kick.
       if (attached) return decision
       const denied = {
         allowed: false,
@@ -2252,28 +2283,63 @@ export function createMonoplayer ({
     return { connected: true, reason: null, body, target: dial, warm: bodyWarm }
   }
 
-  // --- #269: a spectator, and the channel it watches through ---
+  // --- #269/#259: a spectator, and the channel it watches through ---
+
+  // #259: who may spectate. Any client this lane's identity gate admitted may
+  // watch any body the lane serves and has up, whether a driver holds it or not.
+  // The whitelist is the one authority the lane already has; a watcher cannot
+  // change the body (the front drops every frame it sends); and a consent
+  // handshake with the driver would put a dialog in front of a player who is
+  // mid-game, and need a default for the driver who never answers.
+  //
+  // A body a driver holds and a body nobody drives are both watchable, and that
+  // is the point: a claim is released when its connection ends, while the body
+  // keeps its backend session, so the last player standing in a world is often
+  // watching one with no driver. Two reasons are refused in words, because they
+  // ask the player for different things: a body still connecting is worth waiting
+  // for, and a body that is down is not.
+  const WATCHABLE = new Set([STATES.WARM, STATES.ATTACHED, STATES.DETACHED])
+
+  // The body this lane serves, while it can hand a client its state: its session
+  // has an up connection and its cache holds the join. Null while it has none.
+  function servedBody () {
+    if (claimedBody === null) return null
+    if (!session.warmReady) return null
+    return WATCHABLE.has(session.state) ? claimedBody : null
+  }
+
+  // Why the served body is not watchable yet. A session that failed its retries
+  // is down; every other state that is not up is still coming.
+  function bodyDownReason () {
+    return session.state === STATES.FAILED ? 'body_down' : 'body_not_warm'
+  }
 
   // The question the front puts before it opens a spectator's channel: may this
   // client watch the body its row names? Nothing is dialled, because a spectator
   // watches a body that already has a session, and the answer is synchronous for
-  // the same reason. Who may spectate, and what it is shown, is #259; the seam is
-  // that delivery is chosen by a channel and not by the one attach slot.
+  // the same reason. The seam is that delivery is chosen by a channel and not by
+  // one attach slot.
   function spectateBody ({ body = null, server = null, name = null } = {}) {
     metrics.spectateAsks++
     if (cfg.picker !== true) return { watching: false, reason: 'picker_off', body }
-    if (claimedBody === null) return { watching: false, reason: 'no_claim', body }
+    if (claimedBody === null) {
+      // No claim has dialled a body on this lane, so there is nothing standing to
+      // watch. Watching never dials: that is the claim's act, and only its act.
+      log('spectateRefused', { body, server, name, reason: 'no_body', state: session.state })
+      return { watching: false, reason: 'no_body', body }
+    }
     if (body !== null && body !== claimedBody) {
       // One body at a time is this session's limit, so a row naming another body
       // is not something there is to watch. A leg per body is #261.
       log('spectateRefused', { body, server, name, reason: 'body_not_served', claimed: claimedBody })
       return { watching: false, reason: 'body_not_served', body: claimedBody }
     }
-    if (session.state !== STATES.ATTACHED || !frontPlayReady) {
-      log('spectateRefused', { body, server, name, reason: 'body_not_warm', state: session.state })
-      return { watching: false, reason: 'body_not_warm', body: claimedBody }
+    if (servedBody() === null) {
+      const reason = bodyDownReason()
+      log('spectateRefused', { body: claimedBody, server, name, reason, state: session.state })
+      return { watching: false, reason, body: claimedBody }
     }
-    log('spectateAsked', { body: claimedBody, server, name, state: session.state })
+    log('spectateAsked', { body: claimedBody, server, name, state: session.state, attached })
     return { watching: true, reason: null, body: claimedBody, server }
   }
 
@@ -2281,14 +2347,16 @@ export function createMonoplayer ({
   // replays a body to a client that is not its driver: the session, the pose and
   // the driver's own channel are untouched, because watching is not driving. A
   // spectator's frames are the same replay an attach would build, so what it sees
-  // is the body as it stands rather than a second login.
+  // is the body as it stands rather than a second login. It needs a body, not a
+  // driver, which is why the guard is the body's and not the attach's (#259).
   function spectateView ({ name = null, channel = null } = {}) {
     if (typeof channel !== 'string' || channel.length === 0) {
       return { watching: false, reason: 'no_channel' }
     }
-    if (!isAttached() || !frontPlayReady) {
-      log('spectateViewRefused', { name, channel, reason: 'no_body', state: session.state })
-      return { watching: false, reason: 'no_body' }
+    if (servedBody() === null) {
+      const reason = claimedBody === null ? 'no_body' : bodyDownReason()
+      log('spectateViewRefused', { name, channel, reason, state: session.state })
+      return { watching: false, reason }
     }
     const synthesized = synthAttach({
       snapshot: cache.snapshot(),
@@ -2301,17 +2369,62 @@ export function createMonoplayer ({
     for (const frame of synthesized.frames) {
       if (writeSynthFrame(frame, { channel })) written++
     }
+    // #259: the client has to be told it is watching, or it fights the world it
+    // was put in. The replay carried the body's own game mode and abilities from
+    // the cache — both are `latest` frames — so these go after it: on this socket
+    // they are the last word, and they reach no other channel.
+    const told = writeSpectatorMode({ channel })
+    activeSpectators++
     metrics.spectatorViews++
     log('spectateView', {
       name,
       channel,
       frames: written,
       replayed: synthesized.counts.replayed,
+      told,
       body: claimedBody,
-      state: session.state
+      state: session.state,
+      attached
     })
-    emit('spectate_view', { name, channel, frames: written })
-    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written }
+    emit('spectate_view', { name, channel, frames: written, told })
+    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, told }
+  }
+
+  // #259: a watcher's channel closed. Its client is gone, so the relay stops when
+  // it was the last one and no driver is attached. Nothing else changes: the body
+  // was never the watcher's.
+  function spectatorLeft ({ channel = null, name = null } = {}) {
+    if (activeSpectators > 0) activeSpectators--
+    log('spectateLeft', { channel, name, watching: activeSpectators, state: session.state })
+    emit('spectate_left', { channel, name, watching: activeSpectators })
+    return { watching: activeSpectators }
+  }
+
+  // #259: the two frames that say what the watcher is in the body as. Minecraft
+  // keeps the game mode in two places — `login`'s spawn info, which the replay
+  // carries verbatim from the body, and this later change — and abilities are a
+  // separate frame the client keeps its own copy of. A spectator in survival's
+  // abilities can fall, take damage, and open a crafting grid on a body it may
+  // not touch.
+  //
+  // The flags are the ones vanilla sends a spectator: invulnerable (0x01), flying
+  // (0x02), flying allowed (0x04). The speeds are the protocol's own defaults.
+  function writeSpectatorMode ({ channel }) {
+    let told = 0
+    try {
+      if (frontLeg.write('game_state_change', {
+        reason: GAME_MODE_CHANGE_REASON,
+        gameMode: GAME_MODE_SPECTATOR
+      }, { channel }) !== false) told++
+      if (frontLeg.write('abilities', {
+        flags: SPECTATOR_ABILITY_FLAGS,
+        flyingSpeed: SPECTATOR_FLYING_SPEED,
+        walkingSpeed: SPECTATOR_WALKING_SPEED
+      }, { channel }) !== false) told++
+    } catch (error) {
+      log('spectateToldFailed', { channel, error: String(error?.message ?? error).slice(0, 200) })
+    }
+    return told
   }
 
   function attachPlayer ({ name, uuid, includeConfig = true } = {}) {
@@ -2789,6 +2902,16 @@ export function createMonoplayer ({
     if (typeof frontLeg.setSpectatorAttach === 'function') {
       frontLeg.setSpectatorAttach(payload => spectateView(payload))
     }
+    // #259: what a picker row says about a body, so a row can read `unclaimed`
+    // rather than `down` about a body nobody drives and a watcher may join. The
+    // session owns the body, so only the core can answer this, and a leg with no
+    // call-in reads every row the way the list wrote it.
+    if (typeof frontLeg.setBodyServed === 'function') {
+      frontLeg.setBodyServed(() => ({ body: claimedBody, up: servedBody() !== null }))
+    }
+    if (typeof frontLeg.setSpectatorLeft === 'function') {
+      frontLeg.setSpectatorLeft(payload => spectatorLeft(payload))
+    }
 
     log('start', { whitelist: identity.whoAmI().whitelist, puppet: cfg.puppet, started: true })
     emit('start')
@@ -2949,7 +3072,7 @@ export function createMonoplayer ({
       if (!wasWarm) {
         session.warmComplete({ marker: name })
         replayPendingEarly()
-      } else if (canRelayPlay()) {
+      } else if (canDeliverPlay()) {
         frontLeg.writeRaw(buffer, { state: 'play', name })
       }
       return
@@ -2957,12 +3080,12 @@ export function createMonoplayer ({
 
     if (name === 'position') {
       // Position is per-leg owned: confirm on the backend leg, follow the
-      // backend teleport in the session pose, and (only when someone is
-      // attached) synthesize a fresh position with a proxy-owned teleportId.
-      // Never cached, never replayed.
+      // backend teleport in the session pose, and (only when somebody is in play
+      // on the body) synthesize a fresh position with a proxy-owned teleportId.
+      // Never cached, never replayed. #259: a watcher is somebody in play.
       session.setPose(capturePose(session.currentPose, 'position', data, { backend: true }))
       backendLeg.write('teleport_confirm', { teleportId: data.teleportId })
-      if (canRelayPlay()) {
+      if (canDeliverPlay()) {
         frontTeleportSeq++
         frontLeg.write('position', {
           teleportId: frontTeleportSeq,
@@ -3057,7 +3180,7 @@ export function createMonoplayer ({
       const chatFrame = CHAT_FRAMES.has(name)
       if (chatFrame && !chatRelayAllowed(name, cfg.chat)) return
       if (chatFrame) metrics.chatRelayed++
-      if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
+      if (canDeliverPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
       return
     }
     if (policy.decision === DECISION.CACHE_ONLY) {
@@ -3070,7 +3193,7 @@ export function createMonoplayer ({
     if (pushed.cached) metrics.framesCached++
     // #87: the first terrain frame is what lets a held move release its client.
     if (name === 'map_chunk') maybeCompleteReconfiguration()
-    if (canRelayPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
+    if (canDeliverPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
   }
 
   async function stop ({ reason = 'stopped' } = {}) {
@@ -3111,9 +3234,10 @@ export function createMonoplayer ({
     connectClaimedBody,
     // #269: the spectator's two answers. `spectateBody` says whether a row names
     // the body this session serves, and `spectateView` replays that body to the one
-    // channel that asked.
+    // channel that asked. #259 adds the third: a watcher's channel ended.
     spectateBody,
     spectateView,
+    spectatorLeft,
     // #233: the operator's move, driven from the control document rather than a
     // packet. The orchestrator calls it when its heartbeat sees a desired backend
     // that is not the one in use.
