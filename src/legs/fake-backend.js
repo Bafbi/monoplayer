@@ -1,4 +1,6 @@
-// Scripted fake backend (26.1) serving a one-chunk flat world.
+// Scripted fake backend serving a one-chunk flat world. It speaks 26.1 by
+// default; a rung that needs 26.2 (#258's picker, whose configuration baseline
+// only exists at 26.2) passes `version` and `chunks: 'empty'`.
 //
 // Shared by the frozen protocol spike and the product offline loopback rung
 // (`src/ladder/loopback.js`). Changes here affect both; run `mise run spike`
@@ -20,6 +22,17 @@ import nbt from 'prismarine-nbt'
 import { decodeBrand } from '../core/client-settings.js'
 
 const VERSION = '26.1'
+
+// One chunk mode out of the three spellings the option accepts, so the factory
+// and the join path cannot disagree about what `true` means. A mode this file
+// does not implement is refused at construction rather than served as nothing.
+function chunkModeOf (chunks) {
+  const mode = chunks === true ? 'full' : (chunks === false ? 'none' : chunks)
+  if (mode !== 'full' && mode !== 'empty' && mode !== 'none') {
+    throw new TypeError("chunks must be 'full', 'empty', 'none', true or false, got " + JSON.stringify(chunks))
+  }
+  return mode
+}
 
 // The gate text a server with `enable-code-of-conduct` sends. The frame's body
 // is one string; the client shows it and answers with an empty packet.
@@ -58,20 +71,41 @@ export function itemStack (itemId, itemCount = 1) {
 // default, so the spike and the other rungs keep the configuration sequence the
 // library writes.
 //
-// `chunks` (default true) makes this server behave like a target that never
-// sends terrain: the join still completes, and no chunk batch or chunk frame
-// follows. Off-line transfers cannot produce that from a real server on demand,
-// and it is the case #87 needs: a client released on such a cache lands in an
-// empty world.
+// `chunks` has three modes. 'full' (the default, and what `true` means) sends
+// one flat chunk in a batch. 'empty' sends the batch's start and finish with no
+// chunk between them: a world with no terrain that still warms a cache, which is
+// what a 26.2 fake can back. `false` sends nothing at all, which makes this
+// server behave like a body that never sends terrain: the join still
+// completes, and no chunk batch or chunk frame follows. Off-line transfers cannot
+// produce that from a real server on demand, and it is the case #87 needs: a
+// client released on such a cache lands in an empty world.
 export async function createFakeBackend ({
   port = 0,
   logStream = process.stdout,
   viewDistance = null,
   codeOfConduct = false,
-  chunks = true
+  // 'full' (the default, and what `true` means) sends one flat chunk in a batch.
+  // 'empty' sends the batch's start and finish with no chunk in it: a world with
+  // no terrain that still warms a cache, and needs no chunk codec. `false` sends
+  // nothing at all, which is the terrain-free body #87 needs.
+  chunks = true,
+  // #258: the protocol the fake speaks. 26.1 by default, because the frozen
+  // spike and every rig that predates the picker run there. A 26.2 fake cannot
+  // serve terrain through prismarine-chunk, so it pairs with `chunks: 'empty'`.
+  version = VERSION,
+  // #258: the pose the join lands the client at. A rung that has to prove WHICH
+  // body a client landed in gives each body its own, so the position the client
+  // received is the body's and not a default two bodies share.
+  spawn = null
 } = {}) {
-  const mcData = minecraftData(VERSION)
-  const Chunk = prismarineChunk(VERSION)
+  if (typeof version !== 'string' || version.length === 0) {
+    throw new TypeError('version must be a protocol version string')
+  }
+  const mcData = minecraftData(version)
+  // prismarine-chunk has no 26.2 implementation, so a 26.2 fake cannot build a
+  // flat chunk. It refuses `chunks: true` rather than serving a world it cannot
+  // serialize, and `chunks: 'empty'` is the mode it can back.
+  const Chunk = chunkModeOf(chunks) === 'full' ? prismarineChunk(version) : null
   const grassState = mcData.blocksByName.grass_block.defaultState
   const stoneState = mcData.blocksByName.stone.defaultState
 
@@ -110,12 +144,12 @@ export async function createFakeBackend ({
     host: '127.0.0.1',
     port,
     'online-mode': false,
-    version: VERSION
+    version
   })
 
   let teleportSeq = 0
   const join = {
-    position: { x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 },
+    position: { x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0, ...(spawn ?? {}) },
     blockChange: null,
     // The view distance this server advertises in its play login, i.e. the cap
     // the puppet must request (#18).
@@ -202,7 +236,8 @@ export async function createFakeBackend ({
     client.write('login', { ...mcData.loginPacket, entityId: 42, viewDistance: join.viewDistance })
     client.write('game_state_change', { reason: 'level_chunks_load_start', gameMode: 0 })
     client.write('position', { teleportId: ++teleportSeq, ...join.position, dx: 0, dy: 0, dz: 0, flags: 0 })
-    if (chunks) {
+    const chunkMode = chunkModeOf(chunks)
+    if (chunkMode === 'full') {
       const chunk = makeFlatChunk()
       const light = chunk.dumpLight()
       client.write('chunk_batch_start', {})
@@ -220,6 +255,9 @@ export async function createFakeBackend ({
         blockLight: light.blockLight
       })
       client.write('chunk_batch_finished', { batchSize: 1 })
+    } else if (chunkMode === 'empty') {
+      client.write('chunk_batch_start', {})
+      client.write('chunk_batch_finished', { batchSize: 0 })
     }
 
     // A real backend sends the player inventory after the join settles. One
