@@ -26,6 +26,7 @@ import {
   readPickAction,
   readServerAction,
   serverActionProblemText,
+  spectateRefusalText,
   serverDialog,
   serverDialogParams,
   verbIdFor,
@@ -74,6 +75,22 @@ test('#257 the label names the state, and the driver when there is one', () => {
   assert.equal(pickerLabel({ name: 'sky', state: 'unclaimed' }), 'sky - unclaimed')
   assert.equal(pickerLabel({ name: 'sky', state: 'claimed', driver: 'Bafbi' }), 'sky - claimed (Bafbi)')
   assert.equal(pickerLabel({}), 'server - down')
+})
+
+// #259: a player choosing a body wants two facts beyond its name: who they would
+// sit beside, and whether they would sit alone. The driver rides in brackets after
+// the state, and the watchers after that, so the three read in the order a player
+// asks them. A row nobody watches says so by saying nothing.
+test('#259 the label names the watchers, and only when somebody is watching', () => {
+  assert.equal(pickerLabel({ name: 'sky', state: 'claimed', driver: 'Bafbi', watchers: 1 }),
+    'sky - claimed (Bafbi), 1 watching')
+  assert.equal(pickerLabel({ name: 'sky', state: 'claimed', driver: 'Bafbi', watchers: 3 }),
+    'sky - claimed (Bafbi), 3 watching')
+  assert.equal(pickerLabel({ name: 'sky', state: 'unclaimed', watchers: 2 }), 'sky - unclaimed, 2 watching')
+  assert.equal(pickerLabel({ name: 'sky', state: 'down', watchers: 0 }), 'sky - down')
+  assert.equal(pickerLabel({ name: 'sky', state: 'down', watchers: null }), 'sky - down')
+  // A count that is not a count is not written into a dialog a player reads.
+  assert.equal(pickerLabel({ name: 'sky', state: 'down', watchers: 'two' }), 'sky - down')
 })
 
 test('#257 a pick answer is the vanilla layout, and it reads back', () => {
@@ -127,6 +144,7 @@ test('#257 rows keep the name the config gave and the slug the wire takes', () =
     name: 'gate-paper:25565',
     state: 'down',
     driver: null,
+    watchers: 0,
     slug: 'gate-paper_25565',
     id: 'monoplayer:pick/gate-paper_25565'
   }])
@@ -267,6 +285,23 @@ test('#266 a verb this lane cannot carry is refused in words that name it', () =
   assert.match(verbRefusalText({ verb: 'claim', server: 'sky' }), /cannot/)
 })
 
+// #259: the sentence a watcher is refused with. Each reason asks the player for
+// something different, so each has its own sentence, and a body nobody drives is
+// no longer among them: a body with no driver is watchable.
+test('#259 every reason a watcher is refused with says what to do about it', () => {
+  assert.match(spectateRefusalText({ reason: 'no_body', server: 'sky' }), /nobody is on sky/)
+  assert.match(spectateRefusalText({ reason: 'no_body', server: 'sky' }), /Claim it/)
+  assert.match(spectateRefusalText({ reason: 'body_not_served', server: 'sky' }), /not serving sky/)
+  assert.match(spectateRefusalText({ reason: 'body_not_warm', server: 'sky' }), /still connecting/)
+  assert.match(spectateRefusalText({ reason: 'body_down', server: 'sky' }), /sky is down/)
+  assert.match(spectateRefusalText({ reason: 'body_down', server: 'sky' }), /Claim it/)
+  assert.match(spectateRefusalText({ reason: 'picker_off', server: 'sky' }), /cannot be watched on this lane/)
+  assert.match(spectateRefusalText({ reason: null }), /cannot be watched right now/)
+  // A watcher is never told the body has no driver, because that is not a refusal.
+  assert.equal(spectateRefusalText({ reason: 'no_claim', server: 'sky' }),
+    'Monoplayer: sky cannot be watched right now.', 'no reason claims a body must be driven first')
+})
+
 // ---- #265: the allowed-server list, and a row's canonical name ----
 
 test('#265 a row is offered under the canonical address its claim dials', () => {
@@ -311,15 +346,15 @@ test('#265 the picker offers the allowed-server list, and says which file answer
   assert.deepEqual(control, {
     source: 'control',
     rows: [
-      { name: 'paper:25565', state: 'down', driver: null },
-      { name: '127.0.0.1:25566', state: 'down', driver: null }
+      { name: 'paper:25565', state: 'down', driver: null, watchers: 0 },
+      { name: '127.0.0.1:25566', state: 'down', driver: null, watchers: 0 }
     ]
   })
 
   // The seed answers when the live file cannot, and the source says so.
   assert.deepEqual(pickerOfferedRows(() => ({ servers: [{ host: 'sky', port: 25565 }], source: 'seed' })), {
     source: 'seed',
-    rows: [{ name: 'sky:25565', state: 'down', driver: null }]
+    rows: [{ name: 'sky:25565', state: 'down', driver: null, watchers: 0 }]
   })
 
   // A lane with no allowed-server key offers nothing, and says that too rather
