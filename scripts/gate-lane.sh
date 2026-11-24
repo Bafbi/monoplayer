@@ -26,11 +26,10 @@
 # in place, so the next up costs the same cold start and nothing else.
 #
 # The lane's two Secrets are its own (#278). up creates gate-<instance>-rcon and
-# gate-<instance>-velocity with random values when they are absent, and down deletes
-# the ones up created, so a first run needs no operator and a stopped lane leaves no
-# Secret behind. An operator's Secret is used as it is and kept: this script never
-# overwrites one and never deletes one. The label up writes on a Secret it generated is
-# what down deletes by, and an operator's Secret carries no label.
+# gate-<instance>-velocity with random values when they are absent. down deletes the
+# ones up created. So a first run needs no operator, and a stopped lane leaves no Secret
+# behind. An operator's Secret is used as it is and kept: this script never overwrites
+# one and never deletes one. down tells the two apart by the label up writes.
 #
 # What it never does: touch the live lane (monoplayer) or the dev lane
 # (monoplayer-dev); delete a workload, a Service or a ConfigMap; or scale paper-hub
@@ -87,9 +86,8 @@ DRIVEN_WORKLOADS="paper paper-conduct"
 
 # The two Secrets a lane reads, in the order up creates them.
 SECRET_ROLES="rcon velocity"
-# The label up stamps on a Secret it generated. down deletes by this selector and by
-# nothing else, so a Secret an operator made carries no label, is never overwritten and
-# is never deleted. One literal, split into the halves a write and a selector need.
+# The label up stamps on a generated Secret, one literal split into the halves a write
+# and a selector need. down deletes by this selector and by nothing else.
 GENERATED_LABEL=app.kubernetes.io/managed-by=gate-lane
 GENERATED_LABEL_KEY=${GENERATED_LABEL%%=*}
 GENERATED_LABEL_VALUE=${GENERATED_LABEL#*=}
@@ -143,23 +141,14 @@ known () {
   return 1
 }
 
-# The key a Deployment takes out of a role's Secret: the three Papers read
+# A role's Secret in two parts, the key and the rows: the three Papers read
 # RCON_PASSWORD out of gate-<instance>-rcon, and Velocity and paper-m4 read
-# PAPER_VELOCITY_SECRET out of gate-<instance>-velocity.
-secret_key () {
+# PAPER_VELOCITY_SECRET out of gate-<instance>-velocity. A row this run wakes without
+# its Secret starts in CreateContainerConfigError, which reads like a slow boot.
+secret_parts () {
   case "$1" in
-    rcon) printf password ;;
-    velocity) printf forwarding-secret ;;
-    *) return 1 ;;
-  esac
-}
-
-# The rows that mount a role's Secret. A row this run wakes without it starts in
-# CreateContainerConfigError, which reads like a slow boot.
-secret_readers () {
-  case "$1" in
-    rcon) printf 'paper paper-conduct paper-m4' ;;
-    velocity) printf 'velocity paper-m4' ;;
+    rcon) printf 'password:paper paper-conduct paper-m4' ;;
+    velocity) printf 'forwarding-secret:velocity paper-m4' ;;
     *) return 1 ;;
   esac
 }
@@ -198,17 +187,17 @@ EOF
   say "created the random Secret $name ($key)"
 }
 
-# The Secrets every row this run wakes reads. A lane that cannot exist without a human
-# is the reason a second lane cannot exist (#278). A Secret that is already there is
-# used as it is, whatever made it, and one line names the ones this run found, because
-# two lines read as two decisions where there was one.
+# The Secrets the rows this run wakes read. A lane that cannot exist without a human is
+# the reason a second lane cannot exist (#278). A Secret that is already there is used as
+# it is, whatever made it, and one line names the ones this run found, because two lines
+# read as two decisions where there was one.
 ensure_secrets () {
-  local waking=$1 role key readers reader name found=''
+  local waking=$1 role parts key readers reader name found=''
   for role in $SECRET_ROLES; do
-    key=$(secret_key "$role") \
+    parts=$(secret_parts "$role") \
       || die "unknown gate Secret role \"$role\": the lane reads $SECRET_ROLES"
-    readers=$(secret_readers "$role") \
-      || die "unknown gate Secret role \"$role\": the lane reads $SECRET_ROLES"
+    key=${parts%%:*}
+    readers=${parts#*:}
     for reader in $readers; do
       case " $waking " in
         *" $reader "*)

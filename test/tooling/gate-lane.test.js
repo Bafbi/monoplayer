@@ -183,24 +183,22 @@ function run (where, args = [], env = {}) {
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
 }
 
-// The Secrets a run generated. The shim keeps the YAML each `apply -f -` was fed,
-// so a case reads the value the run wrote without the run ever printing it.
-function uploads (where) {
-  const file = path.join(where.state, 'secrets.yaml')
-  if (!fs.existsSync(file)) return []
-  return fs.readFileSync(file, 'utf8').split(/^---$/m).filter(block => block.trim()).map(block => ({
-    name: block.match(/^  name: (\S+)$/m)[1],
-    namespace: block.match(/^  namespace: (\S+)$/m)[1],
-    managedBy: block.match(/app\.kubernetes\.io\/managed-by: (\S+)/)?.[1] ?? null,
-    key: block.match(/^stringData:\n  (\S+): /m)[1],
-    value: block.match(/^stringData:\n  \S+: (\S+)$/m)[1]
-  }))
-}
-
-// A run in which no Secret exists, so up has to make every one it needs.
-function generated (where, args, env = {}) {
+// A run in which no Secret exists, so up generates every one its rows read, plus the
+// Secrets it wrote. The shim keeps the YAML each `apply -f -` was fed, so a case reads
+// the value the run generated without the run ever printing it.
+function generatedSecrets (where, args, env = {}) {
   const result = run(where, args, { KUBECTL_SECRET_MISSING: 'all', ...env })
-  return { ...result, made: uploads(where) }
+  const file = path.join(where.state, 'secrets.yaml')
+  const secrets = fs.existsSync(file)
+    ? fs.readFileSync(file, 'utf8').split(/^---$/m).filter(block => block.trim()).map(block => ({
+      name: block.match(/^  name: (\S+)$/m)[1],
+      namespace: block.match(/^  namespace: (\S+)$/m)[1],
+      managedBy: block.match(/app\.kubernetes\.io\/managed-by: (\S+)/)?.[1] ?? null,
+      key: block.match(/^stringData:\n  (\S+): /m)[1],
+      value: block.match(/^stringData:\n  \S+: (\S+)$/m)[1]
+    }))
+    : []
+  return { ...result, secrets }
 }
 
 // The deployments one scale call names, and the count it asks for.
@@ -293,13 +291,11 @@ test('gate:down takes the whole lane to 0 and waits for the pods to go', () => {
   const listings = calls.filter(line => /get pods/.test(line)).length
   assert.ok(listings > gateWorkloads().length, 'the pods are read more than once: ' + listings)
   assert.match(output, /waiting up to 180s for their pods to go/)
-  // The one delete a stop makes is of the Secrets up generated, and it is by label
-  // (#278). No workload, Service or ConfigMap goes: the emptyDir worlds die with
-  // their pods either way.
-  for (const line of calls.filter(call => /\bdelete\b/.test(call))) {
-    assert.match(line, / delete secret -l app\.kubernetes\.io\/managed-by=gate-lane --ignore-not-found$/,
-      'a stop deletes generated Secrets and nothing else: ' + line)
-  }
+  // No workload, Service or ConfigMap is deleted: the emptyDir worlds die with their
+  // pods either way. The one delete a stop makes is of generated Secrets, and it has
+  // its own case below.
+  assert.equal(calls.some(call => / delete (deploy|pod|svc|service|configmap) /.test(call)), false,
+    'nothing but a Secret is deleted: ' + calls.join(' | '))
   assert.match(output, /emptyDir/, 'the task says the world is gone, so a reader expects the cold start')
 })
 
@@ -330,20 +326,20 @@ test('a lane whose Secrets are absent makes random ones, and the value never lea
   // password. paper-m4 reads both Secrets, so it is the one row that makes a run
   // create both.
   const where = space()
-  const { status, output, calls, made } = generated(where, ['up', 'paper-m4'])
+  const { status, output, calls, secrets } = generatedSecrets(where, ['up', 'paper-m4'])
   assert.equal(status, 0, output)
 
-  assert.deepEqual(made.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'])
-  assert.deepEqual(made.map(secret => secret.key).sort(), ['forwarding-secret', 'password'])
-  assert.deepEqual([...new Set(made.map(secret => secret.namespace))], ['monoplayer-gate-b'], 'both land in the lane')
-  for (const secret of made) {
+  assert.deepEqual(secrets.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'])
+  assert.deepEqual(secrets.map(secret => secret.key).sort(), ['forwarding-secret', 'password'])
+  assert.deepEqual([...new Set(secrets.map(secret => secret.namespace))], ['monoplayer-gate-b'], 'both land in the lane')
+  for (const secret of secrets) {
     assert.match(secret.value, /^[0-9a-f]{32}$/, secret.name + ' holds a 16-byte random value')
     // The rule that outranks the ticket: a value reaches neither a log line nor an
     // argv. `create secret --from-literal` would fail both.
     assert.equal(calls.some(line => line.includes(secret.value)), false, secret.name + ' value is in an argv')
     assert.equal(output.includes(secret.value), false, secret.name + ' value is on a printed line')
   }
-  assert.notEqual(made[0].value, made[1].value, 'two Secrets, two values')
+  assert.notEqual(secrets[0].value, secrets[1].value, 'two Secrets, two values')
   assert.match(output, /created the random Secret gate-b-rcon \(password\)/)
   assert.match(output, /created the random Secret gate-b-velocity \(forwarding-secret\)/)
   // Created before the wake: a pod that starts without its Secret sits in
@@ -385,8 +381,8 @@ test('a row this run re-wakes gets the Secret it reads', () => {
   // Secret check follows the wake list: a row scaled to 1 without its Secret starts in
   // CreateContainerConfigError, whether this run asked for it or found it awake.
   const where = space()
-  const { made } = generated(where, ['up', 'paper'], { KUBECTL_AWAKE: 'velocity' })
-  assert.deepEqual(made.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'],
+  const { secrets } = generatedSecrets(where, ['up', 'paper'], { KUBECTL_AWAKE: 'velocity' })
+  assert.deepEqual(secrets.map(secret => secret.name).sort(), ['gate-b-rcon', 'gate-b-velocity'],
     'the awake forwarding row gets its Secret as well')
 })
 
@@ -394,7 +390,7 @@ test('the Secret a lane generates follows the Deployment that reads it', () => {
   // The map: the three Papers take the RCON password, and Velocity and the Paper
   // behind it take the forwarding secret. Generating one nothing reads is a value
   // nobody uses; skipping one a row reads is CreateContainerConfigError.
-  const only = args => generated(space(), args).made.map(secret => secret.name).sort()
+  const only = args => generatedSecrets(space(), args).secrets.map(secret => secret.name).sort()
   assert.deepEqual(only(['up', 'paper']), ['gate-b-rcon'])
   assert.deepEqual(only(['up', 'paper-conduct']), ['gate-b-rcon'])
   assert.deepEqual(only(['up', 'velocity']), ['gate-b-velocity'])
@@ -407,17 +403,17 @@ test('the Secrets the lane generates are the two its Deployments mount', () => {
   const mounted = [...new Set(driverManifests().flatMap(({ text }) =>
     [...text.matchAll(/secretKeyRef:\n\s+name: (gate-b-\S+)\n\s+key: (\S+)/g)].map(match => match[1] + ' ' + match[2])))]
   assert.deepEqual(mounted.sort(), ['gate-b-rcon password', 'gate-b-velocity forwarding-secret'], 'the tree mounts these two')
-  const made = generated(space(), ['up', 'paper-m4']).made.map(secret => secret.name + ' ' + secret.key).sort()
-  assert.deepEqual(made, mounted, 'the generated pair is exactly the mounted pair')
+  const generated = generatedSecrets(space(), ['up', 'paper-m4']).secrets.map(secret => secret.name + ' ' + secret.key).sort()
+  assert.deepEqual(generated, mounted, 'the generated pair is exactly the mounted pair')
 })
 
 test('gate:down deletes the Secrets it generated, and a hand-made one is out of its reach', () => {
   // The label up writes is the selector down deletes by, so an operator's Secret
   // carries no label, is never overwritten, and is never deleted.
   const where = space()
-  const { made } = generated(where, ['up', 'paper-m4'])
-  assert.ok(made.length > 0, 'the lane generated its Secrets')
-  for (const secret of made) {
+  const { secrets } = generatedSecrets(where, ['up', 'paper-m4'])
+  assert.ok(secrets.length > 0, 'the lane generated its Secrets')
+  for (const secret of secrets) {
     assert.equal(secret.managedBy, 'gate-lane', secret.name + ' is marked as this script\'s')
   }
 
@@ -656,9 +652,9 @@ test('a renamed lane generates its own Secrets, and nothing it writes names gate
   // Secrets this lane makes have to carry the same instance, or the lane the render
   // describes starts in CreateContainerConfigError on a Secret it never reads.
   const where = space()
-  const { made } = generated(where, ['up', 'paper-m4'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
-  assert.deepEqual(made.map(secret => secret.name).sort(), ['gate-x-rcon', 'gate-x-velocity'])
-  assert.deepEqual([...new Set(made.map(secret => secret.namespace))], ['monoplayer-gate-x'])
+  const { secrets } = generatedSecrets(where, ['up', 'paper-m4'], { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-x' })
+  assert.deepEqual(secrets.map(secret => secret.name).sort(), ['gate-x-rcon', 'gate-x-velocity'])
+  assert.deepEqual([...new Set(secrets.map(secret => secret.namespace))], ['monoplayer-gate-x'])
   assert.doesNotMatch(fs.readFileSync(path.join(where.state, 'secrets.yaml'), 'utf8'), /gate-b/,
     'the write names this lane only')
 })
