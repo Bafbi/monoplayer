@@ -11,15 +11,15 @@
 # digest pins before any longer-lived lane.
 #
 # The forwarding secret is never a manifest or ConfigMap value: pods read it
-# from the `gate-b-velocity` Secret, which `gate:up` creates when it is absent
+# from the `gate-__instance__-velocity` Secret, which `gate:up` creates when it is absent
 # (README, "One tree, one lane, one value").
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: gate-b-velocity-config
-  namespace: monoplayer-gate-b
+  name: gate-__instance__-velocity-config
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-velocity
+    app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
     app.kubernetes.io/part-of: monoplayer
 data:
   # Velocity 4.3.1 default template (config-version 2.9, from PaperMC/Velocity
@@ -48,9 +48,9 @@ data:
     # Modern forwarding is the M4 pass path (plan M4).
     player-info-forwarding-mode = "modern"
 
-    # Secret mounted from the gate-b-velocity Kubernetes Secret; absolute path
+    # Secret mounted from the gate-__instance__-velocity Kubernetes Secret; absolute path
     # so the image's auto-generated /server/forwarding.secret fallback is never read.
-    forwarding-secret-file = "/run/secrets/gate-b-velocity/forwarding-secret"
+    forwarding-secret-file = "/run/secrets/gate-__instance__-velocity/forwarding-secret"
 
     announce-forge = false
     kick-existing-players = false
@@ -112,9 +112,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: velocity
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-velocity
+    app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
     app.kubernetes.io/part-of: monoplayer
 spec:
   # 0 at rest: `mise run gate:up` wakes this, and `gate:down` puts it back (#115).
@@ -123,11 +123,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: monoplayer-gate-b-velocity
+      app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: monoplayer-gate-b-velocity
+        app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
         app.kubernetes.io/part-of: monoplayer
     spec:
       containers:
@@ -179,20 +179,20 @@ spec:
               mountPath: /config
               readOnly: true
             - name: forwarding-secret
-              mountPath: /run/secrets/gate-b-velocity
+              mountPath: /run/secrets/gate-__instance__-velocity
               readOnly: true
       volumes:
         - name: server
           emptyDir: {}
         - name: config
           configMap:
-            name: gate-b-velocity-config
+            name: gate-__instance__-velocity-config
             items:
               - key: velocity.toml
                 path: velocity.toml
         - name: forwarding-secret
           secret:
-            secretName: gate-b-velocity
+            secretName: gate-__instance__-velocity
             items:
               - key: forwarding-secret
                 path: forwarding-secret
@@ -201,14 +201,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: velocity
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-velocity
+    app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
     app.kubernetes.io/part-of: monoplayer
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-velocity
+    app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
   ports:
     - name: minecraft
       port: 25566
@@ -222,17 +222,17 @@ apiVersion: v1
 kind: Service
 metadata:
   name: velocity-m4
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-velocity
+    app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
     app.kubernetes.io/part-of: monoplayer
   annotations:
-    tailscale.com/hostname: monoplayer-gate-b-velocity
+    tailscale.com/hostname: monoplayer-gate-__instance__-velocity
 spec:
   type: LoadBalancer
   loadBalancerClass: tailscale
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-velocity
+    app.kubernetes.io/name: monoplayer-gate-__instance__-velocity
   ports:
     - name: minecraft
       port: 25565
