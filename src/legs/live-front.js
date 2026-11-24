@@ -21,9 +21,11 @@
 //      BEFORE our synchronous beforeLogin hook runs). Offline: the library
 //      sets client.uuid to the vanilla offline UUID (MD5 of
 //      "OfflinePlayer:<name>").
-//   2. beforeLogin (synchronous; createServer option): deny a second attach
-//      before any verification, then run the core login decision (fail closed)
-//      and the mode's check. Deny = client.end('attach denied (...)'): the
+//   2. beforeLogin (synchronous; createServer option): run the core login decision
+//      (fail closed) and the mode's check. A second client is not denied here: a lane
+//      that offers a picker sends it to the picker, where the claim refuses it, and a
+//      lane with no picker lets the session answer `already_attached` at the attach
+//      (#269). Deny = client.end('attach denied (...)'): the
 //      Server.end override writes the login-state disconnect then ends the
 //      serializer chain, so the library's follow-up compress/success writes in
 //      loginClient are mechanically dropped (client.write no-ops on an ended
@@ -64,9 +66,11 @@
 //      belongs to the front leg (omitted via the join-synth option).
 //   5. serverbound play frames (raw buffer + decoded data) go to the core's
 //      setServerboundHandler pipeline; client end/error go to the core detach.
-//   6. the client's Client Information (`settings`) is reported to the core as
-//      it arrives, in configuration or play (#18). The core owns what the
-//      backend sees: the human's fields with the backend's view distance cap.
+//   6. a client's Client Information (`settings`) is recorded on its own channel as
+//      it arrives (#269). Only the driver's is reported to the core, and only outside
+//      play (#18): a play-state change travels the serverbound pipeline, and a
+//      spectator's settings reach nothing. The core owns what the backend sees: the
+//      driver's fields with the backend's view distance cap.
 //   7. #22: the core may ask the attached client to re-enter configuration on
 //      the same connection (`startReconfiguration`). The leg writes the
 //      play-state `start_configuration` and holds the core's configuration
@@ -933,6 +937,18 @@ function createFrontLeg ({
     return typeof id === 'string' ? clientByChannel.get(id) ?? null : null
   }
 
+  // One clientbound write, to every channel on the body or to one of them. The two
+  // callers differ only in what they hand a client, so the addressing and the count of
+  // deliveries live here (#269).
+  function deliverEach (channel, deliver) {
+    if (channel !== null) return deliver(clientOfChannel(channel)) ? 1 : 0
+    let sent = 0
+    for (const target of deliveryTargets()) {
+      if (deliver(target.client)) sent++
+    }
+    return sent
+  }
+
   // The socket that drives the body this leg serves. A reconfiguration and the
   // wire's one-start-per-round are the driver's; a spectator is handed the result
   // like any other body stream.
@@ -1220,14 +1236,10 @@ function createFrontLeg ({
       endConfiguration(client, 'claim_refused', claimed.text)
       return
     }
-    if (action.verb === 'spectate') {
-      // #269: watching a body that already has a session. Nothing is dialled, and
-      // the body is not the client's: who may spectate, and what a spectator is
-      // shown, is #259. The seam is the channel.
-      landSpectatingBody(client, server)
-      return
-    }
-    // A verb no lane carries yet is read, reported, and refused in words that name it.
+    // #269: `spectate` is refused here in words, and the delivery it will use exists
+    // below (`spectate`). What a spectator is told, whether an unclaimed body may be
+    // watched, and what the picker shows about watchers are #259's, so this verb does
+    // not answer for them.
     endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
   }
 
@@ -1368,77 +1380,67 @@ function createFrontLeg ({
     if (ctx) ctx.picker = false
   }
 
-  // #269: the answer to Spectate, on a body that is already up. The core owns the
-  // body, so it answers whether this row names the one it serves; the leg then opens
-  // the client's spectator channel and continues its own configuration phase with
-  // that body's frames, exactly as a landing does. A body this lane cannot watch is
-  // answered in words that say which of the three reasons it hit, because "claim it
-  // first", "wait" and "this lane is not serving it" ask for different things.
-  function landSpectatingBody (client, server) {
+  // #269: land a client this leg holds in a body as that body's spectator. The core
+  // owns the body, so it answers whether the body this call names is the one it
+  // serves; the leg then opens the client's spectator channel and continues its own
+  // configuration phase with that body's frames, exactly as a landing does. Nothing
+  // is asked of the client and nothing is sent to it on a refusal: the call answers
+  // with the sentence to give it, and the caller that asked (the picker's Spectate,
+  // #259) decides how to say it. Three reasons have three sentences, because "claim
+  // it first", "wait" and "this lane is not serving it" ask for different things.
+  function landSpectator (client, { body = null, server = null } = {}) {
+    const named = server ?? body
     const answer = spectateBodyHandler === null
       ? { watching: false, reason: 'no_spectator_sink' }
-      : spectateBodyHandler({
-        body: server.slug,
-        server: server.name,
-        name: client.username ?? null
-      })
-    log('pickerSpectate', {
-      username: client.username ?? null,
-      uuid: client.uuid ?? null,
-      body: server.slug,
-      server: server.name,
-      watching: answer?.watching === true,
-      reason: answer?.reason ?? null
+      : spectateBodyHandler({ body, server: named, name: client.username ?? null })
+    const refused = reason => ({
+      watching: false,
+      reason,
+      text: spectateRefusalText({ server: named, reason })
     })
     if (answer?.watching !== true) {
       metrics.pickerRefusals++
-      endConfiguration(client, 'spectate_refused', spectateRefusalText({
-        server: server.name,
-        reason: answer?.reason ?? null
-      }))
-      return
+      const outcome = refused(answer?.reason ?? 'unwatchable')
+      log('spectateRefused', {
+        username: client.username ?? null,
+        body,
+        server: named,
+        reason: outcome.reason,
+        text: outcome.text
+      })
+      return outcome
     }
     const channel = openChannel(client, {
       role: CHANNEL_ROLES.SPECTATOR,
-      body: typeof answer.body === 'string' ? answer.body : server.slug
+      body: typeof answer.body === 'string' ? answer.body : body
     })
-    if (channel === null) {
-      metrics.pickerRefusals++
-      endConfiguration(client, 'spectate_refused', spectateRefusalText({
-        server: server.name,
-        reason: 'channel_refused'
-      }))
-      return
-    }
+    if (channel === null) return refused('channel_refused')
     const sent = sendBodyConfiguration(client)
     if (sent.frames === 0) {
-      metrics.pickerRefusals++
       closeChannel(client)
-      endConfiguration(client, 'spectate_refused', spectateRefusalText({
-        server: server.name,
-        reason: 'no_cached_configuration'
-      }))
-      return
+      return refused('no_cached_configuration')
     }
     leavePicker(client)
     metrics.spectateLandings++
-    log('pickerSpectateLanded', {
+    log('spectateLanded', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
+      channel: channel.id,
       body: channel.body,
-      server: server.name,
+      server: named,
       frames: sent.written
     })
     try {
       client.write('finish_configuration', {})
     } catch (error) {
-      log('pickerSpectateFinishFailed', {
+      log('spectateFinishFailed', {
         body: channel.body,
-        server: server.name,
+        server: named,
         error: String(error?.message ?? error).slice(0, 200)
       })
-      endConfiguration(client, 'spectate_refused', spectateRefusalText({ server: server.name }))
+      return refused('finish_failed')
     }
+    return { watching: true, reason: null, text: null, channel: channel.id, body: channel.body, frames: sent.written }
   }
 
   // #269: a body's own configuration frames, in the phase the baseline opened and
@@ -1616,9 +1618,13 @@ function createFrontLeg ({
       client.end(`attach denied (${outcome.reason})`)
       return
     }
-    // The core just replayed the body's play state on this socket, so this channel
-    // has been handed its one replay.
-    if (channel !== null) channels.markReplay(channel.id)
+    // The core just replayed the body's play state on this socket, so this channel has
+    // been handed its one replay. A client the session accepted without a channel —
+    // its login was admitted while another connection still held the body, and that
+    // connection failed before the core answered this one — gets its channel here, or
+    // the replay would have been written to no socket at all.
+    const held = channelFor(client) ?? openChannel(client, { role: CHANNEL_ROLES.DRIVER })
+    if (held !== null) channels.markReplay(held.id)
     metrics.attaches++
     log('attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })
   }
@@ -1987,24 +1993,32 @@ function createFrontLeg ({
     // waiting for an answer nobody sends.
     setSpectateBody (fn) { spectateBodyHandler = typeof fn === 'function' ? fn : null },
     setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
+    // #269: land one of this leg's connections in a body as its spectator, and answer
+    // with what happened. The player is named rather than the socket because the
+    // caller is the lane's, not the socket's: #259 wires the picker's Spectate to
+    // this, and a rung stands in for it until then. A refusal carries the sentence for
+    // the client, so the surface that shows it stays the caller's to decide.
+    spectate ({ username = null, body = null, server = null } = {}) {
+      const client = typeof username === 'string'
+        ? [...clients.keys()].find(entry => entry.username === username) ?? null
+        : null
+      if (client === null) {
+        return {
+          watching: false,
+          reason: 'no_client',
+          text: spectateRefusalText({ server: server ?? body })
+        }
+      }
+      return landSpectator(client, { body, server })
+    },
     // #269: a clientbound write goes to the body's channels: its driver, and every
     // spectator watching that body. `channel` addresses one of them, which is what a
     // spectator's own replay uses so the driver is never handed it twice.
     write (name, packet, { channel = null } = {}) {
-      if (channel !== null) return writePacketTo(clientOfChannel(channel), name, packet)
-      let sent = 0
-      for (const target of deliveryTargets()) {
-        if (writePacketTo(target.client, name, packet)) sent++
-      }
-      return sent > 0
+      return deliverEach(channel, client => writePacketTo(client, name, packet)) > 0
     },
     writeRaw (buffer, meta = null, { channel = null } = {}) {
-      if (channel !== null) return writeRawTo(clientOfChannel(channel), buffer, meta)
-      let sent = false
-      for (const target of deliveryTargets()) {
-        if (writeRawTo(target.client, buffer, meta)) sent = true
-      }
-      return sent
+      return deliverEach(channel, client => writeRawTo(client, buffer, meta)) > 0
     },
     end (reason) {
       // A body that ends ends every channel watching it: the driver and its

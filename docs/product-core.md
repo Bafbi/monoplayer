@@ -393,11 +393,12 @@ listing the lane's allowed servers.
 - **A verb is read, reported, then answered (#266).** Claim, spectate and
   disconnect all act on a body. `claim` records the claim (#267), and
   `disconnect` is honoured: the client goes, and its configuration `disconnect`
-  frame says which server it left. `spectate` is a channel on a body that already
-  has a session (#269): the core answers whether this row names the body it serves,
-  and the client is handed that body's play state on its own channel. A body with no
-  claim, a row naming another body, and a body still connecting are three refusals
-  with three sentences, because they ask the client for three different things.
+  frame says which server it left. `spectate` is refused in words here, and the
+  delivery it will use exists (#269): a body's play state, on that client's own
+  channel, with the core answering whether the row names the body it serves. A body
+  with no claim, a row naming another body, and a body still connecting are three
+  refusals with three sentences. What a spectator is told, whether an unclaimed body
+  may be watched, and what the picker shows about watchers are #259's.
 - **An unreadable answer is refused, never guessed at (#266).** `readServerAction`
   returns a reason rather than a null: `not_a_click`, `unknown_id`, `malformed` or
   `unknown_verb`. `serverActionProblemText` turns that reason into one sentence
@@ -414,8 +415,9 @@ listing the lane's allowed servers.
   refused with `backend_not_ready`, exactly as before.
 
 What a spectator is shown, and who may spectate, is #259. #269 builds only the
-seam: a body's frames go to every channel on it, and a channel is not a driver by
-default.
+seam: a body's frames go to every channel on it, a channel is not a driver by
+default, and `frontLeg.spectate({ username, body })` lands a client as a spectator.
+#259 wires the picker's Spectate to it.
 
 The gate for the whole epic is answered at rung 2 by `O55`, `O56` and `O56b`. A
 26.2 client reads the recording, gets the dialog, and clicks one action. It then
@@ -842,12 +844,14 @@ frontLeg = {                      // a body's channels: its driver and its spect
   setConfiguringHandler(({ name }) => {})     // -> createMonoplayer().configuringReady
                                               //    the client entered its own configuration
                                               //    phase (#16)
-  setSpectateBody({ body, server, name })     // optional (#269):
-                                              //    -> createMonoplayer().spectateBody
-                                              //    may this client watch the body it named
-  setSpectatorAttach({ name, channel })       // optional (#269):
-                                              //    -> createMonoplayer().spectateView
-                                              //    the body's play state, on that one channel
+  setSpectateBody(fn)                         // optional (#269): registers
+                                              //    fn({ body, server, name }) ->
+                                              //    createMonoplayer().spectateBody, which
+                                              //    answers whether the body may be watched
+  setSpectatorAttach(fn)                      // optional (#269): registers
+                                              //    fn({ name, channel }) ->
+                                              //    createMonoplayer().spectateView, the
+                                              //    body's play state on that one channel
   write(name, packet, { synth, channel }), writeRaw(buffer, meta, { channel })
   end(reason)                     // deny/kick/close, to every channel
 }
