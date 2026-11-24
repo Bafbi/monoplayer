@@ -36,7 +36,7 @@ pod, and Paper downloads its server and writes a flat one again. The 240-310 s i
 is already up and restarts with the observer plugin, and `observer:run` owns it.
 
 `gate:down` deletes the Secrets `gate:up` generated, so a stopped lane leaves no value
-behind. The Deployments, the Services, the ConfigMaps and any Secret an operator made
+behind. The Deployments, the Services, the ConfigMaps and every operator's Secret
 survive, and the next `up` costs the same cold start and nothing else.
 
 `gate:up` wakes `paper` and `paper-conduct`, the two rows a rung drives. Name the
@@ -87,21 +87,21 @@ Two boundaries to keep in mind.
 
 The lane makes its own Secrets. `gate:up` creates `gate-<instance>-rcon` (key
 `password`) and `gate-<instance>-velocity` (key `forwarding-secret`) with random values
-when they are absent, and only for the rows it wakes: the three Papers take the RCON
-password, and Velocity and the Paper behind it take the forwarding secret.
+when they are absent. It creates only the ones the rows it wakes read. The three Papers
+read the RCON password, and Velocity and the Paper behind it read the forwarding secret.
 `gate:down` deletes the Secrets this lane generated, and only those.
 
-A Secret that already exists is used as it is, whatever made it. This script never
+`gate:up` uses an operator's Secret as it is, whatever wrote it. This script never
 overwrites one, and `gate:up` says once per run which ones it found. A generated Secret
-carries the label `app.kubernetes.io/managed-by: gate-lane`, which is the selector
-`gate:down` deletes by; a Secret an operator made carries no such label, so it survives
-every `down`. To have a lane regenerate its Secrets, delete them and run `gate:up`.
+carries the label `app.kubernetes.io/managed-by: gate-lane`. `gate:down` deletes by that
+label, and an operator's Secret carries none, so it survives every `down`. To make a
+lane generate new Secrets, delete the old ones and run `gate:up`.
 
 `paper-hub` and `paper-sky` from `deploy/testbed` live in `monoplayer-gate-b` beside
 this lane. They belong to the transfer testbed. A lane on another instance does not
 take them with it, and nothing here scales them. Both read `gate-b-rcon` from this
-namespace, so a `gate:down` that removed a generated one leaves them without it until
-the next `gate:up`; the testbed owns its own Secret, not this lane.
+namespace. A `gate:down` that removes a generated `gate-b-rcon` therefore leaves them
+without one until the next `gate:up`. The testbed owns its own Secret, not this lane.
 
 ## Names this tree does not rename
 
@@ -116,7 +116,7 @@ Each needs its own migration step:
 |---|---|---|
 | namespace `monoplayer-gate-b` | every manifest here | create the new namespace, re-apply, delete the old |
 | labels `app.kubernetes.io/name: monoplayer-gate-b-*` | every manifest here | selector change: recreate the workloads |
-| Secrets `gate-b-rcon`, `gate-b-velocity` | cluster only | a new instance generates its own; copy a hand-made value only to keep a password |
+| Secrets `gate-b-rcon`, `gate-b-velocity` | cluster only | a new instance generates its own. Copy an operator's Secret only to keep a password |
 | Tailscale hostnames `monoplayer-gate-b-paper`, `-velocity` | Services with annotations | republish under a new hostname |
 | server motd `Monoplayer Gate B` | `velocity.yaml` | a config value players see |
 | Prism instances `gate-b-player`, `gate-b-player-fabric` | display host | clone into a new instance id |
