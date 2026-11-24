@@ -11,7 +11,8 @@
 # digest pins before any longer-lived lane.
 #
 # The forwarding secret is never a manifest or ConfigMap value: pods read it
-# from the `gate-b-velocity` Secret (created by the operator; README "Secrets").
+# from the `gate-b-velocity` Secret, which `gate:up` creates when it is absent
+# (README, "One tree, one lane, one value").
 apiVersion: v1
 kind: ConfigMap
 metadata:
