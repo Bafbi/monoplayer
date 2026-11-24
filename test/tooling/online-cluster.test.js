@@ -280,7 +280,8 @@ test('an expired lease is taken without asking', () => {
   assert.equal(status, 0, output)
   const written = leasesWritten(space)
   assert.equal(written.length, 2, 'taken and released: ' + JSON.stringify(written))
-  assert.match(written[0].spec.holderIdentity, /^monoplayer-gate-\S+ on \S+ \(pid \d+\)$/)
+  // The branch may be `detached at <sha>`, which has spaces: CI checks out a merge.
+  assert.match(written[0].spec.holderIdentity, /^monoplayer-gate-\S+ on .+ \(pid \d+\)$/)
   assert.equal(written[0].spec.leaseTransitions, 2, 'a takeover of a dead holder is a transition')
   assert.equal(written[1].spec.holderIdentity, '', 'released on the way out')
   assert.ok(calls.some(line => line.includes('online.js')), 'the rung ran: ' + calls.join(' | '))
