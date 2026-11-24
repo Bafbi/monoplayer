@@ -1110,7 +1110,7 @@ function createFrontLeg ({
 
   // #267: one claim, recorded where the client answers. The refusal carries the
   // claim that stands in the way, and the sentence for it, so the caller answers
-  // the client and this stays the one place a claim is taken.
+  // the client and this stays the one place a claim is recorded.
   function recordClaim (client, server) {
     const outcome = claims.claim({
       body: server.slug,
@@ -1136,7 +1136,7 @@ function createFrontLeg ({
       reason: outcome.reason,
       server: server.name,
       holder: outcome.claim?.name ?? null,
-      driving: outcome.reason === CLAIM_REFUSAL.HELD ? outcome.claim?.server ?? null : null
+      claimed: outcome.reason === CLAIM_REFUSAL.HELD ? outcome.claim?.server ?? null : null
     })
     log('pickerClaimRefused', { ...fields, text })
     return { ...outcome, text }
@@ -1510,8 +1510,8 @@ function createFrontLeg ({
     },
     get listening () { return Boolean(server) },
     get attached () { return attached ?? null },
-    // #267: the claims this leg holds, as the driver of each body. A lane that
-    // never serves a picker never records one, so this stays empty there.
+    // #267: the claims this leg holds, one per body. A lane that never serves a
+    // picker never records one, so this stays empty there.
     get claims () { return claims.snapshot() },
     // The window's own numbers are read live, so the leg keeps no copy of a count
     // the policy already holds.

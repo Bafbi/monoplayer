@@ -304,14 +304,14 @@ listing the lane's allowed servers.
   counts the join as `attach_picker`, not as a denial. A pick is recorded and the
   client is shown that server's own dialog. The answer to it is recorded too.
 - **The claim is recorded at the pick, not at login (#267).** The client that
-  clicks `Claim` takes the body the frame names, and `src/core/claims.js` records
+  clicks `Claim` claims the body the frame names, and `src/core/claims.js` records
   it. Two rules hold. A body carries one claim. A connection carries one claim. A
   second claim on a claimed body is refused with one sentence naming the player who
-  holds it, so two people never share a body's controls. The holder is the connection, so the
-  claim ends when that connection ends and a client that never clicks `Claim` holds
-  nothing. The old attach slot keeps what it had: the claim decides who may drive a
-  body, the slot decides who is delivered one, and #269 deletes the slot once a
-  channel holds delivery.
+  holds it, so two people never share a body's controls. The holder is the
+  connection, so the claim ends when that connection ends. A client that never
+  clicks `Claim` therefore holds nothing. The old attach slot keeps what it had:
+  the claim decides who may own a body, the slot decides who is delivered one, and
+  #269 deletes the slot once a channel holds delivery.
 - **A claim is not a delivery (#267).** The claiming client stays in the
   configuration phase with its dialog, because a claim has no channel to deliver a
   body through. That is the state #269 and #260 change, and it is why a pick on this
