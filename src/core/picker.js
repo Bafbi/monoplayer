@@ -1,8 +1,10 @@
 // The picker's dialog and its answer (#257).
 //
 // The picker is a dialog the front shows a joining client during the
-// configuration phase, when no backend is connected. Two halves, and neither is
-// a socket: the dialog the front sends, and the click the front reads back.
+// configuration phase, when no backend is connected. Two levels (#257, #266) and
+// two clicks, and none of it is a socket: the dialog the front sends and the click
+// it reads back, at the level that names a server, then at the level that names a
+// verb on that server.
 //
 // Where the pick rides. The vanilla answer frame is
 //   Identifier id, lengthPrefixed(optional anonymous NBT) payload
@@ -27,6 +29,14 @@
 import { decodeVarInt, encodeVarInt } from './client-settings.js'
 
 export const PICK_NAMESPACE = 'monoplayer:pick'
+// #266: the second level's verbs. One namespace per verb, not one namespace with
+// the verb inside it: with the verb in the path (`monoplayer:pick/<slug>/claim`),
+// `readPickAction` above returns a pick of a server called `<slug>/claim`, and the
+// two levels are told apart only by splitting a slug. One namespace per verb keeps
+// a level-one answer and a level-two answer distinguishable at the first field.
+export const PICK_VERBS = ['claim', 'spectate', 'disconnect']
+const VERB_NAMESPACE = 'monoplayer:'
+const VERB_LABELS = { claim: 'Claim', spectate: 'Spectate', disconnect: 'Disconnect' }
 export const PICK_DIALOG_TYPE = 'minecraft:multi_action'
 export const PICK_ACTION_TYPE = 'minecraft:dynamic/custom'
 // The configuration-state packet id of `custom_click_action`. The play state
@@ -118,10 +128,11 @@ export function pickerDialogParams (options) {
   return { dialog: pickerDialog(options) }
 }
 
-// Read the pick out of a serverbound `custom_click_action` frame, in the vanilla
-// layout the client actually sends. Returns null for a frame that is not one, so
-// a caller cannot mistake an unrelated click for a pick.
-export function readPickAction (buffer) {
+// The identifier out of a serverbound `custom_click_action`, in the vanilla layout
+// the client actually sends: packet id, then a length-prefixed identifier, then a
+// length-prefixed optional tag this module never reads. Null for a frame that is
+// not one, so no caller can mistake an unrelated click for an answer.
+export function readActionId (buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 3) return null
   // The one VarInt reader in core (src/core/client-settings.js), so this parse
   // and the encoder that built the frame cannot drift.
@@ -132,16 +143,113 @@ export function readPickAction (buffer) {
   const start = id.bytes + length.bytes
   const end = start + length.value
   if (end > buffer.length) return null
-  let identifier
   try {
-    identifier = buffer.toString('utf8', start, end)
+    return buffer.toString('utf8', start, end)
   } catch {
     return null
   }
-  if (!identifier.startsWith(PICK_NAMESPACE + '/')) return null
+}
+
+// Read the pick out of a serverbound `custom_click_action` frame. Returns null for
+// a frame that is not one, so a caller cannot mistake an unrelated click for a pick.
+export function readPickAction (buffer) {
+  const identifier = readActionId(buffer)
+  if (identifier === null || !identifier.startsWith(PICK_NAMESPACE + '/')) return null
   const slug = identifier.slice(PICK_NAMESPACE.length + 1)
   if (slug.length === 0) return null
   return { id: identifier, slug }
+}
+
+// #266: the second level. A clicked server opens its own dialog, and each button
+// answers with a verb and the server it belongs to. The server is in the id, never
+// in a connection's memory: the same frame the client sends says which dialog it
+// came from and which server it names, so a leg that lost its state cannot act on
+// the wrong server and nothing has to be kept in step with two clients at once.
+export function verbIdFor (verb, name) {
+  if (!PICK_VERBS.includes(verb)) {
+    throw new TypeError('verb must be one of ' + PICK_VERBS.join(', ') + ', got ' + JSON.stringify(verb))
+  }
+  return VERB_NAMESPACE + verb + '/' + pickSlug(name)
+}
+
+// The chosen server's own dialog: claim, spectate, disconnect. Same shape as the
+// picker's, for the same reason (see the button-list note in `pickerDialog`), and
+// the title carries the words the picker's button carried.
+export function serverDialog ({ server = {}, title = null } = {}) {
+  const label = pickerLabel(server)
+  const buttons = PICK_VERBS.map(verb => ({
+    label: textComponent(VERB_LABELS[verb]),
+    width: { type: 'int', value: 200 },
+    action: {
+      type: 'compound',
+      value: {
+        type: { type: 'string', value: PICK_ACTION_TYPE },
+        id: { type: 'string', value: verbIdFor(verb, server.name) }
+      }
+    }
+  }))
+  return {
+    type: 'compound',
+    name: '',
+    value: {
+      type: { type: 'string', value: PICK_DIALOG_TYPE },
+      title: textComponent(title === null ? label : title),
+      can_close_with_escape: { type: 'byte', value: 0 },
+      columns: { type: 'int', value: 1 },
+      actions: { type: 'list', value: { type: 'compound', value: buttons } }
+    }
+  }
+}
+
+export function serverDialogParams (options) {
+  return { dialog: serverDialog(options) }
+}
+
+// Read a click on a server's dialog. Unlike `readPickAction`, a refusal is a
+// result, not a null: the ticket requires the client to be told what was wrong,
+// and a sentence needs to know whether the verb was unknown, the id was someone
+// else's, or a server was missing. `ok: true` is the only case a caller acts on.
+export function readServerAction (buffer) {
+  const id = readActionId(buffer)
+  if (id === null) return { ok: false, reason: 'not_a_click', id: null, verb: null, slug: null }
+  if (!id.startsWith(VERB_NAMESPACE)) return { ok: false, reason: 'unknown_id', id, verb: null, slug: null }
+  const rest = id.slice(VERB_NAMESPACE.length)
+  const slash = rest.indexOf('/')
+  if (slash < 0) return { ok: false, reason: 'malformed', id, verb: rest, slug: null }
+  const verb = rest.slice(0, slash)
+  const slug = rest.slice(slash + 1)
+  if (verb.length === 0 || slug.length === 0) {
+    return { ok: false, reason: 'malformed', id, verb, slug }
+  }
+  if (!PICK_VERBS.includes(verb)) return { ok: false, reason: 'unknown_verb', id, verb, slug }
+  return { ok: true, reason: null, id, verb, slug }
+}
+
+// What is wrong with a refused click, as one sentence a log and a client can both
+// carry. It names the id and the part that did not read.
+export function serverActionProblemText (action) {
+  const id = action?.id === null || action?.id === undefined ? 'the answer' : '"' + action.id + '"'
+  switch (action?.reason) {
+    case 'unknown_verb':
+      return 'Monoplayer: the answer ' + id + ' names the verb "' + action.verb +
+        '", which this dialog does not offer. It offers claim, spectate and disconnect.'
+    case 'unknown_id':
+      return 'Monoplayer: the answer ' + id + ' is not a Monoplayer action.'
+    case 'malformed':
+      return 'Monoplayer: the answer ' + id + ' names no server.'
+    default:
+      return 'Monoplayer: the answer is not a dialog click this lane can read.'
+  }
+}
+
+// A verb this lane reads and cannot carry yet. `disconnect` is the one verb the
+// dialog layer can honour, so it is not refused here: the client leaves, and the
+// frame that ends its configuration says it left (#266). Claim and spectate act on
+// a body, and no body is connected from this phase until #267.
+export function verbRefusalText ({ verb = null, server = null } = {}) {
+  const named = server === null ? 'that server' : server
+  const asked = verb === null ? 'that' : verb
+  return 'Monoplayer: ' + named + ' was asked for ' + asked + ', and this lane cannot carry a ' + asked + ' yet.'
 }
 
 // The frame the picker's answer rides in, built for the front's own tests and
@@ -159,10 +267,19 @@ export function buildPickAnswer ({ name } = {}) {
   ])
 }
 
-// What the client is told after a pick, until a pick lands somewhere. #267 is
-// the ticket that makes a pick connect a body. Until it lands there is nothing to
-// enter, and a client left staring at a dialog is worse than one that is told
-// why it cannot.
+// What the client is told when the picker cannot go on: no servers to offer, or no
+// baseline to serve. It is not what a pick gets any more — a pick that names an
+// offered server opens that server's dialog (#266) — and it is still the sentence
+// for a lane that cannot enter a body at all. #267 is the ticket that makes a
+// claim connect one.
+// A pick naming a server the lane does not offer. The dialog on screen may be a
+// moment older than the list, so the sentence says which id did not match rather
+// than repeating the list.
+export function pickUnknownText ({ id = null } = {}) {
+  const named = id === null ? 'that answer' : '"' + id + '"'
+  return 'Monoplayer: ' + named + ' names no server this lane offers.'
+}
+
 export function pickRefusalText ({ server = null } = {}) {
   const named = server === null ? 'that server' : server
   return 'Monoplayer: ' + named + ' was recorded, but this lane cannot connect a body yet.'

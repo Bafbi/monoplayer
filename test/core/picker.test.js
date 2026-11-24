@@ -8,7 +8,9 @@ import assert from 'node:assert/strict'
 
 import {
   PICK_ACTION_TYPE,
+  PICK_DIALOG_TYPE,
   PICK_NAMESPACE,
+  PICK_VERBS,
   buildPickAnswer,
   pickIdFor,
   pickRefusalText,
@@ -17,8 +19,15 @@ import {
   pickerDialogParams,
   pickerLabel,
   pickerRows,
-  readPickAction
+  readPickAction,
+  readServerAction,
+  serverActionProblemText,
+  serverDialog,
+  serverDialogParams,
+  verbIdFor,
+  verbRefusalText
 } from '../../src/core/picker.js'
+import { buildCustomClickAction } from '../../src/core/dialog-codec.js'
 
 const rows = [
   { name: 'gate-paper:25565', state: 'down' },
@@ -116,4 +125,102 @@ test('#257 rows keep the name the config gave and the slug the wire takes', () =
     id: 'monoplayer:pick/gate-paper_25565'
   }])
   assert.deepEqual(pickerRows([]), [])
+})
+
+// ---- #266: the second level, the server's own dialog ----
+
+const server = { name: 'gate-paper:25565', state: 'down', driver: null }
+
+// The frame a client sends for one verb. The writer is the one the protocol bot
+// uses (src/core/dialog-codec.js), so the reader is proven against the bytes a
+// client-like sender really puts on the wire, not against a fixture this test
+// chose.
+const clickFor = (id, state = 'configuration') => buildCustomClickAction({ state, id })
+
+test('#266 the server dialog offers claim, spectate and disconnect', () => {
+  const dialog = serverDialog({ server })
+  const value = dialog.value
+  assert.equal(value.type.value, PICK_DIALOG_TYPE)
+  // The title names the server and its state, the same words the picker's button
+  // carried, so the client knows which server it is answering for.
+  assert.equal(value.title.value, 'gate-paper:25565 - down')
+  assert.deepEqual(value.can_close_with_escape, { type: 'byte', value: 0 })
+  const buttons = value.actions.value.value
+  assert.equal(buttons.length, 3)
+  assert.deepEqual(buttons.map(button => button.label.value), ['Claim', 'Spectate', 'Disconnect'])
+  assert.deepEqual(buttons.map(button => button.action.value.id.value), [
+    'monoplayer:claim/gate-paper_25565',
+    'monoplayer:spectate/gate-paper_25565',
+    'monoplayer:disconnect/gate-paper_25565'
+  ])
+  // Same action type as the picker's buttons: a custom action is clickable in the
+  // configuration phase, and a command action is inert there.
+  for (const button of buttons) assert.equal(button.action.value.type.value, PICK_ACTION_TYPE)
+  // A claimed server's dialog says who holds it.
+  const claimed = serverDialog({ server: { name: 'sky', state: 'claimed', driver: 'Bafbi' } })
+  assert.equal(claimed.value.title.value, 'sky - claimed (Bafbi)')
+  assert.equal(serverDialogParams({ server }).dialog.type, 'compound')
+})
+
+test('#266 a verb answer carries the verb and the server, and reads back', () => {
+  for (const verb of PICK_VERBS) {
+    const action = readServerAction(clickFor(verbIdFor(verb, 'gate-paper:25565')))
+    assert.equal(action.ok, true, verb)
+    assert.equal(action.verb, verb)
+    assert.equal(action.slug, 'gate-paper_25565')
+    assert.equal(action.id, 'monoplayer:' + verb + '/gate-paper_25565')
+  }
+  // The play-state packet id is not this conversation.
+  assert.equal(readServerAction(clickFor(verbIdFor('claim', 'sky'), 'play')).reason, 'not_a_click')
+  assert.equal(readServerAction(Buffer.alloc(0)).reason, 'not_a_click')
+  assert.equal(readServerAction('not a buffer').reason, 'not_a_click')
+  // A truncated frame is refused rather than half-read.
+  assert.equal(readServerAction(clickFor(verbIdFor('claim', 'sky')).subarray(0, 6)).reason, 'not_a_click')
+})
+
+test('#266 an unknown verb is refused, and the sentence names it', () => {
+  const action = readServerAction(clickFor('monoplayer:teleport/gate-paper_25565'))
+  assert.equal(action.ok, false)
+  assert.equal(action.reason, 'unknown_verb')
+  assert.equal(action.verb, 'teleport')
+  assert.equal(action.slug, 'gate-paper_25565')
+  const text = serverActionProblemText(action)
+  assert.match(text, /teleport/)
+  assert.match(text, /claim, spectate and disconnect/)
+})
+
+test('#266 a malformed verb id is refused, and the sentence names what is wrong', () => {
+  const noServer = readServerAction(clickFor('monoplayer:claim'))
+  assert.equal(noServer.ok, false)
+  assert.equal(noServer.reason, 'malformed')
+  assert.match(serverActionProblemText(noServer), /names no server/)
+
+  const emptySlug = readServerAction(clickFor('monoplayer:claim/'))
+  assert.equal(emptySlug.reason, 'malformed')
+  assert.match(serverActionProblemText(emptySlug), /names no server/)
+
+  // A click from another dialog is not one this lane can act on, and it is not
+  // guessed at either.
+  const foreign = readServerAction(clickFor('other:dialog/exit'))
+  assert.equal(foreign.ok, false)
+  assert.equal(foreign.reason, 'unknown_id')
+  assert.match(serverActionProblemText(foreign), /other:dialog\/exit/)
+})
+
+test('#266 a pick is not a verb click, so the caller must read the pick first', () => {
+  // The pick namespace is not a verb namespace: read in the wrong order, a level-one
+  // answer would be refused as an unknown verb. The leg reads the pick first, and
+  // this test pins the reason that order is load bearing.
+  const action = readServerAction(buildPickAnswer({ name: 'sky' }))
+  assert.equal(action.ok, false)
+  assert.equal(action.reason, 'unknown_verb')
+  assert.equal(action.verb, 'pick')
+})
+
+test('#266 a verb this lane cannot carry is refused in words that name it', () => {
+  assert.match(verbRefusalText({ verb: 'claim', server: 'gate-paper:25565' }), /claim/)
+  assert.match(verbRefusalText({ verb: 'claim', server: 'gate-paper:25565' }), /gate-paper:25565/)
+  assert.match(verbRefusalText({ verb: 'spectate', server: 'sky' }), /spectate/)
+  // Every refusal says it is the lane, not the client, that cannot go further.
+  assert.match(verbRefusalText({ verb: 'claim', server: 'sky' }), /cannot/)
 })
