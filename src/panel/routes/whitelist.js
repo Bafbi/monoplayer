@@ -48,6 +48,7 @@
 import { createNameLookup, WHITELIST_VERSION } from '../../custody/store.js'
 import { normalizeUuid } from '../../custody/util.js'
 import { containerEnv } from '../kube.js'
+import { readBody } from './body.js'
 
 export const WHITELIST_KEY = 'attach-whitelist.json'
 // The variable the puppet's Deployment sets to its own account's uuid. It is the
@@ -129,23 +130,6 @@ export function whitelistText (document) {
 export function configMapYaml (text, key = WHITELIST_KEY) {
   const body = String(text).replace(/\n$/, '').split('\n').map(line => '    ' + line).join('\n')
   return 'data:\n  ' + key + ': |\n' + body + '\n'
-}
-
-// The body of a request, bounded. The bytes past MAX_BODY_BYTES are counted and
-// thrown away rather than buffered, the way `routes/backend.js` reads its own body
-// (#233). Two copies of twelve lines, and neither route grows a branch for the
-// other.
-function readBody (req, limit = MAX_BODY_BYTES) {
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    let size = 0
-    req.on('data', chunk => {
-      size += chunk.length
-      if (size <= limit) chunks.push(chunk)
-    })
-    req.on('end', () => resolve({ text: Buffer.concat(chunks).toString('utf8'), tooLarge: size > limit }))
-    req.on('error', reject)
-  })
 }
 
 // The attach whitelist as the document it is, with the version it was read at. One
@@ -332,7 +316,7 @@ export function createWhitelistRoute ({
 
     let body
     try {
-      body = await readBody(req)
+      body = await readBody(req, MAX_BODY_BYTES)
     } catch (error) {
       log('panelWhitelistBodyFailed', { puppet: puppet.name, error: reason(error) })
       return send(res, 400, TEXT, 'the request body could not be read\n')

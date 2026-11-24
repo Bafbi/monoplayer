@@ -1,6 +1,6 @@
 // The panel's HTTP surface: the probe, the registry list, its own files, one
 // dispatch line into the puppet cards, one into the stream they hold open, and one
-// into the write route.
+// each into the three routes that write a control key.
 //
 // Nothing here knows about namespaces, tokens, or the API server. The registry
 // arrives as a function, so a test hands in a document and a pod hands in the

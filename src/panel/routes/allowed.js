@@ -43,6 +43,7 @@
 // through, so a test hands in a fake and the route cannot tell it from the cluster.
 import { ALLOWED_SERVERS_VERSION, parseAllowedServers } from '../../service/control.js'
 import { isTargetHost } from '../registry.js'
+import { readBody } from './body.js'
 import { configMapYaml } from './whitelist.js'
 
 export const ALLOWED_KEY = 'allowed-servers.json'
@@ -55,11 +56,12 @@ export const MAX_ATTEMPTS = 3
 // owns, so the answer carries the block to paste into the file that holds it.
 export const PASTE_INTO = 'deploy/manifests/configmap.yaml'
 // Both halves of this are true and neither is obvious: the document is stored, and
-// no lane reads it yet. #265 is the picker that does, and the answer says so rather
-// than letting a 200 read as "offered".
-export const WRITTEN_ONLY = 'the document is written, and no lane reads this key yet: the picker that ' +
-  'offers the list is #265, so until it lands this list is stored and offered to nobody. Nothing here stops a ' +
-  'running session: this route writes one key of one ConfigMap. A lane whose MONOPLAYER_ALLOWED_SERVERS names ' +
+// nothing offers it yet. The lane reads the file for its own start record, and the
+// picker that puts a row on a client's screen is #265, so the answer says which of
+// the two it is rather than letting a 200 read as "offered".
+export const WRITTEN_ONLY = 'the document is written. The lane reads this key for its own start record, ' +
+  'and nothing offers the list to a client yet: the picker that does is #265. Nothing here stops a running ' +
+  'session either: this route writes one key of one ConfigMap. A lane whose MONOPLAYER_ALLOWED_SERVERS names ' +
   'another file does not read this key at all.'
 
 const JSON_TYPE = 'application/json; charset=utf-8'
@@ -101,21 +103,6 @@ export function targetOf (raw) {
   const port = Number(text.slice(colon + 1))
   if (!isTargetHost(host) || !Number.isInteger(port) || port < 1 || port > 65535) return null
   return { host, port }
-}
-
-// The body of a request, bounded. The bytes past MAX_BODY_BYTES are counted and
-// thrown away rather than buffered, the way the other two write routes read theirs.
-function readBody (req, limit = MAX_BODY_BYTES) {
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    let size = 0
-    req.on('data', chunk => {
-      size += chunk.length
-      if (size <= limit) chunks.push(chunk)
-    })
-    req.on('end', () => resolve({ text: Buffer.concat(chunks).toString('utf8'), tooLarge: size > limit }))
-    req.on('error', reject)
-  })
 }
 
 const versionOf = configMap => {
@@ -295,7 +282,7 @@ export function createAllowedRoute ({
 
     let body
     try {
-      body = await readBody(req)
+      body = await readBody(req, MAX_BODY_BYTES)
     } catch (error) {
       log('panelAllowedBodyFailed', { puppet: puppet.name, error: reason(error) })
       return send(res, 400, TEXT, 'the request body could not be read\n')

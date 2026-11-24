@@ -63,6 +63,7 @@ test('a document the panel cannot act on is refused with the field that broke it
     ['a seed that is the write target', document([puppet({ seedConfigMap: 'monoplayer-control' })]), /seedConfigMap/],
     ['a namespace that is not a name', document([puppet({ namespace: 'Monoplayer' })]), /namespace/],
     ['a backend with no port', document([puppet({ backend: 'play2.excalia.fr' })]), /backend/],
+    ['a backend at an address no dial can reach', document([puppet({ backend: '999.999.999.999:25565' })]), /backend/],
     ['a backend port out of range', document([puppet({ backend: 'play2.excalia.fr:70000' })]), /backend/],
     ['a front with a scheme', document([puppet({ frontHostname: 'https://glowsquidye.tail41e568.ts.net' })]), /frontHostname/],
     ['a backend switch that is not a boolean', document([puppet({ allowBackendSwitch: 'yes' })]), /allowBackendSwitch/],
