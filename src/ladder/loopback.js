@@ -3254,9 +3254,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         serverDialogs: pickerFront.metrics.pickerServerDialogs,
         verbs: pickerFront.metrics.pickerVerbs,
         attaches: pickerCore.metrics.attaches,
-        denials: pickerCore.metrics.denials,
-        // #258: the lane before any claim existed.
-        noClaim: pickerNoClaim
+        denials: pickerCore.metrics.denials
       }
     }
     evidence.picker.serverDialog = {
