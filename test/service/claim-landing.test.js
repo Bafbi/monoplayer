@@ -44,8 +44,8 @@ test('#258 a claim with no address dials nothing', async () => {
   assert.equal(outcome.connected, false)
   assert.equal(outcome.reason, 'no_target')
   assert.equal(backendLeg.connected, false, 'a body with no address is never dialled')
-  // #260: a cache is created when a body is dialled, so a claim that never
-  // reaches the leg leaves the registry as it was: the lane's own body.
+  // #260: a cache is created when a body is dialled. A claim that never reaches
+  // the leg leaves the registry as it was: the lane's own body.
   assert.equal(core.bodies.get('sky'), null, 'a body that was never dialled has no cache')
   assert.equal(core.bodies.stats().count, 1)
 })
@@ -123,8 +123,8 @@ test('#258 the same body may be redialled after its session faulted, and another
   const bodyCache = core.cache
   assert.equal(bodyCache.warm, true)
 
-  // The body's session faults with nobody attached: that body's cache is reset,
-  // the session arms its reconnect, and the claim on that body is still the one
+  // The body's session faults with nobody attached. That body's cache is reset,
+  // and the session arms its reconnect. The claim on that body is still the one
   // this session serves. Coming back to it is a redial of the same body and the
   // same cache, not a second one (#260).
   backendLeg.deliverEnd({ reason: 'body_fault' })

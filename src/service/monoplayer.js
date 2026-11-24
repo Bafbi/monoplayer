@@ -387,7 +387,7 @@ export function createMonoplayer ({
       // session already serves, so its cache stays. A restore has already put the
       // session back on the body it came from (failTransfer).
       const dialled = target ?? moveTarget
-      if (dialled !== null) activateBody(pickSlug(dialled.host + ':' + dialled.port))
+      if (dialled !== null) activateBody(bodyKeyFor(dialled))
       // #22: after a restore the cache holds the snapshot the client was put
       // back on. The returning backend is a fresh session, and its frames must
       // not append to that snapshot: the client already has it, and a later
@@ -539,7 +539,7 @@ export function createMonoplayer ({
   let noticeSeq = 0 // one advancing id per notice, so a removal names its own
   let pendingTransfer = null // target for the next reconnect_due
   // #258: the one body this session has dialled for a picker claim, or null. It is
-  // a slot rather than a map because the session holds one backend connection:
+  // a slot rather than a map because the session holds one backend connection.
   // #260 gave each body its own cache, so what still refuses a second body is the
   // session and not the cache. A leg per body is #261, and delivery is #269.
   let claimedBody = null
@@ -2022,7 +2022,13 @@ export function createMonoplayer ({
   function syncDialledBody () {
     const target = backendLeg.target
     if (target === null || typeof target?.host !== 'string' || !Number.isInteger(target?.port)) return cache
-    return activateBody(pickSlug(target.host + ':' + target.port))
+    return activateBody(bodyKeyFor(target))
+  }
+
+  // #260: one body key, from the server a dial names. A claim, a move and a first
+  // frame all ask this, so one server cannot be spelled two ways.
+  function bodyKeyFor (target) {
+    return pickSlug(target.host + ':' + target.port)
   }
 
   function activateBody (body) {
@@ -2091,16 +2097,16 @@ export function createMonoplayer ({
   // the puppet dials on a claim: with nobody claiming, nothing is connected (Q6).
   // One body at a time, because the session holds one backend connection. The
   // cache is already the body's (#260). A body per connection waits on #261, with
-  // #269's delivery. Losing the body afterwards is its lifecycle (#261), not this
-  // path: a dial that never opened a session fails here, and a fault after the
-  // landing is the reconnect machine's.
+  // #269's delivery. Losing the body afterwards is its lifecycle, not this path.
+  // A dial that never opened a session fails here, and a fault after the landing
+  // is the reconnect machine's (#261).
   async function connectClaimedBody ({ body = null, server = null, target = null, name = null } = {}) {
     if (cfg.picker !== true) return { connected: false, reason: 'picker_off', body }
     // One body at a time, and the same body is still one. A claim that returns to
     // the body this session already dialled waits on that body again. A different
-    // body is refused because the session holds one backend connection, not
-    // because the cache cannot tell two bodies apart: a leg per body is #261, and
-    // a channel to deliver through is #269.
+    // body is refused because the session holds one backend connection. The cache
+    // can tell two bodies apart, but a leg per body is #261 and a channel to
+    // deliver through is #269.
     const serving = claimDial?.body ?? claimedBody
     if (serving !== null && body !== serving) {
       log('claimDialRefused', { body, reason: 'one_body', claimed: serving })
@@ -2148,10 +2154,12 @@ export function createMonoplayer ({
     }
     // #260: the body owns the cache, so the frames this dial brings land in this
     // body's cache and no other's. The body is the server the dial names, not the
-    // label the front's row printed: a picker row's name is its address, so the two
-    // agree, and a move reads the same key from its target. Bound before the socket
-    // opens, because the body's first frame can arrive before connect() resolves.
-    activateBody(pickSlug(dial.host + ':' + dial.port))
+    // label the front's row printed. A picker row's name is its address, so the two
+    // agree, and a move reads the same key from its target. A name that spells one
+    // address two ways would split one body's cache in two, so a row's name must be
+    // its canonical address (#265). The binding is made before the socket opens,
+    // because the body's first frame can arrive before connect() resolves.
+    activateBody(bodyKeyFor(dial))
     metrics.claimDials++
     claimDial = { body, target: { ...dial } }
     log('claimDial', { body, server, host: dial.host, port: dial.port, name })
