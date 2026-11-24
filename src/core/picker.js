@@ -92,14 +92,58 @@ export function pickerLabel (row) {
   return driver === null ? name + ' - ' + state : name + ' - ' + state + ' (' + driver + ')'
 }
 
+// #265: the name a row is offered under is the canonical address its claim
+// dials. A claim labels a body with pickSlug(row.name), while the per-body state
+// cache is keyed by pickSlug(host + ':' + port) of the dial (src/core/body-caches.js,
+// src/service/monoplayer.js). A name that spells one address another way would give
+// one server two body ids and one body's state two caches, so a row is normalised
+// here, where every row a lane offers is read.
+function canonicalPickName (name) {
+  const target = pickTarget(name)
+  // A name that names no address is offered as it was written. The claim refuses
+  // it in words, and rewriting it would be a guess at which server was meant.
+  if (target === null) return String(name ?? '')
+  // A bracketed IPv6 address is written the way a URL writes one and dialled the
+  // way the socket layer takes one, so the name parses back to the address it
+  // dials.
+  const host = target.host.indexOf(':') === -1 ? target.host : '[' + target.host + ']'
+  return host + ':' + target.port
+}
+
 export function pickerRows (rows = []) {
-  return rows.map(row => ({
-    name: String(row?.name ?? 'server'),
-    state: String(row?.state ?? 'down'),
-    driver: row?.driver ? String(row.driver) : null,
-    slug: pickSlug(row?.name),
-    id: pickIdFor(row?.name)
-  }))
+  return rows.map(row => {
+    // One name per row: the slug and the id are read from the name this row is
+    // offered under, never from the one its lane handed over. A claim records the
+    // slug, so a row whose slug came from another spelling is the split above.
+    const name = canonicalPickName(row?.name ?? 'server')
+    return {
+      name,
+      state: String(row?.state ?? 'down'),
+      driver: row?.driver ? String(row.driver) : null,
+      slug: pickSlug(name),
+      id: pickIdFor(name)
+    }
+  })
+}
+
+// #265: the rows a picker lane offers, from the read of the allowed-server list.
+// `read` is src/service/control.js's own answer — the servers, and the file that
+// answered — so a picker lane offers the live file's list, the seed's when the live
+// file cannot answer, and nothing when neither is configured. The row is the
+// picker's vocabulary, and its name is the `host:port` a claim dials: a claim
+// lands the client on the address its row names, so a row that names anything else
+// can be offered and never entered.
+export function pickerOfferedRows (read = null) {
+  const list = typeof read === 'function' ? read() : null
+  const servers = Array.isArray(list?.servers) ? list.servers : []
+  return {
+    source: typeof list?.source === 'string' ? list.source : 'none',
+    rows: servers.map(server => ({
+      name: String(server?.host ?? '') + ':' + String(server?.port ?? ''),
+      state: 'down',
+      driver: null
+    }))
+  }
 }
 
 // The dialog as the NBT the show_dialog frame carries. Pure: the caller writes

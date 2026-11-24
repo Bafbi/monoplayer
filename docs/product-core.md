@@ -412,6 +412,16 @@ listing the lane's allowed servers.
   label, a width and one custom action. About 12 000 servers fit under the 2 MiB
   ceiling `show_dialog` reads. Measured while #255 was written, so do not
   re-measure.
+- **The list is the allowed-server key (#265).** The picker offers the servers in
+  `allowed-servers.json`, read at each offer through `control.allowedServers()`, so
+  a panel edit is what the next join sees and no restart is involved. A live file
+  that cannot be parsed is named and ignored, and the copy Git commits answers in
+  its place: a broken list must not leave a client in a dialog with no buttons. A
+  lane with no such key offers nothing, because the list is what a picker lane
+  offers and not the backend it dials. Each row's name is the canonical `host:port`
+  its claim dials: a claim labels a body with the row's slug, the body's state cache
+  is keyed by the address the dial names, and `pickerRows` normalises a row where it
+  is read, so one server is one body id.
 - **One switch, off by default.** `MONOPLAYER_PICKER` is read once at startup and
   validated. With it off, or with no baseline on disk, a join with no backend is
   refused with `backend_not_ready`, exactly as before.

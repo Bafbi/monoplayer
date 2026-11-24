@@ -33,7 +33,7 @@ The configuration-phase dialog an attaching player lands in before they have a b
 _Avoid_: lobby, menu, server list, hub, browser
 
 **Allowed server**:
-One game server an attaching player may pick in the picker. The list of them is a key of the control document, so adding one is a panel edit and not a deploy.
+One game server an attaching player may pick in the picker. The list of them is a key of the control document (`allowed-servers.json`), so adding one is a panel edit and not a deploy, and a row is named for the `host:port` its claim dials.
 _Avoid_: whitelisted server, approved server, server whitelist, target
 
 ## Accounts and identity

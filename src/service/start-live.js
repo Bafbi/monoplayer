@@ -94,6 +94,7 @@ import { createLiveFrontLeg } from '../legs/live-front.js'
 import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
+import { pickerOfferedRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
@@ -108,6 +109,27 @@ import { MAX_DEADLINE_MS, PREAUTH_CLOSE_REASON } from '../core/preauth-window.js
 // named with its path here instead of letting the first unrelated write on that
 // volume fail with ENOSPC under another stage. Apart from startLive so the
 // report is observable without a live backend.
+// #265: the rows a picker lane offers. The list is the allowed-server key (#262),
+// read at each offer so a panel edit shows at the next join, and each row is named
+// for the address a claim dials (src/core/picker.js).
+export function createPickerServerReader ({ control, log = () => {} } = {}) {
+  if (typeof control?.allowedServers !== 'function') {
+    throw new TypeError('createPickerServerReader: control must offer allowedServers')
+  }
+  // The last answer this lane offered, as one string. A join reads the list more
+  // than once, and an operator needs one line per answer, not one per read.
+  let said = null
+  return function pickerServerRows () {
+    const offered = pickerOfferedRows(control.allowedServers)
+    const answer = offered.source + '|' + offered.rows.map(row => row.name).join(',')
+    if (answer !== said) {
+      said = answer
+      log('pickerOffered', { source: offered.source, servers: offered.rows.length })
+    }
+    return offered.rows
+  }
+}
+
 export function journalVolumeFull ({ disabledReason = null, dir = null, freeBytes = null, requiredBytes = null } = {}) {
   if (disabledReason !== 'journal_volume_full') return null
   return { reason: 'journal_volume_full', dir, freeBytes, requiredBytes }
@@ -432,8 +454,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
 
   // #262: the allowed-server list, read once. The start record says which file
   // answered and how many servers it holds, so an operator can see a seed standing
-  // in for an unedited list without opening a file. The picker reads it per offer
-  // when #265 lands; this read is the lane's own report, and it is the same call.
+  // in for an unedited list without opening a file. The picker reads the list again
+  // at each offer (#265); this read is the lane's own report, and it is the same call.
   const allowedServersAtStart = control.allowedServers()
 
   // #229: the desired backend is read once before the first dial, and again
@@ -518,13 +540,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
     // #257: the picker's configuration phase, and the list it offers. The
     // recording is committed protocol data (src/legs/configuration-baseline.js).
     // A lane with no fixture on disk refuses a picker join rather than inventing
-    // one. The list is the one backend this lane is configured with, because the
-    // allowed-server list is #267's key and this ticket adds no config surface:
-    // the row says `down`, because with no session there is no body standing.
+    // one. #265: the list is the allowed-server key (#262), read at each offer, so
+    // a panel edit is what the next join sees and a broken live file falls back to
+    // the seed Git commits rather than offering nothing. A lane with no key offers
+    // nothing: the list is what a picker lane offers, not the backend it dials. The
+    // row says `down`, because with no session there is no body standing.
     configurationBaseline: baseline,
-    pickerServers: cfg.picker === true
-      ? () => [{ name: cfg.backend.host + ':' + cfg.backend.port, state: 'down', driver: null }]
-      : null,
+    pickerServers: cfg.picker === true ? createPickerServerReader({ control, log }) : null,
     onPickerPick: pick => {
       log('pickerPickRecorded', {
         server: pick.server?.name ?? null,
@@ -874,8 +896,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
       allowBackendSwitch: cfg.control.allowBackendSwitch,
       whitelistReload: whitelistSource !== null,
       // #262: the two paths, which file answered, and how many servers it offers.
-      // Nothing reads this key yet: #265 is the picker that does, and a lane with
-      // no list says `none` here rather than looking wired.
+      // #265: the picker reads this key at each offer, so these numbers are the read
+      // at start. A lane with no list says `none` here rather than looking wired.
       allowedServers: {
         file: cfg.control.allowedServers ?? null,
         seed: cfg.control.allowedServersSeed ?? null,
