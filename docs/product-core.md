@@ -400,21 +400,21 @@ listing the lane's allowed servers.
   dialled. A lane that serves no body yet, a row naming another body, a body still
   connecting and a body that is down are four refusals with four sentences, each
   asking the player for something different.
-- **Who may watch a body, and what a watcher is (#259).** Any client the lane's
+- **Who may watch a body, and what a spectator is (#259).** Any client the lane's
   identity gate admitted may watch any body the lane serves and has up, whether a
-  driver holds it or not. No driver is asked for consent: the whitelist is the one
-  authority a lane has, a watcher cannot change the body, and a request the driver
-  must answer would put a dialog in front of a player who is mid-game and need a
-  default for the one who never answers. A body with no driver is the ordinary case
-  rather than an error — a claim is released when its connection ends while the body
-  keeps its backend session — so the ordinary case is watchable.
-- **A watcher's client is told what it is (#259).** The replay carries the body's own
+  driver holds it or not. No driver is asked for consent. The whitelist is the one
+  authority a lane has, and a spectator cannot change the body. A request the driver
+  must answer would put a dialog in front of a player who is mid-game, and it would
+  need a default for the one who never answers. A body with no driver is the ordinary
+  case rather than an error: a claim is released when its connection ends, and the
+  body keeps its backend session. So the ordinary case is watchable.
+- **A spectator's client is told what it is (#259).** The replay carries the body's own
   game mode and abilities, because those are `latest` frames in the body's cache. So
   two frames go to that channel after the replay: `game_state_change` with reason 3
   and game mode 3, then `abilities` with the flags vanilla sends a spectator
   (invulnerable, flying, flying allowed) at the protocol's two speeds. They are the
   last word on that socket. A later frame from the body reaches the driver and never
-  a watcher's channel, so the body's next mode change cannot put a watcher back in
+  a spectator's channel, so the body's next mode change cannot put a spectator back in
   the driver's world.
 - **The picker is the door on a lane that has one (#259).** Every admitted join is
   served the picker, whatever the session is doing, because a claim is the only thing
@@ -423,12 +423,13 @@ listing the lane's allowed servers.
   no claim recorded: the body was driven by a player the claim registry had never
   heard of, and nobody could watch it. A lane without the picker is unchanged, and
   that is the live lane.
-- **A row says what a chooser needs (#259).** The row carries the body's state —
-  claimed, unclaimed, or down — the driver's name from the claim, and how many
+- **A row says what a chooser needs (#259).** The row carries the body's state
+  (claimed, unclaimed, or down), the driver's name from the claim, and how many
   channels on that body are spectators. A row is read at every dialog, so a claim
   made a moment ago is on the next one. A body the lane serves and has up with nobody
-  holding it is `unclaimed`, which is the state a watcher can join; everything else
-  is `down`.
+  holding it is `unclaimed`, which is the state a spectator can join. Everything else
+  is `down`, including a body whose claim is still held: the state says whether the
+  body can be entered, and the driver's name is a fact about a body that is up.
 - **An unreadable answer is refused, never guessed at (#266).** `readServerAction`
   returns a reason rather than a null: `not_a_click`, `unknown_id`, `malformed` or
   `unknown_verb`. `serverActionProblemText` turns that reason into one sentence
@@ -454,7 +455,7 @@ listing the lane's allowed servers.
   validated. With it off, or with no baseline on disk, a join with no backend is
   refused with `backend_not_ready`, exactly as before.
 
-#269 built the seam for a watcher and #259 finished it: a body's frames go to every
+#269 built the seam for a spectator and #259 finished it: a body's frames go to every
 channel on it, a channel is not a driver by default, and the picker's Spectate verb
 lands a client through `landSpectator` without a claim, a dial or a second login.
 `O62` proves the click, and `O63` proves a body nobody drives is still watchable.

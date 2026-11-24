@@ -101,6 +101,7 @@ import {
   pickRefusalText,
   pickUnknownText,
   pickerDialogParams,
+  pickerRowForBody,
   pickerRows,
   readPickAction,
   pickTarget,
@@ -547,7 +548,7 @@ function createFrontLeg ({
   let spectateBodyHandler = null
   let spectatorAttachHandler = null
   // #259: the body this lane serves, and whether it has one up, so a row can say
-  // `unclaimed` rather than `down` about a body a watcher could join. Absent is a
+  // `unclaimed` rather than `down` about a body a spectator could join. Absent is a
   // leg with no core, and every row then reads what the list says.
   let bodyServedHandler = null
   let spectatorLeftHandler = null
@@ -946,13 +947,13 @@ function createFrontLeg ({
   // callers differ only in what they hand a client, so the addressing and the count of
   // deliveries live here (#269).
   //
-  // #259: the body's stream goes to its driver and its watchers, with one exception.
+  // #259: the body's stream goes to its driver and its spectators, with one exception.
   // `game_state_change` and `abilities` say what the *body* is doing — its game mode
-  // and the flags that go with it — and a watcher already carries the body's own
-  // copies from its replay. What a watcher's client should hold is the spectator mode
+  // and the flags that go with it — and a spectator already carries the body's own
+  // copies from its replay. What a spectator's client should hold is the spectator mode
   // the core wrote to that channel when it landed, so a later body frame must not be
   // broadcast over it. A write that names one channel is the lane deciding for that
-  // client and always passes: that is how the core tells a watcher what it is.
+  // client and always passes: that is how the core tells a spectator what it is.
   function deliverEach (channel, deliver, { name = null } = {}) {
     if (channel !== null) return deliver(clientOfChannel(channel)) ? 1 : 0
     let sent = 0
@@ -981,7 +982,7 @@ function createFrontLeg ({
     return driver === null ? null : clientOfChannel(driver.id)
   }
 
-  // The body a watcher names, for a body nobody drives: one body at a time is this
+  // The body a spectator names, for a body nobody drives: one body at a time is this
   // leg's limit, so the first channel that names one names it (#259).
   function watchedBody () {
     for (const channel of channels.snapshot()) {
@@ -994,7 +995,7 @@ function createFrontLeg ({
   // spectator watching that body. The driver's channel names the body; a driver
   // channel that names none is a client this lane admitted without a claim, and
   // `null` is then the lane's own body rather than no body at all. With no driver,
-  // a watcher's channel names the body, which is the ordinary state of a body whose
+  // a spectator's channel names the body, which is the ordinary state of a body whose
   // player left (#259). A leg per body is #261.
   function deliveryTargets () {
     const driver = channels.driverChannel()
@@ -1098,24 +1099,22 @@ function createFrontLeg ({
     }
     // #259: what each body on a row is doing, read where the rows are handed out,
     // so every dialog a client reads is as old as the click that asked for it. The
-    // claim names the driver, the channels name the watchers, and whether the body
-    // is up at all is the core's answer, because the session owns the body.
+    // claim names the driver, the channels name the spectators, and whether the body
+    // is up at all is the core's answer, because the session owns the body. What the
+    // three facts make of a row is the picker's own vocabulary
+    // (src/core/picker.js, `pickerRowForBody`).
     //
     // A body this lane serves and has up with nobody holding it is `unclaimed`,
-    // and that is a body a client may watch. Everything else is `down`: a row is
-    // what this lane can offer, not what it has dialled.
+    // and that is a body a client may watch. Everything else is `down`, including
+    // a body whose claim is still held: a row is what this lane can offer, not what
+    // it has dialled.
     const served = bodyServedHandler === null ? null : bodyServedHandler()
     return offered.map(row => {
       const claim = claims.claimOn(row.slug)
-      const watchers = channels.on(row.slug)
+      const spectators = channels.on(row.slug)
         .filter(channel => channel.role === CHANNEL_ROLES.SPECTATOR).length
       const up = served !== null && served.body === row.slug && served.up === true
-      return {
-        ...row,
-        state: claim !== null ? 'claimed' : (up ? 'unclaimed' : 'down'),
-        driver: claim === null ? null : claim.name,
-        watchers
-      }
+      return pickerRowForBody(row, { up, driver: claim === null ? null : claim.name, spectators })
     })
   }
 
@@ -1296,7 +1295,7 @@ function createFrontLeg ({
       return
     }
     if (action.verb === 'spectate') {
-      // #259: the click is the landing. A watcher enters the body the way a driver
+      // #259: the click is the landing. A spectator enters the body the way a driver
       // does — that body's configuration continues this client's phase — and then
       // its own play state arrives on the connection it already holds. A refusal is
       // answered in the sentence that names its reason, because a client left in a
@@ -1517,7 +1516,7 @@ function createFrontLeg ({
   // as one. A claim and a spectator both enter a body this way, which is why it is
   // one function: a client's configuration must not depend on its role. Its play
   // state differs in one way only, and the core writes that: the two frames that
-  // tell a watcher it is a spectator (#259).
+  // tell a spectator what it is (#259).
   function sendBodyConfiguration (client) {
     const frames = replayableConfigFrames().filter(frame => frame.name !== 'finish_configuration')
     let written = 0
@@ -1829,14 +1828,14 @@ function createFrontLeg ({
         })
       }
       // #269: the channel ends with its connection. The driver's channel closing is a
-      // detach, because the body outlives the player; a spectator's is the end of a
-      // watcher and nothing else, since the body was never the spectator's.
+      // detach, because the body outlives the player. A spectator's channel closing
+      // ends a spectator and nothing else, because the body was never theirs.
       const closed = closeChannel(client)
       if (closed !== null && closed.role === CHANNEL_ROLES.DRIVER) {
         log('frontDetach', { reason: String(reason).slice(0, 160), attached: true, channels: channels.size })
         detachHandler?.({ reason: String(reason) })
       } else if (closed !== null && closed.role === CHANNEL_ROLES.SPECTATOR) {
-        // #259: a watcher leaving is the end of a watcher and nothing else. The
+        // #259: a spectator leaving is the end of a spectator and nothing else. The
         // body was never theirs, so the core is told only so it can stop relaying
         // when nobody is left to receive.
         log('frontClientEnd', {
@@ -2077,7 +2076,7 @@ function createFrontLeg ({
     setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
     // #259: the body this lane serves and whether it is up, for the picker's rows.
     setBodyServed (fn) { bodyServedHandler = typeof fn === 'function' ? fn : null },
-    // #259: a watcher's channel ended, so the core can stop relaying a body that
+    // #259: a spectator's channel ended, so the core can stop relaying a body that
     // nobody is in play on.
     setSpectatorLeft (fn) { spectatorLeftHandler = typeof fn === 'function' ? fn : null },
     // #269: land one of this leg's connections in a body as its spectator, and answer
