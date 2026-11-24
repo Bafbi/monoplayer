@@ -6,7 +6,8 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O59 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
+// Assertions R0 and O1-O61 (including O11b, O24b, O41b, O54b, O55b, O56b, O56c, O60b
+// and O61) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -35,7 +36,8 @@ import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 import { baselineRegistryNames, readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { chooseDialogAction } from '../core/dialog-codec.js'
-import { pickIdFor, pickSlug, verbIdFor } from '../core/picker.js'
+import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
+import { createPickerServerReader } from '../service/start-live.js'
 
 const VERSION = '26.1'
 const DEFAULT_REPORT = '.reports/loopback-report.json'
@@ -177,6 +179,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot6 = null
   let pickerBot7 = null
   let pickerBot8 = null
+  // #265: the picker's list rig. Its own directory, because the assertion edits the
+  // live file mid-run, and the seed beside it is what answers when the live file
+  // cannot.
+  let pickerControlDir = null
+  let pickerControl = null
+  let pickerLiveFile = null
+  let pickerSeedFile = null
+  let pickerBot9 = null
+  let pickerBot10 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -3074,8 +3085,35 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // #269: the sixth and seventh are the spectator and the rival claim.
     const pickerWhitelist = [
       offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third'), offlineUuid('Fourth'), offlineUuid('Pilot'),
-      offlineUuid('Watcher'), offlineUuid('Rival'), offlineUuid('Looker')
+      offlineUuid('Watcher'), offlineUuid('Rival'), offlineUuid('Looker'),
+      // #265: the two clients the list assertion joins with, one per edited list.
+      offlineUuid('Seeded'), offlineUuid('Late')
     ]
+    // #265: the list the lane offers comes from the allowed-server key (#262), so
+    // the rig writes the two files the lane reads — the live list the panel edits,
+    // and the seed Git commits behind it — and offers them through the product's own
+    // reader (src/service/start-live.js). What this rung proves is therefore the
+    // offer the service makes, not a list the rig chose.
+    pickerControlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-picker-'))
+    pickerLiveFile = path.join(pickerControlDir, 'allowed-servers.json')
+    pickerSeedFile = path.join(pickerControlDir, 'seed-allowed-servers.json')
+    // A seed address nothing listens on, so this row can only have come from the
+    // seed: the live file never names it.
+    const pickerSeedName = '127.0.0.1:' + await freePort()
+    const writeAllowedServers = (file, names) => fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      servers: names.map(name => ({
+        host: name.slice(0, name.lastIndexOf(':')),
+        port: Number(name.slice(name.lastIndexOf(':') + 1))
+      }))
+    }, null, 2) + '\n')
+    writeAllowedServers(pickerSeedFile, [pickerSeedName])
+    writeAllowedServers(pickerLiveFile, [pickerServerName, pickerBodyName])
+    pickerControl = createControlDocument({
+      allowedServersFile: pickerLiveFile,
+      allowedServersSeedFile: pickerSeedFile,
+      log
+    })
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
       // The lane's configured backend, which nothing listens on: with no claim, the
@@ -3096,10 +3134,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // cached replay path must find nothing here.
       getSnapshotConfig: () => pickerCore?.cache.snapshot().config ?? [],
       configurationBaseline: pickerBaseline,
-      pickerServers: () => [
-        { name: pickerServerName, state: 'down', driver: null },
-        { name: pickerBodyName, state: 'down', driver: null }
-      ],
+      pickerServers: createPickerServerReader({ control: pickerControl, log }),
       onPickerPick: pick => pickerPicks.push(pick),
       onPickerVerb: verb => pickerVerbs.push(verb),
       wireCheck: payload => {
@@ -4262,13 +4297,146 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.channels.rival
     )
 
+    // --- O61: the picker offers the allowed-server list, under the address each row dials (#265) ---
+    // The offer has been the live list since O55, because the rig offers rows through
+    // the product's own reader. Two facts are left to prove: the read is per offer and
+    // says which file answered, and a row's name is the address a claim dials, so one
+    // server is one body id. Then the two edits an operator makes: a list that cannot
+    // be parsed falls back to the seed, and a server removed while a body runs on it
+    // stops being offered with that body untouched.
+    const offeredBefore = logs
+      .filter(entry => entry.event === 'pickerOffered')
+      .map(entry => entry.fields)
+    // The body O58's driver holds, read before the list is edited. A removal must
+    // leave every field of it alone.
+    const drivenBefore = {
+      claimed: pickerCore.claimedBody,
+      cache: pickerCore.cache,
+      logins: pickerBodyFake.received.logins,
+      dials: pickerCore.metrics.claimDials,
+      claims: pickerFront.claims.map(claim => ({ body: claim.body, server: claim.server, name: claim.name })),
+      channels: (pickerFront.channels ?? []).map(channel => ({ role: channel.role, name: channel.name, body: channel.body }))
+    }
+
+    // A live file that cannot be parsed is named and ignored, and the seed answers.
+    // The client is offered the seed's list: not an empty dialog, and not the backend
+    // this lane is configured with.
+    fs.writeFileSync(pickerLiveFile, '{"version":1,"servers":[{"host":\n')
+    pickerBot9 = createBot({ port: pickerBound.port, username: 'Seeded', version: pickerVersion })
+    await pickerBot9.waitFor(
+      () => pickerBot9.received.dialogs.length === 1,
+      'the picker at a client while the live list cannot be parsed',
+      15_000
+    )
+    const seededRead = readServerDialog(pickerBot9.received.dialogs[0])
+
+    // The edit the panel makes: the row of a server a body is running on is removed.
+    // It stops being offered, and the body is not touched.
+    writeAllowedServers(pickerLiveFile, [pickerServerName])
+    pickerBot10 = createBot({ port: pickerBound.port, username: 'Late', version: pickerVersion })
+    await pickerBot10.waitFor(
+      () => pickerBot10.received.dialogs.length === 1,
+      'the picker at a client after a server was removed from the list',
+      15_000
+    )
+    const lateRead = readServerDialog(pickerBot10.received.dialogs[0])
+    const drivenAfter = {
+      claimed: pickerCore.claimedBody,
+      cache: pickerCore.cache,
+      logins: pickerBodyFake.received.logins,
+      dials: pickerCore.metrics.claimDials,
+      claims: pickerFront.claims.map(claim => ({ body: claim.body, server: claim.server, name: claim.name })),
+      channels: (pickerFront.channels ?? []).map(channel => ({ role: channel.role, name: channel.name, body: channel.body }))
+    }
+    const offeredLines = logs
+      .filter(entry => entry.event === 'pickerOffered')
+      .map(entry => entry.fields)
+    const rejectedLists = logs
+      .filter(entry => entry.event === 'controlRejected')
+      .map(entry => entry.fields)
+    // The key the per-body cache is made under: the address the row names, parsed
+    // the way the claim parses it. A row whose name spelled its address differently
+    // would record one body id here and key another cache there.
+    const cacheKeyFor = name => {
+      const target = pickTarget(name)
+      return target === null ? null : pickSlug(target.host + ':' + target.port)
+    }
+    const drivenClaim = drivenAfter.claims.find(claim => claim.name === 'Pilot') ?? null
+    evidence.picker.list = {
+      files: { live: pickerLiveFile, seed: pickerSeedFile },
+      offeredBefore,
+      offered: offeredLines,
+      rejected: rejectedLists,
+      rows: {
+        opened: 2,
+        seeded: seededRead.buttons.map(button => ({ id: button.id, label: button.label })),
+        seededTitle: seededRead.title,
+        afterRemoval: lateRead.buttons.map(button => ({ id: button.id, label: button.label }))
+      },
+      driven: { before: drivenBefore, after: drivenAfter, cacheKey: drivenClaim === null ? null : cacheKeyFor(drivenClaim.server) },
+      clients: {
+        seeded: pickerBot9.received.ended === null ? null : String(pickerBot9.received.ended).slice(0, 120),
+        late: pickerBot10.received.ended === null ? null : String(pickerBot10.received.ended).slice(0, 120),
+        driver: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 120),
+        spectator: pickerBot6.received.ended === null ? null : String(pickerBot6.received.ended).slice(0, 120),
+        driverKick: pickerBot5.received.kick === null ? null : JSON.stringify(pickerBot5.received.kick).slice(0, 120)
+      }
+    }
+    check(
+      'O61',
+      'the picker offers the allowed-server list at each offer, falls back to the seed it names, and a row is one body id',
+      // The offer at O55 came from the live file, and the lane said so once: a join
+      // reads the list more than once and the operator reads one line.
+      offeredBefore.length === 1 &&
+        offeredBefore[0].source === 'control' &&
+        offeredBefore[0].servers === 2 &&
+        // A live file that cannot be parsed is named, and the seed answers.
+        offeredLines.some(line => line.source === 'seed' && line.servers === 1) &&
+        rejectedLists.some(fields => fields.file === pickerLiveFile && fields.reason === 'not_json') &&
+        seededRead.buttons.length === 1 &&
+        seededRead.buttons[0].id === pickIdFor(pickerSeedName) &&
+        seededRead.buttons[0].label === pickerSeedName + ' - down' &&
+        // A server removed from the list stops being offered, and the row that
+        // remains is still the live file's.
+        lateRead.buttons.length === 1 &&
+        lateRead.buttons[0].id === pickIdFor(pickerServerName) &&
+        offeredLines.at(-1).source === 'control' &&
+        offeredLines.at(-1).servers === 1 &&
+        // One server, one body id: the claim's body is the key the dial's cache is
+        // made under, read through the address the row names.
+        drivenClaim !== null &&
+        drivenClaim.body === pickSlug(pickerBodyName) &&
+        drivenClaim.server === pickerBodyName &&
+        cacheKeyFor(drivenClaim.server) === drivenClaim.body &&
+        drivenAfter.claimed === drivenClaim.body &&
+        // Removing the row left the body alone: its claim, its cache, its channels,
+        // its client and its one dial are the ones the edit found.
+        drivenAfter.claimed === drivenBefore.claimed &&
+        drivenAfter.cache === drivenBefore.cache &&
+        drivenAfter.logins === drivenBefore.logins &&
+        drivenAfter.logins === 1 &&
+        drivenAfter.dials === drivenBefore.dials &&
+        JSON.stringify(drivenAfter.claims) === JSON.stringify(drivenBefore.claims) &&
+        JSON.stringify(drivenAfter.channels) === JSON.stringify(drivenBefore.channels) &&
+        drivenAfter.channels.length === 2 &&
+        drivenAfter.channels.filter(channel => channel.body === drivenClaim.body).length === 2 &&
+        pickerBot5.received.ended === null &&
+        pickerBot6.received.ended === null &&
+        pickerBot5.received.kick === null &&
+        // Neither list a client read was empty, so neither join was refused.
+        pickerBot9.received.ended === null &&
+        pickerBot10.received.ended === null &&
+        pickerCore.attached === true,
+      evidence.picker.list
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
@@ -4315,9 +4483,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { journal?.close?.() } catch { /* best effort */ }
     if (!failed) {
       try { if (journalDir) fs.rmSync(journalDir, { recursive: true, force: true }) } catch { /* best effort */ }
-      // The control directory holds the two files O53 edited. A passing run
+      // The control directories hold the files O53 and O61 edited. A passing run
       // leaves nothing behind; a failing one keeps them for the report.
       try { if (controlDir) fs.rmSync(controlDir, { recursive: true, force: true }) } catch { /* best effort */ }
+      try { if (pickerControlDir) fs.rmSync(pickerControlDir, { recursive: true, force: true }) } catch { /* best effort */ }
     }
 
     if (failed && exitCode === 0) exitCode = 1
