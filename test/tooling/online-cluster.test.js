@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,8 @@ const SHIM = [
   // script writes, and can answer one read as held and the next as absent, which is
   // the whole of "queue behind a holder, then take it".
   '  *" get lease "*) if [ -n "$KUBECTL_LEASE_READ_ERROR" ]; then printf \'Error from server (Forbidden): leases are forbidden\\n\' >&2; exit 1; fi',
+    '    reads=$(cat "$KUBECTL_LEASE_READS" 2>/dev/null || printf 0); reads=$((reads + 1)); printf %s "$reads" > "$KUBECTL_LEASE_READS"' ,
+  '    if [ -n "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ "$reads" -gt "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ -f "$KUBECTL_LEASE_FOREIGN" ]; then cat "$KUBECTL_LEASE_FOREIGN"; exit 0; fi',
   '    if [ -f "$KUBECTL_LEASE" ]; then cat "$KUBECTL_LEASE"; if [ "$KUBECTL_LEASE_ONCE" = 1 ]; then rm -f "$KUBECTL_LEASE"; fi; exit 0; fi',
   '    printf \'Error from server (NotFound): lease not found\\n\' >&2; exit 1 ;;',
   '  *" create -f "*|*" replace -f "*) staged="${@: -1}"; { printf \'%s\\n\' ---; cat "$staged"; } >> "$KUBECTL_LEASES"; cp "$staged" "$KUBECTL_LEASE"; printf \'lease configured\\n\'; exit 0 ;;',
@@ -71,7 +73,9 @@ function workspace () {
     manifest: path.join(root, 'manifest.yaml'),
     // The lease the shim answers from, and every object the script wrote, in order.
     lease: path.join(root, 'lease.json'),
-    leases: path.join(root, 'leases.log')
+    leases: path.join(root, 'leases.log'),
+    reads: path.join(root, 'lease-reads'),
+    foreign: path.join(root, 'lease-foreign.json')
   }
 }
 
@@ -93,6 +97,8 @@ function run (space, env = {}, args = null) {
       MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
       KUBECTL_LEASE: space.lease,
       KUBECTL_LEASES: space.leases,
+      KUBECTL_LEASE_READS: space.reads,
+      KUBECTL_LEASE_FOREIGN: space.foreign,
       ...env
     }
   })
@@ -392,4 +398,68 @@ test('mise run online holds the lease, so both forms of the rung exclude each ot
   assert.deepEqual(online.depends, ['install'])
   assert.deepEqual(online.wait_for, ['check'], 'a red gate still stops the expensive rung')
   assert.match(tasks.get('online:cluster').body, /^run = "scripts\/online-cluster\.sh"$/m)
+})
+
+// A run killed outright runs no EXIT handler. The renewal loop is the only thing left
+// that can notice, and it must not keep renewing an account nobody is using.
+test('a run killed with SIGKILL releases its lease instead of renewing for ever', async () => {
+  const space = workspace()
+  const child = spawn('bash', [SCRIPT, ...podArgs(space)], {
+    cwd: space.root,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PATH: space.bin + ':' + process.env.PATH,
+      KUBECTL_LOG: space.log,
+      KUBECTL_MANIFEST: space.manifest,
+      KUBECTL_PUPPET: PUPPET,
+      KUBECTL_ATTACH: ATTACH,
+      KUBECTL_LEASE: space.lease,
+      KUBECTL_LEASES: space.leases,
+      MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
+      // One second of lease and a rung that never ends on its own.
+      MONOPLAYER_LEASE_DURATION: '3',
+      KUBECTL_RUN_SLEEP: '30'
+    }
+  })
+
+  const held = async () => {
+    for (let i = 0; i < 120; i += 1) {
+      const written = leasesWritten(space)
+      if (written.length > 0 && written[written.length - 1].spec.holderIdentity === '' ) return written
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    return leasesWritten(space)
+  }
+  // Wait for the run to take the lease, then kill it the way a kill -9 does.
+  for (let i = 0; i < 100 && leasesWritten(space).length === 0; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  assert.ok(leasesWritten(space).length >= 1, 'the run took the lease before it was killed')
+  child.kill('SIGKILL')
+
+  const written = await held()
+  assert.equal(
+    written[written.length - 1].spec.holderIdentity,
+    '',
+    'the lease was released by the loop that outlived the run: ' + JSON.stringify(written)
+  )
+})
+
+// The other half of exclusivity: a run that loses the lease must stop. If it carried
+// on, it would write the refresh chain beside the run that now holds the lease.
+test('a run whose lease is taken over stops instead of writing the chain twice', () => {
+  const space = workspace()
+  fs.writeFileSync(space.foreign, held({ holderIdentity: 'monoplayer-gate-zzzzzzz-111111 on feat/other (pid 7)' }))
+  const { status, output } = run(space, {
+    // One second of lease, a rung that would run for six, and a holder who takes the
+    // lease after this run's own acquisition read.
+    MONOPLAYER_LEASE_DURATION: '3',
+    KUBECTL_RUN_SLEEP: '6',
+    KUBECTL_LEASE_FOREIGN_AFTER: '1'
+  })
+
+  assert.notEqual(status, 0, output)
+  assert.match(output, /is no longer this run's/)
+  assert.match(output, /Stopping, because two runs must not write one refresh chain/)
 })
