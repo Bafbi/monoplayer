@@ -26,6 +26,7 @@
 // whether the panel *asks*, and the puppet's own `control.allowBackendSwitch`
 // decides whether it obeys (docs/panel.md).
 import { isTargetHost } from '../registry.js'
+import { readBody } from './body.js'
 
 // The control document's shape is `src/service/control.js`'s, and this is its
 // version. test/panel/backend-route.test.js reads what this route writes back
@@ -39,22 +40,6 @@ const JSON_TYPE = 'application/json; charset=utf-8'
 const TEXT = 'text/plain; charset=utf-8'
 
 const PATTERN = /^\/api\/puppets\/([^/]+)\/backend$/
-
-// The body of a request, bounded. A body past the cap is drained rather than
-// buffered: the bytes past MAX_BODY_BYTES are counted and thrown away, so a
-// request that is not this route's can cost bandwidth but never memory.
-function readBody (req, limit = MAX_BODY_BYTES) {
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    let size = 0
-    req.on('data', chunk => {
-      size += chunk.length
-      if (size <= limit) chunks.push(chunk)
-    })
-    req.on('end', () => resolve({ text: Buffer.concat(chunks).toString('utf8'), tooLarge: size > limit }))
-    req.on('error', reject)
-  })
-}
 
 export function createBackendRoute ({
   read,
@@ -138,7 +123,7 @@ export function createBackendRoute ({
 
     let body
     try {
-      body = await readBody(req)
+      body = await readBody(req, MAX_BODY_BYTES)
     } catch (error) {
       log('panelBackendBodyFailed', { puppet: puppet.name, error: String(error?.message ?? error).slice(0, 200) })
       return send(res, 400, TEXT, 'the request body could not be read\n')

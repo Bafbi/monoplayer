@@ -22,22 +22,32 @@ export const REGISTRY_KEY = 'puppets.json'
 
 // Alphabetical, so the message that lists the expected fields reads the same
 // wherever it is printed.
-const FIELDS = ['allowBackendSwitch', 'backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace']
+const FIELDS = ['allowBackendSwitch', 'backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace', 'seedConfigMap']
 
 // A name the API server accepts for a namespace, a Deployment, or a ConfigMap.
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
 // A hostname with at least two labels: no scheme, no port, no trailing dot.
 const HOSTNAME = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$/
+// Four numeric groups: the shape an address is written in, and the shape a hostname
+// rule cannot tell from one. What it is not is a DNS name anyone registers.
 const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/
 
 const quote = value => JSON.stringify(value ?? null)
 
 // A host a dial can target: a DNS name of at least two labels with no scheme, no
-// port and no trailing dot, or an IPv4 literal. Exported because the write route
-// (#233) accepts the same two shapes in a request body, and a second rule would
+// port and no trailing dot, or an IPv4 literal. Exported because the write routes
+// (#233, #262) accept the same two shapes in a request body, and a second rule would
 // drift from this one.
+//
+// An octet is checked for its range, not only its length. `999.999.999.999` matches
+// the four-group shape, and it is also a legal hostname to the rule below, so without
+// the range check a typo becomes a picker row that fails at the socket. Anything the
+// address shape does not match is still judged as a hostname, so no name this cluster
+// resolved before is refused now.
 export function isTargetHost (value) {
-  return typeof value === 'string' && (HOSTNAME.test(value) || IPV4.test(value))
+  if (typeof value !== 'string') return false
+  if (IPV4.test(value)) return value.split('.').every(octet => Number(octet) <= 255)
+  return HOSTNAME.test(value)
 }
 
 // The JSON text inside the document, from either shape. A bare JSON document is
@@ -116,9 +126,9 @@ function puppet (entry, index, seen) {
   for (const key of FIELDS) {
     if (!(key in entry)) throw new Error('registry: ' + where + ' has no ' + key)
   }
-  // The four names the API server must accept, because three of them are the
-  // address of an object and the fourth names the puppet.
-  for (const key of ['name', 'namespace', 'deployment', 'controlConfigMap']) {
+  // The five names the API server must accept, because four of them are the
+  // address of an object and the fifth names the puppet.
+  for (const key of ['name', 'namespace', 'deployment', 'controlConfigMap', 'seedConfigMap']) {
     const value = entry[key]
     if (typeof value !== 'string' || value.length > 63 || !DNS_LABEL.test(value)) {
       throw new Error('registry: ' + where + '.' + key + ' must be a lowercase DNS label of at most 63 characters, not ' + quote(value))
@@ -149,12 +159,20 @@ function puppet (entry, index, seen) {
     throw new Error('registry: two puppets write ' + target + ', and one control ConfigMap has one owner')
   }
   seen.targets.add(target)
+  // #262: the seed is the copy Git commits, and the panel only reads it. A row that
+  // named the object it writes would read back the key it just found absent, so the
+  // fallback would answer an empty list while the manifest looked wired.
+  if (entry.seedConfigMap === entry.controlConfigMap) {
+    throw new Error('registry: ' + where + '.seedConfigMap must be the copy Git commits, and it names ' +
+      'controlConfigMap ' + quote(entry.controlConfigMap) + ', which the panel writes')
+  }
 
   return {
     name: entry.name,
     namespace: entry.namespace,
     deployment: entry.deployment,
     controlConfigMap: entry.controlConfigMap,
+    seedConfigMap: entry.seedConfigMap,
     frontHostname: entry.frontHostname,
     backend,
     allowBackendSwitch: entry.allowBackendSwitch

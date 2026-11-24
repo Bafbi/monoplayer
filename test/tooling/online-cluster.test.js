@@ -432,11 +432,15 @@ test('a run killed with SIGKILL releases its lease instead of renewing for ever'
     }
     return leasesWritten(space)
   }
-  // Wait for the run to take the lease, then kill it the way a kill -9 does.
-  for (let i = 0; i < 100 && leasesWritten(space).length === 0; i += 1) {
+  // Wait for the renewal loop to tick, not merely for the lease to be written. The run
+  // writes the lease and then starts the loop, so a kill in between leaves nothing to
+  // release and the lease only expires: that is the product's fallback for a run killed
+  // outright, and it is not what this case measures. One renewal stamps the same holder
+  // with a new renewTime, which is proof the loop exists.
+  for (let i = 0; i < 200 && leasesWritten(space).length < 2; i += 1) {
     await new Promise(resolve => setTimeout(resolve, 50))
   }
-  assert.ok(leasesWritten(space).length >= 1, 'the run took the lease before it was killed')
+  assert.ok(leasesWritten(space).length >= 2, 'the renewal loop ticked before the run was killed')
   child.kill('SIGKILL')
 
   const written = await held()
