@@ -947,13 +947,13 @@ function createFrontLeg ({
   // callers differ only in what they hand a client, so the addressing and the count of
   // deliveries live here (#269).
   //
-  // #259: the body's stream goes to its driver and its spectators, with one exception.
-  // `game_state_change` and `abilities` say what the *body* is doing — its game mode
-  // and the flags that go with it — and a spectator already carries the body's own
-  // copies from its replay. What a spectator's client should hold is the spectator mode
-  // the core wrote to that channel when it landed, so a later body frame must not be
+  // #259: the body's stream goes to its driver and its spectators, with one
+  // exception. `game_state_change` and `abilities` say what the *body* is doing: its
+  // game mode, and the flags that go with it. A spectator already carries the body's
+  // own copies from its replay, and what its client should hold is the spectator mode
+  // the core wrote to that channel when it landed. So a later body frame must not be
   // broadcast over it. A write that names one channel is the lane deciding for that
-  // client and always passes: that is how the core tells a spectator what it is.
+  // client, and it always passes: that is how the core tells a spectator what it is.
   function deliverEach (channel, deliver, { name = null } = {}) {
     if (channel !== null) return deliver(clientOfChannel(channel)) ? 1 : 0
     let sent = 0
@@ -1296,8 +1296,8 @@ function createFrontLeg ({
     }
     if (action.verb === 'spectate') {
       // #259: the click is the landing. A spectator enters the body the way a driver
-      // does — that body's configuration continues this client's phase — and then
-      // its own play state arrives on the connection it already holds. A refusal is
+      // does: that body's configuration continues this client's phase, and then its
+      // own play state arrives on the connection it already holds. A refusal is
       // answered in the sentence that names its reason, because a client left in a
       // dialog nobody will read is worse off than one that is told why.
       const landing = landSpectator(client, { body: server.slug, server: server.name })

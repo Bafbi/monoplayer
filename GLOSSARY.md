@@ -21,7 +21,7 @@ The attaching player who holds a body's claim, and so drives it. Their movement 
 _Avoid_: controller, owner, player in control, operator
 
 **Spectator**:
-An attaching player who watches a body without control. They receive the body's world and the body itself, and nothing they send reaches the server. Any attaching player the lane admits may watch any body it serves and has up, whether or not a driver holds it: the whitelist is who may watch, and no driver is asked. A spectator's client is told what it is: spectator game mode and the abilities that go with it. A frame from the body never puts it back in the driver's mode.
+An attaching player who watches a body without control. They receive the body's world and the body itself, and nothing they send reaches the server. Any player the lane admits may watch any body it serves and has up, whether or not a driver holds it. The whitelist is who may watch, and no driver is asked. A spectator's client is told what it is: spectator game mode, and the abilities that go with it. A frame from the body never puts it back in the driver's mode.
 _Avoid_: viewer, watcher, observer, audience
 
 **Channel**:
@@ -93,7 +93,7 @@ The running Monoplayer process: config, core, both legs, custody, and the CLI. I
 _Avoid_: app, daemon, the proxy, the bot
 
 **Control document**:
-The two files an operator edits between deploys, named by `config.control.file` (`desired.json`) and `config.attachWhitelistFile` (`attach-whitelist.json`). Both are read at the point of use, the whitelist at each login and the desired backend before each connect, so an edit takes effect without a deploy and without a restart. There is no spectator, and `control.file` unset means no lane reads a control document at all.
+The two files an operator edits between deploys, named by `config.control.file` (`desired.json`) and `config.attachWhitelistFile` (`attach-whitelist.json`). Both are read at the point of use, the whitelist at each login and the desired backend before each connect, so an edit takes effect without a deploy and without a restart. Nothing watches either file, and `control.file` unset means no lane reads a control document at all.
 _Avoid_: control file, runtime config, feature flag, control dialog
 
 **Desired backend**:
