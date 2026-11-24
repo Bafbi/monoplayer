@@ -3776,9 +3776,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The product's own wiring, read on the picker core this run already landed a
     // claim on. The cache the client is served from is the claimed body's. Every
     // other body the core dialled kept a cache of its own, and the claim put no
-    // frame into it. There are two of those here: the lane's configured backend,
-    // which a picker lane never dials, and the row whose dial the kernel refused in
-    // O56. Both were dialled and neither answered, so both caches are empty.
+    // frame into it. Two of those are here. One is the lane's configured backend,
+    // which a picker lane never dials. The other is the row whose dial the kernel
+    // refused in O56. Both were dialled and neither answered, so both are empty.
     const pickerBodies = pickerCore.bodies.stats()
     const pickerClaimed = pickerCore.claimedBody
     const pickerOther = pickerBodies.bodies
@@ -3869,8 +3869,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         bodyBAfterPush.blocks.length === 2 &&
         bodyBAfterPush.blocks[1].data.location.x === 11 &&
         pickerClaimed === pickSlug(pickerBodyName) &&
-        // The lane's configured body, the row O56 claimed and never reached, and
-        // the body O58 landed: three caches, one per body, and only the landed one
+        // Three caches, one per body: the lane's configured body, the row O56
+        // claimed and never reached, and the body O58 landed. Only the landed one
         // holds state.
         pickerBodies.count === 3 &&
         pickerOther.length === 2 &&
