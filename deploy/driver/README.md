@@ -13,8 +13,9 @@ Evidence: [docs/driver-lane.md](../../docs/driver-lane.md),
 [docs/custody.md](../../docs/custody.md), [docs/paper-behind-velocity.md](../../docs/paper-behind-velocity.md),
 and [docs/driver-validation.md](../../docs/driver-validation.md).
 
-The `monoplayer-gate-b` namespace holds the real-backend matrix. It is not the
-product namespace; do not point the product at it.
+A lane holds the real-backend matrix: its own namespace, one per worktree, named
+after the worktree that asked for it. It is not the product namespace. Do not point
+the product at it.
 
 ## Lifecycle: the lane rests at 0
 
@@ -49,59 +50,116 @@ those three, which is why they stay off.
 interval between checks, and the two waits are `MONOPLAYER_GATE_READY_TIMEOUT` and
 `MONOPLAYER_GATE_STOP_TIMEOUT`.
 
-## One tree, one lane, one value
+## Lanes: one per worktree, named by derivation
 
-The tree in this directory is a **template**, not a lane. It spells today's lane,
-`monoplayer-gate-b`, everywhere the lane is named. That covers the namespace object,
-every `app.kubernetes.io/name` label and selector, the Secret and ConfigMap names,
-the two tailnet hostnames, and one path inside `velocity.toml`.
-
-`MONOPLAYER_GATE_NAMESPACE` names the lane. The instance is what follows
-`monoplayer-gate-`. `gate:up` copies the tree, substitutes the instance, and applies
-that copy.
-
-So one rename reaches every one of those places. The label that `gate:status` and
-`gate:down` look pods up by comes from the same value, so it cannot disagree with
-the manifests.
-
-Instance `b` is today's lane, and the substitution is then the empty one: an ordinary
-`gate:up` applies byte for byte what this directory holds, which
-`test/tooling/gate-lane.test.js` pins. To read what another lane would apply:
+A lane is named after the worktree that asked for it: the worktree's short commit,
+then a short hash of its path. Two checkouts at one commit are two lanes, so two
+agents can validate at the same time, and nobody types an instance.
 
 ```bash
-scripts/gate-lane.sh render /tmp/gate-x    # with MONOPLAYER_GATE_NAMESPACE=monoplayer-gate-x
-kubectl kustomize /tmp/gate-x
+scripts/gate-lane.sh name      # this worktree's lane, and nothing else
+mise run lanes                # every lane: its age, its pods, and its worktree
+mise run lanes -- --reap      # delete the lanes idle past the window
 ```
+
+`name` prints one line, so a shell can pass it on. The rungs that still name a
+single lane take it as `MONOPLAYER_GATE_NAMESPACE` until #282 lands:
+
+```bash
+MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run online:cluster
+```
+
+`mise run lanes` is what makes a crashed run visible instead of invisible. One
+row per lane: the namespace, how long since it last ran `up` or `down`, its pod
+count, and the worktree that owns it.
+
+```
+LANE                                   AGE     PODS  WORKTREE
+monoplayer-gate-6098a9f-3f1c2a         3h12m   0     /home/me/src/monoplayer
+monoplayer-gate-0a1b2c3-77d1e0         12m     2     /home/me/worktrees/t3-9f2
+```
+
+`up` and `down` write three annotations on the namespace: the worktree, the
+commit, and an epoch that `lanes` reads as the age. `up` fails when it cannot write
+them, because a lane nobody can find is worse than a lane that did not wake.
+
+A commit moves a worktree to a new lane, and the lane it left keeps its old name.
+`mise run lanes` shows it with its worktree, and the reaper is what cleans it up.
+
+The reaper deletes a namespace, so it is hard to satisfy on purpose. A lane is
+reaped only when all of these hold:
+
+- no pod runs in it, whatever its age
+- it carries the clock `up` wrote, so its age is known
+- it has been idle past the window: `MONOPLAYER_GATE_IDLE_WINDOW` seconds, six
+  hours by default, or `--window SECONDS` for one run
+- every Deployment in it is one the gate tree declares, so a lane holding the
+  transfer testbed's `paper-hub` or `paper-sky` is kept
+- every Secret in it was made by this script, so an operator's Secret is kept
+
+Deletion is asynchronous. `--reap` asks the API to delete the namespace. The next
+listing shows that lane as `(deleting)` until its objects are gone.
+
+The live namespace and the dev lane are out of reach at every step. `lanes` reads
+a label only a gate lane carries, `app.kubernetes.io/component: gate-lane`, and it
+passes every candidate through the same guard `up` and `down` use.
+
+## One tree, one lane, one value
+
+The tree in this directory is a **template**, not a lane. Wherever it names a lane it
+spells `gate-__instance__`: the namespace object, every
+`app.kubernetes.io/name` label and selector, the Secret and ConfigMap names,
+the two tailnet hostnames, and one path inside `velocity.toml`. One substitution
+reaches all of them, which is why a lane's names cannot disagree with the label
+`status` and `down` look pods up by.
+
+The placeholder is not a valid object name, so this directory cannot be applied as
+it is. That is the point: a lane exists only through `scripts/gate-lane.sh`. A tree
+that spelled a lane would apply that lane whoever ran it.
+
+To read what a lane would apply, without a cluster:
+
+```bash
+scripts/gate-lane.sh render /tmp/my-lane   # an empty directory you own
+kubectl kustomize /tmp/my-lane
+```
+
+`MONOPLAYER_GATE_NAMESPACE` pins the namespace by hand, and the instance is what
+follows `monoplayer-gate-`. `MONOPLAYER_GATE_WORKTREE` derives the lane from
+another checkout's commit and path. Neither is needed on an ordinary run.
 
 The instance must be a DNS-1123 label, because it names a namespace and part of a
 label value. It is at most 33 characters, which keeps the longest label value this
 lane writes, `app.kubernetes.io/name: monoplayer-gate-<instance>-paper-conduct`, inside
 63.
 
-The namespace's own `monoplayer.eu/environment: gate-b` label follows the instance too,
-so a renamed lane says `gate-x` there. Nothing selects on it. It is a label for a human
-reading `kubectl get namespace`, and leaving it at `gate-b` in a lane called something
+The namespace's own `monoplayer.eu/environment: gate-<instance>` label follows the
+instance too. Nothing selects on it. It is a label for a human reading
+`kubectl get namespace`, and leaving it at an old name in a lane called something
 else is the kind of stale name the ADR exists to avoid.
 
 Two boundaries to keep in mind.
 
 The lane makes its own Secrets. `gate:up` creates `gate-<instance>-rcon` (key
-`password`) and `gate-<instance>-velocity` (key `forwarding-secret`) with random values
-when they are absent. It creates only the ones the rows it wakes read. The three Papers
-read the RCON password, and Velocity and the Paper behind it read the forwarding secret.
-`gate:down` deletes the Secrets this lane generated, and only those.
+`password`) and `gate-<instance>-velocity` (key `forwarding-secret`) with random
+values when they are absent. It creates only the ones the rows it wakes read. The
+three Papers read the RCON password, and Velocity and the Paper behind it read the
+forwarding secret. `gate:down` deletes the Secrets this lane generated, and only
+those.
 
 `gate:up` uses an operator's Secret as it is, whatever wrote it. This script never
-overwrites one, and `gate:up` says once per run which ones it found. A generated Secret
-carries the label `app.kubernetes.io/managed-by: gate-lane`. `gate:down` deletes by that
-label, and an operator's Secret carries none, so it survives every `down`. To make a
-lane generate new Secrets, delete the old ones and run `gate:up`.
+overwrites one, and `gate:up` says once per run which ones it found. A generated
+Secret carries the label `app.kubernetes.io/managed-by: gate-lane`. `gate:down`
+deletes by that label, and an operator's Secret carries none, so it survives every
+`down`. To make a lane generate new Secrets, delete the old ones and run
+`gate:up`.
 
-`paper-hub` and `paper-sky` from `deploy/testbed` live in `monoplayer-gate-b` beside
-this lane. They belong to the transfer testbed. A lane on another instance does not
-take them with it, and nothing here scales them. Both read `gate-b-rcon` from this
-namespace. A `gate:down` that removes a generated `gate-b-rcon` therefore leaves them
-without one until the next `gate:up`. The testbed owns its own Secret, not this lane.
+`paper-hub` and `paper-sky` from `deploy/testbed` are tenants of a gate namespace. They
+belong to the transfer testbed: nothing here scales them, and a lane on another
+instance does not take them with it. Both read that namespace's
+`gate-<instance>-rcon`, so a `gate:down` that removes a generated one leaves them
+without one until the next `gate:up`. The testbed owns its own Secret, not this lane
+(#283, #288).
 
 ## Names this tree does not rename
 
@@ -114,18 +172,16 @@ Each needs its own migration step:
 
 | Name | Where it lives | Migration |
 |---|---|---|
-| namespace `monoplayer-gate-b` | every manifest here | create the new namespace, re-apply, delete the old |
-| labels `app.kubernetes.io/name: monoplayer-gate-b-*` | every manifest here | selector change: recreate the workloads |
-| Secrets `gate-b-rcon`, `gate-b-velocity` | cluster only | a new instance generates its own. Copy an operator's Secret only to keep a password |
-| Tailscale hostnames `monoplayer-gate-b-paper`, `-velocity` | Services with annotations | republish under a new hostname |
 | server motd `Monoplayer Gate B` | `velocity.yaml` | a config value players see |
 | Prism instances `gate-b-player`, `gate-b-player-fabric` | display host | clone into a new instance id |
 | `GATEB_*` environment variables, `gateb.*` JVM properties, window title `Monoplayer Gate B` | operator shell, launch flags, Hyprland rule | rename together, in one operator run |
 
-The first two rows are now derived. Naming another instance in
-`MONOPLAYER_GATE_NAMESPACE` moves the namespace and the label prefix together, which
-is what #277 added ("One tree, one lane, one value" above). Every other row still
-migrates by hand, when the change that reads it arrives.
+The namespace, the labels, the Secrets and the two tailnet hostnames are derived
+now, which is what #277, #278 and #279 did. The tree spells a placeholder, and one
+instance names all of them. Every row left in the table still migrates by hand, when
+the change that reads it arrives. The copies in `src/driver/`,
+`scripts/online-cluster.sh` and `tools/` keep the old name until #281 and #282 land.
+`docs/testing-ladder.md` keeps it until #281 rewrites its rows.
 
 ## Paper G0 backend
 
@@ -139,15 +195,16 @@ secure-profile. The RCON password is a cluster Secret, never a manifest value.
 mise run gate:up
 
 # 2. Watch it download Paper 26.2 and boot.
-kubectl -n monoplayer-gate-b logs deploy/paper --tail=100
+kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/paper --tail=100
 
 # 3. Tailscale endpoint for the display host.
-kubectl -n monoplayer-gate-b get svc paper-g0 -w
+kubectl -n "$(scripts/gate-lane.sh name)" get svc paper-g0 -w
 ```
 
 The Tailscale service should publish a hostname like
-`monoplayer-gate-b-paper.tail41e568.ts.net:25565`. Join that address from the
-26.2 Prism instance for G0.
+`monoplayer-gate-<instance>-paper.tail41e568.ts.net:25565`, where the instance is
+what `scripts/gate-lane.sh name` prints. Join that address from the 26.2 Prism
+instance for G0.
 
 ## Notes
 
@@ -174,7 +231,7 @@ the folder is part of the lane, written by an initContainer.
 
 ```bash
 mise run gate:up paper-conduct
-kubectl -n monoplayer-gate-b logs deploy/paper-conduct --tail=100
+kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/paper-conduct --tail=100
 ```
 
 ## M4 lane — Paper behind Velocity 4.3.1 (+ toxiproxy)
@@ -185,8 +242,8 @@ which is its own run.
 `velocity.yaml` (Velocity 4.3.1 b45, online-mode, modern forwarding),
 `paper-m4.yaml` (Paper 26.1.2 b74, offline, puppet-only whitelist),
 `toxiproxy.yaml` (puppet-leg faults). Full bring-up, smoke and teardown
-commands (and the `gate-b-velocity` forwarding secret, which `gate:up` generates
-when it is absent and no manifest ever holds) are in the M4 runbook:
+commands (and the `gate-<instance>-velocity` forwarding secret, which `gate:up`
+generates when it is absent and no manifest ever holds) are in the M4 runbook:
 
 ```bash
 # The three M4 rows, awake together. `gate:up` creates the two Secrets the rows read
@@ -194,9 +251,11 @@ when it is absent and no manifest ever holds) are in the M4 runbook:
 mise run gate:up -- velocity paper-m4 toxiproxy
 ```
 
-Offline validation of the manifests without touching the cluster:
+Offline validation of the manifests without touching the cluster. The tree holds
+a placeholder, so it is rendered first, and the render is what a lane applies:
 
 ```bash
-kubectl kustomize deploy/driver > /tmp/driver.yaml
-kubectl apply -k deploy/driver --dry-run=client
+scripts/gate-lane.sh render /tmp/my-lane   # an empty directory you own
+kubectl kustomize /tmp/my-lane > /tmp/driver.yaml
+kubectl apply -k /tmp/my-lane --dry-run=client
 ```
