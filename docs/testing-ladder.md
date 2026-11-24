@@ -10,7 +10,7 @@ cheapest rung that can fail for the defect you are chasing.
 |---|---|---|---|---|---|
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers, and the front leg's status answer over a loopback socket (#200); no auth | socket framing beyond the status handshake, leg wiring, real timers, backend behavior |
-| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline and answers the picker (#257); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog and answers it (#257, #266); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, the same-connection reconfiguration, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering and vanilla acceptance of the reconfiguration; the run takes the live front offline, so the operator starts it |
 | 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
@@ -503,8 +503,9 @@ first dial and its target warms in five seconds.
   client received, has the bot
   answer it in the configuration state, and requires the service to report that
   same id with the server it named. The pick rides in the action `id`, never in
-  `additions`. `front.lastConfigMode` is `baseline`, the core attaches nothing,
-  and the client is ended with a configuration `disconnect` that says why.
+  `additions`. `front.lastConfigMode` is `baseline`, and the core attaches nothing.
+  A pick no longer ends the connection: it opens the server's own dialog, which is
+  O56.
 
   What it cannot prove: that a vanilla 26.2 client accepts the registry set. The
   protocol bot is not a vanilla oracle, and rung 4 is the only place one runs. What
@@ -516,6 +517,33 @@ first dial and its target warms in five seconds.
   dialog and no leftover bytes, and the front counts two picker joins and no
   attach. The single-attach rule is unchanged for a real attach: this is the
   property that makes a picker reachable while one client is reading it.
+- `O56` a pick opens that server's own dialog, and its answer is read back from the
+  frame the client sent (#266). The same 26.2 bot that picked reads a second
+  `show_dialog`. Its title is `gate-paper:25565 - down`, it has one column, no
+  escape, and three custom actions: `Claim`, `Spectate` and `Disconnect`. Their ids
+  are `monoplayer:claim/gate-paper_25565`, `monoplayer:spectate/…` and
+  `monoplayer:disconnect/…`, read out of the frame rather than chosen by the rung.
+  The bot clicks `Claim` in the configuration state. The assertion requires the
+  service to report verb `claim` with the id the frame carried and the server it
+  named. It also requires the client to be answered with a configuration
+  `disconnect`, and the front to count one server dialog and one verb. The verb and
+  the server both ride in the id, so the leg keeps no per-connection state about
+  which dialog a client is looking at. Wiring a claim to a body is #267's. What this
+  proves is the round trip.
+- `O56b` an unknown verb is refused, named, and answered (#266). The second 26.2 bot
+  sends `monoplayer:teleport/gate-paper_25565` in the configuration state. The front
+  refuses it and logs one sentence that names the verb and the verbs it does offer.
+  It reports no verb to the caller and ends the client with a configuration
+  `disconnect`, so the client is not left in a dialog. A malformed id
+  (`monoplayer:claim` with no server), an id in another namespace and a server the
+  lane does not offer take the same route through the leg. Their sentences are
+  proven in `test/core/picker.test.js` rather than here.
+- `O56c` disconnect is carried out (#266). A third 26.2 bot picks, then clicks
+  `Disconnect` out of the frame it received. The front reports verb `disconnect`
+  with that id and the server it named, and ends the client's configuration with a
+  `disconnect` frame. Claim and spectate are refused in words because the body they
+  act on is #267's. This is the one verb the dialog layer can complete on its own,
+  and it is proven by a click for that reason.
 
 
 ## The client parity rung

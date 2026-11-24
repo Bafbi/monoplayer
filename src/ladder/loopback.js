@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O55 (including O11b, O24b, O41b, O54b and O55b) are the contract
+// Assertions R0 and O1-O56 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -163,6 +163,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerCore = null
   let pickerBot = null
   let pickerBot2 = null
+  let pickerBot3 = null
 
   const evidence = {
     frontPort: null,
@@ -3025,6 +3026,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const pickerWireChecks = []
     const pickerServerName = 'gate-paper:25565'
     const pickerPicks = []
+    // #266: the verbs the front reports from the chosen server's dialog. The
+    // second level's answer is a claim here. Claim is the verb the dialog layer can
+    // read and cannot carry, because the body it would act on is #267's.
+    const pickerVerbs = []
+    // Three clients, so this rig has its own whitelist: the other rigs take the
+    // shared pair, and a name they do not know would change what they can refuse.
+    const pickerWhitelist = [offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third')]
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
       // A port nothing listens on, and the rig never dials it: this ticket's whole
@@ -3039,13 +3047,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       host: '127.0.0.1',
       port: 0,
       version: pickerVersion,
-      offlineWhitelist,
+      offlineWhitelist: pickerWhitelist,
       // No cached backend configuration exists, and none is invented: the front's
       // cached replay path must find nothing here.
       getSnapshotConfig: () => pickerCore?.cache.snapshot().config ?? [],
       configurationBaseline: pickerBaseline,
       pickerServers: () => [{ name: pickerServerName, state: 'down', driver: null }],
       onPickerPick: pick => pickerPicks.push(pick),
+      onPickerVerb: verb => pickerVerbs.push(verb),
       wireCheck: payload => {
         const outcome = pickerWire.check(payload)
         pickerWireChecks.push({ state: payload.state, name: payload.name, ok: outcome.ok === true })
@@ -3060,7 +3069,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // The one switch that lets a login with no backend through, and the reason
         // the front may serve a picker at all.
         picker: true,
-        attachWhitelist: offlineWhitelist,
+        attachWhitelist: pickerWhitelist,
         front: { host: '127.0.0.1', port: 0 },
         backend: { host: '127.0.0.1', port: pickerBackend.port ?? 1 },
         puppet: { username: 'GlowSquidye', uuid: puppetUuid }
@@ -3118,13 +3127,55 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // is in. The library's own writer omits the payload's length prefix, so the
       // bot's answer is the vanilla layout (src/core/picker.js).
       pickerBot.answerDialog(pickerAction.id, null, 'configuration')
-      await pickerBot.waitFor(
-        () => pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
-        'the refusal a pick gets while nothing can be entered',
-        15_000
-      )
     }
     await waitFor(() => pickerPicks.length === 1, 'the pick to reach the service', 10_000)
+    // #266: the pick opens that server's own dialog, and the phase stays open for
+    // it. Nothing is entered: the second dialog is the whole of what a pick does
+    // until #267 wires the verbs to a body.
+    await pickerBot.waitFor(
+      () => pickerBot.received.dialogs.length === 2,
+      'the chosen server\'s dialog after a pick',
+      15_000
+    )
+    // Read the dialog as the client read it: the title, the three buttons and the
+    // ids they would answer with. Nothing here is a constant this rung chose.
+    const readServerDialog = data => {
+      const dialog = data?.dialog?.value ?? data?.dialog ?? data
+      const entries = dialog?.actions?.value?.value
+      return {
+        title: dialog?.title?.value ?? (typeof dialog?.title === 'string' ? dialog.title : null),
+        escapes: dialog?.can_close_with_escape?.value ?? null,
+        columns: dialog?.columns?.value ?? null,
+        buttons: Array.isArray(entries)
+          ? entries.map(entry => ({
+              label: entry?.label?.value ?? null,
+              id: entry?.action?.value?.id?.value ?? null,
+              type: entry?.action?.value?.type?.value ?? null
+            }))
+          : []
+      }
+    }
+    const serverRead = readServerDialog(pickerBot.received.dialogs[1])
+    const claimAction = chooseDialogAction(pickerBot.received.dialogs[1], 'claim')
+    if (claimAction !== null) pickerBot.answerDialog(claimAction.id, null, 'configuration')
+    await pickerBot.waitFor(
+      () => pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the answer a claim gets while no body can be claimed',
+      15_000
+    )
+    await waitFor(() => pickerVerbs.length === 1, 'the verb to reach the service', 10_000)
+    // #266: an unknown verb is refused and named, and the client is answered
+    // rather than left in a dialog. The second client is in the same phase with no
+    // dialog of its own left to click, so it is the one that sends it.
+    pickerBot2.answerDialog('monoplayer:teleport/gate-paper_25565', null, 'configuration')
+    await pickerBot2.waitFor(
+      () => pickerBot2.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the refusal an unknown verb gets',
+      15_000
+    )
+    const verbRefusals = logs
+      .filter(entry => entry.event === 'pickerVerbRefused')
+      .map(entry => entry.fields)
     evidence.picker.pick = {
       ...pickerRead,
       reported: pickerPicks[0] ?? null,
@@ -3146,9 +3197,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       metrics: {
         pickers: pickerFront.metrics.pickers,
         picks: pickerFront.metrics.pickerPicks,
+        serverDialogs: pickerFront.metrics.pickerServerDialogs,
+        verbs: pickerFront.metrics.pickerVerbs,
         attaches: pickerCore.metrics.attaches,
         denials: pickerCore.metrics.denials
       }
+    }
+    evidence.picker.serverDialog = {
+      read: serverRead,
+      chosen: claimAction === null ? null : { id: claimAction.id, label: claimAction.label, total: claimAction.total },
+      reported: pickerVerbs[0] ?? null,
+      ended: pickerBot.received.ended === null ? null : String(pickerBot.received.ended).slice(0, 120),
+      refused: verbRefusals,
+      refusedEnded: pickerBot2.received.ended === null ? null : String(pickerBot2.received.ended).slice(0, 120)
     }
     check(
       'O55',
@@ -3166,7 +3227,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         pickerPicks.length === 1 &&
         pickerPicks[0].id === pickerAction.id &&
         pickerPicks[0].server?.name === pickerServerName &&
-        pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
         evidence.picker.pick.wire.rejected === 0 &&
         evidence.picker.pick.metrics.picks === 1 &&
         evidence.picker.pick.metrics.attaches === 0 &&
@@ -3181,6 +3241,100 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         pickerFront.metrics.pickers === 2,
       evidence.picker.pick.secondClient
     )
+    check(
+      'O56',
+      "a pick opens that server's own dialog, and its answer is read back from the frame the client sent",
+      pickerAction !== null &&
+        serverRead.title === pickerServerName + ' - down' &&
+        serverRead.escapes === 0 &&
+        serverRead.columns === 1 &&
+        serverRead.buttons.length === 3 &&
+        serverRead.buttons.map(button => button.id).join(',') === [
+          'monoplayer:claim/gate-paper_25565',
+          'monoplayer:spectate/gate-paper_25565',
+          'monoplayer:disconnect/gate-paper_25565'
+        ].join(',') &&
+        serverRead.buttons.map(button => button.label).join(',') === 'Claim,Spectate,Disconnect' &&
+        serverRead.buttons.every(button => button.type === 'minecraft:dynamic/custom') &&
+        claimAction !== null &&
+        pickerBot.received.dialogs.length === 2 &&
+        pickerBot.received.leftovers.length === 0 &&
+        pickerVerbs.length === 1 &&
+        pickerVerbs[0].verb === 'claim' &&
+        pickerVerbs[0].id === claimAction.id &&
+        pickerVerbs[0].slug === 'gate-paper_25565' &&
+        pickerVerbs[0].server?.name === pickerServerName &&
+        pickerBot.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerFront.metrics.pickerServerDialogs === 1 &&
+        pickerFront.metrics.pickerVerbs === 1 &&
+        pickerCore.attached === false,
+      evidence.picker.serverDialog
+    )
+    check(
+      'O56b',
+      'an unknown verb is refused and named, and the client is answered instead of left in a dialog',
+      verbRefusals.length === 1 &&
+        verbRefusals[0].verb === 'teleport' &&
+        verbRefusals[0].slug === 'gate-paper_25565' &&
+        /teleport/.test(String(verbRefusals[0].text ?? '')) &&
+        /claim, spectate and disconnect/.test(String(verbRefusals[0].text ?? '')) &&
+        pickerVerbs.length === 1 &&
+        pickerBot2.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      evidence.picker.serverDialog
+    )
+
+    // #266: the one verb the dialog layer can carry out. A third client picks, then
+    // clicks Disconnect out of the frame it received, and its configuration ends
+    // with the sentence naming the server it left.
+    pickerBot3 = createBot({ port: pickerBound.port, username: 'Third', version: pickerVersion })
+    await pickerBot3.waitFor(() => pickerBot3.received.dialogs.length === 1, 'the picker at the third client', 15_000)
+    const thirdPick = chooseDialogAction(pickerBot3.received.dialogs[0], 'first')
+    if (thirdPick !== null) pickerBot3.answerDialog(thirdPick.id, null, 'configuration')
+    await pickerBot3.waitFor(
+      () => pickerBot3.received.dialogs.length === 2,
+      "the chosen server's dialog at the third client",
+      15_000
+    )
+    const thirdLeave = chooseDialogAction(pickerBot3.received.dialogs[1], 'disconnect')
+    if (thirdLeave !== null) pickerBot3.answerDialog(thirdLeave.id, null, 'configuration')
+    await pickerBot3.waitFor(
+      () => pickerBot3.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the goodbye a disconnect gets',
+      15_000
+    )
+    await waitFor(() => pickerVerbs.length === 2, 'the disconnect verb to reach the service', 10_000)
+    evidence.picker.disconnect = {
+      pick: thirdPick === null ? null : { id: thirdPick.id, label: thirdPick.label },
+      chosen: thirdLeave === null ? null : { id: thirdLeave.id, label: thirdLeave.label },
+      reported: pickerVerbs[1] ?? null,
+      ended: pickerBot3.received.ended === null ? null : String(pickerBot3.received.ended).slice(0, 120),
+      metrics: {
+        picks: pickerFront.metrics.pickerPicks,
+        serverDialogs: pickerFront.metrics.pickerServerDialogs,
+        verbs: pickerFront.metrics.pickerVerbs,
+        pickers: pickerFront.metrics.pickers
+      }
+    }
+    check(
+      'O56c',
+      'disconnect is carried out: the client leaves the server it named, and the front says which',
+      thirdPick !== null &&
+        thirdPick.id === 'monoplayer:pick/gate-paper_25565' &&
+        thirdLeave !== null &&
+        thirdLeave.id === 'monoplayer:disconnect/gate-paper_25565' &&
+        thirdLeave.label === 'Disconnect' &&
+        pickerVerbs.length === 2 &&
+        pickerVerbs[1].verb === 'disconnect' &&
+        pickerVerbs[1].id === thirdLeave.id &&
+        pickerVerbs[1].server?.name === pickerServerName &&
+        pickerBot3.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerFront.metrics.pickerPicks === 2 &&
+        pickerFront.metrics.pickerServerDialogs === 2 &&
+        pickerFront.metrics.pickerVerbs === 2 &&
+        pickerFront.metrics.pickers === 3 &&
+        pickerCore.attached === false,
+      evidence.picker.disconnect
+    )
 
   } catch (error) {
     runError = error
@@ -3188,7 +3342,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
