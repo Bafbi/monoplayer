@@ -102,18 +102,26 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 ### One cache per body (`body-caches`)
 
 The cache belongs to a body, not to the process. `src/core/body-caches.js`
-creates one state cache per body and answers every read of that body with the
-same instance, so a body's driver and its spectators share one replay, and two
-bodies share nothing: not a frame, not a bound, not the capture counter that
-orders the entity/generic merge. A body whose cache was evicted by the registry's
-body bound keeps its session and re-warms from nothing on its next claim.
+creates one state cache per body. Every read of that body answers with the same
+instance, so a body's driver and its spectators share one replay. Two bodies
+share nothing: no frame, no bound, and no capture counter. That counter orders
+the entity and generic merge, so two bodies must not interleave into it.
+
+There is no body cap. A lane offers one body per allowed server, so the allowed
+server list is the bound. Caps wait for the per-body numbers, and they are
+configuration when they land (`docs/adr/one-account-many-bodies.md`).
 
 A body's fault resets that body's cache and no other. The composition root's
-teardown resets the cache of the body whose session ended; a sibling body's
-snapshot, warm flag and sequence numbers are untouched. What still serves one
-body at a time is the session, which holds one backend connection, not the
-cache: a leg per body is #261, and a channel that delivers a body to a client is
-#269.
+teardown resets the cache of the body whose session ended. A sibling body's
+snapshot, warm flag and sequence numbers are untouched.
+
+A dial names the body it serves. A move dials another server, so it dials that
+server's body. A failed move puts the snapshot back in the body the move started
+on, and releases the target body's cache with the target's session.
+
+What still serves one body at a time is the session, not the cache: a session
+holds one backend connection. A leg per body is #261, and a channel that
+delivers a body to a client is #269.
 
 ### Attach stream order (`join-synth.synthAttach`)
 

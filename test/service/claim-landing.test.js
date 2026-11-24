@@ -1,9 +1,8 @@
 // #258: the landing's rules, at the fake-integration seam. The offline loopback
-// rung (O58) proves the whole path over real sockets; what is cheap to pin here is
+// rung (O58) proves the whole path over real sockets. What is cheap to pin here is
 // the part a socket would hide: which dials a claim is allowed to make, and what a
-// claim gets when it is not. #260 gave each body its own cache; what this file
-// still holds still is one body per session, which is #261's lifetime and #269's
-// delivery.
+// claim gets when it is not. #260 gave each body its own cache. This file still
+// holds one body per session, which is #261's lifetime and #269's delivery.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -67,7 +66,7 @@ test('#258 the claim dials the body it names, and another body after it is refus
   assert.equal(core.claimedBody, CLAIMED_BODY.body)
   assert.equal(core.metrics.claimDials, 1)
   assert.equal(core.metrics.claimBodies, 1)
-  // #260: the cache the body's frames landed in is that body's. The lane's own
+  // #260: the cache the body's frames landed in is that body's. The lane's
   // configured body keeps a cache of its own, and the claim put no frame in it.
   const configured = pickSlug(core.config.backend.host + ':' + core.config.backend.port)
   assert.notEqual(CLAIMED_BODY.body, configured, 'the claim names a body that is not the lane\'s own')
