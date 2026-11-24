@@ -653,6 +653,32 @@ first dial and its target warms in five seconds.
   The report says which path ran, out of the client's own frames: this one is
   `same_phase`, with one finish and no `start_configuration`. The fallback would
   show that frame, so a later run cannot report the same path by accident.
+- `O59` a body owns its state cache: two bodies of one account hold their own
+  state at once, and one body's fault leaves the other body's cache and session
+  intact (#260). Two 26.1 fake backends, two offline backend legs, one account
+  (`GlowSquidye`) logged in to both at once, and no client delivered to either.
+  Each body's frames go into its own cache through the product's body-cache
+  registry, which is the ownership this assertion is about. Each body sends its
+  own spawn entity and its own block change, and each cache holds only its own,
+  so the two are not one cache by accident. The capture counters are the cache's
+  own: a block frame at the first body does not advance the second body's
+  sequence. One replay per body follows from that: `replayFrames` over each
+  snapshot carries that body's entity and not the other's. Then the first body's
+  session ends and its cache is reset, which is the composition root's own rule
+  for the body that ended. The second body's snapshot is byte for byte the one it
+  had, its warm flag is still set, and its fake's next block change still lands
+  in its block domain. The picker core this run already landed a claim on is read
+  too: the cache the client is served from is the claimed body's, and the two
+  bodies it dialled and never reached each kept an empty cache of their own: the
+  lane's configured backend, which a picker lane never dials, and the row whose
+  dial O56's claim had refused.
+
+  What it cannot prove: that two clients are delivered at once, one per body,
+  each reading its own body's cache. That is per-channel delivery, #269, and a
+  session per body, #261: the two bodies here are held at the leg, not delivered.
+  It also cannot prove two sessions of one account on one server, because a
+  server kicks the session it already has, and these are two fakes, so two
+  servers.
 
 
 ## The client parity rung
