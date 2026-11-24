@@ -4,7 +4,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { envOverlay, journalVolumeFull, unidentifiedSkinWarning } from '../../src/service/start-live.js'
+import {
+  createPickerServerReader,
+  envOverlay,
+  journalVolumeFull,
+  unidentifiedSkinWarning
+} from '../../src/service/start-live.js'
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import {
   DEFAULT_MAX_AGE_MS,
@@ -324,3 +329,39 @@ test('#262 the list is read without the desired document, and one unset path lea
   assert.deepEqual(envOverlay(doc, {}).control, doc.control, 'an unset variable is not a removal')
 })
 
+
+// #265: the picker's list. The key is the allowed-server list (#262), read at each
+// offer, so a panel edit shows at the next join. The row a lane offers names the
+// address a claim dials.
+test('#265 the picker reader offers the allowed-server list, and names the source once per answer', () => {
+  let answer = { servers: [{ host: 'paper', port: 25565 }], source: 'seed' }
+  const said = []
+  const offered = createPickerServerReader({
+    control: { allowedServers: () => answer },
+    log: (event, fields) => said.push({ event, ...fields })
+  })
+
+  assert.deepEqual(offered(), [{ name: 'paper:25565', state: 'down', driver: null }])
+  // The list is read at each offer, so an edit made from the panel is what the next
+  // join sees. The picker is not a snapshot taken at start.
+  answer = { servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25566 }], source: 'control' }
+  assert.deepEqual(offered().map(row => row.name), ['paper:25565', 'sky:25566'])
+
+  // One line per answer, not one per read. A join reads the list more than once, and
+  // an operator does not need the same fact three times.
+  offered()
+  assert.deepEqual(said, [
+    { event: 'pickerOffered', source: 'seed', servers: 1 },
+    { event: 'pickerOffered', source: 'control', servers: 2 }
+  ])
+
+  // A lane with no list offers nothing, and says so. It does not fall back to the
+  // configured backend: the list is what a picker lane offers.
+  answer = { servers: [], source: 'none' }
+  assert.deepEqual(offered(), [])
+  assert.equal(said.length, 3)
+  assert.deepEqual(said[2], { event: 'pickerOffered', source: 'none', servers: 0 })
+
+  // Composed where a lane can see the mistake at start, not at a join.
+  assert.throws(() => createPickerServerReader({ control: {} }), /allowedServers/)
+})
