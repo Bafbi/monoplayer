@@ -5,6 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { SENTINEL, redact } from '../../src/observability/redact.js'
+import { pickSlug } from '../../src/core/picker.js'
 import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -47,6 +48,40 @@ const PACK = uuid => ({
   state: 'play',
   name: 'add_resource_pack',
   data: { uuid, url: `https://example.invalid/${uuid}.zip`, hash: '', forced: false, prompt: null }
+})
+
+// #260: the cache belongs to a body, not to the process. A lane with no claim
+// serves the body its configured backend is. That body is named the way a claim
+// names one, and `core.cache` is its cache. The facade stays because every rung,
+// every service test and the panel read it.
+test('#260 the lane serves its configured backend as one body, and core.cache is that body\'s', () => {
+  const rig = makeCore()
+  const configured = pickSlug(rig.core.config.backend.host + ':' + rig.core.config.backend.port)
+  const held = rig.core.bodies.stats()
+
+  assert.deepEqual(held.bodies, [configured], 'one lane, one body, named by its address')
+  assert.equal(held.count, 1)
+  assert.equal(rig.core.cache, rig.core.bodies.cacheFor(configured), 'the process serves one body\'s cache')
+  warmBackend(rig)
+  assert.equal(rig.core.bodies.cacheFor(configured).warm, true, 'the warm marker landed in that body\'s cache')
+})
+
+test("#260 the first frame of a session binds the body the leg was pointed at", () => {
+  const rig = makeCore()
+  const configured = pickSlug(rig.core.config.backend.host + ':' + rig.core.config.backend.port)
+  const dialled = pickSlug('127.0.0.1:25599')
+  assert.equal(rig.core.bodies.stats().count, 1, 'the lane starts on its configured body')
+
+  // The orchestrator points the leg at a target of its own: the control document's
+  // startup target, or a desired backend on a detached reconnect. No move field
+  // names it (#229), so the leg's target is the only record of the dial.
+  rig.backendLeg.setTarget({ host: '127.0.0.1', port: 25599 })
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+
+  assert.equal(rig.core.cache, rig.core.bodies.cacheFor(dialled), 'the frame is cached under the server it came from')
+  assert.deepEqual(rig.core.bodies.get(configured).snapshot().config, [],
+    'the configured body keeps no frame of another body')
+  assert.deepEqual([...rig.core.bodies.stats().bodies].sort(), [configured, dialled].sort())
 })
 
 // #98: the pack is the human's answer, and the held copy is what a later client
