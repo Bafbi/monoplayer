@@ -256,8 +256,10 @@ The runner builds:
   fault, and retains the last pose (`2.5/1.62/2.5`).
 - `O11b` a non-whitelisted bot is denied before play: no login success, no play
   frames, no client error, one front denial, and an `attachDenied` log with
-  reason `not_whitelisted`. The check runs with the attach slot free; while a client
-  is attached, the earlier second-attach guard answers `already_attached`.
+  reason `not_whitelisted`. The check runs after the first client has detached, so
+  the whitelist is what refuses this bot and not a second attach: a lane with no
+  picker has no claim to make, and its core session answers `already_attached` at
+  the attach (#269).
 - `O13` the second attach makes `core.metrics.attaches` 2, keeps
   `backendLogins` at 1, lands the first synthesized position at the last pose
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
@@ -570,8 +572,8 @@ first dial and its target warms in five seconds.
   it does establish is that the bytes are a real server's, that they parse in the
   configuration state under the strict wire checker, and that no frame the front
   invented is in the phase.
-- `O55b` a second client reads the picker at the same time, because the picker
-  takes no attach slot (#257). Two 26.2 bots hold the picker at once, each with a
+- `O55b` a second client reads the picker at the same time, because a picker
+  join holds no channel and enters no body (#257). Two 26.2 bots hold the picker at once, each with a
   dialog and no leftover bytes, and the front counts two picker joins and no
   attach. The single-attach rule is unchanged for a real attach: this is the
   property that makes a picker reachable while one client is reading it.
@@ -613,7 +615,7 @@ first dial and its target warms in five seconds.
   refused by name (#267). The first 26.2 bot claimed the row whose port answers
   nothing in O56 and is still connected, so it holds that body, and it is back at
   the picker holding it. A fourth bot reads the picker while that claim stands,
-  which it may, because the picker is not a claim and takes no attach slot. It
+  which it may, because a picker join is not a claim and holds no channel. It
   picks the same server and clicks `Claim`. The claims the front holds are then
   exactly one, on that body, and they name `Attach`. The refusal is one
   sentence naming `Attach`, and the rival gets a configuration `disconnect` rather
@@ -624,8 +626,8 @@ first dial and its target warms in five seconds.
   joins, one claim and no attach, so the core's session is untouched.
 
   What it cannot prove: that the claiming client is delivered the body, because the
-  body claimed here never came up. The landing is O58's. Delivery still runs through
-  the front leg's attach slot, and #269 replaces it.
+  body claimed here never came up. The landing is O58's, and the body that is
+  actually driven is where O60b refuses a rival.
 - `O58` a claim lands the client in the body it named: the body is dialled only
   for that claim, and its play state arrives on the connection the client already
   held (#258). A fifth 26.2 bot reads the same picker, picks the row that names a
@@ -673,10 +675,51 @@ first dial and its target warms in five seconds.
   lane never dials, and the row whose dial O56's claim had refused.
 
   What it cannot prove: that two clients are delivered at once, one per body,
-  each reading its own body's cache. That is per-channel delivery, #269, and a
-  session per body, #261: the two bodies here are held at the leg, not delivered.
-  It also cannot prove two sessions of one account on one server. A server kicks
-  the session it already has, and these are two fakes, so two servers.
+  each reading its own body's cache. That is a session per body, #261: the two
+  bodies here are held at the leg, not delivered. O60 delivers a driver and a
+  spectator of one body, which is the delivery half. It also cannot prove two
+  sessions of one account on one server. A server kicks the session it already has,
+  and these are two fakes, so two servers.
+- `O60` a body serves a driver and a spectator: two channels on one body, each
+  with its own delivery state and its own client information (#269). O58's driver
+  is still connected and still holds the body. A sixth 26.2 bot reads the same
+  picker, picks the row the driver is on, and clicks `Spectate`. Nothing is dialled
+  for it: the fake body counts the same one login it had, because a spectator
+  watches a body that already has a session. The client continues the
+  configuration phase the baseline opened with that body's own frames, ends it with
+  one `finish_configuration`, and its play login arrives on the connection it
+  already held, at the body's own spawn.
+
+  Then the body sends one block change, and both clients receive it: the live
+  stream of a body reaches every channel on that body. The front's channels are
+  read as records, not counters. There are two, and the driver comes first. Both
+  are on the claimed body's slug, both have been handed their body's replay once,
+  and their delivery counts differ, because one landed at O58 and the other at
+  O60. Their `last` frame is the block change each of them just received.
+
+  Each client's own client information stays on its own channel. Both are sent in
+  play, which is the state where the front's settings hook reports nothing and the
+  driver's change travels the serverbound rewrite. The driver's reaches the puppet
+  as one Client Information frame with the driver's locale. The spectator's reaches
+  the fake as nothing, and the front counts it as a spectator's. A position the
+  spectator sends moves nothing: the front drops it before the core's pipeline, the
+  core forwards nothing, and the session pose is byte for byte the one it had.
+
+  What it cannot prove: that what a spectator is shown is right, or who may
+  spectate. That is #259. This is the seam that decides it: a body's frames go to
+  every channel on that body, and a channel is not a driver by default.
+- `O60b` a second claim on a body a driver already holds is refused by the claim,
+  not by an attach slot (#269). O57 refused a rival on a body nothing was delivered
+  to. Here the body is driven: O58's driver holds it and O60's spectator watches
+  it. A seventh bot reaches the picker while the body is driven, which is the login
+  route #269 changes: the core serves the picker rather than passing the login to an
+  attach it would refuse. The bot picks the driven body and clicks `Claim`. The
+  refusal is one sentence naming the player who holds it, the rival gets a
+  configuration `disconnect`, and no `attachDenied` line with reason
+  `already_attached` exists in the whole run: nothing refused the rival before the
+  claim did. The session's attach count stays one, the driver and the spectator are
+  still connected, and the front still holds exactly two channels, one of them a
+  driver.
 
 
 ## The client parity rung
