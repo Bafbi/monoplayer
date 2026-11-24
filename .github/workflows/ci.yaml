@@ -7,8 +7,16 @@ name: ci
 
 on:
   push:
-    # The deploy branch is bot-written from an already-green main.
-    branches-ignore: [deploy]
+    # Only the default branch. A feature branch is checked by its pull request,
+    # and running the same commit twice doubled the exposure to the loopback
+    # rung's intermittent failure (#211): at roughly one run in three, a branch
+    # showed a red `check` on about half its commits while its pull-request run
+    # was green on the same tree, and GitHub blocks the merge on the red one.
+    #
+    # The deploy branch is bot-written from an already-green main, so it needs no
+    # run of its own either. A branch with no pull request now goes unchecked
+    # until one is opened, which is the price of the halved flake surface.
+    branches: [main]
   pull_request:
   workflow_call:
 
