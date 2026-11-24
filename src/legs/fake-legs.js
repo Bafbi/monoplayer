@@ -16,6 +16,8 @@ export function createFakeBackendLeg () {
   let errorHandler = null
   let connected = false
   let ended = 0
+  let target = null
+  const targets = []
 
   const leg = {
     kind: 'fake-backend-leg',
@@ -30,6 +32,14 @@ export function createFakeBackendLeg () {
     setErrorHandler (fn) { errorHandler = fn },
     writeRaw (buffer, meta) { written.raw.push({ buffer, meta }) },
     write (name, packet, meta) { written.packets.push({ name, packet, meta }) },
+    // #258: the target the core hands over for the next connect. The real leg
+    // refuses a change while connected; the fake records the ask, which is what a
+    // test reads to know which body a claim dialled.
+    setTarget (next = {}, intent = {}) {
+      target = { host: next.host, port: next.port }
+      targets.push({ host: target.host, port: target.port, ...intent })
+      return { ...target }
+    },
     // #73: the core asks for the answer a configuration gate the last client
     // left would have had from a headless session. The fake records the ask;
     // the real leg's policy is what decides, and the leg unit tests cover it.
@@ -48,6 +58,8 @@ export function createFakeBackendLeg () {
     get connected () { return connected },
     get ended () { return ended },
     get written () { return written },
+    get target () { return target === null ? null : { ...target } },
+    dialledTargets: () => [...targets],
     rawWrites: () => [...written.raw],
     packetWrites: () => [...written.packets],
     spoken: () => [...written.spoken],
