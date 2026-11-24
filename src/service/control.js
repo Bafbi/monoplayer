@@ -1,12 +1,20 @@
-// The runtime control document (#229): the two files an operator edits between
-// deploys, both re-read at the point of use.
+// The runtime control document (#229, #262): the files an operator edits between
+// deploys, each re-read at the point of use.
 //
 //   control.file          desired.json           {version:1, backend:{host,port}, changedAt, changedBy}
 //   attachWhitelistFile   attach-whitelist.json  {version:1, players:[{uuid,name,addedAt}]}
+//   allowedServersFile    allowed-servers.json   {version:1, servers:[{host,port,addedAt}]}
 //
-// There is no watcher. A login and a backend dial are both rare, so each read is
-// one file read at the moment the value is needed: the whitelist at every login,
-// the desired backend before every backend connect.
+// There is no single control document, and no watcher. Each key is its own file
+// with its own environment variable and its own reader, and each read is one file
+// read at the moment the value is needed: the whitelist at every login, the desired
+// backend before every backend connect, the allowed-server list when the picker
+// offers it (#265).
+//
+// One key differs from the other two: the allowed-server list has a fallback. A
+// missing or broken whitelist denies a login, which is safe and loud; a missing or
+// broken server list offers a joining client nothing. So the list Git commits
+// answers when the live file cannot.
 //
 // A control file that cannot be read or parsed is named and ignored, never fatal.
 // The value never reaches loadConfig, because a throw at boot would stop the lane
@@ -16,6 +24,7 @@ import fs from 'node:fs'
 import { createWhitelistStore } from '../custody/store.js'
 
 export const DESIRED_VERSION = 1
+export const ALLOWED_SERVERS_VERSION = 1
 
 // desired.json -> { target, reason }. The shape is the ticket's: a version, one
 // backend, and the two fields a dial needs. A reason is a word an operator can
@@ -43,16 +52,66 @@ export function parseDesiredTarget (raw) {
   return { target: { host: host.trim(), port, changedAt }, reason: null }
 }
 
-// One reader for both files. `file` is the switch: with it unset nothing is read
-// and the lane behaves exactly as it did before this ticket.
+// allowed-servers.json -> { servers, reason }. Each entry is one game server the
+// picker offers (#262), and the row it becomes is `host:port` (#258: a row's name
+// is the address a claim dials).
+//
+// Strict, and the same function the panel parses with. The whitelist needs two
+// parsers because the custody store reads leniently at a login and the panel must
+// refuse a document it would otherwise shorten; here there is one consumer of a
+// broken file, and it is the fallback. A field this reader has no use for is
+// dropped: this key has no document older than itself, so there is nothing to
+// preserve in a rewrite.
+export function parseAllowedServers (raw) {
+  let doc
+  try {
+    doc = JSON.parse(String(raw))
+  } catch {
+    return { servers: null, reason: 'not_json' }
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { servers: null, reason: 'not_an_object' }
+  if (doc.version !== ALLOWED_SERVERS_VERSION) return { servers: null, reason: 'version' }
+  if (!Array.isArray(doc.servers)) return { servers: null, reason: 'servers' }
+  const servers = []
+  const seen = new Set()
+  for (const [index, entry] of doc.servers.entries()) {
+    // `at` is the entry the refusal is about, so a route can say which line of the
+    // file to fix rather than "an entry". A success carries no such field.
+    const at = 'servers[' + index + ']'
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { servers: null, reason: 'server', at }
+    const host = typeof entry.host === 'string' ? entry.host.trim() : ''
+    if (host === '') return { servers: null, reason: 'host', at }
+    if (!Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535) return { servers: null, reason: 'port', at }
+    // Two rows for one address are two buttons that dial the same server, and a
+    // claim would land on whichever the picker happened to render first. A DNS name
+    // is case-insensitive, so the comparison is.
+    const address = host.toLowerCase() + ':' + entry.port
+    if (seen.has(address)) return { servers: null, reason: 'duplicate', at }
+    seen.add(address)
+    // An entry the seed wrote has no stamp, and a rewrite must not give it one: the
+    // panel may only add a field it means.
+    const addedAt = typeof entry.addedAt === 'string' && entry.addedAt.trim() !== '' ? entry.addedAt : null
+    servers.push({ host, port: entry.port, ...(addedAt === null ? {} : { addedAt }) })
+  }
+  return { servers, reason: null }
+}
+
+// A path a lane named, or nothing. One rule, so a blank variable and an unset one
+// are the same fact everywhere in this module.
+const named = value => typeof value === 'string' && value.trim() !== ''
+
+// One reader for every file. Each path is its own switch: with all of them unset
+// nothing is read and the lane behaves exactly as it did before #229.
 export function createControlDocument ({
   file = null,
   whitelistFile = null,
+  allowedServersFile = null,
+  allowedServersSeedFile = null,
   allowBackendSwitch = false,
   readFile = fs.readFileSync,
   log = () => {}
 } = {}) {
-  const enabled = typeof file === 'string' && file.trim() !== ''
+  const enabled = named(file)
   const said = new Set()
 
   // One line per distinct refusal. A reconnect loop re-reads the same file every
@@ -67,7 +126,7 @@ export function createControlDocument ({
   // One store for the whole process: the core reads the list through
   // attachWhitelist() and the front legs read has(). Every read reloads, so the
   // file is the only authority and a broken one is named, not silently empty.
-  const whitelistStore = enabled && typeof whitelistFile === 'string' && whitelistFile.trim() !== ''
+  const whitelistStore = enabled && named(whitelistFile)
     ? createWhitelistStore({
       file: whitelistFile,
       reloadEachUse: true,
@@ -78,6 +137,43 @@ export function createControlDocument ({
   function attachWhitelist () {
     if (whitelistStore === null) return []
     return whitelistStore.list().map(player => player.uuid)
+  }
+
+  // One allowed-server file, as the list or the reason there is none. An unwritten
+  // live key is the normal state before the first panel edit, not a failure: the
+  // seed is the answer. Anything else that stops a read is named.
+  function readAllowedServers (path) {
+    let raw
+    try {
+      raw = String(readFile(path, 'utf8'))
+    } catch (error) {
+      if (error?.code !== 'ENOENT') sayOnce('controlUnreadable', { file: path, code: error?.code ?? null })
+      return { servers: null, reason: 'missing' }
+    }
+    const parsed = parseAllowedServers(raw)
+    if (parsed.reason !== null) sayOnce('controlRejected', { file: path, reason: parsed.reason })
+    return parsed
+  }
+
+  // #262: the list the picker offers (#265). The live key, else the copy Git
+  // commits, else nothing. It never throws, so a picker can ask on every offer and
+  // a broken file is one named line instead of a refused join.
+  //
+  // `source` is which file answered, because "the seed is what you are offering"
+  // and "your edit is what you are offering" are different facts to an operator
+  // reading the start record.
+  function allowedServers () {
+    if (!named(allowedServersFile)) return { servers: [], source: 'none' }
+    const live = readAllowedServers(allowedServersFile)
+    if (live.reason === null) return { servers: live.servers, source: 'control' }
+    if (!named(allowedServersSeedFile)) return { servers: [], source: 'none' }
+    const seed = readAllowedServers(allowedServersSeedFile)
+    // The live key's absence is the normal state. The seed's is not: it is a file
+    // this repository commits and the Deployment mounts, so a seed that is not there
+    // is a mount to fix, and it is named once.
+    if (seed.reason === 'missing') sayOnce('controlUnreadable', { file: allowedServersSeedFile, code: 'ENOENT' })
+    if (seed.reason === null) return { servers: seed.servers, source: 'seed' }
+    return { servers: [], source: 'none' }
   }
 
   function desiredTarget () {
@@ -104,7 +200,7 @@ export function createControlDocument ({
     return parsed.target
   }
 
-  return { enabled, file, whitelistStore, attachWhitelist, desiredTarget }
+  return { enabled, file, whitelistStore, attachWhitelist, allowedServers, desiredTarget }
 }
 
 // The target the next backend connect dials. A followed transfer wins, because a

@@ -2,10 +2,21 @@
 #
 # It is a ConfigMap in Git, not a discovery step. The panel never lists pods to
 # find work, so the list it can act on is the list a reviewer reads in the diff.
-# Each entry names the one control ConfigMap the panel may write for that puppet;
-# role.yaml names the same ConfigMap in `resourceNames`, and
-# test/tooling/panel-manifests.test.js fails when the two lists disagree in either
+# Each entry names the one control ConfigMap the panel may write for that puppet,
+# and the seed ConfigMap it may only read; role.yaml names the first in a write
+# rule and the second in a `get`-only rule, and
+# test/tooling/panel-manifests.test.js fails when the lists disagree in either
 # direction.
+#
+# `seedConfigMap` is the copy Git commits (#262). One control key has a fallback:
+# the lane offers the list this object holds whenever the live key is absent or
+# unreadable, and the panel lists and edits from it when the live key is absent, so
+# a first write is built on the committed list rather than on an empty document. A
+# live key that exists and does not parse is refused by name instead, so the file
+# that needs fixing is not hidden behind a list that looks normal.
+#
+# It is a read because it is Argo's: a write to it would be reverted by the next
+# sync, which is the whole reason the control ConfigMap is not in Git.
 #
 # `allowBackendSwitch` is whether this puppet may be pointed at another backend
 # from the panel (#233). It is the panel's own declaration, not the fence: the
@@ -52,6 +63,7 @@ data:
           "namespace": "monoplayer",
           "deployment": "monoplayer",
           "controlConfigMap": "monoplayer-control",
+          "seedConfigMap": "monoplayer-config",
           "frontHostname": "glowsquidye.tail41e568.ts.net",
           "backend": "play2.excalia.fr:25565",
           "allowBackendSwitch": true

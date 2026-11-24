@@ -1,10 +1,11 @@
 // The panel's whole promise is that it can only ever write the control
-// ConfigMaps its registry names. That promise lives in four manifest facts, and
-// nothing walked deploy/panel before this file: the Role's `resourceNames` is the
-// registry's list, no rule grants a verb that escapes it, the Service is on the
-// tailnet and nowhere else, and the Argo project whitelists exactly the kinds this
-// tree holds. A panel that is scoped today is not a panel that is scoped tomorrow
-// without an assertion.
+// ConfigMaps its registry names, and only ever read the seeds it names. That
+// promise lives in four manifest facts, and nothing walked deploy/panel before this
+// file: the Role's `resourceNames` is the registry's lists — write for the control
+// ConfigMaps, `get` alone for the seed ConfigMaps (#262) — no rule grants a verb
+// that escapes it, the Service is on the tailnet and nowhere else, and the Argo
+// project whitelists exactly the kinds this tree holds. A panel that is scoped today
+// is not a panel that is scoped tomorrow without an assertion.
 //
 // Styled after live-manifests.test.js, which exists because nothing walked
 // deploy/manifests either. There is no YAML library in this repo and no new
@@ -23,6 +24,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseRegistry } from '../../src/panel/registry.js'
+import { ALLOWED_KEY } from '../../src/panel/routes/allowed.js'
+import { DESIRED_KEY } from '../../src/panel/routes/backend.js'
+import { WHITELIST_KEY } from '../../src/panel/routes/whitelist.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const PANEL = path.join(ROOT, 'deploy', 'panel')
@@ -130,6 +134,13 @@ function assign (rule, text) {
 // invent any ConfigMap in the namespace the Role lives in (#230).
 const NEVER_VERBS = ['create', 'delete', 'deletecollection', 'escalate', 'bind', 'impersonate']
 const NEVER_RESOURCES = ['secrets']
+// A configmaps rule is a write rule or a read rule (#262). A write rule carries
+// `patch` or `update`, and its names are the control ConfigMaps the registry names.
+// A read rule carries `get` alone, and its names are the seed ConfigMaps: the copy
+// Git commits, which the panel reads and never writes, because Argo would revert a
+// write to an object it owns.
+const WRITE_VERBS = ['patch', 'update']
+
 // The verbs each resource is allowed, so a new one is a decision someone makes
 // here rather than a line a reviewer has to notice.
 const ALLOWED = new Map([
@@ -173,9 +184,14 @@ function audit ({ files, documents, registry }) {
   //    and a registry entry with no resourceNames is a write that will be refused
   //    at the worst possible moment.
   const writable = new Map()
+  const seeds = new Map()
   for (const puppet of registry.puppets) {
-    if (!writable.has(puppet.namespace)) writable.set(puppet.namespace, new Set())
+    if (!writable.has(puppet.namespace)) {
+      writable.set(puppet.namespace, new Set())
+      seeds.set(puppet.namespace, new Set())
+    }
     writable.get(puppet.namespace).add(puppet.controlConfigMap)
+    seeds.get(puppet.namespace).add(puppet.seedConfigMap)
   }
   for (const [namespace, targets] of writable) {
     const hosted = roles.filter(role => role.namespace === namespace)
@@ -187,9 +203,12 @@ function audit ({ files, documents, registry }) {
     if (bound.length !== 1) report(namespace + ' has ' + bound.length + ' RoleBindings; it needs exactly one')
 
     const named = new Set()
+    const readOnly = new Set()
     for (const rule of roleRules.get(hosted[0])) {
       if (!(rule.resources ?? []).includes('configmaps')) continue
-      for (const name of rule.resourceNames ?? []) named.add(name)
+      const verbs = rule.verbs ?? []
+      const into = WRITE_VERBS.some(verb => verbs.includes(verb)) ? named : readOnly
+      for (const name of rule.resourceNames ?? []) into.add(name)
     }
     for (const name of named) {
       if (!targets.has(name)) {
@@ -200,6 +219,23 @@ function audit ({ files, documents, registry }) {
     for (const name of targets) {
       if (!named.has(name)) {
         report('the registry names ' + namespace + '/' + name + ' as a controlConfigMap, and the Role does not')
+      }
+    }
+    // The seed is read and never written: a write rule that names it would be a
+    // grant to replace the copy Git owns, which selfHeal would then revert under
+    // the operator's feet.
+    for (const name of readOnly) {
+      if (!seeds.get(namespace).has(name)) {
+        report('Role ' + hosted[0].name + ' in ' + namespace + ' reads ' + name +
+          ', which is not a seedConfigMap the registry names')
+      }
+      if (named.has(name)) {
+        report('Role ' + hosted[0].name + ' in ' + namespace + ' both reads and writes ' + name)
+      }
+    }
+    for (const name of seeds.get(namespace)) {
+      if (!readOnly.has(name)) {
+        report('the registry names ' + namespace + '/' + name + ' as a seedConfigMap, and the Role does not read it')
       }
     }
   }
@@ -381,6 +417,74 @@ test('the guard refuses a resourceNames entry the registry does not name', () =>
   assert.deepEqual(audit({ files, documents: broken, registry }), [
     'Role panel-control in monoplayer may write kube-root-ca.crt, which is not a controlConfigMap the registry names'
   ])
+})
+
+test('the guard refuses a seed the registry does not name, and a seed no rule reads', () => {
+  // A `get`-only rule for an object no row names as a seed: a read target nobody
+  // approved, which is the same failure as a write target nobody approved.
+  const extra = structuredClone(documents)
+  const extraRole = extra.find(document => document.kind === 'Role')
+  extraRole.text = extraRole.text.replace(
+    /resourceNames: \["monoplayer-config"\]\n    verbs: \["get"\]/,
+    'resourceNames: ["monoplayer-config", "monoplayer-custody-tokens"]\n    verbs: ["get"]'
+  )
+  assert.deepEqual(audit({ files, documents: extra, registry }), [
+    'Role panel-control in monoplayer reads monoplayer-custody-tokens, which is not a seedConfigMap the registry names'
+  ])
+
+  // The other direction: a registry row naming a seed the Role cannot read is a
+  // fallback that answers 403 at the one moment it is needed.
+  const unread = structuredClone(registry)
+  unread.puppets[0] = { ...unread.puppets[0], seedConfigMap: 'monoplayer-seed' }
+  assert.deepEqual(audit({ files, documents, registry: unread }).sort(), [
+    'Role panel-control in monoplayer reads monoplayer-config, which is not a seedConfigMap the registry names',
+    'the registry names monoplayer/monoplayer-seed as a seedConfigMap, and the Role does not read it'
+  ].sort(), 'the row moved and the rule did not, and both halves are named')
+
+  // A seed granted `patch` is a grant to rewrite the copy Argo owns, which the next
+  // sync would revert under the operator's feet.
+  const writable = structuredClone(documents)
+  const writeRole = writable.find(document => document.kind === 'Role')
+  writeRole.text = writeRole.text.replace(
+    'resourceNames: ["monoplayer-config"]\n    verbs: ["get"]',
+    'resourceNames: ["monoplayer-config"]\n    verbs: ["get", "patch"]'
+  )
+  assert.deepEqual(audit({ files, documents: writable, registry }).sort(), [
+    'Role panel-control in monoplayer may write monoplayer-config, which is not a controlConfigMap the registry names',
+    'the registry names monoplayer/monoplayer-config as a seedConfigMap, and the Role does not read it'
+  ].sort())
+})
+
+test('the seed the panel reads is the ConfigMap the lane mounts, and its keys are the lane\'s files', () => {
+  // Two trees, one fact: the panel's read target is a ConfigMap this repository
+  // ships, and the object behind the lane's seed mount is the same one. A rename in
+  // either tree is a red gate rather than a fallback that answers 404 at the moment
+  // it is needed.
+  const deployment = manifestsDocuments.find(document => document.kind === 'Deployment')
+  const volume = /- name: config\n\s+configMap:\n\s+name: (\S+)/.exec(deployment.text)
+  assert.ok(volume, 'the lane mounts the committed seed ConfigMap')
+  const mounted = volume[1]
+  const shipped = manifestsDocuments.filter(document => document.kind === 'ConfigMap').map(document => document.name)
+  assert.ok(shipped.includes(mounted), 'the lane mounts a ConfigMap these manifests declare: ' + mounted)
+  for (const puppet of registry.puppets) {
+    assert.equal(puppet.seedConfigMap, mounted,
+      'the panel reads ' + puppet.seedConfigMap + ' as the seed and the lane mounts ' + mounted)
+  }
+
+  // The panel writes one key of one ConfigMap, and each of those keys is the file
+  // the lane's own variable points at. A key named one thing in the route and
+  // another in the Deployment is a write that lands where nothing reads.
+  const env = new Map([...deployment.text.matchAll(/- name: (MONOPLAYER_[A-Z_]+)\n\s+value: (.*)$/gm)]
+    .map(match => [match[1], match[2].replace(/^"|"$/g, '')]))
+  const pairs = [
+    [DESIRED_KEY, env.get('MONOPLAYER_CONTROL_FILE')],
+    [WHITELIST_KEY, env.get('MONOPLAYER_ATTACH_WHITELIST')],
+    [ALLOWED_KEY, env.get('MONOPLAYER_ALLOWED_SERVERS')],
+    [ALLOWED_KEY, env.get('MONOPLAYER_ALLOWED_SERVERS_SEED')]
+  ]
+  for (const [key, path] of pairs) {
+    assert.equal(String(path).split('/').pop(), key, key + ' is the file ' + path + ' names')
+  }
 })
 
 test('the guard refuses a rule that escapes the scope', () => {

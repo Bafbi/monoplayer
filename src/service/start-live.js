@@ -20,6 +20,14 @@
 //                                                       its socket is destroyed
 //                                                       (default 30000, #205)
 //   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
+//   MONOPLAYER_ALLOWED_SERVERS                          allowed-servers.json, the
+//                                                       servers the picker offers
+//                                                       (#262). Its own switch: it is
+//                                                       read whether or not a desired
+//                                                       document is named
+//   MONOPLAYER_ALLOWED_SERVERS_SEED                     the allowed-servers.json Git
+//                                                       commits, which answers when the
+//                                                       live file is absent or unreadable
 //   MONOPLAYER_CONTROL_FILE                             desired.json, the control
 //                                                       document that moves the
 //                                                       puppet's backend; setting it
@@ -140,6 +148,10 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // written below cannot silently drop one written above it.
   const control = { ...doc.control }
   if (env.MONOPLAYER_CONTROL_FILE) control.file = env.MONOPLAYER_CONTROL_FILE
+  // #262: the allowed-server list, and the copy Git commits. Two paths, because the
+  // fallback names a file: a fallback nobody named is a fallback nobody can check.
+  if (env.MONOPLAYER_ALLOWED_SERVERS) control.allowedServers = env.MONOPLAYER_ALLOWED_SERVERS
+  if (env.MONOPLAYER_ALLOWED_SERVERS_SEED) control.allowedServersSeed = env.MONOPLAYER_ALLOWED_SERVERS_SEED
   // Only "1" and "0" are read, so a typo cannot quietly move a deployed lane's
   // puppet to another server.
   const controlSwitch = env.MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH
@@ -399,6 +411,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const control = createControlDocument({
     file: cfg.control.file,
     whitelistFile: cfg.attachWhitelistFile,
+    // #262: the allowed-server list and the file Git commits behind it. Read here
+    // for the start record below; #265 is what reads it when the picker offers a
+    // server, and nothing else consumes it yet.
+    allowedServersFile: cfg.control.allowedServers ?? null,
+    allowedServersSeedFile: cfg.control.allowedServersSeed ?? null,
     allowBackendSwitch: cfg.control.allowBackendSwitch,
     log
   })
@@ -412,6 +429,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
       log('whitelistEmpty', { file: cfg.attachWhitelistFile, control: cfg.control.file })
     }
   }
+
+  // #262: the allowed-server list, read once. The start record says which file
+  // answered and how many servers it holds, so an operator can see a seed standing
+  // in for an unedited list without opening a file. The picker reads it per offer
+  // when #265 lands; this read is the lane's own report, and it is the same call.
+  const allowedServersAtStart = control.allowedServers()
 
   // #229: the desired backend is read once before the first dial, and again
   // before every reconnect. The target the process treats as its base is the one
@@ -849,7 +872,16 @@ export async function startLive ({ argv = [], io = process } = {}) {
     control: {
       file: cfg.control.file,
       allowBackendSwitch: cfg.control.allowBackendSwitch,
-      whitelistReload: whitelistSource !== null
+      whitelistReload: whitelistSource !== null,
+      // #262: the two paths, which file answered, and how many servers it offers.
+      // Nothing reads this key yet: #265 is the picker that does, and a lane with
+      // no list says `none` here rather than looking wired.
+      allowedServers: {
+        file: cfg.control.allowedServers ?? null,
+        seed: cfg.control.allowedServersSeed ?? null,
+        source: allowedServersAtStart.source,
+        count: allowedServersAtStart.servers.length
+      }
     },
     ...accountLogFields,
     attachWhitelist: cfg.attachWhitelistFile,

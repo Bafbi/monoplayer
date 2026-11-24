@@ -10,12 +10,14 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  ALLOWED_SERVERS_VERSION,
   DESIRED_VERSION,
   createBackendMoveTick,
   createControlDocument,
   dialIntent,
   dialTargetFor,
   moveDue,
+  parseAllowedServers,
   parseDesiredTarget,
   revertAfterRestore
 } from '../../src/service/control.js'
@@ -326,3 +328,147 @@ test('#233 a restored move reverts the dial for every kind that moved the sessio
   assert.equal(revertAfterRestore({ kind: null }), true, 'an unknown kind is not a reason to keep a dead target')
   assert.equal(revertAfterRestore(), true)
 })
+
+// --- #262: the allowed-server list ---
+
+// The third key of the control document: the servers the picker offers (#265).
+// It is its own file with its own path because that is what the control document
+// is: one key, one file, one reader. It also has a fallback the other two do not,
+// because a list with nothing in it offers a client nothing, and the list Git
+// commits is the copy an operator reviewed.
+
+function writeAllowed (file, entries) {
+  fs.writeFileSync(file, JSON.stringify({ version: ALLOWED_SERVERS_VERSION, servers: entries }, null, 2) + '\n')
+}
+
+test('#262 allowed-servers.json parses to host and port, and every refusal is named', () => {
+  assert.deepEqual(
+    parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '10.0.0.9', port: 25566 }] })),
+    { servers: [{ host: '10.0.0.9', port: 25566 }], reason: null })
+  assert.deepEqual(
+    parseAllowedServers(JSON.stringify({
+      version: 1,
+      servers: [{ host: ' 10.0.0.9 ', port: 25566, addedAt: '2026-11-23T00:00:00.000Z' }]
+    })).servers,
+    [{ host: '10.0.0.9', port: 25566, addedAt: '2026-11-23T00:00:00.000Z' }],
+    'a host is trimmed, because a configmap edit leaves whitespace')
+  assert.deepEqual(parseAllowedServers(JSON.stringify({ version: 1, servers: [] })), { servers: [], reason: null },
+    'an empty list is a document: it refuses every pick, and it is not the same fact as a broken one')
+  // A field this reader has no use for is not carried into the list the picker
+  // builds. There is no document older than this key, so nothing is preserved for
+  // a writer that is not in this repository.
+  assert.deepEqual(
+    parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: 'a.example.net', port: 1, label: 'A' }] })).servers,
+    [{ host: 'a.example.net', port: 1 }])
+
+  assert.equal(parseAllowedServers('{').reason, 'not_json')
+  assert.equal(parseAllowedServers('null').reason, 'not_an_object')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 2, servers: [] })).reason, 'version')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1 })).reason, 'servers')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: {} })).reason, 'servers')
+  // A document is not re-validated against the dial rule on its way to the picker.
+  // The route that writes it refuses a host no dial reaches, so a bad one is there
+  // only by hand; the lane reads what the operator wrote, and the panel lists it so
+  // that entry can be removed rather than refusing a document it could not repair.
+  // Only the document's shape is refused on a read.
+  assert.deepEqual(
+    parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '999.999.999.999', port: 25565 }] })).servers,
+    [{ host: '999.999.999.999', port: 25565 }])
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: ['paper'] })).reason, 'server')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '', port: 1 }] })).reason, 'host')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: '   ', port: 1 }] })).reason, 'host')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ port: 1 }] })).reason, 'host')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: 'a', port: 0 }] })).reason, 'port')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: 'a', port: 65536 }] })).reason, 'port')
+  assert.equal(parseAllowedServers(JSON.stringify({ version: 1, servers: [{ host: 'a', port: '25565' }] })).reason, 'port')
+  assert.equal(
+    parseAllowedServers(JSON.stringify({
+      version: 1,
+      servers: [{ host: 'a.example.net', port: 25565 }, { host: 'A.example.net', port: 25565 }]
+    })).reason,
+    'duplicate',
+    'two rows for one address are two buttons that dial the same server')
+})
+
+test('#262 the allowed-server list is read from its own file, and the committed seed answers when it cannot be', () => {
+  const dir = controlDir('allowed')
+  const live = path.join(dir, 'allowed-servers.json')
+  const seedFile = path.join(dir, 'seed', 'allowed-servers.json')
+  fs.mkdirSync(path.dirname(seedFile))
+  writeAllowed(seedFile, [{ host: 'play2.excalia.fr', port: 25565 }])
+
+  // Absent live key: the seed is the list. That is the state the deployed lane is
+  // in until an operator edits the list, and it is why the seed exists.
+  const document = createControlDocument({ allowedServersFile: live, allowedServersSeedFile: seedFile })
+  assert.deepEqual(document.allowedServers(),
+    { servers: [{ host: 'play2.excalia.fr', port: 25565 }], source: 'seed' })
+
+  // The live key wins, and it is re-read at each read: a panel write takes effect
+  // without a restart, the way the attach whitelist's does.
+  writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }])
+  assert.deepEqual(document.allowedServers(),
+    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control' })
+  writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }, { host: 'sky.example.net', port: 25565 }])
+  assert.equal(document.allowedServers().servers.length, 2, 'the file is the only authority')
+
+  // Unreadable is the same answer as absent, and it is named once.
+  const lines = []
+  fs.writeFileSync(live, 'not json')
+  const named = createControlDocument({
+    allowedServersFile: live,
+    allowedServersSeedFile: seedFile,
+    log: (event, fields) => lines.push({ event, fields })
+  })
+  assert.deepEqual(named.allowedServers().servers, [{ host: 'play2.excalia.fr', port: 25565 }])
+  assert.equal(named.allowedServers().source, 'seed')
+  assert.deepEqual(lines.filter(line => line.event === 'controlRejected').map(line => line.fields),
+    [{ file: live, reason: 'not_json' }], 'a broken live key is named once, and the seed still answers')
+  assert.equal(named.allowedServers().source, 'seed')
+  assert.equal(lines.length, 1, 'one line per distinct refusal, however often the list is read')
+})
+
+test('#262 a list nobody named is off, and two files that both fail are named by their own paths', () => {
+  const off = createControlDocument({ log: () => { throw new Error('an unset switch logs nothing') } })
+  assert.deepEqual(off.allowedServers(), { servers: [], source: 'none' })
+
+  // Its own file is its own switch: a picker lane offers a list with no desired
+  // document at all.
+  const dir = controlDir('allowed-alone')
+  const live = path.join(dir, 'allowed-servers.json')
+  writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }])
+  assert.equal(createControlDocument({ allowedServersFile: live }).allowedServers().source, 'control',
+    'the third key is read without control.file being set')
+
+  const broken = path.join(controlDir('allowed-broken'), 'allowed-servers.json')
+  const seedFile = path.join(controlDir('seed-broken'), 'allowed-servers.json')
+  fs.writeFileSync(broken, JSON.stringify({ version: 9, servers: [] }))
+  fs.writeFileSync(seedFile, JSON.stringify({ version: 1, servers: [{ host: 'a', port: 1 }, { host: 'a', port: 1 }] }))
+  const lines = []
+  const document = createControlDocument({
+    allowedServersFile: broken,
+    allowedServersSeedFile: seedFile,
+    log: (event, fields) => lines.push({ event, fields })
+  })
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(lines.map(line => [line.event, line.fields.file, line.fields.reason]),
+    [['controlRejected', broken, 'version'], ['controlRejected', seedFile, 'duplicate']],
+    'both files are named, and each with its own reason')
+
+  // A seed the lane named and the mount did not deliver is not the normal state: the
+  // live key's absence is, because the operator has not written it yet.
+  const absentLines = []
+  const absentSeed = path.join(controlDir('seed-missing'), 'allowed-servers.json')
+  const absent = createControlDocument({
+    allowedServersFile: path.join(controlDir('allowed-missing'), 'allowed-servers.json'),
+    allowedServersSeedFile: absentSeed,
+    log: (event, fields) => absentLines.push({ event, fields })
+  })
+  assert.deepEqual(absent.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(absentLines.map(line => [line.event, line.fields.code]),
+    [['controlUnreadable', 'ENOENT']],
+    'a seed that is not mounted is one named line, not silence')
+  assert.equal(absentLines[0].fields.file, absentSeed, 'the line names the seed')
+  absent.allowedServers()
+  assert.equal(absentLines.length, 1, 'and one line is enough, however often the list is asked for')
+})
+
