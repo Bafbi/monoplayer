@@ -51,8 +51,8 @@ const PACK = uuid => ({
 })
 
 // #260: the cache belongs to a body, not to the process. A lane with no claim
-// serves the body its configured backend is, named the way a claim names a body,
-// and `core.cache` is that body's cache. The facade stays because every rung,
+// serves the body its configured backend is. That body is named the way a claim
+// names one, and `core.cache` is its cache. The facade stays because every rung,
 // every service test and the panel read it.
 test('#260 the lane serves its configured backend as one body, and core.cache is that body\'s', () => {
   const rig = makeCore()

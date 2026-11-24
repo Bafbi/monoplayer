@@ -3675,12 +3675,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // --- O59: a body owns its state cache, and one body's fault leaves the other intact (#260) ---
-    // Two bodies of one account at once, with no client delivered either: per-channel
-    // delivery is #269, and one session per body is #261. What this asserts is the
-    // cache's ownership, on real frames over real sockets. Two offline backend legs,
-    // one account on both, each writing into its own body's cache through the
-    // product's own registry. Then one body's session ends, and the other body's cache
-    // must be the cache it already had, byte for byte, and must still take frames.
+    // Two bodies of one account at once, with no client delivered to either:
+    // per-channel delivery is #269, and one session per body is #261. This asserts
+    // the cache's ownership, on real frames over real sockets. Two offline backend
+    // legs hold the account, one per body. Each writes into its own body's cache
+    // through the product's registry. Then one body's session ends. The other body's
+    // cache must be the one it already had, byte for byte, and must still take
+    // frames.
     const bodyCaches = createBodyCaches({ bounds: { maxBlocks: 8 } })
     bodyFakeA = await createFakeBackend({
       port: 0,
@@ -3708,8 +3709,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       host: '127.0.0.1', port: bodyFakeB.port, version: VERSION, username: 'GlowSquidye', log
     })
     for (const [body, leg] of [[bodyA, bodyLegA], [bodyB, bodyLegB]]) {
-      // The wiring the composition root does for its one leg: the body's cache is
-      // where that body's frames go, decided by the body and not by whichever
+      // This is the wiring the composition root does for its one leg. The body's
+      // cache is where that body's frames go. The body decides that, not whichever
       // reader happens to be looking.
       leg.setFrameHandler(frame => {
         bodyFrames[body]++
@@ -3753,9 +3754,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     await waitFor(() => cacheA.stats().sizes.blocks === 2, 'the second block frame at the first body', 10_000)
     const seqBAfter = cacheB.snapshot().frameSeq
 
-    // The fault. Body A's session ends, and the composition root's rule is that the
-    // cache of the body that ended is reset: reset, not discarded, and not another
-    // body's.
+    // The fault. Body A's session ends. The composition root's rule is that the
+    // cache of the body that ended is reset: reset, not discarded, and never
+    // another body's.
     const bodyBBeforeFault = cacheB.snapshot()
     bodyLegA.end()
     await waitFor(() => bodyLegA.ended === true, "the first body's session to end", 10_000)
@@ -3773,12 +3774,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const bodyBAfterPush = cacheB.snapshot()
 
     // The product's own wiring, read on the picker core this run already landed a
-    // claim on: the cache the client was served from is the claimed body's, and
-    // every other body the core dialled kept a cache of its own that the claim put
-    // no frame into. There are two of those here: the lane's configured backend,
-    // which the picker lane never dials, and the row whose dial the kernel refused
-    // in O56. Both were dialled by a claim and neither answered, so both caches are
-    // empty, and neither is the cache the landing warmed.
+    // claim on. The cache the client is served from is the claimed body's. Every
+    // other body the core dialled kept a cache of its own, and the claim put no
+    // frame into it. There are two of those here: the lane's configured backend,
+    // which a picker lane never dials, and the row whose dial the kernel refused in
+    // O56. Both were dialled and neither answered, so both caches are empty.
     const pickerBodies = pickerCore.bodies.stats()
     const pickerClaimed = pickerCore.claimedBody
     const pickerOther = pickerBodies.bodies
