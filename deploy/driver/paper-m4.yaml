@@ -9,17 +9,17 @@
 #     itzg /config sync); the SECRET itself is never in config or git — Paper
 #     reads PAPER_VELOCITY_SECRET (official env override, PaperMC PR #10127 /
 #     docs.papermc.io/paper/reference/system-properties) from the
-#     gate-b-velocity Secret.
+#     gate-__instance__-velocity Secret.
 #   - no Tailscale Service: the backend must only be reachable from Velocity
 #     on the ClusterIP. Anything that can reach an offline-mode backend can
 #     claim any player identity.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: gate-b-paper-m4-config
-  namespace: monoplayer-gate-b
+  name: gate-__instance__-paper-m4-config
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper-m4
     app.kubernetes.io/part-of: monoplayer
 data:
   # Deliberately partial: Paper merges every key left out with its defaults
@@ -35,9 +35,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: paper-m4
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper-m4
     app.kubernetes.io/part-of: monoplayer
 spec:
   # 0 at rest: `mise run gate:up` wakes this, and `gate:down` puts it back (#115).
@@ -46,11 +46,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+      app.kubernetes.io/name: monoplayer-gate-__instance__-paper-m4
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+        app.kubernetes.io/name: monoplayer-gate-__instance__-paper-m4
         app.kubernetes.io/part-of: monoplayer
     spec:
       containers:
@@ -104,14 +104,14 @@ spec:
             - name: RCON_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: gate-b-rcon
+                  name: gate-__instance__-rcon
                   key: password
             # Modern forwarding secret: imported from the cluster Secret and
             # NOT baked into the pre-seeded YAML.
             - name: PAPER_VELOCITY_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: gate-b-velocity
+                  name: gate-__instance__-velocity
                   key: forwarding-secret
             # Re-apply the pre-seeded partial config on every start so Paper's
             # own expanded copy can never drift the forwarding state.
@@ -150,7 +150,7 @@ spec:
           emptyDir: {}
         - name: config
           configMap:
-            name: gate-b-paper-m4-config
+            name: gate-__instance__-paper-m4-config
             items:
               - key: paper-global.yml
                 path: paper-global.yml
@@ -159,14 +159,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: paper-m4
-  namespace: monoplayer-gate-b
+  namespace: monoplayer-gate-__instance__
   labels:
-    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper-m4
     app.kubernetes.io/part-of: monoplayer
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: monoplayer-gate-b-paper-m4
+    app.kubernetes.io/name: monoplayer-gate-__instance__-paper-m4
   ports:
     - name: minecraft
       port: 25565

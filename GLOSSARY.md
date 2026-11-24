@@ -413,11 +413,11 @@ The validation lane in namespace `monoplayer-dev`: its own Paper, its own proxy,
 _Avoid_: staging, sandbox, dev environment
 
 **Gate lane**:
-The five gate workloads — `paper`, `paper-conduct`, `paper-m4`, `velocity`, `toxiproxy` — and their lifecycle. It rests at 0 replicas between runs: `mise run gate:up` wakes the rows a rung drives, and `mise run gate:down` stops all five. The transfer testbed's `paper-hub` and `paper-sky` share the namespace and are not part of it.
+The five gate workloads — `paper`, `paper-conduct`, `paper-m4`, `velocity`, `toxiproxy` — and their lifecycle. It rests at 0 replicas between runs: `mise run gate:up` wakes the rows a rung drives, and `mise run gate:down` stops all five. Each worktree has its own lane, in a namespace named after its short commit and a short hash of its path, so two checkouts at one commit are two lanes (#279). The transfer testbed's `paper-hub` and `paper-sky` share a lane's namespace and are not part of it.
 _Avoid_: gate cluster, gate-b environment
 
 **Gate Paper**:
-The disposable Papers in namespace `monoplayer-gate-b` that the observer, the online rung, the driver lane, and the transfer testbed run against.
+The disposable Papers in a gate lane's namespace that the observer, the online rung, the driver lane, and the transfer testbed run against.
 _Avoid_: test server, gate-b backend
 
 **Protocol spike**:
