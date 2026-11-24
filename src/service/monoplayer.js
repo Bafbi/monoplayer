@@ -342,7 +342,7 @@ const NOOP_JOURNAL = Object.freeze({
   stats: () => ({ enabled: false })
 })
 
-// #259: what a watcher's client is told about itself. Minecraft carries a player's
+// #259: what a spectator's client is told about itself. Minecraft carries a player's
 // game mode in two frames, and both are needed: `game_state_change` is the change
 // (reason 3 is `change_game_mode`, and the mode is a float, 3 for spectator), and
 // `abilities` is the flags the client keeps its own copy of. The flags are the ones
@@ -559,11 +559,13 @@ export function createMonoplayer ({
   let earlyAttach = null
   let pendingEarlyReplay = null
   let frontPlayReady = false
-  // #259: the watchers whose channel has been handed its body and has not gone.
-  // The front owns the channels, so it is the front that says when one closes; this
-  // is only what the relay needs to know: is anybody watching a body whose driver
-  // is not there.
-  let activeSpectators = 0
+  // #259: the spectators whose channel has been handed its body and has not gone.
+  // The front owns the channels, so it is the front that says when one closes. This
+  // holds only what the relay needs to know: is anybody watching a body nobody
+  // drives. It holds channel ids rather than a count, because a channel that closes
+  // before it was handed the body closes as a spectator's too. A count would take
+  // one spectator away for it, and the relay would stop under a spectator that stayed.
+  const spectators = new Set()
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
   // #18: the last human's client information. It survives a detach, like a
@@ -691,12 +693,12 @@ export function createMonoplayer ({
   }
 
   // #259: the body's stream goes out while anybody is in play on it, and a
-  // watcher counts. A body whose driver left keeps its session and its state, and
+  // spectator counts as one. A body whose driver left keeps its session and its state, and
   // a client watching it should follow the world rather than a frozen replay; the
   // front drops the write when no channel holds the body, so this is permission to
   // try, not a promise of a reader.
   function canDeliverPlay () {
-    return canRelayPlay() || (activeSpectators > 0 && servedBody() !== null)
+    return canRelayPlay() || (spectators.size > 0 && servedBody() !== null)
   }
 
   // --- front-leg login pipeline (pure decisions; adapter owns kick/close IO) ---
@@ -730,7 +732,7 @@ export function createMonoplayer ({
     // nobody driving it was attached as that body's driver down the pre-picker path
     // with no claim recorded. Two things followed: the body was driven by a player
     // the claim registry had never heard of, and nobody could watch it, because a
-    // watcher's row names a body the picker never offered. Serving the picker first
+    // spectator's row names a body the picker never offered. Serving the picker first
     // fixes both, and it is what the epic says the picker is for (docs/product-core.md).
     if (cfg.picker === true) {
       log('attachPicker', { uuid: payload.uuid, name: payload.name, state: session.state, attached })
@@ -2287,10 +2289,10 @@ export function createMonoplayer ({
 
   // #259: who may spectate. Any client this lane's identity gate admitted may
   // watch any body the lane serves and has up, whether a driver holds it or not.
-  // The whitelist is the one authority the lane already has; a watcher cannot
-  // change the body (the front drops every frame it sends); and a consent
-  // handshake with the driver would put a dialog in front of a player who is
-  // mid-game, and need a default for the driver who never answers.
+  // The whitelist is the one authority the lane already has, and a spectator cannot
+  // change the body: the front drops every frame it sends. A consent handshake with
+  // the driver was declined, because it would put a dialog in front of a player who
+  // is mid-game, and it would need a default for the driver who never answers.
   //
   // A body a driver holds and a body nobody drives are both watchable, and that
   // is the point: a claim is released when its connection ends, while the body
@@ -2374,7 +2376,7 @@ export function createMonoplayer ({
     // the cache — both are `latest` frames — so these go after it: on this socket
     // they are the last word, and they reach no other channel.
     const told = writeSpectatorMode({ channel })
-    activeSpectators++
+    spectators.add(channel)
     metrics.spectatorViews++
     log('spectateView', {
       name,
@@ -2390,19 +2392,19 @@ export function createMonoplayer ({
     return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, told }
   }
 
-  // #259: a watcher's channel closed. Its client is gone, so the relay stops when
+  // #259: a spectator's channel closed. Its client is gone, so the relay stops when
   // it was the last one and no driver is attached. Nothing else changes: the body
-  // was never the watcher's.
+  // was never the spectator's.
   function spectatorLeft ({ channel = null, name = null } = {}) {
-    if (activeSpectators > 0) activeSpectators--
-    log('spectateLeft', { channel, name, watching: activeSpectators, state: session.state })
-    emit('spectate_left', { channel, name, watching: activeSpectators })
-    return { watching: activeSpectators }
+    if (typeof channel === 'string') spectators.delete(channel)
+    log('spectateLeft', { channel, name, spectators: spectators.size, state: session.state })
+    emit('spectate_left', { channel, name, spectators: spectators.size })
+    return { watching: spectators.size }
   }
 
-  // #259: the two frames that say what the watcher is in the body as. Minecraft
-  // keeps the game mode in two places — `login`'s spawn info, which the replay
-  // carries verbatim from the body, and this later change — and abilities are a
+  // #259: the two frames that say what the spectator is in the body as. Minecraft
+  // keeps the game mode in two places: `login`'s spawn info, which the replay
+  // carries verbatim from the body, and this later change. Abilities are a
   // separate frame the client keeps its own copy of. A spectator in survival's
   // abilities can fall, take damage, and open a crafting grid on a body it may
   // not touch.
@@ -2415,12 +2417,12 @@ export function createMonoplayer ({
       if (frontLeg.write('game_state_change', {
         reason: GAME_MODE_CHANGE_REASON,
         gameMode: GAME_MODE_SPECTATOR
-      }, { channel }) !== false) told++
+      }, { channel })) told++
       if (frontLeg.write('abilities', {
         flags: SPECTATOR_ABILITY_FLAGS,
         flyingSpeed: SPECTATOR_FLYING_SPEED,
         walkingSpeed: SPECTATOR_WALKING_SPEED
-      }, { channel }) !== false) told++
+      }, { channel })) told++
     } catch (error) {
       log('spectateToldFailed', { channel, error: String(error?.message ?? error).slice(0, 200) })
     }
@@ -2903,7 +2905,7 @@ export function createMonoplayer ({
       frontLeg.setSpectatorAttach(payload => spectateView(payload))
     }
     // #259: what a picker row says about a body, so a row can read `unclaimed`
-    // rather than `down` about a body nobody drives and a watcher may join. The
+    // rather than `down` about a body nobody drives and a spectator may join. The
     // session owns the body, so only the core can answer this, and a leg with no
     // call-in reads every row the way the list wrote it.
     if (typeof frontLeg.setBodyServed === 'function') {
@@ -3082,7 +3084,7 @@ export function createMonoplayer ({
       // Position is per-leg owned: confirm on the backend leg, follow the
       // backend teleport in the session pose, and (only when somebody is in play
       // on the body) synthesize a fresh position with a proxy-owned teleportId.
-      // Never cached, never replayed. #259: a watcher is somebody in play.
+      // Never cached, never replayed. #259: a spectator is somebody in play.
       session.setPose(capturePose(session.currentPose, 'position', data, { backend: true }))
       backendLeg.write('teleport_confirm', { teleportId: data.teleportId })
       if (canDeliverPlay()) {
@@ -3234,7 +3236,7 @@ export function createMonoplayer ({
     connectClaimedBody,
     // #269: the spectator's two answers. `spectateBody` says whether a row names
     // the body this session serves, and `spectateView` replays that body to the one
-    // channel that asked. #259 adds the third: a watcher's channel ended.
+    // channel that asked. #259 adds the third: a spectator's channel ended.
     spectateBody,
     spectateView,
     spectatorLeft,

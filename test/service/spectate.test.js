@@ -1,4 +1,4 @@
-// #259: who may watch a body, and what a watcher's own client is told.
+// #259: who may watch a body, and what a spectator's own client is told.
 //
 // Seam: the fake-integration rig (test/support/harness.js), because what a socket
 // hides is exactly the two decisions here — whether a client may watch a given
@@ -8,7 +8,7 @@
 //
 // The rule this file pins (#259): any client the lane's identity gate admitted may
 // watch any body the lane serves and has up, whether or not a driver holds it, and
-// no dial is made for a watcher.
+// no dial is made for a spectator.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -20,7 +20,7 @@ import { makeCore } from '../support/harness.js'
 const TARGET = { host: '127.0.0.1', port: 25566 }
 const CLAIMED = { body: pickSlug(TARGET.host + ':' + TARGET.port), target: TARGET }
 
-// A body a watcher could be offered and is not: one server, one body id.
+// A body a spectator could be offered and is not: one server, one body id.
 const OTHER = 'sky'
 
 // The body's join, cached: configuration first, then its play login and the warm
@@ -32,7 +32,7 @@ function warmABody (backendLeg) {
   backendLeg.deliver({ state: 'play', name: 'chunk_batch_finished', buffer: Buffer.from('marker'), data: {} })
 }
 
-// Dial and land the claimed body, so a watcher has something to watch.
+// Dial and land the claimed body, so a spectator has something to watch.
 async function landABody (rig) {
   const dial = rig.core.connectClaimedBody(CLAIMED)
   await Promise.resolve()
@@ -52,7 +52,7 @@ test('#259 a lane without the picker has no spectator at all', () => {
   })
 })
 
-test('#259 a lane that serves no body refuses a watcher, and dials nothing for one', async () => {
+test('#259 a lane that serves no body refuses a spectator, and dials nothing for one', async () => {
   const { core, backendLeg } = makeCore({ config: { picker: true } })
   const answer = core.spectateBody({ body: CLAIMED.body, server: CLAIMED.body })
   assert.equal(answer.watching, false)
@@ -99,7 +99,7 @@ test('#259 a body nobody drives is still watchable, and watching attaches nobody
   const answer = rig.core.spectateBody({ body: CLAIMED.body, server: CLAIMED.body, name: 'Watcher' })
   assert.equal(answer.watching, true)
   assert.equal(answer.reason, null)
-  // Nobody was attached to serve the watcher, and nobody is now.
+  // Nobody was attached to serve the spectator, and nobody is now.
   assert.equal(rig.core.attached, false)
   assert.equal(rig.core.session.attachCount, 1)
 })
@@ -108,7 +108,7 @@ test('#259 a body that is not up is refused in words, and the word says which', 
   const rig = makeCore({ config: { picker: true } })
   await landABody(rig)
   // The body's session ends with nobody attached: the session arms its one
-  // reconnect, and a watcher is asked to wait rather than served a frozen world.
+  // reconnect, and a spectator is asked to wait rather than served a frozen world.
   rig.backendLeg.deliverEnd({ reason: 'body_fault' })
   assert.equal(rig.core.session.state, 'reconnecting')
   const waiting = rig.core.spectateBody({ body: CLAIMED.body, server: CLAIMED.body })
@@ -125,11 +125,26 @@ test('#259 a body that is not up is refused in words, and the word says which', 
   assert.equal(down.reason, 'body_down')
 })
 
-test('#259 a watcher is told it is spectating, on its own channel and after the replay', async () => {
+test('#259 a spectator that never landed takes no watcher away from one that did', async () => {
   const rig = makeCore({ config: { picker: true } })
   await landABody(rig)
   rig.core.attachPlayer({ name: 'Pilot', uuid: null })
-  // The body's own abilities and game mode are cached: a watcher replays them
+  rig.frontLeg.clientDisconnect({ reason: 'player_quit' })
+  rig.core.spectateView({ name: 'Watcher', channel: 'spectator-one' })
+  // A client that left between its landing and the body's play state closes as a
+  // spectator's channel too, and it was never handed the body. The relay is still
+  // somebody's: a count would take the one that stayed away for it.
+  assert.equal(rig.core.spectatorLeft({ channel: 'spectator-two' }).watching, 1,
+    'the spectator that stayed is still watching')
+  assert.equal(rig.core.spectatorLeft({ channel: 'spectator-one' }).watching, 0,
+    'and the last one leaving ends it')
+})
+
+test('#259 a spectator is told it is spectating, on its own channel and after the replay', async () => {
+  const rig = makeCore({ config: { picker: true } })
+  await landABody(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: null })
+  // The body's own abilities and game mode are cached: a spectator replays them
   // like any other state, so the frames that tell it it is spectating have to
   // arrive after them or the client fights the world it was put in.
   rig.backendLeg.deliver({
@@ -146,12 +161,12 @@ test('#259 a watcher is told it is spectating, on its own channel and after the 
   })
   const mark = rig.frontLeg.frames().length
   const backendWrites = rig.backendLeg.rawWrites().length + rig.backendLeg.packetWrites().length
-  const view = rig.core.spectateView({ name: 'Watcher', channel: 'watcher-channel' })
+  const view = rig.core.spectateView({ name: 'Watcher', channel: 'spectator-channel' })
   assert.equal(view.watching, true)
   assert.equal(view.reason, null)
   const frames = rig.frontLeg.frames().slice(mark)
-  const onOwnChannel = frames.filter(frame => frame.channel === 'watcher-channel')
-  assert.equal(onOwnChannel.length, frames.length, 'every frame goes to that watcher and no other socket')
+  const onOwnChannel = frames.filter(frame => frame.channel === 'spectator-channel')
+  assert.equal(onOwnChannel.length, frames.length, 'every frame goes to that spectator and no other socket')
   // What the client is told, and in which order.
   const told = frames.filter(frame => frame.name === 'game_state_change' || frame.name === 'abilities').slice(-2)
   assert.deepEqual(told.map(frame => frame.name), ['game_state_change', 'abilities'])
@@ -159,7 +174,7 @@ test('#259 a watcher is told it is spectating, on its own channel and after the 
   assert.equal(told[1].packet.flags, 7, 'invulnerable, flying, and flying allowed')
   assert.equal(told[1].packet.flyingSpeed, 0.05)
   assert.equal(told[1].packet.walkingSpeed, 0.1)
-  // The replay came first: the watcher is in the body's world before it is told
+  // The replay came first: the spectator is in the body's world before it is told
   // what it is there as.
   const replayNames = frames.slice(0, -2).map(frame => frame.name)
   assert.ok(replayNames.includes('login'), "the body's play login is replayed")
@@ -169,15 +184,15 @@ test('#259 a watcher is told it is spectating, on its own channel and after the 
   assert.equal(rig.core.metrics.spectatorViews, 1)
 })
 
-test('#259 a watcher of a body nobody drives is handed that body as it stands', async () => {
+test('#259 a spectator of a body nobody drives is handed that body as it stands', async () => {
   const rig = makeCore({ config: { picker: true } })
   await landABody(rig)
   rig.core.attachPlayer({ name: 'Pilot', uuid: null })
   rig.frontLeg.clientDisconnect({ reason: 'player_quit' })
   const mark = rig.frontLeg.frames().length
-  const view = rig.core.spectateView({ name: 'Watcher', channel: 'watcher-channel' })
+  const view = rig.core.spectateView({ name: 'Watcher', channel: 'spectator-channel' })
   assert.equal(view.watching, true)
-  assert.equal(rig.core.attached, false, 'a watcher never becomes the driver')
+  assert.equal(rig.core.attached, false, 'a spectator never becomes the driver')
   const names = rig.frontLeg.frames().slice(mark).map(frame => frame.name)
   assert.ok(names.includes('login'))
   assert.equal(names.at(-1), 'abilities', 'and it is still told it is spectating')
