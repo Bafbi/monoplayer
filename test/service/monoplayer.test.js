@@ -5,6 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { SENTINEL, redact } from '../../src/observability/redact.js'
+import { pickSlug } from '../../src/core/picker.js'
 import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -47,6 +48,22 @@ const PACK = uuid => ({
   state: 'play',
   name: 'add_resource_pack',
   data: { uuid, url: `https://example.invalid/${uuid}.zip`, hash: '', forced: false, prompt: null }
+})
+
+// #260: the cache belongs to a body, not to the process. A lane with no claim
+// serves the body its configured backend is, named the way a claim names a body,
+// and `core.cache` is that body's cache. The facade stays because every rung,
+// every service test and the panel read it.
+test('#260 the lane serves its configured backend as one body, and core.cache is that body\'s', () => {
+  const rig = makeCore()
+  const configured = pickSlug(rig.core.config.backend.host + ':' + rig.core.config.backend.port)
+  const held = rig.core.bodies.stats()
+
+  assert.deepEqual(held.bodies, [configured], 'one lane, one body, named by its address')
+  assert.equal(held.count, 1)
+  assert.equal(rig.core.cache, rig.core.bodies.cacheFor(configured), 'the process serves one body\'s cache')
+  warmBackend(rig)
+  assert.equal(rig.core.bodies.cacheFor(configured).warm, true, 'the warm marker landed in that body\'s cache')
 })
 
 // #98: the pack is the human's answer, and the held copy is what a later client
