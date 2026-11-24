@@ -318,17 +318,19 @@ listing the lane's allowed servers.
   and it ends when the body is attach-ready: its play login has landed, and its
   configuration and join prefix are cached. Nothing is dialled before a claim, which
   is why a lane nobody claims never opens a backend connection. The client's own
-  configuration phase, still open from the baseline, then continues with that body's
-  configuration frames, ends with one `finish_configuration`, and the core replays
-  the body's play state on the connection the client already held. One body at a
-  time: a claim on a different body is refused, and two bodies at once is the
-  per-body cache of #260. The same body may be dialled again after its session
-  faults, because that is one body and one cache.
+  configuration phase is still open from the baseline, so it continues with that
+  body's configuration frames and ends with one `finish_configuration`. The core
+  then replays the body's play state on the connection the client already held.
+  One body at a time: a claim on a different body is refused, and two bodies at once
+  is the per-body cache of #260. The same body may be dialled again after its
+  session faults, because that is one body and one cache.
 - **A body that does not answer gives the picker back (#258).** A refused dial, a
   body that never warms, and a row whose name is not an address all end the same
   way: the client reads the list again, titled with the body that did not answer.
   Its claim still stands, because a claim belongs to the connection (#267), so the
-  client may click `Claim` again. A body that accepted every frame and then refused
+  client may click `Claim` again. A second claim on a body that is connected and not
+  yet warm waits on that body again, rather than dialling a second one or refusing a
+  client the picker just invited. A body that accepted every frame and then refused
   the finish is the one case the client is ended in words instead.
 - **What the landing does not prove (#258, #268).** The client receives a second
   registry round inside one configuration phase: the baseline's set, then the

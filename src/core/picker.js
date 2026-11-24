@@ -310,11 +310,12 @@ export function claimFailureText ({ server = null } = {}) {
   return 'Monoplayer: ' + named + ' accepted the connection and could not be entered.'
 }
 
-// What the client is told when the picker cannot go on: no servers to offer, or no
-// baseline to serve. A pick that names an offered server opens that server's dialog
-// (#266), so this is no longer what a pick gets. It is the sentence for a lane that
-// cannot offer a body at all, and #269 does not change it.
+// What the client is told when the picker cannot go on: no servers to offer, or a
+// dialog that could not be written. A pick that names an offered server opens that
+// server's dialog (#266), and a claim on it dials that body (#258), so neither of
+// those is what this sentence is for. It is for a lane that cannot show the list at
+// all.
 export function pickRefusalText ({ server = null } = {}) {
   const named = server === null ? 'that server' : server
-  return 'Monoplayer: ' + named + ' was recorded, but this lane cannot connect a body yet.'
+  return 'Monoplayer: ' + named + ' could not be offered on this lane.'
 }

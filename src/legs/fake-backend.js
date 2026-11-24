@@ -75,7 +75,7 @@ export function itemStack (itemId, itemCount = 1) {
 // one flat chunk in a batch. 'empty' sends the batch's start and finish with no
 // chunk between them: a world with no terrain that still warms a cache, which is
 // what a 26.2 fake can back. `false` sends nothing at all, which makes this
-// server behave like a target that never sends terrain: the join still
+// server behave like a body that never sends terrain: the join still
 // completes, and no chunk batch or chunk frame follows. Off-line transfers cannot
 // produce that from a real server on demand, and it is the case #87 needs: a
 // client released on such a cache lands in an empty world.
@@ -87,7 +87,7 @@ export async function createFakeBackend ({
   // 'full' (the default, and what `true` means) sends one flat chunk in a batch.
   // 'empty' sends the batch's start and finish with no chunk in it: a world with
   // no terrain that still warms a cache, and needs no chunk codec. `false` sends
-  // nothing at all, which is the transfer target #87 needs.
+  // nothing at all, which is the terrain-free body #87 needs.
   chunks = true,
   // #258: the protocol the fake speaks. 26.1 by default, because the frozen
   // spike and every rig that predates the picker run there. A 26.2 fake cannot

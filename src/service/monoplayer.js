@@ -525,6 +525,10 @@ export function createMonoplayer ({
   // first is delivered is the per-body cache of #260, and a session that refuses
   // the second claim is better than one that mixes two bodies' state.
   let claimedBody = null
+  // The body this session dialled for a claim, and the address it dialled. It is
+  // what lets a second claim on the same body wait again instead of dialling a
+  // second one, and it survives a wait that timed out: the body is still connected.
+  let claimDial = null
   // #233: the target an operator move dials on the next reconnect_due. It is a
   // second slot rather than a flag on the first because the two dials differ in
   // dialect: a transfer asks for the transfer handshake and keeps its cookies, an
@@ -2020,20 +2024,37 @@ export function createMonoplayer ({
   // fault after the landing is the reconnect machine's.
   async function connectClaimedBody ({ body = null, server = null, target = null, name = null } = {}) {
     if (cfg.picker !== true) return { connected: false, reason: 'picker_off', body }
-    // One body at a time, and the same body is still one: a claim that returns to
-    // the body this session already serves is a redial, not a second cache. A
-    // different body is #260's per-body cache, refused here rather than mixed.
-    if (claimedBody !== null && body !== claimedBody) {
-      log('claimDialRefused', { body, reason: 'one_body', claimed: claimedBody })
-      return { connected: false, reason: 'one_body', body: claimedBody }
-    }
-    if (session.state !== STATES.BOOT && session.state !== STATES.FAILED) {
-      log('claimDialRefused', { body, reason: 'session_busy', state: session.state })
-      return { connected: false, reason: 'session_busy', body }
+    // One body at a time, and the same body is still one. A claim that returns to
+    // the body this session already dialled waits on that body again instead of
+    // opening a second cache. A different body is #260's per-body cache, refused
+    // here rather than mixed.
+    const serving = claimDial?.body ?? claimedBody
+    if (serving !== null && body !== serving) {
+      log('claimDialRefused', { body, reason: 'one_body', claimed: serving })
+      return { connected: false, reason: 'one_body', body: serving }
     }
     if (target === null || typeof target?.host !== 'string' || !Number.isInteger(target?.port)) {
       log('claimDialRefused', { body, reason: 'no_target' })
       return { connected: false, reason: 'no_target', body }
+    }
+    // A body this session is already connected to and has not given up on: the
+    // wait is the part that failed last time, so the second claim waits again
+    // rather than refusing a client the picker just offered.
+    const waitingOnSameBody = claimDial !== null && claimDial.body === body &&
+      session.state !== STATES.BOOT && session.state !== STATES.FAILED
+    if (waitingOnSameBody) {
+      log('claimWaitAgain', {
+        body,
+        host: claimDial.target.host,
+        port: claimDial.target.port,
+        state: session.state,
+        name
+      })
+      return finishClaimLanding({ body, server, dial: claimDial.target, bodyWarm: await awaitBodyWarm() })
+    }
+    if (session.state !== STATES.BOOT && session.state !== STATES.FAILED) {
+      log('claimDialRefused', { body, reason: 'session_busy', state: session.state })
+      return { connected: false, reason: 'session_busy', body }
     }
     const dial = { host: target.host, port: target.port }
     // A claim is a fresh login on a server that never saw the puppet: no transfer
@@ -2053,6 +2074,7 @@ export function createMonoplayer ({
       return { connected: false, reason: 'target_refused', body }
     }
     metrics.claimDials++
+    claimDial = { body, target: { ...dial } }
     log('claimDial', { body, server, host: dial.host, port: dial.port, name })
     // The body's own first dial. The session goes back to boot for it, so a claim
     // after a fault runs the same path as a claim on a lane that started cold.
@@ -2061,6 +2083,9 @@ export function createMonoplayer ({
       await backendLeg.connect()
     } catch (error) {
       metrics.claimDialsFailed++
+      // The socket never opened, so this session is serving no body: the next claim
+      // dials its own rather than waiting on one that was never there.
+      claimDial = null
       log('claimDialFailed', {
         body,
         host: dial.host,
@@ -2070,13 +2095,19 @@ export function createMonoplayer ({
       })
       return { connected: false, reason: 'connect_failed', body }
     }
-    const bodyWarm = await awaitBodyWarm()
+    return finishClaimLanding({ body, server, dial, bodyWarm: await awaitBodyWarm() })
+  }
+
+  // The wait's answer, turned into the front leg's answer. One place decides what a
+  // warmed body means, so the first claim and a later wait on the same body cannot
+  // disagree.
+  function finishClaimLanding ({ body = null, server = null, dial = null, bodyWarm }) {
     if (!bodyWarm.attachReady) {
       metrics.claimDialsFailed++
       log('claimDialFailed', {
         body,
-        host: dial.host,
-        port: dial.port,
+        host: dial?.host ?? null,
+        port: dial?.port ?? null,
         reason: bodyWarm.reason,
         state: bodyWarm.state,
         marker: bodyWarm.marker,
@@ -2090,8 +2121,8 @@ export function createMonoplayer ({
     log('claimBodyWarm', {
       body,
       server,
-      host: dial.host,
-      port: dial.port,
+      host: dial?.host ?? null,
+      port: dial?.port ?? null,
       state: bodyWarm.state,
       marker: bodyWarm.marker,
       configFrames: bodyWarm.configFrames,
@@ -2241,6 +2272,10 @@ export function createMonoplayer ({
     started = true
 
     backendLeg.setEndHandler(({ reason = 'backend_end' } = {}) => {
+      // #258: a body that ended is not a body this session is waiting on. The
+      // claim bookkeeping that survives is `claimedBody`, which is what refuses a
+      // second body (#260).
+      claimDial = null
       // #22: the leg the core ended for a handover reports its end late.
       if (legHandover) {
         legHandover = false

@@ -116,7 +116,7 @@ test('#257 a library-shaped click is not read as a pick', () => {
 test('#257 the refusal says what happened, and names the server', () => {
   assert.match(pickRefusalText({ server: 'sky' }), /sky/)
   assert.match(pickRefusalText({ server: null }), /that server/)
-  assert.match(pickRefusalText({}), /cannot connect a body yet/)
+  assert.match(pickRefusalText({}), /could not be offered on this lane/)
 })
 
 test('#257 rows keep the name the config gave and the slug the wire takes', () => {
