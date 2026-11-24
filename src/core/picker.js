@@ -240,8 +240,10 @@ export function serverActionProblemText (action) {
 
 // A verb this lane reads and cannot carry yet. `disconnect` is the one verb the
 // dialog layer can honour, so it is not refused here: the client leaves, and its
-// configuration `disconnect` frame says which server it left (#266). Claim and
-// spectate act on a body. No body is connected from this phase until #267.
+// configuration `disconnect` frame says which server it left (#266). `claim` is
+// no longer one of them: #267 records a claim where the client answers
+// (src/core/claims.js), and its refusal has its own sentence there. `spectate`
+// still acts on a body nothing watches from this phase, so this is what it gets.
 export function verbRefusalText ({ verb = null, server = null } = {}) {
   const named = server === null ? 'that server' : server
   const asked = verb === null ? 'that' : verb
@@ -273,8 +275,8 @@ export function pickUnknownText ({ id = null } = {}) {
 
 // What the client is told when the picker cannot go on: no servers to offer, or no
 // baseline to serve. A pick that names an offered server opens that server's dialog
-// (#266), so this is no longer what a pick gets. It is still the sentence for a lane
-// that cannot enter a body at all, which is what #267 changes.
+// (#266), so this is no longer what a pick gets. It is the sentence for a lane that
+// cannot offer a body at all, and #269 does not change it.
 export function pickRefusalText ({ server = null } = {}) {
   const named = server === null ? 'that server' : server
   return 'Monoplayer: ' + named + ' was recorded, but this lane cannot connect a body yet.'
