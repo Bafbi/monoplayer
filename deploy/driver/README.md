@@ -85,6 +85,8 @@ them, because a lane nobody can find is worse than a lane that did not wake.
 
 A commit moves a worktree to a new lane, and the lane it left keeps its old name.
 `mise run lanes` shows it with its worktree, and the reaper is what cleans it up.
+Before the first `up` on a new lane, `gate:status` says the lane does not exist,
+and `gate:down` says there is nothing to stop.
 
 The reaper deletes a namespace, so it is hard to satisfy on purpose. A lane is
 reaped only when all of these hold:
