@@ -13,7 +13,7 @@ cheapest rung that can fail for the defect you are chasing.
 | 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog, answers it, and lands a claiming client in the body it named (#257, #266, #258); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, the same-connection reconfiguration, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering and vanilla acceptance of the reconfiguration; the run takes the live front offline, so the operator starts it |
-| 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, and both account custodians | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
+| 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, both account custodians, and cluster access for the account lease | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
 | 4 real client | `mise run driver:parity`, `mise run driver:scenario`, then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, the gate Paper, the dev lane for parity, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window, and what the client shows joined directly against joined through the proxy. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
 
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
@@ -40,8 +40,8 @@ may change. The rung decides what it proves.
 | rungs 0-2 | `mise run check` | none: this machine | seconds | nothing outside the working copy |
 | client-parity rung, 2a | `mise run parity:run` | none: this machine, two bots and a fake backend | about 5 seconds | nothing outside the working copy |
 | observer, the server's view | `mise run observer:run` | `paper-conduct` in `monoplayer-gate-b`, the gate-serving sibling of the gate Paper, plus throwaway pods in `monoplayer` that mount the live claim read-only | minutes, and up to 10 minutes when the gate Paper's restart is slow: the container took 240 s to 310 s to come back on the gate Paper, 26.2 build 135, and 40 s from a freshly created pod; paper-conduct has not been timed on its own | installs the plugin into `paper-conduct` and restarts it, and runs two joins from pods in the live namespace. It refuses to measure the live lane itself. A restart that outlasts the start budget is reported as a start that did not finish, and the joins never run. The budget is `MONOPLAYER_OBSERVER_START_TIMEOUT`; `scripts/observer-report.sh` holds its default |
-| online rung, from a pod | `mise run online:cluster` (the gate lane must be awake: `mise run gate:up`) | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart |
-| online rung, bare | `mise run online` | this machine's copy of the account chain, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session. `mise run online:cluster` is the form that leaves the deployment serving |
+| online rung, from a pod | `mise run online:cluster` (the gate lane must be awake: `mise run gate:up`) | namespace `monoplayer`, in a throwaway pod that mounts the live claim read-only, against the gate Paper | minutes | nothing on the deployment: it refuses an expired token instead of rotating. `--rotate` is the exception and a human decision: it writes the refreshed chain into the live custody and asks for a live restart. It takes the account lease first, which is one `Lease` object named `monoplayer-online-account` in `monoplayer`: a Lease is not a workload, so no scale, patch or restart is involved |
+| online rung, bare | `mise run online` | this machine's copy of the account chain, and whatever `MONOPLAYER_BACKEND_HOST` names | minutes | the token chain: a refresh here invalidates the copy the deployment holds, and a join to the live server kicks the live session. `mise run online:cluster` is the form that leaves the deployment serving. It holds the same account lease, so it needs `kubectl` and cluster access even though the rung itself runs here |
 | the gate lane itself | `mise run gate:up`, `mise run gate:down` | `monoplayer-gate-b`, which is not in Argo CD | `up` waits up to 900 s and says so first; a cold start is 90 s | every gate workload's replica count. It applies the tree and scales; it deletes nothing, so the Secrets and the objects stay. The `emptyDir` worlds go with their pods |
 | driver lane, rung 4 | `mise run driver:scenario` | the gate Paper, on its Tailscale host, and the display host | tens of minutes | the gate Paper's world and a real client. The deployment keeps serving |
 | driver parity, rung 4 | `mise run driver:parity` | the dev lane, through the operator's port-forwards and reverse tunnel, and the display host | minutes | a join and a client launch as the attach account: it moves that account's player in the dev world, and nothing in `monoplayer`. It refuses the live fleet, the live front in front of it, and a `playit.gg` tunnel to that front |
@@ -107,6 +107,57 @@ Run one verify task at a time. The online rung holds the puppet's writer lock
 for its whole run, and two runs contend for the same two accounts. Run
 `mise run image:build` from a clean checkout: it tags the working tree with
 HEAD's `sha-<7>`, so uncommitted bytes would carry a commit's name.
+
+## The account lease
+
+One Minecraft identity is one refresh chain, so a run that uses the real account
+takes a Kubernetes `Lease` first (#280). The lease is `monoplayer-online-account`
+in `monoplayer`, the namespace that holds the custody.
+
+The holder identity is the run's gate lane (the namespace `scripts/gate-lane.sh
+name` prints), its branch, and its pid. So a refusal reads as a person's run:
+
+    online-cluster: the account lease monoplayer/monoplayer-online-account is held by
+    "monoplayer-gate-3e64f1b-43b036 on t3/online-rung-account-lease (pid 355694)"
+    until 2026-11-24T19:25:38.830Z (15m left). One run uses the refresh chain at a
+    time, so this one does not start: wait for that lease to expire, or pass
+    --lease-wait SECONDS to queue behind it
+
+Both forms of the rung take it: `mise run online` through `scripts/online-cluster.sh
+hold`, and `mise run online:cluster` around the pod. A second run refuses at once,
+or queues with `--lease-wait`. The lease is released on a clean exit and on a
+failure.
+
+The lease lasts `MONOPLAYER_LEASE_DURATION` seconds, 900 by default, and is renewed
+every third of that while the run goes. A lease that has expired is taken without
+asking. `scripts/online-cluster.sh` holds the defaults and the rest of the
+`MONOPLAYER_LEASE_*` variables.
+
+Two ways a run can end without releasing the lease, and what happens:
+
+- **A run killed with `SIGKILL` runs no exit handler.** The renewal loop outlives it,
+  notices its parent is gone, and releases the lease. It checks `/proc/<pid>/stat`,
+  because a zombie still answers `kill -0`.
+- **Another run takes the lease, either after it expired or by a wrong clock.** This
+  run stops with `SIGTERM` and says so, rather than carry on as a second writer on
+  one refresh chain. The expiry is judged by the reader's own clock compared with the
+  `renewTime` the holder wrote, so two machines more than a few minutes apart can
+  disagree about a live lease. The renewal interval is a third of the duration for
+  that reason.
+
+The lease needs `get`, `create` and `replace` on `coordination.k8s.io/leases` in the
+namespace. That is the same cluster and the same credential the rung already holds:
+it creates a pod, reads the Deployment and the custody, so it is not a narrower
+permission. A role that grants only `pods` and `deployments` would need those three
+verbs added before `mise run online` works, and the script says so, naming the verbs,
+instead of starting without a lease.
+
+Three things the lease does not cover. The deployment's own proxy keeps refreshing
+the puppet while it serves, which is what one-account-one-writer-one-replica is
+for. A worktree's copy of the account is not the axis: a lease is one object for
+every worktree on the cluster. And the writer lock inside the custody is a
+different thing, per account directory, which is why `mise run online` still holds
+it too.
 
 `mise run check` stays the offline gate, unchanged: it runs rungs 0, 1, and 2,
 and CI runs it.
