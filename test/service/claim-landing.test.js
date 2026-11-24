@@ -8,7 +8,8 @@ import assert from 'node:assert/strict'
 
 import { makeCore } from '../support/harness.js'
 
-const PARTY = { body: 'paper_25565', target: { host: '127.0.0.1', port: 25565 } }
+// The body a claim names, and the address its row carried.
+const CLAIMED_BODY = { body: 'paper_25565', target: { host: '127.0.0.1', port: 25565 } }
 
 // A body the core can release a client on: its configuration is cached, its play
 // login has landed, and its warm marker has been seen. That is the same pair of
@@ -27,7 +28,7 @@ function warmABody (backendLeg, { config = ['registry_data'], play = ['login'], 
 
 test('#258 a lane without the picker never lands a claim', async () => {
   const { core } = makeCore()
-  const outcome = await core.connectClaimedBody(PARTY)
+  const outcome = await core.connectClaimedBody(CLAIMED_BODY)
   assert.equal(outcome.connected, false)
   assert.equal(outcome.reason, 'picker_off')
 })
@@ -42,10 +43,10 @@ test('#258 a claim with no address dials nothing', async () => {
 
 test('#258 the claim dials the body it names, and another body after it is refused', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
-  const dial = core.connectClaimedBody(PARTY)
+  const dial = core.connectClaimedBody(CLAIMED_BODY)
   // The dial is in flight: the leg has the target and the session is booting.
   await Promise.resolve()
-  assert.deepEqual(backendLeg.target, PARTY.target)
+  assert.deepEqual(backendLeg.target, CLAIMED_BODY.target)
   assert.equal(backendLeg.dialledTargets().length, 1)
   // The claim is a fresh login: no transfer handshake and no cookies.
   assert.equal(backendLeg.dialledTargets()[0].transfer, false)
@@ -56,8 +57,8 @@ test('#258 the claim dials the body it names, and another body after it is refus
   clock.tick(50)
   const outcome = await dial
   assert.equal(outcome.connected, true)
-  assert.equal(outcome.body, PARTY.body)
-  assert.equal(core.claimedBody, PARTY.body)
+  assert.equal(outcome.body, CLAIMED_BODY.body)
+  assert.equal(core.claimedBody, CLAIMED_BODY.body)
   assert.equal(core.metrics.claimDials, 1)
   assert.equal(core.metrics.claimBodies, 1)
 
@@ -67,13 +68,34 @@ test('#258 the claim dials the body it names, and another body after it is refus
   const second = await core.connectClaimedBody({ body: 'sky', target: { host: '127.0.0.1', port: 25566 } })
   assert.equal(second.connected, false)
   assert.equal(second.reason, 'one_body')
-  assert.equal(second.body, PARTY.body)
+  assert.equal(second.body, CLAIMED_BODY.body)
   assert.equal(backendLeg.dialledTargets().length, 1, 'the refused claim dialled nothing')
+})
+
+test('#258 a body that ended before it warmed does not hold the next claim', async () => {
+  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  // The first body's connection ends while the claim is still waiting for it.
+  const died = core.connectClaimedBody({ body: 'dead', target: { host: '127.0.0.1', port: 1 } })
+  await Promise.resolve()
+  backendLeg.deliverEnd({ reason: 'refused' })
+  clock.tick(30_000)
+  const dead = await died
+  assert.equal(dead.connected, false)
+  assert.equal(dead.reason, 'body_not_warm')
+  // A second client may claim a different body: nothing is connected, so there is
+  // nothing for it to contend with.
+  const live = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  warmABody(backendLeg)
+  clock.tick(50)
+  const landed = await live
+  assert.equal(landed.connected, true)
+  assert.equal(core.claimedBody, CLAIMED_BODY.body)
 })
 
 test('#258 the same body may be redialled after its session faulted, and another body may not', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
-  const first = core.connectClaimedBody(PARTY)
+  const first = core.connectClaimedBody(CLAIMED_BODY)
   await Promise.resolve()
   warmABody(backendLeg)
   clock.tick(50)
@@ -86,9 +108,9 @@ test('#258 the same body may be redialled after its session faulted, and another
   assert.equal(core.session.state, 'reconnecting')
   clock.tick(1000)
   assert.equal(core.session.state, 'boot')
-  assert.equal(core.claimedBody, PARTY.body)
+  assert.equal(core.claimedBody, CLAIMED_BODY.body)
 
-  const again = core.connectClaimedBody(PARTY)
+  const again = core.connectClaimedBody(CLAIMED_BODY)
   await Promise.resolve()
   warmABody(backendLeg)
   clock.tick(50)
@@ -103,7 +125,7 @@ test('#258 the same body may be redialled after its session faulted, and another
 
 test('#258 a body that never warms is refused in bounded time, not held forever', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
-  const dial = core.connectClaimedBody(PARTY)
+  const dial = core.connectClaimedBody(CLAIMED_BODY)
   // The body connects and then says nothing: no configuration, no login, no warm
   // marker. The wait is the only thing between the client and a hang.
   await Promise.resolve()
@@ -123,9 +145,37 @@ test('#258 a body that never warms is refused in bounded time, not held forever'
   assert.equal(core.metrics.claimDialsFailed, 1)
 })
 
+test('#258 a claim that timed out waiting for its body waits again instead of dialling a second', async () => {
+  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  const first = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  // The body logs in and caches its configuration, and never sends the warm
+  // marker: a connected body no client can be released on yet.
+  warmABody(backendLeg, { marker: false })
+  clock.tick(30_000)
+  const timedOut = await first
+  assert.equal(timedOut.connected, false)
+  assert.equal(timedOut.reason, 'body_not_warm')
+  assert.equal(backendLeg.dialledTargets().length, 1)
+
+  // The picker offers the list again, so the client may click Claim again. The
+  // second claim must wait on the body this session already dialled, not refuse a
+  // client the picker just invited.
+  const second = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  assert.equal(backendLeg.dialledTargets().length, 1, 'the second claim dialled nothing')
+  backendLeg.deliver({ state: 'play', name: 'chunk_batch_finished', buffer: Buffer.from('marker'), data: {} })
+  clock.tick(50)
+  const warmed = await second
+  assert.equal(warmed.connected, true)
+  assert.equal(core.claimedBody, CLAIMED_BODY.body)
+  assert.equal(core.metrics.claimDials, 1)
+  assert.equal(core.metrics.claimBodies, 1)
+})
+
 test('#258 a body with no cached configuration is not ready for a client, however warm it is', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
-  const dial = core.connectClaimedBody(PARTY)
+  const dial = core.connectClaimedBody(CLAIMED_BODY)
   await Promise.resolve()
   // Warm and logged in, but nothing to configure the client with: a client
   // released on this cache would land in a world it has no registries for.
