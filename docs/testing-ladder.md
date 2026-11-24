@@ -726,6 +726,37 @@ first dial and its target warms in five seconds.
   still connected, and the front still holds exactly two channels, one of them a
   driver.
 
+- `O61` the picker offers the allowed-server list, falls back to the seed it names,
+  and a row is one body id (#265). The rig writes the two files the key has — the
+  live list the panel edits, and the seed Git commits behind it — and offers them
+  through the product's own reader (`createPickerServerReader` in
+  `src/service/start-live.js`), so what this rung reads is the offer the service
+  makes. Every join from O55 on is therefore a live-file list, and the lane said
+  which file answered once: one `pickerOffered` line with `source: control` and two
+  servers, not one line per read. A join reads the list more than once and the
+  operator reads one line.
+
+  The live file is then made unparseable. The reader names it and ignores it —
+  `controlRejected` with that file and `reason: not_json` — and the seed answers
+  rather than an empty dialog: a ninth client reads exactly the seed's one row,
+  labelled with its address, and nothing is dialled for it. Then the live file is
+  edited the way the panel writes it, with the row of the body a driver holds and a
+  spectator watches removed. A tenth client reads a list of exactly the remaining
+  row, and the driven body is the one the edit found: the same claim, the same cache
+  instance, the same one dial, the same two channels on that body, and neither
+  client ended or kicked.
+
+  The identity this proves is the one #260 and #267 have to agree on: the body id
+  the claim records is the key the dial's cache is made under, read back through
+  the address the row names (`pickSlug(pickTarget(row).host + ':' + port)`), so one
+  server is one body id.
+
+  What it cannot prove: a row whose name spells its address another way, because no
+  allowed-server file can spell a port that way and a leading zero is not JSON.
+  `pickerRows` normalises whatever name a lane hands it, and
+  `test/core/picker.test.js` is where that is proven. A live file that is absent
+  rather than broken, and a seed that is missing, are
+  `test/service/control.test.js`'s.
 
 ## The client parity rung
 
