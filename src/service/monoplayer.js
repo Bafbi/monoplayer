@@ -1953,6 +1953,17 @@ export function createMonoplayer ({
     skinSent = false
   }
 
+  // One frame of a synthesized replay, on the body's channels or on one of them
+  // (#269): a position is a library packet the leg writes, everything else is the
+  // cached bytes. The attach replay and the spectator's take the same shape, so the
+  // two cannot disagree about which frames are packets.
+  function writeSynthFrame (frame, { channel = null } = {}) {
+    if (frame.synth === 'position') {
+      return frontLeg.write(frame.name, frame.packet, { synth: true, channel }) !== false
+    }
+    return frontLeg.writeRaw(frame.buffer, { state: 'play', name: frame.name }, { channel }) !== false
+  }
+
   // The replay half of an attach: the join prefix and the warm state as they
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
@@ -1972,10 +1983,7 @@ export function createMonoplayer ({
     })
     frontTeleportSeq = synthesized.teleportId
 
-    for (const frame of synthesized.frames) {
-      if (frame.synth === 'position') frontLeg.write(frame.name, frame.packet, { synth: true })
-      else frontLeg.writeRaw(frame.buffer, { state: 'play', name: frame.name })
-    }
+    for (const frame of synthesized.frames) writeSynthFrame(frame)
     metrics.framesReplayed += synthesized.counts.replayed
     metrics.positionsSynthesized += synthesized.counts.synthesized
     telemetry.metric('monoplayer.replay.frames', synthesized.counts.replayed, { player: name })
@@ -2291,10 +2299,7 @@ export function createMonoplayer ({
     frontTeleportSeq = synthesized.teleportId
     let written = 0
     for (const frame of synthesized.frames) {
-      const sent = frame.synth === 'position'
-        ? frontLeg.write(frame.name, frame.packet, { synth: true, channel }) !== false
-        : frontLeg.writeRaw(frame.buffer, { state: 'play', name: frame.name }, { channel }) !== false
-      if (sent) written++
+      if (writeSynthFrame(frame, { channel })) written++
     }
     metrics.spectatorViews++
     log('spectateView', {
