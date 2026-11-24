@@ -331,7 +331,7 @@ test('#262 the list is read without the desired document, and one unset path lea
 
 
 // #265: the picker's list. The key is the allowed-server list (#262), read at each
-// offer so a panel edit shows at the next join, and the row a lane offers names the
+// offer, so a panel edit shows at the next join. The row a lane offers names the
 // address a claim dials.
 test('#265 the picker reader offers the allowed-server list, and names the source once per answer', () => {
   let answer = { servers: [{ host: 'paper', port: 25565 }], source: 'seed' }
@@ -347,7 +347,7 @@ test('#265 the picker reader offers the allowed-server list, and names the sourc
   answer = { servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25566 }], source: 'control' }
   assert.deepEqual(offered().map(row => row.name), ['paper:25565', 'sky:25566'])
 
-  // One line per answer, not one per read: a join reads the list more than once, and
+  // One line per answer, not one per read. A join reads the list more than once, and
   // an operator does not need the same fact three times.
   offered()
   assert.deepEqual(said, [
