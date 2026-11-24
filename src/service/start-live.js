@@ -512,9 +512,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
       })
       telemetry.metric('monoplayer.picker_picks', 1, { server: pick.server?.name ?? null })
     },
-    // #266: the answer to a chosen server's own dialog. Recorded, not acted on:
-    // the verb names a body this lane does not connect from the configuration
-    // phase, and #267 is the ticket that changes that.
+    // #266: the answer to a chosen server's own dialog. Recorded, not acted on.
+    // The verb names a body this lane does not connect from the configuration
+    // phase. #267 is the ticket that changes that.
     onPickerVerb: verb => {
       log('pickerVerbRecorded', {
         verb: verb.verb,

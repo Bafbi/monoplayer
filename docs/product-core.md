@@ -302,49 +302,54 @@ listing the lane's allowed servers.
 - **Nothing is attached.** A picker join takes no attach slot and never reaches
   the core's session, so several clients may read the picker at once. The core
   counts the join as `attach_picker`, not as a denial. Until #267 lands, a pick is
-  recorded and the client is shown that server's own dialog; the answer to it is
+  recorded and the client is shown that server's own dialog. The answer to it is
   recorded too, and the client is told in one sentence what the lane cannot do yet.
 - **The second level is the server's own dialog (#266).** A pick sends a second
-  `show_dialog` in the same open phase: the server's name and state as the title,
-  and three `minecraft:dynamic/custom` actions — claim, spectate, disconnect. The
-  phase still never finishes. It is a second frame, not a `minecraft:dialog`
-  registry entry: the configuration `show_dialog` carries the dialog inline with no
-  registry branch, and the recorded baseline is never edited.
+  `show_dialog` in the same open phase. The title is the server's name and state.
+  The buttons are claim, spectate and disconnect, three `minecraft:dynamic/custom`
+  actions. The phase still never finishes. It is a second frame, not a
+  `minecraft:dialog` registry entry. The configuration `show_dialog` carries the
+  dialog inline with no registry branch, and the recorded baseline is never edited.
 - **The verb, and the server, ride in the id (#266).** The ids are
   `monoplayer:claim/<slug>`, `monoplayer:spectate/<slug>` and
-  `monoplayer:disconnect/<slug>`, one namespace per verb rather than a segment
-  inside `monoplayer:pick/`. With the verb inside the pick namespace
-  (`monoplayer:pick/<slug>/claim`), the picker's own reader returns a pick of a
-  server called `<slug>/claim`, and telling the two levels apart means splitting a
-  slug. Because the server is in the id, the front keeps no per-connection record of
-  which dialog a client is looking at: the frame alone says which level it answers
-  and which server it names, so two clients in the phase at once cannot read each
-  other's dialog.
-- **A verb is read, reported, then refused — except `disconnect` (#266).** Claim and
-  spectate act on a body, and no body is connected from the configuration phase
-  until #267, so both are reported to the service and answered with a sentence that
-  names the verb. `disconnect` is the one the dialog layer can carry out: the client
-  goes, and its configuration `disconnect` frame says which server it left.
+  `monoplayer:disconnect/<slug>`: one namespace per verb, not a segment inside
+  `monoplayer:pick/`. With the verb inside the pick namespace
+  (`monoplayer:pick/<slug>/claim`), the picker's reader returns a pick of a server
+  called `<slug>/claim`. Telling the two levels apart would then mean splitting a
+  slug. The server is in the id too, so the front keeps no per-connection record of
+  which dialog a client is looking at. The frame alone says which level it answers
+  and which server it names. Two clients in the phase at once therefore cannot read
+  each other's dialog.
+- **A verb is honoured whether or not the client saw that dialog (#266).** The id is
+  the request. A claim the client sends without a pick is read as a claim, not
+  refused for the order it arrived in. #267 has to authorise a claim on the body it
+  would act on, rather than on a dialog having been shown.
+- **A verb is read, reported, then answered (#266).** Claim and spectate act on a
+  body. No body is connected from this phase until #267, so both are reported and
+  answered with a sentence that names the verb. `disconnect` is the one verb the
+  dialog layer can carry out. The client goes, and its configuration
+  `disconnect` frame says which server it left.
 - **An unreadable answer is refused, never guessed at (#266).** `readServerAction`
-  returns a reason rather than a null — `not_a_click`, `unknown_id`, `malformed`,
-  `unknown_verb` — and `serverActionProblemText` turns it into one sentence that
-  names the id and the part that did not read. A frame that is not a configuration
-  click at all keeps the dialog on screen so the client can still choose. Anything
-  else is logged and answered with a `disconnect` instead of leaving the client in a
-  dialog nobody will read.
-- **The dialog's size is not the limit.** A server is about 172 bytes of dialog:
-  label, width, and one custom action, so about 12 000 servers fit under the 2 MiB
-  ceiling `show_dialog` reads. Measured while #255 was written; do not re-measure.
+  returns a reason rather than a null: `not_a_click`, `unknown_id`, `malformed` or
+  `unknown_verb`. `serverActionProblemText` turns that reason into one sentence
+  naming the id and the part that did not read. A frame that is not a configuration
+  click at all keeps the dialog on screen, so the client can still choose. Anything
+  else is logged and answered with a `disconnect`. It is never left in a dialog
+  nobody will read.
+- **The dialog's size is not the limit.** A server is about 172 bytes of dialog: a
+  label, a width and one custom action. About 12 000 servers fit under the 2 MiB
+  ceiling `show_dialog` reads. Measured while #255 was written, so do not
+  re-measure.
 - **One switch, off by default.** `MONOPLAYER_PICKER` is read once at startup and
   validated. With it off, or with no baseline on disk, a join with no backend is
   refused with `backend_not_ready`, exactly as before.
 
-The gate for the whole epic is answered at rung 2 by `O55` and `O56`: a 26.2
-client reads the recording, gets the dialog, clicks one action, receives that
-server's own dialog, clicks a verb, and the service records both ids with the
-server they named. `O56b` refuses an unknown verb in a sentence that names it.
-What no rung proves is that a vanilla 26.2 client accepts the registry set; that
-is rung 4's question.
+The gate for the whole epic is answered at rung 2 by `O55`, `O56` and `O56b`. A
+26.2 client reads the recording, gets the dialog, and clicks one action. It then
+receives that server's own dialog and clicks a verb, and the service records both
+ids with the server they named. `O56b` refuses an unknown verb in a sentence that
+names it. What no rung proves is that a vanilla 26.2 client accepts the registry
+set. That is rung 4's question.
 
 ### Control dialogs (#16)
 

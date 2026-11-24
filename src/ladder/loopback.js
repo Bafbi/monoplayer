@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O56 (including O11b, O24b, O41b, O54b, O55b and O56b) are the contract
+// Assertions R0 and O1-O56 (including O11b, O24b, O41b, O54b, O55b, O56b and O56c) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -163,6 +163,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerCore = null
   let pickerBot = null
   let pickerBot2 = null
+  let pickerBot3 = null
 
   const evidence = {
     frontPort: null,
@@ -3026,9 +3027,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const pickerServerName = 'gate-paper:25565'
     const pickerPicks = []
     // #266: the verbs the front reports from the chosen server's dialog. The
-    // second level's answer is a claim here because claim is the verb the dialog
-    // layer can read and cannot carry: the body it would act on is #267's.
+    // second level's answer is a claim here. Claim is the verb the dialog layer can
+    // read and cannot carry, because the body it would act on is #267's.
     const pickerVerbs = []
+    // Three clients, so this rig has its own whitelist: the other rigs take the
+    // shared pair, and a name they do not know would change what they can refuse.
+    const pickerWhitelist = [offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Third')]
     pickerBackend = createOfflineBackendLeg({
       host: '127.0.0.1',
       // A port nothing listens on, and the rig never dials it: this ticket's whole
@@ -3043,7 +3047,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       host: '127.0.0.1',
       port: 0,
       version: pickerVersion,
-      offlineWhitelist,
+      offlineWhitelist: pickerWhitelist,
       // No cached backend configuration exists, and none is invented: the front's
       // cached replay path must find nothing here.
       getSnapshotConfig: () => pickerCore?.cache.snapshot().config ?? [],
@@ -3065,7 +3069,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // The one switch that lets a login with no backend through, and the reason
         // the front may serve a picker at all.
         picker: true,
-        attachWhitelist: offlineWhitelist,
+        attachWhitelist: pickerWhitelist,
         front: { host: '127.0.0.1', port: 0 },
         backend: { host: '127.0.0.1', port: pickerBackend.port ?? 1 },
         puppet: { username: 'GlowSquidye', uuid: puppetUuid }
@@ -3279,13 +3283,66 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.serverDialog
     )
 
+    // #266: the one verb the dialog layer can carry out. A third client picks, then
+    // clicks Disconnect out of the frame it received, and its configuration ends
+    // with the sentence naming the server it left.
+    pickerBot3 = createBot({ port: pickerBound.port, username: 'Third', version: pickerVersion })
+    await pickerBot3.waitFor(() => pickerBot3.received.dialogs.length === 1, 'the picker at the third client', 15_000)
+    const thirdPick = chooseDialogAction(pickerBot3.received.dialogs[0], 'first')
+    if (thirdPick !== null) pickerBot3.answerDialog(thirdPick.id, null, 'configuration')
+    await pickerBot3.waitFor(
+      () => pickerBot3.received.dialogs.length === 2,
+      "the chosen server's dialog at the third client",
+      15_000
+    )
+    const thirdLeave = chooseDialogAction(pickerBot3.received.dialogs[1], 'disconnect')
+    if (thirdLeave !== null) pickerBot3.answerDialog(thirdLeave.id, null, 'configuration')
+    await pickerBot3.waitFor(
+      () => pickerBot3.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the goodbye a disconnect gets',
+      15_000
+    )
+    await waitFor(() => pickerVerbs.length === 2, 'the disconnect verb to reach the service', 10_000)
+    evidence.picker.disconnect = {
+      pick: thirdPick === null ? null : { id: thirdPick.id, label: thirdPick.label },
+      chosen: thirdLeave === null ? null : { id: thirdLeave.id, label: thirdLeave.label },
+      reported: pickerVerbs[1] ?? null,
+      ended: pickerBot3.received.ended === null ? null : String(pickerBot3.received.ended).slice(0, 120),
+      metrics: {
+        picks: pickerFront.metrics.pickerPicks,
+        serverDialogs: pickerFront.metrics.pickerServerDialogs,
+        verbs: pickerFront.metrics.pickerVerbs,
+        pickers: pickerFront.metrics.pickers
+      }
+    }
+    check(
+      'O56c',
+      'disconnect is carried out: the client leaves the server it named, and the front says which',
+      thirdPick !== null &&
+        thirdPick.id === 'monoplayer:pick/gate-paper_25565' &&
+        thirdLeave !== null &&
+        thirdLeave.id === 'monoplayer:disconnect/gate-paper_25565' &&
+        thirdLeave.label === 'Disconnect' &&
+        pickerVerbs.length === 2 &&
+        pickerVerbs[1].verb === 'disconnect' &&
+        pickerVerbs[1].id === thirdLeave.id &&
+        pickerVerbs[1].server?.name === pickerServerName &&
+        pickerBot3.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerFront.metrics.pickerPicks === 2 &&
+        pickerFront.metrics.pickerServerDialogs === 2 &&
+        pickerFront.metrics.pickerVerbs === 2 &&
+        pickerFront.metrics.pickers === 3 &&
+        pickerCore.attached === false,
+      evidence.picker.disconnect
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }

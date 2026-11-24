@@ -457,14 +457,14 @@ function createFrontLeg ({
   // server's configuration phase (src/legs/configuration-baseline.js), and
   // `pickerServers` is the allowed list this leg offers when the core says there
   // is no backend to attach to. Both absent means the lane behaves exactly as it
-  // did: a join with no backend is refused. `onPickerPick` reports a pick and
-  // `onPickerVerb` the answer to the chosen server's dialog (#266); the leg answers
-  // the client itself either way, because a configuration phase has nowhere to hand
-  // a client until #267 lands.
+  // did: a join with no backend is refused. `onPickerPick` reports a pick, and
+  // `onPickerVerb` reports the answer to the chosen server's dialog (#266). The leg
+  // answers the client itself either way, because a configuration phase has nowhere
+  // to hand a client until #267 lands.
   configurationBaseline = null,
   pickerServers = null,
   onPickerPick = null,
-  // #266: the answer to a chosen server's own dialog — claim, spectate or
+  // #266: the answer to a chosen server's own dialog, which is claim, spectate or
   // disconnect, with the server it names.
   onPickerVerb = null,
   // #201: the total connection cap on the pre-auth window.
@@ -950,10 +950,10 @@ function createFrontLeg ({
   }
 
   // #266: one click on a dialog this leg authored, at either level. The level is
-  // the id's namespace, not a connection's memory: a pick names a server, a verb
-  // names a verb and a server, so the frame alone decides which dialog the answer
-  // came from. Nothing has to be kept in step, which is what lets two clients hold
-  // the picker at once (O55b).
+  // the id's namespace, not a connection's memory. A pick names a server, and a verb
+  // names a verb and a server, so the frame alone says which dialog it answers.
+  // Nothing has to be kept in step, which is what lets two clients hold the picker
+  // at once (O55b).
   function handlePickerClick (client, buffer) {
     const pick = readPickAction(buffer)
     if (pick !== null) {
@@ -972,10 +972,9 @@ function createFrontLeg ({
       log('pickerPickIgnored', { username: client.username ?? null, reason: 'not_a_pick' })
       return
     }
-    // Ours to read and it did not read. A click that names nothing the dialog
-    // offered is refused with the sentence that says what was wrong, and the
-    // client is answered: a client left in a dialog nobody will read is worse off
-    // than one that is told why.
+    // Ours to read and it did not read. The click is refused with the sentence
+    // that says what was wrong, and the client is answered. A client left in a
+    // dialog nobody will read is worse off than one that is told why.
     metrics.pickerRefusals++
     const text = serverActionProblemText(action)
     log('pickerVerbRefused', {
@@ -990,9 +989,9 @@ function createFrontLeg ({
     endConfiguration(client, 'picker_refused', text)
   }
 
-  // The client picked a server. It is reported to the caller, and the same client
-  // gets that server's own dialog: a pick is the first half of a choice, not the
-  // end of the connection (#266).
+  // The client picked a server. The pick is reported to the caller, and the same
+  // client gets that server's own dialog. A pick is the first half of a choice, not
+  // the end of the connection (#266).
   function sendServerDialog (client, server) {
     let written = false
     try {
@@ -1016,8 +1015,8 @@ function createFrontLeg ({
   }
 
   // #266: the answer to a server's own dialog. The verb and the server both ride in
-  // the frame, so the server named here is the one the client clicked, not one this
-  // leg remembered.
+  // the frame. This is therefore the server the client clicked, not one the leg
+  // remembered.
   function handlePickerVerb (client, action) {
     const server = pickerServerRows().find(row => row.slug === action.slug) ?? null
     const fields = {
@@ -1058,7 +1057,7 @@ function createFrontLeg ({
     }
     // Claim and spectate act on a body. No body is connected from this phase until
     // #267 wires a pick to one, so the verb is read, reported, and refused in words
-    // that name it. Nothing is invented here.
+    // that name it. Nothing is invented here for it.
     endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
   }
 
