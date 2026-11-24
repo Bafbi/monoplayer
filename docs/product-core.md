@@ -301,9 +301,21 @@ listing the lane's allowed servers.
   actions are inert.
 - **Nothing is attached.** A picker join takes no attach slot and never reaches
   the core's session, so several clients may read the picker at once. The core
-  counts the join as `attach_picker`, not as a denial. Until #267 lands, a pick is
-  recorded and the client is shown that server's own dialog. The answer to it is
-  recorded too, and the client is told in one sentence what the lane cannot do yet.
+  counts the join as `attach_picker`, not as a denial. A pick is recorded and the
+  client is shown that server's own dialog. The answer to it is recorded too.
+- **The claim is recorded at the pick, not at login (#267).** The client that
+  clicks `Claim` takes the body the frame names, and `src/core/claims.js` records
+  it. Two rules hold: a body carries one claim, and a connection carries one claim.
+  A second claim on a driven body is refused with one sentence naming its driver, so
+  two people never share a body's controls. The holder is the connection, so the
+  claim ends when that connection ends and a client that never clicks `Claim` holds
+  nothing. The old attach slot keeps what it had: the claim decides who may drive a
+  body, the slot decides who is delivered one, and #269 deletes the slot once a
+  channel holds delivery.
+- **A claim is not a delivery (#267).** The claiming client stays in the
+  configuration phase with its dialog, because a claim has no channel to deliver a
+  body through. That is the state #269 and #260 change, and it is why a pick on this
+  lane still ends in configuration rather than in a world.
 - **The second level is the server's own dialog (#266).** A pick sends a second
   `show_dialog` in the same open phase. The title is the server's name and state.
   The buttons are claim, spectate and disconnect, three `minecraft:dynamic/custom`
@@ -322,13 +334,13 @@ listing the lane's allowed servers.
   each other's dialog.
 - **A verb is honoured whether or not the client saw that dialog (#266).** The id is
   the request. A claim the client sends without a pick is read as a claim, not
-  refused for the order it arrived in. #267 has to authorise a claim on the body it
-  would act on, rather than on a dialog having been shown.
-- **A verb is read, reported, then answered (#266).** Claim and spectate act on a
-  body. No body is connected from this phase until #267, so both are reported and
-  answered with a sentence that names the verb. `disconnect` is the one verb the
-  dialog layer can carry out. The client goes, and its configuration
-  `disconnect` frame says which server it left.
+  refused for the order it arrived in. A claim is authorised against the body the
+  frame names, never against a dialog having been shown (#267).
+- **A verb is read, reported, then answered (#266).** Claim, spectate and
+  disconnect all act on a body. `claim` records the claim (#267), and
+  `disconnect` is honoured: the client goes, and its configuration `disconnect`
+  frame says which server it left. Spectate acts on a body nothing watches from
+  this phase, so it is reported and answered with a sentence that names the verb.
 - **An unreadable answer is refused, never guessed at (#266).** `readServerAction`
   returns a reason rather than a null: `not_a_click`, `unknown_id`, `malformed` or
   `unknown_verb`. `serverActionProblemText` turns that reason into one sentence
