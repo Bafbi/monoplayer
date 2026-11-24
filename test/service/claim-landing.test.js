@@ -1,11 +1,13 @@
 // #258: the landing's rules, at the fake-integration seam. The offline loopback
 // rung (O58) proves the whole path over real sockets; what is cheap to pin here is
 // the part a socket would hide: which dials a claim is allowed to make, and what a
-// claim gets when it is not. One body at a time is the boundary this file holds
-// still for #260, which is where a second body's cache arrives.
+// claim gets when it is not. #260 gave each body its own cache; what this file
+// still holds still is one body per session, which is #261's lifetime and #269's
+// delivery.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { pickSlug } from '../../src/core/picker.js'
 import { makeCore } from '../support/harness.js'
 
 // The body a claim names, and the address its row carried.
@@ -39,6 +41,10 @@ test('#258 a claim with no address dials nothing', async () => {
   assert.equal(outcome.connected, false)
   assert.equal(outcome.reason, 'no_target')
   assert.equal(backendLeg.connected, false, 'a body with no address is never dialled')
+  // #260: a cache is created when a body is dialled, so a claim that never
+  // reaches the leg leaves the registry as it was: the lane's own body.
+  assert.equal(core.bodies.get('sky'), null, 'a body that was never dialled has no cache')
+  assert.equal(core.bodies.stats().count, 1)
 })
 
 test('#258 the claim dials the body it names, and another body after it is refused', async () => {
@@ -61,15 +67,26 @@ test('#258 the claim dials the body it names, and another body after it is refus
   assert.equal(core.claimedBody, CLAIMED_BODY.body)
   assert.equal(core.metrics.claimDials, 1)
   assert.equal(core.metrics.claimBodies, 1)
+  // #260: the cache the body's frames landed in is that body's. The lane's own
+  // configured body keeps a cache of its own, and the claim put no frame in it.
+  const configured = pickSlug(core.config.backend.host + ':' + core.config.backend.port)
+  assert.notEqual(CLAIMED_BODY.body, configured, 'the claim names a body that is not the lane\'s own')
+  assert.equal(core.cache, core.bodies.cacheFor(CLAIMED_BODY.body))
+  assert.deepEqual([...core.bodies.stats().bodies].sort(), [CLAIMED_BODY.body, configured].sort())
+  assert.deepEqual(core.bodies.cacheFor(configured).snapshot().prefix, [],
+    'the lane\'s own body holds none of the claimed body\'s frames')
+  assert.equal(core.bodies.cacheFor(configured).warm, false)
 
-  // One body at a time. A second body's frames arriving while this one is
-  // delivered is the per-body cache of #260, so the second claim is refused with
-  // the body this session already serves.
+  // One body at a time, because the session holds one backend connection. The
+  // second claim is refused with the body this session already serves, and the
+  // refusal creates no cache for the body it refused (#260).
   const second = await core.connectClaimedBody({ body: 'sky', target: { host: '127.0.0.1', port: 25566 } })
   assert.equal(second.connected, false)
   assert.equal(second.reason, 'one_body')
   assert.equal(second.body, CLAIMED_BODY.body)
   assert.equal(backendLeg.dialledTargets().length, 1, 'the refused claim dialled nothing')
+  assert.equal(core.bodies.get('sky'), null, 'and no second body was given a cache')
+  assert.equal(core.cache, core.bodies.cacheFor(CLAIMED_BODY.body), 'the serving body\'s cache is unchanged')
 })
 
 test('#258 a body that ended before it warmed does not hold the next claim', async () => {
@@ -100,12 +117,16 @@ test('#258 the same body may be redialled after its session faulted, and another
   warmABody(backendLeg)
   clock.tick(50)
   assert.equal((await first).connected, true)
+  const bodyCache = core.cache
+  assert.equal(bodyCache.warm, true)
 
-  // The body's session faults with nobody attached: the cache goes, the session
-  // arms its reconnect, and the claim on that body is still the one this session
-  // serves. Coming back to it is a redial of the same body, not a second cache.
+  // The body's session faults with nobody attached: that body's cache is reset,
+  // the session arms its reconnect, and the claim on that body is still the one
+  // this session serves. Coming back to it is a redial of the same body and the
+  // same cache, not a second one (#260).
   backendLeg.deliverEnd({ reason: 'body_fault' })
   assert.equal(core.session.state, 'reconnecting')
+  assert.equal(bodyCache.warm, false, 'the fault reset the cache of the body that ended')
   clock.tick(1000)
   assert.equal(core.session.state, 'boot')
   assert.equal(core.claimedBody, CLAIMED_BODY.body)
@@ -116,11 +137,17 @@ test('#258 the same body may be redialled after its session faulted, and another
   clock.tick(50)
   assert.equal((await again).connected, true)
   assert.equal(core.metrics.claimDials, 2)
+  assert.equal(core.cache, bodyCache, 'one body, one cache: a redial does not open a second')
+  assert.equal(bodyCache.warm, true, 'and the new join warmed the same cache')
+  assert.deepEqual([...core.bodies.stats().bodies].sort(),
+    [CLAIMED_BODY.body, pickSlug(core.config.backend.host + ':' + core.config.backend.port)].sort(),
+    'the redial added no body: the two caches are the lane\'s own body and the claimed one')
 
-  // A different body is still refused: one body per session is #260's edge.
+  // A different body is still refused, because one session serves one body.
   const other = await core.connectClaimedBody({ body: 'sky', target: { host: '127.0.0.1', port: 25566 } })
   assert.equal(other.connected, false)
   assert.equal(other.reason, 'one_body')
+  assert.equal(core.bodies.get('sky'), null)
 })
 
 test('#258 a second claim on a body still dialling waits for that dial, not a new one', async () => {
