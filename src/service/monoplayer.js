@@ -2037,11 +2037,11 @@ export function createMonoplayer ({
       log('claimDialRefused', { body, reason: 'no_target' })
       return { connected: false, reason: 'no_target', body }
     }
-    // A body this session is already connected to and has not given up on: the
-    // wait is the part that failed last time, so the second claim waits again
-    // rather than refusing a client the picker just offered.
-    const waitingOnSameBody = claimDial !== null && claimDial.body === body &&
-      session.state !== STATES.BOOT && session.state !== STATES.FAILED
+    // A body this session already dialled and has not given up on: either the wait
+    // failed last time or the dial is still in flight. The second claim waits on it
+    // rather than dialling over a live socket or refusing a client the picker just
+    // offered, and a double click on Claim is one landing.
+    const waitingOnSameBody = claimDial !== null && claimDial.body === body
     if (waitingOnSameBody) {
       log('claimWaitAgain', {
         body,

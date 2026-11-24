@@ -123,6 +123,24 @@ test('#258 the same body may be redialled after its session faulted, and another
   assert.equal(other.reason, 'one_body')
 })
 
+test('#258 a second claim on a body still dialling waits for that dial, not a new one', async () => {
+  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  // A client that clicks Claim twice: the second click lands the same body, and
+  // must not change the target of a socket that is still coming up.
+  const first = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  const second = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  assert.equal(backendLeg.dialledTargets().length, 1, 'one dial, not two')
+  warmABody(backendLeg)
+  clock.tick(50)
+  const [a, b] = await Promise.all([first, second])
+  assert.equal(a.connected, true)
+  assert.equal(b.connected, true)
+  assert.equal(core.metrics.claimDials, 1)
+  assert.equal(core.claimedBody, CLAIMED_BODY.body)
+})
+
 test('#258 a body that never warms is refused in bounded time, not held forever', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
   const dial = core.connectClaimedBody(CLAIMED_BODY)
