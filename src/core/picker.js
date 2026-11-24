@@ -82,20 +82,20 @@ function textComponent (text) {
   return { type: 'string', value: String(text) }
 }
 
-// One button per row. `rows` are { name, state, driver, watchers }, the picker's
+// One button per row. `rows` are { name, state, driver, spectators }, the picker's
 // own vocabulary: a body is claimed, unclaimed, or down, a claimed body names who
 // is driving it, and a watched body names how many are watching it (#259).
 //
 // The order is the order a player asks the questions: what is it, is anyone
 // driving it, am I alone if I watch. A body nobody watches says nothing about
-// watchers, because ", 0 watching" is a sentence about a player who is not there.
+// spectators, because ", 0 watching" is a sentence about a player who is not there.
 export function pickerLabel (row) {
   const name = String(row?.name ?? 'server')
   const state = String(row?.state ?? 'down')
   const driver = row?.driver ? String(row.driver) : null
-  const watchers = Number.isInteger(row?.watchers) && row.watchers > 0 ? row.watchers : 0
+  const spectators = Number.isInteger(row?.spectators) && row.spectators > 0 ? row.spectators : 0
   const driving = driver === null ? '' : ' (' + driver + ')'
-  const watching = watchers === 0 ? '' : ', ' + watchers + ' watching'
+  const watching = spectators === 0 ? '' : ', ' + spectators + ' watching'
   return name + ' - ' + state + driving + watching
 }
 
@@ -129,11 +129,27 @@ export function pickerRows (rows = []) {
       driver: row?.driver ? String(row.driver) : null,
       // #259: how many watch the body, as the lane counted them. A row the lane
       // knows nothing about watches nobody.
-      watchers: Number.isInteger(row?.watchers) && row.watchers > 0 ? row.watchers : 0,
+      spectators: Number.isInteger(row?.spectators) && row.spectators > 0 ? row.spectators : 0,
       slug: pickSlug(name),
       id: pickIdFor(name)
     }
   })
+}
+
+// #259: a row with what the lane knows about the body it names, composed where
+// the rows are handed out. The state answers the question a player asks first: can I
+// get in. So a body that is not up is `down` whatever a claim still says about it,
+// because a claim outlives a dial that failed (#295) and a row that reads `claimed`
+// about a body nobody can enter sends the player into a refusal. A driver is a fact
+// about an up body, so a claim on a down one names nobody.
+export function pickerRowForBody (row, { up = false, driver = null, spectators = 0 } = {}) {
+  const named = up && typeof driver === 'string' && driver.length > 0 ? driver : null
+  return {
+    ...row,
+    state: up ? (named === null ? 'unclaimed' : 'claimed') : 'down',
+    driver: named,
+    spectators: Number.isInteger(spectators) && spectators > 0 ? spectators : 0
+  }
 }
 
 // #265: the rows a picker lane offers, from the read of the allowed-server list.
@@ -154,7 +170,7 @@ export function pickerOfferedRows (read = null) {
       // answer at the offer (src/legs/live-front.js, `pickerServerRows`).
       state: 'down',
       driver: null,
-      watchers: 0
+      spectators: 0
     }))
   }
 }
@@ -333,7 +349,7 @@ export function verbRefusalText ({ verb = null, server = null } = {}) {
 // Each reason asks the player for something different, so each gets its own
 // sentence: nothing is standing on that server yet, so claim it; this lane serves
 // another body; the body is still coming up, so wait; or the body is down, and a
-// claim is what brings it back. A watcher is never told the body has no driver,
+// claim is what brings it back. A spectator is never told the body has no driver,
 // because a body with no driver is watchable (#259).
 export function spectateRefusalText ({ server = null, reason = null } = {}) {
   const named = server === null ? 'that server' : server

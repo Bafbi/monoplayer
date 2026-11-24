@@ -344,7 +344,7 @@ test('#265 the picker reader offers the allowed-server list, and names the sourc
   // #259: the reader names servers; what a body on one is doing is the leg's answer
   // at the offer, so a row leaves this function with nobody driving and nobody
   // watching it.
-  assert.deepEqual(offered(), [{ name: 'paper:25565', state: 'down', driver: null, watchers: 0 }])
+  assert.deepEqual(offered(), [{ name: 'paper:25565', state: 'down', driver: null, spectators: 0 }])
   // The list is read at each offer, so an edit made from the panel is what the next
   // join sees. The picker is not a snapshot taken at start.
   answer = { servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25566 }], source: 'control' }
