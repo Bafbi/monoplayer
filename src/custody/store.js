@@ -20,6 +20,13 @@ import { normalizeUuid, sameUuid } from './util.js'
 export const WHITELIST_VERSION = 1
 export const DEFAULT_WHITELIST_FILE = path.join('.secrets', 'attach-whitelist.json')
 
+// What a Minecraft account name can be: 1 to 16 of these characters. The limit
+// is a fact about the game, so it is spelled once, here, where a name is
+// resolved. A service that writes a name of its own reads it rather than
+// repeating the number.
+export const MAX_PLAYER_NAME_LENGTH = 16
+export const PLAYER_NAME_PATTERN = new RegExp('^[A-Za-z0-9_]{1,' + MAX_PLAYER_NAME_LENGTH + '}$')
+
 // Name → UUID resolution, injectable in tests. Minecraft services first
 // (the launcher's own API), legacy api.mojang.com as fallback — both return
 // `{ id, name }` with an undashed UUID. Respect the ~200 req/2min Mojang
@@ -37,7 +44,7 @@ export function createNameLookup ({
     throw new Error('createNameLookup needs an injectable fetch (fetchImpl)')
   }
   return async function lookup (name) {
-    if (typeof name !== 'string' || !/^[A-Za-z0-9_]{1,16}$/.test(name)) return null
+    if (typeof name !== 'string' || !PLAYER_NAME_PATTERN.test(name)) return null
     for (const [index, base] of bases.entries()) {
       const isLast = index === bases.length - 1
       try {

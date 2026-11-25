@@ -262,12 +262,13 @@ Common:
 a front that asks no session server who a client is (no encryption, no
 `hasJoined`, and a UUID derived from the name the client claims), and a backend
 leg that joins as `auth: 'offline'` with a fixed username, from
-`MONOPLAYER_PUPPET_USERNAME` or `GlowSquidye`. Its UUID follows from that name.
-A lane that sets `MONOPLAYER_PUPPET_UUID` must set the UUID the name derives, or
-it refuses to start with `offline_puppet_uuid_mismatch`. The lane
-needs no custody directory, no account selector, and no Microsoft auth:
-`MONOPLAYER_PUPPET_ACCOUNT`, `MONOPLAYER_PUPPET_ACCOUNTS_DIR` and
-`MONOPLAYER_PUPPET_CACHE_DIR` are ignored.
+`MONOPLAYER_PUPPET_USERNAME`, else `MONOPLAYER_PUPPET_ACCOUNT`, else
+`GlowSquidye`. Its UUID follows from that name. A lane that sets
+`MONOPLAYER_PUPPET_UUID` must set the UUID the name derives. Any other value
+refuses to start, with `offline_puppet_uuid_mismatch`. The lane
+needs no custody directory and no Microsoft auth: `MONOPLAYER_PUPPET_ACCOUNTS_DIR`
+and `MONOPLAYER_PUPPET_CACHE_DIR` are ignored, and `MONOPLAYER_PUPPET_ACCOUNT` is
+read only as the name, when `MONOPLAYER_PUPPET_USERNAME` is unset.
 
 A lane that sets the key has to satisfy three facts:
 

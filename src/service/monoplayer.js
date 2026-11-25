@@ -61,6 +61,7 @@
 import { WARM_MARKER } from '../core/state-cache.js'
 import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
+import { forceWarm, shouldForceWarm } from './readiness.js'
 import {
   FABRIC_BRAND,
   brandFrame,
@@ -354,6 +355,19 @@ const NOOP_JOURNAL = Object.freeze({
 // sentence, because the client has no action left: there is no dialog to answer
 // and no claim to make. It rides the login-state disconnect, so it is the whole
 // of what the player is told.
+// How long a claim waits for the batch marker before it takes the same fallback
+// startup and reconnect take. Paper 26.x never sends `chunk_batch_finished` to a
+// protocol leg (the note on the cache's `forceWarm`), and the dev lane's body
+// joined and cached its frames without one. A backend that does batch sends the
+// marker inside a second. So the grace costs only a lane that was never going to
+// send one. The startup budget is 20 s because it also bounds a boot. A claim is
+// an attaching player on a loading screen.
+export const CLAIM_WARM_GRACE_MS = 5_000
+
+// The whole wait a claim allows, before it hands the picker back. Exported with
+// the grace because a test that drives the injected clock ticks past both.
+export const CLAIM_WARM_TIMEOUT_MS = 30_000
+
 export const ALREADY_DRIVEN_TEXT =
   'Monoplayer: another player is already driving this server. Try again when they leave.'
 
@@ -2068,11 +2082,11 @@ export function createMonoplayer ({
     return cache
   }
 
-  // How long a claimed body has to reach the state a client can be released on:
-  // its configuration and join prefix cached and its play login landed. Bounded
-  // because the client is on a loading screen: a body that misses it gets the
-  // picker back rather than a promise nobody keeps.
-  const CLAIM_WARM_TIMEOUT_MS = 30_000
+  // How long a claimed body has to reach the state an attaching player can be
+  // released on (CLAIM_WARM_TIMEOUT_MS): its configuration and join prefix cached
+  // and its play login landed. It is bounded because that player is on a loading
+  // screen. A body that misses it gets the picker back rather than a promise
+  // nobody keeps.
 
   // One wait on the injected clock. The core's default clock is inert, and an
   // inert clock cannot wait: the caller is told so instead of being held forever,
@@ -2095,25 +2109,68 @@ export function createMonoplayer ({
   // The body is attach-ready when a warm attach would be accepted: its play login
   // has landed and its configuration and join prefix are in the cache. Those are
   // the conditions the warm attach gate reads, so a claim cannot release a client
-  // that an ordinary attach would refuse. `marker` is the cache's own warm state,
-  // reported rather than inferred, so a log line can tell "no marker yet" from
-  // "marker seen, nothing to attach with".
-  async function awaitBodyWarm ({ timeoutMs = CLAIM_WARM_TIMEOUT_MS, pollMs = 50 } = {}) {
-    const deadline = clockNow() + timeoutMs
+  // that an ordinary attach would refuse. `marker` is the cache's warm state,
+  // reported rather than inferred, and `forced` says whether this wait is what
+  // pinned it: a reader can tell "the backend sent the batch" from "the grace
+  // declared a backend that does not batch".
+  async function awaitBodyWarm ({
+    body = null,
+    timeoutMs = CLAIM_WARM_TIMEOUT_MS,
+    graceMs = CLAIM_WARM_GRACE_MS,
+    pollMs = 50
+  } = {}) {
+    const startedAt = clockNow()
+    const deadline = startedAt + timeoutMs
     for (;;) {
       const stats = cache.stats()
       const state = {
         state: session.state,
         marker: stats.warm === true,
         configFrames: stats.sizes.config,
-        prefixFrames: stats.sizes.prefix
+        prefixFrames: stats.sizes.prefix,
+        // The counter the startup and transfer paths read for the same question
+        // (`waitForReady` and `shouldForceWarm`). A chunk in the pre-warm prefix
+        // is in the prefix, not in the chunk map, so `sizes.chunks` is 0 until a
+        // body is warm and cannot answer "did terrain arrive".
+        chunkFrames: stats.chunkFrames
       }
       if (session.isAttachReady() && stats.sizes.config > 0 && stats.sizes.prefix > 0) {
-        return { attachReady: true, reason: null, ...state }
+        return { attachReady: true, reason: null, forced: false, ...state }
       }
-      if (clockNow() >= deadline) return { attachReady: false, reason: 'body_not_warm', ...state }
+      // The fallback the startup and reconnect paths already take (#87). A body
+      // that cached a join and never saw the marker is a backend that does not
+      // batch, which on this product is a real Paper. Chunks are required, as on
+      // the transfer stage: this releases a client into the body, and a client
+      // released over an empty world falls.
+      const forced = shouldForceWarm({
+        hasConfig: stats.sizes.config > 0,
+        hasPrefix: stats.sizes.prefix > 0,
+        warm: stats.warm === true,
+        chunkFrames: stats.chunkFrames
+      }, { requireChunks: true })
+      if (forced && clockNow() - startedAt >= graceMs) {
+        const pinned = forceWarm({ cache, session })
+        log('warmFallback', {
+          stage: 'claim',
+          body,
+          forced: pinned.forced,
+          state: session.state,
+          configFrames: stats.sizes.config,
+          prefixFrames: stats.sizes.prefix,
+          chunkFrames: stats.chunkFrames,
+          afterMs: clockNow() - startedAt
+        })
+        return {
+          attachReady: true,
+          reason: null,
+          forced: pinned.forced,
+          ...state,
+          marker: cache.stats().warm === true
+        }
+      }
+      if (clockNow() >= deadline) return { attachReady: false, reason: 'body_not_warm', forced: false, ...state }
       const waited = await sleepOnClock(pollMs)
-      if (!waited) return { attachReady: false, reason: 'no_wait', ...state }
+      if (!waited) return { attachReady: false, reason: 'no_wait', forced: false, ...state }
     }
   }
 
@@ -2153,7 +2210,7 @@ export function createMonoplayer ({
         state: session.state,
         name
       })
-      return finishClaimLanding({ body, server, dial: claimDial.target, bodyWarm: await awaitBodyWarm() })
+      return finishClaimLanding({ body, server, dial: claimDial.target, bodyWarm: await awaitBodyWarm({ body }) })
     }
     // A body is dialled out of `boot` (never connected), `failed` (the retry
     // budget spent) or `down` (nobody claimed it, or somebody ended it). All three
@@ -2213,7 +2270,7 @@ export function createMonoplayer ({
       })
       return { connected: false, reason: 'connect_failed', body }
     }
-    return finishClaimLanding({ body, server, dial, bodyWarm: await awaitBodyWarm() })
+    return finishClaimLanding({ body, server, dial, bodyWarm: await awaitBodyWarm({ body }) })
   }
 
   // The wait's answer, turned into the front leg's answer. One place decides what a
@@ -2229,6 +2286,7 @@ export function createMonoplayer ({
         reason: bodyWarm.reason,
         state: bodyWarm.state,
         marker: bodyWarm.marker,
+        forced: bodyWarm.forced === true,
         configFrames: bodyWarm.configFrames,
         prefixFrames: bodyWarm.prefixFrames
       })
@@ -2243,6 +2301,9 @@ export function createMonoplayer ({
       port: dial?.port ?? null,
       state: bodyWarm.state,
       marker: bodyWarm.marker,
+      // A landing on the batch marker and a landing on the grace look the same in
+      // every other field.
+      forced: bodyWarm.forced === true,
       configFrames: bodyWarm.configFrames,
       prefixFrames: bodyWarm.prefixFrames
     })

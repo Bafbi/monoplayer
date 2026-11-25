@@ -27,7 +27,7 @@ import { DEFAULT_WHITELIST_FILE, createWhitelistStore } from '../custody/store.j
 import { sameName, sameUuid } from '../custody/util.js'
 import { createLiveBackendLeg } from '../legs/live-backend.js'
 import { createLiveFrontLeg } from '../legs/live-front.js'
-import { waitForReady } from '../service/readiness.js'
+import { forceWarm, waitForReady } from '../service/readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createBot } from './bot.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
@@ -563,10 +563,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
       // Same fallback as start-live: after the grace window the join prefix is
       // pinned at its current edge, and the marker path stays untouched for
       // backends that do batch.
-      const forced = core.cache.forceWarm()
-      core.session.warmComplete({
-        marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished'
-      })
+      const forced = forceWarm({ cache: core.cache, session: core.session })
       evidence.readiness.warmFallback = true
       log('warmFallback', {
         forced: forced.forced,

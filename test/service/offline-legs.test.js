@@ -134,6 +134,15 @@ test('#391 a lane with the switch on builds the offline legs, with no custody', 
   assert.equal(front.chat, cfg.chat)
 })
 
+test('#391 the offline body joins as the name the lane selects', () => {
+  const { calls, legs } = recorders()
+  // The dev lane sets only the account selector, and an offline lane has no
+  // account to resolve: it is the body's name.
+  const cfg = lane({ offlineLegs: true, puppet: { account: 'devpuppet' } })
+  createServiceLegs({ cfg, resolved: null, control: null, getSnapshotConfig: snapshot, legs })
+  assert.equal(optionsOf(calls, 'offline-backend-leg').username, 'devpuppet')
+})
+
 test('#391 the whitelist file is the offline front list when the lane names one', () => {
   const { calls, legs } = recorders()
   const store = { has: () => true }
@@ -158,9 +167,30 @@ test('#391 the offline puppet is named, and its UUID is the one that name derive
     username: 'devpuppet',
     uuid: offlineUuid('devpuppet')
   })
+  // The dev lane names its account and nothing else, and an offline lane has no
+  // account to resolve: the selector is the name.
+  assert.deepEqual(offlinePuppet({ account: 'devpuppet' }), {
+    username: 'devpuppet',
+    uuid: offlineUuid('devpuppet')
+  })
+  // An explicit username wins over the selector, so a lane can keep both.
+  assert.equal(offlinePuppet({ account: 'devpuppet', username: 'puppet' }).username, 'puppet')
   // A UUID that agrees is accepted, so a lane may assert the identity it expects.
   assert.equal(offlinePuppet({ username: 'devpuppet', uuid: offlineUuid('devpuppet') }).uuid,
     offlineUuid('devpuppet'))
+})
+
+test('a body name a server would reject is refused at startup', () => {
+  // MONOPLAYER_PUPPET_ACCOUNT is a selector, and a lane may set it to a UUID. On
+  // an offline lane that string would be the name, and the server kicks it.
+  assert.throws(
+    () => offlinePuppet({ account: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af' }),
+    /offline_puppet_name_too_long: "7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af" is 36 characters/
+  )
+  assert.equal(offlinePuppet({ account: 'devpuppet' }).username, 'devpuppet')
+  // Sixteen is the limit, not fifteen.
+  assert.equal(offlinePuppet({ username: 'a'.repeat(16) }).username, 'a'.repeat(16))
+  assert.throws(() => offlinePuppet({ username: 'a'.repeat(17) }), /offline_puppet_name_too_long/)
 })
 
 test('#391 a UUID the offline name does not derive is refused, not carried', () => {

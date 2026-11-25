@@ -82,11 +82,12 @@ import { redact } from '../observability/redact.js'
 import { resolveAccount } from '../custody/accounts.js'
 import { accountTokenExpiry } from '../custody/status.js'
 import { normalizeUuid } from '../custody/util.js'
+import { MAX_PLAYER_NAME_LENGTH } from '../custody/store.js'
 import { createLiveBackendLeg, createOfflineBackendLeg, OFFLINE_PUPPET_USERNAME } from '../legs/live-backend.js'
 import { createLiveFrontLeg, createOfflineFrontLeg } from '../legs/live-front.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
-import { shouldForceWarm, waitForReady } from './readiness.js'
+import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { pickerOfferedRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
@@ -292,15 +293,37 @@ function accountHint () {
   ].join('\n')
 }
 
+
+
 // #391: the identity an offline body speaks as, derived from its name the way an
 // offline server derives it for every client (src/legs/offline-identity.js).
+// The name is the lane's: `username`, else the `account` selector, else the
+// leg's own default. The UUID always follows from it.
 //
 // A configured UUID can only agree with that derivation or be wrong. The backend
 // derives the UUID from the name on its side, so a lane that carried the other
 // one would name a player the server does not have: in the skin frame, and in the
 // start record. A disagreement is refused, never overridden.
-export function offlinePuppet ({ username = null, uuid = null } = {}) {
-  const name = username ?? OFFLINE_PUPPET_USERNAME
+export function offlinePuppet ({ account = null, username = null, uuid = null } = {}) {
+  // The name an offline body joins as. `username` is the key that says what the
+  // puppet is called, and `account` is the selector a lane like the dev lane
+  // already sets (`MONOPLAYER_PUPPET_ACCOUNT=devpuppet`). An offline lane has no
+  // account to resolve, so the selector string is read as the name, whatever form
+  // it was written in: a lane joined as the live puppet's name is at best
+  // confusing and at worst a live identity on a test Paper. `MONOPLAYER_PUPPET_UUID`
+  // is still checked against the name, so a lane that pairs a name with the wrong
+  // UUID is refused rather than renamed.
+  const name = username ?? account ?? OFFLINE_PUPPET_USERNAME
+  // A lane that sets the selector to a UUID or an alias has named a body no
+  // server accepts, and the offline leg would dial it and be kicked. Refusing
+  // here names the key instead of leaving a kick to explain it. The limit is the
+  // game's, read from where a name is resolved.
+  if (name.length > MAX_PLAYER_NAME_LENGTH) {
+    throw new TypeError(
+      'offline_puppet_name_too_long: ' + JSON.stringify(name) + ' is ' + name.length +
+      ' characters, and a Minecraft name is at most ' + MAX_PLAYER_NAME_LENGTH +
+      '. Set MONOPLAYER_PUPPET_USERNAME, or a shorter MONOPLAYER_PUPPET_ACCOUNT.')
+  }
   const derived = offlineUuid(name)
   if (uuid !== null && normalizeUuid(uuid) !== derived) {
     throw new TypeError(
@@ -783,8 +806,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
         })
         return { ...readiness, warmRefused: true }
       }
-      const forced = core.cache.forceWarm()
-      core.session.warmComplete({ marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished' })
+      const forced = forceWarm({ cache: core.cache, session: core.session })
       log('warmFallback', {
         stage,
         forced: forced.forced,
