@@ -481,6 +481,27 @@ export function createServiceLegs ({
   return { backend, front }
 }
 
+// What the service does with the configured backend before the front listens.
+// A picker lane dials nothing. The claim is the only thing that dials a body
+// (#258), so a lane nobody claims opens no backend connection.
+//
+// Dialling at boot is what the dev lane did, and its own granted claim was then
+// refused: `claimDialRefused reason=session_busy state=warm`, because a body is
+// dialled only from `boot`, `failed` or `down` (src/service/monoplayer.js).
+// Nothing here reports a failure: the caller owns the process's exit code, and
+// the existing catch is where a failed dial is already named.
+//
+// The readability wait stays with the caller. A picker lane has nothing to wait
+// for, and a lane with no dial must not claim a warm cache it never filled.
+export async function dialBodyAtBoot ({ cfg, backend, log = () => {}, connectTimeoutMs = 240_000 } = {}) {
+  if (cfg.picker === true) {
+    log('backendBootSkipped', { reason: 'picker' })
+    return { dialled: false, reason: 'picker' }
+  }
+  await withTimeout(backend.connect(), connectTimeoutMs, 'backend_leg_connect')
+  return { dialled: true, reason: null }
+}
+
 export async function startLive ({ argv = [], io = process } = {}) {
   const stdout = io.stdout ?? process.stdout
   const stderr = io.stderr ?? process.stderr
@@ -1015,9 +1036,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
   })
 
   // --- 3. backend connect ---
-  const connectTimeoutMs = 240_000
+  // A picker lane dials nothing here. Its claim is the only thing that dials a
+  // body, and a body dialled at boot is a session the claim then finds busy with
+  // the body it just asked for. The dev lane is what that looked like.
+  let boot
   try {
-    await withTimeout(backend.connect(), connectTimeoutMs, 'backend_leg_connect')
+    boot = await dialBodyAtBoot({ cfg, backend, log })
   } catch (error) {
     await stopAfterFailure('backend_connect', { error: String(error?.message ?? error).slice(0, 300) })
     return 1
@@ -1029,8 +1053,13 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // (counted, logged; the marker path stays untouched for backends that do
   // batch). Attach readiness without this would never clear and the growing
   // prefix would eventually evict the login frame.
-  const readiness = await settleWarm({ stage: 'startup', maxWarmMs: 20_000 })
-  if (!readiness.hasConfig || !readiness.hasPrefix) {
+  //
+  // Only a body that was dialled has anything to warm. A picker lane fills
+  // its cache when a claim dials, and the front serves the picker until then.
+  const readiness = boot.dialled
+    ? await settleWarm({ stage: 'startup', maxWarmMs: 20_000 })
+    : null
+  if (readiness !== null && (!readiness.hasConfig || !readiness.hasPrefix)) {
     await stopAfterFailure('cache_readiness', readiness)
     return 1
   }
@@ -1043,21 +1072,25 @@ export async function startLive ({ argv = [], io = process } = {}) {
     await stopAfterFailure('front_listen', { error: String(error?.message ?? error).slice(0, 300) })
     return 1
   }
+  // The readiness numbers describe a body. A lane that dialled none says
+  // `null` rather than `0`, and the boot row says which answer this is.
   log('liveReady', {
     front: `${bound.host}:${bound.port}`,
     ...accountLogFields,
-    backendConnected: !backend.ended,
-    configFrames: readiness.configFrames,
-    prefixFrames: readiness.prefixFrames,
-    warm: readiness.warm,
+    boot: boot.dialled ? 'dialled' : 'skipped',
+    backendConnected: boot.dialled ? !backend.ended : false,
+    configFrames: readiness?.configFrames ?? null,
+    prefixFrames: readiness?.prefixFrames ?? null,
+    warm: readiness?.warm ?? null,
     wire: front.wireStats
   })
   journal.event('liveReady', {
     front: `${bound.host}:${bound.port}`,
     ...accountLogFields,
-    configFrames: readiness.configFrames,
-    prefixFrames: readiness.prefixFrames,
-    warm: readiness.warm
+    boot: boot.dialled ? 'dialled' : 'skipped',
+    configFrames: readiness?.configFrames ?? null,
+    prefixFrames: readiness?.prefixFrames ?? null,
+    warm: readiness?.warm ?? null
   })
 
   // #229: when the puppet's Minecraft token expires, the one "info" fact the
