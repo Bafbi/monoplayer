@@ -3,6 +3,9 @@
 // matters: its default is off, and a lane turns it on through this overlay.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import {
   createPickerServerReader,
@@ -11,6 +14,7 @@ import {
   unidentifiedSkinWarning
 } from '../../src/service/start-live.js'
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
+import { createControlDocument } from '../../src/service/control.js'
 import {
   DEFAULT_MAX_AGE_MS,
   DEFAULT_MAX_BYTES,
@@ -369,4 +373,23 @@ test('#265 the picker reader offers the allowed-server list, and names the sourc
 
   // Composed where a lane can see the mistake at start, not at a join.
   assert.throws(() => createPickerServerReader({ control: {} }), /allowedServers/)
+})
+
+// #356: the offer a lane makes when it names only the seed. This reader is the
+// product's own, composed over the product's own control document. A fix that stopped
+// at the answer control.js returns would leave the picker empty, and this fails.
+test('#356 a lane that names only the seed offers the seed to the picker', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-picker-seed-'))
+  const seedFile = path.join(dir, 'allowed-servers.json')
+  fs.writeFileSync(seedFile, JSON.stringify({ version: 1, servers: [{ host: 'paper', port: 25565 }] }), 'utf8')
+  const said = []
+  const offer = createPickerServerReader({
+    control: createControlDocument({ allowedServersSeedFile: seedFile }),
+    log: (event, fields) => said.push({ event, ...fields })
+  })
+
+  assert.deepEqual(offer().rows.map(row => row.name), ['paper:25565'],
+    'the row the seed holds is the row the picker draws')
+  assert.deepEqual(said, [{ event: 'pickerOffered', source: 'seed', servers: 1, reason: null }],
+    'and the line says the seed answered')
 })
