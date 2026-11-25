@@ -143,9 +143,12 @@ seed_attach_whitelist() {
       say 'the dev attach whitelist is empty and the live one names nobody: add a controller before a client can attach'
       return 0 ;;
   esac
-  kubectl -n "$DEV_NAMESPACE" create configmap monoplayer-dev-config \
-    --from-literal=attach-whitelist.json="$live" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # A merge patch of the one key, never an apply of a whole ConfigMap. A
+  # client-side apply deletes every data key the previous one wrote and this one
+  # omits, which would strip allowed-servers.json and leave the picker offering
+  # nothing (#392). The patch sets this key and leaves its neighbours alone.
+  kubectl -n "$DEV_NAMESPACE" patch configmap monoplayer-dev-config --type merge \
+    -p "$(WHITELIST="$live" node -e 'process.stdout.write(JSON.stringify({ data: { "attach-whitelist.json": process.env.WHITELIST } }))')" >/dev/null
   say "filled the dev attach whitelist from $LIVE_NAMESPACE"
 }
 
