@@ -139,8 +139,11 @@ export function createControlDocument ({
     try {
       raw = String(readFile(path, 'utf8'))
     } catch (error) {
-      if (error?.code !== 'ENOENT') sayOnce('controlUnreadable', { file: path, code: error?.code ?? null })
-      return { servers: null, reason: 'missing' }
+      // #315: an absent file and a file the process is not allowed to read are two
+      // different repairs, so they are two reasons. Only ENOENT means nobody wrote it.
+      if (error?.code === 'ENOENT') return { servers: null, reason: 'missing' }
+      sayOnce('controlUnreadable', { file: path, code: error?.code ?? null })
+      return { servers: null, reason: 'unreadable' }
     }
     const parsed = parseAllowedServers(raw)
     // `at` is the entry the refusal is about. A document with two rows that name one
@@ -158,18 +161,40 @@ export function createControlDocument ({
   // `source` is which file answered, because "the seed is what you are offering"
   // and "your edit is what you are offering" are different facts to an operator
   // reading the start record.
+  //
+  // #315: `reason` is why there is no list when there is none, and null when one
+  // answered. Each value is a different edit, which is the whole use of it: an
+  // operator who reads "the list is empty" already knew that.
+  //
+  //   no_key        nothing names a list. Set MONOPLAYER_ALLOWED_SERVERS.
+  //   live_missing  the live key names a file nobody has written. Write it, or let
+  //                 the panel write it.
+  //   empty_list    the file read and holds no servers. Add one back.
+  //   seed_missing  the seed this lane names is not on its mount. Fix the mount.
+  //   unreadable    a file the lane read cannot be read or does not parse. Repair it.
+  // A file that answered, as the picker's answer. A list a file answers with is the
+  // list; a file that answers with no servers is the one empty state a read cannot
+  // see, because the file is valid and the list is deliberately empty.
+  function fileAnswer (servers, source) {
+    return { servers, source, reason: servers.length === 0 ? 'empty_list' : null }
+  }
+
   function allowedServers () {
-    if (!named(allowedServersFile)) return { servers: [], source: 'none' }
+    if (!named(allowedServersFile)) return { servers: [], source: 'none', reason: 'no_key' }
     const live = readAllowedServers(allowedServersFile)
-    if (live.reason === null) return { servers: live.servers, source: 'control' }
-    if (!named(allowedServersSeedFile)) return { servers: [], source: 'none' }
+    if (live.reason === null) return fileAnswer(live.servers, 'control')
+    if (!named(allowedServersSeedFile)) {
+      // Nothing answers behind the live file. A file nobody wrote and a file that does
+      // not parse are two different repairs, so they are two words.
+      return { servers: [], source: 'none', reason: live.reason === 'missing' ? 'live_missing' : 'unreadable' }
+    }
     const seed = readAllowedServers(allowedServersSeedFile)
     // The live key's absence is the normal state. The seed's is not: it is a file
     // this repository commits and the Deployment mounts, so a seed that is not there
     // is a mount to fix, and it is named once.
     if (seed.reason === 'missing') sayOnce('controlUnreadable', { file: allowedServersSeedFile, code: 'ENOENT' })
-    if (seed.reason === null) return { servers: seed.servers, source: 'seed' }
-    return { servers: [], source: 'none' }
+    if (seed.reason === null) return fileAnswer(seed.servers, 'seed')
+    return { servers: [], source: 'none', reason: seed.reason === 'missing' ? 'seed_missing' : 'unreadable' }
   }
 
   return { enabled, whitelistStore, attachWhitelist, allowedServers }
