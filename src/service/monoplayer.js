@@ -61,7 +61,7 @@
 import { WARM_MARKER } from '../core/state-cache.js'
 import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
-import { shouldForceWarm } from './readiness.js'
+import { forceWarm, shouldForceWarm } from './readiness.js'
 import {
   FABRIC_BRAND,
   brandFrame,
@@ -357,12 +357,16 @@ const NOOP_JOURNAL = Object.freeze({
 // of what the player is told.
 // How long a claim waits for the batch marker before it takes the same fallback
 // startup and reconnect take. Paper 26.x never sends `chunk_batch_finished` to a
-// protocol-leg client (the note on the cache's `forceWarm`), and the dev lane's
-// body joined and cached 2179 frames with `warm=false`. A backend that does
-// batch sends the marker inside a second, so the grace only costs a lane that
-// was never going to send it. The startup budget is 20 s because it also bounds
-// a boot; a claim is a client on a loading screen.
+// protocol leg (the note on the cache's `forceWarm`), and the dev lane's body
+// joined and cached its frames without one. A backend that does batch sends the
+// marker inside a second. So the grace costs only a lane that was never going to
+// send one. The startup budget is 20 s because it also bounds a boot. A claim is
+// an attaching player on a loading screen.
 export const CLAIM_WARM_GRACE_MS = 5_000
+
+// The whole wait a claim allows, before it hands the picker back. Exported with
+// the grace because a test that drives the injected clock ticks past both.
+export const CLAIM_WARM_TIMEOUT_MS = 30_000
 
 export const ALREADY_DRIVEN_TEXT =
   'Monoplayer: another player is already driving this server. Try again when they leave.'
@@ -2078,13 +2082,11 @@ export function createMonoplayer ({
     return cache
   }
 
-  // How long a claimed body has to reach the state a client can be released on:
-  // its configuration and join prefix cached and its play login landed. Bounded
-  // because the client is on a loading screen: a body that misses it gets the
-  // picker back rather than a promise nobody keeps.
-  const CLAIM_WARM_TIMEOUT_MS = 30_000
-
-
+  // How long a claimed body has to reach the state an attaching player can be
+  // released on (CLAIM_WARM_TIMEOUT_MS): its configuration and join prefix cached
+  // and its play login landed. It is bounded because that player is on a loading
+  // screen. A body that misses it gets the picker back rather than a promise
+  // nobody keeps.
 
   // One wait on the injected clock. The core's default clock is inert, and an
   // inert clock cannot wait: the caller is told so instead of being held forever,
@@ -2107,9 +2109,10 @@ export function createMonoplayer ({
   // The body is attach-ready when a warm attach would be accepted: its play login
   // has landed and its configuration and join prefix are in the cache. Those are
   // the conditions the warm attach gate reads, so a claim cannot release a client
-  // that an ordinary attach would refuse. `marker` is the cache's own warm state,
-  // reported rather than inferred, so a log line can tell "no marker yet" from
-  // "marker seen, nothing to attach with".
+  // that an ordinary attach would refuse. `marker` is the cache's warm state,
+  // reported rather than inferred, and `forced` says whether this wait is what
+  // pinned it: a reader can tell "the backend sent the batch" from "the grace
+  // declared a backend that does not batch".
   async function awaitBodyWarm ({
     body = null,
     timeoutMs = CLAIM_WARM_TIMEOUT_MS,
@@ -2146,9 +2149,9 @@ export function createMonoplayer ({
         chunkFrames: stats.chunkFrames
       }, { requireChunks: true })
       if (forced && clockNow() - startedAt >= graceMs) {
-        const pinned = cache.forceWarm()
-        session.warmComplete({ marker: pinned.forced ? 'claim_warm_fallback_join_settled' : 'chunk_batch_finished' })
-        log('claimWarmFallback', {
+        const pinned = forceWarm({ cache, session })
+        log('warmFallback', {
+          stage: 'claim',
           body,
           forced: pinned.forced,
           state: session.state,
@@ -2283,6 +2286,7 @@ export function createMonoplayer ({
         reason: bodyWarm.reason,
         state: bodyWarm.state,
         marker: bodyWarm.marker,
+        forced: bodyWarm.forced === true,
         configFrames: bodyWarm.configFrames,
         prefixFrames: bodyWarm.prefixFrames
       })
@@ -2297,6 +2301,9 @@ export function createMonoplayer ({
       port: dial?.port ?? null,
       state: bodyWarm.state,
       marker: bodyWarm.marker,
+      // A landing on the batch marker and a landing on the grace look the same in
+      // every other field.
+      forced: bodyWarm.forced === true,
       configFrames: bodyWarm.configFrames,
       prefixFrames: bodyWarm.prefixFrames
     })

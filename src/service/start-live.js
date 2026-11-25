@@ -86,7 +86,7 @@ import { createLiveBackendLeg, createOfflineBackendLeg, OFFLINE_PUPPET_USERNAME 
 import { createLiveFrontLeg, createOfflineFrontLeg } from '../legs/live-front.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
-import { shouldForceWarm, waitForReady } from './readiness.js'
+import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { pickerOfferedRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
@@ -304,10 +304,12 @@ function accountHint () {
 export function offlinePuppet ({ account = null, username = null, uuid = null } = {}) {
   // The name an offline body joins as. `username` is the key that says what the
   // puppet is called, and `account` is the selector a lane like the dev lane
-  // already sets (`MONOPLAYER_PUPPET_ACCOUNT=devpuppet`). On a lane with no
-  // account to resolve, the selector is only ever a name, so it is read as one
-  // rather than ignored: a dev lane joined as the live puppet's name is at best
-  // confusing and at worst a live identity on a test Paper.
+  // already sets (`MONOPLAYER_PUPPET_ACCOUNT=devpuppet`). An offline lane has no
+  // account to resolve, so the selector string is read as the name, whatever form
+  // it was written in: a lane joined as the live puppet's name is at best
+  // confusing and at worst a live identity on a test Paper. `MONOPLAYER_PUPPET_UUID`
+  // is still checked against the name, so a lane that pairs a name with the wrong
+  // UUID is refused rather than renamed.
   const name = username ?? account ?? OFFLINE_PUPPET_USERNAME
   const derived = offlineUuid(name)
   if (uuid !== null && normalizeUuid(uuid) !== derived) {
@@ -791,8 +793,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
         })
         return { ...readiness, warmRefused: true }
       }
-      const forced = core.cache.forceWarm()
-      core.session.warmComplete({ marker: forced.forced ? 'warm_fallback_join_settled' : 'chunk_batch_finished' })
+      const forced = forceWarm({ cache: core.cache, session: core.session })
       log('warmFallback', {
         stage,
         forced: forced.forced,

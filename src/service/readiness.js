@@ -30,6 +30,19 @@ export function shouldForceWarm (readiness, { requireChunks = true } = {}) {
   return Number(readiness.chunkFrames) > 0
 }
 
+// The fallback itself, once a caller has decided the grace ran out and the body
+// has terrain to release a client on: pin the join prefix at its current edge and
+// tell the session the body is warm. One copy, because the order and the marker
+// string must not drift between startup, reconnect, the transfer stage and a
+// claim.
+export const WARM_FALLBACK_MARKER = 'warm_fallback_join_settled'
+
+export function forceWarm ({ cache, session, marker = WARM_FALLBACK_MARKER } = {}) {
+  const pinned = cache.forceWarm()
+  session.warmComplete({ marker: pinned.forced ? marker : 'chunk_batch_finished' })
+  return pinned
+}
+
 // The wait between two reads of the cache. A caller may inject it, so a test can
 // take the loop's second pass, and the branch that re-polls, with no timer
 // (#110). Every caller today leaves it at the default, which is a real 1 s.
