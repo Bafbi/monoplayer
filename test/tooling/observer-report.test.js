@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { LANE } from '../support/lane.js'
 
 const SCRIPT = path.join(
   path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'observer-report.sh'
@@ -19,12 +20,10 @@ const PUPPET = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const POD = 'paper-abc123'
 
-// The lane this worktree's rung derives (#279), mirrored the way gate-lane.test.js
-// mirrors it: a script that typed a name instead of deriving one could not match.
-const WORKTREE = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'))
-const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
-const LANE = 'monoplayer-gate-' + COMMIT + '-' + (crc(WORKTREE) % 0x1000000).toString(16).padStart(6, '0')
+// LANE, the lane this worktree's rung derives (#279), is mirrored once in
+// test/support/lane.js: a script that typed a name instead of deriving one could not
+// match it.
+//
 // The label the lane's Paper deployment carries: the tree spells
 // app.kubernetes.io/name: monoplayer-gate-__instance__-paper.
 const PAPER_LABEL = LANE + '-paper'
