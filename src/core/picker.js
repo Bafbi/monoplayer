@@ -87,16 +87,23 @@ function textComponent (text) {
 // is driving it, and a watched body names how many are watching it (#259).
 //
 // The order is the order a player asks the questions: what is it, is anyone
-// driving it, am I alone if I watch. A body nobody watches says nothing about
-// spectators, because ", 0 watching" is a sentence about a player who is not there.
+// driving it, am I alone if I watch. A body nobody watches names no count, because
+// ", 0 watching" is a sentence about a player who is not there.
 export function pickerLabel (row) {
   const name = String(row?.name ?? 'server')
   const state = String(row?.state ?? 'down')
   const driver = row?.driver ? String(row.driver) : null
-  const spectators = Number.isInteger(row?.spectators) && row.spectators > 0 ? row.spectators : 0
+  const spectators = spectatorCount(row?.spectators)
   const driving = driver === null ? '' : ' (' + driver + ')'
   const watching = spectators === 0 ? '' : ', ' + spectators + ' watching'
   return name + ' - ' + state + driving + watching
+}
+
+// How many watch a body, as the lane counted them. One rule for the three places a
+// count arrives from, so a label, a normalised row and a composed row cannot
+// disagree about what a count is. A number that is not a count is nobody.
+function spectatorCount (value) {
+  return Number.isInteger(value) && value > 0 ? value : 0
 }
 
 // #265: the name a row is offered under is the canonical address its claim
@@ -127,9 +134,8 @@ export function pickerRows (rows = []) {
       name,
       state: String(row?.state ?? 'down'),
       driver: row?.driver ? String(row.driver) : null,
-      // #259: how many watch the body, as the lane counted them. A row the lane
-      // knows nothing about watches nobody.
-      spectators: Number.isInteger(row?.spectators) && row.spectators > 0 ? row.spectators : 0,
+      // #259: a row the lane knows nothing about watches nobody.
+      spectators: spectatorCount(row?.spectators),
       slug: pickSlug(name),
       id: pickIdFor(name)
     }
@@ -148,7 +154,7 @@ export function pickerRowForBody (row, { up = false, driver = null, spectators =
     ...row,
     state: up ? (named === null ? 'unclaimed' : 'claimed') : 'down',
     driver: named,
-    spectators: Number.isInteger(spectators) && spectators > 0 ? spectators : 0
+    spectators: spectatorCount(spectators)
   }
 }
 
@@ -347,10 +353,10 @@ export function verbRefusalText ({ verb = null, server = null } = {}) {
 
 // #259: the sentence a client gets when it asks to watch a body it cannot watch.
 // Each reason asks the player for something different, so each gets its own
-// sentence: nothing is standing on that server yet, so claim it; this lane serves
-// another body; the body is still coming up, so wait; or the body is down, and a
-// claim is what brings it back. A spectator is never told the body has no driver,
-// because a body with no driver is watchable (#259).
+// sentence. Nothing is standing on that server yet, so claim it. This lane serves
+// another body. The body is still coming up, so wait. The body is down, and a claim
+// is what brings it back. A spectator is never told the body has no driver, because
+// a body with no driver is watchable (#259).
 export function spectateRefusalText ({ server = null, reason = null } = {}) {
   const named = server === null ? 'that server' : server
   switch (reason) {
