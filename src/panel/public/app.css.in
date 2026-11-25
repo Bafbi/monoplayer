@@ -233,11 +233,16 @@
   }
   .write button:disabled { background-color: var(--color-stone-dark); border-color: #4c4c4c; cursor: progress; }
 
-  /* --- who may attach ---------------------------------------------------- */
+  /* --- the two control blocks -------------------------------------------- */
+  /* The attach whitelist and the allowed servers are the same block twice (#309): one
+     list, one answer area, one form. `.control-block` is the layout both share, so the
+     client finds a form's answer area the same way in either one
+     (src/panel/public/panel.js). Not `.block`: that is a Tailwind utility, and the
+     utility's display wins the cascade over a rule of the same name. */
 
-  .attach-block { display: grid; gap: 0.2rem; margin: 0.4rem 0 0; }
+  .control-block { display: grid; gap: 0.2rem; margin: 0.4rem 0 0; }
 
-  /* The list is the one block a tick redraws by itself (an out-of-band swap), so its
+  /* These lists are the blocks a tick redraws by itself (an out-of-band swap), so their
      rows are bricks: same 2px edge, same palette, no radius. */
   .entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
   .entry {
@@ -248,7 +253,7 @@
     gap: 0.15rem;
   }
   .entry .who { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; }
-  .entry .player { color: var(--color-grass); }
+  .entry .player, .entry .server { color: var(--color-grass); }
   .entry .when { color: var(--color-ink-dim); font-size: 0.9em; }
   .remove { margin: 0.2rem 0 0; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
   .remove button {
