@@ -206,27 +206,36 @@ pin the digest in `deploy/manifests/kustomization.yaml` yourself.
 Run the container as uid `1000` (`node`). The image sets `USER node` and
 `EXPOSE 25565`.
 
+`envOverlay` in `src/service/start-live.js` owns the service's configuration
+surface. A name it does not read changes nothing in the config document, and
+`loadConfig` ignores it in silence. `MONOPLAYER_LOG` and the `OTEL_*` names
+below are read outside it, in `start-live.js` and
+`src/observability/telemetry.js`. The defaults behind the names live in the
+config document. `node src/service/monoplayer.js --print-config` prints the
+values this environment resolves to. This section names what a deployment sets
+and why, and gives a default only to say what happens when you leave it unset.
+
 Required:
 
 - `MONOPLAYER_BACKEND_HOST`: `--start` refuses to run without it. Point it at
   the Season 3 backend, `play2.excalia.fr`, for the live deployment.
-- `MONOPLAYER_FRONT_HOST=0.0.0.0`: the default is `127.0.0.1`, which only
-  accepts pod-local connections.
+- `MONOPLAYER_FRONT_HOST=0.0.0.0`: the default is loopback, which only accepts
+  pod-local connections.
 
 Common:
 
-- `MONOPLAYER_VERSION`: the protocol version, default `26.1`. The image also
-  carries the 26.2 data, so set `26.2` for Excalia Season 3.
+- `MONOPLAYER_VERSION`: the protocol version. The image also carries the 26.2
+  data, so set `26.2` for Excalia Season 3.
 - `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye`
-- `MONOPLAYER_CHAT=read-only` (default): relay server chat to the attached
-  client and drop the client's own text. `full` also speaks the client's chat
+- `MONOPLAYER_CHAT`: `read-only` relays server chat to the attached client and
+  drops the client's own text. `full` also speaks the client's chat
   and commands on the puppet leg as the account, and relays the server's signed
   player chat back. `off` blocks both directions. Set `full` only after a live
   run shows `chatCapability` with `signed: true`: a leg without profile keys
   sends an unsigned frame, and a server that enforces secure profiles answers
   that by closing the connection.
-- `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
-  `WORKDIR`) or the mount path
+- `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts`, relative to the `WORKDIR`,
+  or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/control/attach-whitelist.json`: the file the
   **panel** writes (#232), not the Git ConfigMap. It is re-read at each login, so
   a UUID the panel adds is allowed on the next attempt with no restart. The
@@ -237,24 +246,25 @@ Common:
   allowed-server list below has its own path and, unlike this one, a fallback.
 - `MONOPLAYER_ALLOWED_SERVERS` and `MONOPLAYER_ALLOWED_SERVERS_SEED`: the list the
   picker offers and the copy Git commits behind it (#262).
-- `MONOPLAYER_PREAUTH_MAX_CONNECTIONS` (default `16`): the total concurrent
-  connections the front accepts between a socket and the attach whitelist's
-  accept. It is on by default, so exposing the port is not a switch to
-  remember. A value below `1` is named and ignored here, and a config document
-  that sets one below `1` refuses to start.
-- `MONOPLAYER_PREAUTH_DEADLINE_MS` (default `30000`): how long one connection
-  may stay in that window. A connection still in it when the deadline fires is
-  destroyed, counted, and logged with reason `preauth_deadline`. It is on by
-  default for the same reason the cap is: a socket that never speaks otherwise
-  holds its slot until its peer closes or the pod restarts. A value below `1`, or
-  above `2147483647` (the largest delay a timer holds; Node fires a longer one at
-  1 ms), is named and ignored here, and a config document that sets one refuses
-  to start.
+- `MONOPLAYER_PREAUTH_MAX_CONNECTIONS`: the total concurrent connections the
+  front accepts between a socket and the attach whitelist's accept. It is on by
+  default, so exposing the port is not a switch to remember. A value below `1`
+  is named and ignored here, and a config document that sets one below `1`
+  refuses to start.
+- `MONOPLAYER_PREAUTH_DEADLINE_MS`: how long one connection may stay in that
+  window. A connection still in it when the deadline fires is destroyed, counted,
+  and logged with reason `preauth_deadline`. It is on by default for the same
+  reason the cap is: a socket that never speaks otherwise holds its slot until
+  its peer closes or the pod restarts. A value below `1`, or above
+  `MAX_DEADLINE_MS` in `src/core/preauth-window.js` (the largest delay a timer
+  holds; Node fires a longer one at 1 ms), is named and ignored here, and a config
+  document that sets one refuses to start.
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
-- `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT` (both default `25565`)
+- `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT`: the two ports. Leave
+  both unset unless the deployment moves one.
 - `MONOPLAYER_RECONNECT_ATTEMPTS` (`0` = unlimited; unset keeps a config
   file's `reconnect.attempts`, which is unlimited when the file sets none) and
-  `MONOPLAYER_RECONNECT_MAX_DELAY_MS` (default `60000`)
+  `MONOPLAYER_RECONNECT_MAX_DELAY_MS`, the cap on the delay between attempts
 
 ### A test lane, and only a test lane
 
@@ -298,11 +308,11 @@ Telemetry and journal:
 - `OTEL_SERVICE_NAME=monoplayer`
 - `MONOPLAYER_JOURNAL_DIR=/tmp/journal`, on the pod's own `journal`
   `emptyDir` with `sizeLimit: 512Mi`, never on the custody volume
-- `MONOPLAYER_JOURNAL_MAX_BYTES` (default `67108864`), one shard's seal
-  threshold
-- `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` (default `268435456`), the directory
-  budget, pruned on start, after every seal, and at close
-- `MONOPLAYER_JOURNAL_MAX_AGE_MS` (default `172800000`, 48 hours), the age cap
+- `MONOPLAYER_JOURNAL_MAX_BYTES`, one shard's seal threshold
+- `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES`, the directory budget, pruned on start,
+  after every seal, and at close
+- `MONOPLAYER_JOURNAL_MAX_AGE_MS`, the age cap. `0` leaves the byte budget as
+  the only rule.
 
 See `docs/telemetry.md` for the signals and the journal layout.
 

@@ -14,6 +14,13 @@ Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch a
 
 ## Environment
 
+The two OTLP names are read in `src/observability/telemetry.js`. The journal
+names are `envOverlay`'s in `src/service/start-live.js`, and that function is
+the authority for them. A `MONOPLAYER_*` name it does not read changes nothing,
+and `loadConfig` ignores it in silence. The defaults behind the journal names
+live in the config document. `node src/service/monoplayer.js --print-config`
+prints the values an environment resolves to.
+
 | Variable | Effect |
 | --- | --- |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP base URL, for example `http://otel-collector.deepmine-shared.svc.cluster.local:4318`. Telemetry is off when unset. A trailing slash is ignored. |
@@ -22,9 +29,9 @@ Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch a
 | `OTEL_SERVICE_VERSION` | `service.version` and the OTLP scope version. Defaults to `unknown`; set it to the image tag. |
 | `HOSTNAME` | `service.instance.id`. Falls back to the process id. |
 | `MONOPLAYER_JOURNAL_DIR` | Journal directory. The journal is off when unset. The directory is created if missing. |
-| `MONOPLAYER_JOURNAL_MAX_BYTES` | Seal threshold for one shard. A shard that would pass it seals early, so one hour cannot grow without bound. Defaults to `67108864` (64 MiB). |
-| `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` | Byte budget for the journal directory, pruned on start, after every seal, and at close. Defaults to `268435456` (256 MiB), and must be at least `MONOPLAYER_JOURNAL_MAX_BYTES`. |
-| `MONOPLAYER_JOURNAL_MAX_AGE_MS` | Age cap for a shard, pruned the same way. `0` leaves the byte budget as the only rule. Defaults to `172800000` (48 hours). |
+| `MONOPLAYER_JOURNAL_MAX_BYTES` | Seal threshold for one shard. A shard that would pass it seals early, so one hour cannot grow without bound. |
+| `MONOPLAYER_JOURNAL_MAX_TOTAL_BYTES` | Byte budget for the journal directory, pruned on start, after every seal, and at close. Must be at least `MONOPLAYER_JOURNAL_MAX_BYTES`. |
+| `MONOPLAYER_JOURNAL_MAX_AGE_MS` | Age cap for a shard, pruned the same way. `0` leaves the byte budget as the only rule. |
 
 `MONOPLAYER_ACCOUNT_ALIAS` is set internally from the resolved puppet alias; it becomes the resource attribute `monoplayer.account.alias`.
 
