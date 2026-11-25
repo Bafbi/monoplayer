@@ -482,17 +482,15 @@ export function createServiceLegs ({
 }
 
 // What the service does with the configured backend before the front listens.
-// A picker lane dials nothing. The claim is the only thing that dials a body
-// (#258), so a lane nobody claims opens no backend connection.
+// A picker lane dials nothing, because a claim is the only thing that dials a
+// body (#258), and a body dialled at boot is the session that claim then finds
+// busy.
 //
-// Dialling at boot is what the dev lane did, and its own granted claim was then
-// refused: `claimDialRefused reason=session_busy state=warm`, because a body is
-// dialled only from `boot`, `failed` or `down` (src/service/monoplayer.js).
 // Nothing here reports a failure: the caller owns the process's exit code, and
-// the existing catch is where a failed dial is already named.
+// its catch is where a failed dial is already named.
 //
-// The readability wait stays with the caller. A picker lane has nothing to wait
-// for, and a lane with no dial must not claim a warm cache it never filled.
+// The readiness wait stays with the caller, because a lane that dialled nothing
+// has no cache to warm.
 export async function dialBodyAtBoot ({ cfg, backend, log = () => {}, connectTimeoutMs = 240_000 } = {}) {
   if (cfg.picker === true) {
     log('backendBootSkipped', { reason: 'picker' })
@@ -1036,9 +1034,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   })
 
   // --- 3. backend connect ---
-  // A picker lane dials nothing here. Its claim is the only thing that dials a
-  // body, and a body dialled at boot is a session the claim then finds busy with
-  // the body it just asked for. The dev lane is what that looked like.
+  // A picker lane dials nothing here, and `dialBodyAtBoot` is what decides it.
+  // The dev lane is what happens otherwise: its own granted claim was restored
+  // with `session_busy` because the body it asked for was already connected.
   let boot
   try {
     boot = await dialBodyAtBoot({ cfg, backend, log })
