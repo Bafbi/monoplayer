@@ -48,10 +48,11 @@
 # What it never does: touch the live lane (monoplayer) or the dev lane
 # (monoplayer-dev). It never deletes a workload, a Service or a ConfigMap. It never
 # scales paper-hub or paper-sky, which are the transfer testbed's and share a gate
-# namespace. And it never reaps a lane that still runs, that holds anything this
-# script did not make, that nobody dated, or that is the testbed's namespace: that
-# last name is fixed, shared by every worktree, and deletes with nothing to restore
-# it (#318).
+# namespace. It never changes anything else in the testbed's namespace either: up and
+# down both refuse that name (#360). And it never reaps a lane that still runs, or one
+# that holds anything this script did not make, or one nobody dated. The testbed's
+# namespace is never reaped either: that last name is fixed, shared by every worktree,
+# and deletes with nothing to restore it (#318).
 #
 # The tree in deploy/driver is a template, not a lane. Everywhere it names one it
 # spells gate-__instance__, and render() substitutes the instance into all of it, so
@@ -103,8 +104,9 @@ LANE_SELECTOR=app.kubernetes.io/component=gate-lane
 # this is neither. deploy/testbed/namespace.yaml carries the selector above, so `lanes`
 # shows it and the reaper reads it like a lane: the tenant rule below keeps it while
 # `paper-hub` and `paper-sky` are in it, and this name keeps it if those rows ever go.
-# It is not a worktree's lane, so no up, down or status here names it, and its clock
-# is the testbed's business: `lanes` prints "?" for an age it does not have.
+# It is not a worktree's lane, so `guard_lane_write` refuses it before up or down acts
+# (#360). `status` still reads its rows. Its clock is the testbed's business: `lanes`
+# prints "?" for an age it does not have.
 TESTBED_NAMESPACE=monoplayer-gate-b
 TESTBED_OWNER='transfer testbed'
 
@@ -221,6 +223,21 @@ guard_namespace () {
 }
 
 guard () { guard_namespace "$GATE_NAMESPACE"; }
+
+# The rule up and down answer to, and no other command does. The testbed's namespace
+# follows the gate prefix but belongs to no worktree (#318), so it passes every rule
+# above. Acting on it means acting on a namespace two worktrees share: down scales the
+# rows a testbed run is using to 0, and up applies the gate tree over it. The name is
+# fixed and its Papers are not disposable by derivation, so one function answers for
+# both commands. status, name and render skip it. None of them acts on a lane: status
+# reads one, name prints it, and render writes text. A reader debugging the testbed needs
+# those rows (#360).
+guard_lane_write () {
+  guard
+  if is_testbed_namespace "$GATE_NAMESPACE"; then
+    die "refusing \"${GATE_NAMESPACE}\": it is the transfer testbed's namespace, which mise run testbed:up owns, not a worktree's lane. Every worktree shares it, its Papers are not disposable by derivation, and nothing here puts them back, so up and down leave it alone (#360)"
+  fi
+}
 
 known () {
   local name
@@ -410,7 +427,7 @@ stamp_lane () {
 }
 
 up () {
-  guard
+  guard_lane_write
   need_kubectl
   local names="${*:-$DRIVEN_WORKLOADS}" name pending start deadline awake='' wake
   for name in $names; do
@@ -488,7 +505,7 @@ up () {
 }
 
 down () {
-  guard
+  guard_lane_write
   need_kubectl
   local name left start deadline
   # A commit makes a new lane, so a worktree can ask to stop one it never woke. That is
