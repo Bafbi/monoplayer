@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { pickSlug } from '../../src/core/picker.js'
-import { CLAIM_WARM_GRACE_MS } from '../../src/service/monoplayer.js'
+import { CLAIM_WARM_GRACE_MS, CLAIM_WARM_TIMEOUT_MS } from '../../src/service/monoplayer.js'
 import { makeCore } from '../support/harness.js'
 
 // The body a claim names, and the address its row carried. The address is a server
@@ -99,7 +99,7 @@ test('#258 a body that ended before it warmed does not hold the next claim', asy
   const died = core.connectClaimedBody({ body: 'dead', target: { host: '127.0.0.1', port: 1 } })
   await Promise.resolve()
   backendLeg.deliverEnd({ reason: 'refused' })
-  clock.tick(30_000)
+  clock.tick(CLAIM_WARM_TIMEOUT_MS)
   const dead = await died
   assert.equal(dead.connected, false)
   assert.equal(dead.reason, 'body_not_warm')
@@ -247,9 +247,8 @@ test('#258 a body with no cached configuration is not ready for a client, howeve
 // protocol-leg client, and the cache's own comment on `forceWarm` says so. The
 // service's startup knows, and pins the prefix after a grace window. The claim
 // path did not, so a claim on a real Paper waited out its deadline, reported
-// `body_not_warm` and gave the picker back, with the body joined and cached.
-// The dev lane is that: claimDialsFailed=2, claimBodies=0, warm=false beside 2179
-// cached frames.
+// `body_not_warm` and gave the picker back. That is the dev lane: the body joined
+// and cached its frames, and no claim ever landed.
 test('a claim lands on a body whose backend never sends the batch marker', async () => {
   const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
   const dial = core.connectClaimedBody(CLAIMED_BODY)
@@ -274,7 +273,7 @@ test('a claim still refuses a body that cached no chunk at all', async () => {
   // The configuration and the play login, and no terrain: a client released here
   // would land in an empty world and fall.
   warmABody(backendLeg, { marker: false })
-  clock.tick(30_000)
+  clock.tick(CLAIM_WARM_TIMEOUT_MS)
   const outcome = await dial
   assert.equal(outcome.connected, false)
   assert.equal(outcome.reason, 'body_not_warm')
