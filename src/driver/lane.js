@@ -1,0 +1,79 @@
+// The one place a driver run names its gate lane (#282).
+//
+// A lane is not a constant. One worktree gets one lane, derived from its short commit
+// and a short hash of its path (#279), and scripts/gate-lane.sh owns that name: it
+// derives the lane, honours MONOPLAYER_GATE_NAMESPACE when an operator names one, and
+// refuses a name that is not a gate lane. This module is the driver's only reader of
+// it, so the RCON target and the address a client joins cannot name different lanes.
+//
+// They did once. src/driver/backends.js exported a literal lane, and rcon.js and
+// run.js defaulted to the same string, so a renamed lane's scenario administered the
+// lane that shipped while the run believed it was measuring its own. Silence, not a
+// crash, is what that class of defect costs (#282).
+//
+// Nothing runs at import: the resolver asks the script once, when a default needs it,
+// and a refusal is the script's own sentence.
+import { spawnSync } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+export const GATE_LANE_SCRIPT = path.join(ROOT, 'scripts', 'gate-lane.sh')
+
+// The tailnet this repo's cluster is on. It is one constant here rather than a
+// hostname per caller: the lane names the host, the tailnet names the domain.
+export const TAILNET = 'tail41e568.ts.net'
+
+// A lane this driver could not name. The message is scripts/gate-lane.sh's own
+// sentence, because that script knows what a reader has to do next.
+export class LaneError extends Error {
+  constructor (message) {
+    super(message)
+    this.name = 'LaneError'
+  }
+}
+
+// Ask the one owner. Its refusal is written to stderr, so it is not swallowed by the
+// capture: a command substitution would keep it out of the run's own output too.
+function askGateLane (env) {
+  const result = spawnSync('bash', [GATE_LANE_SCRIPT, 'name'], {
+    encoding: 'utf8',
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (result.error) {
+    throw new LaneError(`cannot run ${GATE_LANE_SCRIPT}: ${result.error.message}`)
+  }
+  if (result.status !== 0) {
+    const said = String(result.stderr || '').trim() || String(result.stdout || '').trim()
+    throw new LaneError(said || `${GATE_LANE_SCRIPT} name exited ${result.status} without saying why`)
+  }
+  const namespace = String(result.stdout || '').trim()
+  if (namespace === '') {
+    throw new LaneError('scripts/gate-lane.sh name printed no lane, and a run that cannot name its lane administers nobody\'s')
+  }
+  return namespace
+}
+
+// The lane, one line: this worktree's, or the one an operator named. The process's
+// own environment is answered once, because the lane is a fact about the checkout and
+// not about the call.
+let cached = null
+export function resolveGateLane ({ env = process.env, exec = askGateLane } = {}) {
+  if (exec === askGateLane && env === process.env && cached !== null) return cached
+  const namespace = exec(env)
+  if (exec === askGateLane && env === process.env) cached = namespace
+  return namespace
+}
+
+// The tailnet name the lane publishes for one workload: the tree renders
+// monoplayer-gate-<instance>-<workload> on the Service that carries it.
+export function tailnetHost (namespace, workload) {
+  return `${namespace}-${workload}.${TAILNET}`
+}
+
+// What a client on the display host joins for the lane's Paper.
+export function paperAddress (namespace, port = 25565) {
+  return `${tailnetHost(namespace, 'paper')}:${port}`
+}
