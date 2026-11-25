@@ -662,8 +662,8 @@ case "${1:-}" in
   up) shift; up "$@" ;;
   down) down ;;
   status) status ;;
-  # The lane's name alone, for a shell: a rung that still names one lane takes it as
-  # MONOPLAYER_GATE_NAMESPACE until #282 lands.
+  # The lane's name alone, for a shell: every rung that reaches a lane reads it, so
+  # naming a lane here is naming it for the whole run (#301, #282).
   name) guard; printf '%s\n' "$GATE_NAMESPACE" ;;
   lanes) shift; lanes_args "$@" ;;
   # What this lane would apply, without a cluster: a lane's objects exist nowhere in

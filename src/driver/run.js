@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { createDriverClient, DriverError } from './client-driver.js'
 import { formatParityReport, parseParityEndpoint, runParity } from './parity.js'
 import { formatSkinReport, runSkinLane, SKIN_CASES } from './skin.js'
+import { laneTargets, resolveGateLane } from './lane.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
 import { verifyG0Evidence, versionRefusal } from './checks.js'
@@ -81,7 +82,8 @@ Options:
   --host             Display host for relaunch/screenshot/tunnel
                      (default: bafbi@nath.tail41e568.ts.net).
   --instance         Prism instance to launch (default: gate-b-player-262-fabric).
-  --server           Join address (default: monoplayer-gate-b-paper.tail41e568.ts.net:25565).
+  --server           Join address (default: the Paper of this worktree's gate lane,
+                     monoplayer-gate-<instance>-paper.tail41e568.ts.net:25565).
   --account          Account name (default: Bafbi).
   --driver-host h    Override GATEB_DRIVER_HOST (default 127.0.0.1).
   --driver-port p    Override GATEB_DRIVER_PORT (default 25599).
@@ -90,7 +92,10 @@ Options:
 Environment:
   GATEB_DRIVER_HOST / GATEB_DRIVER_PORT / GATEB_DRIVER_TOKEN — driver socket
   GATEB_RCON_NAMESPACE / GATEB_RCON_DEPLOYMENT — kubectl exec target (defaults:
-                     monoplayer-gate-b / paper)
+                     this worktree's gate lane / paper). The lane comes from
+                     scripts/gate-lane.sh name, so MONOPLAYER_GATE_NAMESPACE names
+                     one by hand. Naming this and not --server is refused: one run
+                     names one lane (#282)
   GATEB_DISPLAY / GATEB_XDG_RUNTIME_DIR / GATEB_WAYLAND_DISPLAY — display-host
                      launch environment (defaults :0, /run/user/1000, wayland-1)
 
@@ -106,9 +111,12 @@ const DEFAULTS = {
   // The Fabric instance built from the 26.2 vanilla instance. The older
   // gate-b-player-fabric pair stays on disk as the 26.1.2 record (#71).
   instance: 'gate-b-player-262-fabric',
-  server: 'monoplayer-gate-b-paper.tail41e568.ts.net:25565',
+  // Empty means the lane this worktree derives: main fills both from
+  // src/driver/lane.js, so the address a client joins and the RCON target a run
+  // administers are one name and cannot disagree (#282).
+  server: '',
   account: 'Bafbi',
-  rconNamespace: process.env.GATEB_RCON_NAMESPACE || 'monoplayer-gate-b',
+  rconNamespace: process.env.GATEB_RCON_NAMESPACE || '',
   rconDeployment: process.env.GATEB_RCON_DEPLOYMENT || 'paper',
   maxAgeHours: 24,
   // The dev lane as the display host reaches it: two loopback ports the operator
@@ -380,7 +388,7 @@ const WITNESS_FILE = 'driver-unmodded-witness.json'
 // The unmodded Prism witness cannot be automated by this lane; it is the
 // anti-masking check (council correction: the driver is a mod and can mask
 // vanilla bugs). Produce an honest checklist with manual placeholders.
-async function writeUnmoddedChecklist ({ laneReportPath }) {
+async function writeUnmoddedChecklist ({ laneReportPath, server }) {
   const nowIso = new Date().toISOString()
   const checklist = {
     gate: 'B', row: 'B5-unmodded-witness (G0 manual lane)', lane: 'unmodded',
@@ -390,7 +398,7 @@ async function writeUnmoddedChecklist ({ laneReportPath }) {
     status: 'NOT COMPLETE — exits nonzero until the operator records the manual run',
     how: [
       'Launch the UNMODDED Prism 26.2 instance (no monoplayer-driver mod installed) where you normally play Minecraft.',
-      'Join the G0 Paper backend directly (monoplayer-gate-b-paper.tail41e568.ts.net:25565).',
+      'Join the G0 Paper backend directly (' + server + ').',
       'For each step below, do the action by hand, capture a grim screenshot, and record ok/pending.',
     ],
     steps: [
@@ -445,6 +453,34 @@ async function verifyG0 (opts) {
   return 0
 }
 
+// --- the one lane this run names (#282) --------------------------------------
+//
+// src/driver/lane.js asks scripts/gate-lane.sh name, which derives this worktree's
+// lane or honours MONOPLAYER_GATE_NAMESPACE, and laneTargets turns that one name into
+// the address a client joins and the namespace RCON administers.
+
+// Fill the run's two targets from the lane, or report why it cannot. A lane that
+// cannot be named stops the run before anything reaches a client or a Deployment.
+function applyLaneToOptions (opts) {
+  let lane
+  try {
+    lane = resolveGateLane()
+  } catch (error) {
+    console.error('driver: ' + String(error?.message ?? error))
+    process.exitCode = 2
+    return false
+  }
+  const targets = laneTargets(lane, opts)
+  if (targets.refused) {
+    console.error('driver: ' + targets.refused)
+    process.exitCode = 2
+    return false
+  }
+  opts.server = targets.server
+  opts.rconNamespace = targets.rconNamespace
+  return true
+}
+
 async function main () {
   let opts
   try {
@@ -470,8 +506,10 @@ async function main () {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 
   if (opts.lane === 'unmodded') {
+    // The checklist sends a reader to this worktree's Paper, so it names the lane too.
+    if (!applyLaneToOptions(opts)) return
     const laneReportPath = path.join(TESTDATA, `driver-unmodded-checklist-${stamp}.json`)
-    await writeUnmoddedChecklist({ laneReportPath })
+    await writeUnmoddedChecklist({ laneReportPath, server: opts.server })
     console.log(`unmodded witness checklist written: ${path.relative(root, laneReportPath)}`)
     console.log('Complete the manual steps there, then record the result as')
     console.log(`testdata/${WITNESS_FILE} (completed: true). Exiting 1 until the witness is done.`)
@@ -488,6 +526,10 @@ async function main () {
     process.exitCode = await runSkinLaneCli(opts)
     return
   }
+
+  // The lane is named before the address is validated, because the address's own
+  // default is this lane's Paper.
+  if (!applyLaneToOptions(opts)) return
 
   // The live fleet and the live deployment in front of it are refused for the
   // G0 join too, not only for the parity lanes.

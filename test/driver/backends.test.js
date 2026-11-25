@@ -3,10 +3,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  NAMESPACE, BACKENDS, PROXY_PLAN, FAULT_PLAN, M5_FAULT_ROW,
+  BACKENDS, PROXY_PLAN, FAULT_PLAN, M5_FAULT_ROW,
   getBackend, activeBackends, rconTarget,
 } from '../../src/driver/backends.js'
+import { tailnetHost } from '../../src/driver/lane.js'
 import { DEFAULT_PINS } from '../../src/driver/scenario.js'
+
+// A lane, named here and nowhere in the driver: the registry takes the run's lane as
+// an argument since #282, so a constant here would be the second answer that defect
+// was made of.
+const LANE = 'monoplayer-gate-x'
 
 test('each backend row has a unique id, deployment and lane', () => {
   const ids = new Set(BACKENDS.map(b => b.id))
@@ -17,16 +23,29 @@ test('each backend row has a unique id, deployment and lane', () => {
   assert.equal(BACKENDS.length, deployments.size, 'deployments unique')
 })
 
-test('rows namespace to monoplayer-gate-b and rcon targets match the registry', () => {
+test('rows carry no gate namespace, and an rcon target takes the one the run names', () => {
+  // #282: a row spelled the lane's namespace that shipped, and a renamed lane's run
+  // then administered it. The namespace belongs to the run, so the registry has none
+  // and rconTarget is handed the one src/driver/lane.js resolved.
   for (const backend of BACKENDS) {
-    assert.equal(backend.rcon.namespace, NAMESPACE)
+    assert.equal('namespace' in backend, false, 'the row names no gate namespace: ' + backend.id)
+    assert.equal('namespace' in backend.rcon, false, 'and its rcon target names none: ' + backend.id)
     assert.equal(backend.rcon.deployment, backend.deployment)
-    assert.equal(rconTarget(backend.id).deployment, backend.deployment)
+    assert.equal(rconTarget(backend.id, LANE).deployment, backend.deployment)
+    assert.equal(rconTarget(backend.id, LANE).namespace, LANE)
     assert.equal(backend.endpoints.clusterService, `${backend.deployment}:${backend.endpoints.port}`)
   }
-  assert.equal(rconTarget('paper').deployment, 'paper',
+  assert.equal(rconTarget('paper', LANE).deployment, 'paper',
     'the M2 row must keep working through the existing src/driver/rcon.js default')
-  assert.equal(rconTarget('nonexistent'), null)
+  assert.equal(rconTarget('nonexistent', LANE), null)
+})
+
+test('a tailnet name is the lane and the row, so a second lane publishes its own', () => {
+  // The hostnames were spelled with the lane that shipped too, and the tree renders
+  // monoplayer-gate-__instance__-<workload> on the Service that carries them.
+  assert.equal(tailnetHost(LANE, 'paper'), LANE + '-paper.tail41e568.ts.net')
+  assert.equal(getBackend('paper').endpoints.tailscale.service, 'paper-g0')
+  assert.equal(getBackend('paper-m4').endpoints.tailscale.service, 'velocity-m4')
 })
 
 test('only G0 paper is marked running; planned rows are honest about it', () => {
