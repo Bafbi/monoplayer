@@ -514,7 +514,9 @@ build on `enforce-secure-profile=true` alone.
 
 > **Protocol-level Gate A status**
 >
-> A loopback harness now passes 37/37 assertions: two-leg relay, synthesized
+> A loopback harness passes an assertion set it reports itself; the contract it must
+> satisfy is [testing-ladder.md](testing-ladder.md), and `src/ladder/loopback.js` is the
+> source. It covers: two-leg relay, synthesized
 > play join, current-pose reconstruction, a 5-second attach/detach liveness
 > soak, per-leg keep-alive/teleport/chunk-ack ownership, exactly one backend
 > login, and chat blocked in both directions. See
