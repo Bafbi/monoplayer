@@ -12,7 +12,7 @@
     "reachedVia": "kubectl -n monoplayer-gate-b port-forward pod/capture-paper 25599:25565",
     "at": "2026-11-24T13:40:15.680Z",
     "note": "online-mode is off: the puppet token is expired and a refresh is a human decision",
-    "command": "node src/ladder/capture-config.js --host 127.0.0.1 --port 25599 --offline --out <fixture>"
+    "command": "node src/ladder/capture-config.js --host 127.0.0.1 --port 25599 --version 26.2 --offline --lane monoplayer-gate-b --paper-build 135 --image itzg/minecraft-server:2026.10.1-java25 --out <fixture>"
   },
   "frames": [
     {
