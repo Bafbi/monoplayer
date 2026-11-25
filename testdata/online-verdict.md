@@ -1,5 +1,10 @@
 # The online rung passed 11 of 12 assertions with a real Microsoft login
 
+> **Record, not documentation.** Taken 2026-11-07 by `mise run online`, on the
+> day the record landed: it carries no timestamp of its own. Every number below
+> belongs to that run: read it as evidence of what happened, never as a current
+> claim, and do not update it to match today.
+
 Verdict: **PASS**, `passed: true`. Eleven assertions passed and N11 is `not_observed`, so the record lists it under `notObserved`.
 Date: 2026-11-07. The record carries no timestamp of its own, and it landed in commit `8b6cf2f` that day.
 Command: `mise run online`, which runs `node src/ladder/online.js` and writes `.reports/online-report.json` by default.

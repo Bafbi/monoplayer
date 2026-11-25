@@ -1,5 +1,10 @@
 # The driver lane passed 2 of 2 runs and the unmodded witness
 
+> **Record, not documentation.** Taken 2026-11-06 and 2026-11-09 by
+> `node src/driver/run.js`, `mise run driver:g0`, and the operator's unmodded
+> witness. Every number below belongs to that run: read it as evidence of what
+> happened, never as a current claim, and do not update it to match today.
+
 Verdict: **PASS**. On 2026-11-06 two runs were requested, two ran, two passed, with 38 of 38 assertions each. On 2026-11-09 `mise run driver:g0` ran the two runs itself and passed, and the operator repeated the unmodded witness.
 Date: 2026-11-06 and 2026-11-09. The first run started at `2026-11-06T14:20:59.583Z` and that verdict was recorded at `2026-11-06T15:46:00.000Z`.
 Commands: `node src/driver/run.js --runs 2 --tunnel` ran the two runs. `mise run driver:scenario` runs the same scenario without `--tunnel`. `node src/driver/run.js --lane unmodded` wrote the witness checklist, and `node src/driver/run.js --verify-g0` (`mise run driver:g0`) reads the reports and the witness.

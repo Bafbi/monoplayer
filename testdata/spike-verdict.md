@@ -1,5 +1,9 @@
 # The frozen protocol spike passed 37 of 37 assertions
 
+> **Record, not documentation.** Taken 2026-11-05 by `mise run spike:report`.
+> Every number below belongs to that run: read it as evidence of what happened,
+> never as a current claim, and do not update it to match today.
+
 Verdict: **PASS**, 37 of 37 assertions, none failed.
 Date: 2026-11-05, report timestamp `2026-11-05T21:54:37.163Z`.
 Command: `mise run spike:report`, which runs `node src/spike/run.js`.
