@@ -123,7 +123,7 @@ client; that is fine, because it no longer has to.
 | Cluster | Talos, 2×32 GiB nodes; `monoplayer-gate-b` created; Paper 26.1.2 b74 running | Backends, Monoplayer, Toxiproxy can run here; client stays on `nath`. |
 | Coding workspace | No display/GPU/launcher; ~3.4 GiB free | Keep it for code, protocol tests, reports, and cluster access. |
 
-> **G0 evidence bundle**
+> **G0 evidence bundle · 6 November 2026**
 >
 > Driver lane: two consecutive reports with 38/38 assertions each,
 > server-verified move, break, place, disconnect, and rejoin, plus
