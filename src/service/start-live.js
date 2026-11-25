@@ -292,6 +292,10 @@ function accountHint () {
   ].join('\n')
 }
 
+// The longest name a Minecraft server accepts. Spelled here because the offline
+// body's name is the one place this service writes one.
+const MAX_PLAYER_NAME = 16
+
 // #391: the identity an offline body speaks as, derived from its name the way an
 // offline server derives it for every client (src/legs/offline-identity.js).
 // The name is the lane's: `username`, else the `account` selector, else the
@@ -311,6 +315,16 @@ export function offlinePuppet ({ account = null, username = null, uuid = null } 
   // is still checked against the name, so a lane that pairs a name with the wrong
   // UUID is refused rather than renamed.
   const name = username ?? account ?? OFFLINE_PUPPET_USERNAME
+  // A Minecraft name is at most 16 characters. A lane that sets the selector to a
+  // UUID or an alias longer than that has named a body no server will accept, and
+  // the offline leg would dial it and be kicked. Refusing here names the key
+  // instead of leaving a kick to explain it.
+  if (name.length > MAX_PLAYER_NAME) {
+    throw new TypeError(
+      'offline_puppet_name_too_long: ' + JSON.stringify(name) + ' is ' + name.length +
+      ' characters, and a Minecraft name is at most ' + MAX_PLAYER_NAME +
+      '. Set MONOPLAYER_PUPPET_USERNAME, or a shorter MONOPLAYER_PUPPET_ACCOUNT.')
+  }
   const derived = offlineUuid(name)
   if (uuid !== null && normalizeUuid(uuid) !== derived) {
     throw new TypeError(
