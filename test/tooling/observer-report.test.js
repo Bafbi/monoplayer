@@ -297,8 +297,10 @@ test('--namespace names the lane the run measures and the backend it dials', () 
   assert.equal(joins.length, 2, 'both joins run: ' + calls.join(' / '))
   assert.equal(joins.every(line => line.includes('MONOPLAYER_BACKEND_HOST=paper-conduct.monoplayer-gate-x.svc.cluster.local')), true,
     'both joins dial the lane the argument named: ' + joins.join(' / '))
-  assert.equal(calls.some(line => line.includes('monoplayer-gate-b')), false,
-    'nothing names the lane that shipped: ' + calls.join(' / '))
+  // The argument decides, so this worktree's lane must not appear at all. A lane
+  // prefix would be too broad a needle: a derived lane starts with its own commit.
+  assert.equal(calls.some(line => line.includes('paper-conduct.' + LANE + '.')), false,
+    "nothing dials this worktree's lane while the argument names another: " + calls.join(' / '))
 })
 
 test('both joins hold the account for the lane the run measures', () => {
