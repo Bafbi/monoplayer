@@ -1,10 +1,11 @@
-// The one place a driver run names its gate lane (#282).
+// The one place a Node process names its gate lane (#282, #322).
 //
 // A lane is not a constant. One worktree gets one lane, derived from its short commit
 // and a short hash of its path (#279), and scripts/gate-lane.sh owns that name: it
 // derives the lane, honours MONOPLAYER_GATE_NAMESPACE when an operator names one, and
-// refuses a name that is not a gate lane. This module is the driver's only reader of
-// it, so the RCON target and the address a client joins cannot name different lanes.
+// refuses a name that is not a gate lane. This module is the one Node reader of it, so
+// the driver's RCON target and the address a client joins cannot name different lanes
+// (#282). The config capture in src/ladder/ records the same lane in its fixture (#322).
 //
 // They did once: backends.js exported a literal lane and rcon.js and run.js defaulted
 // to the same string, so a renamed lane's scenario administered the lane that
