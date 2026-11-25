@@ -36,10 +36,9 @@ export const ALLOWED_SERVERS_VERSION = 1
 // address, so one host on two ports is two servers.
 //
 // This key is for comparison only. What a row keeps is the host the operator wrote,
-// because a host is what the socket dials (#265), and both doors that ask the
-// question use this one function rather than a copy: the parser below, and the
-// panel's add and remove.
-export function addressKey (host, port) {
+// because a host is what the socket dials (#265). The panel's add and remove build
+// their own key, which is #339: when that ticket lands, this is what it calls.
+function addressKey (host, port) {
   const name = String(host ?? '').trim().toLowerCase()
   return (name.endsWith('.') ? name.slice(0, -1) : name) + ':' + port
 }
@@ -105,9 +104,12 @@ export function createControlDocument ({
   const said = new Set()
 
   // One line per distinct refusal. A reconnect loop re-reads the same file every
-  // few seconds, and a heartbeat of identical warnings is not a diagnosis.
+  // few seconds, and a heartbeat of identical warnings is not a diagnosis. The entry
+  // is part of the refusal: an operator fixes row 1, the collision moves to row 2,
+  // and the second refusal is a second row to fix rather than the first one again.
   function sayOnce (event, fields) {
-    const key = [event, fields.file, fields.reason ?? fields.code].map(value => String(value ?? '')).join(':')
+    const key = [event, fields.file, fields.reason ?? fields.code, fields.at]
+      .map(value => String(value ?? '')).join(':')
     if (said.has(key)) return
     said.add(key)
     log(event, fields)
