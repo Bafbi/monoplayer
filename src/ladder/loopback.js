@@ -6,8 +6,8 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O65 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
-// O62, O63, O64 and O65) are the contract
+// Assertions R0 and O1-O66 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
+// O62, O63, O64, O65 and O66) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -192,6 +192,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #261: the client that reads the row a body nobody claims leaves behind when
   // its backend faults, and claims it back.
   let pickerBot18 = null
+  // #315: the client that joins a lane whose allowed-server list is empty.
+  let pickerBot19 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -2789,7 +2791,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Owner'), offlineUuid('Dropper'), offlineUuid('After'), offlineUuid('Back'),
       // #261: the client that reads the row a faulted unclaimed body leaves, and
       // claims it back.
-      offlineUuid('Fault')
+      offlineUuid('Fault'),
+      // #315: the client that joins a lane offering nothing. The whitelist is checked
+      // before the picker, so this client has to be known to reach the refusal.
+      offlineUuid('Empty')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -4949,13 +4954,77 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.fault
     )
 
+    // --- O66: a lane with no list refuses the join in a sentence about the lane (#315) ---
+    // Every join from O55 read a list, and O61 proved the read falls back when the live
+    // file cannot be parsed. This is the other answer: both files the lane names are
+    // unparseable, so there is nothing to offer. The client that joins gets no dialog
+    // and one sentence, and the sentence is about the lane because the client clicked
+    // nothing. The offer's own line names the fact an operator can act on, "unreadable",
+    // which is the word the control module already uses for a file that does not parse.
+    fs.writeFileSync(pickerLiveFile, '{"version":1,"servers":[' + '\n')
+    fs.writeFileSync(pickerSeedFile, 'not json' + '\n')
+    const emptyMark = logs.length
+    pickerBot19 = createBot({ port: pickerBound.port, username: 'Empty', version: pickerVersion })
+    await pickerBot19.waitFor(
+      () => pickerBot19.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
+      'the refusal a lane that offers nothing gives a joining client',
+      15_000
+    )
+    // The frame is written before the socket ends, so the two are two waits: this
+    // assertion is about a client that was told and then ended, not one left hanging.
+    await pickerBot19.waitFor(
+      () => pickerBot19.received.ended !== null,
+      'the client ended after the refusal a lane with no list gives',
+      10_000
+    )
+    const emptyOffers = logs
+      .slice(emptyMark)
+      .filter(entry => entry.event === 'pickerOffered')
+      .map(entry => entry.fields)
+    const emptyRefusals = logs
+      .slice(emptyMark)
+      .filter(entry => entry.event === 'pickerEmpty')
+      .map(entry => entry.fields)
+    // The sentence the client was actually given, off the disconnect frame it received,
+    // not only the one the lane logged: a wrong write would still log the right text.
+    const toldText = pickerBot19.received.disconnects.map(told => JSON.stringify(told.packet ?? null))
+    evidence.empty = {
+      offer: emptyOffers[0] ?? null,
+      refusal: emptyRefusals[0] ?? null,
+      dialogs: pickerBot19.received.dialogs.length,
+      disconnects: pickerBot19.received.disconnects.map(told => told.state),
+      told: toldText.map(text => text.slice(0, 240)),
+      ended: pickerBot19.received.ended === null ? null : String(pickerBot19.received.ended).slice(0, 160)
+    }
+    check(
+      'O66',
+      'a lane with no list refuses the join in a sentence about the lane, and its offer names why the list is empty',
+      // One offer, one line, and it says which empty state this is.
+      emptyOffers.length === 1 &&
+        emptyOffers[0].source === 'none' &&
+        emptyOffers[0].servers === 0 &&
+        emptyOffers[0].reason === 'unreadable' &&
+        // The refusal names the lane, never a server the client did not pick, and the
+        // sentence the client was told is the one the lane said it chose.
+        emptyRefusals.length === 1 &&
+        emptyRefusals[0].reason === 'unreadable' &&
+        /this lane is not offering any server/.test(String(emptyRefusals[0].text ?? '')) &&
+        toldText.length === 1 &&
+        toldText[0].includes('this lane is not offering any server') &&
+        !toldText[0].includes('that server') &&
+        // No dialog with no buttons: the client is told, and ended.
+        pickerBot19.received.dialogs.length === 0 &&
+        pickerBot19.received.ended !== null,
+      evidence.empty
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
