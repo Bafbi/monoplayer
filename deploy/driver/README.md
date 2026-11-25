@@ -216,8 +216,9 @@ Each needs its own migration step:
 The namespace, the labels, the Secrets and the two tailnet hostnames are derived
 now, which is what #277, #278, #279 and #282 did. The tree spells a placeholder, and
 one instance names all of them. Every row left in the table still migrates by hand,
-when the change that reads it arrives. The examples in `tools/driver/` still print
-the lane that shipped; a run that joins its own lane passes `-s`.
+when the change that reads it arrives. The examples in `tools/driver/` ask
+`scripts/gate-lane.sh name` for the lane, so a copied command joins the lane the
+run does (#327).
 
 ## Paper G0 backend
 
