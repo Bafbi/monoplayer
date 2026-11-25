@@ -8,7 +8,9 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { LaneError, laneTargets, paperAddress, resolveGateLane, tailnetHost } from '../../src/driver/lane.js'
+import {
+  LaneError, laneOfAddress, laneTargets, paperAddress, resolveGateLane, tailnetHost
+} from '../../src/driver/lane.js'
 import { createRcon } from '../../src/driver/rcon.js'
 import { LANE, WORKTREE } from '../support/lane.js'
 
@@ -95,6 +97,27 @@ test('a run whose RCON namespace names another lane refuses instead of splitting
   assert.equal(targets.server, undefined, 'and nothing is filled to dial')
 })
 
+test('a --server naming another lane refuses while RCON would stay on this one', () => {
+  // The mirror of the RCON case: the address is a lane when it is a lane's tailnet
+  // name, so a run given one and left to default RCON here names two lanes.
+  const other = 'monoplayer-gate-y-paper.tail41e568.ts.net:25565'
+  const targets = laneTargets('monoplayer-gate-x', { server: other })
+  assert.match(targets.refused ?? '', /monoplayer-gate-y/, 'the refusal names the lane the address is')
+  assert.match(targets.refused ?? '', /monoplayer-gate-x/, "and this worktree's")
+  assert.equal(targets.server, undefined, 'and nothing is filled to dial')
+})
+
+test('a tunnel or a port-forward is an address, not a lane', () => {
+  // docs/driver-lane.md reaches the dev lane through loopback ports, and a capture or
+  // a scenario may reach its own lane the same way. Neither names another lane.
+  assert.equal(laneOfAddress('127.0.0.1:25565'), null)
+  assert.equal(laneOfAddress('monoplayer-gate-x-paper.tail41e568.ts.net:25565'), 'monoplayer-gate-x')
+  const targets = laneTargets('monoplayer-gate-x', { server: '127.0.0.1:25565' })
+  assert.equal(targets.refused, undefined)
+  assert.equal(targets.server, '127.0.0.1:25565')
+  assert.equal(targets.rconNamespace, 'monoplayer-gate-x', 'and RCON stays on this lane, which the address is a tunnel to')
+})
+
 test('a run handed both targets goes where it was told', () => {
   // The caller owns the pair once it names the address, which is what #301 kept for
   // --backend-host: an explicit address is not a second lane.
@@ -111,6 +134,12 @@ test('no file under src/driver spells a lane of its own', () => {
   assert.ok(files.length > 0, 'the driver has sources')
   for (const name of files) {
     const text = fs.readFileSync(path.join(DRIVER, name), 'utf8')
+    if (name === 'lane.js') {
+      // The one place names the shape it resolves. A spelled instance is still a lane.
+      assert.doesNotMatch(text, /monoplayer-gate-[a-z0-9]/,
+        'lane.js spells a lane; it resolves one')
+      continue
+    }
     // The placeholder is the shape, not a lane: only a spelled instance is one.
     assert.doesNotMatch(text, /monoplayer-gate-(?!<instance>)/,
       name + ' spells a lane of its own; the lane comes from gate-lane.sh through lane.js and nowhere else')
