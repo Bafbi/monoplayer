@@ -756,14 +756,14 @@ export function createMonoplayer ({
       telemetry.metric('monoplayer.pickers', 1, { player: payload.name })
       return { ...decision, allowed: true, phase: 'picker', picker: true }
     }
-    // #312: the picker branch above returned, so this is a lane that offers no
-    // picker: there is no dialog to send the second client to, and no claim for it
-    // to make. #269 deleted the attach slot that used to refuse it at beforeLogin,
-    // and that slot was what made the refusal early. Left to the attach, the only
-    // answer is the session's `already_attached` at playerJoin — which the client
-    // reads AFTER the body's cached configuration frames have been written to it.
-    // The login decision is the last place this lane can say no before any of
-    // them, so it says no here, in words a player reads.
+    // #312: the picker branch above returned, so this lane offers no picker. There is
+    // no dialog to send the second client to, and no claim for it to make. #269
+    // deleted the attach slot that used to refuse it at beforeLogin, and that slot
+    // was what made the refusal early. Left to the attach, the only answer is the
+    // session's `already_attached` at playerJoin, and the client reads that after the
+    // body's cached configuration frames have been written to it. The login decision
+    // is the last place this lane can say no before any of them, so it says no here,
+    // in words a player reads.
     if (attached) {
       const denied = {
         allowed: false,

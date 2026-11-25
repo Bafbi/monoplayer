@@ -1737,11 +1737,11 @@ function createFrontLeg ({
       return
     }
     // The driver, and a client this lane admitted without one. The core's session is
-    // the authority here: it answers `already_attached` when a driver already holds
-    // the body. A rival on a lane with no picker never reaches this point, because its
-    // login was refused (#312); one on a lane with a picker is refused by the claim
-    // (#269). The session's answer covers the case neither of those can: a login
-    // admitted while another connection still held the body.
+    // the authority here, and it answers `already_attached` when a driver already
+    // holds the body. A rival on a lane with no picker never reaches this point,
+    // because its login was refused (#312). One on a lane with a picker is refused by
+    // the claim (#269). The session's answer covers the case neither of those can: a
+    // login admitted while another connection still held the body.
     // The channel has to exist before the core replays: the replay is written
     // synchronously, and it goes to the channels this leg holds. A client the session
     // accepts without one — its login was admitted while another connection still held

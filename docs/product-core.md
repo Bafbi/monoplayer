@@ -291,29 +291,31 @@ A body carries one driver. Which mechanism refuses the second client depends on 
 lane's shape, and the two shapes refuse at different points.
 
 A lane that offers a picker refuses by claim. Every admitted join reads the picker,
-and the claim is what refuses a second client on a driven body: one sentence naming
-the holder, and the client is still connected, in the picker, able to spectate or
-pick something else (#259).
+and the claim is what refuses a second client on a driven body. The refusal is one
+sentence naming the holder. The client stays connected, in the picker, free to
+spectate or pick something else (#259).
 
 A lane that offers no picker has no claim to refuse at, and #269 deleted the front
 leg's attach slot, which is what used to refuse the second client at `beforeLogin`.
-Refusing at the attach is one phase too late: the client's configuration has already
-been replayed to it from the body's cache, and the `already_attached` answer arrives
-at `playerJoin` — a kick read after a phase the client should never have been shown
-(#312). So the core's login decision refuses it, before Login Success and before
-every configuration frame, with reason `already_driven`, the field `lane:
-no_picker`, and one sentence the front writes into the login-state `disconnect`:
-`Monoplayer: another player is already driving this server. Try again when they
-leave.` The login decision is the last place this lane shape can refuse, and the
-only one it needs.
+Refusing at the attach is one phase too late. The client's configuration has already
+been replayed to it from the body's cache, and the `already_attached` answer only
+arrives at `playerJoin`. That is a kick read after a phase the client should never
+have been shown (#312).
 
-The session keeps `already_attached` for a client the login admitted earlier: a
-connection that fails between its login and its `playerJoin` leaves a login decision
-that is no longer true, and the session is still the authority at the attach.
+So the core's login decision refuses it, before Login Success and before every
+configuration frame. The decision carries reason `already_driven`, the field
+`lane: no_picker`, and one sentence the front writes into the login-state
+`disconnect`: `Monoplayer: another player is already driving this server. Try again
+when they leave.` The login decision is the last place this lane shape can refuse,
+and the only one it needs.
+
+The session keeps `already_attached` for a client the login admitted earlier. A
+connection can fail between its login and its `playerJoin`, and that leaves a login
+decision that is no longer true. The session is still the authority at the attach.
 
 What a loopback proves: O67 refuses a second client on a pickerless lane with no
-configuration frame and no login success, and O60b sends one to the picker on a lane
-that offers it. What a loopback cannot prove: what a vanilla client draws for either
+configuration frame and no login success. O60b sends one to the picker on a lane that
+offers it. What a loopback cannot prove: what a vanilla client draws for either
 sentence.
 
 ### The configuration baseline and the picker (#257)
