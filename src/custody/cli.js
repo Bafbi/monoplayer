@@ -38,6 +38,12 @@
 // followed the checkout edited this worktree's gate Paper while the operator meant
 // another server (#328). The resolved Paper is printed before the write, so a human
 // reads which server is about to change.
+//
+// Every command reads a fixed set of options and refuses the rest (COMMAND_FLAGS).
+// parseArgs takes every option for every command, so without that check a flag the
+// chosen command never reads was accepted and dropped: `whitelist attach add Bafbi
+// --namespace monoplayer-dev` exited 0 and wrote the local file, and the operator
+// had no reason to check (#377).
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -143,6 +149,24 @@ const USAGE = [
   '  node src/custody/cli.js whitelist backend add|remove <name-or-uuid> --namespace <ns> [--deployment <dep>] [--secrets-dir <dir>]',
 ].join('\n')
 
+// What each command reads. parseArgs takes every option for every command, so this
+// table is the whole answer to "does that flag change anything here?". A command
+// that omits a flag refuses it before it writes, because a flag accepted and
+// ignored is worse than one that does not exist: the operator has no reason to
+// check (#377). --secrets-dir and --accounts-dir name the custody root itself and
+// are read before the dispatch, so every command takes them.
+const ROOT_FLAGS = ['secrets-dir', 'accounts-dir']
+const COMMAND_FLAGS = {
+  accounts: ['json', 'from'],
+  'device-code': ['account', 'dir', 'alias'],
+  status: ['account', 'dir', 'json', 'refresh'],
+  migrate: ['apply', 'dry-run', 'from', 'no-quarantine'],
+  // One flag names a local file, the other names a Paper. Neither whitelist reads
+  // the other's, so each refuses it.
+  'whitelist attach': ['file'],
+  'whitelist backend': ['namespace', 'deployment'],
+}
+
 function fail (message, code = 1) {
   process.stderr.write(`error: ${message}\n${USAGE}\n`)
   process.exit(code)
@@ -164,6 +188,26 @@ function lockRefusal (message, holder) {
   // Exit code 2: refused, not failed — the caller should not retry blindly.
   process.stderr.write(`refused: ${message}${holder?.pid ? ` (holder pid ${holder.pid})` : ''}\n`)
   process.exit(2)
+}
+
+// A whitelist names its half by its first positional, so its table key depends on
+// the arguments and not only on the command. An unknown command or scope finds no
+// table here and returns; the dispatch refuses it with its own message.
+function refuseUnreadFlags (command, args) {
+  const scope = command === 'whitelist' ? args.positional[0] : undefined
+  const key = scope === undefined ? command : 'whitelist ' + scope
+  const read = COMMAND_FLAGS[key]
+  if (!read) return
+  for (const name of Object.keys(args)) {
+    if (name === 'positional' || ROOT_FLAGS.includes(name) || read.includes(name)) continue
+    // Naming the command that does read the flag turns a refusal into the next
+    // command the operator types.
+    const readers = Object.keys(COMMAND_FLAGS).filter(owner => COMMAND_FLAGS[owner].includes(name))
+    usageFail([
+      key + ' does not take --' + name + ': nothing in it reads that flag',
+      readers.length > 0 ? 'hint: --' + name + ' is read by ' + readers.join(', ') : null,
+    ].filter(Boolean).join('\n'))
+  }
 }
 
 // A backend flag that is present and empty names nothing. kubectl would take the
@@ -338,6 +382,8 @@ async function main () {
     if (error instanceof UsageError) usageFail(error.message)
     throw error
   }
+  // Before the dispatch, so a command that cannot honour a flag writes nothing.
+  refuseUnreadFlags(command, args)
   const paths = custodyPathsFromArgs(args)
   const accountsDir = accountsDirFromArgs(args, paths)
   const secretsDir = paths.root
