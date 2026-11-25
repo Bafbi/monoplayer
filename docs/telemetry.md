@@ -226,16 +226,19 @@ a heartbeat.
 
 | Record | Field | Kind | Meaning |
 | --- | --- | --- | --- |
-| `startLive` | `version`, `front`, `backend`, `backendConfigured` | label | The service version, the address the front bound, the backend the lane dialled, and the backend the config document asks for. Both backends are `host:port` strings. |
+| `startLive` | `version`, `front`, `backend` | label | The service version, the address the front bound, and the backend the lane starts on, which is the backend the config document asks for (#331). It is written before the first dial. A `host:port` string. |
 | `startLive` | `whitelistCount` | count | Entries in the attach whitelist at startup. |
 | `startLive` | `control.whitelistReload` | boolean | Whether the attach whitelist is re-read at each login, because the lane named its file (#229, #264). |
 | `start` | `whitelist` | list | The core's copy of the same whitelist, one UUID per entry. Its length is `whitelistCount`. |
 | `backendReconnect`, `backendReconnectFailed` | `target` | label | The `host:port` a reconnect dialled. `backendReconnect` is a dial that connected, and `backendReconnectFailed` one that did not, with `error` and no `warm`. |
 | `backendReconnect`, `backendReconnectFailed` | `delayMs`, `attempt`, `backendLogins`, `followed`, `warm`, `state` | count, boolean, label | The delay before the dial, its attempt number, the logins the session completed, whether a followed transfer landed, whether the cache came back warm, and the session's state after it. |
 
-The panel reads them to name the effective backend and the whitelist's size. A
-400-line log tail usually predates a pod's start, so a start record is absent from
-a tail more often than not.
+The panel reads them to name the effective backend, the configured one, and the
+whitelist's size. It shows `startLive.backend` twice: as the configured target
+always, and as the effective one until a reconnect moves that. Those are two
+questions that one record field answers, because the lane starts on the backend
+its config document names (#331). A 400-line log tail usually predates a pod's
+start, so a start record is absent from a tail more often than not.
 
 A picker join writes its own four records, and they are the whole story of one
 client that never reached a backend (#257): `pickerServed` (the recording's frame

@@ -429,9 +429,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // The target the process dials first, and treats as its base: the one the
   // deployment configured. #229 let a control document override it before the first
   // dial; #264 retired that key with the backend move, so the first dial is now the
-  // configured one and every later target comes from a transfer.
+  // configured one and every later target comes from a transfer. #331: that makes
+  // "the target at startup" and "the configured target" one fact, so the code and
+  // the start record carry one name for it.
   const configuredTarget = { host: cfg.backend.host, port: cfg.backend.port }
-  const startupTarget = configuredTarget
 
   // --- telemetry + journal (both inert unless their env is set) ---
   // Telemetry carries the puppet alias as a resource attribute; the alias and
@@ -450,8 +451,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // --- 2. legs + core ---
   const backend = resolved
     ? createLiveBackendLeg({
-      host: startupTarget.host,
-      port: startupTarget.port,
+      host: configuredTarget.host,
+      port: configuredTarget.port,
       version: cfg.version,
       accountDir: resolved.account.dir,
       account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
@@ -468,8 +469,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
       log
     })
     : createLiveBackendLeg({
-      host: startupTarget.host,
-      port: startupTarget.port,
+      host: configuredTarget.host,
+      port: configuredTarget.port,
       version: cfg.version,
       cacheDir: cfg.puppet.cacheDir,
       cacheAccount: cfg.puppet.cacheAccount,
@@ -618,7 +619,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     return readiness
   }
 
-  const baseTarget = { ...startupTarget }
+  const baseTarget = { ...configuredTarget }
   const follow = createTransferFollowController()
   // The server the puppet is on now. A plain backend fault reconnects here,
   // not always to the configured base.
@@ -797,6 +798,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
         accountAlias: null,
         accountDir: cfg.puppet.cacheDir
       }
+  // #331: one address, written to both records, so the log line and the journal
+  // event cannot name different backends.
+  const backendAddress = `${configuredTarget.host}:${configuredTarget.port}`
   log('startLive', {
     version: cfg.version,
     chat: cfg.chat,
@@ -807,8 +811,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
     picker: cfg.picker,
     pickerBaseline: baseline === null ? null : baseline.version,
     front: `${cfg.front.host}:${cfg.front.port}`,
-    backend: `${startupTarget.host}:${startupTarget.port}`,
-    backendConfigured: `${configuredTarget.host}:${configuredTarget.port}`,
+    // #331: one label. The lane starts on the configured backend, and every later
+    // target comes from a transfer. So this is both the target it dials first and
+    // the one the config document asks for. A reader that wants the configured
+    // target after a transfer reads this record, not a second field beside it.
+    backend: backendAddress,
     control: {
       whitelistReload: whitelistSource !== null,
       // #262: the two paths, which file answered, and how many servers it offers.
@@ -830,7 +837,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
     front: `${cfg.front.host}:${cfg.front.port}`,
-    backend: `${startupTarget.host}:${startupTarget.port}`,
+    backend: backendAddress,
     ...accountLogFields,
     whitelistCount: cfg.attachWhitelist.length,
     reconnect: {

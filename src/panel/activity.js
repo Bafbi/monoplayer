@@ -138,9 +138,14 @@ function podFacts (pod, now) {
   }
 }
 
-// The effective backend is the one the last successful dial used, so a puppet
-// that followed a transfer shows where it is now, not where it started. `configured` is the config document's target, and `registry` is this
-// panel's own copy: two different facts, labelled, never merged. `lastDial` is the
+// The effective backend is the one the last successful dial used. A puppet that
+// followed a transfer shows where it is now, not where it started. `configured` is
+// the target the config document asks for, which is the one the lane started on.
+// `registry` is this panel's own copy. Those three facts stay apart, each labelled
+// with the record it came from.
+// #331: `effective` and `configured` read the same start record field, because the
+// lane starts on its configured backend. They diverge the moment a reconnect moves
+// `effective`, which is the only time they are different answers. `lastDial` is the
 // newest dial of either outcome, because a reconnect that failed in the tail is
 // the difference between "on play2" and "on play2 until three minutes ago".
 function backendFacts ({ puppet, start, reconnect, failed }) {
@@ -164,8 +169,8 @@ function backendFacts ({ puppet, start, reconnect, failed }) {
           at: newest.at.at,
           connected: newest.record.event === 'backendReconnect'
         },
-    configured: start !== null && typeof start.backendConfigured === 'string'
-      ? { value: clean(start.backendConfigured), source: 'start', at: started.at }
+    configured: start !== null && typeof start.backend === 'string'
+      ? { value: clean(start.backend), source: 'start', at: started.at }
       : null,
     registry: { value: puppet.backend, source: 'registry', at: null }
   }
