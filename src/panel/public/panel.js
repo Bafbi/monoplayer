@@ -49,6 +49,12 @@ let armed = null
 
 const resultOf = (form) => form.closest('.control-block')?.querySelector('.block-result') ?? null
 
+// The key an armed removal is held under: the row's own key inside the card it sits in.
+// The row alone is not enough — one address can be listed by two puppets, and one account
+// can be on two attach whitelists — and a confirmation armed on one card must not appear
+// on the other card's row for the same name.
+const armKey = (form) => (form.closest('article.card')?.id ?? '') + ' ' + (form.dataset.key ?? '')
+
 const outcome = (form, text, kind) => {
   const out = resultOf(form)
   if (out === null) return
@@ -66,7 +72,7 @@ function paintArmed () {
   for (const form of document.querySelectorAll('form[data-write="remove"], form[data-write="remove-server"]')) {
     const button = form.querySelector('button')
     if (button === null) continue
-    const on = armed !== null && form.dataset.key === armed.key && armed.until > Date.now()
+    const on = armed !== null && armKey(form) === armed.key && armed.until > Date.now()
     button.dataset.armed = on ? 'true' : 'false'
     button.classList.toggle('armed', on)
     button.textContent = on ? 'confirm: remove ' + armed.name : 'remove'
@@ -138,7 +144,7 @@ document.addEventListener('submit', async (event) => {
   const button = form.querySelector('button')
   const kind = form.dataset.write
   if (kind === 'remove' || kind === 'remove-server') {
-    const key = form.dataset.key
+    const key = armKey(form)
     // Already armed for this row: this press is the confirmation.
     if (armed !== null && armed.key === key && armed.until > Date.now()) {
       armed = null
@@ -155,7 +161,11 @@ document.addEventListener('submit', async (event) => {
     }
   }
 
-  const payload = body(form, new FormData(form))
+  const data = new FormData(form)
+  const payload = body(form, data)
+  // What the operator typed, for the one refusal the route cannot name back: it answers a
+  // host and a port it could not use, and the address never existed as one value to it.
+  const sent = kind === 'add-server' ? String(data.get('server') ?? '').trim() : null
   const method = kind === 'remove' || kind === 'remove-server' ? 'DELETE' : 'POST'
 
   form.setAttribute('aria-busy', 'true')
@@ -173,8 +183,11 @@ document.addEventListener('submit', async (event) => {
       form.reset()
     } else if (response.status === 400) {
       // The route's 400 is an instruction, not a failure: it asks for the uuid when a
-      // name did not resolve. It is rendered as one, in its own words.
-      outcome(form, text.trim(), 'instruction')
+      // name did not resolve. It is rendered as one, in its own words. The whitelist's 400
+      // names the account it refused; the allowed servers' cannot name an address it could
+      // not parse, so the value the operator sent goes in front and the route's sentence
+      // stays whole behind it.
+      outcome(form, sent === null ? text.trim() : '"' + sent + '" was refused: ' + text.trim(), 'instruction')
     } else {
       outcome(form, text.trim() === '' ? 'refused with ' + response.status : text.trim(), 'refused')
     }
