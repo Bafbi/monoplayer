@@ -79,7 +79,10 @@ mise run driver:scenario
 better address; they are not a second way to choose a lane. A run that names
 `GATEB_RCON_NAMESPACE` (or `--rcon-namespace`) and leaves the join address to this
 worktree stops instead, because it would join one lane's Paper and administer another
-lane's Deployments. Pass `--server` too when that is what you mean.
+lane's Deployments. `--server` naming another lane's Paper while RCON stays on this
+one is the same refusal. Pass the other flag too when that is what you mean: the pair
+is the caller's once it names both. A tunnel or a port-forward is an address and not a
+lane, so it never disagrees.
 `MONOPLAYER_GATE_NAMESPACE` names a lane for every rung at once.
 
 That is the task's own command with the lane named. One run at a time on the

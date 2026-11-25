@@ -77,17 +77,34 @@ export function paperAddress (namespace, port = 25565) {
   return `${tailnetHost(namespace, 'paper')}:${port}`
 }
 
+// The lane a tailnet address belongs to, or null when the address is an address and
+// not a lane: a tunnel, a port-forward, an IP. The tree renders
+// monoplayer-gate-<instance>-paper on the Service that publishes each lane's Paper.
+const LANE_HOST = new RegExp('^(monoplayer-gate-.+)-paper\\.' + TAILNET.replace(/\./g, '\\.') + '$')
+
+export function laneOfAddress (address) {
+  const match = LANE_HOST.exec(String(address).split(':')[0])
+  return match === null ? null : match[1]
+}
+
 // The two targets one driver run fills from the lane: the address a client joins and
 // the namespace RCON administers. Or the sentence that stops the run.
 //
 // --server and --rcon-namespace are the caller's overrides, not second lanes: a run
 // handed both goes where it was told, which is what #301 kept for --backend-host. A
-// run handed only the RCON namespace, and whose join address would be this lane's,
-// names two lanes, so it refuses instead of picking one.
+// run handed one of them, where the other would be this lane's, names two lanes when
+// they disagree, so it refuses instead of picking one. A tunnel or a port-forward is
+// an address and not a lane, so it never disagrees.
 export function laneTargets (lane, { server = '', rconNamespace = '' } = {}) {
   if (rconNamespace !== '' && server === '' && rconNamespace !== lane) {
     return {
       refused: `GATEB_RCON_NAMESPACE names "${rconNamespace}" and this worktree's lane is "${lane}". One run names one lane: pass --server too if the client should join the other one`,
+    }
+  }
+  const serverLane = laneOfAddress(server)
+  if (rconNamespace === '' && serverLane !== null && serverLane !== lane) {
+    return {
+      refused: `--server names "${serverLane}" and this worktree's lane is "${lane}". One run names one lane: pass --rcon-namespace too if RCON should administer the other one`,
     }
   }
   return { server: server || paperAddress(lane), rconNamespace: rconNamespace || lane }
