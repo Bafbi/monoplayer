@@ -97,7 +97,12 @@ count, and the worktree that owns it.
 LANE                                   AGE     PODS  WORKTREE
 monoplayer-gate-6098a9f-3f1c2a         3h12m   0     /home/me/src/monoplayer
 monoplayer-gate-0a1b2c3-77d1e0         12m     2     /home/me/worktrees/t3-9f2
+monoplayer-gate-b                      ?       0     transfer testbed
 ```
+
+The last row is the transfer testbed's namespace: the one namespace in that listing that
+no worktree derives, and not a gate lane. No `up` or `down` here writes its clock, so its
+age is `?`, and it never reaps: see the conditions below (#318).
 
 `up` and `down` write three annotations on the namespace: the worktree, the
 commit, and an epoch that `lanes` reads as the age. `up` fails when it cannot write
@@ -112,11 +117,17 @@ The reaper deletes a namespace, so it is hard to satisfy on purpose. A lane is
 reaped only when all of these hold:
 
 - no pod runs in it, whatever its age
+- every Deployment in it is one the gate tree declares, so a lane holding the
+  transfer testbed's `paper-hub` or `paper-sky` is kept. This is read first, and the
+  reason printed is the first one that keeps the lane: a namespace holding a row this
+  tree does not declare is not this script's lane to date, so an undated or young one
+  reaches the check too
 - it carries the clock `up` wrote, so its age is known
 - it has been idle past the window: `MONOPLAYER_GATE_IDLE_WINDOW` seconds, six
   hours by default, or `--window SECONDS` for one run
-- every Deployment in it is one the gate tree declares, so a lane holding the
-  transfer testbed's `paper-hub` or `paper-sky` is kept
+- it is not the transfer testbed's namespace. `monoplayer-gate-b` is fixed, every
+  worktree shares it, and nothing here recreates it or its two hand-made Secrets, so
+  the name is refused even once the `paper-hub` and `paper-sky` rows are gone (#318)
 - every Secret in it was made by this script, so an operator's Secret is kept
 
 Deletion is asynchronous. `--reap` asks the API to delete the namespace. The next
@@ -124,7 +135,9 @@ listing shows that lane as `(deleting)` until its objects are gone.
 
 The live namespace and the dev lane are out of reach at every step. `lanes` reads
 a label only a gate lane carries, `app.kubernetes.io/component: gate-lane`, and it
-passes every candidate through the same guard `up` and `down` use.
+passes every candidate through the same guard `up` and `down` use. The testbed's
+`monoplayer-gate-b` carries that label too, because `deploy/testbed/namespace.yaml`
+writes it: the listing shows it, and the conditions above are what keep it.
 
 ## One tree, one lane, one value
 
@@ -178,7 +191,9 @@ deletes by that label, and an operator's Secret carries none, so it survives eve
 
 `paper-hub` and `paper-sky` from `deploy/testbed` are tenants of a gate namespace. They
 belong to the transfer testbed: nothing here scales them, and a lane on another
-instance does not take them with it. Both read that namespace's
+instance does not take them with it. They are also why the reaper keeps
+`monoplayer-gate-b`, the one namespace the listing names that no worktree derives (#318).
+Both read that namespace's
 `gate-<instance>-rcon`, so a `gate:down` that removes a generated one leaves them
 without one until the next `gate:up`. The testbed owns its own Secret, not this lane
 (#283, #288).

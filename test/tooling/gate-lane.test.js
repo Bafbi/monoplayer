@@ -623,7 +623,14 @@ test('the tree carries a placeholder, so no render can land in a typed lane', ()
   for (const spelling of spellings) {
     assert.match(spelling, /^gate-__instance__/, 'every lane name in the tree is the placeholder plus a suffix: ' + spelling)
   }
-  assert.doesNotMatch(script(), /gate-b/, 'the script carries no lane name either')
+  // The one fixed namespace name the script carries is the transfer testbed's, and it
+  // is not a lane's name: no render, no scale, no stamp and no Secret of a lane comes
+  // from it (#318). Every other gate- spelling here is the prefix a comment describes.
+  const fixed = new Set(script().match(/monoplayer-gate-[a-z0-9-]+/g) ?? [])
+  for (const spelling of fixed) {
+    assert.equal(spelling, 'monoplayer-gate-b', 'every lane name in the script is derived, and the only fixed one is the testbed namespace: ' + spelling)
+  }
+  assert.equal((script().match(/monoplayer-gate-b/g) ?? []).length, 1, 'and it is spelled once, where the constant names it')
   // The two spellings the tree has to keep: monoplayer-gate-<instance> for the
   // namespace, the labels and the tailnet names, and gate-<instance> for the Secrets
   // and the ConfigMaps. One placeholder covers both, which is why a rename cannot
@@ -982,6 +989,98 @@ test('a lane holding anything this script did not make is never reaped', () => {
   assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'nothing this script did not make is deleted')
   assert.match(output, new RegExp('keeping ' + tenant + ': it runs paper-hub, which the gate tree does not declare'))
   assert.match(output, new RegExp('keeping ' + operator + ': it holds secret/gate-ccccccc-222222-rcon'))
+})
+
+// The transfer testbed's namespace is the one gate namespace no worktree derives
+// (#318). It is fixed, every worktree shares it, and no lane command may reap it.
+// These cases hold the three halves of that: the namespace object carries the
+// selector the listing reads, the listing says what the namespace is, and a reap
+// keeps it in both states it can be in.
+const TESTBED = 'monoplayer-gate-b'
+
+test("the testbed's namespace carries the lane selector, so the listing finds it", () => {
+  // lanes and the reaper select one label and nothing else. A namespace without it is
+  // invisible to both, which is how the testbed sat unlisted while holding seven
+  // Deployments. No other file in this repo declares that namespace object, so the
+  // label has to live in deploy/testbed or a rebuilt cluster would not have it.
+  const manifest = fs.existsSync(path.join(ROOT, 'deploy/testbed/namespace.yaml'))
+    ? read('deploy/testbed/namespace.yaml')
+    : ''
+  assert.ok(manifest, 'deploy/testbed/namespace.yaml exists, so the namespace has an owner')
+  assert.match(manifest, new RegExp('^  name: ' + TESTBED + '$', 'm'), "the object is the testbed's namespace")
+
+  const selector = script().match(/^LANE_SELECTOR=(\S+)$/m)[1]
+  const [key, value] = selector.split('=')
+  assert.match(manifest, new RegExp('^    ' + key.replaceAll('.', '\\.') + ': ' + value + '$', 'm'),
+    'the namespace carries the one selector lanes and the reaper read: ' + selector)
+  assert.match(read('deploy/testbed/kustomization.yaml'), /^  - namespace\.yaml$/m,
+    'the kustomization applies it, so the next testbed up writes the label')
+})
+
+test("lanes names the testbed's namespace as the testbed, not an unowned lane", () => {
+  // The testbed is not a worktree's lane: no up or down here stamps it, so a row that
+  // read its owner off the annotation would print "unknown" and read as an orphan.
+  const where = space()
+  laneState(where, TESTBED, { touched: '', worktree: '', pods: 0 })
+  laneList(where, [TESTBED])
+  const { status, output } = run(where, ['lanes'])
+  assert.equal(status, 0, output)
+  const row = output.split('\n').find(line => line.startsWith(TESTBED))
+  assert.ok(row, 'the testbed has a row: ' + output)
+  assert.match(row, /\s0\s+transfer testbed$/, 'the row says what owns it: ' + row)
+})
+
+test("a reap keeps the testbed's namespace for the rows it holds", () => {
+  // #283: paper-hub and paper-sky are the testbed's tenants, and the gate tree does not
+  // declare them. This is the rule the ticket says was invisible: with the namespace
+  // listed, the tenant probe is what keeps the one shared gate namespace.
+  const where = space()
+  const now = Math.floor(Date.now() / 1000)
+  laneState(where, TESTBED, {
+    touched: now - 7200,
+    worktree: '/w/testbed',
+    deploys: 'deployment.apps/paper-hub\ndeployment.apps/paper-sky'
+  })
+  laneList(where, [TESTBED])
+
+  const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '3600'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'the testbed is never deleted: ' + calls.join(' | '))
+  assert.match(output, new RegExp('keeping ' + TESTBED + ': it runs paper-hub'))
+})
+
+test("a reap keeps the testbed's namespace even when its own rows are gone", () => {
+  // The tenant rule is evidence, not a promise: it holds while paper-hub and paper-sky
+  // are in the namespace. Deleting those two Deployments must not hand the shared
+  // namespace, its Services and its Secrets to the reaper, so the fixed name is refused
+  // at the delete as well.
+  const where = space()
+  const now = Math.floor(Date.now() / 1000)
+  laneState(where, TESTBED, { touched: now - 7200, worktree: '/w/testbed' })
+  laneList(where, [TESTBED])
+
+  const { status, output, calls } = run(where, ['lanes', '--reap', '--window', '3600'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls.filter(line => /\bdelete\b/.test(line)), [], 'nothing was deleted: ' + calls.join(' | '))
+  assert.match(output, new RegExp('keeping ' + TESTBED + ': it is the transfer testbed'))
+})
+
+test('a lane holding rows the tree does not declare is kept whatever its age', () => {
+  // Contents outrank age. A namespace holding a Deployment the gate tree did not make
+  // is not this script's lane at all, so the probe runs before the clock is read. That
+  // is what makes the tenant rule reachable: an undated or young namespace reaches it
+  // too, instead of being kept earlier for having no age.
+  const where = space()
+  const tenant = laneState(where, 'monoplayer-gate-ccccccc-333333', {
+    touched: '',
+    worktree: '/w/tenant',
+    deploys: 'deployment.apps/paper\ndeployment.apps/paper-hub'
+  })
+  laneList(where, [tenant])
+
+  const { status, output } = run(where, ['lanes', '--reap', '--window', '1'])
+  assert.equal(status, 0, output)
+  assert.match(output, new RegExp('keeping ' + tenant + ': it runs paper-hub'))
 })
 
 test('a lane namespace this run cannot read stops it, instead of reading as absent', () => {
