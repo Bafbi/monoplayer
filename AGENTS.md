@@ -8,7 +8,7 @@ Three cluster lanes, and two rules that outrank a test.
 |---|---|---|---|
 | live | `monoplayer` | the deployment Argo CD syncs from the `deploy` branch: one replica, the puppet account GlowSquidye, backend `play2.excalia.fr` | a human, by merging to `main` |
 | dev | `monoplayer-dev` | the dev lane: its own Paper, its own proxy, its own account, not in Argo CD | anyone, with `mise run dev:up` and the rest of the `dev:` tasks |
-| gate lane | `monoplayer-gate-<instance>`, one per worktree | the Papers the online rung and the driver lane run against. `paper-conduct` is the gate-serving sibling the observer measures. The instance is the worktree's short commit and a short hash of its path, so two checkouts at one commit are two lanes, and `scripts/gate-lane.sh name` prints this worktree's. `mise run lanes` lists every lane `gate:up` made, with its age and the worktree that owns it. The transfer testbed's Papers are not one: they sit in the fixed `monoplayer-gate-b` namespace, which no lane command lists or reaps. A lane rests at 0 replicas | anyone. It is disposable, and `mise run gate:up` and `mise run gate:down` wake and stop one |
+| gate lane | `monoplayer-gate-<instance>`, one per worktree | the Papers the online rung and the driver lane run against. `paper-conduct` is the gate-serving sibling the observer measures. The instance is the worktree's short commit and a short hash of its path, so two checkouts at one commit are two lanes, and `scripts/gate-lane.sh name` prints this worktree's. `mise run lanes` lists every lane `gate:up` made, with its age and the worktree that owns it, and the transfer testbed's namespace beside them (#318). The testbed's Papers are not a worktree's lane: they sit in the fixed `monoplayer-gate-b` namespace, which `mise run lanes` lists with `?` for its age and `transfer testbed` for its owner, and which no lane command reaps. A lane rests at 0 replicas | anyone. It is disposable, and `mise run gate:up` and `mise run gate:down` wake and stop one |
 
 **Never take the live lane down, scale it, patch it, or restart it for a test.**
 That covers `kubectl -n monoplayer scale`, `patch`, `delete a workload`,
@@ -60,7 +60,7 @@ prints it, one line. Two runs in one worktree share that lane, so one
 `mise run gate:down` stops both. Every rung that reaches a lane resolves it from that
 script, so none needs a variable: `online:cluster`, `observer:run` and
 `driver:scenario` each dial this worktree's lane and administer it (#301, #282).
-`MONOPLAYER_GATE_NAMESPACE` names a lane by hand for all of them at once.
+`MONOPLAYER_GATE_NAMESPACE` names a lane by hand for all of them at once. `mise run lanes -- --reap` deletes an idle derived lane and never `monoplayer-gate-b`, which holds the transfer testbed's two Papers (#318).
 Anything that uses the real account takes the lease
 `monoplayer-online-account` while it does: one object for every worktree on the
 cluster. `docs/testing-ladder.md` answers this rung by rung, beside the lane table.

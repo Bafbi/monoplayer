@@ -16,7 +16,8 @@
 #   scripts/gate-lane.sh lanes [--reap] [--window SECONDS]
 #                                 every gate lane on the cluster: its age, its pods,
 #                                 and the worktree that owns it. --reap deletes the
-#                                 lanes idle past the window
+#                                 lanes idle past the window. The transfer testbed's
+#                                 fixed namespace is listed here and never deleted
 #
 # Why: the lane used to run 24/7 for runs that last minutes — 6,214 MiB of Paper,
 # Velocity and toxiproxy, two of which no rung drives. At rest the five
@@ -47,8 +48,10 @@
 # What it never does: touch the live lane (monoplayer) or the dev lane
 # (monoplayer-dev). It never deletes a workload, a Service or a ConfigMap. It never
 # scales paper-hub or paper-sky, which are the transfer testbed's and share a gate
-# namespace. And it never reaps a lane that still runs, that nobody dated, or that
-# holds anything this script did not make.
+# namespace. And it never reaps a lane that still runs, that holds anything this
+# script did not make, that nobody dated, or that is the testbed's namespace: that
+# last name is fixed, shared by every worktree, and deletes with nothing to restore
+# it (#318).
 #
 # The tree in deploy/driver is a template, not a lane. Everywhere it names one it
 # spells gate-__instance__, and render() substitutes the instance into all of it, so
@@ -95,6 +98,14 @@ GATE_PREFIX=monoplayer-gate-
 # reaper use. The live and the dev namespace carry app.kubernetes.io/part-of alone, so
 # neither can be listed as a gate lane, let alone deleted as one.
 LANE_SELECTOR=app.kubernetes.io/component=gate-lane
+# The transfer testbed's namespace is the one listed lane this script does not derive
+# (#318). deploy/testbed/namespace.yaml carries the selector above, so `lanes` shows
+# it and the reaper reads it like any other lane: the tenant rule below keeps it while
+# `paper-hub` and `paper-sky` are in it, and this name keeps it if those rows ever go.
+# It is not a worktree's lane, so no up, down or status here names it, and its clock
+# is the testbed's business: `lanes` prints "?" for an age it does not have.
+TESTBED_NAMESPACE=monoplayer-gate-b
+TESTBED_OWNER='transfer testbed'
 # What up writes on the namespace: the two facts the listing needs, and the clock the
 # reaper reads. A lane without them is a lane nobody can find, and one nobody dates is
 # a lane no reap will touch.
@@ -564,19 +575,14 @@ reap_lane () {
     say "keeping $ns: $pods pod(s) running, and a lane with a pod is not idle"
     return 0
   fi
-  if [ -z "$touched" ]; then
-    say "keeping $ns: no $ANNOTATION_TOUCHED annotation, so its age is unknown"
-    return 0
-  fi
-  age=$(( now - touched ))
-  if [ "$age" -lt "$IDLE_WINDOW" ]; then
-    say "keeping $ns: touched ${age}s ago, and the window is ${IDLE_WINDOW}s"
-    return 0
-  fi
-  # The transfer testbed's paper-hub and paper-sky are tenants of a gate namespace
-  # (#283). A namespace holding a Deployment the gate tree does not declare is not
-  # this script's lane to delete. A read that fails stops the run: unreadable is not
-  # absent, and this is the read that would otherwise delete what it could not see.
+  # What is in the namespace outranks how old it is. The transfer testbed's paper-hub
+  # and paper-sky are tenants of a gate namespace (#283), and a namespace holding a
+  # Deployment the gate tree does not declare is not this script's lane to date or to
+  # delete. This runs before the clock because a rule that only fires on a namespace
+  # that is both old and dated is a rule a reader cannot count on: an undated one
+  # reaches it too, and the reason printed is the one that decided. A read that fails
+  # stops the run: unreadable is not absent, and this is the read that would otherwise
+  # delete what it could not see.
   workloads=$(kubectl -n "$ns" get deploy -o name) ||
     die "cannot read the Deployments in $ns: an unreadable lane is not an idle one" 1
   for entry in $workloads; do
@@ -586,6 +592,23 @@ reap_lane () {
       return 0
     fi
   done
+  if [ -z "$touched" ]; then
+    say "keeping $ns: no $ANNOTATION_TOUCHED annotation, so its age is unknown"
+    return 0
+  fi
+  age=$(( now - touched ))
+  if [ "$age" -lt "$IDLE_WINDOW" ]; then
+    say "keeping $ns: touched ${age}s ago, and the window is ${IDLE_WINDOW}s"
+    return 0
+  fi
+  # The evidence above is not a promise. The testbed's two rows are its tenants, so an
+  # operator who deletes them would leave a namespace of Services and Secrets that this
+  # script's own rules would then delete. Its name is fixed and every worktree shares
+  # it, and nothing puts it back, so no lane command deletes it (#318).
+  if [ "$ns" = "$TESTBED_NAMESPACE" ]; then
+    say "keeping $ns: it is the transfer testbed, and no lane command deletes it"
+    return 0
+  fi
   # An operator's Secret has no managed-by label, and #278's rule is that this script
   # deletes only what it made. Deleting the namespace would take the Secret too.
   held=$(kubectl -n "$ns" get secrets -l "!$GENERATED_LABEL_KEY" -o name) ||
@@ -619,7 +642,13 @@ lanes () {
     ns=${ns#namespace/}
     guard_namespace "$ns"
     touched=$(lane_annotation "$ns" "$ANNOTATION_TOUCHED")
-    worktree=$(lane_annotation "$ns" "$ANNOTATION_WORKTREE")
+    # The testbed is nobody's worktree: no up or down here stamps it, so reading its
+    # owner off the annotation would print "unknown" and read as an orphan lane.
+    if [ "$ns" = "$TESTBED_NAMESPACE" ]; then
+      worktree=$TESTBED_OWNER
+    else
+      worktree=$(lane_annotation "$ns" "$ANNOTATION_WORKTREE")
+    fi
     pods=$(pod_count "$ns")
     total=$((total + 1))
     [ "$pods" = 0 ] || awake=$((awake + 1))
