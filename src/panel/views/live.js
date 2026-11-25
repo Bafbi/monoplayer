@@ -34,6 +34,18 @@ function whitelistRead (attach) {
   return ', and the attach whitelist read at ' + attach.observedAt + version
 }
 
+// The allowed servers' read of this instant, as the second clause of the footer. Same
+// shape and same reason as the whitelist's: a version orders writes and is not a clock.
+function allowedRead (allowed) {
+  if (allowed === null || allowed === undefined) return ''
+  if (present(allowed.failure)) return ', and the allowed servers could not be read'
+  if (!present(allowed.observedAt)) return ''
+  const version = present(allowed.resourceVersion)
+    ? ' at ConfigMap resourceVersion ' + allowed.resourceVersion + ' (a version, not a time)'
+    : ', and the ConfigMap named no resourceVersion'
+  return ', and the allowed servers read at ' + allowed.observedAt + version
+}
+
 function renderHeartbeat (facts) {
   const heartbeat = facts.heartbeat
   if (heartbeat === null) return ''
@@ -229,11 +241,12 @@ function renderState (facts) {
 // innerHTML this becomes, because the same markup is the server's first render and
 // the stream's every later one.
 //
-// `attach` is the attach whitelist read of this same instant, and the footer names it
-// beside the log read. It is here and not in the list, because the list is only redrawn
-// when it changes: a time printed there would be the time of the last change, which a
-// reader would take for the time of the read (#248).
-export function renderLive (facts, attach = null) {
+// `attach` is the attach whitelist read of this same instant, and `allowed` is the
+// allowed servers', and the footer names both beside the log read. They are here and
+// not in the lists, because a list is only redrawn when it changes: a time printed
+// there would be the time of the last change, which a reader would take for the time of
+// the read (#248, #309).
+export function renderLive (facts, attach = null, allowed = null) {
   return [
     renderStage(facts),
     renderState(facts),
@@ -249,7 +262,7 @@ export function renderLive (facts, attach = null) {
         // a fixture can hand in anything, which is the case this covers.
         : ' from ' + escape(facts.tail.lines) + ' log lines (' + escape(facts.tail.heartbeats) + ' heartbeats' +
           (facts.tail.unreadable === 0 ? '' : ', ' + escape(facts.tail.unreadable) + ' unreadable') + ')') +
-      whitelistRead(attach) + '</p>',
+      whitelistRead(attach) + allowedRead(allowed) + '</p>',
     ''
   ].join('\n')
 }

@@ -11,6 +11,8 @@
 //      as a form that posts nowhere.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 
 import { activity } from '../../src/panel/activity.js'
 import { renderCard } from '../../src/panel/views/card.js'
@@ -120,7 +122,7 @@ test('the whitelist block renders the entries, their added time, and the two wri
   for (const row of rows) assert.doesNotMatch(row, /<output/, 'no answer is printed inside a row')
   // The uuid is the key the page holds its armed confirmation under, so a tick that
   // replaces the button can paint it back, and the name is what the confirmation reads.
-  assert.match(card, /data-write="remove" data-uuid="6eb73524-ff88-4a62-a8d0-c63905e7afba" data-who="Bafbi" action="\/api\/puppets\/glowsquidye\/whitelist\/6eb73524-ff88-4a62-a8d0-c63905e7afba"/,
+  assert.match(card, /data-write="remove" data-key="6eb73524-ff88-4a62-a8d0-c63905e7afba" data-name="Bafbi" action="\/api\/puppets\/glowsquidye\/whitelist\/6eb73524-ff88-4a62-a8d0-c63905e7afba"/,
     'the confirm step names the entry it would remove, by the key the page holds it under')
   assert.match(card, /data-armed="false"/, 'a removal starts unarmed')
 })
@@ -135,6 +137,99 @@ test('the whitelist block tells an empty list apart from a list it could not rea
 
   const unread = renderCard(puppet, facts())
   assert.match(unread, /the panel did not read the attach whitelist for this page/)
+})
+
+// The allowed-server list: the same block idiom, over the other control key (#309).
+// The route names a server by its `host:port` address, so the row, the removal's path
+// and the add field all use that one name.
+const allowedList = {
+  observedAt: '2026-11-18T10:37:24.906Z',
+  resourceVersion: '41222',
+  source: 'control',
+  document: {
+    version: 1,
+    servers: [
+      { host: 'paper.example.net', port: 25565, addedAt: '2026-11-23T12:00:00.000Z' },
+      { host: 'sky.example.net', port: 25566, addedAt: null }
+    ]
+  }
+}
+
+test('the allowed servers render beside the attach whitelist, with the two writes', () => {
+  const card = renderCard(puppet, facts(), attachList, allowedList)
+  assert.match(card, /<h3>Allowed servers<\/h3>/)
+  // The address, which is the name the route uses for a server and the path its
+  // removal takes. A missing addedAt says so instead of printing nothing.
+  assert.match(card, /paper\.example\.net:25565/)
+  assert.match(card, /added 2026-11-23T12:00:00\.000Z/)
+  assert.match(card, /added no added-at recorded/)
+  // The read instant and the ConfigMap's version in the card's footer, called a
+  // version: the list itself carries no clock, because a tick redraws it on change.
+  assert.match(card, /and the allowed servers read at 2026-11-18T10:37:24\.906Z at ConfigMap resourceVersion 41222 \(a version, not a time\)/)
+  // One field, because the route names a server by host:port and a phone operator
+  // pastes one thing. The page splits it into the route's two fields.
+  assert.match(card, /<form class="write" method="post" data-write="add-server" action="\/api\/puppets\/glowsquidye\/allowed-servers">/)
+  assert.match(card, /<input name="server"/)
+  assert.doesNotMatch(card, /name="port"/, 'the route takes two fields, and the page asks for one name')
+  assert.match(card, /add an allowed server/, 'the glossary names it, and the button uses the name')
+  // One answer area for the block, outside the list the tick replaces.
+  const block = card.slice(card.indexOf('<section class="allowed-block'), card.indexOf('</section>', card.indexOf('<section class="allowed-block')))
+  assert.match(block, /<output class="result block-result"/)
+  const rows = [...block.matchAll(/<li class="entry">([\s\S]*?)<\/li>/g)].map(match => match[1])
+  assert.equal(rows.length, 2, 'one row per server')
+  for (const row of rows) assert.doesNotMatch(row, /<output/, 'no answer is printed inside a row')
+  // The removal names the address in the path the route takes, and the address is the
+  // key the page holds its armed confirmation under, because a tick replaces the button.
+  assert.match(card, /data-write="remove-server" data-key="paper\.example\.net:25565" data-name="paper\.example\.net:25565" action="\/api\/puppets\/glowsquidye\/allowed-servers\/paper\.example\.net%3A25565"/)
+  assert.match(card, /data-armed="false"/, 'a removal starts unarmed')
+  // Beside the whitelist block, after the live region closes: a tick must not reach
+  // either form.
+  const liveEnd = card.indexOf('</div>', card.indexOf('<div class="live"'))
+  assert.ok(card.indexOf('<section class="allowed-block') > liveEnd, 'the block sits outside the live region')
+  assert.ok(card.indexOf('<section class="allowed-block') > card.indexOf('<section class="attach-block'),
+    'the allowed servers sit beside the attach whitelist')
+})
+
+test('the allowed servers tell an empty list, an unread one, and the committed copy apart', () => {
+  const empty = renderCard(puppet, facts(), attachList, {
+    observedAt: '2026-11-18T10:37:24.906Z', resourceVersion: '7', source: 'control', document: { version: 1, servers: [] }
+  })
+  assert.match(empty, /no allowed servers: the picker offers a joining player nothing/)
+
+  // The live key is absent, so the lane offers the copy Git commits. That is a fact
+  // about which file answered, and an operator editing the list has to see it: the
+  // first write is built on that copy.
+  const seed = renderCard(puppet, facts(), attachList, {
+    observedAt: '2026-11-18T10:37:24.906Z', resourceVersion: '7', source: 'seed', document: allowedList.document
+  })
+  assert.match(seed, /<code>monoplayer-config<\/code>/, 'the seed ConfigMap is named')
+  assert.match(seed, /Git commits/)
+
+  const failed = renderCard(puppet, facts(), attachList, {
+    observedAt: '2026-11-18T10:37:24.906Z', failure: 'read ConfigMap monoplayer/monoplayer-control: the API server answered 403 Forbidden'
+  })
+  assert.match(failed, /the allowed servers could not be read: read ConfigMap/)
+  assert.doesNotMatch(failed, /no allowed servers/, 'a read that failed is never drawn as an empty list')
+
+  const unread = renderCard(puppet, facts(), attachList)
+  assert.match(unread, /the panel did not read the allowed servers for this page/)
+})
+
+// The client script has no unit test, because the repository has no DOM to run it in. What
+// can be checked is the join between the two: every removal the page renders is one the
+// script's armed paint knows about. A selector that named one block's buttons would leave
+// the other's second press invisible, and the operator would watch a button say "remove"
+// while the press beside it sent the deletion.
+test('the client arming selector names every removal the page renders', () => {
+  const card = renderCard(puppet, facts(), attachList, allowedList)
+  const kinds = [...new Set([...card.matchAll(/data-write="(remove[a-z-]*)"/g)].map(match => match[1]))].sort()
+  assert.deepEqual(kinds, ['remove', 'remove-server'], 'the page renders both blocks\' removals')
+  const script = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'panel', 'public', 'panel.js'), 'utf8')
+  const paint = script.slice(script.indexOf('function paintArmed'), script.indexOf('function written'))
+  const selector = /querySelectorAll\('([^']+)'\)/.exec(paint)?.[1] ?? ''
+  for (const kind of kinds) {
+    assert.match(selector, new RegExp('data-write="' + kind + '"'), 'the armed paint covers data-write="' + kind + '"')
+  }
 })
 
 test('the scene is decoration: no number, no word, nothing a colour would have to say', () => {

@@ -59,6 +59,14 @@ const attachFor = (name, players = []) => ({
   }
 })
 
+// The recorded allowed-server list (#309), which every fixture needs for the same
+// reason: the page draws that block beside the whitelist for every puppet it shows.
+// `document` is the live key in the control ConfigMap; `seed` is the copy Git commits,
+// which answers when the live key is absent.
+const allowedFor = (name, servers = []) => ({
+  [name]: { document: { version: 1, servers } }
+})
+
 // The smallest client the page needs to render a card: a Deployment with a selector, no
 // pods, and a control ConfigMap with an empty attach whitelist.
 const kubeFor = () => ({
@@ -171,7 +179,13 @@ test('fixture mode and a registry are two sources, and the panel reads one', asy
 
 test('a rewrite of the fixture reaches the next read, which is how the stream rolls', async () => {
   const first = factsFor('glowsquidye')
-  const file = fixtureFile({ version: 1, puppets: [puppet()], facts: { glowsquidye: first }, whitelist: attachFor('glowsquidye') })
+  const file = fixtureFile({
+    version: 1,
+    puppets: [puppet()],
+    facts: { glowsquidye: first },
+    whitelist: attachFor('glowsquidye'),
+    allowed: allowedFor('glowsquidye')
+  })
   const panel = await startPanel({
     argv: ['--fixture', file, '--port', '0', '--host', '127.0.0.1'],
     io: quiet,
@@ -184,7 +198,13 @@ test('a rewrite of the fixture reaches the next read, which is how the stream ro
     // The operator's live roll: the recording is rewritten, and the next request
     // reads the new one, exactly as the registry is re-read.
     const later = factsFor('glowsquidye', { now: Date.parse('2026-11-18T10:39:12.906Z') })
-    fs.writeFileSync(file, JSON.stringify({ version: 1, puppets: [puppet()], facts: { glowsquidye: later }, whitelist: attachFor('glowsquidye') }))
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      puppets: [puppet()],
+      facts: { glowsquidye: later },
+      whitelist: attachFor('glowsquidye'),
+      allowed: allowedFor('glowsquidye')
+    }))
     const next = await (await fetch(url)).json()
     assert.equal(next.observedAt, '2026-11-18T10:39:12.906Z')
     assert.notEqual(next.observedAt, first.observedAt)
@@ -210,8 +230,42 @@ test('the committed fixture holds the states a reviewer has to see', () => {
   }
 })
 
+test('the committed fixture carries the allowed servers, in both the states the block draws', () => {
+  const { registry, allowed } = parseFixture(fs.readFileSync(FIXTURE, 'utf8'))
+  // Every puppet the page draws has one: a recording that omitted it would render a
+  // block with nothing in it, which is the hole #309 closed.
+  for (const puppet of registry.puppets) {
+    assert.ok(allowed.get(puppet.name) !== undefined, 'no recorded allowed servers for ' + puppet.name)
+  }
+  const counts = registry.puppets.map(puppet => allowed.get(puppet.name).document.servers.length)
+  assert.ok(counts.includes(0), 'a puppet whose picker offers nothing: ' + counts.join(', '))
+  assert.ok(counts.some(count => count > 0), 'a puppet with servers: ' + counts.join(', '))
+  const withServers = registry.puppets.find(puppet => allowed.get(puppet.name).document.servers.length > 0)
+  for (const server of allowed.get(withServers.name).document.servers) {
+    assert.match(server.host, /^[a-z0-9.-]+$/, 'a host a dial can target: ' + server.host)
+    assert.ok(Number.isInteger(server.port) && server.port > 0 && server.port < 65_536, 'a port a dial can target')
+    assert.match(server.addedAt, /^\d{4}-\d{2}-\d{2}T/, 'every server carries the time it was added')
+  }
+  // And the fallback the other key has: one puppet offers the copy Git commits, so the
+  // block's seed sentence is on the page a reviewer screenshots.
+  const sources = registry.puppets.map(puppet => allowed.get(puppet.name).source)
+  assert.ok(sources.includes('control'), 'a puppet whose live key holds the list: ' + sources.join(', '))
+  assert.ok(sources.includes('seed'), 'a puppet offering the copy Git commits: ' + sources.join(', '))
+  // The puppet with both recorded reads its live key, because that is the rule the route
+  // applies: the seed answers only while the live key is absent.
+  const both = registry.puppets.find(puppet => allowed.get(puppet.name).live !== null && allowed.get(puppet.name).seed !== null)
+  assert.ok(both !== undefined, 'a puppet records both the live key and its seed')
+  assert.equal(allowed.get(both.name).source, 'control')
+})
+
 test('a fixture the panel cannot act on is refused by name', () => {
-  const base = { version: 1, puppets: [puppet()], facts: { glowsquidye: factsFor('glowsquidye') }, whitelist: attachFor('glowsquidye') }
+  const base = {
+    version: 1,
+    puppets: [puppet()],
+    facts: { glowsquidye: factsFor('glowsquidye') },
+    whitelist: attachFor('glowsquidye'),
+    allowed: allowedFor('glowsquidye')
+  }
   const cases = [
     ['{"version":1,"puppets":[', /fixture: not JSON/],
     ['[]', /fixture: the document is not an object/],
@@ -232,7 +286,23 @@ test('a fixture the panel cannot act on is refused by name', () => {
     // Every field a whitelist record may hold is named, so a misspelling is refused
     // instead of becoming a recording that silently names no puppet account.
     [JSON.stringify({ ...base, whitelist: { glowsquidye: { ...attachFor('glowsquidye').glowsquidye, puppetUUID: 'x' } } }),
-      /whitelist\["glowsquidye"\] has the unknown key "puppetUUID"/]
+      /whitelist\["glowsquidye"\] has the unknown key "puppetUUID"/],
+    // The allowed servers are the same bargain: one record per puppet, every field
+    // named, and the document judged by the route's own parser so a recording cannot
+    // hold a list the panel would refuse to show.
+    [JSON.stringify({ ...base, allowed: undefined }), /allowed must be an object keyed by puppet name/],
+    [JSON.stringify({ ...base, allowed: {} }), /allowed has no entry for "glowsquidye"/],
+    [JSON.stringify({ ...base, allowed: { ...allowedFor('glowsquidye'), nobody: {} } }), /an entry for "nobody"/],
+    [JSON.stringify({ ...base, allowed: { glowsquidye: {} } }),
+      /allowed\["glowsquidye"\] names neither a live document nor a seed/],
+    [JSON.stringify({ ...base, allowed: { glowsquidye: { document: { version: 1, servers: [{ host: 'paper.example.net', port: '25565' }] } } } }),
+      /allowed\["glowsquidye"\]\.document: servers\[0\]\.port must be an integer between 1 and 65535/],
+    // And the seed is judged by the same parser, so a recording cannot hold a fallback
+    // the lane would refuse to read.
+    [JSON.stringify({ ...base, allowed: { glowsquidye: { seed: { version: 1, servers: [{ host: 'paper.example.net', port: 70000 }] } } } }),
+      /allowed\["glowsquidye"\]\.seed: servers\[0\]\.port must be an integer between 1 and 65535/],
+    [JSON.stringify({ ...base, allowed: { glowsquidye: { ...allowedFor('glowsquidye').glowsquidye, documents: {} } } }),
+      /allowed\["glowsquidye"\] has the unknown key "documents"/]
   ]
   for (const [text, expected] of cases) {
     assert.throws(() => parseFixture(text), expected)
@@ -244,7 +314,8 @@ test('a fixture with only one puppet for two registry rows names the one it lack
     version: 1,
     puppets: [puppet(), puppet({ name: 'quiet', controlConfigMap: 'quiet-control', deployment: 'quiet' })],
     facts: { glowsquidye: factsFor('glowsquidye') },
-    whitelist: { ...attachFor('glowsquidye'), ...attachFor('quiet') }
+    whitelist: { ...attachFor('glowsquidye'), ...attachFor('quiet') },
+    allowed: { ...allowedFor('glowsquidye'), ...allowedFor('quiet') }
   })
   assert.throws(() => parseFixture(text), /no recorded document for "quiet"/)
 })
@@ -266,11 +337,11 @@ test('the panel serves a fixture and writes nothing', async () => {
     const refused = await post('/api/puppets/glowsquidye/whitelist', { uuid: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af' })
     assert.equal(refused.status, 503)
     assert.match(await refused.text(), /fixture mode is a recording, so no document was written/)
-    // The other write reads its document before it can replace it, so a recording
-    // that holds no copy answers there instead. Either way nothing is written.
-    const unreadable = await post('/api/puppets/glowsquidye/allowed-servers', { host: 'paper.example.net', port: 25565 })
-    assert.equal(unreadable.status, 503)
-    assert.match(await unreadable.text(), /no recorded puppet owns/)
+    // The allowed servers are recorded (#309), so this write reads the recording's
+    // document and then reaches the write a recording refuses, by name.
+    const servers = await post('/api/puppets/glowsquidye/allowed-servers', { host: 'new.example.net', port: 25565 })
+    assert.equal(servers.status, 503)
+    assert.match(await servers.text(), /the allowed-server list was not written: fixture mode is a recording/)
   } finally {
     await panel.close()
   }
@@ -304,6 +375,43 @@ test('a panel reading a cluster carries no recording banner', async () => {
   } finally {
     server.closeAllConnections?.()
     await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('the allowed servers are read from the recording, and the two states are on the page', async () => {
+  const panel = await startPanel({
+    argv: ['--fixture', FIXTURE, '--port', '0', '--host', '127.0.0.1'],
+    io: quiet,
+    tokenFile: '/nonexistent/token'
+  })
+  const url = 'http://127.0.0.1:' + panel.port
+  try {
+    // The route the page calls answers out of the recording, through the reader the
+    // route would use in a pod.
+    const listed = await fetch(url + '/api/puppets/glowsquidye/allowed-servers')
+    assert.equal(listed.status, 200)
+    const list = await listed.json()
+    assert.equal(list.source, 'control')
+    // One ConfigMap, one version: the recording names it once, in the whitelist record.
+    assert.equal(list.resourceVersion, '41221')
+    assert.deepEqual(list.servers.map(server => server.host + ':' + server.port), ['paper.example.net:25565', 'sky.example.net:25566'])
+
+    // The other puppet's live key is absent, so the lane offers the copy Git commits,
+    // and the answer says which file it read.
+    const seed = await (await fetch(url + '/api/puppets/quiet/allowed-servers')).json()
+    assert.equal(seed.source, 'seed')
+    assert.equal(seed.count, 0)
+
+    // And both are on the page: the fixture's whole job is that a reviewer can see the
+    // block before it is merged.
+    const page = await (await fetch(url + '/')).text()
+    assert.match(page, /<h3>Allowed servers<\/h3>/)
+    assert.match(page, /paper\.example\.net:25565/)
+    assert.match(page, /sky\.example\.net:25566/)
+    assert.match(page, /no allowed servers: the picker offers a joining player nothing/)
+    assert.match(page, /<code>monoplayer-quiet-config<\/code>/, 'the puppet whose list is the copy Git commits says so')
+  } finally {
+    await panel.close()
   }
 })
 

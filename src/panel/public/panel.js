@@ -1,4 +1,4 @@
-// The page's writes: the two attach-whitelist changes.
+// The page's writes: the attach whitelist's two changes, and the allowed servers'.
 //
 // The write routes require Content-Type: application/json, and that is the guard
 // rather than a convention: it is not a CORS-safelisted content type, so a browser
@@ -10,8 +10,10 @@
 // only the writing. Each form names what it is in data-write, and the shape of the
 // request is that name's business:
 //
-//   add       POST {uuid} or {name}, one of the two, never both
-//   remove    DELETE, with the uuid already in the form's action
+//   add            POST {uuid} or {name}, one of the two, never both
+//   remove         DELETE, with the uuid already in the form's action
+//   add-server     POST {host, port}, split out of the one host:port field
+//   remove-server  DELETE, with the host:port already in the form's action
 //
 // Three answers, three renderings (#232's refusals, #248's block):
 //
@@ -28,8 +30,9 @@
 // both: the stream replaces the list whenever it changes, so anything held in a row
 // would be thrown away under the operator.
 //
-//   the armed removal   keyed by uuid, re-painted onto the button the tick replaced,
-//                       so the confirmation survives a redraw between the two presses
+//   the armed removal   keyed by the entry's uuid or the server's host:port, and
+//                       re-painted onto the button the tick replaced, so the
+//                       confirmation survives a redraw between the two presses
 //   the last answer     there is one answer area per block, outside the list, so a
 //                       refusal is not taken away with the row it was about
 
@@ -44,7 +47,7 @@ const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$
 const ARM_MS = 10_000
 let armed = null
 
-const resultOf = (form) => form.closest('.attach-block')?.querySelector('.block-result') ?? null
+const resultOf = (form) => form.closest('.control-block')?.querySelector('.block-result') ?? null
 
 const outcome = (form, text, kind) => {
   const out = resultOf(form)
@@ -56,12 +59,14 @@ const outcome = (form, text, kind) => {
 
 // Every remove button in the document, painted from the one armed value. Called after
 // a swap as well as after a press, which is what makes the confirmation survive the
-// tick that replaced the button.
+// tick that replaced the button. Both blocks' buttons are here: `remove` for an
+// attach whitelist entry and `remove-server` for an allowed server, and a selector
+// that named one would leave the other's second press invisible.
 function paintArmed () {
-  for (const form of document.querySelectorAll('form[data-write="remove"]')) {
+  for (const form of document.querySelectorAll('form[data-write="remove"], form[data-write="remove-server"]')) {
     const button = form.querySelector('button')
     if (button === null) continue
-    const on = armed !== null && form.dataset.uuid === armed.uuid && armed.until > Date.now()
+    const on = armed !== null && form.dataset.key === armed.key && armed.until > Date.now()
     button.dataset.armed = on ? 'true' : 'false'
     button.classList.toggle('armed', on)
     button.textContent = on ? 'confirm: remove ' + armed.name : 'remove'
@@ -83,13 +88,19 @@ function written (form, text) {
     return text.trim()
   }
   const kind = form.dataset.write
-  if (kind === 'add' || kind === 'remove') {
-    const who = answer?.name ?? answer?.uuid ?? 'the account'
+  // One answer area, two vocabularies: the attach whitelist writes about an account,
+  // the allowed servers about an address. Each says what its route answered in.
+  const account = kind === 'add' || kind === 'remove'
+  const server = kind === 'add-server' || kind === 'remove-server'
+  if (account || server) {
+    const what = account
+      ? answer?.name ?? answer?.uuid ?? 'the account'
+      : answer?.server ?? 'the server'
     const already = answer?.changed === false ? 'already there, so nothing was rewritten: ' : ''
     const version = answer?.resourceVersion === null || answer?.resourceVersion === undefined
       ? ' the route named no ConfigMap version'
       : ' at ConfigMap resourceVersion ' + answer.resourceVersion + ', which is a version and not a time'
-    return already + (kind === 'add' ? 'added ' : 'removed ') + who + version +
+    return already + (kind === 'add' || kind === 'add-server' ? 'added ' : 'removed ') + what + version +
       '. The list redraws on the next change, within 5 s.'
   }
   return text.trim()
@@ -104,6 +115,18 @@ function body (form, data) {
     // once, so the page decides from what the operator typed.
     return UUID.test(value) ? { uuid: value } : { name: value }
   }
+  if (kind === 'add-server') {
+    // One field, two fields: the list, the removal path and a picker row all name a
+    // server by host:port, so that is what the page asks for, and the route's host and
+    // port are split out of it here. The split is the route's own rule, and a value
+    // that does not split is sent as a host the route refuses in its own words rather
+    // than as a sentence invented on this side.
+    const value = String(data.get('server') ?? '').trim()
+    const colon = value.lastIndexOf(':')
+    if (colon <= 0) return { host: value, port: null }
+    const port = value.slice(colon + 1)
+    return { host: value.slice(0, colon), port: /^[0-9]+$/.test(port) ? Number(port) : null }
+  }
   return null
 }
 
@@ -114,17 +137,17 @@ document.addEventListener('submit', async (event) => {
 
   const button = form.querySelector('button')
   const kind = form.dataset.write
-  if (kind === 'remove') {
-    const uuid = form.dataset.uuid
+  if (kind === 'remove' || kind === 'remove-server') {
+    const key = form.dataset.key
     // Already armed for this row: this press is the confirmation.
-    if (armed !== null && armed.uuid === uuid && armed.until > Date.now()) {
+    if (armed !== null && armed.key === key && armed.until > Date.now()) {
       armed = null
       paintArmed()
     } else {
-      armed = { uuid, name: form.dataset.who ?? 'this entry', until: Date.now() + ARM_MS }
+      armed = { key, name: form.dataset.name ?? 'this entry', until: Date.now() + ARM_MS }
       paintArmed()
       setTimeout(() => {
-        if (armed === null || armed.uuid !== uuid) return
+        if (armed === null || armed.key !== key) return
         armed = null
         paintArmed()
       }, ARM_MS)
@@ -133,7 +156,7 @@ document.addEventListener('submit', async (event) => {
   }
 
   const payload = body(form, new FormData(form))
-  const method = kind === 'remove' ? 'DELETE' : 'POST'
+  const method = kind === 'remove' || kind === 'remove-server' ? 'DELETE' : 'POST'
 
   form.setAttribute('aria-busy', 'true')
   if (button !== null) button.disabled = true
