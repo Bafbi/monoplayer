@@ -293,12 +293,21 @@ function accountHint () {
 }
 
 // #391: the identity an offline body speaks as, derived from its name the way an
-// offline server derives it for every client (src/legs/offline-identity.js). A
-// lane names the name and the UUID follows. An operator's own UUID claim stands,
-// because it is an assertion about the lane rather than a derivation of the name.
+// offline server derives it for every client (src/legs/offline-identity.js).
+//
+// A configured UUID can only agree with that derivation or be wrong. The backend
+// derives the UUID from the name on its side, so a lane that carried the other
+// one would name a player the server does not have: in the skin frame, and in the
+// start record. A disagreement is refused, never overridden.
 export function offlinePuppet ({ username = null, uuid = null } = {}) {
   const name = username ?? OFFLINE_PUPPET_USERNAME
-  return { username: name, uuid: uuid ?? offlineUuid(name) }
+  const derived = offlineUuid(name)
+  if (uuid !== null && normalizeUuid(uuid) !== derived) {
+    throw new TypeError(
+      'offline_puppet_uuid_mismatch: config asserts ' + uuid + ', and the offline UUID of ' +
+      name + ' is ' + derived)
+  }
+  return { username: name, uuid: derived }
 }
 
 // #391: the two legs this process builds, and the only place the offline branch
@@ -510,7 +519,16 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // the UUID follows from it, so the custody tree is never opened and a lane
   // boots on a pod with no account volume at all.
   if (cfg.offlineLegs === true) {
-    const puppet = offlinePuppet(cfg.puppet)
+    // The same refusal the live branch gives a mismatched puppet UUID, with the
+    // name an offline lane can act on: there is no account to resolve, so the
+    // name is the identity and the UUID follows from it.
+    let puppet
+    try {
+      puppet = offlinePuppet(cfg.puppet)
+    } catch (error) {
+      stderr.write('monoplayer --start: ' + error.message + '\n')
+      return 2
+    }
     cfg.puppet.username = puppet.username
     cfg.puppet.uuid = puppet.uuid
   }
