@@ -86,7 +86,7 @@ export function createWhitelistStore ({
   role = 'attach',
   // #229: re-read the file at each read, so a control document an operator edits
   // between two logins takes effect on the next one. Off by default: a lane that
-  // never set config.control.file keeps the single read it always did.
+  // names no control file keeps the single read it always did.
   reloadEachUse = false,
   // #229: told when the file cannot be read or parsed, so a control lane can name
   // the file instead of denying every login in silence. Every other lane ignores

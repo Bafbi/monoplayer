@@ -156,8 +156,6 @@ function renderStart (facts) {
     row('configured backend', sourced(facts.backend.configured) ?? 'unknown, and no start record is in the tail'),
     row('registry backend', sourced(facts.backend.registry)),
     row('attach whitelist at start', whitelistText),
-    row('control file', control.file),
-    row('backend switch', yesno(control.allowBackendSwitch)),
     row('whitelist reload', yesno(control.whitelistReload))
   ]))
   return lines.join('')

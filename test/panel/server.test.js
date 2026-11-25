@@ -25,7 +25,6 @@ const puppet = {
   seedConfigMap: 'monoplayer-config',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
-  allowBackendSwitch: true
 }
 
 const registry = () => ({ version: 1, puppets: [puppet] })
