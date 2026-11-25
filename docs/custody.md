@@ -303,11 +303,22 @@ node src/custody/cli.js status --refresh           # silent refresh, guarded
 node src/custody/cli.js whitelist attach add <player-name-or-uuid>
 node src/custody/cli.js whitelist attach remove <name-or-uuid>
 
-# backend whitelist (puppet only; through the existing gate-b rcon adapter):
-node src/custody/cli.js whitelist backend add <puppet-name>          # add + reload
-node src/custody/cli.js whitelist backend remove <puppet-name>
+# backend whitelist (puppet only; through src/driver/rcon.js). --namespace is
+# required: one command writes one Paper's whitelist. It names the namespace
+# that holds the Paper Deployment: monoplayer-dev here, a gate lane from
+# `mise run lanes` for the gate Papers. The live namespace monoplayer holds the
+# proxy and the playit agent, not a Paper, so this command cannot edit a Paper
+# there:
+node src/custody/cli.js whitelist backend add <puppet-name> --namespace monoplayer-dev   # add + reload
+node src/custody/cli.js whitelist backend remove <puppet-name> --namespace monoplayer-dev
 ```
 
+- `whitelist backend` addresses its Paper with `--namespace` (required) and
+  `--deployment` (default `paper`). It prints
+  `paper: namespace=<ns> deployment=<dep>` before the write, so the operator
+  reads which Paper changes. Only those two flags name the Paper. The lane this
+  checkout derives, `GATEB_RCON_NAMESPACE`, and `GATEB_RCON_DEPLOYMENT` name a
+  driver run's Paper, and a whitelist write is not a run.
 - Names are resolved to UUIDs **at add time** (`minecraftservices.com`
   profile lookup first, legacy `api.mojang.com` fallback); the file stores
   `{uuid, name, addedAt}` normalized lowercase-hyphenated. Display names are
@@ -379,8 +390,9 @@ Everything except step 2 is unattended.
    UUID enters the vault through `whitelist attach add <player>` (record the
    resolved UUID). The two UUIDs must differ; a missing multi-account
    situation is a smoke, never a pass (`twoAccount=false` in reports).
-   Backend whitelist (`whitelist backend add <puppet>`) then holds exactly
-   the puppet; the attach whitelist exactly the player.
+   Backend whitelist (`whitelist backend add <puppet> --namespace <ns>`, the
+   namespace that holds the Paper) then holds exactly the puppet; the attach
+   whitelist exactly the player.
 5. **Attach allow (live fixture)** — run the Monoplayer front leg (or the
    minimal `src/custody/fixture.js` fixture) with the attach whitelist as
    configured; log into `127.0.0.1:25565` from Prism as the player. Pass =

@@ -27,8 +27,17 @@
 //   node src/custody/cli.js device-code --dir <accountDir>
 //   node src/custody/cli.js status [--account ...] [--json] [--refresh] [--secrets-dir <dir>]
 //   node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]
-//   node src/custody/cli.js whitelist <attach|backend> add|remove <name-or-uuid>
-//        [--file <secretsDir>/attach-whitelist.json] [--secrets-dir <dir>] [--namespace ... --deployment ...]
+//   node src/custody/cli.js whitelist attach add|remove <name-or-uuid>
+//        [--file <secretsDir>/attach-whitelist.json] [--secrets-dir <dir>]
+//   node src/custody/cli.js whitelist backend add|remove <name-or-uuid> --namespace <ns>
+//        [--deployment <dep>] [--secrets-dir <dir>]
+//
+// `whitelist backend` writes to one Paper server. The namespace and the deployment
+// are the whole address, so the operator supplies the namespace and no default
+// stands in for it. A custody write is not a run, so it has no lane. A default that
+// followed the checkout edited this worktree's gate Paper while the operator meant
+// another server (#328). The resolved Paper is printed before the write, so a human
+// reads which server is about to change.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -51,6 +60,13 @@ import { createRcon } from '../driver/rcon.js'
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SECRETS_DIR = path.join(REPO_ROOT, '.secrets')
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/
+// The Paper Deployment a backend whitelist write reaches when `--deployment` is
+// absent. It repeats src/driver/rcon.js's own default on purpose. Custody may take
+// only the RCON adapter from the driver lane, so the constant cannot be imported.
+// This command also must not read that adapter's environment to find the
+// deployment (test/custody/imports.test.js).
+const BACKEND_DEPLOYMENT = 'paper'
+
 
 class UsageError extends Error {}
 
@@ -123,7 +139,8 @@ const USAGE = [
   '  node src/custody/cli.js device-code --dir <accountDir>',
   '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--secrets-dir <dir>] [--json] [--refresh]',
   '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]',
-  '  node src/custody/cli.js whitelist attach|backend add|remove <name-or-uuid> [--file <path>] [--secrets-dir <dir>] [--namespace <ns>] [--deployment <dep>]',
+  '  node src/custody/cli.js whitelist attach add|remove <name-or-uuid> [--file <path>] [--secrets-dir <dir>]',
+  '  node src/custody/cli.js whitelist backend add|remove <name-or-uuid> --namespace <ns> [--deployment <dep>] [--secrets-dir <dir>]',
 ].join('\n')
 
 function fail (message, code = 1) {
@@ -147,6 +164,16 @@ function lockRefusal (message, holder) {
   // Exit code 2: refused, not failed — the caller should not retry blindly.
   process.stderr.write(`refused: ${message}${holder?.pid ? ` (holder pid ${holder.pid})` : ''}\n`)
   process.exit(2)
+}
+
+// A backend flag that is present and empty names nothing. kubectl would take the
+// namespace its own context carries, so the write would land on a Paper nobody
+// named, which is the failure this command refuses to have.
+function backendValue (args, flag) {
+  const value = args[flag]
+  if (value === undefined) return undefined
+  if (String(value).trim() === '') usageFail(`--${flag} needs a value, and an empty one names no Paper`)
+  return value
 }
 
 function emitReport (text) {
@@ -502,9 +529,32 @@ async function main () {
 
       // backend scope: through the existing rcon adapter (server resolves
       // and persists its own whitelist.json).
-      const whitelist = createBackendWhitelist({
-        rcon: createRcon({ namespace: args.namespace, deployment: args.deployment }),
+      //
+      // The namespace is the operator's to name. The adapter's own default is the
+      // lane this checkout derives (#282). That is right for a run and wrong here
+      // (#328), so a missing flag refuses before any call. GATEB_RCON_NAMESPACE and
+      // GATEB_RCON_DEPLOYMENT name a driver run's Paper, so neither may fill in a
+      // missing namespace. Neither may move the deployment, because a stale
+      // environment would redirect a whitelist write.
+      const namespace = backendValue(args, 'namespace')
+      if (namespace === undefined) {
+        // The examples name Papers this repo deploys. The live namespace holds the
+        // proxy and the playit agent, not a Paper, so it is not one of them.
+        usageFail([
+          'whitelist backend needs --namespace <ns>: it writes one Paper\'s whitelist, and no default is right for every checkout',
+          'hint: the dev lane is --namespace monoplayer-dev --deployment paper',
+          '      the gate lanes this cluster has: mise run lanes',
+        ].join('\n'))
+      }
+      const rcon = createRcon({
+        namespace,
+        // Defaulted here rather than left to the adapter, so no environment
+        // variable can move it.
+        deployment: backendValue(args, 'deployment') ?? BACKEND_DEPLOYMENT,
       })
+      // Before the write, so a human sees which Paper is about to change.
+      process.stdout.write(`paper: namespace=${rcon.namespace} deployment=${rcon.deployment}\n`)
+      const whitelist = createBackendWhitelist({ rcon })
       if (action === 'add') {
         const results = await whitelist.add(identifier)
         process.stdout.write(`add: ${(results.add.ok ? results.add.output : results.add.stderr) || '(no output)'}\n`)
