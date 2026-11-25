@@ -788,11 +788,14 @@ The allowed-server list is its own key with its own fallback: see
   takes a world away from a client that still holds the claim. An armed retry is
   cleared on the way down, and `connectClaimedBody` dials out of `down` the way
   it dials out of `boot` and `failed`.
-- (#261) What this does not do: a fault under a *driver* still ends that driver's
-  connection, whatever the claim says. The claim buys the body a retry, and the
-  driver rejoins to find it. Keeping the connection needs a same-connection
-  reconfiguration round that a fault starts, with somewhere to put the driver
-  when the body cannot come back (#334).
+- (#261) What a loopback can prove: O65 takes a body nobody claims through a
+  fault, and the body lands in `down` with no retry armed, the row says `down`,
+  and a claim dials it back. What it cannot prove: a fault under a *driver* still
+  ends that driver's connection, whatever the claim says. The claim buys the body a
+  retry, and the driver rejoins to find it; the seam proves that retry and the fresh
+  login (`test/service/body-lifecycle.test.js`). Keeping the connection needs a
+  same-connection reconfiguration round that a fault starts, with somewhere to put
+  the driver when the body cannot come back (#334).
 - `backendLogins` increments **only** on real backend `login` frames. An
   attach/detach cycle alone leaves it untouched (tested: stays 1 across
   warm → attach → detach → reattach).
