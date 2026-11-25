@@ -450,7 +450,18 @@ listing the lane's allowed servers.
   cannot be parsed is named and ignored. The copy Git commits answers in its place,
   because a broken list must not leave a client in a dialog with no buttons. A lane
   with no such key offers nothing, because the list is what a picker lane offers and
-  not the backend it dials. Each row's name is the canonical `host:port` its claim
+  not the backend it dials.
+
+  A client that joins a lane with nothing to offer hears that in one sentence about
+  the lane (#315). It never picked a server, so no sentence names one. The sentence is
+  the same in every empty state, because the fix is never the client's.
+
+  Why the list is empty is the offer's to say. `pickerOffered` carries `no_key`,
+  `live_missing`, `empty_list`, `seed_missing` or `unreadable` beside the source and
+  the count, and the refusal's own line repeats it. Each word is a different edit: set
+  the variable, write the file, add a server, fix the mount, or repair the file.
+
+  Each row's name is the canonical `host:port` its claim
   dials. A claim labels a body with the row's slug, while the body's state cache is
   keyed by the address the dial names. `pickerRows` normalises a row where it is
   read, so one server is one body id.

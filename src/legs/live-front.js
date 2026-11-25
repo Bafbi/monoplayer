@@ -99,6 +99,7 @@ import {
   claimFailureText,
   claimRestoreTitle,
   disconnectRefusalText,
+  pickEmptyText,
   pickRefusalText,
   pickUnknownText,
   pickerDialogParams,
@@ -516,7 +517,7 @@ function createFrontLeg ({
   if (dumpRaw !== null && typeof dumpRaw !== 'function') throw new TypeError('dumpRaw must be null or a function')
   if (dumpFramed !== null && typeof dumpFramed !== 'function') throw new TypeError('dumpFramed must be null or a function')
   if (pickerServers !== null && typeof pickerServers !== 'function') {
-    throw new TypeError('pickerServers must be null or a function returning rows')
+    throw new TypeError('pickerServers must be null or a function returning an offer: { source, reason, rows }')
   }
   if (onPickerPick !== null && typeof onPickerPick !== 'function') {
     throw new TypeError('onPickerPick must be null or a function')
@@ -1091,17 +1092,27 @@ function createFrontLeg ({
     return interceptor
   }
 
-  // #257: the picker's own rows, from the caller's list. A throw there is a bug
+  // #257: the picker's own rows, from the caller's offer. A throw there is a bug
   // in the lane's configuration, not a reason to leave a client in the dark: the
-  // leg reports an empty list, and an empty picker closes the connection with a
+  // leg reports an empty offer, and an empty picker closes the connection with a
   // reason instead of showing a dialog with no buttons.
-  function pickerServerRows () {
-    let offered = []
+  //
+  // #315: the answer is the offer, `{ source, reason, rows }`, so a join that finds
+  // nothing can say which fact emptied the list without reading the files again. It
+  // is named for what it returns, not for the rows inside it. A reader that throws is
+  // named by its own line, and its reason is null.
+  function pickerOffer () {
+    let offered = { source: 'none', reason: null, rows: [] }
     try {
-      offered = pickerRows(pickerServers() ?? [])
+      const read = pickerServers() ?? null
+      offered = {
+        source: typeof read?.source === 'string' ? read.source : 'none',
+        reason: typeof read?.reason === 'string' ? read.reason : null,
+        rows: pickerRows(read?.rows ?? [])
+      }
     } catch (error) {
       log('pickerServersError', { error: String(error?.message ?? error).slice(0, 200) })
-      return []
+      return offered
     }
     // #259: what each body on a row is doing, read where the rows are handed out,
     // so every dialog a client reads is as old as the click that asked for it. The
@@ -1115,13 +1126,13 @@ function createFrontLeg ({
     // a body whose claim is still held: a row is what this lane can offer, not what
     // it has dialled.
     const served = bodyServedHandler === null ? null : bodyServedHandler()
-    return offered.map(row => {
+    return { ...offered, rows: offered.rows.map(row => {
       const claim = claims.claimOn(row.slug)
       const spectators = channels.on(row.slug)
         .filter(channel => channel.role === CHANNEL_ROLES.SPECTATOR).length
       const up = served !== null && served.body === row.slug && served.up === true
       return pickerRowForBody(row, { up, driver: claim === null ? null : claim.name, spectators })
-    })
+    }) }
   }
 
   // #257: a join with no backend, on a leg that holds a baseline. The client is
@@ -1144,17 +1155,23 @@ function createFrontLeg ({
       username: client.username ?? null,
       uuid: client.uuid ?? null,
       frames: pickerFrames.length,
-      servers: pickerServerRows().length
+      servers: pickerOffer().rows.length
     })
   }
 
   // The frames are on the wire and the client can parse a dialog now. The dialog
   // is the phase: no finish_configuration follows it.
   function sendPickerDialog (client, { title = 'Choose a server' } = {}) {
-    const rows = pickerServerRows()
+    const offer = pickerOffer()
+    const rows = offer.rows
     if (rows.length === 0) {
-      log('pickerEmpty', { username: client.username ?? null })
-      endConfiguration(client, 'picker_empty', pickRefusalText({ server: null }))
+      // #315: the lane offers nothing, and the client hears that. It never picked a
+      // server, so a sentence about one names a choice nobody made. The reason is the
+      // offer's own, repeated here because the offer's line is written once per
+      // distinct answer and the second join on an empty list reads none (#315).
+      const text = pickEmptyText()
+      log('pickerEmpty', { username: client.username ?? null, reason: offer.reason, text })
+      endConfiguration(client, 'picker_empty', text)
       return
     }
     let written = false
@@ -1245,7 +1262,7 @@ function createFrontLeg ({
   // the frame. This is therefore the server the client clicked, not one the leg
   // remembered.
   function handlePickerVerb (client, action) {
-    const server = pickerServerRows().find(row => row.slug === action.slug) ?? null
+    const server = pickerOffer().rows.find(row => row.slug === action.slug) ?? null
     const fields = {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
@@ -1621,7 +1638,7 @@ function createFrontLeg ({
   }
 
   function handlePickerPick (client, action) {
-    const rows = pickerServerRows()
+    const rows = pickerOffer().rows
     const picked = rows.find(row => row.slug === action.slug) ?? null
     metrics.pickerPicks++
     log('pickerPick', {
