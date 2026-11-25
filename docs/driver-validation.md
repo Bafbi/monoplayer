@@ -10,8 +10,8 @@ display host. This is the driver leg of G0, not the unmodded witness.
 | Host | `nath` (Omarchy/Arch, Hyprland 0.56.2, Prism 11.0.3) |
 | Client | Minecraft 26.1.2, Fabric Loader 0.20.1, Java 25.0.1 runtime |
 | Driver | `gate-b-driver` 0.1.0, loopback `127.0.0.1:25599` via SSH tunnel |
-| Backend | Paper 26.1.2 build 74 in `monoplayer-gate-b` |
-| Server | `monoplayer-gate-b-paper.tail41e568.ts.net:25565` (online-mode) |
+| Backend | Paper 26.1.2 build 74 in that run's lane, `monoplayer-gate-b` |
+| Server | `monoplayer-gate-b-paper.tail41e568.ts.net:25565` (online-mode; that run's lane) |
 
 ## Driving the host from the workspace
 
@@ -23,10 +23,15 @@ The driver `quit` needs no session at all.
 ```bash
 tools/nath.sh env
 tools/nath.sh launch gate-b-player-fabric \
-  -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi
+  -s "$(scripts/gate-lane.sh name)-paper.tail41e568.ts.net:25565" -a Bafbi
 tools/nath.sh kill gate-b-player-fabric
 tools/nath.sh shot testdata/witness-2026-11-06.png
 ```
+
+A lane belongs to a worktree, so `-s` names the Paper this checkout derives.
+`scripts/gate-lane.sh name` prints it, and `mise run gate:up` publishes it. A lane
+that never ran `up` is a hostname nothing answers
+([the driver lane](../deploy/driver/README.md)).
 
 - `env` prints `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and the
   signature as `KEY=value`. Prefix each line with `export` when a child process
