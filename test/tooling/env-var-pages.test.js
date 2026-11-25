@@ -73,7 +73,11 @@ function readers () {
   const found = new Map()
   for (const dir of CODE_DIRS) {
     for (const file of walk(path.join(ROOT, dir), () => true)) {
-      for (const line of live(fs.readFileSync(file, 'utf8')).split('\n')) {
+      const bytes = fs.readFileSync(file)
+      // A font or an archive reads no variable, and decoding one would be a guess
+      // about an encoding this guard has no reason to hold.
+      if (bytes.includes(0)) continue
+      for (const line of live(bytes.toString('utf8')).split('\n')) {
         for (const name of names(line)) {
           if (!found.has(name)) found.set(name, new Set())
           found.get(name).add(path.relative(ROOT, file))
