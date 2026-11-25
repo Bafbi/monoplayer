@@ -130,10 +130,11 @@ One fragment per tick, as `data:` lines. A comment line every 15 s is the heartb
 quiet connection. The stream ends when the client closes, and nothing else ends it: a
 puppet that stopped writing still gets a fragment every five seconds that says so.
 
-A tick reads five objects: a Deployment, a pod list, a pod log, and the control
-ConfigMap's two keys, `attach-whitelist.json` and `allowed-servers.json`. The reads run
-together, so a tick waits for the slowest of them and not for each in turn. A tick that
-finds the previous read still pending is **skipped** and logged as
+A tick reads a Deployment, a pod list, a pod log, and the control ConfigMap's two keys,
+`attach-whitelist.json` and `allowed-servers.json`. A puppet whose live
+`allowed-servers.json` key is absent adds one read of its seed ConfigMap, which is the copy
+that answers. The reads run together, so a tick waits for the slowest of them and not for
+each in turn. A tick that finds the previous read still pending is **skipped** and logged as
 `panelStreamTickSkipped`: a slow API server can outlast a tick, and overlapping reads
 would answer out of order. A skipped tick costs one interval of freshness. An out-of-order
 one costs trust in the page.
@@ -667,9 +668,9 @@ The document is a registry's puppets, the facts each one answered, and both cont
 
 `document` is the live key in the control ConfigMap and `seed` is the copy Git commits,
 which answers when the live key is absent. A record names at least one of the two, and both
-when the recording should show which file answered. There is no version in that record,
-because a version belongs to the ConfigMap and not to a key: the whitelist record names the
-object's, and both keys are read from that one object.
+when the recording should show which file answered. That record holds no
+`resourceVersion`, because a version belongs to the ConfigMap and not to a key. The
+whitelist record names the object's version, and both keys are read from that one object.
 
 `src/panel/fixture.js` validates it: the puppets go through the registry's own parser, the
 whitelist document through the whitelist route's, and the allowed servers through the lane's
