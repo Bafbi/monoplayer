@@ -25,7 +25,6 @@ import { fileURLToPath } from 'node:url'
 
 import { parseRegistry } from '../../src/panel/registry.js'
 import { ALLOWED_KEY } from '../../src/panel/routes/allowed.js'
-import { DESIRED_KEY } from '../../src/panel/routes/backend.js'
 import { WHITELIST_KEY } from '../../src/panel/routes/whitelist.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -477,7 +476,6 @@ test('the seed the panel reads is the ConfigMap the lane mounts, and its keys ar
   const env = new Map([...deployment.text.matchAll(/- name: (MONOPLAYER_[A-Z_]+)\n\s+value: (.*)$/gm)]
     .map(match => [match[1], match[2].replace(/^"|"$/g, '')]))
   const pairs = [
-    [DESIRED_KEY, env.get('MONOPLAYER_CONTROL_FILE')],
     [WHITELIST_KEY, env.get('MONOPLAYER_ATTACH_WHITELIST')],
     [ALLOWED_KEY, env.get('MONOPLAYER_ALLOWED_SERVERS')],
     [ALLOWED_KEY, env.get('MONOPLAYER_ALLOWED_SERVERS_SEED')]

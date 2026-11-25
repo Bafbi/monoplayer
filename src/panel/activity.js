@@ -139,8 +139,7 @@ function podFacts (pod, now) {
 }
 
 // The effective backend is the one the last successful dial used, so a puppet
-// that followed a transfer or a desired move shows where it is now, not where it
-// started. `configured` is the config document's target, and `registry` is this
+// that followed a transfer shows where it is now, not where it started. `configured` is the config document's target, and `registry` is this
 // panel's own copy: two different facts, labelled, never merged. `lastDial` is the
 // newest dial of either outcome, because a reconnect that failed in the tail is
 // the difference between "on play2" and "on play2 until three minutes ago".
@@ -289,7 +288,7 @@ function startFacts (start) {
     at: time(start.t).at,
     version: typeof start.version === 'string' ? clean(start.version) : null,
     front: typeof start.front === 'string' ? clean(start.front) : null,
-    control: pick(start.control, ['file', 'allowBackendSwitch', 'whitelistReload'])
+    control: pick(start.control, ['whitelistReload'])
   }
 }
 

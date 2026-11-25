@@ -9,13 +9,12 @@
 //   the live    an element whose innerHTML is replaced by every SSE tick. It
 //    region     carries the state sentence, the scene, and every number with the
 //               timestamp of the record behind it (src/panel/views/live.js).
-//   the actions  the move form and the whitelist block, outside the live region so
-//               a tick cannot overwrite a half-typed host (src/panel/views/forms.js
-//               and src/panel/views/whitelist.js). The whitelist's list is outside
+//   the actions  the whitelist block, outside the live region so a tick cannot
+//               overwrite a half-typed name or an armed remove button
+//               (src/panel/views/whitelist.js). The whitelist's list is outside
 //               too, and the stream refreshes it with an out-of-band swap.
 import { escape, heading, list, row } from './html.js'
 import { renderLive } from './live.js'
-import { renderMoveForm } from './forms.js'
 import { renderWhitelistBlock } from './whitelist.js'
 
 // `attach` is the attach whitelist, read by the caller. It is a separate read from
@@ -40,8 +39,6 @@ export function renderCard (puppet, facts, attach = null) {
     renderLive(facts, attach),
     '  </div>',
     '  <section class="actions">',
-    '    <h3>Move it</h3>',
-    renderMoveForm(puppet),
     renderWhitelistBlock({ puppet, list: attach }),
     '  </section>',
     '</article>',

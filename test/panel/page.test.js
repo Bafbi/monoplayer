@@ -25,7 +25,6 @@ const puppet = {
   seedConfigMap: 'monoplayer-config',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
-  allowBackendSwitch: true
 }
 
 const HEARTBEAT_AT = '2026-11-18T10:37:12.906Z'
@@ -75,22 +74,12 @@ test('the live region is the element the stream swaps, and no form is inside it'
   const liveEnd = card.indexOf('</div>', card.indexOf('<div class="live"'))
   assert.ok(liveEnd > 0)
   assert.ok(card.indexOf('<section class="actions">') > liveEnd, 'the actions sit outside the live region')
-  assert.match(card, /<form class="write" method="post" action="\/api\/puppets\/glowsquidye\/backend"/)
-  assert.match(card, /data-write="backend"/)
-  // The write is JSON, and the route demands it: the page says which content type
-  // it sends so an implementor does not reach for a form-encoded post.
-  assert.match(card, /application\/json|panel\.js|sends exactly what the route demands/)
-})
-
-test('a puppet the registry refuses renders the refusal, and no move form', () => {
-  const refused = { ...puppet, allowBackendSwitch: false }
-  const card = renderCard(refused, facts())
-  assert.doesNotMatch(card, /data-write="backend"/, 'no move form when the registry refuses the move')
-  assert.match(card, /move: refused by the registry/)
-  assert.match(card, /allowBackendSwitch: false/)
-  assert.match(card, /control\.allowBackendSwitch/, 'the second fence is named too')
-  // The whitelist is a different fence and stays: the registry's switch is about the
-  // move, and a lane that refuses to be repointed can still admit a player.
+  // #264: the backend move is retired, so the card offers the whitelist writes and
+  // nothing that names another server. The move's form, its route and its client
+  // handler all went; an action that came back is an action the panel cannot keep.
+  assert.doesNotMatch(card, /data-write="backend"/)
+  assert.doesNotMatch(card, /move the puppet/)
+  assert.doesNotMatch(card, /<h3>Move it<\/h3>/)
   assert.match(card, /data-write="add"/)
 })
 

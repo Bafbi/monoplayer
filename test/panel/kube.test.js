@@ -172,8 +172,8 @@ function patcher (calls = [], responses = {}) {
 }
 
 test('the merge patch keeps every key it does not name', () => {
-  const body = JSON.parse(mergePatchBody({ key: 'desired.json', text: '{ "version": 1 }' }))
-  assert.deepEqual(body, { data: { 'desired.json': '{ "version": 1 }' } },
+  const body = JSON.parse(mergePatchBody({ key: 'allowed-servers.json', text: '{ "version": 1 }' }))
+  assert.deepEqual(body, { data: { 'allowed-servers.json': '{ "version": 1 }' } },
     'RFC 7386 merges objects, so the whitelist beside this key survives the patch')
 })
 
@@ -182,12 +182,12 @@ test('a patch is one authorized request on the object the registry names', async
   const outcome = await kube.patchConfigMapKey({
     namespace: 'monoplayer',
     name: 'monoplayer-control',
-    key: 'desired.json',
+    key: 'allowed-servers.json',
     text: '{ "version": 1 }'
   })
 
   assert.equal(outcome.status, 200)
-  assert.equal(outcome.key, 'desired.json')
+  assert.equal(outcome.key, 'allowed-servers.json')
   assert.equal(typeof outcome.bytes, 'number')
   assert.equal(calls.length, 1)
   const call = calls[0]
@@ -196,7 +196,7 @@ test('a patch is one authorized request on the object the registry names', async
   assert.equal(call.token, 'test-token')
   assert.equal(call.ca, 'test-ca', 'the cluster CA is read from its mounted file')
   assert.equal(call.contentType, 'application/merge-patch+json')
-  assert.equal(call.body, mergePatchBody({ key: 'desired.json', text: '{ "version": 1 }' }))
+  assert.equal(call.body, mergePatchBody({ key: 'allowed-servers.json', text: '{ "version": 1 }' }))
 })
 
 test('a write with no token says so, and sends nothing', async () => {
@@ -207,7 +207,7 @@ test('a write with no token says so, and sends nothing', async () => {
     request: async call => { calls.push(call); return { status: 200, statusText: 'OK', body: '{}' } }
   })
   await assert.rejects(
-    kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'desired.json', text: '{}' }),
+    kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'allowed-servers.json', text: '{}' }),
     error => {
       assert.ok(error instanceof WriteRefused)
       assert.match(error.message, /no service account token at \/nonexistent\/token/)
@@ -226,7 +226,7 @@ test('a write the API server refuses carries the reason it gave', async () => {
     }
   })
   await assert.rejects(
-    refused.kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'desired.json', text: '{}' }),
+    refused.kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'allowed-servers.json', text: '{}' }),
     error => {
       assert.ok(error instanceof WriteRefused)
       assert.equal(error.status, 403)
@@ -236,7 +236,7 @@ test('a write the API server refuses carries the reason it gave', async () => {
 
   const unreachable = patcher([], { [path]: new Error('connect ECONNREFUSED 10.96.0.1:443') })
   await assert.rejects(
-    unreachable.kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'desired.json', text: '{}' }),
+    unreachable.kube.patchConfigMapKey({ namespace: 'monoplayer', name: 'monoplayer-control', key: 'allowed-servers.json', text: '{}' }),
     error => {
       assert.ok(error instanceof WriteRefused)
       assert.equal(error.status, 0)
@@ -250,7 +250,7 @@ test('a write that succeeded says what it wrote, and the token reaches nothing',
   const outcome = await kube.patchConfigMapKey({
     namespace: 'monoplayer',
     name: 'monoplayer-control',
-    key: 'desired.json',
+    key: 'allowed-servers.json',
     text: '{}'
   })
   assert.ok(!JSON.stringify(outcome).includes('test-token'), 'the token is not in a return value')
@@ -273,7 +273,7 @@ test('the ConfigMap read asks for that object, by namespace and name', async () 
       body: JSON.stringify({
         kind: 'ConfigMap',
         metadata: { name: 'monoplayer-control', namespace: 'monoplayer', resourceVersion: '412' },
-        data: { 'attach-whitelist.json': '{ "version": 1, "players": [] }', 'desired.json': '{}' }
+        data: { 'attach-whitelist.json': '{ "version": 1, "players": [] }', 'allowed-servers.json': '{}' }
       })
     }
   })
@@ -304,8 +304,8 @@ test('a merge patch can carry the resourceVersion it read, so a lost race is a 4
     'the version is a precondition on the object, not a second document'
   )
   assert.deepEqual(
-    JSON.parse(mergePatchBody({ key: 'desired.json', text: '{}' })),
-    { data: { 'desired.json': '{}' } },
+    JSON.parse(mergePatchBody({ key: 'allowed-servers.json', text: '{}' })),
+    { data: { 'allowed-servers.json': '{}' } },
     'a write that does not read first sends exactly what it always did'
   )
 })

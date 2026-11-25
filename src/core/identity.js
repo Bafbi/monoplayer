@@ -29,8 +29,8 @@ export const ALLOW_REASONS = Object.freeze({
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 // #229: the whitelist is an array (frozen here, the default) or a provider
-// read at each login. The provider is what config.control.file turns on: an
-// operator adds a UUID to the file on disk and the next login sees it, with no
+// read at each login. The provider is what a named attach whitelist file turns on:
+// an operator adds a UUID to the file on disk and the next login sees it, with no
 // restart. A provider that throws, or that returns anything but an array,
 // denies: a broken control document must never allow a player.
 export function createFrontIdentity ({
