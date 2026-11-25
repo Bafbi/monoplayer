@@ -18,15 +18,61 @@ gets its own account rather than borrowing the live one.
 
 | Piece | Where |
 |---|---|
-| `paper` | `monoplayer-dev`, Paper 26.2, online mode, secure profile, disposable |
+| `paper` | `monoplayer-dev`, Paper 26.2, offline mode, no secure profile, disposable |
 | `monoplayer` | `monoplayer-dev`, the image under test, pointed at that Paper |
 | `monoplayer-dev-custody` | the dev account only, `ReadWriteOnce`, one replica |
-| `monoplayer-dev-config` | the attach whitelist: who may control the dev proxy |
+| `monoplayer-dev-config` | the attach whitelist, and the one row the picker offers |
+| `monoplayer-dev` Service | the front's tailnet name: how a client on another machine reaches the picker |
 
 Nothing here runs in the live namespace, `monoplayer`. Nothing here is in Argo
 CD. `AGENTS.md` states the rule that keeps it that way: no agent takes the live
 lane down, scales it, or patches it for a test. `docs/testing-ladder.md` says
 which lane each run belongs on.
+
+## Offline, and why that is allowed here
+
+The dev lane is the repository's offline picker lane
+([#392](https://github.com/Bafbi/monoplayer/issues/392)). Three things make it one,
+and each is a line in `deploy/dev/`:
+
+- **The front serves the picker.** `MONOPLAYER_PICKER=1` lands a joining client in
+  the picker instead of attaching it to a body as the driver, so it can claim a row
+  or watch one.
+- **The row it offers is a file Git commits.**
+  `MONOPLAYER_ALLOWED_SERVERS_SEED` names `/config/allowed-servers.json`, and the
+  lane's ConfigMap carries exactly one entry: this lane's own Paper, at
+  `paper.monoplayer-dev.svc.cluster.local:25565`. The lane names no live key, so the
+  seed is the list an operator reads in git, and `mise run dev:up` converges the
+  cluster's copy back to it.
+- **The front is on the tailnet as `monoplayer-dev`.** A client on another machine
+  joins `monoplayer-dev.tail41e568.ts.net:25565` with no port-forward. The Paper is
+  not published: a Paper anyone can join directly is a join that never reached a
+  picker.
+
+The Paper runs `ONLINE_MODE=FALSE` and `ENFORCE_SECURE_PROFILE=FALSE`. That is the
+half of [#391](https://github.com/Bafbi/monoplayer/issues/391) this lane can land first:
+a lane that exists to be joined by bots cannot run a Paper that refuses a login Mojang
+never verified. Nothing needs it yet, and nothing is proved by it yet either. The front
+is the Paper's only client, so the Paper's mode decides nothing about who may join the
+lane, and the front still verifies that player against Mojang and the attach whitelist.
+What it costs is the sign-in path this lane used to exercise, which the testbed's online
+Papers still cover.
+
+It is allowed here and nowhere a player reaches. An offline server answers a login under
+any name, so a pod that can reach this Service could join as the puppet; the tree carries
+no NetworkPolicy. What keeps that a dev lane's problem is scope: the Paper has no tailnet
+Service and no published port, so the front is the only client it is meant to have; its
+world is an `emptyDir` with one flat map; and the account behind it is the dev puppet,
+not GlowSquidye. The live lane is the opposite case: it fronts Excalia for real players
+and stays in online mode. The gate lane's M4 Paper is offline for its own reason, behind
+a Velocity that authenticates in front of it and a forwarding secret Paper checks.
+
+What the lane still cannot do is admit two bots. The front verifies a joining client
+against Mojang before it shows a picker, so one front admits one account at a time,
+and the offline legs the loopback rungs use refuse any host but loopback. #391 builds
+them into the composition root. Until it lands this lane serves its picker to an
+authenticated client: a real client, or a bot that holds an account. That client can
+make a claim. What no run does yet is put a second client on the body to watch it.
 
 ## The first run
 
@@ -245,10 +291,14 @@ overwritten.
 
 Proves: a real Paper server and a real Monoplayer run beside the live lane, the
 live lane keeps its replicas and its front for the whole run, and the live
-account's token files do not move.
+account's token files do not move. It also proves the picker serves: the proxy's
+`startLive` line carries `"picker":true` and the seed it read, so a lane that
+offers nothing says so in its own log.
 
 Does not prove: anything about Excalia. The dev Paper has none of its plugins,
-its menus, or its network path. The live servers remain the final oracle.
+its menus, or its network path. The live servers remain the final oracle. It does
+not prove the two-client row either: that needs two clients on one body, and the
+front admits one account at a time until #391 lands.
 
 ## It is not in Argo CD
 
