@@ -1,10 +1,9 @@
 // #259: who may watch a body, and what a spectator's own client is told.
 //
 // Seam: the fake-integration rig (test/support/harness.js), because what a socket
-// hides is exactly the two decisions here — whether a client may watch a given
-// body, and which frames its client gets for it. O62 proves the same path over a
-// real socket, with a real protocol bot and a fake backend that counts what it
-// receives.
+// hides is exactly the two decisions here: whether a client may watch a given body,
+// and which frames its client gets for it. O62 proves the same path over a real
+// socket, with a real protocol bot and a fake backend that counts what it receives.
 //
 // The rule this file pins (#259): any client the lane's identity gate admitted may
 // watch any body the lane serves and has up, whether or not a driver holds it, and
