@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { pickSlug } from '../../src/core/picker.js'
+import { CLAIM_WARM_GRACE_MS } from '../../src/service/monoplayer.js'
 import { makeCore } from '../support/harness.js'
 
 // The body a claim names, and the address its row carried. The address is a server
@@ -240,4 +241,42 @@ test('#258 a body with no cached configuration is not ready for a client, howeve
   assert.equal(settled.connected, false)
   assert.equal(settled.reason, 'body_not_warm')
   assert.equal(settled.warm.configFrames, 0)
+})
+
+// #258 and a real backend: Paper 26.x never sends `chunk_batch_finished` to a
+// protocol-leg client, and the cache's own comment on `forceWarm` says so. The
+// service's startup knows, and pins the prefix after a grace window. The claim
+// path did not, so a claim on a real Paper waited out its deadline, reported
+// `body_not_warm` and gave the picker back, with the body joined and cached.
+// The dev lane is that: claimDialsFailed=2, claimBodies=0, warm=false beside 2179
+// cached frames.
+test('a claim lands on a body whose backend never sends the batch marker', async () => {
+  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  const dial = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  warmABody(backendLeg, { marker: false })
+  // One chunk, which is what a real Paper does send: the fallback releases a
+  // client into terrain, never into an empty world.
+  backendLeg.deliver({ state: 'play', name: 'map_chunk', buffer: Buffer.from('chunk'), data: { x: 0, z: 0 } })
+  clock.tick(CLAIM_WARM_GRACE_MS)
+  const outcome = await dial
+  assert.equal(outcome.connected, true, 'the body is attach-ready once its prefix is pinned')
+  assert.equal(core.cache.warm, true, 'the claim pinned the prefix at its current edge')
+  assert.equal(core.claimedBody, CLAIMED_BODY.body)
+  assert.equal(core.metrics.claimBodies, 1)
+  assert.equal(core.metrics.claimDialsFailed, 0)
+})
+
+test('a claim still refuses a body that cached no chunk at all', async () => {
+  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  const dial = core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  // The configuration and the play login, and no terrain: a client released here
+  // would land in an empty world and fall.
+  warmABody(backendLeg, { marker: false })
+  clock.tick(30_000)
+  const outcome = await dial
+  assert.equal(outcome.connected, false)
+  assert.equal(outcome.reason, 'body_not_warm')
+  assert.equal(core.metrics.claimBodies, 0)
 })

@@ -61,6 +61,7 @@
 import { WARM_MARKER } from '../core/state-cache.js'
 import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
+import { shouldForceWarm } from './readiness.js'
 import {
   FABRIC_BRAND,
   brandFrame,
@@ -354,6 +355,15 @@ const NOOP_JOURNAL = Object.freeze({
 // sentence, because the client has no action left: there is no dialog to answer
 // and no claim to make. It rides the login-state disconnect, so it is the whole
 // of what the player is told.
+// How long a claim waits for the batch marker before it takes the same fallback
+// startup and reconnect take. Paper 26.x never sends `chunk_batch_finished` to a
+// protocol-leg client (the note on the cache's `forceWarm`), and the dev lane's
+// body joined and cached 2179 frames with `warm=false`. A backend that does
+// batch sends the marker inside a second, so the grace only costs a lane that
+// was never going to send it. The startup budget is 20 s because it also bounds
+// a boot; a claim is a client on a loading screen.
+export const CLAIM_WARM_GRACE_MS = 5_000
+
 export const ALREADY_DRIVEN_TEXT =
   'Monoplayer: another player is already driving this server. Try again when they leave.'
 
@@ -2074,6 +2084,8 @@ export function createMonoplayer ({
   // picker back rather than a promise nobody keeps.
   const CLAIM_WARM_TIMEOUT_MS = 30_000
 
+
+
   // One wait on the injected clock. The core's default clock is inert, and an
   // inert clock cannot wait: the caller is told so instead of being held forever,
   // which is the difference between a refused landing and a hung one.
@@ -2098,22 +2110,60 @@ export function createMonoplayer ({
   // that an ordinary attach would refuse. `marker` is the cache's own warm state,
   // reported rather than inferred, so a log line can tell "no marker yet" from
   // "marker seen, nothing to attach with".
-  async function awaitBodyWarm ({ timeoutMs = CLAIM_WARM_TIMEOUT_MS, pollMs = 50 } = {}) {
-    const deadline = clockNow() + timeoutMs
+  async function awaitBodyWarm ({
+    body = null,
+    timeoutMs = CLAIM_WARM_TIMEOUT_MS,
+    graceMs = CLAIM_WARM_GRACE_MS,
+    pollMs = 50
+  } = {}) {
+    const startedAt = clockNow()
+    const deadline = startedAt + timeoutMs
     for (;;) {
       const stats = cache.stats()
       const state = {
         state: session.state,
         marker: stats.warm === true,
         configFrames: stats.sizes.config,
-        prefixFrames: stats.sizes.prefix
+        prefixFrames: stats.sizes.prefix,
+        chunkFrames: stats.chunkFrames
       }
       if (session.isAttachReady() && stats.sizes.config > 0 && stats.sizes.prefix > 0) {
-        return { attachReady: true, reason: null, ...state }
+        return { attachReady: true, reason: null, forced: false, ...state }
       }
-      if (clockNow() >= deadline) return { attachReady: false, reason: 'body_not_warm', ...state }
+      // The fallback the startup and reconnect paths already take (#87). A body
+      // that cached a join and never saw the marker is a backend that does not
+      // batch, which on this product is a real Paper. Chunks are required, as on
+      // the transfer stage: this releases a client into the body, and a client
+      // released over an empty world falls.
+      const forced = shouldForceWarm({
+        hasConfig: stats.sizes.config > 0,
+        hasPrefix: stats.sizes.prefix > 0,
+        warm: stats.warm === true,
+        chunkFrames: stats.chunkFrames
+      }, { requireChunks: true })
+      if (forced && clockNow() - startedAt >= graceMs) {
+        const pinned = cache.forceWarm()
+        session.warmComplete({ marker: pinned.forced ? 'claim_warm_fallback_join_settled' : 'chunk_batch_finished' })
+        log('claimWarmFallback', {
+          body,
+          forced: pinned.forced,
+          state: session.state,
+          configFrames: stats.sizes.config,
+          prefixFrames: stats.sizes.prefix,
+          chunkFrames: stats.chunkFrames,
+          afterMs: clockNow() - startedAt
+        })
+        return {
+          attachReady: true,
+          reason: null,
+          forced: pinned.forced,
+          ...state,
+          marker: cache.stats().warm === true
+        }
+      }
+      if (clockNow() >= deadline) return { attachReady: false, reason: 'body_not_warm', forced: false, ...state }
       const waited = await sleepOnClock(pollMs)
-      if (!waited) return { attachReady: false, reason: 'no_wait', ...state }
+      if (!waited) return { attachReady: false, reason: 'no_wait', forced: false, ...state }
     }
   }
 
@@ -2153,7 +2203,7 @@ export function createMonoplayer ({
         state: session.state,
         name
       })
-      return finishClaimLanding({ body, server, dial: claimDial.target, bodyWarm: await awaitBodyWarm() })
+      return finishClaimLanding({ body, server, dial: claimDial.target, bodyWarm: await awaitBodyWarm({ body }) })
     }
     // A body is dialled out of `boot` (never connected), `failed` (the retry
     // budget spent) or `down` (nobody claimed it, or somebody ended it). All three
@@ -2213,7 +2263,7 @@ export function createMonoplayer ({
       })
       return { connected: false, reason: 'connect_failed', body }
     }
-    return finishClaimLanding({ body, server, dial, bodyWarm: await awaitBodyWarm() })
+    return finishClaimLanding({ body, server, dial, bodyWarm: await awaitBodyWarm({ body }) })
   }
 
   // The wait's answer, turned into the front leg's answer. One place decides what a
