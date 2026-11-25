@@ -40,19 +40,14 @@ test('a successful connect clears the target', () => {
   assert.deepEqual(c.onDue({}), { target: null, kind: null, failures: 0 })
 })
 
-test('#233 the hop\'s kind survives the retries that carry no target', () => {
+test('#264 every followed hop dials as a transfer, whatever kind the event names', () => {
   const c = createTransferFollowController()
-  assert.deepEqual(c.onDue({ target, kind: 'operator' }), { target, kind: 'operator', failures: 0 })
-  assert.equal(c.kind, 'operator')
-  assert.deepEqual(c.onDue({ target: null, kind: 'transfer' }), { target, kind: 'operator', failures: 0 },
-    'a retry carries no target, so it must not overwrite the dialect either')
-  assert.equal(c.kind, 'operator', 'and the target is still there')
-})
-
-test('#233 a kind the controller does not know is a transfer, which is what every lane had', () => {
-  const c = createTransferFollowController()
-  assert.equal(c.onDue({ target, kind: 'nonsense' }).kind, 'transfer')
-  assert.equal(createTransferFollowController().onDue({ target }).kind, 'transfer')
+  assert.deepEqual(c.onDue({ target, kind: 'operator' }), { target, kind: 'transfer', failures: 0 },
+    'the operator move is gone, so no event ranks the dialect')
+  assert.equal(c.kind, 'transfer')
+  assert.deepEqual(c.onDue({ target: null, kind: 'nonsense' }), { target, kind: 'transfer', failures: 0 },
+    'a retry carries no target, so it keeps the hop it remembered, and that hop was a transfer')
+  assert.equal(c.kind, 'transfer')
 })
 
 test('invalid targets are ignored', () => {
