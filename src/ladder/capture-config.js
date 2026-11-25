@@ -1,10 +1,20 @@
 // Capture a real server's configuration phase as a fixture the front can serve.
 //
-//   node src/ladder/capture-config.js --host <h> --port <n> --out <file>
-//                                    [--version 26.2] [--account glowsquidye]
-//                                    [--offline] [--timeout 120] [--lane <lane>]
-//                                    [--paper-build <n>] [--image <ref>]
+//   node src/ladder/capture-config.js --host <h> --port <n> --paper-build <n> --out <file>
+//                                    [--image <ref>] [--version 26.2]
+//                                    [--account glowsquidye] [--offline]
+//                                    [--timeout 120] [--lane <lane>]
 //                                    [--reached-via <how>] [--note <why>]
+//
+// What the fixture may claim (#367). `capturedFrom` records provenance the capture
+// had. The build and the image are named by the operator and never defaulted, because
+// no frame a client receives carries either. Paper answers a status ping with
+// `serverModName() + ' ' + serverVersion()`, which is "Paper 26.2" and no build
+// (PaperServerListPingEventImpl, paper-server). A container image is packaging the
+// server never sends. So a capture with no --paper-build stops before the join, and one
+// that names no --image records `image: null`, which says nobody named one. The
+// recorded command carries every flag that decided the recording. A reader who repeats
+// it reaches the same lane, build and image from another worktree.
 //
 // The front leg serves a configuration phase of its own when no backend is
 // connected (the picker, #257). It cannot invent that phase: minecraft-protocol
@@ -32,6 +42,7 @@
 //   kubectl -n "$(scripts/gate-lane.sh name)" apply -f .scratch/capture-paper.yaml  # gate image, online-mode off
 //   kubectl -n "$(scripts/gate-lane.sh name)" port-forward pod/capture-paper 25599:25565
 //   node src/ladder/capture-config.js --host 127.0.0.1 --port 25599 --offline \
+//     --paper-build 135 --image itzg/minecraft-server:2026.10.1-java25 \
 //     --note 'online-mode is off: the puppet token is expired and a refresh is a human decision' \
 //     --out src/legs/configuration-baseline/26.2.json
 //   kubectl -n "$(scripts/gate-lane.sh name)" delete pod capture-paper
@@ -43,6 +54,11 @@
 //   scripts/online-cluster.sh --rung src/ladder/capture-config.js --keep-pod
 //   kubectl -n monoplayer cp <pod>:/work/config-baseline.json <fixture>
 //   mise run gate:down
+//
+// That rung is handed no flags: scripts/online-cluster.sh runs the module with its own
+// argv alone. The capture therefore stops on the build before the join (#367). A capture
+// that needs the real account names the build and the image, and runs the module where it
+// can reach the gate Paper's tailnet name.
 //
 // Exit codes: 0 a capture was written, 1 the join failed, 2 setup failed.
 import fs from 'node:fs'
@@ -60,13 +76,16 @@ import { resolveBotIdentity } from './observer-baseline.js'
 const PER_LEG = new Set(['keep_alive', 'ping'])
 
 const DEFAULT_OUT = 'config-baseline.json'
-const DEFAULT_VERSION = process.env.MONOPLAYER_VERSION || '26.2'
-// What the recorded server is when the flags are not given: the gate lane's Paper,
-// because that is the server a refresh records (deploy/driver/paper.yaml). The lane is
-// not beside them: captureLane() asks scripts/gate-lane.sh, the one place its name
-// comes from (#282, #322), and a capture from anywhere else passes --lane.
-const DEFAULT_PAPER_BUILD = '135'
-const DEFAULT_IMAGE = 'itzg/minecraft-server:2026.10.1-java25'
+const DEFAULT_VERSION = '26.2'
+
+// A provenance input the capture cannot record, so it stops before the join with the
+// sentence that says what to pass (#367). Exit 2, beside the lane's refusal (#322).
+export class CaptureSetupError extends Error {
+  constructor (message) {
+    super(message)
+    this.name = 'CaptureSetupError'
+  }
+}
 
 function fail (message, code = 2) {
   process.stderr.write('capture-config: ' + message + '\n')
@@ -84,35 +103,102 @@ export function captureLane ({ lane = null, resolve = resolveGateLane } = {}) {
   return resolve()
 }
 
+// The Paper build, named or refused (#367). No frame a client receives carries it: a
+// status ping answers "Paper 26.2" (the module header says where that comes from) and the
+// configuration phase carries registries and packs. The one place a build is written down
+// is the deployment that ran it, `PAPER_BUILD` in deploy/driver/paper.yaml. A capture
+// cannot read that from the socket, so a default here would record the gate lane's build
+// for every server. The sentence instead asks the operator for the one value only they
+// have.
+export function captureBuild ({ paperBuild = null } = {}) {
+  const build = typeof paperBuild === 'string' ? paperBuild.trim() : ''
+  if (build === '') {
+    throw new CaptureSetupError(
+      'a capture records no Paper build it did not read: pass --paper-build <n>, the build the server you are capturing was deployed from (PAPER_BUILD in deploy/driver/paper.yaml)'
+    )
+  }
+  return build
+}
+
+// The container image, or null when nobody named one (#367). A protocol client cannot see
+// an image: it is packaging around the server, not something the server sends. So the
+// fixture records the one an operator names, and records null when nobody did. The gate
+// lane's image in a fixture taken from another image is the claim this replaces.
+export function captureImage ({ image = null } = {}) {
+  const named = typeof image === 'string' ? image.trim() : ''
+  return named === '' ? null : named
+}
+
+// The command that repeats a capture (#367): every flag that decided what the fixture
+// holds. A reader who repeats it in another worktree reaches the same server, and records
+// the same lane, build and image rather than that worktree's. --note, --reached-via,
+// --account and --timeout are commentary, how it was reached, identity and patience. A
+// replay leaves those to the operator, and --out is the reader's choice of file. Every
+// value here is one token, so the line runs as written.
+export function captureCommand ({ host, port, version, offline, lane, paperBuild, image }) {
+  const parts = [
+    'node src/ladder/capture-config.js',
+    '--host ' + host,
+    '--port ' + port,
+    '--version ' + version
+  ]
+  if (offline) parts.push('--offline')
+  parts.push('--lane ' + lane, '--paper-build ' + paperBuild)
+  if (image !== null) parts.push('--image ' + image)
+  parts.push('--out <fixture>')
+  return parts.join(' ')
+}
+
+// What a capture resolves from its flags, before it dials (#322, #367). Pure apart from
+// the lane resolver, so a case proves what a fixture claims with no socket. It also proves
+// what a replay of that fixture's own command claims.
+export function captureInputs (argv, { resolve = resolveGateLane, env = process.env } = {}) {
+  const host = flag(argv, '--host') ?? env.MONOPLAYER_BACKEND_HOST ?? '127.0.0.1'
+  const port = Number(flag(argv, '--port') ?? env.MONOPLAYER_BACKEND_PORT ?? 25565)
+  const version = flag(argv, '--version') ?? env.MONOPLAYER_VERSION ?? DEFAULT_VERSION
+  const offline = argv.includes('--offline')
+  const lane = captureLane({ lane: flag(argv, '--lane') ?? null, resolve })
+  const paperBuild = captureBuild({ paperBuild: flag(argv, '--paper-build') ?? null })
+  const image = captureImage({ image: flag(argv, '--image') ?? null })
+  const reachedVia = flag(argv, '--reached-via') ?? ('kubectl -n ' + lane + ' port-forward pod/capture-paper ' + port + ':25565')
+  const note = flag(argv, '--note') ?? null
+  return { host, port, version, offline, lane, paperBuild, image, reachedVia, note }
+}
+
 // The provenance a reader needs to reach this server again, and to know when the
-// recording is old. Pure, so a case proves what lands in `capturedFrom` — the lane a
-// capture was given, and the command that repeats it — with no socket (#322).
-export function captureProvenance ({ version, lane, paperBuild, image, host, port, reachedVia, note, command, at }) {
-  return { kind: 'paper', version, paperBuild, image, lane, host, port, reachedVia, at, note, command }
+// recording is old. Pure, so a case proves what lands in `capturedFrom` with no socket
+// (#322, #367): the lane a capture was given, the build and image it had, and the command
+// that repeats it.
+export function captureProvenance ({ version, lane, paperBuild, image, host, port, offline, reachedVia, note, at }) {
+  return {
+    kind: 'paper',
+    version,
+    paperBuild,
+    image,
+    lane,
+    host,
+    port,
+    reachedVia,
+    at,
+    note,
+    command: captureCommand({ host, port, version, offline, lane, paperBuild, image })
+  }
 }
 
 async function main (argv) {
-  const host = flag(argv, '--host') ?? process.env.MONOPLAYER_BACKEND_HOST ?? '127.0.0.1'
-  const port = Number(flag(argv, '--port') ?? process.env.MONOPLAYER_BACKEND_PORT ?? 25565)
-  const version = flag(argv, '--version') ?? DEFAULT_VERSION
   const out = flag(argv, '--out') ?? DEFAULT_OUT
   const selector = flag(argv, '--account') ?? process.env.MONOPLAYER_CAPTURE_ACCOUNT ?? 'glowsquidye'
-  const offline = argv.includes('--offline')
   const timeout = Number(flag(argv, '--timeout') ?? 120_000)
-  // Provenance, so a reader can tell how the fixture was reached and how to reach
-  // it again: the lane and the Paper build are what make the recording checkable. A
-  // capture that guessed a lane would record a provenance it cannot stand behind, so
-  // a lane that cannot be named is a setup failure here.
-  let lane
+  // Provenance, so a reader can tell how the fixture was reached and how to reach it
+  // again. A lane nobody can name, and a build nobody states, are setup failures here. A
+  // fixture that guessed either points the next reader at another server (#322, #367).
+  let inputs
   try {
-    lane = captureLane({ lane: flag(argv, '--lane') ?? null })
+    inputs = captureInputs(argv)
   } catch (error) {
     fail(error.message)
   }
-  const paperBuild = flag(argv, '--paper-build') ?? DEFAULT_PAPER_BUILD
-  const image = flag(argv, '--image') ?? DEFAULT_IMAGE
-  const reachedVia = flag(argv, '--reached-via') ?? ('kubectl -n ' + lane + ' port-forward pod/capture-paper ' + port + ':25565')
-  const note = flag(argv, '--note') ?? null
+  const { host, port, version, offline } = inputs
   if (!Number.isInteger(port) || port <= 0) fail('bad port: ' + port)
 
   const data = md(version)
@@ -173,19 +259,7 @@ async function main (argv) {
       // What the recording is, so a reader can refresh it and know when it is old.
       version,
       protocolVersion: data.version.version,
-      capturedFrom: captureProvenance({
-        version,
-        lane,
-        paperBuild,
-        image,
-        host,
-        port,
-        reachedVia,
-        note,
-        at: new Date().toISOString(),
-        command: 'node src/ladder/capture-config.js --host ' + host + ' --port ' + port +
-          (offline ? ' --offline' : '') + ' --out <fixture>'
-      }),
+      capturedFrom: captureProvenance({ ...inputs, at: new Date().toISOString() }),
       // Every clientbound configuration frame, in the order the server sent it.
       frames
     }
