@@ -62,24 +62,28 @@ mise run lanes                # every lane: its age, its pods, and its worktree
 mise run lanes -- --reap      # delete the lanes idle past the window
 ```
 
-`name` prints one line, so a shell can pass it on. The online rung needs no such
-help: `mise run online:cluster` names this lane in its lease and dials its Paper
-(#301). The rungs that still name a single lane take it as
-`MONOPLAYER_GATE_NAMESPACE` until #282 lands:
+`name` prints one line, and every rung reads it. `mise run online:cluster` names
+this lane in its lease and dials its Paper (#301). `mise run observer:run` decides its
+lane after its arguments, so `--namespace` and the variable are the same decision
+(#282). `mise run driver:scenario` resolves the address it joins and the RCON target
+it administers from the same name (#282). So no rung needs the variable:
 
 ```bash
-MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run observer:run
+mise run online:cluster
+mise run observer:run
+mise run driver:scenario
 ```
 
-The driver takes the lane by two flags instead, because its join address and its
-RCON target are separate values (`src/driver/run.js`), and `mise run
-driver:scenario` forwards no arguments:
-
-```bash
-L=$(scripts/gate-lane.sh name)
-node src/driver/run.js --runs 2 \
-  --rcon-namespace $L --server $L-paper.tail41e568.ts.net:25565
-```
+`src/driver/lane.js` is the driver's reader, and it asks `scripts/gate-lane.sh name`.
+`--server` and `--rcon-namespace` remain per-run overrides for a caller that knows a
+better address; they are not a second way to choose a lane. A run that names
+`GATEB_RCON_NAMESPACE` (or `--rcon-namespace`) and leaves the join address to this
+worktree stops instead, because it would join one lane's Paper and administer another
+lane's Deployments. `--server` naming another lane's Paper while RCON stays on this
+one is the same refusal. Pass the other flag too when that is what you mean: the pair
+is the caller's once it names both. A tunnel or a port-forward is an address and not a
+lane, so it never disagrees.
+`MONOPLAYER_GATE_NAMESPACE` names a lane for every rung at once.
 
 That is the task's own command with the lane named. One run at a time on the
 display host: the rung relaunches one Prism instance over SSH and drives its
@@ -195,11 +199,10 @@ Each needs its own migration step:
 | `GATEB_*` environment variables, `gateb.*` JVM properties, window title `Monoplayer Gate B` | operator shell, launch flags, Hyprland rule | rename together, in one operator run |
 
 The namespace, the labels, the Secrets and the two tailnet hostnames are derived
-now, which is what #277, #278 and #279 did. The tree spells a placeholder, and one
-instance names all of them. Every row left in the table still migrates by hand, when
-the change that reads it arrives. The copies in `src/driver/` and `tools/` keep
-the old name until #282 lands. Until they do, the rungs name it and the docs say
-which lane they dial, so a run that wants its own lane names it.
+now, which is what #277, #278, #279 and #282 did. The tree spells a placeholder, and
+one instance names all of them. Every row left in the table still migrates by hand,
+when the change that reads it arrives. The examples in `tools/driver/` still print
+the lane that shipped; a run that joins its own lane passes `-s`.
 
 ## Paper G0 backend
 

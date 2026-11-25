@@ -12,24 +12,14 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { COMMIT, INSTANCE, LANE, WORKTREE, instanceOf, pathHash } from '../support/lane.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 
-// The lane this worktree's script derives (#279): the worktree's short commit, then
-// a short hash of its path, so two checkouts at one commit are two lanes. The mirror
-// is the point of the cases below: a script that types a name instead of deriving
-// one cannot match it.
-//
-// `pwd -P` in the script, `realpathSync` here: one worktree has one path, so it
-// hashes to one lane however the caller spelled its way in.
-const WORKTREE = fs.realpathSync(ROOT)
-const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
-const pathHash = dir => (crc(dir) % 0x1000000).toString(16).padStart(6, '0')
-const instanceOf = (dir, commit) => commit + '-' + pathHash(dir)
-const INSTANCE = instanceOf(WORKTREE, COMMIT)
-const LANE = 'monoplayer-gate-' + INSTANCE
+// The lane this worktree's script derives (#279) is mirrored once, in
+// test/support/lane.js, so the files that assert against a derived lane share one
+// oracle. A script that typed a name instead of deriving one could not match it.
 const LANE_SECRET = role => 'gate-' + INSTANCE + '-' + role
 
 const TOXIPROXY = read('deploy/driver/toxiproxy.yaml')
