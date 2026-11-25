@@ -1403,10 +1403,10 @@ export function createMonoplayer ({
     }
   }
 
-  // #22 and #233: start a move that keeps the client's connection, and hold the
-  // pre-move state so a target that never answers can be rolled back onto the
-  // same socket. One body, because the transfer frame and the operator's
-  // document differ in where the intent comes from and not in what it does.
+  // #22: start a move that keeps the client's connection, and hold the pre-move
+  // state so a target that never answers can be rolled back onto the same socket.
+  // One body: the transfer frame and the backend's own `start_configuration`
+  // differ in where the intent comes from and not in what it does.
   //
   // Returns `began` false when the key is off or nobody is attached: the caller
   // then takes the ordinary backend-down path, which detaches the client and
@@ -1726,9 +1726,6 @@ export function createMonoplayer ({
       sendTransferRestoredNotice()
     }
     metrics.reconfigurationsRestored++
-    // #233: an operator move that failed says so by name, because the operator is
-    // the one who has to act on it. The line below already carries `kind`; this
-    // one is what a reader greps for.
     log('transferRestored', {
       kind,
       reason,
@@ -2099,8 +2096,7 @@ export function createMonoplayer ({
     }
     const dial = { host: target.host, port: target.port }
     // A claim is a fresh login on a server that never saw the puppet: no transfer
-    // handshake and no cookies from another body (#233's dialect split, the
-    // operator arm).
+    // handshake and no cookies from another body (#233's dialect split).
     try {
       backendLeg.setTarget(dial, { keepCookies: false, transfer: false })
     } catch (error) {

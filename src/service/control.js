@@ -12,7 +12,7 @@
 // Naming a file is the switch for its key. The whitelist file is the one whose
 // presence turns this module on at all: it is the first key, and a lane that names
 // it loads the list. #264 removed the desired-backend key, and this is the line
-// that had to survive it — a whitelist that does not load is a front that refuses
+// that had to survive it. A whitelist that does not load is a front that refuses
 // every login with no error.
 //
 // One key differs from the other: the allowed-server list has a fallback. A
