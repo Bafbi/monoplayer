@@ -50,6 +50,73 @@ function firstUse (text, task) {
   return text.search(new RegExp('^\\s*mise run ' + task + '(?=\\s|$)', 'm'))
 }
 
+// The lane table's answer to "may this run beside another agent?" (#319). #281
+// added the column so each run answers that question once. No code read the answer,
+// and an empty cell reads as "nobody asked", which is the drift the column exists
+// to stop.
+const LANE_SECTION = 'Which lane a run uses'
+const CONCURRENCY = 'Beside another agent?'
+
+// A markdown table as rows of cells. The outer pipes are not cells, and the |---|
+// rule is a row like any other, so data rows start at index 2. This is the split
+// src/ladder/next-rung.js cells() does. It stays local because that file reads the
+// rungs table and owns no lane parser.
+function table (text) {
+  return text.split('\n')
+    .filter(line => line.trimStart().startsWith('|'))
+    .map(line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim()))
+}
+
+// A run's first cell names its rung ids, as in "driver lane, rung 4" or "rungs 0,
+// 1, 2". An id has to follow the word. A cell that mentions a number for another
+// reason ("about 3 minutes") does not answer for that rung.
+function rungIds (cell) {
+  const tokens = cell.split(/[^A-Za-z0-9]+/)
+  const ids = []
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!/^rungs?$/.test(tokens[i])) continue
+    for (let j = i + 1; j < tokens.length && /^[0-9]+[a-z]?$/.test(tokens[j]); j += 1) ids.push(tokens[j])
+  }
+  return ids
+}
+
+// The lane table as data. The header names the column, so the guard reports a
+// header that lost it once, rather than reading every row as one that answered
+// nothing. parseLadder reads the rungs table. A rung it finds and the lane table
+// never names has no lane answer at all.
+function laneDrift (text) {
+  const rows = table(section(text, LANE_SECTION))
+  const header = rows[0] ?? []
+  const column = header.indexOf(CONCURRENCY)
+  const lanes = rows.slice(2).map(cells => ({
+    run: cells[0] ?? '',
+    rungs: rungIds(cells[0] ?? ''),
+    answer: column < 0 ? '' : (cells[column] ?? '')
+  }))
+  const named = new Set(lanes.flatMap(lane => lane.rungs))
+  return {
+    column,
+    lanes,
+    blank: column < 0 ? [] : lanes.filter(lane => !lane.answer.trim()).map(lane => lane.run),
+    unnamed: parseLadder(text).map(rung => rung.id).filter(id => !named.has(id))
+  }
+}
+
+// One message per kind of drift. Each names the row and says what to write there,
+// and a missing column is one finding, because one edit fixes every row.
+function laneDisagreement ({ column, blank, unnamed }) {
+  return [
+    column < 0
+      ? 'docs/testing-ladder.md has no "' + CONCURRENCY + '" column: add it to the lane ' +
+        'table, so every run answers whether it can run beside another agent'
+      : null,
+    ...blank.map(run => 'the lane row "' + run + '" leaves "' + CONCURRENCY + '" empty: ' +
+      'write "yes", "no", or the reason it cannot run beside another agent'),
+    ...unnamed.map(id => 'rung ' + id + ' has no lane row: add one to "' + LANE_SECTION + '", ' +
+      'and answer "' + CONCURRENCY + '" for it')
+  ].filter(Boolean)
+}
+
 test('AGENTS.md carries the rule, because that is what an agent reads', () => {
   const lanes = section(AGENTS, 'Lanes')
 
@@ -120,6 +187,82 @@ test('the ladder maps every run to the lane it belongs on', () => {
   // G0 joins the gate Paper directly. Velocity fronts paper-m4, a different one.
   assert.doesNotMatch(row(lanes, 'mise run driver:scenario'), /Velocity/i,
     'the driver row does not name a Velocity that G0 does not go through')
+})
+
+test('every lane row answers whether its run may go beside another agent', () => {
+  const drifted = laneDrift(LADDER)
+
+  // The guard reads both sides, so a reformat that matches nothing cannot pass.
+  assert.ok(drifted.lanes.length > 0, 'the lane table has rows')
+  assert.ok(parseLadder(LADDER).length > 0, 'the rungs table still parses')
+  assert.notEqual(drifted.column, -1,
+    'the lane table header carries "' + CONCURRENCY + '", the column #281 added')
+  assert.equal(new Set(drifted.lanes.map(lane => lane.run)).size, drifted.lanes.length,
+    'no lane row repeats, so one run holds one answer')
+
+  assert.deepEqual(laneDisagreement(drifted), [], 'the lane table and the ladder disagree')
+})
+
+test('the lane guard names a row whose concurrency cell is empty', () => {
+  // Fixtures, not the tree: this case tests the comparison, so a real drift
+  // cannot make the case about the drift instead.
+  const doc = [
+    '## Rungs',
+    '',
+    '| Rung | Command | Cost | Prerequisites | Asserts | Cannot catch |',
+    '|---|---|---|---|---|---|',
+    '| 3 online bot | \`mise run online:cluster\` | minutes | a backend | the shape through the online leg | a vanilla client |',
+    '| 4 real client | \`mise run driver:scenario\` | tens of minutes | a client | the client shows it | nothing cheaper |',
+    '',
+    '## Which lane a run uses',
+    '',
+    '| Run | Command | Lane | Cost | What it may change | Beside another agent? |',
+    '|---|---|---|---|---|---|',
+    '| online rung, 3, from a pod | \`mise run online:cluster\` | namespace \`monoplayer\` | minutes | nothing on the deployment | no, it takes the account lease |',
+    '| driver lane, rung 4 | \`mise run driver:scenario\` | the gate Paper | tens of minutes | its world | no, the display host carries one client |',
+    ''
+  ].join('\n')
+
+  assert.deepEqual(laneDrift(doc), {
+    column: 5,
+    lanes: [
+      { run: 'online rung, 3, from a pod', rungs: ['3'], answer: 'no, it takes the account lease' },
+      { run: 'driver lane, rung 4', rungs: ['4'], answer: 'no, the display host carries one client' }
+    ],
+    blank: [],
+    unnamed: []
+  }, 'the guard reads the header, the answer, and the rung ids, and nothing else')
+
+  // The cell emptied. The row stays, so the answer reads as "nobody asked"
+  // rather than absent. The message names the row and says what to write.
+  const emptied = doc.replace('| no, the display host carries one client |', '|  |')
+  assert.deepEqual(laneDrift(emptied).blank, ['driver lane, rung 4'],
+    'the guard reports an empty cell against the row that holds it')
+  assert.deepEqual(laneDisagreement(laneDrift(emptied)), [
+    'the lane row "driver lane, rung 4" leaves "Beside another agent?" empty: ' +
+      'write "yes", "no", or the reason it cannot run beside another agent'
+  ], 'one failure names the row and what to write')
+
+  // The column gone from the header: reported once, not once per row.
+  const renamed = doc.replace(' | Beside another agent? |', ' |').replace('|---|---|---|---|---|---|', '|---|---|---|---|---|')
+  assert.equal(laneDrift(renamed).column, -1, 'the guard reads a header that lost the column as missing')
+  assert.deepEqual(laneDisagreement(laneDrift(renamed)), [
+    'docs/testing-ladder.md has no "Beside another agent?" column: add it to the lane ' +
+      'table, so every run answers whether it can run beside another agent'
+  ], 'a missing column is one finding, not one per row')
+
+  // A rung the lane table never names: the run exists and has no answer at all.
+  const unnamed = doc.replace('| driver lane, rung 4 |', '| driver lane |')
+  assert.deepEqual(laneDrift(unnamed).unnamed, ['4'], 'the guard reports a rung with no lane row')
+  assert.deepEqual(laneDisagreement(laneDrift(unnamed)), [
+    'rung 4 has no lane row: add one to "Which lane a run uses", ' +
+      'and answer "Beside another agent?" for it'
+  ], 'the message names the rung and the table to add it to')
+
+  // A number the cell carries without naming a rung. Reading it as an answer
+  // would let a count cover a rung, which is the drift again in a new shape.
+  const counted = doc.replace('| online rung, 3, from a pod |', '| online rung serving 3 servers |')
+  assert.deepEqual(laneDrift(counted).unnamed, ['3'], 'a stray number does not answer for a rung')
 })
 
 test('the dev runbook takes a reader from an empty volume to a joined bot', () => {
