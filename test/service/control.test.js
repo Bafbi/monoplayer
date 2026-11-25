@@ -226,8 +226,8 @@ test('#314 two rows that name one server with a trailing dot are refused, and th
 })
 
 // #314: the lane refuses the list once, and the refusal names the entry. An operator
-// reading `controlRejected` at three in the morning has a document with two rows in
-// it, and needs to know which of the two is the one to fix.
+// reading `controlRejected` has a document with two rows, and needs to know which one
+// to fix.
 test('#314 the refusal names the entry that collided, not only the file', () => {
   const file = path.join(controlDir('trailing-dot'), 'allowed-servers.json')
   fs.writeFileSync(file, JSON.stringify({
@@ -239,6 +239,17 @@ test('#314 the refusal names the entry that collided, not only the file', () => 
   assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' },
     'a list that names one server twice offers nothing, rather than two buttons')
   assert.deepEqual(lines, [{ event: 'controlRejected', fields: { file, reason: 'duplicate', at: 'servers[1]' } }])
+
+  // The refusal is said once, and "once" is per entry. The operator fixes row 1 and
+  // the collision moves to row 2: that is a second refusal with a second row to fix,
+  // not the same warning arriving twice.
+  fs.writeFileSync(file, JSON.stringify({
+    version: 1,
+    servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25565 }, { host: 'paper.', port: 25565 }]
+  }))
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(lines.map(line => line.fields.at), ['servers[1]', 'servers[2]'],
+    'a collision that moved is a new refusal, naming the row to fix now')
 })
 
 test('#262 the allowed-server list is read from its own file, and the committed seed answers when it cannot be', () => {
