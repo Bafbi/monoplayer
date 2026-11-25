@@ -12,6 +12,10 @@
 //   detached      - player gone; puppet session alive on the backend
 //   reconnecting  - backend fault; one reconnect armed at a time, with an
 //                   optional retry budget and capped exponential backoff
+//   down          - (#261) no session, and no retry armed: nobody claims the body,
+//                   so there is nothing to come back for, or somebody asked the
+//                   body to end. A claim dials it out of here, through the same
+//                   `backendConnecting` the first dial used.
 //   failed        - the retry budget was exhausted (default: after one attempt)
 //   transferring  - (#22) the attaching client keeps its connection while the
 //                   puppet moves to another server, or while the backend
@@ -42,7 +46,8 @@ export const STATES = Object.freeze({
   DETACHED: 'detached',
   TRANSFERRING: 'transferring',
   RECONNECTING: 'reconnecting',
-  FAILED: 'failed'
+  FAILED: 'failed',
+  DOWN: 'down'
 })
 
 export const DEFAULT_POSE = Object.freeze({ x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 })
@@ -69,7 +74,17 @@ export function createSession ({
   // Called once each time a scheduled reconnect fires (the session has moved
   // to boot and the adapter may now re-open the backend). Null keeps the
   // inert-clock behavior: the timer never fires, so the callback never runs.
-  onReconnect = null
+  onReconnect = null,
+  // (#261) Does a claim hold this body right now? A claim is the reason a body is
+  // kept alive, so a fault that would arm a retry asks here first: nobody claims
+  // it, and the body lands in `down` with no retry. The claim is the front leg's
+  // record, so the caller answers from its board and this session keeps no copy.
+  //
+  // Null is a lane with no claim board, which is every lane with no picker: no
+  // claim exists there to keep or drop a body, and its faults reconnect exactly as
+  // they always have. That absent oracle is the whole of the picker-off rule, so
+  // it has to stay absent there rather than be answered `false`.
+  claimHeld = null
 } = {}) {
   const attempts = Number.isFinite(reconnectPolicy?.attempts) && reconnectPolicy.attempts > 0
     ? Math.floor(reconnectPolicy.attempts)
@@ -160,6 +175,47 @@ export function createSession ({
     return warmReady
   }
 
+  // (#261) Is a claim what keeps this body alive? An absent oracle is a lane with
+  // no claims at all, and the answer there is "keep it", which is the contract
+  // every lane had before this rule. An oracle that throws is a bug in the lane's
+  // claim read, and it is recorded rather than allowed to break a fault handler:
+  // the body is kept, because a body nobody can ask about is not a body to drop.
+  function claimed () {
+    if (typeof claimHeld !== 'function') return true
+    try {
+      return claimHeld() !== false
+    } catch (error) {
+      emit('claim_oracle_failed', { error: String(error?.message ?? error).slice(0, 200) })
+      return true
+    }
+  }
+
+  // A retry that is armed but not due yet belongs to a body somebody wants. The
+  // body ends with the retry, so the timer is cleared here and the caller is told
+  // it was, rather than left to fire at a session with nothing to dial.
+  function cancelReconnect () {
+    const armed = pendingReconnect
+    if (reconnectTimer !== null) {
+      clock.clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    pendingReconnect = false
+    reconnectScheduledAt = null
+    return armed
+  }
+
+  // (#261) The body lands in `down`: no session, no retry, and a claim is what
+  // dials it out. Two callers reach it, a fault nobody claims and a requested end,
+  // because they leave the body in the same place and the picker says the same
+  // thing about both. `unclaimed` is the record's own word for why: the fault
+  // paths reached this because no claim held the body, and the requested end
+  // reports what the oracle said at the moment it was asked.
+  function bodyDown ({ reason, type, cancelled = false, unclaimed = true }) {
+    warmReady = false
+    transition(type, STATES.DOWN, { reason, frontEnded: false, unclaimed, cancelled })
+    return { scheduled: false, state, cancelled, unclaimed }
+  }
+
   // Exponential backoff, capped. The first attempt uses the base delay so the
   // G0 fault contract (one reconnect at 1000 ms) is unchanged.
   function backoffDelay () {
@@ -200,6 +256,10 @@ export function createSession ({
       transition('transfer_retry', state, { reason, attempt: reconnectAttempts })
       return scheduleReconnect(reason)
     }
+    // #261: the retry budget is the claim's. A claim that ended while an attempt
+    // was pending spends no further attempt, so a body nobody holds cannot be
+    // retried for ever by a lane that retries without a bound.
+    if (!claimed()) return bodyDown({ reason, type: 'body_down_unclaimed' })
     if (reconnectAttempts >= attempts) {
       transition('failed', STATES.FAILED, { reason, backendLogins, attempts: reconnectAttempts })
       return { scheduled: false, state, failed: true }
@@ -226,6 +286,12 @@ export function createSession ({
       emit('fault_while_reconnecting', { reason }) // recorded, NOT a new timer
       return { scheduled: false, state }
     }
+    // A body that is down has nothing to reconnect: the session is not there to
+    // dial. A claim reaches it through `backendConnecting`, never through a fault.
+    if (state === STATES.DOWN) {
+      emit('fault_while_down', { reason })
+      return { scheduled: false, state }
+    }
     if (state === STATES.BOOT) {
       if (backendLogins > 0) {
         // A reconnect attempt was fired and the connection dropped before the
@@ -240,6 +306,11 @@ export function createSession ({
     if (wasAttached) {
       transition('backend_down', STATES.RECONNECTING, { reason, frontEnded: true })
       detachCount++
+    } else if (!claimed()) {
+      // #261: nobody claims this body, so nothing on it is worth a dial. It stays
+      // down and the picker says so, and the claim that comes next is what brings
+      // it back.
+      return bodyDown({ reason, type: 'body_down_unclaimed' })
     } else {
       transition('backend_down', STATES.RECONNECTING, { reason, frontEnded: false })
     }
@@ -317,6 +388,27 @@ export function createSession ({
     transferLanded = false
     transition('detach', STATES.DETACHED, { reason, pose: { ...currentPose } })
     return { detached: true, pose: { ...currentPose } }
+  }
+
+  // (#261) A requested end. A player asked for this body to go down from the
+  // picker, and only while no claim holds it. The body lands in `down`, where it
+  // arms no retry, and a claim is what dials it back.
+  //
+  // The invariant is the core's: a body a driver is standing in is refused here
+  // whatever the caller asked, because ending it would take a client's world away
+  // from a client that still holds the claim.
+  function end ({ reason = 'requested' } = {}) {
+    if (state === STATES.ATTACHED || state === STATES.CONFIGURING || state === STATES.TRANSFERRING) {
+      emit('body_end_refused', { reason, state })
+      return { ended: false, reason: 'client_attached', state }
+    }
+    if (state === STATES.DOWN) {
+      emit('body_end_repeated', { reason })
+      return { ended: false, reason: 'already_down', state, cancelled: false }
+    }
+    const cancelled = cancelReconnect()
+    bodyDown({ reason, type: 'body_end', cancelled, unclaimed: !claimed() })
+    return { ended: true, reason, state, cancelled }
   }
 
   // --- transfer lifecycle (#22) ---
@@ -403,6 +495,7 @@ export function createSession ({
     transferStart,
     transferComplete,
     transferFailed,
+    end,
     setPose
   }
 }

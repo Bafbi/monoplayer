@@ -6,8 +6,8 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O63 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
-// O62 and O63) are the contract
+// Assertions R0 and O1-O64 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
+// O62, O63 and O64) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -182,6 +182,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // row a spectator is on, and the client that watches a body nobody drives.
   let pickerBot11 = null
   let pickerBot12 = null
+  // #261: the client that claims the body O63 left standing, the client that ends
+  // the body once that claim has gone, the client that reads the row it left, and
+  // the client that claims that row back.
+  let pickerBot13 = null
+  let pickerBot15 = null
+  let pickerBot16 = null
+  let pickerBot17 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -2772,7 +2779,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Seeded'), offlineUuid('Late'),
       // #259: the client that reads the watched row, and the client that watches a
       // body nobody drives.
-      offlineUuid('Reader'), offlineUuid('LateWatch')
+      offlineUuid('Reader'), offlineUuid('LateWatch'),
+      // #261: the client that claims the standing body, the client that ends it once
+      // that claim has gone, the client that reads the row it left, and the client
+      // that claims that row back.
+      offlineUuid('Owner'), offlineUuid('Dropper'), offlineUuid('After'), offlineUuid('Back')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -3113,9 +3124,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.picker.serverDialog
     )
 
-    // #266: the one verb the dialog layer can carry out. A third client picks, then
-    // clicks Disconnect out of the frame it received, and its configuration ends
-    // with the sentence naming the server it left.
+    // #266 and #261: the verb that acts on a body. A third client picks, then clicks
+    // Disconnect on the row the first client's claim stands on — a claim whose landing
+    // failed (#295), which is a claim all the same. So the request is refused in one
+    // sentence naming the driver, and the client is disconnected with it rather than
+    // left in a dialog nobody will read. O64 is the half where a body is unclaimed and
+    // does end.
     pickerBot3 = createBot({ port: pickerBound.port, username: 'Third', version: pickerVersion })
     await pickerBot3.waitFor(() => pickerBot3.received.dialogs.length === 1, 'the picker at the third client', 15_000)
     const thirdPick = chooseDialogAction(pickerBot3.received.dialogs[0], 'first')
@@ -3129,25 +3143,36 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (thirdLeave !== null) pickerBot3.answerDialog(thirdLeave.id, null, 'configuration')
     await pickerBot3.waitFor(
       () => pickerBot3.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
-      'the goodbye a disconnect gets',
+      'the refusal a claimed disconnect gets',
       15_000
     )
     await waitFor(() => pickerVerbs.length === 2, 'the disconnect verb to reach the service', 10_000)
+    const disconnectRefusals = logs
+      .filter(entry => entry.event === 'pickerDisconnectRefused')
+      .map(entry => entry.fields)
+    const disconnectLines = logs
+      .filter(entry => entry.event === 'pickerDisconnect')
+      .map(entry => entry.fields)
     evidence.picker.disconnect = {
       pick: thirdPick === null ? null : { id: thirdPick.id, label: thirdPick.label },
       chosen: thirdLeave === null ? null : { id: thirdLeave.id, label: thirdLeave.label },
       reported: pickerVerbs[1] ?? null,
+      refusals: disconnectRefusals,
+      granted: disconnectLines,
       ended: pickerBot3.received.ended === null ? null : String(pickerBot3.received.ended).slice(0, 120),
+      claims: pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name })),
       metrics: {
         picks: pickerFront.metrics.pickerPicks,
         serverDialogs: pickerFront.metrics.pickerServerDialogs,
         verbs: pickerFront.metrics.pickerVerbs,
-        pickers: pickerFront.metrics.pickers
+        pickers: pickerFront.metrics.pickers,
+        disconnects: pickerFront.metrics.pickerDisconnects,
+        refused: pickerFront.metrics.pickerDisconnectsRefused
       }
     }
     check(
       'O56c',
-      'disconnect is carried out: the client leaves the server it named, and the front says which',
+      'disconnect is refused while a claim holds the body, in one sentence naming the driver',
       thirdPick !== null &&
         thirdPick.id === pickIdFor(pickerServerName) &&
         thirdLeave !== null &&
@@ -3157,7 +3182,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         pickerVerbs[1].verb === 'disconnect' &&
         pickerVerbs[1].id === thirdLeave.id &&
         pickerVerbs[1].server?.name === pickerServerName &&
+        pickerVerbs[1].claim === null &&
+        // Refused, by name, and nothing ended: the claim stands and no body closed.
+        disconnectRefusals.length === 1 &&
+        disconnectRefusals[0].driver === 'Attach' &&
+        /claimed by Attach/.test(String(disconnectRefusals[0].text ?? '')) &&
+        disconnectLines.length === 0 &&
+        pickerFront.metrics.pickerDisconnects === 0 &&
+        pickerFront.metrics.pickerDisconnectsRefused === 1 &&
+        pickerFront.claims.length === 1 &&
+        pickerFront.claims[0].name === 'Attach' &&
+        // The client that asked is answered rather than left in a dialog.
         pickerBot3.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
+        pickerBot3.received.ended !== null &&
         pickerFront.metrics.pickerPicks === 2 &&
         pickerFront.metrics.pickerServerDialogs === 2 &&
         pickerFront.metrics.pickerVerbs === 2 &&
@@ -4508,13 +4545,284 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.undriven
     )
 
+    // --- O64: a claim keeps a body alive, and a disconnect ends an unclaimed body (#261) ---
+    // O63 left the body standing with nobody driving it and two spectators on it. #261
+    // is the other half of what a claim means: a claim is the reason a body is kept
+    // alive. So a client may end an unclaimed body, a claimed one refuses that request
+    // in a sentence naming the driver, and a body that is ended stays down with no
+    // retry armed behind it.
+    //
+    // Nothing here dials. The body's session outlived its driver, so claiming it again
+    // is a landing on the cache it already has, and the fake counts the one login it
+    // has had since O58.
+    pickerBot13 = createBot({ port: pickerBound.port, username: 'Owner', version: pickerVersion })
+    await pickerBot13.waitFor(
+      () => pickerBot13.received.dialogs.length === 1,
+      'the picker at the client that claims the standing body',
+      15_000
+    )
+    const ownerPick = chooseDialogAction(pickerBot13.received.dialogs[0], pickerBodyName)
+    if (ownerPick !== null) pickerBot13.answerDialog(ownerPick.id, null, 'configuration')
+    await pickerBot13.waitFor(
+      () => pickerBot13.received.dialogs.length === 2,
+      "the standing body's own dialog at the client that claims it",
+      15_000
+    )
+    const ownerDialog = readServerDialog(pickerBot13.received.dialogs[1])
+    const ownerClaim = chooseDialogAction(pickerBot13.received.dialogs[1], 'claim')
+    const loginsBeforeOwner = pickerBodyFake.received.logins
+    if (ownerClaim !== null) pickerBot13.answerDialog(ownerClaim.id, null, 'configuration')
+    await pickerBot13.waitFor(
+      () => pickerBot13.received.login !== null,
+      'the claimed body at its new driver',
+      30_000
+    )
+    await waitFor(
+      () => pickerCore.attached === true && pickerCore.session.state === 'attached',
+      'the body claimed and driven again',
+      20_000
+    )
+    const ownerClaimLines = logs
+      .filter(entry => entry.event === 'pickerClaim')
+      .map(entry => entry.fields)
+    // Read now, not at the check: by the end of this assertion the body has been
+    // ended on purpose, and what the claim landed is a moment earlier in the run.
+    const afterClaim = {
+      state: pickerCore.session.state,
+      attached: pickerCore.attached,
+      claimed: pickerCore.claimedBody,
+      logins: pickerBodyFake.received.logins,
+      claims: pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name }))
+    }
+
+    // The claim ends with the driver's connection, so the body is standing and
+    // unclaimed again, which is what makes it a body a client may end.
+    await pickerBot13.close()
+    // The claim on the body this row names, not on every body: the first client's
+    // claim from O56 is still held on the row whose port answers nothing (#295).
+    await waitFor(
+      () => pickerFront.claims.every(claim => claim.body !== pickSlug(pickerBodyName)) &&
+        pickerCore.attached === false,
+      'the claim released when its driver left',
+      20_000
+    )
+    await waitFor(
+      () => pickerCore.session.state === 'detached',
+      'the body standing with nobody driving it',
+      20_000
+    )
+
+    pickerBot15 = createBot({ port: pickerBound.port, username: 'Dropper', version: pickerVersion })
+    await pickerBot15.waitFor(
+      () => pickerBot15.received.dialogs.length === 1,
+      'the picker at the client that ends the body',
+      15_000
+    )
+    const dropperPick = chooseDialogAction(pickerBot15.received.dialogs[0], pickerBodyName)
+    if (dropperPick !== null) pickerBot15.answerDialog(dropperPick.id, null, 'configuration')
+    await pickerBot15.waitFor(
+      () => pickerBot15.received.dialogs.length === 2,
+      "the undriven body's own dialog at the client that ends it",
+      15_000
+    )
+    const undrivenRow = readServerDialog(pickerBot15.received.dialogs[1])
+    const dropperClick = chooseDialogAction(pickerBot15.received.dialogs[1], 'disconnect')
+    const dropperDialogsBefore = pickerBot15.received.dialogs.length
+    const loginsBeforeEnd = pickerBodyFake.received.logins
+    const dialsBeforeEnd = pickerCore.metrics.claimDials
+    const endMark = logs.length
+    if (dropperClick !== null) pickerBot15.answerDialog(dropperClick.id, null, 'configuration')
+    await pickerBot15.waitFor(
+      () => pickerBot15.received.dialogs.length === dropperDialogsBefore + 1,
+      'the list again after the body it named was ended',
+      20_000
+    )
+    const afterEndList = readServerDialog(pickerBot15.received.dialogs[dropperDialogsBefore])
+    // The core's own record of the end: it arrives as one JSON line inside a
+    // `pickerCore` entry, because the rig hands it a logStream.
+    const endLines = coreLogEvents(endMark, 'pickerCore')
+      .filter(entry => entry.event === 'bodyDisconnected')
+    const endRefusals = coreLogEvents(endMark, 'pickerCore')
+      .filter(entry => entry.event === 'bodyDisconnectRefused')
+    // A retry arming for a body nobody claims would show up as a second login at the
+    // body's server. The run waits past the session's own one-second delay to look for
+    // one rather than reading the state once and calling it settled.
+    const retried = await settleUntil(() => pickerBodyFake.received.logins > loginsBeforeEnd, 1500)
+    // The two spectators end with the body, and their channels leave when their
+    // sockets do. A client that joins after that reads the row the ended body left:
+    // it is the row's own word for a body that is not up, not a count taken during
+    // the teardown.
+    await waitFor(
+      () => (pickerFront.channels ?? []).length === 0,
+      'the channels the ended body took with it',
+      15_000
+    )
+    pickerBot16 = createBot({ port: pickerBound.port, username: 'After', version: pickerVersion })
+    await pickerBot16.waitFor(
+      () => pickerBot16.received.dialogs.length === 1,
+      'the picker at a client that joins after the body ended',
+      15_000
+    )
+    const afterEndRows = readServerDialog(pickerBot16.received.dialogs[0])
+    // Read before the claim below, because that claim is a dial and it moves every
+    // one of these.
+    const afterEnd = {
+      state: pickerCore.session.state,
+      pendingReconnect: pickerCore.session.pendingReconnect,
+      claimed: pickerCore.claimedBody,
+      attached: pickerCore.attached,
+      logins: pickerBodyFake.received.logins,
+      legEnded: pickerBackend.ended
+    }
+    // A body that ended is a body a claim dials back. `down` is the third stage a
+    // claim leaves, beside `boot` and `failed`, and it is the only way a body a
+    // player ended ever returns. This is the assertion's one dial, and it is the
+    // guard's proof rather than a retry's: the login moves because a client asked,
+    // not because a timer fired.
+    pickerBot17 = createBot({ port: pickerBound.port, username: 'Back', version: pickerVersion })
+    await pickerBot17.waitFor(
+      () => pickerBot17.received.dialogs.length === 1,
+      'the picker at the client that claims the ended body',
+      15_000
+    )
+    const backPick = chooseDialogAction(pickerBot17.received.dialogs[0], pickerBodyName)
+    if (backPick !== null) pickerBot17.answerDialog(backPick.id, null, 'configuration')
+    await pickerBot17.waitFor(
+      () => pickerBot17.received.dialogs.length === 2,
+      "the ended body's own dialog at the client that claims it",
+      15_000
+    )
+    const backRow = readServerDialog(pickerBot17.received.dialogs[1])
+    const backClick = chooseDialogAction(pickerBot17.received.dialogs[1], 'claim')
+    if (backClick !== null) pickerBot17.answerDialog(backClick.id, null, 'configuration')
+    await pickerBot17.waitFor(
+      () => pickerBot17.received.login !== null,
+      'the body a claim dialled back',
+      30_000
+    )
+    await waitFor(
+      () => pickerCore.attached === true && pickerCore.session.state === 'attached',
+      'the body down, dialled back and driven again',
+      20_000
+    )
+    const afterBack = {
+      state: pickerCore.session.state,
+      attached: pickerCore.attached,
+      claimed: pickerCore.claimedBody,
+      logins: pickerBodyFake.received.logins,
+      claims: pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name })),
+      dials: pickerCore.metrics.claimDials,
+      dialled: pickerCore.metrics.claimDials - dialsBeforeEnd
+    }
+    evidence.ended = {
+      body: pickerBodyName,
+      claim: {
+        dialogs: ownerDialog.buttons.map(button => button.label),
+        title: ownerDialog.title,
+        clicked: ownerClaim === null ? null : ownerClaim.id,
+        granted: ownerClaimLines.at(-1) ?? null,
+        after: afterClaim,
+        logins: { before: loginsBeforeOwner, after: pickerBodyFake.received.logins }
+      },
+      ended: {
+        row: undrivenRow.title,
+        clicked: dropperClick === null ? null : dropperClick.id,
+        lines: endLines,
+        refusals: endRefusals,
+        state: afterEnd.state,
+        claimed: afterEnd.claimed,
+        pendingReconnect: afterEnd.pendingReconnect,
+        written: pickerFront.metrics.pickerDisconnects,
+        legEnded: afterEnd.legEnded,
+        logins: { before: loginsBeforeEnd, after: afterEnd.logins },
+        retried,
+        rows: {
+          resent: afterEndList.buttons.map(button => button.label),
+          after: afterEndRows.buttons.map(button => button.label)
+        },
+        clients: {
+          dropper: pickerBot15.received.ended === null ? null : String(pickerBot15.received.ended).slice(0, 140),
+          after: pickerBot16.received.ended === null ? null : String(pickerBot16.received.ended).slice(0, 140),
+          watcher: pickerBot6.received.ended === null ? null : String(pickerBot6.received.ended).slice(0, 140),
+          lateWatch: pickerBot12.received.ended === null ? null : String(pickerBot12.received.ended).slice(0, 140)
+        }
+      },
+      back: {
+        row: backRow.title,
+        clicked: backClick === null ? null : backClick.id,
+        logins: { before: loginsBeforeEnd, after: afterBack.logins },
+        after: afterBack
+      }
+    }
+    check(
+      'O64',
+      'a claim keeps a body alive and a disconnect ends an unclaimed one: the body that ends stays down until a claim dials it back',
+      // The claim lands on the body that is already standing: no dial, no second login.
+      ownerPick !== null &&
+        ownerPick.id === pickIdFor(pickerBodyName) &&
+        ownerClaim !== null &&
+        ownerClaim.id === verbIdFor('claim', pickerBodyName) &&
+        ownerDialog.title === pickerBodyName + ' - unclaimed, 2 watching' &&
+        pickerBot13.received.login !== null &&
+        afterClaim.attached === true &&
+        afterClaim.state === 'attached' &&
+        afterClaim.claims.filter(claim => claim.body === pickSlug(pickerBodyName)).length === 1 &&
+        afterClaim.claims.some(claim => claim.body === pickSlug(pickerBodyName) && claim.name === 'Owner') &&
+        afterClaim.logins === loginsBeforeOwner &&
+        loginsBeforeOwner === 1 &&
+        // The claim is the body's, and it is a landing on the state the body already
+        // had: the driver before this one came and went without the body moving.
+        afterClaim.claimed === pickSlug(pickerBodyName) &&
+        // With the claim gone the body is a body a client may end, and the row says so.
+        undrivenRow.title === pickerBodyName + ' - unclaimed, 2 watching' &&
+        dropperClick !== null &&
+        dropperClick.id === verbIdFor('disconnect', pickerBodyName) &&
+        // The end: the session goes down, the socket closes, and the cache goes with it.
+        endLines.length === 1 &&
+        endLines[0].body === pickSlug(pickerBodyName) &&
+        endLines[0].name === 'Dropper' &&
+        pickerFront.metrics.pickerDisconnects === 1 &&
+        afterEnd.state === 'down' &&
+        afterEnd.pendingReconnect === false &&
+        afterEnd.legEnded === true &&
+        afterEnd.attached === false &&
+        // A body that ends is not retried, and a body that is down stays down.
+        retried === false &&
+        afterEnd.logins === loginsBeforeEnd &&
+        // The lane still serves that body, so the row is down rather than gone.
+        afterEnd.claimed === pickSlug(pickerBodyName) &&
+        afterEndList.buttons.some(button => button.label.startsWith(pickerBodyName + ' - down')) &&
+        afterEndRows.buttons.length === 2 &&
+        afterEndRows.buttons.some(button => button.label === pickerBodyName + ' - down') &&
+        // The client that asked stayed, and the body that ended took its spectators.
+        pickerBot15.received.ended === null &&
+        pickerBot6.received.ended !== null &&
+        pickerBot12.received.ended !== null &&
+        // And a claim dials the ended body back: the client clicked Claim on the row
+        // that says `down`, the body's server saw its second login, and the driver
+        // is standing in it. Without this a body a player ended would be gone until
+        // the lane restarted, and no rung would say so.
+        backPick !== null &&
+        backPick.id === pickIdFor(pickerBodyName) &&
+        backRow.title === pickerBodyName + ' - down' &&
+        backClick !== null &&
+        backClick.id === verbIdFor('claim', pickerBodyName) &&
+        afterBack.logins === loginsBeforeEnd + 1 &&
+        afterBack.state === 'attached' &&
+        afterBack.attached === true &&
+        afterBack.claimed === pickSlug(pickerBodyName) &&
+        afterBack.claims.some(claim => claim.body === pickSlug(pickerBodyName) && claim.name === 'Back') &&
+        afterBack.dialled === 1,
+      evidence.ended
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }

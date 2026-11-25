@@ -639,12 +639,16 @@ first dial and its target warms in five seconds.
   (`monoplayer:claim` with no server), an id in another namespace and a server the
   lane does not offer take the same route through the leg. Their sentences are
   proven in `test/core/picker.test.js` rather than here.
-- `O56c` disconnect is carried out (#266). A third 26.2 bot picks, then clicks
-  `Disconnect` out of the frame it received. The front reports verb `disconnect`
-  with that id and the server it named, and ends the client's configuration with a
-  `disconnect` frame. Spectate is refused in words, because nothing watches a body
-  from this phase. This is the one verb the dialog layer can complete on its own,
-  and it is proven by a click for that reason.
+- `O56c` disconnect is refused while a claim holds the body, in one sentence
+  naming the driver (#261). A third 26.2 bot picks, then clicks `Disconnect` on the
+  row the first client's claim stands on: a claim whose landing failed, which is a
+  claim all the same (#295). The front reports verb `disconnect` with that id and the
+  server it named, and the click reaches the claim. The refusal is one sentence that
+  names `Attach`, and the client is disconnected with it rather than left in a dialog
+  nobody will read. Nothing else moves: no body closed, the claim is still the one on
+  that body, and the core's session is untouched. O64 is the half where a body is
+  unclaimed and does end. Spectate is refused in words, because nothing watches a
+  body from this phase.
 - `O57` the pick records an exclusive claim, and a second claim on that body is
   refused by name (#267). The first 26.2 bot claimed the row whose port answers
   nothing in O56 and is still connected, so it holds that body, and it is back at
@@ -858,6 +862,44 @@ first dial and its target warms in five seconds.
   drive. Both clients here are protocol bots, and the driver lane's scenarios do not
   watch a body yet (#325). The second registry round a real client takes is #268's;
   the body's own entity stream is what a driver-lane scenario has to witness.
+- `O64` a claim keeps a body alive, and a disconnect ends an unclaimed one (#261).
+  O63 left the body standing with nobody driving it and two spectators on it. A
+  thirteenth client reads the picker, picks that row and clicks `Claim`. Nothing is
+  dialled: the body's session outlived its driver, so the claim lands on the state the
+  body already has, the fake counts the one login it has had since O58, the client's
+  play login arrives on the socket it already held, and the session is `attached`. The
+  row the client read said `<address> - unclaimed, 2 watching`.
+
+  That driver then leaves, which releases the claim with its connection, and the body
+  is standing and unclaimed again: the session is `detached` and the front holds no
+  claim on it. A fifteenth client reads the picker, picks that row, reads
+  `<address> - unclaimed, 2 watching`, and clicks `Disconnect`. The body ends: the
+  session goes `down` with no retry armed behind it, the backend leg closes, and the
+  request is one `bodyDisconnected` line naming the client that asked. The run then
+  waits past the session's own one-second delay and finds the fake's login count
+  unchanged, so the body that ended was not dialled again.
+
+  The two spectators are ended with the body, because a body that ends takes every
+  channel on it. The client that asked stays: it is shown the list again, and the row it
+  ended reads `<address> - down`. A sixteenth client joins once those channels are gone
+  and reads the same row, unchanged, so the row is the body's state and not a count
+  taken mid-teardown. The lane still serves that body, and `claimedBody` still names it,
+  so the row is a body that is down rather than a server the lane forgot.
+
+  A body that ended is a body a claim dials back, and that is the last thing the
+  assertion proves. A seventeenth client reads the `down` row, clicks `Claim`, and the
+  body's server takes its second login. The session leaves `down` through the same dial
+  a cold lane uses, the client lands in the body, and the claim names that client.
+  Without this a body a player ended would be gone until the lane restarted, and no rung
+  would say so.
+
+  What it cannot prove: a drop while a claim is held. That needs the front to keep a
+  client that is standing in a world whose backend has died, through a same-connection
+  reconfiguration round that a fault starts rather than a server's transfer. O54 proves
+  such a round with a protocol bot. It does not prove one a fault starts, and it has no
+  give-up that puts a driver somewhere when the body cannot come back (#334). Today such
+  a fault still ends the driver's connection: the claim buys the body a retry, and the
+  driver rejoins to find it.
 
 ## The client parity rung
 
