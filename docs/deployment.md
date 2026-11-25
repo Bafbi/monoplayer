@@ -262,7 +262,8 @@ Common:
 a front that asks no session server who a client is (no encryption, no
 `hasJoined`, and a UUID derived from the name the client claims), and a backend
 leg that joins as `auth: 'offline'` with a fixed username, from
-`MONOPLAYER_PUPPET_USERNAME` or `GlowSquidye`. Its UUID follows from that name.
+`MONOPLAYER_PUPPET_USERNAME`, else `MONOPLAYER_PUPPET_ACCOUNT`, else
+`GlowSquidye`. Its UUID follows from that name.
 A lane that sets `MONOPLAYER_PUPPET_UUID` must set the UUID the name derives, or
 it refuses to start with `offline_puppet_uuid_mismatch`. The lane
 needs no custody directory, no account selector, and no Microsoft auth:

@@ -158,6 +158,14 @@ test('#391 the offline puppet is named, and its UUID is the one that name derive
     username: 'devpuppet',
     uuid: offlineUuid('devpuppet')
   })
+  // The dev lane names its account and nothing else, and an offline lane has no
+  // account to resolve: the selector is the name.
+  assert.deepEqual(offlinePuppet({ account: 'devpuppet' }), {
+    username: 'devpuppet',
+    uuid: offlineUuid('devpuppet')
+  })
+  // An explicit username wins over the selector, so a lane can keep both.
+  assert.equal(offlinePuppet({ account: 'devpuppet', username: 'puppet' }).username, 'puppet')
   // A UUID that agrees is accepted, so a lane may assert the identity it expects.
   assert.equal(offlinePuppet({ username: 'devpuppet', uuid: offlineUuid('devpuppet') }).uuid,
     offlineUuid('devpuppet'))

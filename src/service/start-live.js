@@ -294,13 +294,21 @@ function accountHint () {
 
 // #391: the identity an offline body speaks as, derived from its name the way an
 // offline server derives it for every client (src/legs/offline-identity.js).
+// The name is the lane's: `username`, else the `account` selector, else the
+// leg's own default. The UUID always follows from it.
 //
 // A configured UUID can only agree with that derivation or be wrong. The backend
 // derives the UUID from the name on its side, so a lane that carried the other
 // one would name a player the server does not have: in the skin frame, and in the
 // start record. A disagreement is refused, never overridden.
-export function offlinePuppet ({ username = null, uuid = null } = {}) {
-  const name = username ?? OFFLINE_PUPPET_USERNAME
+export function offlinePuppet ({ account = null, username = null, uuid = null } = {}) {
+  // The name an offline body joins as. `username` is the key that says what the
+  // puppet is called, and `account` is the selector a lane like the dev lane
+  // already sets (`MONOPLAYER_PUPPET_ACCOUNT=devpuppet`). On a lane with no
+  // account to resolve, the selector is only ever a name, so it is read as one
+  // rather than ignored: a dev lane joined as the live puppet's name is at best
+  // confusing and at worst a live identity on a test Paper.
+  const name = username ?? account ?? OFFLINE_PUPPET_USERNAME
   const derived = offlineUuid(name)
   if (uuid !== null && normalizeUuid(uuid) !== derived) {
     throw new TypeError(
