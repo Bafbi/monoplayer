@@ -40,8 +40,8 @@
 // reads which server is about to change.
 //
 // Every command reads a fixed set of options and refuses the rest (COMMAND_FLAGS).
-// parseArgs takes every option for every command, so without that check a flag the
-// chosen command never reads was accepted and dropped: `whitelist attach add Bafbi
+// parseArgs takes every option for every command, so without that check the command
+// accepted a flag it never reads and wrote anyway: `whitelist attach add Bafbi
 // --namespace monoplayer-dev` exited 0 and wrote the local file, and the operator
 // had no reason to check (#377).
 import path from 'node:path'
@@ -140,11 +140,11 @@ function parseArgs (argv) {
 
 const USAGE = [
   'usage:',
-  '  node src/custody/cli.js accounts [--accounts-dir <dir>] [--secrets-dir <dir>] [--json]',
-  '  node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>] [--secrets-dir <dir>]',
+  '  node src/custody/cli.js accounts [--accounts-dir <dir>] [--secrets-dir <dir>] [--json] [--from <name>]',
+  '  node src/custody/cli.js device-code [--account <uuid|alias|name>] [--alias <alias>] [--accounts-dir <dir>] [--secrets-dir <dir>]',
   '  node src/custody/cli.js device-code --dir <accountDir>',
-  '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--secrets-dir <dir>] [--json] [--refresh]',
-  '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--secrets-dir <dir>]',
+  '  node src/custody/cli.js status [--account <uuid|alias|name>] [--dir <accountDir>] [--accounts-dir <dir>] [--secrets-dir <dir>] [--json] [--refresh]',
+  '  node src/custody/cli.js migrate [--apply] [--dry-run] [--from <name>] [--no-quarantine] [--accounts-dir <dir>] [--secrets-dir <dir>]',
   '  node src/custody/cli.js whitelist attach add|remove <name-or-uuid> [--file <path>] [--secrets-dir <dir>]',
   '  node src/custody/cli.js whitelist backend add|remove <name-or-uuid> --namespace <ns> [--deployment <dep>] [--secrets-dir <dir>]',
 ].join('\n')
@@ -153,18 +153,23 @@ const USAGE = [
 // table is the whole answer to "does that flag change anything here?". A command
 // that omits a flag refuses it before it writes, because a flag accepted and
 // ignored is worse than one that does not exist: the operator has no reason to
-// check (#377). --secrets-dir and --accounts-dir name the custody root itself and
-// are read before the dispatch, so every command takes them.
-const ROOT_FLAGS = ['secrets-dir', 'accounts-dir']
+// check (#377).
+//
+// The two root flags are per command too. --secrets-dir names the custody root,
+// which every command resolves, so every list carries it. --accounts-dir names the
+// account tree, which only a command that resolves an account reads: a whitelist
+// write reaches no account, so it refuses the flag rather than drop it.
+const CUSTODY_ROOT = 'secrets-dir'
+const ACCOUNT_TREE = 'accounts-dir'
 const COMMAND_FLAGS = {
-  accounts: ['json', 'from'],
-  'device-code': ['account', 'dir', 'alias'],
-  status: ['account', 'dir', 'json', 'refresh'],
-  migrate: ['apply', 'dry-run', 'from', 'no-quarantine'],
+  accounts: [CUSTODY_ROOT, ACCOUNT_TREE, 'json', 'from'],
+  'device-code': [CUSTODY_ROOT, ACCOUNT_TREE, 'account', 'dir', 'alias'],
+  status: [CUSTODY_ROOT, ACCOUNT_TREE, 'account', 'dir', 'json', 'refresh'],
+  migrate: [CUSTODY_ROOT, ACCOUNT_TREE, 'apply', 'dry-run', 'from', 'no-quarantine'],
   // One flag names a local file, the other names a Paper. Neither whitelist reads
   // the other's, so each refuses it.
-  'whitelist attach': ['file'],
-  'whitelist backend': ['namespace', 'deployment'],
+  'whitelist attach': [CUSTODY_ROOT, 'file'],
+  'whitelist backend': [CUSTODY_ROOT, 'namespace', 'deployment'],
 }
 
 function fail (message, code = 1) {
@@ -199,7 +204,7 @@ function refuseUnreadFlags (command, args) {
   const read = COMMAND_FLAGS[key]
   if (!read) return
   for (const name of Object.keys(args)) {
-    if (name === 'positional' || ROOT_FLAGS.includes(name) || read.includes(name)) continue
+    if (name === 'positional' || read.includes(name)) continue
     // Naming the command that does read the flag turns a refusal into the next
     // command the operator types.
     const readers = Object.keys(COMMAND_FLAGS).filter(owner => COMMAND_FLAGS[owner].includes(name))
