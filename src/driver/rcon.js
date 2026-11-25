@@ -3,13 +3,16 @@
 //   kubectl -n <namespace> exec deploy/<deployment> -- rcon-cli "<command>"
 //
 // so no server credentials ever appear in code, on this command line, or in
-// reports; rcon-cli reads its config inside the pod. Namespace/deployment are
+// reports; rcon-cli reads its config inside the pod. The namespace is the run's gate
+// lane (#282): the caller's, GATEB_RCON_NAMESPACE, or the lane this worktree derives,
+// and src/driver/lane.js is the only place that answers it. The deployment is
 // configurable for testing and re-use. The adapter returns records
 // `{ ok, output, command, durationMs, label, kind }` and never throws.
 //
 // Op classification lives with the caller: helpers below tag setup vs
 // assertion vs probe, and the scenario executor records the tag.
 import { execFile } from 'node:child_process'
+import { resolveGateLane } from './lane.js'
 
 export function blockIfCommand (x, y, z, block) {
   return `execute if block ${x} ${y} ${z} ${block}`
@@ -20,7 +23,9 @@ export function blockUnlessCommand (x, y, z, block) {
 }
 
 export function createRcon ({
-  namespace = process.env.GATEB_RCON_NAMESPACE || 'monoplayer-gate-b',
+  // No literal lane here. A default that typed one administered the lane that
+  // shipped while the run measured its own, and nothing said so (#282).
+  namespace = process.env.GATEB_RCON_NAMESPACE || resolveGateLane(),
   deployment = process.env.GATEB_RCON_DEPLOYMENT || 'paper',
   timeoutMs = Number(process.env.GATEB_RCON_TIMEOUT_MS || 20000),
   exec = defaultExec,
