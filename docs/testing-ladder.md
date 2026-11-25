@@ -858,9 +858,12 @@ first dial and its target warms in five seconds.
   driving.
 
   What neither assertion can prove: that a vanilla client draws a body it does not
-  drive. Both clients here are protocol bots, and the driver lane's scenarios do not
-  watch a body yet (#325). The second registry round a real client takes is #268's;
-  the body's own entity stream is what a driver-lane scenario has to witness.
+  drive. Both clients here are protocol bots, and the picker is off on every lane this
+  repo deploys, so no real client has made a claim for another to watch (#325). A row
+  that witnesses one needs a lane serving a picker, and
+  [the driver runbook](../deploy/driver/README.md#no-spectator-row-this-lane-serves-no-body)
+  says what that lane would have to hold. The second registry round a real client takes
+  is #268's. The body's own entity stream is what such a row has to witness.
 - `O64` a claim lands on a body that is already standing, and a disconnect ends an
   unclaimed one (#261).
   O63 left the body standing with nobody driving it and two spectators on it. A
