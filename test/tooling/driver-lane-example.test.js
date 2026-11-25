@@ -48,7 +48,7 @@ test('no file under tools/driver spells a lane of its own', () => {
     // the defect: it resolves to nothing once the lane moves.
     const literal = read(file).match(/monoplayer-gate-[a-z0-9]/)
     assert.equal(literal, null,
-      file + ' spells a gate lane (' + (literal ? literal[0] : '') +
+      file + ' spells a gate lane (' + (literal?.[0] ?? '') +
       '). A lane is this worktree\'s: name it with scripts/gate-lane.sh name, or write monoplayer-gate-<instance>')
   }
 })
@@ -81,8 +81,8 @@ test('deploy/driver/README.md no longer calls the driver examples stale', () => 
     'the examples derive the lane, so the page does not warn that they do not')
 })
 
-test('the installer asks the resolver, and its printed command names the lane', () => {
-  const printed = runInstall()
+test('the installer asks the resolver, and its printed command names the lane', t => {
+  const printed = runInstall(t)
   const address = paperAddress(LANE)
   assert.equal(printed.status, 0, 'install.sh installs into a throwaway Prism root: ' + printed.stderr)
   assert.ok(printed.stdout.includes(address),
@@ -91,11 +91,11 @@ test('the installer asks the resolver, and its printed command names the lane', 
   assert.match(printed.stdout, /another lane/i, 'and says what a run against another lane passes')
 })
 
-test('the installer prints a placeholder and the way out when the lane cannot be derived', () => {
+test('the installer prints a placeholder and the way out when the lane cannot be derived', t => {
   // The installer can reach a host whose checkout is not a git worktree: the
   // resolver cannot answer, so the example has to look like a placeholder
   // instead of hosting a plausible one.
-  const printed = runInstall({ env: { MONOPLAYER_GATE_WORKTREE: os.tmpdir() } })
+  const printed = runInstall(t, { env: { MONOPLAYER_GATE_WORKTREE: os.tmpdir() } })
   assert.equal(printed.status, 0, 'the install still succeeds: ' + printed.stderr)
   assert.match(printed.stdout, /monoplayer-gate-<instance>-paper\./,
     'install.sh prints the placeholder shape the tree renders. It printed:\n' + printed.stdout)
@@ -106,9 +106,11 @@ test('the installer prints a placeholder and the way out when the lane cannot be
 })
 
 // A Prism root with one base instance, installed into by the real script. Each
-// run writes under its own temp directory, so no host Prism root is touched.
-function runInstall ({ env = {} } = {}) {
+// run writes under its own temp directory, so no host Prism root is touched, and
+// the case removes it.
+function runInstall (t, { env = {} } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'driver-install-'))
+  t.after(() => fs.rmSync(scratch, { recursive: true, force: true }))
   const prism = path.join(scratch, 'PrismLauncher')
   const base = path.join(prism, 'instances', 'gate-b-player')
   fs.mkdirSync(path.join(base, 'minecraft'), { recursive: true })
