@@ -32,13 +32,15 @@ const HEARTBEAT_MS = Date.parse(HEARTBEAT_AT)
 const NOW = HEARTBEAT_MS + 12_000
 const START_AT = '2026-11-18T09:00:00.000Z'
 
+// #331: one label for one fact. The start record carries the backend the lane
+// dialled, which is the configured one, and no second copy of it. The panel still
+// shows both facts, because a reconnect moves the effective one and not this one.
 const startLive = {
   t: START_AT,
   event: 'startLive',
   version: '1.2.3',
   front: '0.0.0.0:25565',
   backend: 'play2.excalia.fr:25565',
-  backendConfigured: 'play2.excalia.fr:25565',
   whitelistCount: 1,
   control: { whitelistReload: true }
 }
@@ -202,7 +204,10 @@ test('a successful reconnect moves the effective backend off the start record', 
   const reconnect = { t: '2026-11-18T10:20:00.000Z', event: 'backendReconnect', target: 'alt.excalia.fr:25565', warm: true }
   const card = facts({ log: { text: tail(startLive, reconnect, heartbeat) } })
   assert.deepEqual(card.backend.effective, { value: 'alt.excalia.fr:25565', source: 'reconnect', at: reconnect.t })
-  assert.equal(card.backend.configured.value, 'play2.excalia.fr:25565', 'the config document\'s target is still its own fact')
+  // #331: the configured target is the start record's one backend label, so a
+  // transfer leaves it where the lane started. One record field, two facts.
+  assert.deepEqual(card.backend.configured, { value: 'play2.excalia.fr:25565', source: 'start', at: START_AT },
+    'the configured target is the start record\'s backend, and a transfer does not move it')
 })
 
 test('the last attach names the bodies that never spawned', () => {
