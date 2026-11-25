@@ -113,7 +113,8 @@ test('the ladder maps every run to the lane it belongs on', () => {
   // The observer restarts the gate Paper and runs its joins from pods in the
   // live namespace, so one namespace in that cell would name half the run.
   const observer = row(lanes, 'mise run observer:run')
-  assert.match(observer, /monoplayer-gate-b/, 'the observer row names the gate namespace')
+  assert.match(observer, /this worktree's lane/,
+    "the observer row names this worktree's lane, and not one that shipped (#282)")
   assert.match(observer, /in `monoplayer`/, 'and the live namespace its pods run in')
 
   // G0 joins the gate Paper directly. Velocity fronts paper-m4, a different one.

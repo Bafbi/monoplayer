@@ -27,7 +27,12 @@
 # which is why installing a plugin into it and restarting it is allowed here.
 #
 # Environment:
-#   MONOPLAYER_GATE_NAMESPACE        the gate namespace        (default monoplayer-gate-b)
+#   MONOPLAYER_GATE_NAMESPACE        the lane measured         (default: this worktree's
+#                                                              lane, from
+#                                                              scripts/gate-lane.sh name).
+#                                                              --namespace names the same
+#                                                              value, and naming it both
+#                                                              ways is a refusal (#282)
 #   MONOPLAYER_CLUSTER_NAMESPACE     the live namespace        (default monoplayer)
 #   MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT
 #                                    the Paper deployment measured
@@ -46,14 +51,18 @@
 # join, 2 setup refused or incomplete.
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
-GATE_NAMESPACE=${MONOPLAYER_GATE_NAMESPACE:-monoplayer-gate-b}
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 LIVE_NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
 # The lane that serves the code of conduct (#78). `paper` is the G0 driver row and
 # a real client there would sit at the gate, so the observer measures its own Paper:
 # same image, version and build, the gate on, and nothing else different.
 PAPER_DEPLOYMENT=${MONOPLAYER_OBSERVER_PAPER_DEPLOYMENT:-paper-conduct}
-BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-paper-conduct.$GATE_NAMESPACE.svc.cluster.local}
+# The lane is decided below, after the arguments: --namespace and the variable are
+# two ways to name it, and one run measures one lane (#282). The backend host follows
+# the lane that comes out, so the install and the joins cannot name different servers.
+GATE_NAMESPACE=''
+NAMED_LANE=''
+BACKEND_HOST=${MONOPLAYER_BACKEND_HOST:-}
 BACKEND_PORT=${MONOPLAYER_BACKEND_PORT:-25565}
 REPORT=${MONOPLAYER_OBSERVER_REPORT:-.reports/observer-report.json}
 VIEWS=${MONOPLAYER_OBSERVER_VIEWS:-.reports/observer-views.jsonl}
@@ -88,7 +97,7 @@ while [ $# -gt 0 ]; do
     --views) VIEWS=${2:?--views needs a value}; shift 2 ;;
     --backend-host) BACKEND_HOST=${2:?--backend-host needs a value}; shift 2 ;;
     --backend-port) BACKEND_PORT=${2:?--backend-port needs a value}; shift 2 ;;
-    --namespace) GATE_NAMESPACE=${2:?--namespace needs a value}; shift 2 ;;
+    --namespace) NAMED_LANE=${2:?--namespace needs a value}; shift 2 ;;
     --paper-deployment) PAPER_DEPLOYMENT=${2:?--paper-deployment needs a value}; shift 2 ;;
     --jar) JAR=${2:?--jar needs a value}; shift 2 ;;
     --start-timeout|--timeout) START_TIMEOUT=${2:?--start-timeout needs a value}; shift 2 ;;
@@ -99,11 +108,51 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-command -v kubectl >/dev/null || die 'kubectl is not on PATH'
-# Measuring the live lane is not this command, and not a plugin install.
-if [ "$GATE_NAMESPACE" = "$LIVE_NAMESPACE" ]; then
-  die "the gate namespace is the live namespace ($LIVE_NAMESPACE); this command never measures the live lane" 2
+# --- the one lane this run measures (#282) -------------------------------------
+#
+# scripts/gate-lane.sh owns the name: monoplayer-gate-<commit>-<path hash> for this
+# worktree, or whatever MONOPLAYER_GATE_NAMESPACE names by hand. It already honours the
+# variable, so naming it by hand and deriving it are one path and no second rule.
+#
+# The name is resolved here, after the arguments, because --namespace and the variable
+# are the same decision. Before #282 the backend host was computed from the default
+# before the parser ran, so --namespace installed the plugin into one lane and dialled
+# another lane's Paper, and the report compared a backend nobody measured.
+#
+# Two names for one run stops the run. Picking one quietly is how that survived.
+NAMED_BY_ENV=${MONOPLAYER_GATE_NAMESPACE:-}
+if [ -n "$NAMED_LANE" ]; then
+  if [ -n "$NAMED_BY_ENV" ] && [ "$NAMED_BY_ENV" != "$NAMED_LANE" ]; then
+    die "--namespace names \"$NAMED_LANE\" and MONOPLAYER_GATE_NAMESPACE names \"$NAMED_BY_ENV\": one run measures one lane, so name it once, or unset the variable" 2
+  fi
+  # Exported, because scripts/gate-lane.sh name is the next reader and it honours
+  # this variable: a shell variable would not reach it, and the derivation would
+  # quietly win over the name the caller gave.
+  export MONOPLAYER_GATE_NAMESPACE=$NAMED_LANE
 fi
+
+# Measuring the live lane is not this command, and not a plugin install. This is
+# checked before the derivation, so the refusal is this script's sentence and not
+# gate-lane.sh's: that script's rule is about the lanes it scales and deletes.
+case "${MONOPLAYER_GATE_NAMESPACE:-}" in
+  "$LIVE_NAMESPACE"|monoplayer|monoplayer-dev)
+    die "the gate namespace is ${MONOPLAYER_GATE_NAMESPACE}; this command never measures the live lane" 2 ;;
+esac
+
+command -v kubectl >/dev/null || die 'kubectl is not on PATH'
+
+# gate-lane.sh's sentence reaches the reader unchanged: a command substitution takes
+# stdout, and a refusal is written to stderr.
+GATE_NAMESPACE=$(bash "$ROOT/scripts/gate-lane.sh" name) ||
+  die 'cannot name the lane this run measures: scripts/gate-lane.sh name failed above, and a run that cannot name its lane would install into a lane nobody can say is its own' 2
+# Exported, so both joins take the account lease for this lane and dial this lane's
+# Paper. Each join is scripts/online-cluster.sh, which names its lane the same way
+# (#301); one value reaches all three.
+export MONOPLAYER_GATE_NAMESPACE=$GATE_NAMESPACE
+# MONOPLAYER_BACKEND_HOST and --backend-host stay the caller's override, not a second
+# lane: a run handed one dials where it was told. The default is the deployment this
+# run measures, so --paper-deployment cannot move the install and leave the backend.
+[ -n "$BACKEND_HOST" ] || BACKEND_HOST=$PAPER_DEPLOYMENT.$GATE_NAMESPACE.svc.cluster.local
 
 if [ -z "$JAR" ]; then
   JAR=$(find "$ROOT/tools/observer/build/libs" -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' 2>/dev/null | head -1)
@@ -123,8 +172,8 @@ mkdir -p "$(dirname "$VIEWS")" "$(dirname "$REPORT")"
 
 # The deployment's own selector decides which pods are its Paper. The label value
 # is not the deployment name: every gate workload is labelled
-# app.kubernetes.io/name=monoplayer-gate-b-<thing>, so reading the selector keeps
-# this step right for whichever workload name it is pointed at.
+# app.kubernetes.io/name=monoplayer-gate-<instance>-<thing>, so reading the selector
+# keeps this step right for whichever lane and workload it is pointed at.
 paper_pod() {
   local label pod
   label=$(kubectl -n "$GATE_NAMESPACE" get deploy "$PAPER_DEPLOYMENT" \

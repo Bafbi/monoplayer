@@ -3,9 +3,13 @@
 // child processes, so the M4 unit tests stay fully offline.
 //
 // Names here must match the Kubernetes objects in deploy/driver/:
-//   service/deployment  <deployment>  (namespace monoplayer-gate-b)
+//   service/deployment  <deployment>  (in the run's lane, from src/driver/lane.js)
 //   rcon                kubectl exec deploy/<rcon.deployment> -- rcon-cli
-export const NAMESPACE = 'monoplayer-gate-b'
+//
+// No row carries a lane (#282). A lane is the run's, not the registry's: one worktree
+// gets one, and a row that spelled one told a renamed lane's run to administer the
+// lane that shipped. rconTarget takes the lane as an argument, and the tailnet name
+// comes from lane.js's tailnetHost and the row's deployment.
 
 // Toxiproxy listeners ("puppet leg" per the plan: Monoplayer back leg ->
 // Toxiproxy -> Velocity/Vanilla/Fabric). The M1 vanilla and M3 fabric rows are
@@ -54,7 +58,6 @@ function row ({
     id,
     lane,
     deployment,
-    namespace: NAMESPACE,
     endpoints: Object.freeze({
       clusterService: `${deployment}:${port}`,
       port,
@@ -63,7 +66,7 @@ function row ({
     }),
     pins: Object.freeze(pins),
     status, // 'running' = live in the cluster, 'planned' = manifest/plan only
-    rcon: Object.freeze({ namespace: NAMESPACE, deployment }),
+    rcon: Object.freeze({ deployment }),
     notes: Object.freeze(notes),
   })
 }
@@ -112,7 +115,7 @@ export const BACKENDS = Object.freeze([
       'G0 direct lane: online-mode=true, secure-profile=true',
       'exposed only through Tailscale for nath; RCON ClusterIP only',
     ],
-    tailscale: { service: 'paper-g0', hostname: 'monoplayer-gate-b-paper' },
+    tailscale: { service: 'paper-g0' },
   }),
   row({
     id: 'fabric',
@@ -152,7 +155,7 @@ export const BACKENDS = Object.freeze([
       'RCON via ClusterIP only',
     ],
     proxyRoute: { listener: 'puppet-velocity', listenPort: 25570, through: 'toxiproxy' },
-    tailscale: { service: 'velocity-m4', hostname: 'monoplayer-gate-b-velocity' },
+    tailscale: { service: 'velocity-m4' },
   }),
 ])
 
@@ -176,7 +179,10 @@ export function activeBackends () {
   return BACKENDS.filter(b => b.status === 'running')
 }
 
-export function rconTarget (id) {
+// The row's RCON target in the lane the run named. The lane is a parameter because
+// it is decided at the run's boundary, by src/driver/lane.js, and a registry that
+// carried one would be a second answer (#282).
+export function rconTarget (id, namespace) {
   const backend = getBackend(id)
-  return backend ? { ...backend.rcon } : null
+  return backend ? { namespace, deployment: backend.rcon.deployment } : null
 }

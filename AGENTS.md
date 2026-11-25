@@ -38,8 +38,8 @@ that leaves the deployment serving.
 | a real Paper and a real proxy, for one branch | `mise run dev:up`, then `mise run dev:image sha-<commit7>`, then `mise run dev:join`. The tag must come from the branch workflow's GHCR build: `mise run image:build` publishes to Zot, whose host the dev namespace cannot resolve. |
 | the online rung, with the deployment still serving | `mise run gate:up`, then `mise run online:cluster`. The rung names this worktree's lane in its lease and dials that lane's Paper (#301) |
 | a clientbound comparison, direct against proxied | `mise run parity:run` |
-| the server's view of a join | `mise run gate:up`, then `MONOPLAYER_GATE_NAMESPACE=$(scripts/gate-lane.sh name) mise run observer:run`, then `mise run gate:down`. Each of its two joins takes the account lease, though the install and the restart do not (#282) |
-| the real client | `mise run gate:up`, then `mise run driver:scenario`. That rung joins `monoplayer-gate-b` and reads RCON there unless `--server` and `--rcon-namespace` name your lane, and the task forwards no arguments, so `deploy/driver/README.md` holds the command (#282) |
+| the server's view of a join | `mise run gate:up`, then `mise run observer:run`, then `mise run gate:down`. The rung measures and dials this worktree's lane, and each of its two joins takes the account lease, though the install and the restart do not (#282) |
+| the real client | `mise run gate:up`, then `mise run driver:scenario`. That rung joins this worktree's lane's Paper and reads RCON there, both from one name it resolves itself, and the task forwards no arguments (#282). `deploy/driver/README.md` holds the command |
 | the transfer path | nothing: it takes the live front offline, so ask a human |
 
 `docs/testing-ladder.md` gives each run its cost and its blast radius.
@@ -57,9 +57,11 @@ even after `gate:up`. `mise run gate:up -- velocity paper-m4 toxiproxy` wakes al
 
 **A lane is this worktree's, and one run uses it at a time.** `scripts/gate-lane.sh name`
 prints it, one line. Two runs in one worktree share that lane, so one
-`mise run gate:down` stops both. Two commands still default to the literal lane
-`monoplayer-gate-b`: `mise run observer:run` takes `MONOPLAYER_GATE_NAMESPACE`, and
-`mise run driver:scenario` takes `--server` and `--rcon-namespace` (#282). Anything that uses the real account takes the lease
+`mise run gate:down` stops both. Every rung that reaches a lane resolves it from that
+script, so none needs a variable: `online:cluster`, `observer:run` and
+`driver:scenario` each dial this worktree's lane and administer it (#301, #282).
+`MONOPLAYER_GATE_NAMESPACE` names a lane by hand for all of them at once.
+Anything that uses the real account takes the lease
 `monoplayer-online-account` while it does: one object for every worktree on the
 cluster. `docs/testing-ladder.md` answers this rung by rung, beside the lane table.
 
