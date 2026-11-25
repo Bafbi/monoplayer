@@ -14,6 +14,9 @@ import http from 'node:http'
 import { createPanelHandler } from '../../src/panel/server.js'
 import { activity } from '../../src/panel/activity.js'
 import { HEARTBEAT_MS, TICK_MS } from '../../src/panel/routes/stream.js'
+// The repo's own deadline, from a leaf module that imports nothing: a predicate
+// poll that rejects with the label of the event it never saw.
+import { waitFor } from '../../src/service/cli.js'
 
 const puppet = {
   name: 'glowsquidye',
@@ -278,17 +281,41 @@ test('the heartbeat is not held up by a slow first read', async () => {
 
 test('the stream stops reading and stops writing when the client closes', async () => {
   const calls = { podLog: 0 }
-  const panel = await serve({ kubernetes: kube({ calls }), tickMs: 15 })
+  const events = []
+  const tickMs = 15
+  const panel = await serve({
+    kubernetes: kube({ calls }),
+    tickMs,
+    log: (event, fields = {}) => events.push([event, fields])
+  })
   try {
     const { text } = await read(panel.url + '/api/puppets/glowsquidye/stream', {
       until: value => datas(value).length >= 2
     })
     assert.ok(text.length > 0)
-    // The abort above closed the client. Nothing may read the pod again: a timer
-    // that outlived its socket is a pod-log read per five seconds per closed tab,
-    // for as long as the pod lives.
+    // The abort above closed the client, but the server learns that on its own
+    // schedule: the socket close is a later turn of the event loop than the abort,
+    // and under a full suite on a loaded machine it is later still. Waiting for the
+    // route to say it stopped is the event; a sleep here instead asked the server to
+    // have noticed within the sleep, which is what made this line fail about once
+    // per full-suite run at 15 ms ticks (#330).
+    await waitFor(() => events.some(([event]) => event === 'panelStreamEnd'),
+      'the stream to report that it stopped', 2_000)
+    const ended = events.find(([event]) => event === 'panelStreamEnd')
+    assert.equal(ended[1].puppet, 'glowsquidye', 'the end names the puppet whose stream ended')
+    // One interval after the end, for the read a tick had already started: the route
+    // checks for the close around its reads and not before them, so a tick that began
+    // in the gap above still finishes one read. That read is not a leak, and the
+    // snapshot below must not count it. This fake answers in a turn, so the read
+    // usually lands long before now; a fake that waited would land here.
+    await new Promise(resolve => setTimeout(resolve, tickMs))
+    // Nothing may read the pod again: a timer that outlived its socket is a
+    // pod-log read per five seconds per closed tab, for as long as the pod lives.
+    // The window is the other half of the claim and not the wait: the event above
+    // says the route stopped, and eight tick intervals say the timer that would have
+    // read again is cleared.
     const after = calls.podLog
-    await new Promise(resolve => setTimeout(resolve, 120))
+    await new Promise(resolve => setTimeout(resolve, 8 * tickMs))
     assert.equal(calls.podLog, after, 'no tick ran after the client closed')
     // The timers themselves are unref'd, so a leaked one does not show in the
     // handle table: the assertion is on the read the timer would have made, which
