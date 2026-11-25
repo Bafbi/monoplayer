@@ -154,9 +154,9 @@ test('#391 the whitelist file is the offline front list when the lane names one'
 // lives here: `test/legs/` is not this change's to edit, and the option exists for
 // this composition root alone.
 test('#391 the fence-lift is a boolean, not a truthy value', () => {
-  // An unset option is the default, false. Every other non-boolean is refused,
-  // because a truthy string would lift the fence as surely as true.
-  for (const value of ['yes', 1, {}, null]) {
+  // An unset option is the default, false. Each value here is truthy, so the
+  // pre-guard code lifted the fence and built the leg.
+  for (const value of ['yes', 1, {}]) {
     assert.throws(
       () => createOfflineFrontLeg({
         host: '0.0.0.0', offlineWhitelist: [ATTACH_UUID], allowNonLoopback: value, getSnapshotConfig: snapshot

@@ -1,6 +1,6 @@
 # The product may be a test double, and the price is a guard on the live manifest
 
-A lane that serves a real backend with two protocol bots needs no Minecraft account, so the service can compose the offline legs. That makes the product a test double, on one condition: the live lane must not become one by a manifest edit. So `MONOPLAYER_OFFLINE_LEGS` is a startup decision, taken from the configuration document or the environment and never from the runtime control document, and `test/tooling/live-manifests.test.js` fails if a manifest under `deploy/manifests/` names it.
+A lane that serves a real backend with two protocol bots needs no Minecraft account, so the service can compose the offline legs. That makes the product a test double, on one condition: the live lane must not become one by a manifest edit. So the switch (`MONOPLAYER_OFFLINE_LEGS` in the environment, `offlineLegs` in a configuration document) is a startup decision, and never a key in the runtime control document. `test/tooling/live-manifests.test.js` fails if a manifest under `deploy/manifests/` names either spelling.
 
 ## Considered options
 

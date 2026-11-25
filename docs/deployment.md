@@ -282,12 +282,12 @@ A lane that sets the key has to satisfy three facts:
 
 Who may set it: the person who writes a lane's own manifests, for a lane
 whose job is a test double. Never this repository's live lane: `deploy/manifests/`
-must not carry the key, `test/tooling/live-manifests.test.js` fails if any file
-there mentions it, and the reason is
-[the ADR](adr/the-product-may-be-a-test-double.md). The key is a
-startup decision, from this lane's manifests or from a `--config` document, and
-never a control-document key. No operator action can turn it on in a running
-lane. A start record carries `offlineLegs: true`, so a lane says which
+must not carry the variable `MONOPLAYER_OFFLINE_LEGS` or the document field
+`offlineLegs`, `test/tooling/live-manifests.test.js` fails if a file there names
+either, and the reason is
+[the ADR](adr/the-product-may-be-a-test-double.md). It is a startup decision: the
+environment variable, or `offlineLegs` in a `--config` document. It is never a
+control-document key, so no operator action can turn it on in a running lane. A start record carries `offlineLegs: true`, so a lane says which
 legs it built.
 
 Telemetry and journal:
