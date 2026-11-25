@@ -199,7 +199,7 @@ test('#262 allowed-servers.json parses to host and port, and every refusal is na
 })
 
 // #314: DNS reads `paper.` and `paper` as one name. The root label is a full stop,
-// not a second label, so a list that spells one server both ways offers two picker
+// not a second label. So a list that spells one server both ways offers two picker
 // buttons for it, and each button's body gets its own cache (#260, #265). The case
 // check could not see it, and the split is the same one.
 test('#314 two rows that name one server with a trailing dot are refused, and the entry is named', () => {
@@ -241,7 +241,7 @@ test('#314 the refusal names the entry that collided, not only the file', () => 
   assert.deepEqual(lines, [{ event: 'controlRejected', fields: { file, reason: 'duplicate', at: 'servers[1]' } }])
 
   // The refusal is said once, and "once" is per entry. The operator fixes row 1 and
-  // the collision moves to row 2: that is a second refusal with a second row to fix,
+  // the collision moves to row 2. That is a second refusal with a second row to fix,
   // not the same warning arriving twice.
   fs.writeFileSync(file, JSON.stringify({
     version: 1,
