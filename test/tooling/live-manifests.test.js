@@ -10,6 +10,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseAllowedServers } from '../../src/service/control.js'
+import { DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
 
 const MANIFESTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'manifests')
 const read = name => fs.readFileSync(path.join(MANIFESTS, name), 'utf8')
@@ -22,6 +23,28 @@ test('the live kustomization lists every manifest in the directory', () => {
     'deploy/manifests holds a manifest the kustomization does not apply')
   assert.deepEqual(listed.filter(name => !files.includes(name)), [],
     'the kustomization names a file deploy/manifests does not hold')
+})
+
+// #391: the service can compose the offline legs. They ask no session server who
+// a client is, so anyone who types a name can play: exactly what a test lane
+// needs, and exactly what the live lane must never become. This file already
+// reads every manifest the live lane applies, so the prohibition is asserted here,
+// beside the kustomization it protects. deploy/dev/ is the lane that sets it (#392).
+test('no live manifest switches the service onto the offline legs', () => {
+  const setting = manifests()
+    .filter(name => /^\s*-\s*name:\s*MONOPLAYER_OFFLINE_LEGS\s*$/m.test(read(name)))
+    .map(name => 'deploy/manifests/' + name)
+  assert.deepEqual(setting, [],
+    'a live manifest sets MONOPLAYER_OFFLINE_LEGS: ' + setting.join(', ') + '. That lane would ask no ' +
+    'session server who a client is, so anyone who names themself could play the live server, with no ' +
+    'account and no custody chain. The offline legs are for a lane whose job is a test double: set the ' +
+    'key on the dev lane instead (deploy/dev/monoplayer.yaml, #392). If the live lane is really meant to ' +
+    'serve anonymous clients, reopen docs/adr/the-product-may-be-a-test-double.md first, then delete this test.')
+
+  // The default is the other half: a manifest that names no switch must not
+  // arrive at the offline legs either.
+  assert.equal(DEFAULT_CONFIG.offlineLegs, false,
+    'the offline-legs default changed to true, so every lane serves anonymous clients without naming the key')
 })
 
 test('the public route reads its secret from the cluster Secret', () => {
