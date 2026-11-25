@@ -2,7 +2,7 @@
 //
 //   node src/ladder/capture-config.js --host <h> --port <n> --out <file>
 //                                    [--version 26.2] [--account glowsquidye]
-//                                    [--offline] [--timeout 120] [--lane <ns>]
+//                                    [--offline] [--timeout 120] [--lane <lane>]
 //                                    [--paper-build <n>] [--image <ref>]
 //                                    [--reached-via <how>] [--note <why>]
 //
@@ -46,6 +46,7 @@
 //
 // Exit codes: 0 a capture was written, 1 the join failed, 2 setup failed.
 import fs from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 import md from 'minecraft-data'
 
@@ -60,10 +61,10 @@ const PER_LEG = new Set(['keep_alive', 'ping'])
 
 const DEFAULT_OUT = 'config-baseline.json'
 const DEFAULT_VERSION = process.env.MONOPLAYER_VERSION || '26.2'
-// What the recorded server is when the flags are not given: this worktree's gate
-// lane, because that is the server a refresh records (deploy/driver/paper.yaml), and
-// scripts/gate-lane.sh is the one place its name comes from (#282). A capture from
-// anywhere else passes --lane.
+// What the recorded server is when the flags are not given: the gate lane's Paper,
+// because that is the server a refresh records (deploy/driver/paper.yaml). The lane is
+// not beside them: captureLane() asks scripts/gate-lane.sh, the one place its name
+// comes from (#282, #322), and a capture from anywhere else passes --lane.
 const DEFAULT_PAPER_BUILD = '135'
 const DEFAULT_IMAGE = 'itzg/minecraft-server:2026.10.1-java25'
 
@@ -72,14 +73,22 @@ function fail (message, code = 2) {
   process.exit(code)
 }
 
-// The lane this worktree's scripts derive, or the sentence that says how to name one
-// by hand. gate-lane.sh's own sentence reaches the reader unchanged.
-function captureLane () {
-  try {
-    return resolveGateLane()
-  } catch (error) {
-    fail(error.message)
-  }
+// The lane a capture records: the one --lane names, or the one this worktree's
+// scripts derive (#322). A capture from somewhere else says --lane, because a
+// port-forward cannot name the lane it forwards to.
+//
+// A lane it cannot name is the exception, not a fallback: gate-lane.sh's own
+// sentence travels, so main() can stop before the join.
+export function captureLane ({ lane = null, resolve = resolveGateLane } = {}) {
+  if (lane) return lane
+  return resolve()
+}
+
+// The provenance a reader needs to reach this server again, and to know when the
+// recording is old. Pure, so a case proves what lands in `capturedFrom` — the lane a
+// capture was given, and the command that repeats it — with no socket (#322).
+export function captureProvenance ({ version, lane, paperBuild, image, host, port, reachedVia, note, command, at }) {
+  return { kind: 'paper', version, paperBuild, image, lane, host, port, reachedVia, at, note, command }
 }
 
 async function main (argv) {
@@ -94,7 +103,12 @@ async function main (argv) {
   // it again: the lane and the Paper build are what make the recording checkable. A
   // capture that guessed a lane would record a provenance it cannot stand behind, so
   // a lane that cannot be named is a setup failure here.
-  const lane = flag(argv, '--lane') ?? captureLane()
+  let lane
+  try {
+    lane = captureLane({ lane: flag(argv, '--lane') ?? null })
+  } catch (error) {
+    fail(error.message)
+  }
   const paperBuild = flag(argv, '--paper-build') ?? DEFAULT_PAPER_BUILD
   const image = flag(argv, '--image') ?? DEFAULT_IMAGE
   const reachedVia = flag(argv, '--reached-via') ?? ('kubectl -n ' + lane + ' port-forward pod/capture-paper ' + port + ':25565')
@@ -159,20 +173,19 @@ async function main (argv) {
       // What the recording is, so a reader can refresh it and know when it is old.
       version,
       protocolVersion: data.version.version,
-      capturedFrom: {
-        kind: 'paper',
+      capturedFrom: captureProvenance({
         version,
+        lane,
         paperBuild,
         image,
-        lane,
         host,
         port,
         reachedVia,
-        at: new Date().toISOString(),
         note,
+        at: new Date().toISOString(),
         command: 'node src/ladder/capture-config.js --host ' + host + ' --port ' + port +
           (offline ? ' --offline' : '') + ' --out <fixture>'
-      },
+      }),
       // Every clientbound configuration frame, in the order the server sent it.
       frames
     }
@@ -187,4 +200,8 @@ async function main (argv) {
   })
 }
 
-main(process.argv.slice(2)).catch(error => fail(String(error?.message ?? error), 1))
+// The direct-run guard every rung here uses (#322). Importing this module must not
+// start a capture, so a unit case can read the lane default without a server.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).catch(error => fail(String(error?.message ?? error), 1))
+}
