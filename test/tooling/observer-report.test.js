@@ -62,6 +62,13 @@ const SHIM = [
   // Two records per connection, as the plugin writes them: the join, then the
   // resource-pack status. The report has to merge each pair.
   '  *views.jsonl*) mkdir -p "$(dirname "$last")"; { printf \'%s\\n\' "$KUBECTL_BASELINE_VIEW"; printf \'%s\\n\' "$KUBECTL_BASELINE_LATE"; printf \'%s\\n\' "$KUBECTL_PUPPET_VIEW"; printf \'%s\\n\' "$KUBECTL_PUPPET_LATE"; } > "$last"; exit 0 ;;',
+  // The attach account each join copies in and copies back (#370). The pod's copy holds
+  // the profile, so the copy-back finds one. A shim that returned nothing would model a
+  // pod whose attach directory vanished, and that is a failed run now.
+  '  *" cp "*"/accounts/$ATTACH"*) case "$last" in',
+  '    *:*) exit 0 ;;',
+  '    *) mkdir -p "$last/$ATTACH"; printf \'{}\' > "$last/$ATTACH/live-cache.json"; printf \'{"uuid":"%s","name":"Bafbi","alias":"bafbi"}\' "$ATTACH" > "$last/$ATTACH/profile.json"; exit 0 ;;',
+  '  esac ;;',
   '  *) exit 0 ;;',
   'esac',
   ''

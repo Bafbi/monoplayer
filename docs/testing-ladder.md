@@ -56,6 +56,12 @@ and never passes `--rotate`. `mise run online:cluster` is the form to prefer, an
 the bare rung stays available because `verify:custody` composes it. `AGENTS.md`
 states the rule. `deploy/dev/README.md` is the dev lane runbook.
 
+The online rung copies the attach account into its pod and copies the rotation back, so
+one live copy of that account stays here. A copy-back that brings nothing back fails the
+run with exit 2. The pod is deleted on every path, so a rotation left there exists
+nowhere. The copy-back reads the returned directory with a glob rather than
+`find -printf`, which BSD `find` does not have (#370).
+
 A capture is the one run here that writes a fixture instead of a report.
 `src/ladder/capture-config.js` records the lane it ran in (#322). It takes that lane from
 `scripts/gate-lane.sh name`, this worktree's lane, with no literal fallback. A capture
