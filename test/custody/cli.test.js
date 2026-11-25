@@ -84,12 +84,16 @@ function harness (t) {
   // Every command that could read or write custody names the fixture root, so
   // no case can reach the checkout's own .secrets by forgetting a flag.
   const runIn = (...argv) => run(...argv, '--accounts-dir', accountsDir, '--secrets-dir', secretsDir)
+  // A whitelist resolves the custody root and no account tree, so its cases name
+  // only that root: --accounts-dir there is a flag it does not read, which the CLI
+  // now refuses.
+  const runRoot = (...argv) => run(...argv, '--secrets-dir', secretsDir)
   // Every kubectl call the CLI made, as its argv. Empty means it reached no
   // cluster at all, which is what a refusal has to do.
   const calls = () => fs.existsSync(kubectlLog)
     ? fs.readFileSync(kubectlLog, 'utf8').split('\n').filter(Boolean).map(line => line.split('\t').slice(1))
     : []
-  return { root, secretsDir, accountsDir, run, runIn, runWith, calls }
+  return { root, secretsDir, accountsDir, run, runIn, runRoot, runWith, calls }
 }
 
 // The product's own profile writer builds the fixture, so the CLI and the tree
@@ -389,6 +393,43 @@ test('every command refuses the options it does not read', (t) => {
     assert.match(refused.stderr, new RegExp('refused: ' + refusal), argv.join(' '))
     assert.match(refused.stderr, new RegExp(hint), argv.join(' '))
   }
+
+  // The root flags are not a hole in the rule either. --secrets-dir names the
+  // custody root every command resolves; --accounts-dir names an account tree the
+  // whitelists never touch, so each refuses it instead of dropping it.
+  for (const [scope, argv] of [
+    ['attach', ['whitelist', 'attach', 'add', PLAYER, '--accounts-dir', h.accountsDir]],
+    ['backend', ['whitelist', 'backend', 'add', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', '--accounts-dir', h.accountsDir]],
+  ]) {
+    const refused = h.runRoot(...argv)
+    assert.equal(refused.status, 2, argv.join(' ') + ': ' + refused.stderr)
+    assert.match(refused.stderr, new RegExp('whitelist ' + scope + ' does not take --accounts-dir'))
+    assert.match(refused.stderr, /--accounts-dir is read by accounts, device-code, status, migrate/)
+  }
+  // Nothing was written, and no Paper was reached.
+  assert.equal(fs.existsSync(path.join(h.secretsDir, 'attach-whitelist.json')), false)
+  assert.deepEqual(h.calls(), [], 'a refusal runs no kubectl')
+})
+
+// What separates this case: the table is what makes every refusal work, and a
+// command missing from it fails open — it accepts every flag again, which is the
+// bug this change exists to stop (#377). The dispatch lists the commands, the table
+// lists the readers, and no command may exist without one.
+test('every command the dispatch handles declares the options it reads', () => {
+  const source = fs.readFileSync(CLI, 'utf8')
+  const dispatched = [...source.matchAll(/^ {4}case '([a-z-]+)': \{/gm)].map(match => match[1])
+  assert.ok(dispatched.length > 0, 'the dispatch was not found in ' + CLI)
+  const tableSource = source.slice(source.indexOf('const COMMAND_FLAGS = {')).split('\n}')[0]
+  const table = [...tableSource.matchAll(/^ {2}'?([a-z-]+(?: [a-z]+)?)'?: \[/gm)].map(match => match[1])
+
+  for (const command of dispatched) {
+    // A whitelist names its half by its first positional, so its two halves carry
+    // the entries. A scope with none falls open the same way.
+    const names = command === 'whitelist' ? ['whitelist attach', 'whitelist backend'] : [command]
+    for (const name of names) {
+      assert.ok(table.includes(name), name + ' is dispatched and declares no options in COMMAND_FLAGS')
+    }
+  }
 })
 
 test('device-code refuses a text selector it does not know, before any request', (t) => {
@@ -415,18 +456,18 @@ test('whitelist attach adds and removes one player by uuid, in the file it was g
 
   // A UUID never reaches the name resolver, which is the only path here that
   // would open a socket.
-  const added = h.runIn('whitelist', 'attach', 'add', PLAYER, '--file', file)
+  const added = h.runRoot('whitelist', 'attach', 'add', PLAYER, '--file', file)
   assert.equal(added.status, 0, added.stderr)
   assert.equal(added.stdout.trim(), 'added ' + PLAYER)
   assert.deepEqual(parse(fs.readFileSync(file, 'utf8')).players.map(entry => entry.uuid), [PLAYER])
 
-  const removed = h.runIn('whitelist', 'attach', 'remove', PLAYER, '--file', file)
+  const removed = h.runRoot('whitelist', 'attach', 'remove', PLAYER, '--file', file)
   assert.equal(removed.status, 0, removed.stderr)
   assert.equal(removed.stdout.trim(), 'removed ' + PLAYER)
   assert.deepEqual(parse(fs.readFileSync(file, 'utf8')).players, [])
 
   // Removing twice is a failed operation, not a refusal: exit 1.
-  const again = h.runIn('whitelist', 'attach', 'remove', PLAYER, '--file', file)
+  const again = h.runRoot('whitelist', 'attach', 'remove', PLAYER, '--file', file)
   assert.equal(again.status, 1, again.stderr)
   assert.match(again.stderr, /whitelist remove failed: not_present/)
 })
@@ -445,7 +486,7 @@ test('whitelist attach refuses the Paper address it cannot honour, and writes no
   // that names nothing is the same silently wrong target.
   for (const action of ['add', 'remove']) {
     for (const [flag, value] of [['--namespace', 'monoplayer-dev'], ['--deployment', 'paper'], ['--namespace', '']]) {
-      const refused = h.runIn('whitelist', 'attach', action, PLAYER, '--file', file, flag, value)
+      const refused = h.runRoot('whitelist', 'attach', action, PLAYER, '--file', file, flag, value)
       assert.equal(refused.status, 2, action + ' ' + flag + ' ' + JSON.stringify(value) + ': ' + refused.stderr)
       assert.match(refused.stderr, new RegExp('refused: whitelist attach does not take ' + flag), flag)
       // The refusal names the command that does read it, so the operator's next
