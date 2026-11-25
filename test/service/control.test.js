@@ -236,7 +236,7 @@ test('#314 the refusal names the entry that collided, not only the file', () => 
   }))
   const lines = []
   const document = createControlDocument({ allowedServersFile: file, log: (event, fields) => lines.push({ event, fields }) })
-  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' },
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', reason: 'unreadable' },
     'a list that names one server twice offers nothing, rather than two buttons')
   assert.deepEqual(lines, [{ event: 'controlRejected', fields: { file, reason: 'duplicate', at: 'servers[1]' } }])
 
@@ -247,7 +247,7 @@ test('#314 the refusal names the entry that collided, not only the file', () => 
     version: 1,
     servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25565 }, { host: 'paper.', port: 25565 }]
   }))
-  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
   assert.deepEqual(lines.map(line => line.fields.at), ['servers[1]', 'servers[2]'],
     'a collision that moved is a new refusal, naming the row to fix now')
 })
@@ -263,13 +263,13 @@ test('#262 the allowed-server list is read from its own file, and the committed 
   // in until an operator edits the list, and it is why the seed exists.
   const document = createControlDocument({ allowedServersFile: live, allowedServersSeedFile: seedFile })
   assert.deepEqual(document.allowedServers(),
-    { servers: [{ host: 'play2.excalia.fr', port: 25565 }], source: 'seed' })
+    { servers: [{ host: 'play2.excalia.fr', port: 25565 }], source: 'seed', reason: null })
 
   // The live key wins, and it is re-read at each read: a panel write takes effect
   // without a restart, the way the attach whitelist's does.
   writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }])
   assert.deepEqual(document.allowedServers(),
-    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control' })
+    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control', reason: null })
   writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }, { host: 'sky.example.net', port: 25565 }])
   assert.equal(document.allowedServers().servers.length, 2, 'the file is the only authority')
 
@@ -291,7 +291,7 @@ test('#262 the allowed-server list is read from its own file, and the committed 
 
 test('#262 a list nobody named is off, and two files that both fail are named by their own paths', () => {
   const off = createControlDocument({ log: () => { throw new Error('an unset switch logs nothing') } })
-  assert.deepEqual(off.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(off.allowedServers(), { servers: [], source: 'none', reason: 'no_key' })
 
   // Its own file is its own switch: a picker lane offers a list with no whitelist
   // file named at all.
@@ -311,7 +311,7 @@ test('#262 a list nobody named is off, and two files that both fail are named by
     allowedServersSeedFile: seedFile,
     log: (event, fields) => lines.push({ event, fields })
   })
-  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
   assert.deepEqual(lines.map(line => [line.event, line.fields.file, line.fields.reason]),
     [['controlRejected', broken, 'version'], ['controlRejected', seedFile, 'duplicate']],
     'both files are named, and each with its own reason')
@@ -325,12 +325,86 @@ test('#262 a list nobody named is off, and two files that both fail are named by
     allowedServersSeedFile: absentSeed,
     log: (event, fields) => absentLines.push({ event, fields })
   })
-  assert.deepEqual(absent.allowedServers(), { servers: [], source: 'none' })
+  assert.deepEqual(absent.allowedServers(), { servers: [], source: 'none', reason: 'seed_missing' })
   assert.deepEqual(absentLines.map(line => [line.event, line.fields.code]),
     [['controlUnreadable', 'ENOENT']],
     'a seed that is not mounted is one named line, not silence')
   assert.equal(absentLines[0].fields.file, absentSeed, 'the line names the seed')
   absent.allowedServers()
   assert.equal(absentLines.length, 1, 'and one line is enough, however often the list is asked for')
+})
+
+// #315: a lane that offers nothing says why, in the answer the picker logs. "The list
+// is empty" is a fact the operator already has; the reason is the thing to edit. Each
+// of these is a different edit, so each is its own word.
+test('#315 an empty list carries the reason it is empty', () => {
+  const fileIn = (label, name = 'allowed-servers.json') => path.join(controlDir('empty-reason-' + label), name)
+
+  // No key: nothing names a list. The live key is the switch, so a seed on its own has
+  // no list to fall back from.
+  assert.deepEqual(createControlDocument({}).allowedServers(),
+    { servers: [], source: 'none', reason: 'no_key' })
+  assert.deepEqual(createControlDocument({ allowedServersSeedFile: fileIn('seed-only') }).allowedServers(),
+    { servers: [], source: 'none', reason: 'no_key' })
+
+  // The key names a file nobody has written, and no seed answers behind it. That is the
+  // normal state before the first panel edit, and it is not a broken file.
+  assert.deepEqual(createControlDocument({ allowedServersFile: fileIn('unwritten') }).allowedServers(),
+    { servers: [], source: 'none', reason: 'live_missing' })
+
+  // The file is there, it parses, and the list holds nothing: an operator removed the
+  // last server. The answer is still the live file's.
+  const emptied = fileIn('emptied')
+  writeAllowed(emptied, [])
+  assert.deepEqual(createControlDocument({ allowedServersFile: emptied }).allowedServers(),
+    { servers: [], source: 'control', reason: 'empty_list' })
+
+  // A seed the lane names and the mount did not deliver: a mount to fix, not an edit.
+  assert.deepEqual(createControlDocument({
+    allowedServersFile: fileIn('unwritten-seed-live'),
+    allowedServersSeedFile: fileIn('unwritten-seed')
+  }).allowedServers(), { servers: [], source: 'none', reason: 'seed_missing' })
+
+  // Both files are there and neither parses, so nothing answered: the live file is the
+  // one to fix, and the seed is the one to repair behind it.
+  const brokenLive = fileIn('broken')
+  const brokenSeed = fileIn('broken-seed')
+  fs.writeFileSync(brokenLive, 'not json')
+  fs.writeFileSync(brokenSeed, JSON.stringify({ version: 9 }))
+  assert.deepEqual(createControlDocument({
+    allowedServersFile: brokenLive,
+    allowedServersSeedFile: brokenSeed
+  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+
+  // A file that is there and cannot be read is not a file nobody wrote. An operator with
+  // a permissions problem must not be told to write a list that is already there.
+  const deny = () => {
+    const error = new Error('EACCES: permission denied')
+    error.code = 'EACCES'
+    throw error
+  }
+  assert.deepEqual(createControlDocument({
+    allowedServersFile: fileIn('denied'),
+    readFile: deny
+  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' },
+  'a live file that cannot be read is not a missing one')
+
+  const deniedLines = []
+  assert.deepEqual(createControlDocument({
+    allowedServersFile: fileIn('denied-live'),
+    allowedServersSeedFile: fileIn('denied-seed'),
+    readFile: deny,
+    log: (event, fields) => deniedLines.push({ event, fields })
+  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  assert.deepEqual(deniedLines.map(line => [line.event, line.fields.code]),
+    [['controlUnreadable', 'EACCES'], ['controlUnreadable', 'EACCES']],
+    'both files are named with the code that stopped the read')
+
+  // A list that answers carries no reason, so a reader can tell an empty answer from a
+  // filled one by the servers alone.
+  const answered = fileIn('answered')
+  writeAllowed(answered, [{ host: 'paper', port: 25565 }])
+  assert.deepEqual(createControlDocument({ allowedServersFile: answered }).allowedServers(),
+    { servers: [{ host: 'paper', port: 25565 }], source: 'control', reason: null })
 })
 

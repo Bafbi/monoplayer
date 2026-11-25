@@ -926,6 +926,29 @@ first dial and its target warms in five seconds.
   What it cannot prove: the claimed half of the pair. A claim is held by a client
   standing in the body, and keeping that client through the fault is #334.
 
+- `O66` a lane with no list refuses a join in a sentence about the lane, and its offer
+  says why the list is empty (#315). O61 proved the offer falls back to the seed when
+  the live file cannot be parsed. This is the case with nothing behind it: both files
+  the lane names are unparseable, so `control.allowedServers()` answers with no servers
+  and the reason `unreadable`.
+
+  A client joins and gets no dialog at all, because a dialog with no buttons is a phase
+  with nothing on screen. It gets one sentence and a configuration `disconnect`:
+  `Monoplayer: this lane is not offering any server to join.` The sentence is about the
+  lane, because the client clicked nothing. The sentence it used to get named "that
+  server", which is a choice the client never made and cannot make again.
+
+  The operator's half is the offer's line. `pickerOffered` carries `reason` beside
+  `source` and the count. The reason is part of the answer the reader deduplicates on,
+  so a cause that changes is a second line. The refusal's own line carries the same
+  reason and the sentence, so an operator reading the end of a log does not have to
+  scroll back to the join.
+
+  What it cannot prove: the other four reasons an empty list carries — `no_key`,
+  `live_missing`, `empty_list` and `seed_missing` — because this rig names both files and
+  can only break them. `test/service/control.test.js` proves each one, and
+  `test/core/picker.test.js` proves both sentences.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a
