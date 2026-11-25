@@ -20,10 +20,10 @@
 //
 // `allowed` is the second control key (#309). `document` is the live key in the control
 // ConfigMap and `seed` is the copy Git commits, which answers when the live key is
-// absent; a record names at least one of the two, and both when the recording should
-// show which file answered. There is no version here, because a version belongs to the
-// ConfigMap and not to a key: the whitelist record names the object's, and both keys are
-// read from that one object.
+// absent. A record names at least one of the two, and both when the recording should
+// show which file answered. It holds no `resourceVersion`, because a version belongs to
+// the ConfigMap and not to a key. The whitelist record names the object's version, and
+// both keys are read from that one object.
 //
 // The puppets are checked by src/panel/registry.js itself, so a fixture cannot
 // describe a puppet the panel would refuse in a pod, the whitelist document is

@@ -144,9 +144,10 @@ export function createStreamRoute ({
       pending = true
       try {
         const at = now()
-        // Five objects, one instant, read together: the card's facts (a Deployment, a pod
-        // list, and a pod log) and the control ConfigMap's two keys. The page waits for the
-        // slower read, not for each in turn.
+        // The card's facts (a Deployment, a pod list, and a pod log) and the control
+        // ConfigMap's two keys, one instant, read together. A puppet whose live
+        // allowed-servers key is absent adds one seed read inside the allowed read. The
+        // page waits for the slower read, not for each in turn.
         const [facts, list, servers] = await Promise.all([
           readPuppet({ kubernetes, puppet, recorded, now: at, log }),
           readAttachList({ kubernetes, puppet, now: at, log }),
