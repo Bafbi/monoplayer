@@ -66,7 +66,8 @@ export class WriteRefused extends Error {
 
 // The patch body. `application/merge-patch+json` merges objects recursively
 // (RFC 7386), so `data` keeps every key this patch does not name: the whitelist
-// the operator created the ConfigMap with survives every backend move.
+// the operator created the ConfigMap with survives every other key's write, and
+// every move the lane makes on its own.
 //
 // `resourceVersion` is optional and is not part of the document. It is the
 // optimistic-concurrency precondition: a merge patch that names the version it

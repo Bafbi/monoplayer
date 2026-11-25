@@ -496,7 +496,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     attachWhitelistFile: cfg.attachWhitelistFile,
     // #229: the control document's store, so the leg's own whitelist check reads
     // the same file the core gate does, at each login. Null keeps the leg's one
-    // startup read, which is every lane that never set control.file.
+    // startup read, which is every lane that names no whitelist file.
     whitelistStore: control.whitelistStore,
     // #201: the total cap on the sockets inside the pre-auth window.
     preAuth: cfg.preAuth,
