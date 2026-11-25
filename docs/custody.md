@@ -323,9 +323,10 @@ node src/custody/cli.js whitelist backend remove <puppet-name> --namespace monop
   exit 2 and nothing written. So `whitelist attach` refuses `--namespace` and
   `--deployment`: it writes `<secretsDir>/attach-whitelist.json` and reaches no
   Paper. And `whitelist backend` refuses `--file`: the whitelist it writes is
-  the one the Paper holds. The same rule holds for every custody command, so
-  `accounts --refresh` and `migrate --json` are refused too, and the refusal
-  names the command that does read the flag.
+  the one the Paper holds, and neither reads `--accounts-dir`, which names the
+  account tree. The same rule holds for every custody command: `accounts
+  --refresh` and `migrate --json` are refused too, and the refusal names the
+  command that does read the flag.
 - Names are resolved to UUIDs **at add time** (`minecraftservices.com`
   profile lookup first, legacy `api.mojang.com` fallback); the file stores
   `{uuid, name, addedAt}` normalized lowercase-hyphenated. Display names are
