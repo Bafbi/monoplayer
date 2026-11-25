@@ -5,7 +5,8 @@
 // constructor, never a config flag:
 //   createLiveFrontLeg    online-mode=true, real sessionserver hasJoined,
 //                         UUID-keyed attach whitelist file (.secrets).
-//   createOfflineFrontLeg online-mode=false, loopback only, local offline
+//   createOfflineFrontLeg online-mode=false, loopback only unless allowNonLoopback,
+//                         local offline identities (#391)
 //                         UUID whitelist, no .secrets read.
 //
 // Flow per connection:
@@ -2324,13 +2325,20 @@ export function createOfflineFrontLeg (options = {}) {
     wireMode = 'throw',
     chat = 'read-only',
     dumpRaw = null,
-    dumpFramed = null
+    dumpFramed = null,
+    // #391: the loopback fence below is what keeps an offline front, which asks
+    // no server who a client is, inside a test rig. A deployed lane whose job is
+    // a test double binds a pod address, so the composition root lifts the fence
+    // with this option and nothing else does. The live lane cannot reach it: the
+    // service passes it only with MONOPLAYER_OFFLINE_LEGS on, and that key is
+    // barred from deploy/manifests (test/tooling/live-manifests.test.js).
+    allowNonLoopback = false
   } = options
 
   if (options.attachWhitelistFile !== undefined) {
     throw new TypeError('createOfflineFrontLeg does not accept attachWhitelistFile; use createLiveFrontLeg')
   }
-  if (!isLoopbackHost(host)) {
+  if (!allowNonLoopback && !isLoopbackHost(host)) {
     throw new TypeError(`offline front leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
   }
   if (whitelistStore !== null && typeof whitelistStore.has !== 'function') {

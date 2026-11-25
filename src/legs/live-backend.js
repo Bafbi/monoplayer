@@ -5,7 +5,8 @@
 //   createLiveBackendLeg    Microsoft auth through the G1 token custody,
 //                           account directory = .secrets/accounts/<uuid>,
 //                           writer lock held.
-//   createOfflineBackendLeg auth 'offline', fixed username, loopback only,
+//   createOfflineBackendLeg auth 'offline', fixed username, loopback only unless
+//                         allowNonLoopback,
 //                           no custody, no lock, no .secrets read.
 //
 // This is the backendLeg adapter for the B1 core (see docs/product-core.md):
@@ -763,12 +764,17 @@ export function createLiveBackendLeg (options = {}) {
   })
 }
 
+// #391: the name an offline body speaks as when the lane names none. Exported
+// because the composition root derives the body's UUID from it, and two copies
+// of a default are two identities.
+export const OFFLINE_PUPPET_USERNAME = 'GlowSquidye'
+
 export function createOfflineBackendLeg (options = {}) {
   const {
     host,
     port,
     version = '26.1',
-    username = 'GlowSquidye',
+    username = OFFLINE_PUPPET_USERNAME,
     log = () => {},
     connectTimeoutMs = 15000,
     // The configuration-gate policy, so a rung can run one and prove it does
@@ -777,7 +783,14 @@ export function createOfflineBackendLeg (options = {}) {
     // #21: the offline rung answers a code-of-conduct gate the same way the
     // live leg does, so the loopback can prove the fallback end to end.
     isHumanAttached = () => false,
-    onDialogAnswered = null
+    onDialogAnswered = null,
+    // #391: the loopback fence below is what keeps an offline body inside a
+    // test rig. A deployed lane whose job is a test double dials a Paper in
+    // another pod, so the composition root lifts the fence with this option and
+    // nothing else does. The live lane cannot reach it: the service passes it
+    // only with MONOPLAYER_OFFLINE_LEGS on, and that key is barred from
+    // deploy/manifests (test/tooling/live-manifests.test.js).
+    allowNonLoopback = false
   } = options
 
   if (options.cacheDir !== undefined) {
@@ -797,7 +810,7 @@ export function createOfflineBackendLeg (options = {}) {
   }
   if (!host) throw new TypeError('host is required')
   if (!port) throw new TypeError('port is required')
-  if (!isLoopbackHost(host)) {
+  if (!allowNonLoopback && !isLoopbackHost(host)) {
     throw new TypeError(`offline backend leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
   }
   if (typeof username !== 'string' || username.length === 0) {
@@ -825,6 +838,6 @@ export function createOfflineBackendLeg (options = {}) {
       username,
       auth: 'offline'
     }),
-    validateTarget: next => isLoopbackHost(next.host)
+    validateTarget: allowNonLoopback ? () => true : next => isLoopbackHost(next.host)
   })
 }

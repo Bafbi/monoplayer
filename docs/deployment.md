@@ -256,6 +256,35 @@ Common:
   file's `reconnect.attempts`, which is unlimited when the file sets none) and
   `MONOPLAYER_RECONNECT_MAX_DELAY_MS` (default `60000`)
 
+### A test lane, and only a test lane
+
+`MONOPLAYER_OFFLINE_LEGS=1` composes the offline legs instead of the live pair:
+a front that asks no session server who a client is (no encryption, no
+`hasJoined`, and a UUID derived from the name the client claims), and a backend
+leg that joins as `auth: 'offline'` with a fixed username, from
+`MONOPLAYER_PUPPET_USERNAME` or `GlowSquidye`. The lane needs no custody
+directory, no account selector, and no Microsoft auth, so the puppet account
+variables above are ignored.
+
+Three facts follow, and a lane that sets the key has to satisfy all three:
+
+- The attach whitelist holds **offline** UUIDs. Each is `nameUUIDFromBytes` of
+  `OfflinePlayer:<name>`, the value `src/legs/offline-identity.js` computes, not
+  the UUID of a Mojang account with that name.
+- The backend the lane dials must run with `ONLINE_MODE=FALSE`. An offline join
+  is not a Mojang session, and an online-mode server closes it.
+- The backend address may be any address, which is the one thing this switch
+  changes about the legs themselves. The offline legs refuse a host that is not
+  loopback, and the composition root lifts that fence only when this key is on.
+
+Set the key on a lane whose job is a test double. Never set it in
+`deploy/manifests/`: `test/tooling/live-manifests.test.js` fails if a manifest
+there names it, and the reason is
+[the ADR](adr/the-product-may-be-a-test-double.md). The key is an environment
+decision, not a control-document key, so no operator action can turn it on in a
+running lane. A start record carries `offlineLegs: true`, so a lane says which
+legs it built.
+
 Telemetry and journal:
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT`, for example
@@ -273,6 +302,10 @@ See `docs/telemetry.md` for the signals and the journal layout.
 
 ## Invariants
 
+- **The live lane never composes offline legs.** `MONOPLAYER_OFFLINE_LEGS` is
+  absent from `deploy/manifests/` and `test/tooling/live-manifests.test.js` fails
+  if it appears, because that lane serves a public route and holds the account
+  chain. See [the ADR](adr/the-product-may-be-a-test-double.md).
 - **One replica, `Recreate`.** The backend login is a rolling refresh-token
   chain; two writers would race it. The custody claim is `ReadWriteOnce`.
 - **The account lease is a run's, not the deployment's.** One Minecraft identity

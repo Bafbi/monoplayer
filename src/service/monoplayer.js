@@ -154,6 +154,15 @@ export const DEFAULT_CONFIG = Object.freeze({
   // configurationBaseline refuses the join instead of inventing one, so a lane
   // cannot promise a picker it cannot show.
   picker: false,
+  // #391: the offline legs. On, the service composes an offline front (no
+  // encryption, no hasJoined, identities derived from the name the client
+  // claims) and an offline backend leg (auth 'offline', a fixed username), so a
+  // test lane serves a real backend with no Minecraft account, no custody chain
+  // and no Microsoft auth. Off, the live legs are built exactly as they always
+  // were. An environment decision, never a key in the control document: the
+  // price of this switch is that deploy/manifests must never name it
+  // (docs/adr/the-product-may-be-a-test-double.md).
+  offlineLegs: false,
   // #229/#264: the runtime control document an operator edits between deploys.
   // Two keys are left, and each path is its own switch: null leaves the lane
   // exactly as it was, and nothing is opened. The attach whitelist's path is
@@ -268,6 +277,9 @@ export function loadConfig (doc = {}) {
   }
   if (typeof merged.picker !== 'boolean') {
     throw new TypeError('config.picker must be a boolean')
+  }
+  if (typeof merged.offlineLegs !== 'boolean') {
+    throw new TypeError('config.offlineLegs must be a boolean')
   }
   if (typeof merged.transfer.follow !== 'boolean') {
     throw new TypeError('config.transfer.follow must be a boolean')
@@ -3318,6 +3330,10 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
+  MONOPLAYER_OFFLINE_LEGS                             1 composes the offline front and backend legs, so the
+                                                      lane needs no account, no custody chain and no
+                                                      Microsoft auth; a test lane only, never the live lane
+                                                      (default 0)
   MONOPLAYER_PICKER                                   1 serves a joining client the recorded configuration
                                                       baseline and the server picker when the lane has no
                                                       backend, and records the pick (default 0)
