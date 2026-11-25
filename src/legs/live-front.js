@@ -2335,6 +2335,11 @@ export function createOfflineFrontLeg (options = {}) {
   if (options.attachWhitelistFile !== undefined) {
     throw new TypeError('createOfflineFrontLeg does not accept attachWhitelistFile; use createLiveFrontLeg')
   }
+  // A truthy string would lift the fence as surely as true, so the option is a
+  // boolean or it is refused.
+  if (typeof allowNonLoopback !== 'boolean') {
+    throw new TypeError('allowNonLoopback must be a boolean')
+  }
   if (!allowNonLoopback && !isLoopbackHost(host)) {
     throw new TypeError(`offline front leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
   }
