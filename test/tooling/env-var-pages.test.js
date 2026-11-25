@@ -1,11 +1,12 @@
 // #402: a page may name only an environment variable the code reads.
 //
-// 97 prose lines name a MONOPLAYER_* variable, and the service's half of that
-// surface is one function: envOverlay in src/service/start-live.js. A page that
-// lists a variable nothing reads teaches the next reader to set nothing:
-// loadConfig ignores the name in silence, so the page reads as true and the lane
-// does nothing. The repo's rule asks for a guard rather than a paragraph,
-// because the list is useful in a runbook and the list is what drifts.
+// The prose of this repo names MONOPLAYER_* variables on nearly every page, and
+// the service's half of that surface is one function: envOverlay in
+// src/service/start-live.js. A page that lists a variable nothing reads teaches
+// the next reader to set nothing: loadConfig ignores the name in silence, so the
+// page reads as true and the lane does nothing. The repo's rule asks for a guard
+// rather than a paragraph, because the list is useful in a runbook and the list
+// is what drifts.
 //
 // The read set is any code line that names a variable, comments excepted. A
 // help string counts as code: the USAGE block in src/service/monoplayer.js lists
@@ -67,7 +68,7 @@ function walk (dir, keep, found = []) {
 // A comment that names a variable is not a read: a header listing the switches
 // would keep a retired name alive for ever. Only whole-line comments are dropped,
 // so a value or a pattern that carries a "#" is left alone.
-const live = text => text.split('\n')
+const withoutComments = text => text.split('\n')
   .filter(line => !/^\s*(\/\/|#|\*|\/\*)/.test(line))
   .join('\n')
 
@@ -82,7 +83,7 @@ function readers () {
       // A font or an archive reads no variable, and decoding one would be a guess
       // about an encoding this guard has no reason to hold.
       if (bytes.includes(0)) continue
-      for (const line of live(bytes.toString('utf8')).split('\n')) {
+      for (const line of withoutComments(bytes.toString('utf8')).split('\n')) {
         for (const name of names(line)) {
           if (!found.has(name)) found.set(name, new Set())
           found.get(name).add(path.relative(ROOT, file))
@@ -108,21 +109,6 @@ function unread (page, text, read) {
     }
   })
   return found
-}
-
-// One section, from its heading to the next heading of the same or a higher level,
-// so a pointer the page owes cannot be satisfied by a stray line elsewhere.
-function section (text, heading) {
-  const lines = text.split('\n')
-  const start = lines.findIndex(line => /^#+\s/.test(line) && line.replace(/^#+\s+/, '').trim() === heading)
-  assert.notEqual(start, -1, 'the page has a "' + heading + '" section')
-  const level = lines[start].match(/^#+/)[0].length
-  let end = lines.length
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const next = lines[i].match(/^(#+)\s/)
-    if (next && next[1].length <= level) { end = i; break }
-  }
-  return lines.slice(start, end).join('\n')
 }
 
 const READ = readers()
@@ -163,7 +149,11 @@ test('a glob names a family, so the guard does not read it as a variable', () =>
 
 test('the deployment page points at the authority instead of restating it', () => {
   const text = fs.readFileSync(path.join(ROOT, 'docs/deployment.md'), 'utf8')
-  const named = section(text, 'What the deployment must set')
+  // The section, not the page: a pointer a stray line satisfies is a pointer the
+  // reader of that section never sees.
+  const start = text.indexOf('## What the deployment must set')
+  assert.notEqual(start, -1, 'the page has a "What the deployment must set" section')
+  const named = text.slice(start, text.indexOf('\n## ', start))
   assert.match(named, /envOverlay/,
     'the section that names variables says where the names come from, so a reader checks the ' +
     'authority rather than trusting the page')
