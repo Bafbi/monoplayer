@@ -7,6 +7,11 @@
 // does nothing. The repo's rule asks for a guard rather than a paragraph,
 // because the list is useful in a runbook and the list is what drifts.
 //
+// The read set is any code line that names a variable, comments excepted. A
+// help string counts as code: the USAGE block in src/service/monoplayer.js lists
+// the switches, so a name it keeps after the switch retires would still pass this
+// guard. That is the same rule one layer up, and #407 is the ticket for it.
+//
 // Nothing here reaches a cluster or a network: every case reads a file.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
