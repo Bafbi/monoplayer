@@ -340,8 +340,8 @@ says why, and it is the reason to add assertions one row at a time.
   frames, no client error, one front denial, and an `attachDenied` log with
   reason `not_whitelisted`. The check runs after the first client has detached, so
   the whitelist is what refuses this bot and not a second attach: a lane with no
-  picker has no claim to make, and its core session answers `already_attached` at
-  the attach (#269).
+  picker refuses a second client at its own login (#312), and O67 proves that
+  refusal while a driver holds the body.
 - `O13` the second attach makes `core.metrics.attaches` 2, keeps
   `backendLogins` at 1, lands the first synthesized position at the last pose
   (`2.5/2.5`), and replays the block edit at `3,0,3` cached while detached.
@@ -959,6 +959,32 @@ first dial and its target warms in five seconds.
   `live_missing`, `empty_list` and `seed_missing` — because this rig names both files and
   can only break them. `test/service/control.test.js` proves each one, and
   `test/core/picker.test.js` proves both sentences.
+
+- `O67` a second client on a lane with no picker is refused at its login, in words a
+  player reads, before any configuration frame reaches it (#312). #269 deleted the
+  front leg's attach slot, and that slot was also what refused a second connection at
+  `beforeLogin`. Left to the attach, the only answer is the session's
+  `already_attached` at `playerJoin` — and by then the body's cached configuration
+  frames have been replayed to a client that is about to be kicked. The rig runs the
+  check on the main lane, which offers no picker, while O13's driver holds the body.
+
+  A third whitelisted client joins, so nothing but the lane's shape can refuse it. It
+  reads no login success and no configuration frame of any kind, and one `disconnect`
+  in the login state, which is the only place a refusal this early can be told:
+  `Monoplayer: another player is already driving this server. Try again when they leave.`
+  The session is never asked, so the attach record stays where it was and no
+  `already_attached` line exists for it. The core's `attachDenied` line carries
+  `lane: no_picker` beside the reason and the sentence, because which lane shape said no
+  is the fact an operator needs. The driver keeps the body: a refusal for the rival is
+  nothing for them.
+
+  The other half is `O60b`: a lane that offers a picker still lets a second client
+  through its login, and the claim is what refuses it. That assertion also checks the
+  rival's login success now, so a refusal in the login decision that fired on a picker
+  lane would fail there as an early `disconnect` rather than at the claim.
+
+  What it cannot prove: the sentence a vanilla client draws. The client here is a
+  protocol bot, and the words are read off the `disconnect` frame it decoded.
 
 ## The client parity rung
 

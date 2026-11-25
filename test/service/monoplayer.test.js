@@ -370,19 +370,59 @@ test('B4-shape: non-whitelisted account is denied before Login Success', () => {
   assert.equal(rig.core.session.backendLogins, 1)
 })
 
-test('legal-but-attached: second account is rejected with already_attached (single attach invariant)', () => {
-  const rig = makeCore()
+// #312: #269 deleted the front leg's attach slot, and that slot was also what
+// refused a second client *before* the body's cached configuration frames were
+// replayed to it. A lane with no picker has no claim to refuse the rival at, so
+// the session answered `already_attached` at the attach — a kick the client only
+// reads after a configuration phase it should never have been shown. The login
+// decision is the one place this lane shape can refuse early: no picker to send
+// the client to, and no claim to make.
+test('#312 a second client on a lane with no picker is refused at its login, before any configuration frame', () => {
+  const logLines = []
+  const rig = makeCore({ logLines })
   warmBackend(rig)
   attach(rig, PLAYER)
+  const framesBefore = rig.frontLeg.frames().length
+  const denialsBefore = rig.core.metrics.denials
 
   const second = rig.frontLeg.loginStart({ name: 'Second', uuid: PLAYER })
-  assert.equal(second.allowed, true) // whitelisted UUID passes the identity gate
+  assert.equal(second.allowed, false, 'the login is refused, never passed to an attach that answers late')
+  assert.equal(second.reason, 'already_driven')
+  // The words the front writes into the kick, so the player reads a sentence
+  // rather than a slug.
+  assert.equal(second.text, 'Monoplayer: another player is already driving this server. Try again when they leave.')
+  assert.deepEqual(rig.frontLeg.endReasons(), [{ reason: 'denied:already_driven' }])
+  assert.equal(rig.core.metrics.denials, denialsBefore + 1)
+  assert.equal(rig.frontLeg.frames().length, framesBefore, 'no configuration frame was written for the refused client')
+  assert.equal(rig.core.session.attachCount, 1, 'the session was never asked')
 
+  // The log says which lane shape answered: a lane with no picker, where the
+  // claim has nothing to refuse.
+  const logged = logLines.filter(line => line.event === 'attachDenied' && line.reason === 'already_driven')
+  assert.equal(logged.length, 1)
+  assert.equal(logged[0].lane, 'no_picker')
+
+  // The attach keeps its own answer for a client the login admitted earlier: a
+  // connection that failed between its login and its playerJoin leaves exactly
+  // that case, and the session stays the authority there.
   const attempt = rig.core.attachPlayer({ name: 'Second', uuid: PLAYER })
   assert.equal(attempt.attached, false)
   assert.equal(attempt.reason, 'already_attached')
   assert.equal(rig.core.session.attachCount, 1)
-  assert.deepEqual(rig.frontLeg.endReasons(), []) // no kick; the adapter owns this decision
+})
+
+// #259: a lane that offers a picker is unchanged. The picker is the door, so the
+// second client's login passes and it is the claim that refuses it — refusing the
+// login here would keep it out of the body list it may spectate.
+test('#312 a lane that offers a picker still passes a second client to the picker', () => {
+  const rig = makeCore({ config: { picker: true } })
+  warmBackend(rig)
+  attach(rig, PLAYER)
+
+  const second = rig.frontLeg.loginStart({ name: 'Second', uuid: PLAYER })
+  assert.equal(second.allowed, true, 'the picker is the door')
+  assert.equal(second.picker, true)
+  assert.deepEqual(rig.frontLeg.endReasons(), [])
 })
 
 test('F4-shape: backend death while attached -> front ended, one reconnect, backendLogins === 2 after recovery, attach during gap rejected', () => {
