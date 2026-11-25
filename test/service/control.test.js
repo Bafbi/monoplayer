@@ -24,6 +24,11 @@ function controlDir (label) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `monoplayer-control-${label}-`))
 }
 
+// One allowed-server file in a directory of its own, for the cases that name two.
+function controlFile (label, name = 'allowed-servers.json') {
+  return path.join(controlDir(label), name)
+}
+
 function writeWhitelist (file, uuids) {
   fs.writeFileSync(file, JSON.stringify({
     version: 1,
@@ -338,13 +343,11 @@ test('#262 a list nobody named is off, and two files that both fail are named by
 // is empty" is a fact the operator already has; the reason is the thing to edit. Each
 // of these is a different edit, so each is its own word.
 test('#315 an empty list carries the reason it is empty', () => {
-  const fileIn = (label, name = 'allowed-servers.json') => path.join(controlDir('empty-reason-' + label), name)
+  const fileIn = label => controlFile('empty-reason-' + label)
 
-  // No key: nothing names a list. The live key is the switch, so a seed on its own has
-  // no list to fall back from.
+  // No key: nothing names a list. #356: a seed on its own is a key, so only a lane
+  // that names neither variable reaches this word, and the seed's own cases are below.
   assert.deepEqual(createControlDocument({}).allowedServers(),
-    { servers: [], source: 'none', reason: 'no_key' })
-  assert.deepEqual(createControlDocument({ allowedServersSeedFile: fileIn('seed-only') }).allowedServers(),
     { servers: [], source: 'none', reason: 'no_key' })
 
   // The key names a file nobody has written, and no seed answers behind it. That is the
@@ -406,5 +409,77 @@ test('#315 an empty list carries the reason it is empty', () => {
   writeAllowed(answered, [{ host: 'paper', port: 25565 }])
   assert.deepEqual(createControlDocument({ allowedServersFile: answered }).allowedServers(),
     { servers: [{ host: 'paper', port: 25565 }], source: 'control', reason: null })
+})
+
+// #356: the live key is not the switch. The list is. A lane an operator configured with
+// the copy Git commits alone has a list, so the seed answers whenever the live key
+// offers none: absent, unreadable or unparseable. One precedence answers all of it, and
+// it takes three inputs. They are the live key, the seed behind it, and neither.
+test('#356 the seed answers when the live key offers no list, including when it was never named', () => {
+  const fileIn = label => controlFile('precedence-' + label)
+  const SEED = [{ host: 'play2.excalia.fr', port: 25565 }]
+
+  // The seed alone: the live key was never set. It is the list this repository commits,
+  // and it used to answer `no_key` with nothing.
+  const seedOnly = fileIn('seed-only-file')
+  writeAllowed(seedOnly, SEED)
+  assert.deepEqual(createControlDocument({ allowedServersSeedFile: seedOnly }).allowedServers(),
+    { servers: SEED, source: 'seed', reason: null },
+    'a lane that names only the seed offers the seed')
+
+  // Both keys, and the file the live key names is not there: the seed answers, and the
+  // source says which file it was.
+  const liveFile = fileIn('live-unwritten')
+  const both = createControlDocument({ allowedServersFile: liveFile, allowedServersSeedFile: seedOnly })
+  assert.deepEqual(both.allowedServers(), { servers: SEED, source: 'seed', reason: null },
+    'a live key nobody has written yet is the normal state, not an empty list')
+
+  // The live file wins the moment it answers, so the order is one answer rather than one
+  // branch per state.
+  writeAllowed(liveFile, [{ host: 'paper.example.net', port: 25565 }])
+  assert.deepEqual(both.allowedServers(),
+    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control', reason: null },
+    'the live key still comes first')
+
+  // A live file that parses and holds nothing is the operator's answer, not a missing
+  // list, so the seed stays behind it. docs/panel.md: showing the seed there would hide
+  // the file that needs fixing.
+  writeAllowed(liveFile, [])
+  assert.deepEqual(both.allowedServers(), { servers: [], source: 'control', reason: 'empty_list' },
+    'an emptied live list is not a reason to serve the seed')
+
+  // Neither key: nothing names a list, and #315's word still says so.
+  assert.deepEqual(createControlDocument({}).allowedServers(),
+    { servers: [], source: 'none', reason: 'no_key' })
+
+  // A seed that parses and holds nothing is a list the operator emptied. The answer
+  // says which file it came from, and that the file holds no server.
+  const emptiedSeed = fileIn('seed-emptied')
+  writeAllowed(emptiedSeed, [])
+  assert.deepEqual(createControlDocument({ allowedServersSeedFile: emptiedSeed }).allowedServers(),
+    { servers: [], source: 'seed', reason: 'empty_list' })
+
+  // A seed the lane named and the mount did not deliver is a mount to fix. It is not
+  // `no_key`, which would send the operator to a variable they did set, and it is one
+  // named line: on a lane that names only the seed, that line is the whole signal.
+  const mountLines = []
+  assert.deepEqual(createControlDocument({
+    allowedServersSeedFile: fileIn('seed-not-mounted'),
+    log: (event, fields) => mountLines.push({ event, fields })
+  }).allowedServers(), { servers: [], source: 'none', reason: 'seed_missing' })
+  assert.deepEqual(mountLines.map(line => [line.event, line.fields.code]),
+    [['controlUnreadable', 'ENOENT']])
+
+  // A seed that does not parse is the file to repair, also not `no_key`, and the line
+  // names the file that failed.
+  const brokenSeed = fileIn('seed-broken')
+  fs.writeFileSync(brokenSeed, 'not json')
+  const lines = []
+  assert.deepEqual(createControlDocument({
+    allowedServersSeedFile: brokenSeed,
+    log: (event, fields) => lines.push({ event, fields })
+  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  assert.deepEqual(lines.map(line => [line.event, line.fields.file, line.fields.reason]),
+    [['controlRejected', brokenSeed, 'not_json']], 'the seed that failed is the file the line names')
 })
 
