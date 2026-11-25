@@ -861,7 +861,8 @@ first dial and its target warms in five seconds.
   drive. Both clients here are protocol bots, and the driver lane's scenarios do not
   watch a body yet (#325). The second registry round a real client takes is #268's;
   the body's own entity stream is what a driver-lane scenario has to witness.
-- `O64` a claim keeps a body alive, and a disconnect ends an unclaimed one (#261).
+- `O64` a claim lands on a body that is already standing, and a disconnect ends an
+  unclaimed one (#261).
   O63 left the body standing with nobody driving it and two spectators on it. A
   thirteenth client reads the picker, picks that row and clicks `Claim`. Nothing is
   dialled: the body's session outlived its driver, so the claim lands on the state the
@@ -892,13 +893,35 @@ first dial and its target warms in five seconds.
   Without this a body a player ended would be gone until the lane restarted, and no rung
   would say so.
 
-  What it cannot prove: a drop while a claim is held. That needs the front to keep a
-  client that is standing in a world whose backend has died, through a same-connection
-  reconfiguration round that a fault starts rather than a server's transfer. O54 proves
-  such a round with a protocol bot. It does not prove one a fault starts, and it has no
+  What it cannot prove: a drop while a claim is held. O65 proves the other way into
+  `down`, a fault while nobody claims the body. The claimed one needs the front to keep
+  a client that is standing in a world whose backend has died, through a same-connection
+  reconfiguration round that a fault starts rather than a server's transfer. O33 to O35
+  and O38 to O41b prove such a round on a client's own socket, and they all start it with
+  a server's transfer. None of them proves one a fault starts, and the machine has no
   give-up that puts a driver somewhere when the body cannot come back (#334). Today such
   a fault still ends the driver's connection: the claim buys the body a retry, and the
-  driver rejoins to find it.
+  driver rejoins to find it. What the claim buys is proven at the seam instead, in
+  `test/service/body-lifecycle.test.js`: a claimed body faults, the retry fires, the body
+  logs in again, and the claim is still the one on it.
+- `O65` a body dropped while nobody claims it stays down (#261). O64 left the body
+  attached to the client that claimed it back. That client leaves, which releases the
+  claim, and the body is standing and unclaimed. A client reads the picker, picks that
+  row and reads `<address> - unclaimed`. Then the body's own server drops its socket:
+  the same path a dropped Paper connection takes.
+
+  The session lands in `down` in one transition with no retry armed behind it, and the
+  core's own record says why (`unclaimed: true`). The run then waits past the session's
+  one-second delay and finds the fake's login count unchanged, so nothing dialled a body
+  nobody claims. The same client asks for the same row again and reads
+  `<address> - down`, which is the row's own word after the fault rather than a label
+  cached from before it.
+
+  A claim is what pays for a dial: the client clicks `Claim` on that row, the body's
+  server takes its third login, and the client lands in the body it read as down.
+
+  What it cannot prove: the claimed half of the pair. A claim is held by a client
+  standing in the body, and keeping that client through the fault is #334.
 
 ## The client parity rung
 

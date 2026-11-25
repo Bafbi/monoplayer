@@ -65,7 +65,7 @@ test('#261 a body nobody claims stays down when its session faults, and arms no 
   assert.equal(rig.backendLeg.dialledTargets().length, 1, 'the body dialled once and was not dialled again')
 })
 
-test('#261 a body whose claim is held still reconnects', async () => {
+test('#261 a body whose claim is held reconnects, and comes back to the same claim', async () => {
   const rig = makeCore({ config: { picker: true } })
   await landABody(rig)
   rig.frontLeg.claim(CLAIMED.body, { name: 'Pilot' })
@@ -74,14 +74,39 @@ test('#261 a body whose claim is held still reconnects', async () => {
   assert.equal(rig.core.session.state, 'reconnecting')
   assert.equal(rig.core.session.pendingReconnect, true, 'the claim is what buys the retry')
 
-  // The claim ends while the attempt is pending: the attempt this lane spends is
-  // the last one, because there is nothing left to come back for.
+  // The dial the claim paid for opens, and the body logs in again. The claim was
+  // never released, so the body comes back to the client that kept it: one body,
+  // two backend logins, and the same claim on the front's board.
+  rig.clock.tick(1000)
+  assert.equal(rig.core.session.state, 'boot')
+  assert.deepEqual(rig.events.map(event => event.attempt), [1], 'the adapter is told to dial once')
+  warmABody(rig.backendLeg)
+  assert.equal(rig.core.session.state, 'warm')
+  assert.equal(rig.core.session.backendLogins, 2)
+  assert.equal(rig.core.session.isAttachReady(), true, 'the body is up again, and a client may enter it')
+  assert.equal(rig.core.cache.warm, true, 'and its cache is the one the new session warmed')
+  assert.equal(rig.frontLeg.claimOn(CLAIMED.body).name, 'Pilot', 'the claim is still the one that kept it')
+})
+
+test('#261 a claim that ends while an attempt is pending spends no further attempt', async () => {
+  const rig = makeCore({ config: { picker: true } })
+  await landABody(rig)
+  rig.frontLeg.claim(CLAIMED.body, { name: 'Pilot' })
+
+  rig.backendLeg.deliverEnd({ reason: 'body_fault' })
+  assert.equal(rig.core.session.state, 'reconnecting')
+
+  // The attempt fires against a body nobody claims any more, and it fails: there
+  // is nothing left to come back for, so it is the last attempt, not a loop.
   rig.frontLeg.releaseClaim(CLAIMED.body)
   rig.clock.tick(1000)
   assert.equal(rig.core.session.state, 'boot')
   rig.backendLeg.deliverEnd({ reason: 'refused' })
   assert.equal(rig.core.session.state, 'down')
   assert.equal(rig.core.session.pendingReconnect, false)
+  assert.equal(rig.clock.pending, 0)
+  rig.clock.tick(60_000)
+  assert.equal(rig.core.session.state, 'down')
 })
 
 test('#261 a body a player asked to end goes down, and its channels end with it', async () => {

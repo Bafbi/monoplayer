@@ -6,8 +6,8 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O64 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
-// O62, O63 and O64) are the contract
+// Assertions R0 and O1-O65 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
+// O62, O63, O64 and O65) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -189,6 +189,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot15 = null
   let pickerBot16 = null
   let pickerBot17 = null
+  // #261: the client that reads the row a body nobody claims leaves behind when
+  // its backend faults, and claims it back.
+  let pickerBot18 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -2783,7 +2786,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // #261: the client that claims the standing body, the client that ends it once
       // that claim has gone, the client that reads the row it left, and the client
       // that claims that row back.
-      offlineUuid('Owner'), offlineUuid('Dropper'), offlineUuid('After'), offlineUuid('Back')
+      offlineUuid('Owner'), offlineUuid('Dropper'), offlineUuid('After'), offlineUuid('Back'),
+      // #261: the client that reads the row a faulted unclaimed body leaves, and
+      // claims it back.
+      offlineUuid('Fault')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -4756,7 +4762,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }
     check(
       'O64',
-      'a claim keeps a body alive and a disconnect ends an unclaimed one: the body that ends stays down until a claim dials it back',
+      'a claim lands on a body that is already standing, and a disconnect ends an unclaimed one: the body that ends stays down until a claim dials it back',
       // The claim lands on the body that is already standing: no dial, no second login.
       ownerPick !== null &&
         ownerPick.id === pickIdFor(pickerBodyName) &&
@@ -4816,13 +4822,140 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.ended
     )
 
+    // --- O65: a body dropped while nobody claims it stays down (#261) ---
+    // O64 proved the body a player ended. This is the other way into `down`: the
+    // body's own server goes away while no claim holds it. Nobody is waiting on it,
+    // so nothing is worth a dial, and the row says so until a claim pays for one.
+    // The claimed half of the pair is not here: a claim is held by a client who is
+    // standing in the body, and keeping that client through the fault is #334. What
+    // this rung can prove is that the fault lands the body in `down` with no retry
+    // armed, and that a claim dials it back.
+    await pickerBot17.close()
+    await waitFor(
+      () => pickerFront.claims.every(claim => claim.body !== pickSlug(pickerBodyName)) &&
+        pickerCore.attached === false,
+      'the claim released when its driver left, before the fault',
+      20_000
+    )
+    await waitFor(
+      () => pickerCore.session.state === 'detached',
+      'the body standing with nobody driving it, before the fault',
+      20_000
+    )
+    pickerBot18 = createBot({ port: pickerBound.port, username: 'Fault', version: pickerVersion })
+    await pickerBot18.waitFor(
+      () => pickerBot18.received.dialogs.length === 1,
+      'the picker at the client that watches the unclaimed body fault',
+      15_000
+    )
+    const faultPick = chooseDialogAction(pickerBot18.received.dialogs[0], pickerBodyName)
+    if (faultPick !== null) pickerBot18.answerDialog(faultPick.id, null, 'configuration')
+    await pickerBot18.waitFor(
+      () => pickerBot18.received.dialogs.length === 2,
+      "the unclaimed body's own dialog, before its fault",
+      15_000
+    )
+    const beforeFaultRow = readServerDialog(pickerBot18.received.dialogs[1])
+    const loginsBeforeDrop = pickerBodyFake.received.logins
+    const faultMark = logs.length
+    // The same path a dropped Paper connection takes: the body's socket dies at the
+    // server's end, and the core learns the session is gone from its own leg.
+    for (const client of Object.values(pickerBodyFake.server.clients)) {
+      try { client.socket?.destroy() } catch { /* already gone */ }
+    }
+    await waitFor(
+      () => pickerCore.session.state === 'down',
+      'the unclaimed body down after its fault',
+      20_000
+    )
+    const faultDown = {
+      state: pickerCore.session.state,
+      pendingReconnect: pickerCore.session.pendingReconnect,
+      claimed: pickerCore.claimedBody,
+      attached: pickerCore.attached,
+      logins: pickerBodyFake.received.logins,
+      events: coreLogEvents(faultMark, 'pickerCore').filter(entry => entry.event === 'backendDown')
+    }
+    // A retry for a body nobody claims would show up as a login here. The run waits
+    // past the session's own one-second delay, so this is a look for a dial rather
+    // than a read taken too early.
+    const faultRetried = await settleUntil(() => pickerBodyFake.received.logins > loginsBeforeDrop, 1500)
+    // The same client asks for the same row again: a pick re-reads the row where the
+    // labels are written, so this is the row's word after the fault and not before it.
+    if (faultPick !== null) pickerBot18.answerDialog(faultPick.id, null, 'configuration')
+    await pickerBot18.waitFor(
+      () => pickerBot18.received.dialogs.length === 3,
+      "the unclaimed body's row after its fault",
+      20_000
+    )
+    const afterFaultRow = readServerDialog(pickerBot18.received.dialogs[2])
+    const faultClaim = chooseDialogAction(pickerBot18.received.dialogs[2], 'claim')
+    if (faultClaim !== null) pickerBot18.answerDialog(faultClaim.id, null, 'configuration')
+    await pickerBot18.waitFor(
+      () => pickerBot18.received.login !== null,
+      'the faulted body a claim dialled back',
+      30_000
+    )
+    await waitFor(
+      () => pickerCore.attached === true && pickerCore.session.state === 'attached',
+      'the faulted body up and driven again',
+      20_000
+    )
+    const afterFault = {
+      state: pickerCore.session.state,
+      attached: pickerCore.attached,
+      claimed: pickerCore.claimedBody,
+      logins: pickerBodyFake.received.logins,
+      claims: pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name })),
+      dials: pickerCore.metrics.claimDials - dialsBeforeEnd
+    }
+    evidence.fault = {
+      body: pickerBodyName,
+      faulted: faultDown,
+      retried: faultRetried,
+      rows: {
+        before: beforeFaultRow.title,
+        after: afterFaultRow.title
+      },
+      clicked: faultClaim === null ? null : faultClaim.id,
+      logins: { before: loginsBeforeDrop, after: afterFault.logins },
+      after: afterFault
+    }
+    check(
+      'O65',
+      'a body dropped while nobody claims it stays down: the fault arms no retry, the row says down, and a claim dials it back',
+      // The body was up and unclaimed before the fault, and the row said so.
+      beforeFaultRow.title === pickerBodyName + ' - unclaimed' &&
+        // The fault landed the body in `down` itself, with no retry behind it.
+        faultDown.state === 'down' &&
+        faultDown.pendingReconnect === false &&
+        faultDown.attached === false &&
+        faultDown.claimed === pickSlug(pickerBodyName) &&
+        faultDown.events.length === 1 &&
+        faultDown.events[0].outcome?.unclaimed === true &&
+        // A body nobody claims is not dialled again, and the row says where it stands.
+        faultRetried === false &&
+        faultDown.logins === loginsBeforeDrop &&
+        afterFaultRow.title === pickerBodyName + ' - down' &&
+        // A claim is the one thing that pays for a dial, and it lands its client.
+        faultClaim !== null &&
+        faultClaim.id === verbIdFor('claim', pickerBodyName) &&
+        afterFault.logins === loginsBeforeDrop + 1 &&
+        afterFault.state === 'attached' &&
+        afterFault.attached === true &&
+        afterFault.claimed === pickSlug(pickerBodyName) &&
+        afterFault.claims.some(claim => claim.body === pickSlug(pickerBodyName) && claim.name === 'Fault') &&
+        afterFault.dials === 2,
+      evidence.fault
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
