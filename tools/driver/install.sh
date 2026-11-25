@@ -15,6 +15,15 @@
 # operator already has, and the pin lives in one place: tools/driver/build.gradle.
 set -euo pipefail
 
+# The lane this checkout derives, from the one owner of that name (#327). The
+# installer prints a launch command and an operator copies it, so the address in
+# it has to be the address a rung joins. scripts/gate-lane.sh derives the lane,
+# honours MONOPLAYER_GATE_NAMESPACE, and refuses a name that is not a lane. A host
+# whose checkout cannot answer gets a placeholder and the command that fills it:
+# a plausible-looking hostname that resolves to nothing reads as a broken cluster.
+root=$(cd "$(dirname "$0")/../.." && pwd -P)
+lane=$(bash "$root/scripts/gate-lane.sh" name 2>/dev/null) || lane=''
+
 jar=${1:-}
 if [ -z "$jar" ] || [ ! -f "$jar" ]; then
   echo "usage: $0 /path/to/monoplayer-driver-0.1.0.jar" >&2
@@ -112,7 +121,15 @@ PY
 echo "installed $instance (Minecraft $mc_version, Fabric Loader $loader)"
 echo "launch, from the workspace:"
 echo "  tools/nath.sh launch $instance \\"
-echo "    -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi"
+echo "    -s ${lane:-monoplayer-gate-<instance>}-paper.tail41e568.ts.net:25565 -a Bafbi"
+echo
+if [ -n "$lane" ]; then
+  echo "lane: $lane, from scripts/gate-lane.sh name"
+else
+  echo "lane: not derived here, so <instance> stands for it. From a checkout,"
+  echo "      scripts/gate-lane.sh name prints this worktree's lane"
+fi
+echo "another lane: pass its hostname to -s instead, <lane>-paper.tail41e568.ts.net:25565"
 echo
 echo "driver: 127.0.0.1:25599"
 echo "screenshots: $instance_dir/minecraft/screenshots/"

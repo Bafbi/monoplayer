@@ -43,8 +43,20 @@ pair, and the only pair the current jar loads. Launch:
 
 ```bash
 tools/nath.sh launch gate-b-player-262-fabric \
-  -s monoplayer-gate-b-paper.tail41e568.ts.net:25565 -a Bafbi
+  -s "$(scripts/gate-lane.sh name)-paper.tail41e568.ts.net:25565" -a Bafbi
 ```
+
+Run `mise run gate:up` in this checkout before the launch: a lane is derived from
+the commit and the path, and a lane that has never run `up` is a hostname nothing
+publishes. `mise run gate:status` says what this lane runs.
+
+The address names the lane this checkout derives, and `scripts/gate-lane.sh name`
+is the one owner of that name. The installer prints the same command for the lane
+it runs in, so neither copy can drift from the lane the rungs use. A run against
+another lane passes that lane's hostname to `-s`:
+`monoplayer-gate-<instance>-paper.tail41e568.ts.net:25565`, where the instance is
+what follows `monoplayer-gate-` in the name
+[deploy/driver/README.md](../../deploy/driver/README.md) derives.
 
 `tools/nath.sh` derives the Hyprland session on the host, so no caller supplies
 `DISPLAY`, `WAYLAND_DISPLAY`, or `XDG_RUNTIME_DIR`.
