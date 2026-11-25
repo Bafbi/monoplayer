@@ -3332,8 +3332,8 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
   MONOPLAYER_OFFLINE_LEGS                             1 composes the offline front and backend legs, so the
                                                       lane needs no account, no custody chain and no
-                                                      Microsoft auth; a test lane only, never the live lane
-                                                      (default 0)
+                                                      Microsoft auth. A test lane only, never the live
+                                                      lane (default 0)
   MONOPLAYER_PICKER                                   1 serves a joining client the recorded configuration
                                                       baseline and the server picker when the lane has no
                                                       backend, and records the pick (default 0)

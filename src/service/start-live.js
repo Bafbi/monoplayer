@@ -37,7 +37,7 @@
 //                                                       backend legs, so the lane
 //                                                       needs no account, no custody
 //                                                       chain and no Microsoft auth.
-//                                                       A test lane only: the live
+//                                                       A test lane only. The live
 //                                                       lane must never name it
 //                                                       (default 0)
 //   MONOPLAYER_PICKER                                   1 holds a joining client in
@@ -294,7 +294,7 @@ function accountHint () {
 
 // #391: the identity an offline body speaks as, derived from its name the way an
 // offline server derives it for every client (src/legs/offline-identity.js). A
-// lane names the name and the UUID follows; an operator's own UUID claim stands,
+// lane names the name and the UUID follows. An operator's own UUID claim stands,
 // because it is an assertion about the lane rather than a derivation of the name.
 export function offlinePuppet ({ username = null, uuid = null } = {}) {
   const name = username ?? OFFLINE_PUPPET_USERNAME
