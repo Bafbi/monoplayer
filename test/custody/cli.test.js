@@ -8,7 +8,9 @@
 //
 // Socket-free by construction. `device-code` login and `status --refresh` are
 // absent: both reach Microsoft. Their refusals are here, because a refusal
-// happens before a request.
+// happens before a request. The cluster is absent for the same reason. A fake
+// `kubectl` sits first on PATH, records its argv, and answers nothing, so
+// `whitelist backend` is tested without a Paper to reach.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -30,6 +32,20 @@ const E = 'abcdefab-1234-4567-89ab-cdefabcdefab'
 const LEGACY_UUID = '0f0f0f0f-1111-4222-8333-444444444444'
 const PLAYER = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 
+// A fake kubectl. `whitelist backend` is the one custody path that shells out to
+// the cluster, so the harness puts this in front of the real one. Nothing here can
+// reach a Paper, and a case reads exactly the argv the CLI would have sent. One
+// line per call: "call", then the arguments tab-separated. A tab keeps an argument
+// holding a space (the whole rcon-cli command) one field.
+const KUBECTL_SHIM = [
+  '#!/usr/bin/env bash',
+  'printf "call" >> "$KUBECTL_LOG"',
+  'for arg in "$@"; do printf "\\t%s" "$arg" >> "$KUBECTL_LOG"; done',
+  'printf "\\n" >> "$KUBECTL_LOG"',
+  'exit 0',
+  ''
+].join('\n')
+
 // Values a real cache holds. They must never reach stdout.
 const REFRESH_TOKEN = 'refresh-value-that-must-not-be-printed'
 const ACCESS_TOKEN = 'access-value-that-must-not-be-printed'
@@ -42,27 +58,38 @@ function harness (t) {
   const accountsDir = path.join(secretsDir, 'accounts')
   fs.mkdirSync(path.join(root, 'home'), { recursive: true })
   fs.mkdirSync(path.join(root, 'tmp'), { recursive: true })
+  const bin = path.join(root, 'bin')
+  const kubectlLog = path.join(root, 'kubectl.log')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'kubectl'), KUBECTL_SHIM, { mode: 0o755 })
 
   // A fresh environment, filtered rather than blanked: the CLI reads
   // GATEB_ACCOUNTS_DIR, GATEB_AUTH_ACCOUNT, and GATEB_AUTH_DIR with ??, so an
   // inherited empty string is a value. HOME and TMPDIR point into the fixture
   // so no dependency can reach the operator's real profile.
   const env = {
-    PATH: process.env.PATH,
+    PATH: bin + path.delimiter + (process.env.PATH ?? ''),
+    KUBECTL_LOG: kubectlLog,
     HOME: path.join(root, 'home'),
     TMPDIR: path.join(root, 'tmp'),
     LANG: 'C',
   }
-  const run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], {
+  const runWith = (extra, ...argv) => spawnSync(process.execPath, [CLI, ...argv], {
     encoding: 'utf8',
     cwd: root,
-    env,
+    env: { ...env, ...extra },
     timeout: 60_000,
   })
+  const run = (...argv) => runWith({}, ...argv)
   // Every command that could read or write custody names the fixture root, so
   // no case can reach the checkout's own .secrets by forgetting a flag.
   const runIn = (...argv) => run(...argv, '--accounts-dir', accountsDir, '--secrets-dir', secretsDir)
-  return { root, secretsDir, accountsDir, run, runIn }
+  // Every kubectl call the CLI made, as its argv. Empty means it reached no
+  // cluster at all, which is what a refusal has to do.
+  const calls = () => fs.existsSync(kubectlLog)
+    ? fs.readFileSync(kubectlLog, 'utf8').split('\n').filter(Boolean).map(line => line.split('\t').slice(1))
+    : []
+  return { root, secretsDir, accountsDir, run, runIn, runWith, calls }
 }
 
 // The product's own profile writer builds the fixture, so the CLI and the tree
@@ -380,6 +407,89 @@ test('whitelist attach adds and removes one player by uuid, in the file it was g
   const again = h.runIn('whitelist', 'attach', 'remove', PLAYER, '--file', file)
   assert.equal(again.status, 1, again.stderr)
   assert.match(again.stderr, /whitelist remove failed: not_present/)
+})
+
+// ---------------------------------------------------------------------------
+// whitelist backend: which Paper the write reaches
+// ---------------------------------------------------------------------------
+
+// The backend whitelist decides whether the puppet may occupy a player slot, and
+// RCON is the whole address: one namespace, one Deployment. The adapter's default
+// namespace used to follow the checkout (#282). A command run from a worktree
+// therefore edited that worktree's gate Paper while the operator meant another
+// server, and nothing said which (#328). These cases read the shim's argv, which is
+// the Paper createRcon was handed.
+const argvLine = args => args.join(' ')
+// The two calls one whitelist write makes, as kubectl argv.
+const backendArgv = (namespace, deployment, command) => [
+  `-n ${namespace} exec deploy/${deployment} -- rcon-cli ${command}`,
+  `-n ${namespace} exec deploy/${deployment} -- rcon-cli whitelist reload`
+]
+const SECRETS_DIR_FLAG = '--secrets-dir'
+
+// What separates this case: a missing flag must refuse, not pick a lane, and a
+// refusal must reach no cluster at all.
+test('whitelist backend without --namespace refuses before it reaches any cluster', (t) => {
+  const h = harness(t)
+  const result = h.run('whitelist', 'backend', 'add', 'GlowSquidye', SECRETS_DIR_FLAG, h.secretsDir)
+
+  assert.equal(result.status, 2, result.stderr)
+  assert.match(result.stderr, /^refused: whitelist backend needs --namespace <ns>/m)
+  // The refusal says why, and its example is a Paper this repo deploys. The live
+  // namespace holds the proxy and the playit agent, not a Paper (deploy/manifests).
+  assert.match(result.stderr, /no default is right for every checkout/)
+  assert.match(result.stderr, /--namespace monoplayer-dev --deployment paper/)
+  // The help states the same rule, so a reader who never triggers the refusal sees it.
+  assert.match(result.stderr, /whitelist backend add\|remove <name-or-uuid> --namespace <ns>/)
+  assert.deepEqual(h.calls(), [], 'a refusal runs no kubectl')
+
+  // An empty value names nothing either. kubectl would take its own context's
+  // namespace, which is the silent wrong Paper this change exists to stop.
+  for (const [flag, empty] of [['--namespace', ''], ['--deployment', '']]) {
+    const blank = h.run('whitelist', 'backend', 'add', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', flag, empty, SECRETS_DIR_FLAG, h.secretsDir)
+    assert.equal(blank.status, 2, flag + ' with an empty value: ' + blank.stderr)
+    assert.match(blank.stderr, new RegExp('refused: ' + flag + ' needs a value'), flag)
+    assert.deepEqual(h.calls(), [], 'an empty ' + flag + ' runs no kubectl')
+  }
+})
+
+// The write gets its own case: one namespace, one Deployment, and the line that
+// says which comes before either call.
+test('whitelist backend reaches exactly the namespace it was given, and prints the Paper first', (t) => {
+  const h = harness(t)
+  const result = h.run('whitelist', 'backend', 'add', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', SECRETS_DIR_FLAG, h.secretsDir)
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(h.calls().map(argvLine), backendArgv('monoplayer-gate-x', 'paper', 'whitelist add GlowSquidye'))
+  // A human reads which Paper the write lands on, and reads it first.
+  assert.equal(result.stdout.split('\n')[0], 'paper: namespace=monoplayer-gate-x deployment=paper')
+})
+
+// What separates this case: a stale GATEB_RCON_* in an operator's shell can neither
+// stand in for the flag nor move the deployment.
+test('a driver environment cannot fill in or redirect the Paper', (t) => {
+  const h = harness(t)
+  const env = { GATEB_RCON_NAMESPACE: 'monoplayer-gate-sideways', GATEB_RCON_DEPLOYMENT: 'paper-sideways' }
+
+  const missing = h.runWith(env, 'whitelist', 'backend', 'add', 'GlowSquidye', SECRETS_DIR_FLAG, h.secretsDir)
+  assert.equal(missing.status, 2, missing.stderr)
+  assert.deepEqual(h.calls(), [], 'the environment alone names no Paper')
+
+  const named = h.runWith(env, 'whitelist', 'backend', 'add', 'GlowSquidye', '--namespace', 'monoplayer', SECRETS_DIR_FLAG, h.secretsDir)
+  assert.equal(named.status, 0, named.stderr)
+  assert.deepEqual(h.calls().map(argvLine), backendArgv('monoplayer', 'paper', 'whitelist add GlowSquidye'))
+  assert.match(named.stdout, /^paper: namespace=monoplayer deployment=paper$/m)
+})
+
+// What separates this case: the second half of the address, and its default when
+// the flag is absent.
+test('--deployment names the Paper Deployment, and the printed Paper says which', (t) => {
+  const h = harness(t)
+  const result = h.run('whitelist', 'backend', 'remove', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', '--deployment', 'paper-conduct', SECRETS_DIR_FLAG, h.secretsDir)
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(h.calls().map(argvLine), backendArgv('monoplayer-gate-x', 'paper-conduct', 'whitelist remove GlowSquidye'))
+  assert.match(result.stdout, /^paper: namespace=monoplayer-gate-x deployment=paper-conduct$/m)
 })
 
 // ---------------------------------------------------------------------------
