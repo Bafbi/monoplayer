@@ -76,6 +76,9 @@
 # Exit codes: 0 the rung passed or was honestly not_observed, 1 it failed,
 # 2 setup refused or incomplete. The pod is deleted and the lease released on
 # every path.
+#
+# Runs on a macOS checkout as well as on a Linux one. The one /proc read falls back to
+# kill -0, and the script reads no directory with a GNU-only find primary.
 set -euo pipefail
 
 NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
@@ -787,19 +790,37 @@ if [ -n "$rung_args" ]; then
     && say "report written to $REPORT"
 fi
 
-# The attach account was copied in, so copy its rotation back: still one copy.
+# The attach account was copied in, so its rotation is copied back here: still one copy.
+# A copy-back that brings nothing back is a failed rotation, not a warning. The pod's token
+# caches are the live ones, and the pod is deleted either way, so the rotation would exist
+# nowhere after this run.
 rotated_attach=$(mktemp -d)
-if kubectl cp "$NAMESPACE/$pod:/work/.secrets/accounts/$(basename "$attach_dir")" "$rotated_attach" >/dev/null 2>&1; then
-  # kubectl cp lays the directory down one level either way; find the profile.
-  from=$(find "$rotated_attach" -maxdepth 2 -name profile.json -printf '%h\n' 2>/dev/null | head -1)
-  if [ -n "$from" ]; then
-    rm -f "$from/writer.lock"
-    cp -a "$from"/. "$attach_dir"/ && chmod 600 "$attach_dir"/*.json 2>/dev/null || true
-    say "attach custody written back to $attach_dir"
-  else
-    say "warning: no attach custody came back from the pod; the local copy may be stale"
-  fi
+fetch_status=0
+kubectl cp "$NAMESPACE/$pod:/work/.secrets/accounts/$(basename "$attach_dir")" "$rotated_attach" >/dev/null 2>&1 ||
+  fetch_status=$?
+# kubectl cp lays the directory down one level either way, so the profile is in the
+# destination itself or in one directory below it. A glob reads the same on GNU and on
+# BSD. `find -printf` reads on GNU only: on macOS it exits 1, and under `set -euo pipefail`
+# that status ends the run (#370).
+from=''
+for candidate in "$rotated_attach" "$rotated_attach"/*; do
+  [ -f "$candidate/profile.json" ] || continue
+  from=$candidate
+  break
+done
+if [ "$fetch_status" != 0 ]; then
+  rm -rf "$rotated_attach"
+  die "kubectl could not copy the attach account directory back from pod $pod, so nothing says whether the rung rotated its token caches. $attach_dir was left as it was. A rotation that does not come back is a failed run" 2
 fi
+if [ -z "$from" ]; then
+  rm -rf "$rotated_attach"
+  die "the attach account directory came back from pod $pod with no profile.json in it, so $attach_dir was left as it was. A rotation that does not come back is a failed run" 2
+fi
+rm -f "$from/writer.lock"
+cp -a "$from"/. "$attach_dir"/ ||
+  die "could not write the rotated attach account into $attach_dir, so that directory may hold part of the rotation and part of what was there before. The rung's copy is left in $rotated_attach, and the pod is deleted on the way out" 2
+chmod 600 "$attach_dir"/*.json 2>/dev/null || true
+say "wrote the attach account directory back to $attach_dir"
 rm -rf "$rotated_attach"
 
 # A rotated puppet chain has to go back, or the deployment dies on its next

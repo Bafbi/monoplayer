@@ -82,18 +82,50 @@ const SHIM = [
   '  *" exec "*) exit 0 ;;',
   '  *" delete pod "*) exit 0 ;;',
   '  *" cp "*"online-report.json"*) printf \'{"summary":"ok"}\\n\' > "$last"; exit 0 ;;',
-  '  *" cp "*"/accounts/$ATTACH"*) mkdir -p "$last/$ATTACH"; printf \'{}\' > "$last/$ATTACH/live-cache.json"; printf \'{}\' > "$last/$ATTACH/profile.json"; exit 0 ;;',
+  // The attach copy-in and the attach copy-back are one shape, so the destination says
+  // which this is: a pod path ends in `:...`, and a copy-back lands on a local directory.
+  // A case can make the copy-back bring nothing back, or fail. Both are what a rotation
+  // that never landed looks like (#370).
+  '  *" cp "*"/accounts/$ATTACH"*) case "$last" in',
+  '    *:*) exit 0 ;;',
+  '    *) if [ "${KUBECTL_ATTACH_BACK_FAIL:-}" = 1 ]; then printf \'Error from server (NotFound): pods "check" not found\\n\' >&2; exit 1; fi',
+  '      [ "${KUBECTL_ATTACH_BACK_EMPTY:-}" != 1 ] || exit 0',
+  '      mkdir -p "$last/$ATTACH"; printf \'{}\' > "$last/$ATTACH/live-cache.json"; printf \'{"uuid":"%s","name":"Bafbi","alias":"bafbi"}\' "$ATTACH" > "$last/$ATTACH/profile.json"; exit 0 ;;',
+  '  esac ;;',
   '  *" cp "*"/accounts/$PUPPET"*) mkdir -p "$last/$PUPPET"; for f in live-cache.json mca-cache.json xbl-cache.json profile.json; do printf \'{}\' > "$last/$PUPPET/$f"; done; exit 0 ;;',
   '  *) exit 0 ;;',
   'esac',
   ''
 ].join('\n')
 
-function workspace () {
+// BSD find, which macOS ships, has no -printf: it writes nothing to stdout, says so on
+// stderr, and exits 1. Under this script's `set -euo pipefail` that exit status is the
+// assignment's, so the copy-back aborted the whole run with a status and no sentence. The
+// shim refuses the primaries BSD lacks, so a GNU-only read fails on this Linux checkout
+// too (#370).
+const REAL_FIND = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim()
+assert.ok(REAL_FIND, 'a real find is on PATH for the shim to exec')
+const FIND_SHIM = [
+  '#!/usr/bin/env bash',
+  'for arg in "$@"; do',
+  '  case "$arg" in',
+  '    -printf) printf \'find: %s: unknown primary or operator\\n\' "$arg" >&2; exit 1 ;;',
+  '  esac',
+  'done',
+  'exec \'' + REAL_FIND + '\' "$@"',
+  ''
+].join('\n')
+
+// `strictFind` puts the BSD-behaved find in PATH. It is on for every case, so no case
+// can pass while the script reads a directory with a GNU-only primary. The two cases that
+// are about an empty or a failed copy-back turn it off, so each fails for its own reason
+// and not for the dialect (#370).
+function workspace ({ strictFind = true } = {}) {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-cluster-'))
   const bin = path.join(root, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
+  if (strictFind) fs.writeFileSync(path.join(bin, 'find'), FIND_SHIM, { mode: 0o755 })
 
   const attach = path.join(root, '.secrets', 'accounts', ATTACH)
   fs.mkdirSync(attach, { recursive: true })
@@ -201,13 +233,70 @@ test('an expired puppet token stops the run before it can rotate the chain', () 
   assert.ok(calls.some(line => line.includes('delete pod')), 'the pod is cleaned up')
 })
 
-test('the attach custody is copied back, so one live copy remains', () => {
+test('the attach account directory is copied back, so one live copy remains', () => {
   const space = workspace()
   const { status, output } = run(space)
   assert.equal(status, 0, output)
 
   const written = JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8'))
   assert.deepEqual(written, {}, 'the rotated copy replaced the local one')
+})
+
+// --- the attach copy-back is not GNU-only (#370) ---
+
+// The copy-back read the returned directory out of `find ... -printf '%h\\n'`. -printf is a
+// GNU primary, and BSD find has no such primary: it prints nothing, says so on stderr, and
+// exits 1. `from` was then empty, so the copy-back copied nothing.
+//
+// On macOS the exit status was the assignment's, under this script's `set -euo pipefail`,
+// so the run died there with no sentence of its own. The rotation was lost either way: the
+// pod is deleted on every path, so the new attach key existed nowhere. A rotation that does
+// not come back is a failed rotation, not a warning.
+//
+// Every workspace's find refuses -printf, so these cases measure both dialects rather than
+// only the GNU one this checkout runs.
+
+test('the attach rotation is copied back, and the copy-back is issued (#370)', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+
+  assert.equal(status, 0, output)
+  const fetched = calls.filter(line => new RegExp('^cp \\S+:\\S*/accounts/' + ATTACH + ' \\S+$').test(line))
+  assert.equal(fetched.length, 1, 'the run fetched the attach directory out of the pod: ' + calls.join(' | '))
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
+    {},
+    'and the rotated copy replaced the local one'
+  )
+  assert.match(output, /wrote the attach account directory back to /)
+})
+
+test('a copy-back that brings nothing back fails the run (#370)', () => {
+  const space = workspace({ strictFind: false })
+  const { status, output, calls } = run(space, { KUBECTL_ATTACH_BACK_EMPTY: '1' })
+
+  assert.equal(status, 2, output)
+  assert.match(output, /no profile\.json/)
+  assert.match(output, /A rotation that does not come back is a failed run/)
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
+    { old: true },
+    'the local key is left alone rather than replaced from an empty source'
+  )
+  assert.ok(calls.some(line => line.includes('delete pod')), 'the pod is still deleted')
+})
+
+test('a copy-back kubectl cannot fetch fails the run (#370)', () => {
+  const space = workspace({ strictFind: false })
+  const { status, output } = run(space, { KUBECTL_ATTACH_BACK_FAIL: '1' })
+
+  assert.equal(status, 2, output)
+  assert.match(output, /could not copy the attach account directory back/)
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
+    { old: true },
+    'nothing was written from a copy that never arrived'
+  )
 })
 
 // --- the backend a run defaults to is the gate lane it was told about (#277) ---
