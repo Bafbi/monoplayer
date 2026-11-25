@@ -110,6 +110,15 @@ this script too, so a renamed lane's run cannot administer the lane that shipped
 
 `MONOPLAYER_GATE_NAMESPACE` names a lane by hand for all of them at once.
 
+**The testbed's namespace is listed, and no lane command reaps it.** `monoplayer-gate-b`
+is the one lane-shaped namespace no worktree derives: every worktree shares it, and it
+holds the transfer testbed's two Papers. `deploy/testbed/namespace.yaml` carries the lane
+selector, so `mise run lanes` lists it, with `?` for the age no `up` here wrote and
+`transfer testbed` in the owner column. The reaper keeps it for the `paper-hub` and
+`paper-sky` Deployments the gate tree does not declare, and refuses that name at the
+delete as well, so the shared namespace survives a testbed whose own rows are gone
+(#318).
+
 **The loopback assertion numbers are one sequence.** An id is a bullet in
 [the assertion contract](#loopback-assertion-contract) and a `check('O<n>', …)`
 call in `src/ladder/loopback.js`, and `test/ladder/loopback-contract.test.js`
@@ -134,7 +143,9 @@ build and race the one account
 
 The transfer testbed never runs beside anything. It takes the live front offline,
 and its two Papers live in the fixed namespace `monoplayer-gate-b`, which every
-worktree shares and `mise run lanes` does not list (`src/testbed/switch.js`).
+worktree shares (`src/testbed/switch.js`). That namespace is the testbed's, not a
+worktree's lane: `mise run lanes` lists it and `mise run lanes -- --reap` never deletes
+it (#318).
 
 This machine's ports are not lanes either. `mise run image:build` port-forwards
 buildkitd on 1234, `mise run panel:run` binds 127.0.0.1:8080, and a bare

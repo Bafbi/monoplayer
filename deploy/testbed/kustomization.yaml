@@ -13,11 +13,17 @@
 # `run` command does the transfer and restores the live deployment from a
 # `finally`. An interrupt skips that block, so it needs
 # `mise run testbed:down`.
+#
+# `namespace.yaml` is here because the Papers' namespace is the one gate
+# namespace no worktree derives, and `scripts/gate-lane.sh` finds a lane by a
+# label on it (#318). The object is also what lets this tree apply to a cluster
+# that never ran the old driver tree at all.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
+  - namespace.yaml
   - paper-hub.yaml
   - paper-sky.yaml
   - monoplayer-testbed.yaml
