@@ -10,15 +10,9 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { LaneError, paperAddress, resolveGateLane, tailnetHost } from '../../src/driver/lane.js'
 import { createRcon } from '../../src/driver/rcon.js'
+import { LANE, WORKTREE } from '../support/lane.js'
 
-const ROOT = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'))
-const DRIVER = path.join(ROOT, 'src', 'driver')
-
-// The lane gate-lane.sh derives, mirrored the way gate-lane.test.js mirrors it: a
-// module that typed a name instead of deriving one could not match this.
-const COMMIT = spawnSync('git', ['-C', ROOT, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
-const LANE = 'monoplayer-gate-' + COMMIT + '-' + (crc(ROOT) % 0x1000000).toString(16).padStart(6, '0')
+const DRIVER = path.join(WORKTREE, 'src', 'driver')
 
 // This machine's own lane would answer for the derivation, so it is not passed on.
 const cleanEnv = (extra = {}) => {
