@@ -31,10 +31,10 @@ export function shouldForceWarm (readiness, { requireChunks = true } = {}) {
 }
 
 // The fallback itself, once a caller has decided the grace ran out and the body
-// has terrain to release a client on: pin the join prefix at its current edge and
-// tell the session the body is warm. One copy, because the order and the marker
-// string must not drift between startup, reconnect, the transfer stage and a
-// claim.
+// has terrain to release an attaching player into: pin the join prefix at its
+// current edge and tell the session the body is warm. One copy, because the
+// order and the marker string must not drift between startup, reconnect, the
+// transfer stage, the online rung and a claim.
 export const WARM_FALLBACK_MARKER = 'warm_fallback_join_settled'
 
 export function forceWarm ({ cache, session, marker = WARM_FALLBACK_MARKER } = {}) {

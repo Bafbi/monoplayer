@@ -180,6 +180,19 @@ test('#391 the offline puppet is named, and its UUID is the one that name derive
     offlineUuid('devpuppet'))
 })
 
+test('a body name a server would reject is refused at startup', () => {
+  // MONOPLAYER_PUPPET_ACCOUNT is a selector, and a lane may set it to a UUID. On
+  // an offline lane that string would be the name, and the server kicks it.
+  assert.throws(
+    () => offlinePuppet({ account: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af' }),
+    /offline_puppet_name_too_long: "7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af" is 36 characters/
+  )
+  assert.equal(offlinePuppet({ account: 'devpuppet' }).username, 'devpuppet')
+  // Sixteen is the limit, not fifteen.
+  assert.equal(offlinePuppet({ username: 'a'.repeat(16) }).username, 'a'.repeat(16))
+  assert.throws(() => offlinePuppet({ username: 'a'.repeat(17) }), /offline_puppet_name_too_long/)
+})
+
 test('#391 a UUID the offline name does not derive is refused, not carried', () => {
   // The backend derives the UUID from the name on its own side, so a lane that
   // kept another one would name a player the server does not have.
