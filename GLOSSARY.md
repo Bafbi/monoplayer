@@ -9,7 +9,7 @@ One Minecraft identity: one profile and one refresh-token chain, held in custody
 _Avoid_: user, player, login, alt
 
 **Body**:
-One session of the account on one game server: the connection that server sees, and the player it sees standing in its world. A body outlives every claim, and there is at most one per allowed server.
+One session of the account on one game server: the connection that server sees, and the player it sees standing in its world. A body outlives every claim, and there is at most one per allowed server. A claim is the reason a body is kept alive: a fault while nobody claims it takes the body down, and a claim is what dials it back.
 _Avoid_: backend session, puppet session, character, alt
 
 **Claim**:
@@ -29,7 +29,7 @@ One attaching player's delivery of one body: whether they are its driver or a sp
 _Avoid_: connection, socket, session, slot, seat
 
 **Picker**:
-The configuration-phase dialog an attaching player lands in before they have a body: one entry per allowed server, labelled with that server's body, who is driving it, and how many are watching it. Picking a server opens its own dialog, which claims that body, watches it, or disconnects it. On a lane with the picker, every admitted join is served the picker: a claim is the only way into a body.
+The configuration-phase dialog an attaching player lands in before they have a body: one entry per allowed server, labelled with that server's body, who is driving it, and how many are watching it. Picking a server opens its own dialog, which claims that body, watches it, or disconnects it. A disconnect ends the body, and only while nobody claims it: a claimed body refuses the request in a sentence naming the driver. On a lane with the picker, every admitted join is served the picker: a claim is the only way into a body.
 _Avoid_: lobby, menu, server list, hub, browser
 
 **Allowed server**:
@@ -129,7 +129,7 @@ _Superseded by_ body, one per server. The code's word for a body today: the pupp
 _Avoid_: puppet session, connection, login
 
 **Session state**:
-The stage a body is in. The stages are boot (no connection), warm (a complete join is cached), configuring (a player connected before the join is cached), attached (a driver holds the claim), detached (nobody is driving it, and the body is alive), transferring (the driver is following the body to another server), reconnecting (one retry pending), and failed (the retry budget is spent).
+The stage a body is in. The stages are boot (no connection), warm (a complete join is cached), configuring (a player connected before the join is cached), attached (a driver holds the claim), detached (nobody is driving it, and the body is alive), transferring (the driver is following the body to another server), reconnecting (one retry pending), down (no connection and no retry: nobody claims the body, or a player ended it, and a claim is what dials it again), and failed (the retry budget is spent).
 _Avoid_: status, phase
 
 **Warm**:

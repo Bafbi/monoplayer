@@ -114,7 +114,7 @@ test('#258 a body that ended before it warmed does not hold the next claim', asy
 })
 
 test('#258 the same body may be redialled after its session faulted, and another body may not', async () => {
-  const { core, backendLeg, clock } = makeCore({ config: { picker: true } })
+  const { core, backendLeg, frontLeg, clock } = makeCore({ config: { picker: true } })
   const first = core.connectClaimedBody(CLAIMED_BODY)
   await Promise.resolve()
   warmABody(backendLeg)
@@ -123,10 +123,13 @@ test('#258 the same body may be redialled after its session faulted, and another
   const bodyCache = core.cache
   assert.equal(bodyCache.warm, true)
 
-  // The body's session faults with nobody attached. That body's cache is reset,
-  // and the session arms its reconnect. The claim on that body is still the one
-  // this session serves. Coming back to it is a redial of the same body and the
-  // same cache, not a second one (#260).
+  // The body's session faults with nobody attached. #261: a claim is what keeps a
+  // body alive, so the claim is recorded on the leg's board before the fault — that
+  // is the state this story is about. That body's cache is reset, and the session
+  // arms its reconnect. The claim on that body is still the one this session
+  // serves. Coming back to it is a redial of the same body and the same cache, not
+  // a second one (#260).
+  frontLeg.claim(CLAIMED_BODY.body, { name: 'Pilot' })
   backendLeg.deliverEnd({ reason: 'body_fault' })
   assert.equal(core.session.state, 'reconnecting')
   assert.equal(bodyCache.warm, false, 'the fault reset the cache of the body that ended')

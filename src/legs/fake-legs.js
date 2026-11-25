@@ -91,6 +91,8 @@ export function createFakeFrontLeg () {
   const sent = [] // {kind:'raw'|'packet'|'synth', name, buffer?, packet?, reason?}
   const ended = [] // {reason}
   const reconfiguredCalls = [] // {reason} per startReconfiguration (#22)
+  // #261: the claims this leg holds, keyed by body.
+  const claims = new Map()
   let loginStartHandler = null
   let serverboundHandler = null
   let detachHandler = null
@@ -132,6 +134,11 @@ export function createFakeFrontLeg () {
       sent.push({ kind: synth ? 'synth' : 'packet', name, packet, meta, channel })
     },
     end (reason) { ended.push({ reason }) },
+    // #261: the claim on one body, or null. The real leg records a claim where a
+    // client answers a body's dialog and releases it when that connection ends; the
+    // fake holds whatever a test puts on it, so a fault can be driven with a claim
+    // held and with none. The core reads this instead of keeping a copy.
+    claimOn (body) { return claims.get(body) ?? null },
     setClient ({ username, uuid }) {
       client.username = username
       client.uuid = uuid
@@ -182,6 +189,14 @@ export function createFakeFrontLeg () {
       return reconfiguredHandler({ name, uuid })
     },
     reconfigurations: () => [...reconfiguredCalls],
+
+    // A claim on a body, the way the real leg's board holds one.
+    claim (body, { name = 'Bafbi', holder = 'holder-1' } = {}) {
+      const record = { body, server: body, holder, name, at: 0 }
+      claims.set(body, record)
+      return { ...record }
+    },
+    releaseClaim (body) { return claims.delete(body) },
   }
 
   return leg
