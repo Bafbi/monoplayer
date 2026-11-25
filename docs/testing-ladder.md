@@ -56,6 +56,19 @@ and never passes `--rotate`. `mise run online:cluster` is the form to prefer, an
 the bare rung stays available because `verify:custody` composes it. `AGENTS.md`
 states the rule. `deploy/dev/README.md` is the dev lane runbook.
 
+A capture is the one run here that writes a fixture instead of a report.
+`src/ladder/capture-config.js` records the lane it ran in (#322). It takes that lane from
+`scripts/gate-lane.sh name`, this worktree's lane, with no literal fallback. A capture
+with no lane to name and no `--lane` stops with exit 2 before it joins. A fixture naming
+the wrong Paper is worse than a capture that failed. `--lane` names the lane for a
+capture whose endpoint is not this worktree's: a port-forward to another lane, another
+cluster, or a Paper started by hand. A port-forward cannot say which lane it forwards
+to, so the flag is that capture's only provenance. `MONOPLAYER_GATE_NAMESPACE` names the
+lane for a rung and for a capture at once: the script answers it, and the capture records
+it. The committed
+`src/legs/configuration-baseline/26.2.json` still reads `monoplayer-gate-b`, because
+that is where it was captured. A fixture is dated evidence, and it keeps its own lane.
+
 The gate lane sleeps: its five Deployments commit `replicas: 0`, so an apply wakes
 nothing — and stops whatever was awake, since it reconciles every row to the tree.
 A run that needs `paper` or `paper-conduct` finds an empty namespace until
