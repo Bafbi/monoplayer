@@ -98,6 +98,7 @@ import {
   PICK_VERBS,
   claimFailureText,
   claimRestoreTitle,
+  disconnectRefusalText,
   pickRefusalText,
   pickUnknownText,
   pickerDialogParams,
@@ -552,6 +553,11 @@ function createFrontLeg ({
   // leg with no core, and every row then reads what the list says.
   let bodyServedHandler = null
   let spectatorLeftHandler = null
+  // #261: the Disconnect verb's answer. It is asked only for a body no claim holds,
+  // because a claim is what keeps a body alive; the core ends the session and
+  // answers whether the body it serves is the one the frame named. Absent is a leg
+  // with no core, and its Disconnect verb leaves the client and ends no body.
+  let disconnectBodyHandler = null
 
   const wireStats = { checked: 0, rejected: 0, lastFailure: null }
 
@@ -560,7 +566,7 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -1275,10 +1281,41 @@ function createFrontLeg ({
       log('pickerVerbHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
     }
     if (action.verb === 'disconnect') {
-      // The one verb the dialog layer can carry out itself: the client asked to
-      // leave, and there is no body to leave from. It goes, and the frame that
-      // ends its configuration says which server it left.
-      endConfiguration(client, 'verb_disconnect', 'Monoplayer: you left ' + server.name + '.')
+      // #261: this verb names a body, not a seat. A claim is what keeps a body
+      // alive, so a claimed body is refused here, where the claim is recorded, in a
+      // sentence naming the player who holds it. An unclaimed body ends: the session
+      // goes down and arms no retry (src/core/session.js), and a claim is what dials
+      // it back. The client leaves in both cases, and the frame that ends its
+      // configuration says which server it left.
+      const held = claims.claimOn(server.slug)
+      if (held !== null) {
+        metrics.pickerDisconnectsRefused++
+        const text = disconnectRefusalText({ server: server.name, driver: held.name })
+        log('pickerDisconnectRefused', { ...fields, driver: held.name, holder: held.holder, text })
+        endConfiguration(client, 'disconnect_refused', text)
+        return
+      }
+      let asked = { ended: false, reason: 'no_body_sink' }
+      try {
+        const answer = disconnectBodyHandler === null
+          ? null
+          : disconnectBodyHandler({ body: server.slug, server: server.name, name: client.username ?? null })
+        if (answer !== null && answer !== undefined) asked = answer
+      } catch (error) {
+        log('pickerDisconnectHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+      }
+      if (asked.ended === true) metrics.pickerDisconnects++
+      log('pickerDisconnect', {
+        ...fields,
+        ended: asked.ended === true,
+        reason: asked.reason ?? null,
+        state: asked.state ?? null
+      })
+      // The verb acted on the body, so this client stays where it was and is shown
+      // the list again: the row it just ended reads `down`, and the next choice is
+      // its own. A client ended here would be paying for the lane's act, and the
+      // row is the proof it was carried out.
+      sendPickerDialog(client)
       return
     }
     if (claimed !== null) {
@@ -2076,6 +2113,9 @@ function createFrontLeg ({
     setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
     // #259: the body this lane serves and whether it is up, for the picker's rows.
     setBodyServed (fn) { bodyServedHandler = typeof fn === 'function' ? fn : null },
+    // #261: the Disconnect verb's answer. The core ends the session, and a lane
+    // with no core records the click and ends no body.
+    setDisconnectBody (fn) { disconnectBodyHandler = typeof fn === 'function' ? fn : null },
     // #259: a spectator's channel ended, so the core can stop relaying a body that
     // nobody is in play on.
     setSpectatorLeft (fn) { spectatorLeftHandler = typeof fn === 'function' ? fn : null },
@@ -2126,6 +2166,10 @@ function createFrontLeg ({
     // #267: the claims this leg holds, one per body. A lane that never serves a
     // picker never records one, so this stays empty there.
     get claims () { return claims.snapshot() },
+    // #261: the claim on one body, or null. The core asks this at the moment it
+    // would arm a retry, so a body nobody holds stays down and a body somebody holds
+    // is kept, and neither answer is a copy of the board that could drift.
+    claimOn (body) { return claims.claimOn(body) },
     // The window's own numbers are read live, so the leg keeps no copy of a count
     // the policy already holds.
     get metrics () {
