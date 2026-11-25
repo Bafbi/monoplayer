@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COMMIT, INSTANCE, LANE, WORKTREE, instanceOf, pathHash } from '../support/lane.js'
+import { readMiseTasks } from './mise-toml.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -518,10 +519,12 @@ test('mise offers the lifecycle, and the lint rung sees the script', () => {
   assert.match(toml, /run = "scripts\/gate-lane\.sh up"/, 'gate:up runs the script')
   assert.match(toml, /run = "scripts\/gate-lane\.sh down"/, 'gate:down runs the script')
   // The lint task lists the shell scripts by hand, so a new one is silently
-  // skipped by the gate unless it is added there.
-  const lint = toml.match(/^\[tasks\.lint\][\s\S]*?^run = "(.*)"$/m)
+  // skipped by the gate unless it is added there. Its run is a script now, not a
+  // one-line command (#320), so read the value. A regex that assumed
+  // `run = "…"` walked past lint and matched the next task's run.
+  const lint = readMiseTasks().get('lint').run
   assert.ok(lint, 'the lint task has a run')
-  assert.match(lint[1], /scripts\/gate-lane\.sh/, 'lint syntax-checks the script')
+  assert.match(lint, /scripts\/gate-lane\.sh/, 'lint syntax-checks the script')
 })
 
 
