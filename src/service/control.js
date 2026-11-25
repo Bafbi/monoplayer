@@ -18,7 +18,8 @@
 // One key differs from the other: the allowed-server list has a fallback. A
 // missing or broken whitelist denies a login, which is safe and loud; a missing or
 // broken server list offers a joining client nothing. So the list Git commits
-// answers when the live file cannot.
+// answers whenever the live file offers none, including a lane that never named the
+// live file at all (#356).
 //
 // A control file that cannot be read or parsed is named and ignored, never fatal.
 // The value never reaches loadConfig, because a throw at boot would stop the lane
@@ -131,6 +132,16 @@ export function createControlDocument ({
     return whitelistStore.list().map(player => player.uuid)
   }
 
+  // The two files this key has, in the order they are asked. Each row carries its own
+  // word for an absence, and whether that absence is a fault to name. Writing the
+  // order down once is the whole precedence (#356): the live key answers, else the
+  // copy Git commits, else nothing. A lane names either one, so an unnamed live key
+  // is not a lane without a list.
+  const allowedServerSources = [
+    { source: 'control', file: allowedServersFile, whenMissing: 'live_missing', absenceIsFault: false },
+    { source: 'seed', file: allowedServersSeedFile, whenMissing: 'seed_missing', absenceIsFault: true }
+  ]
+
   // One allowed-server file, as the list or the reason there is none. An unwritten
   // live key is the normal state before the first panel edit, not a failure: the
   // seed is the answer. Anything else that stops a read is named.
@@ -156,7 +167,8 @@ export function createControlDocument ({
 
   // #262: the list the picker offers (#265). The live key, else the copy Git
   // commits, else nothing. It never throws, so a picker can ask on every offer and
-  // a broken file is one named line instead of a refused join.
+  // a broken file is one named line instead of a refused join. #356: the order is
+  // `allowedServerSources`, and this reads it in that order.
   //
   // `source` is which file answered, because "the seed is what you are offering"
   // and "your edit is what you are offering" are different facts to an operator
@@ -166,7 +178,8 @@ export function createControlDocument ({
   // answered. Each value is a different edit, which is the whole use of it: an
   // operator who reads "the list is empty" already knew that.
   //
-  //   no_key        nothing names a list. Set MONOPLAYER_ALLOWED_SERVERS.
+  //   no_key        nothing names a list: the lane set neither variable. Set
+  //                 MONOPLAYER_ALLOWED_SERVERS, or MONOPLAYER_ALLOWED_SERVERS_SEED.
   //   live_missing  the live key names a file nobody has written. Write it, or let
   //                 the panel write it.
   //   empty_list    the file read and holds no servers. Add one back.
@@ -180,21 +193,24 @@ export function createControlDocument ({
   }
 
   function allowedServers () {
-    if (!named(allowedServersFile)) return { servers: [], source: 'none', reason: 'no_key' }
-    const live = readAllowedServers(allowedServersFile)
-    if (live.reason === null) return fileAnswer(live.servers, 'control')
-    if (!named(allowedServersSeedFile)) {
-      // Nothing answers behind the live file. A file nobody wrote and a file that does
-      // not parse are two different repairs, so they are two words.
-      return { servers: [], source: 'none', reason: live.reason === 'missing' ? 'live_missing' : 'unreadable' }
+    // The first source that answers is the list. A file nobody wrote and a file that
+    // does not parse are two repairs, so each source carries its own word.
+    let noList = null
+    for (const { source, file, whenMissing, absenceIsFault } of allowedServerSources) {
+      if (!named(file)) continue
+      const read = readAllowedServers(file)
+      if (read.reason === null) return fileAnswer(read.servers, source)
+      // The seed's absence is a mount to fix, so it is named once. The live key's
+      // absence is the normal state the seed exists for, so that one is not a line.
+      if (absenceIsFault === true && read.reason === 'missing') {
+        sayOnce('controlUnreadable', { file, code: 'ENOENT' })
+      }
+      // The last source that could have answered is the one an operator fixes, so its
+      // word is the one the picker carries. `no_key` is the answer for a lane that
+      // named neither variable, which is the one case this loop never enters.
+      noList = { servers: [], source: 'none', reason: read.reason === 'missing' ? whenMissing : 'unreadable' }
     }
-    const seed = readAllowedServers(allowedServersSeedFile)
-    // The live key's absence is the normal state. The seed's is not: it is a file
-    // this repository commits and the Deployment mounts, so a seed that is not there
-    // is a mount to fix, and it is named once.
-    if (seed.reason === 'missing') sayOnce('controlUnreadable', { file: allowedServersSeedFile, code: 'ENOENT' })
-    if (seed.reason === null) return fileAnswer(seed.servers, 'seed')
-    return { servers: [], source: 'none', reason: seed.reason === 'missing' ? 'seed_missing' : 'unreadable' }
+    return noList ?? { servers: [], source: 'none', reason: 'no_key' }
   }
 
   return { enabled, whitelistStore, attachWhitelist, allowedServers }
