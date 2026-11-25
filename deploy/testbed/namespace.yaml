@@ -1,0 +1,18 @@
+# The transfer testbed's Papers run here. The name is fixed and every worktree
+# shares it, which is the one thing that sets this namespace apart from a gate lane:
+# a lane is derived from a worktree and disposable, and this is neither (#318).
+#
+# The lane selector is here so that `mise run lanes` lists the namespace and the
+# reaper reads it like any other lane. That is what makes the keep-rule the reaper
+# already had reachable: a namespace holding a Deployment the gate tree does not
+# declare is kept, and `paper-hub` and `paper-sky` are the testbed's. The script
+# also refuses this exact name at the delete, so the shared namespace survives even
+# if those two rows are gone. See scripts/gate-lane.sh.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monoplayer-gate-b
+  labels:
+    app.kubernetes.io/part-of: monoplayer
+    app.kubernetes.io/component: gate-lane
+    monoplayer.eu/environment: gate-b
