@@ -12,6 +12,7 @@
 import { activity } from '../activity.js'
 import { deploymentCaps, labelSelector } from '../kube.js'
 import { renderPage } from '../views/page.js'
+import { readAllowedList } from './allowed.js'
 import { readAttachList } from './whitelist.js'
 
 const HTML = 'text/html; charset=utf-8'
@@ -94,13 +95,16 @@ export function createInfoRoutes ({ read, kubernetes = null, recorded = null, lo
           return true
         }
         const at = now()
-        // The card's facts and its attach whitelist are two reads of two objects, so
-        // they run together: the page waits for the slower one, not for both (#248).
-        const [activities, lists] = await Promise.all([
+        // The card's facts, its attach whitelist, and its allowed servers are reads of
+        // different objects, so they run together: the page waits for the slower one,
+        // not for all of them in turn (#248, #309).
+        const [activities, lists, servers] = await Promise.all([
           Promise.all(document.puppets.map(puppet => readPuppet({ kubernetes, puppet, recorded, now: at, log }))),
-          Promise.all(document.puppets.map(puppet => readAttachList({ kubernetes, puppet, now: at, log })))
+          Promise.all(document.puppets.map(puppet => readAttachList({ kubernetes, puppet, now: at, log }))),
+          Promise.all(document.puppets.map(puppet => readAllowedList({ kubernetes, puppet, now: at, log })))
         ])
         const byName = new Map(document.puppets.map((puppet, index) => [puppet.name, lists[index]]))
+        const serversByName = new Map(document.puppets.map((puppet, index) => [puppet.name, servers[index]]))
         // A page served from a recording says so, in the page, where a screenshot can see
         // it. The start line says it too, and a write refuses by name, but neither of
         // those is on the page (#248).
@@ -108,7 +112,7 @@ export function createInfoRoutes ({ read, kubernetes = null, recorded = null, lo
           ? null
           : 'this panel is serving a recording, not a cluster: every fact below was captured from ' +
             'GET /api/puppets/<name>, and every write is refused'
-        send(res, 200, HTML, renderPage(document, activities, byName, banner))
+        send(res, 200, HTML, renderPage(document, activities, { attach: byName, allowed: serversByName, banner }))
         return true
       }
 

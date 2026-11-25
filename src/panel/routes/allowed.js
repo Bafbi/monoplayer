@@ -167,6 +167,30 @@ export async function readAllowedDocument ({ kubernetes, puppet }) {
   }
 }
 
+// The same read, as the fact the page renders: a document, or the sentence that says
+// why there is none, with the instant it was read at and the file that answered. It
+// never throws, so a stream tick or a page render can carry a failed read without
+// losing the rest of the card (#248). The shape is the attach whitelist's reader
+// (#309): one block per control key, and one read behind it.
+export async function readAllowedList ({ kubernetes, puppet, now = Date.now(), log = () => {} }) {
+  const observedAt = new Date(now).toISOString()
+  if (kubernetes === null || kubernetes === undefined || typeof kubernetes.configMap !== 'function') {
+    return { failure: 'the panel has no cluster client, so the allowed servers were not read', observedAt }
+  }
+  try {
+    const read = await readAllowedDocument({ kubernetes, puppet })
+    return { ...read, observedAt }
+  } catch (error) {
+    log('allowedListReadFailed', {
+      puppet: puppet.name,
+      controlConfigMap: puppet.controlConfigMap,
+      seedConfigMap: puppet.seedConfigMap,
+      reason: String(error?.message ?? error).slice(0, 200)
+    })
+    return { failure: String(error?.message ?? error).slice(0, 300), observedAt }
+  }
+}
+
 // The document as the file the lane reads: two-space JSON and one trailing newline,
 // the same bytes `src/service/control.js` is handed everywhere else.
 export function allowedText (document) {

@@ -26,10 +26,11 @@ function renderEntry (puppet, entry) {
     '      <li class="entry">',
     '        <span class="who"><span class="player">' + escape(who) + '</span> <code>' + escape(uuid) + '</code></span>',
     '        <span class="when">added ' + escape(added) + '</span>',
-    // data-uuid is the key the page holds its armed confirmation under, so a tick that
-    // replaces this button paints the confirmation back onto it. data-who is the name
-    // that confirmation reads back, so the second press asks about a person.
-    '        <form class="remove" method="post" data-write="remove" data-uuid="' + escape(uuid) + '" data-who="' + escape(who) + '" action="/api/puppets/' +
+    // data-key is the key the page holds its armed confirmation under, so a tick that
+    // replaces this button paints the confirmation back onto it. data-name is what that
+    // confirmation reads back, so the second press asks about a person. The allowed
+    // servers' block uses the same two attributes, keyed by host:port (#309).
+    '        <form class="remove" method="post" data-write="remove" data-key="' + escape(uuid) + '" data-name="' + escape(who) + '" action="/api/puppets/' +
       escape(encodeURIComponent(puppet.name)) + '/whitelist/' + escape(encodeURIComponent(uuid)) + '">',
     '          <button type="submit" data-armed="false">remove</button>',
     '        </form>',
@@ -92,7 +93,7 @@ export function renderAddForm (puppet) {
 // whichever action was last taken, and it stays until the next one.
 export function renderWhitelistBlock ({ puppet, list }) {
   return [
-    '    <section class="attach-block">',
+    '    <section class="attach-block control-block">',
     '    <h3>Who may attach</h3>',
     '    <p class="note">From <code>' + escape(puppet.controlConfigMap) + '</code> key',
     '    <code>attach-whitelist.json</code> in <code>' + escape(puppet.namespace) +
