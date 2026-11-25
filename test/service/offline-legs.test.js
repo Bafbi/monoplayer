@@ -134,6 +134,15 @@ test('#391 a lane with the switch on builds the offline legs, with no custody', 
   assert.equal(front.chat, cfg.chat)
 })
 
+test('#391 the offline body joins as the name the lane selects', () => {
+  const { calls, legs } = recorders()
+  // The dev lane sets only the account selector, and an offline lane has no
+  // account to resolve: it is the body's name.
+  const cfg = lane({ offlineLegs: true, puppet: { account: 'devpuppet' } })
+  createServiceLegs({ cfg, resolved: null, control: null, getSnapshotConfig: snapshot, legs })
+  assert.equal(optionsOf(calls, 'offline-backend-leg').username, 'devpuppet')
+})
+
 test('#391 the whitelist file is the offline front list when the lane names one', () => {
   const { calls, legs } = recorders()
   const store = { has: () => true }

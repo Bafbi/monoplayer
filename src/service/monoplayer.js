@@ -2125,6 +2125,10 @@ export function createMonoplayer ({
         marker: stats.warm === true,
         configFrames: stats.sizes.config,
         prefixFrames: stats.sizes.prefix,
+        // The counter the startup and transfer paths read for the same question
+        // (`waitForReady` and `shouldForceWarm`). A chunk in the pre-warm prefix
+        // is in the prefix, not in the chunk map, so `sizes.chunks` is 0 until a
+        // body is warm and cannot answer "did terrain arrive".
         chunkFrames: stats.chunkFrames
       }
       if (session.isAttachReady() && stats.sizes.config > 0 && stats.sizes.prefix > 0) {
