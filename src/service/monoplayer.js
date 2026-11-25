@@ -386,6 +386,23 @@ export function createMonoplayer ({
     attachWhitelist: whitelistSource ?? cfg.attachWhitelist,
     puppetProfile: cfg.puppet
   })
+  // #261: is a claim held on the body this session serves? A claim is the reason a
+  // body is kept alive, so the session asks this at the moment it would arm a
+  // retry. The claim is the front leg's record, read there and nowhere else, so
+  // this keeps no copy that can drift from the board.
+  //
+  // A leg that cannot answer has no claim board, and a body nobody can be asked
+  // about is not a body to drop: it is kept, which is the contract every lane had
+  // before this rule. The gate on `cfg.picker` is the same rule from the other
+  // side: a lane with no picker has no claims at all, so its bodies reconnect
+  // exactly as they did before.
+  function claimHeldOnServedBody () {
+    if (typeof frontLeg?.claimOn !== 'function') return true
+    const body = claimDial?.body ?? claimedBody ?? activeBody
+    if (body === null) return false
+    return frontLeg.claimOn(body) !== null
+  }
+
   const session = createSession({
     clock,
     reconnectDelayMs: cfg.reconnect.delayMs,
@@ -393,6 +410,7 @@ export function createMonoplayer ({
       attempts: cfg.reconnect.attempts ?? 1,
       maxDelayMs: cfg.reconnect.maxDelayMs ?? 60_000
     },
+    claimHeld: cfg.picker === true ? claimHeldOnServedBody : null,
     // The core announces the due reconnect; the adapter/orchestrator owns the
     // actual backend connect (the core never touches the backend leg here).
     onReconnect: ({ delayMs, attempt }) => {
@@ -445,6 +463,9 @@ export function createMonoplayer ({
     claimDials: 0,
     claimDialsFailed: 0,
     claimBodies: 0,
+    // #261: a body somebody asked to end, and a body a client tried to enter while
+    // it was down. The second is the picker's own refusal, counted at the front.
+    bodyDisconnects: 0,
     // #269: a spectator's own counters. A view is one body replayed to one
     // channel; an ask is the question the front puts before it opens the channel.
     spectateAsks: 0,
@@ -2090,7 +2111,10 @@ export function createMonoplayer ({
       })
       return finishClaimLanding({ body, server, dial: claimDial.target, bodyWarm: await awaitBodyWarm() })
     }
-    if (session.state !== STATES.BOOT && session.state !== STATES.FAILED) {
+    // A body is dialled out of `boot` (never connected), `failed` (the retry
+    // budget spent) or `down` (nobody claimed it, or somebody ended it). All three
+    // are stages with no session, and the claim is what leaves them.
+    if (session.state !== STATES.BOOT && session.state !== STATES.FAILED && session.state !== STATES.DOWN) {
       log('claimDialRefused', { body, reason: 'session_busy', state: session.state })
       return { connected: false, reason: 'session_busy', body }
     }
@@ -2124,6 +2148,11 @@ export function createMonoplayer ({
     // The body's own first dial. The session goes back to boot for it, so a claim
     // after a fault runs the same path as a claim on a lane that started cold.
     session.backendConnecting({ initial: true })
+    // A dial is a new session, and the handover flag belonged to the leg that
+    // ended. The reconnect path clears it in `onReconnect`; this path dials
+    // without one, and a body ended on request is exactly the case where the new
+    // session follows an end the core asked for.
+    legHandover = false
     try {
       await backendLeg.connect()
     } catch (error) {
@@ -2176,6 +2205,74 @@ export function createMonoplayer ({
     return { connected: true, reason: null, body, target: dial, warm: bodyWarm }
   }
 
+  // --- #261: a requested end ---
+
+  // A player asked for this body to end, from the picker's Disconnect verb. The
+  // claim is the front leg's record, so a claimed body is refused there, before
+  // this is asked: the sentence that names the driver is written where the holder
+  // is known. What is left is the session's half — whether this lane serves the
+  // body the frame named, and what the end did.
+  //
+  // The body ends, arms no retry, and its cache goes with it, because a body that
+  // is down has no state a client may be served. Every channel watching it ends
+  // too: a body that ends takes its spectators with it (frontLeg.end).
+  function disconnectBody ({ body = null, server = null, name = null } = {}) {
+    if (cfg.picker !== true) {
+      log('bodyDisconnectRefused', { body, server, name, reason: 'picker_off' })
+      return { ended: false, reason: 'picker_off', body }
+    }
+    if (claimedBody === null) {
+      // No claim has dialled a body on this lane, so it is not serving one: there
+      // is nothing to end, and the row the client clicked names a server rather
+      // than a body.
+      log('bodyDisconnectRefused', { body, server, name, reason: 'no_body' })
+      return { ended: false, reason: 'no_body', body }
+    }
+    if (body !== null && body !== claimedBody) {
+      // One body per session, which is the same limit a claim reads.
+      log('bodyDisconnectRefused', { body, server, name, reason: 'body_not_served', claimed: claimedBody })
+      return { ended: false, reason: 'body_not_served', body: claimedBody }
+    }
+    // The session owns the invariant: a body a client is standing in is refused
+    // here whatever the caller asked, because the request would take a world away
+    // from a client that still holds the claim on it.
+    const ended = session.end({ reason: 'requested' })
+    if (ended.ended !== true) {
+      log('bodyDisconnectRefused', {
+        body: claimedBody,
+        server,
+        name,
+        reason: ended.reason,
+        state: session.state
+      })
+      return { ended: false, reason: ended.reason, body: claimedBody, state: session.state }
+    }
+    const body_ = claimedBody
+    teardownBackend({ reason: 'requested_disconnect', kickReason: 'body_disconnected' })
+    // The core ended this leg on purpose. Its late end event belongs to the
+    // session that is gone, and must not be read as the body faulting.
+    legHandover = true
+    // The body ended, so no landing is waiting on it: the late end event above is
+    // swallowed, and it is the one path that would otherwise clear this.
+    claimDial = null
+    try {
+      backendLeg.end('requested_disconnect')
+    } catch (error) {
+      log('bodyDisconnectEndFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    // The driver's seat is empty by the session's own refusal above, so this ends
+    // the spectators: a body that ends takes every channel watching it.
+    try {
+      frontLeg.end('body_disconnected')
+    } catch (error) {
+      log('bodyDisconnectChannelsFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    metrics.bodyDisconnects++
+    log('bodyDisconnected', { body: body_, server, name, state: session.state })
+    emit('body_disconnected', { body: body_, server, name })
+    return { ended: true, reason: 'requested', body: body_, state: session.state }
+  }
+
   // --- #269/#259: a spectator, and the channel it watches through ---
 
   // #259: who may spectate. Any client this lane's identity gate admitted may
@@ -2204,7 +2301,7 @@ export function createMonoplayer ({
   // Why the served body is not watchable yet. A session that failed its retries
   // is down; every other state that is not up is still coming.
   function bodyDownReason () {
-    return session.state === STATES.FAILED ? 'body_down' : 'body_not_warm'
+    return session.state === STATES.FAILED || session.state === STATES.DOWN ? 'body_down' : 'body_not_warm'
   }
 
   // The question the front puts before it opens a spectator's channel: may this
@@ -2796,6 +2893,9 @@ export function createMonoplayer ({
     // rather than `down` about a body nobody drives and a spectator may join. The
     // session owns the body, so only the core can answer this, and a leg with no
     // call-in reads every row the way the list wrote it.
+    if (typeof frontLeg.setDisconnectBody === 'function') {
+      frontLeg.setDisconnectBody(payload => disconnectBody(payload))
+    }
     if (typeof frontLeg.setBodyServed === 'function') {
       frontLeg.setBodyServed(() => ({ body: claimedBody, up: servedBody() !== null }))
     }
@@ -3122,6 +3222,9 @@ export function createMonoplayer ({
     // #258: the landing. The front leg calls this when a claim is granted, and it
     // is the only place a claim dials a body.
     connectClaimedBody,
+    // #261: a player asked for this body to end, from the picker's Disconnect verb.
+    // It is the reversing act, and its refusals are the session's.
+    disconnectBody,
     // #269: the spectator's two answers. `spectateBody` says whether a row names
     // the body this session serves, and `spectateView` replays that body to the one
     // channel that asked. #259 adds the third: a spectator's channel ended.

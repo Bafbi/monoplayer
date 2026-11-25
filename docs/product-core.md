@@ -38,7 +38,7 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 | `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
 | `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + the chat frames whose text is spoken as the puppet), pose capture (backend teleport authoritative over client movement) | pure |
 | `src/core/clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
-| `src/core/session.js` | `boot → warm → attached ⇄ detached`, `transferring` for a client that follows a move, `reconnecting` with **exactly one** scheduled reconnect, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
+| `src/core/session.js` | `boot → warm → attached ⇄ detached`, `transferring` for a client that follows a move, `reconnecting` with **exactly one** scheduled reconnect, `down` for a body nobody claims or one a player ended, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
 | `src/core/transfer.js` | The pre-transfer snapshot and the move's commit/rollback, on top of the session's `transferring` state and the cache's `restore` | pure |
 | `src/observability/redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
 | `src/observability/secrets.js` | Secret scanner for reports: findings with index and kind, spans rewritten to `[REDACTED]<kind>`. Custody and the driver lane both import it here | pure |
@@ -392,9 +392,12 @@ listing the lane's allowed servers.
   refused for the order it arrived in. A claim is authorised against the body the
   frame names, never against a dialog having been shown (#267).
 - **A verb is read, reported, then answered (#266).** Claim, spectate and
-  disconnect all act on a body. `claim` records the claim (#267), and
-  `disconnect` is honoured: the client goes, and its configuration `disconnect`
-  frame says which server it left. `spectate` is the third landing (#259): the
+  disconnect all act on a body. `claim` records the claim (#267).
+  `disconnect` ends a body nobody claims (#261): the session goes `down` with no
+  retry, the body's channels end with it, and the client that asked stays in the
+  picker and is shown the list again, where that row now says `down`. A claimed
+  body refuses it in one sentence naming the driver, and the client is
+  disconnected with it. `spectate` is the third landing (#259): the
   click opens that client's spectator channel, continues its configuration phase
   with the body's own frames, and hands it the body's play state, with nothing
   dialled. A lane that serves no body yet, a row naming another body, a body still
@@ -770,6 +773,26 @@ The allowed-server list is its own key with its own fallback: see
   client is not detached for a move it can follow. `retainFront` on
   `backendDown` arms the reconnect without leaving the state, and a failed dial
   under a retained client retries instead of failing closed.
+- (#261) A claim is the reason a body is kept alive. A fault that would arm a
+  retry asks the session's `claimHeld` oracle first, and a body nobody claims
+  lands in `down` instead: no session, no retry, and the picker's row says
+  `down`. The oracle is the front leg's claim board, read where the session asks
+  (`frontLeg.claimOn(body)`), so nothing keeps a second copy of a claim. A lane
+  with no picker wires no oracle, and its bodies reconnect exactly as they did
+  before this rule. The same rule ends the retries a claim no longer pays for: a
+  claim released while an attempt is pending spends no further attempt.
+- (#261) `end({ reason })` is a requested end, and `down` is where it lands: a
+  player asked from the picker, the body arms no retry, and a claim is what dials
+  it back. The session refuses it while a client is attached
+  (`client_attached`) whatever the caller asked, because ending a driven body
+  takes a world away from a client that still holds the claim. An armed retry is
+  cleared on the way down, and `connectClaimedBody` dials out of `down` the way
+  it dials out of `boot` and `failed`.
+- (#261) What this does not do: a fault under a *driver* still ends that driver's
+  connection, whatever the claim says. The claim buys the body a retry, and the
+  driver rejoins to find it. Keeping the connection needs a same-connection
+  reconfiguration round that a fault starts, with somewhere to put the driver
+  when the body cannot come back (#334).
 - `backendLogins` increments **only** on real backend `login` frames. An
   attach/detach cycle alone leaves it untouched (tested: stays 1 across
   warm → attach → detach → reattach).
@@ -829,6 +852,12 @@ frontLeg = {                      // a body's channels: its driver and its spect
                                               //    fn({ name, channel }) ->
                                               //    createMonoplayer().spectateView, the
                                               //    body's play state on that one channel
+  setDisconnectBody(fn)                       // optional (#261): registers
+                                              //    fn({ body, server, name }) ->
+                                              //    createMonoplayer().disconnectBody, which
+                                              //    ends an unclaimed body on request
+  claimOn(body)                               // (#261) the claim on one body, or null:
+                                              //    the session's claimHeld oracle reads it
   write(name, packet, { synth, channel }), writeRaw(buffer, meta, { channel })
   end(reason)                     // deny/kick/close, to every channel
 }

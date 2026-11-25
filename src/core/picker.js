@@ -338,13 +338,12 @@ export function serverActionProblemText (action) {
   }
 }
 
-// A verb this lane reads and cannot carry. `disconnect` is the one verb the
-// dialog layer can honour, so it is not refused here: the client leaves, and its
-// configuration `disconnect` frame says which server it left (#266). `claim` is
-// no longer one of them: #267 records a claim where the client answers
-// (src/core/claims.js), and its refusal has its own sentence there. `spectate`
-// is one the lane carries since #269, and it has its own refusal below; what
-// reaches here is a verb no lane offers yet.
+// A verb this lane reads and cannot carry. `disconnect` is not one of them: since
+// #261 it ends the body the frame names, and the client stays in the picker, so
+// nothing here refuses it. `claim` is not one either: #267 records a claim where
+// the client answers (src/core/claims.js), and its refusal has its own sentence
+// there. `spectate` is the lane's since #269, and it has its own refusal below.
+// What reaches here is a verb no lane offers yet.
 export function verbRefusalText ({ verb = null, server = null } = {}) {
   const named = server === null ? 'that server' : server
   const asked = verb === null ? 'that' : verb
@@ -373,6 +372,19 @@ export function spectateRefusalText ({ server = null, reason = null } = {}) {
     default:
       return 'Monoplayer: ' + named + ' cannot be watched right now.'
   }
+}
+
+// #261: the sentence a client gets when it asks to disconnect a body somebody
+// holds. A disconnect is the one verb that acts on the body rather than on the
+// client, so its refusal names the driver: the client can ask them, or wait for
+// the claim to end with their connection. A claim with no name in it is named as
+// another player rather than left blank, because a sentence with a hole in it
+// reads as a bug in the lane.
+export function disconnectRefusalText ({ server = null, driver = null } = {}) {
+  const named = server === null ? 'that server' : server
+  const who = typeof driver === 'string' && driver.length > 0 ? driver : 'another player'
+  return 'Monoplayer: ' + named + ' is claimed by ' + who +
+    ', so it cannot be disconnected. A body can only be disconnected while nobody claims it.'
 }
 
 // The frame the picker's answer rides in, built for the front's own tests and
