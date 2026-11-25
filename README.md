@@ -102,7 +102,9 @@ The F1-F6 fault rows are still pending
 Each verdict is one page in `testdata/`: [the protocol spike](testdata/spike-verdict.md),
 [the driver lane](testdata/driver-verdict.md), [custody](testdata/custody-verdict.md),
 [M4](testdata/m4-verdict.md), [the live attach](testdata/live-attach-verdict.md),
-[the online rung](testdata/online-verdict.md), and [the deployed service](testdata/service-verdict.md).
+[the online rung](testdata/online-verdict.md), [the deployed service](testdata/service-verdict.md),
+[the server's view of the puppet](testdata/observer-verdict.md), and
+[the puppet's skin](testdata/skin-verdict.md).
 Each page quotes the verdict, the date where the record carries one, and the fact
 the run establishes, plus the command where the record names one. The records themselves stay in git history.
 
