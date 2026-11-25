@@ -33,7 +33,7 @@ The configuration-phase dialog an attaching player lands in before they have a b
 _Avoid_: lobby, menu, server list, hub, browser
 
 **Allowed server**:
-One game server an attaching player may pick in the picker. The list of them is a file an operator edits between deploys, `allowed-servers.json`, so adding one is a panel edit and not a deploy. A row is named for the `host:port` its claim dials.
+One game server an attaching player may pick in the picker. The list of them is its own key of the control document: `allowed-servers.json` in the control ConfigMap, named by `MONOPLAYER_ALLOWED_SERVERS`. An operator edits it between deploys, so adding a server is a panel edit and not a deploy. A row is named for the `host:port` its claim dials.
 _Avoid_: whitelisted server, approved server, server whitelist, target
 
 ## Accounts and identity
@@ -93,7 +93,7 @@ The running Monoplayer process: config, core, both legs, custody, and the CLI. I
 _Avoid_: app, daemon, the proxy, the bot
 
 **Control document**:
-The files an operator edits between deploys, each named by its own path: `config.attachWhitelistFile` (`attach-whitelist.json`) and `config.control.allowedServers` (`allowed-servers.json`). Each is read at the point of use, the whitelist at each login and the server list at each offer, so an edit takes effect without a deploy and without a restart. Nothing watches either file, and a path left unset means no lane reads that key. The whitelist's path is also what turns the document on.
+The files an operator edits between deploys: `config.attachWhitelistFile` (`MONOPLAYER_ATTACH_WHITELIST`, `attach-whitelist.json`) and `config.control.allowedServers` (`MONOPLAYER_ALLOWED_SERVERS`, `allowed-servers.json`). Each key is its own file, its own variable, and its own reader. Each read is one file read at the point of use: the whitelist at every login, the server list at every offer. Nothing watches either file, so an edit lands on the next read, without a restart. A path left unset means no lane reads that key. The whitelist's file is also what turns the control module on. The server list is the one key with a fallback: `config.control.allowedServersSeed` (`MONOPLAYER_ALLOWED_SERVERS_SEED`), the copy Git commits, answers when the live file cannot. A control file that cannot be read or parsed is named and ignored, never fatal.
 _Avoid_: control file, runtime config, feature flag, control dialog
 
 **Testbed front**:
