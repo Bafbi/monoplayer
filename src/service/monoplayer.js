@@ -338,6 +338,13 @@ const NOOP_JOURNAL = Object.freeze({
   stats: () => ({ enabled: false })
 })
 
+// #312: the words a second client reads on a lane that offers no picker. One
+// sentence, because the client has no action left: there is no dialog to answer
+// and no claim to make. It rides the login-state disconnect, so it is the whole
+// of what the player is told.
+export const ALREADY_DRIVEN_TEXT =
+  'Monoplayer: another player is already driving this server. Try again when they leave.'
+
 // #259: what a spectator's client is told about itself. Minecraft carries a player's
 // game mode in two frames, and both are needed: `game_state_change` is the change
 // (reason 3 is `change_game_mode`, and the mode is a float, 3 for spectator), and
@@ -346,13 +353,6 @@ const NOOP_JOURNAL = Object.freeze({
 // (0x04). The speeds are the protocol's own defaults. Proof of the field names:
 // `node tools/protocol.mjs frame 26.1 play toClient game_state_change` and `... abilities`;
 // 26.2 declares the same two frames unchanged.
-// #312: the words a second client reads on a lane that offers no picker. One
-// sentence, because the client has no action left: there is no dialog to answer
-// and no claim to make. It rides the login-state disconnect, so it is the whole
-// of what the player is told.
-export const ALREADY_DRIVEN_TEXT =
-  'Monoplayer: another player is already driving this server. Try again when they leave.'
-
 const GAME_MODE_CHANGE_REASON = 3
 const GAME_MODE_SPECTATOR = 3
 const SPECTATOR_ABILITY_FLAGS = 0x07
