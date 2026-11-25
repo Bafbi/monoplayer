@@ -4422,8 +4422,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // back first, which is the edit the panel makes and the same key O61 read.
     //
     // What this proves that no earlier assertion could: the dialog a client is looking at
-    // is enough to watch a body — no claim, no second login, no dial — and the client is
-    // told what it is by its own two frames. What a spectator sends reaches no backend, and
+    // is enough to watch a body. No claim, no second login, no dial. The client is told
+    // what it is by its own two frames. What a spectator sends reaches no backend, and
     // that is read at the backend rather than in the front's own counter.
     writeAllowedServers(pickerLiveFile, [pickerServerName, pickerBodyName])
     const toldFrames = { gameModes: [], abilities: [] }
@@ -4431,7 +4431,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     pickerBot8.client.on('abilities', packet => toldFrames.abilities.push(packet))
     const claimsBeforeWatch = pickerFront.claims.map(claim => ({ body: claim.body, name: claim.name }))
     const forwardedBeforeVerb = pickerCore.metrics.serverboundForwarded
-    const backendReceivedBefore = {
+    // The fake backend's own counters as one record, read before the click and after
+    // the spectator's input. One reader, so the two reads cannot drift apart.
+    const backendReceived = () => ({
       logins: pickerBodyFake.received.logins,
       positions: pickerBodyFake.received.positions.length,
       chats: pickerBodyFake.received.chats.length,
@@ -4439,7 +4441,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       digs: pickerBodyFake.received.digs.length,
       places: pickerBodyFake.received.places.length,
       settings: pickerBodyFake.received.settings.length
-    }
+    })
+    const backendReceivedBefore = backendReceived()
     const watchDroppedBefore = pickerFront.metrics.spectatorFramesDropped
     if (lookerVerb !== null) pickerBot8.answerDialog(lookerVerb.id, null, 'configuration')
     await pickerBot8.waitFor(
@@ -4506,15 +4509,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // A drop writes nothing, so the wait is for the absence of a frame rather than for
     // one: the socket needs a moment to prove nothing is coming.
     await new Promise(resolve => setTimeout(resolve, 300))
-    const backendReceivedAfter = {
-      logins: pickerBodyFake.received.logins,
-      positions: pickerBodyFake.received.positions.length,
-      chats: pickerBodyFake.received.chats.length,
-      commands: pickerBodyFake.received.chatCommands.length,
-      digs: pickerBodyFake.received.digs.length,
-      places: pickerBodyFake.received.places.length,
-      settings: pickerBodyFake.received.settings.length
-    }
+    const backendReceivedAfter = backendReceived()
     // The row a player reads before choosing. A fresh client reads the list while the
     // body is driven and watched, so the label carries both facts.
     pickerBot11 = createBot({ port: pickerBound.port, username: 'Reader', version: pickerVersion })
@@ -4545,6 +4540,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the sentence a refused Spectate gets',
       15_000
     )
+    // The frame is what the client reads; the socket end is the leg's follow-up and
+    // arrives a moment later, so it is waited for rather than read on arrival. A
+    // refusal that stayed connected would be a client left in a dialog.
+    await settleUntil(() => pickerBot11.received.ended !== null, 5_000)
     const refusedSpectates = logs.slice(refusedMark)
       .filter(entry => entry.event === 'configurationEnded' && entry.fields?.reason === 'spectate_refused')
       .map(entry => entry.fields)
@@ -4636,10 +4635,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         lookerConfiguration.filter(name => name === 'registry_data').length === 57 &&
         pickerBot8.received.leftovers.length === 0 &&
         pickerBot8.received.blockChanges.some(change => change.location?.x === clickedBlock.x) &&
-        // Told what it is, last. The replay carries the body's own game mode first —
-        // reason `level_chunks_load_start`, the mode the driver plays in — and the
-        // frame after it is the one that makes the client a spectator. Abilities go
-        // with it, at the protocol's two speeds.
+        // Told what it is, last. The replay carries the body's own game mode first,
+        // reason `level_chunks_load_start` and the mode the driver plays in. The frame
+        // after it is the one that makes the client a spectator. Abilities go with it,
+        // at the protocol's two speeds.
         toldFrames.gameModes.length === 2 &&
         toldFrames.gameModes[0].gameMode === 0 &&
         toldFrames.gameModes.at(-1).reason === 'change_game_mode' &&
@@ -4694,10 +4693,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
     // --- O63: a body nobody drives stays up, and is still watchable (#259) ---
     // The claim is held by the connection that made it, so the driver leaving releases
-    // the body and nothing else: its backend session, its warm state and its spectator all
-    // stay. O62's click lands a client where a driver is; this is the other half of the
-    // rule #259 had to decide — a body with no driver is watchable, and a spectator is
-    // never a driver.
+    // the body and nothing else. Its backend session, its warm state and its spectator
+    // all stay. O62's click lands a client where a driver is. This is the other half of
+    // the rule #259 had to decide: a body with no driver is watchable, and a spectator
+    // is never a driver.
     //
     // The join reads the picker rather than taking the empty driver seat. Before #259 it
     // was attached as that body's driver down the pre-picker path, with no claim

@@ -404,10 +404,10 @@ listing the lane's allowed servers.
   identity gate admitted may watch any body the lane serves and has up, whether a
   driver holds it or not. No driver is asked for consent. The whitelist is the one
   authority a lane has, and a spectator cannot change the body. A request the driver
-  must answer would put a dialog in front of a player who is mid-game, and it would
-  need a default for the one who never answers. A body with no driver is the ordinary
-  case rather than an error: a claim is released when its connection ends, and the
-  body keeps its backend session. So the ordinary case is watchable.
+  must answer would put a dialog in front of a player who is mid-game. It would also
+  need a default for the driver who never answers. A body with no driver is the
+  ordinary case rather than an error: a claim is released when its connection ends,
+  and the body keeps its backend session. So the ordinary case is watchable.
 - **A spectator's client is told what it is (#259).** The replay carries the body's own
   game mode and abilities, because those are `latest` frames in the body's cache. So
   two frames go to that channel after the replay: `game_state_change` with reason 3
