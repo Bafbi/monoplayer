@@ -26,19 +26,21 @@ export const ASSETS = [
   ['script', '/static/panel.js']
 ]
 
-// `lists` is each puppet's attach whitelist, keyed by name (#248). A caller that
-// omits it gets the block's "not read" sentence rather than an empty list, because
-// the two are different facts: one says the panel did not look, the other says nobody
-// may attach.
+// `attach` and `allowed` are each puppet's two control lists, keyed by name (#248,
+// #309). A caller that omits one gets that block's "not read" sentence rather than an
+// empty list, because "the panel did not look" and "nobody may attach" are different
+// facts, and so are "the panel did not look" and "the picker offers nothing".
 // `banner` is the sentence a recording is announced with, or null. A fixture must be
 // visible as one on the page itself, not only in the start line and in a refusal after a
 // write: a screenshot of a recording that reads like a live lane is the failure this
 // whole ticket exists to prevent (#248).
-export function renderPage ({ version, puppets }, activities, lists = new Map(), banner = null) {
+export function renderPage ({ version, puppets }, activities, { attach = new Map(), allowed = new Map(), banner = null } = {}) {
   const byName = new Map(activities.map(facts => [facts.name, facts]))
   const cards = puppets.map(puppet => {
     const facts = byName.get(puppet.name)
-    return facts === undefined ? '' : renderCard(puppet, facts, lists.get(puppet.name) ?? null)
+    return facts === undefined
+      ? ''
+      : renderCard(puppet, facts, attach.get(puppet.name) ?? null, allowed.get(puppet.name) ?? null)
   }).filter(card => card !== '')
   const total = puppets.length === 1 ? '1 puppet' : puppets.length + ' puppets'
   return [

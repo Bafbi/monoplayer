@@ -20,6 +20,40 @@
       "backend": "play2.excalia.fr:25565"
     }
   ],
+  "allowed": {
+    "glowsquidye": {
+      "document": {
+        "version": 1,
+        "servers": [
+          {
+            "host": "paper.example.net",
+            "port": 25565,
+            "addedAt": "2026-11-23T12:00:00.000Z"
+          },
+          {
+            "host": "sky.example.net",
+            "port": 25566,
+            "addedAt": "2026-11-23T12:04:11.000Z"
+          }
+        ]
+      },
+      "seed": {
+        "version": 1,
+        "servers": [
+          {
+            "host": "paper.example.net",
+            "port": 25565
+          }
+        ]
+      }
+    },
+    "quiet": {
+      "seed": {
+        "version": 1,
+        "servers": []
+      }
+    }
+  },
   "facts": {
     "glowsquidye": {
       "name": "glowsquidye",
