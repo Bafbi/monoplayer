@@ -100,9 +100,9 @@ monoplayer-gate-0a1b2c3-77d1e0         12m     2     /home/me/worktrees/t3-9f2
 monoplayer-gate-b                      ?       0     transfer testbed
 ```
 
-The last row is the transfer testbed's namespace, and the one listed lane no worktree
-derives. No `up` or `down` here writes its clock, so its age is `?`, and it never
-reaps: see the conditions below (#318).
+The last row is the transfer testbed's namespace: the one namespace in that listing that
+no worktree derives, and not a gate lane. No `up` or `down` here writes its clock, so its
+age is `?`, and it never reaps: see the conditions below (#318).
 
 `up` and `down` write three annotations on the namespace: the worktree, the
 commit, and an epoch that `lanes` reads as the age. `up` fails when it cannot write
@@ -192,7 +192,8 @@ deletes by that label, and an operator's Secret carries none, so it survives eve
 `paper-hub` and `paper-sky` from `deploy/testbed` are tenants of a gate namespace. They
 belong to the transfer testbed: nothing here scales them, and a lane on another
 instance does not take them with it. They are also why the reaper keeps
-`monoplayer-gate-b`, the one listed lane no worktree derives (#318). Both read that namespace's
+`monoplayer-gate-b`, the one namespace the listing names that no worktree derives (#318).
+Both read that namespace's
 `gate-<instance>-rcon`, so a `gate:down` that removes a generated one leaves them
 without one until the next `gate:up`. The testbed owns its own Secret, not this lane
 (#283, #288).
