@@ -50,14 +50,17 @@ const CODE_DIRS = ['src', 'tools', 'scripts']
 const OVERLAY = 'src/service/start-live.js'
 const PRINT_CONFIG = 'node src/service/monoplayer.js --print-config'
 
-// A verdict page records what was true when it was taken, so it may name a
-// variable that retired after the run. It is evidence, not a runbook, and AGENTS.md
-// says to leave its numbers alone.
-const NOT_A_PAGE = new Set(['node_modules', '.git', '.scratch', '.reports', 'testdata'])
+// Where the walk does not go. The first four hold no page a reader acts on:
+// installed packages, history, scratch output, run reports.
+//
+// testdata holds verdict pages. A record says what was true when it was taken, so
+// it may name a variable that retired after that run, and AGENTS.md says to leave
+// its numbers alone. Guarding a record would edit evidence.
+const SKIP = new Set(['node_modules', '.git', '.scratch', '.reports', 'testdata'])
 
 function walk (dir, keep, found = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (NOT_A_PAGE.has(entry.name)) continue
+    if (SKIP.has(entry.name)) continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) walk(full, keep, found)
     else if (keep(entry.name)) found.push(full)
