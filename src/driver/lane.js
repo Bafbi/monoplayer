@@ -6,10 +6,9 @@
 // refuses a name that is not a gate lane. This module is the driver's only reader of
 // it, so the RCON target and the address a client joins cannot name different lanes.
 //
-// They did once. src/driver/backends.js exported a literal lane, and rcon.js and
-// run.js defaulted to the same string, so a renamed lane's scenario administered the
-// lane that shipped while the run believed it was measuring its own. Silence, not a
-// crash, is what that class of defect costs (#282).
+// They did once: backends.js exported a literal lane and rcon.js and run.js defaulted
+// to the same string, so a renamed lane's scenario administered the lane that
+// shipped while the run believed it was measuring its own (#282).
 //
 // Nothing runs at import: the resolver asks the script once, when a default needs it,
 // and a refusal is the script's own sentence.
@@ -76,4 +75,20 @@ export function tailnetHost (namespace, workload) {
 // What a client on the display host joins for the lane's Paper.
 export function paperAddress (namespace, port = 25565) {
   return `${tailnetHost(namespace, 'paper')}:${port}`
+}
+
+// The two targets one driver run fills from the lane: the address a client joins and
+// the namespace RCON administers. Or the sentence that stops the run.
+//
+// --server and --rcon-namespace are the caller's overrides, not second lanes: a run
+// handed both goes where it was told, which is what #301 kept for --backend-host. A
+// run handed only the RCON namespace, and whose join address would be this lane's,
+// names two lanes, so it refuses instead of picking one.
+export function laneTargets (lane, { server = '', rconNamespace = '' } = {}) {
+  if (rconNamespace !== '' && server === '' && rconNamespace !== lane) {
+    return {
+      refused: `GATEB_RCON_NAMESPACE names "${rconNamespace}" and this worktree's lane is "${lane}". One run names one lane: pass --server too if the client should join the other one`,
+    }
+  }
+  return { server: server || paperAddress(lane), rconNamespace: rconNamespace || lane }
 }
