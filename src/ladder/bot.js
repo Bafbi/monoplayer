@@ -103,6 +103,11 @@ export function createBot ({
     gatesHeld: 0, // code-of-conduct accepts this bot refused to send (#73)
     advancements: [], // decoded clientbound advancements frames (a proxy notice toast, #15)
     kick: null, // decoded clientbound kick_disconnect, if one arrived
+    // #315: every configuration or login disconnect the client was told about, as the
+    // decoded packet. The reason the client was given is the sentence a rung has to
+    // read: `client.end()` reaches this process as a socket close, which carries none
+    // of it.
+    disconnects: [],
     ended: null,
     errors: []
   }
@@ -149,6 +154,7 @@ export function createBot ({
     received.names.push({ state, name })
     if (!received.byState[state]) received.byState[state] = []
     received.byState[state].push(name)
+    if (name === 'disconnect') received.disconnects.push({ state, packet: data ?? null })
     if (leftover !== 0) received.leftovers.push({ state, name, total, leftover })
   })
 

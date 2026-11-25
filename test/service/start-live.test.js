@@ -328,27 +328,44 @@ test('#265 the picker reader offers the allowed-server list, and names the sourc
 
   // #259: the reader names servers; what a body on one is doing is the leg's answer
   // at the offer, so a row leaves this function with nobody driving and nobody
-  // watching it.
-  assert.deepEqual(offered(), [{ name: 'paper:25565', state: 'down', driver: null, spectators: 0 }])
+  // watching it. #315: the answer is the whole offer, so the leg that draws it can say
+  // why there is nothing to draw.
+  assert.deepEqual(offered(), {
+    source: 'seed',
+    reason: null,
+    rows: [{ name: 'paper:25565', state: 'down', driver: null, spectators: 0 }]
+  })
   // The list is read at each offer, so an edit made from the panel is what the next
   // join sees. The picker is not a snapshot taken at start.
   answer = { servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25566 }], source: 'control' }
-  assert.deepEqual(offered().map(row => row.name), ['paper:25565', 'sky:25566'])
+  assert.deepEqual(offered().rows.map(row => row.name), ['paper:25565', 'sky:25566'])
 
   // One line per answer, not one per read. A join reads the list more than once, and
   // an operator does not need the same fact three times.
   offered()
   assert.deepEqual(said, [
-    { event: 'pickerOffered', source: 'seed', servers: 1 },
-    { event: 'pickerOffered', source: 'control', servers: 2 }
+    { event: 'pickerOffered', source: 'seed', servers: 1, reason: null },
+    { event: 'pickerOffered', source: 'control', servers: 2, reason: null }
   ])
 
   // A lane with no list offers nothing, and says so. It does not fall back to the
   // configured backend: the list is what a picker lane offers.
-  answer = { servers: [], source: 'none' }
-  assert.deepEqual(offered(), [])
+  answer = { servers: [], source: 'none', reason: 'no_key' }
+  assert.deepEqual(offered().rows, [])
   assert.equal(said.length, 3)
-  assert.deepEqual(said[2], { event: 'pickerOffered', source: 'none', servers: 0 })
+  assert.deepEqual(said[2], { event: 'pickerOffered', source: 'none', servers: 0, reason: 'no_key' })
+
+  // #315: the reason is part of the answer, so a reason that changes is a new line. An
+  // operator fixes the mount only to find the file it exposes is broken, and the second
+  // fact is the one they need now.
+  answer = { servers: [], source: 'none', reason: 'live_missing' }
+  assert.deepEqual(offered().rows, [])
+  answer = { servers: [], source: 'none', reason: 'unreadable' }
+  assert.deepEqual(offered().rows, [])
+  assert.deepEqual(said.slice(-2), [
+    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'live_missing' },
+    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'unreadable' }
+  ])
 
   // Composed where a lane can see the mistake at start, not at a join.
   assert.throws(() => createPickerServerReader({ control: {} }), /allowedServers/)
