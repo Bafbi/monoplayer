@@ -301,9 +301,9 @@ A lifecycle event record:
 {"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","accountUuid":"...","warm":true}
 ```
 
-The service writes `startLive`, `backendBootSkipped`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/service/start-live.js`. The core writes none.
+The service writes `startLive`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/service/start-live.js`. The core writes none.
 
-`backendBootSkipped` says the service dialled no body before the front listened, and why. A picker lane is the one lane that skips the dial, because a claim is what dials a body (`reason":"picker"`). Its `liveReady` then says `"boot":"skipped"`, `"backendConnected":null`, and `null` for `warm`, `configFrames` and `prefixFrames`: no body was dialled, so there is no cache to describe. A lane that dialled says `"boot":"dialled"` and the numbers of the body it dialled.
+A picker lane dials no body before the front listens, because a claim is what dials a body. Its JSONL log carries `{"event":"backendBootSkipped","reason":"picker"}`, and its `liveReady` says `"boot":"skipped"`. The same record reads `"backendConnected":null`, and `null` for `warm`, `configFrames` and `prefixFrames`: no body was dialled, so there is no cache to describe. A lane that dialled says `"boot":"dialled"` and the numbers of the body it dialled.
 
 ### The name policy
 
