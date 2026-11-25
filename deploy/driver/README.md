@@ -255,6 +255,69 @@ mise run gate:up paper-conduct
 kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/paper-conduct --tail=100
 ```
 
+## No spectator row: this lane serves no body
+
+#325 asks for a row in which two real clients reach one body. One claims it, the other
+watches it in spectator mode, and the watching client's report records what that client
+read. This tree serves no body, so the row cannot run here. Nothing in the driver is what
+stops it.
+
+A spectator is the product's, not a server's. The Spectate verb is the picker's
+(`src/core/picker.js:37,39`), and the claim is the front's own registry
+(`src/core/claims.js:1-17`). The two frames that tell a spectator what it is are written
+by the service (`src/service/monoplayer.js:2402,2406`). A client that joins this lane's
+Paper reaches Paper and never a picker. The tree declares no product row
+(`deploy/driver/kustomization.yaml:8-14`), and the ladder already says no proxy stands in
+front of the gate Paper.
+
+The product's half is built and proven against fakes, so no server-side piece is missing
+except a lane to serve it. `test/service/spectate.test.js` covers a spectator beside a
+pilot. The loopback rung's O60 to O63 drive the same path with protocol bots.
+
+Four things would have to hold. Each one is a change this lane does not have.
+
+1. **A front on the lane, serving a picker.** The picker is off by default
+   (`src/service/monoplayer.js:156`), and no manifest under `deploy/` sets
+   `MONOPLAYER_PICKER`. So no lane this repo deploys has ever offered a claim.
+2. **A puppet token chain for that front.** The service builds live legs only
+   (`src/service/start-live.js:452,492`), and the backend leg refuses to start without an
+   account directory (`src/legs/live-backend.js:695`). The offline legs belong to the
+   loopback rungs, and they refuse any host but loopback
+   (`src/legs/live-backend.js:801`, `src/legs/live-front.js:2308`). The cluster holds
+   two chains, the live deployment's (`deploy/manifests/pvc.yaml`) and the dev lane's
+   (`deploy/dev/custody.yaml`). Each one has one writer, and a third has no bootstrap
+   path this lane owns.
+3. **Two clients.** A run launches one Prism instance as one account
+   (`src/driver/run.js:346-357`), and the mod binds one socket on one port
+   (`tools/driver/src/main/java/eu/monoplayer/driver/DriverMod.java:10`). The port is a
+   JVM property, so two clients can be made to differ. The launch command passes none, and
+   a second client cannot bind it while a first holds it (`src/driver/parity.js:353`).
+   One account cannot serve both clients either, because a second login to one server
+   disconnects the first (`docs/custody.md:111`). That is why every driver run so far is
+   sequential (`src/driver/parity.js:87`). A second client needs a second instance, a
+   second drive port, a second window title, and a second premium account, all set on the
+   display host.
+4. **A way to read the claims list from outside the process.** The loopback rung reads
+   `pickerFront.claims` in the process that serves the picker
+   (`src/ladder/loopback.js:3027`). A deployed front reads out nowhere a rung can see. No
+   metric, no log record, and no panel route carries a claim. This is the weakest of the
+   four, because it is about measuring the claim rather than making one.
+
+The driver's own half is unbuilt too. The mod reports no game mode and no abilities, so
+"spectator mode, as the client read it" has no reader yet. `status` in
+`tools/driver/src/main/java/eu/monoplayer/driver/DriverServer.java:227` is where that
+reading and the report field it feeds would go. The picker's own buttons are already
+reachable through the driver's `click` op.
+
+Two narrower rows were considered and rejected. A protocol bot driving the body would
+measure a bot where the row exists to witness two real clients. Reading the spectator's
+frames instead of drawing them is what O62 and O63 already do. Neither is a substitute
+for this one.
+
+The row belongs on a lane that serves a picker, and neither lane that could does. The dev
+lane sets no `MONOPLAYER_PICKER`, and the live lane is not a target for an automated join.
+#336 carries the lane work, and #337 the two-client harness and the spectator reading.
+
 ## M4 lane — Paper behind Velocity 4.3.1 (+ toxiproxy)
 
 Second backend row per [docs/paper-behind-velocity.md](../../docs/paper-behind-velocity.md).
