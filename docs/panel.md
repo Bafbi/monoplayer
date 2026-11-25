@@ -137,6 +137,12 @@ is **skipped** and logged as `panelStreamTickSkipped`: a slow API server can out
 tick, and overlapping reads would answer out of order. A skipped tick costs one interval
 of freshness. An out-of-order one costs trust in the page.
 
+A stream that ends is logged as `panelStreamEnd`, with the puppet's name and the ticks
+and beats it wrote. Both intervals are cleared before that record is written, so the
+record is the point after which the stream starts no new read. A read a tick had already
+started still finishes. A test waits on that record instead of on a clock, which is why
+the order matters.
+
 The whitelist list travels in the same frame as an out-of-band swap, so the block
 redraws with the card while the form beside it keeps what the operator typed. A failed
 whitelist read is a sentence in that block, and the rest of the card still arrives.
