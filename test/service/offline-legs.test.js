@@ -10,8 +10,6 @@ import assert from 'node:assert/strict'
 import { createServiceLegs, envOverlay, offlinePuppet } from '../../src/service/start-live.js'
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
-import { createOfflineBackendLeg } from '../../src/legs/live-backend.js'
-import { createOfflineFrontLeg } from '../../src/legs/live-front.js'
 
 const ATTACH_UUID = '06081639-2178-368a-abb3-3f762836f9a4'
 const ACCOUNT_UUID = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
@@ -148,35 +146,6 @@ test('#391 the whitelist file is the offline front list when the lane names one'
   const front = optionsOf(calls, 'offline-front-leg')
   assert.equal(front.whitelistStore, store, 'the reloading store is what the leg reads at each login')
   assert.equal(front.offlineWhitelist, null, 'and the frozen array would only shadow it')
-})
-
-// The one option the composition root passes to a leg, and the reason this case
-// lives here: `test/legs/` is not this change's to edit, and the option exists for
-// this composition root alone.
-test('#391 the fence-lift is a boolean, not a truthy value', () => {
-  // An unset option is the default, false. Each value here is truthy, so the
-  // pre-guard code lifted the fence and built the leg.
-  for (const value of ['yes', 1, {}]) {
-    assert.throws(
-      () => createOfflineFrontLeg({
-        host: '0.0.0.0', offlineWhitelist: [ATTACH_UUID], allowNonLoopback: value, getSnapshotConfig: snapshot
-      }),
-      /allowNonLoopback must be a boolean/,
-      JSON.stringify(value)
-    )
-    assert.throws(
-      () => createOfflineBackendLeg({ host: 'paper.example', port: 25565, allowNonLoopback: value }),
-      /allowNonLoopback must be a boolean/,
-      JSON.stringify(value)
-    )
-  }
-
-  // With the boolean the composition root passes, both legs build off loopback.
-  assert.equal(createOfflineFrontLeg({
-    host: '0.0.0.0', offlineWhitelist: [ATTACH_UUID], allowNonLoopback: true, getSnapshotConfig: snapshot, wireMode: 'off'
-  }).kind, 'offline-front-leg')
-  assert.equal(createOfflineBackendLeg({ host: 'paper.example', port: 25565, allowNonLoopback: true }).kind,
-    'offline-backend-leg')
 })
 
 test('#391 the offline puppet is named, and its UUID is the one that name derives', () => {

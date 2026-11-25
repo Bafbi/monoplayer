@@ -1,6 +1,6 @@
 # The product may be a test double, and the price is a guard on the live manifest
 
-A lane that serves a real backend with two protocol bots needs no Minecraft account, so the service can compose the offline legs. That makes the product a test double, on one condition: the live lane must not become one by a manifest edit. So the switch (`MONOPLAYER_OFFLINE_LEGS` in the environment, `offlineLegs` in a configuration document) is a startup decision, and never a key in the runtime control document. `test/tooling/live-manifests.test.js` fails if a manifest under `deploy/manifests/` names either spelling.
+A lane that serves a real backend with two protocol bots needs no Minecraft account. So the service can compose the offline legs, on one condition: the live lane must not become one by a manifest edit. The switch is therefore a startup decision, never a control-document key, and `test/tooling/live-manifests.test.js` bars it from `deploy/manifests/`.
 
 ## Considered options
 
@@ -11,6 +11,8 @@ A lane that serves a real backend with two protocol bots needs no Minecraft acco
 - **Read the switch from the control document, so an operator can turn it on in a running lane.** Rejected: a lane's mode is not runtime state. It decides which code the process builds, and an operator action that turns a live lane into an anonymous one is the failure this decision exists to prevent.
 
 ## Consequences
+
+The switch is `MONOPLAYER_OFFLINE_LEGS` in the environment, and `offlineLegs` in a configuration document passed with `--config`. The guard reads for either spelling, because a ConfigMap holding one is the same edit as a manifest setting the other.
 
 The guard is the price, and it is the load-bearing part. Without it, one manifest line would serve anonymous clients from the lane that holds the account chain and the public route. Two files answer a reader who asks why the live lane cannot do that: this one, and the failing test's own message.
 
