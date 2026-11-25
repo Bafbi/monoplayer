@@ -16,7 +16,7 @@
 // Secrets: RCON lives inside the pod (rcon-cli), the driver token comes from
 // GATEB_DRIVER_TOKEN, and every report body is scanned with
 // observability/secrets.redactSecrets before it is written.
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
 import path from 'node:path'
@@ -94,7 +94,8 @@ Environment:
   GATEB_RCON_NAMESPACE / GATEB_RCON_DEPLOYMENT — kubectl exec target (defaults:
                      this worktree's gate lane / paper). The lane comes from
                      scripts/gate-lane.sh name, so MONOPLAYER_GATE_NAMESPACE names
-                     one by hand (#282)
+                     one by hand. Naming this and not --server is refused: one run
+                     names one lane (#282)
   GATEB_DISPLAY / GATEB_XDG_RUNTIME_DIR / GATEB_WAYLAND_DISPLAY — display-host
                      launch environment (defaults :0, /run/user/1000, wayland-1)
 
@@ -452,6 +453,51 @@ async function verifyG0 (opts) {
   return 0
 }
 
+// --- the one lane this run names (#282) --------------------------------------
+//
+// src/driver/lane.js asks scripts/gate-lane.sh name, which derives this worktree's
+// lane or honours MONOPLAYER_GATE_NAMESPACE. The RCON target and the address the
+// client joins are filled from the one value, so a renamed lane's run cannot
+// administer the lane that shipped while it joins its own.
+//
+// --server and --rcon-namespace stay the caller's override, not a second lane: a run
+// handed both goes where it was told, which is what #301 kept for --backend-host. A
+// run handed only the RCON namespace, and whose join address would be this lane's,
+// names two lanes, so it stops here instead.
+
+// The two targets, or the sentence that stops the run. Pure, and given the lane, so
+// a test can name one without a checkout.
+export function laneTargets (opts, lane) {
+  if (opts.rconNamespace !== '' && opts.server === '' && opts.rconNamespace !== lane) {
+    return {
+      refused: `GATEB_RCON_NAMESPACE names "${opts.rconNamespace}" and this worktree's lane is "${lane}". One run names one lane: pass --server too if the client should join the other one`,
+    }
+  }
+  return { server: opts.server || paperAddress(lane), rconNamespace: opts.rconNamespace || lane }
+}
+
+// Fill the run's two targets from the lane, or report why it cannot. A lane that
+// cannot be named stops the run before anything reaches a client or a Deployment.
+function applyLaneToOptions (opts) {
+  let lane
+  try {
+    lane = resolveGateLane()
+  } catch (error) {
+    console.error('driver: ' + String(error?.message ?? error))
+    process.exitCode = 2
+    return false
+  }
+  const targets = laneTargets(opts, lane)
+  if (targets.refused) {
+    console.error('driver: ' + targets.refused)
+    process.exitCode = 2
+    return false
+  }
+  opts.server = targets.server
+  opts.rconNamespace = targets.rconNamespace
+  return true
+}
+
 async function main () {
   let opts
   try {
@@ -476,29 +522,9 @@ async function main () {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 
-  // --- the one lane this run names (#282) ------------------------------------
-  //
-  // src/driver/lane.js asks scripts/gate-lane.sh name, which derives this worktree's
-  // lane or honours MONOPLAYER_GATE_NAMESPACE. The RCON target and the address the
-  // client joins are filled from it here, once, so a renamed lane's run cannot
-  // administer the lane that shipped while it joins its own.
-  //
-  // --server and --rcon-namespace stay the caller's override, not a second lane: a
-  // run handed one dials where it was told, which is what #301 kept for
-  // --backend-host. A lane that cannot be named stops the run before anything
-  // reaches a client or a Deployment.
-  let lane
-  try {
-    lane = resolveGateLane()
-  } catch (error) {
-    console.error('driver: ' + String(error?.message ?? error))
-    process.exitCode = 2
-    return
-  }
-  opts.server ||= paperAddress(lane)
-  opts.rconNamespace ||= lane
-
   if (opts.lane === 'unmodded') {
+    // The checklist sends a reader to this worktree's Paper, so it names the lane too.
+    if (!applyLaneToOptions(opts)) return
     const laneReportPath = path.join(TESTDATA, `driver-unmodded-checklist-${stamp}.json`)
     await writeUnmoddedChecklist({ laneReportPath, server: opts.server })
     console.log(`unmodded witness checklist written: ${path.relative(root, laneReportPath)}`)
@@ -517,6 +543,10 @@ async function main () {
     process.exitCode = await runSkinLaneCli(opts)
     return
   }
+
+  // The lane is named before the address is validated, because the address's own
+  // default is this lane's Paper.
+  if (!applyLaneToOptions(opts)) return
 
   // The live fleet and the live deployment in front of it are refused for the
   // G0 join too, not only for the parity lanes.
@@ -612,12 +642,19 @@ async function main () {
   process.exit(process.exitCode)
 }
 
-main().catch(error => {
-  cleanupTunnel()
-  if (error instanceof DriverError) {
-    console.error(`driver error: ${error.message}`)
-  } else {
-    console.error(`driver fatal: ${error.stack || error.message || error}`)
-  }
-  process.exit(1)
-})
+// Only when this file is the program. A test imports laneTargets above, and an
+// import that launched a client would be the last thing a test wanted.
+const invoked = process.argv[1] === undefined
+  ? null
+  : realpathSync(process.argv[1])
+if (invoked !== null && invoked === realpathSync(fileURLToPath(import.meta.url))) {
+  main().catch(error => {
+    cleanupTunnel()
+    if (error instanceof DriverError) {
+      console.error(`driver error: ${error.message}`)
+    } else {
+      console.error(`driver fatal: ${error.stack || error.message || error}`)
+    }
+    process.exit(1)
+  })
+}
