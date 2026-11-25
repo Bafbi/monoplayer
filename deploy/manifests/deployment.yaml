@@ -100,29 +100,22 @@ spec:
               value: 73e0e19b-d4e4-4cc1-a553-a3952f0c1aed
             - name: MONOPLAYER_PUPPET_USERNAME
               value: GlowSquidye
-            # #229/#232: the runtime control document, and the whitelist it
-            # reloads. Both files live in `monoplayer-control`, an object the
-            # panel patches and Git does not own, mounted at /control (#228).
-            # Before this, the whitelist was the Git ConfigMap read once at boot,
-            # so a write from the panel reached a file the puppet never re-read.
+            # #229/#232: the runtime control document. Its files live in
+            # `monoplayer-control`, an object the panel patches and Git does not
+            # own, mounted at /control (#228). Before this, the whitelist was the Git
+            # ConfigMap read once at boot, so a write from the panel reached a file
+            # the puppet never re-read. Naming this path is what turns the control
+            # document on (#264 retired the desired-backend key that used to).
             - name: MONOPLAYER_ATTACH_WHITELIST
               value: /control/attach-whitelist.json
-            - name: MONOPLAYER_CONTROL_FILE
-              value: /control/desired.json
             # #262: the allowed-server list the picker offers, and the copy Git
             # commits that answers when the live key is absent or unreadable. Its
-            # own switch, so it is read whether or not a desired document is named.
+            # own switch, so it is read whether or not the whitelist is named.
             # The seed is mounted at /config, which nothing else reads.
             - name: MONOPLAYER_ALLOWED_SERVERS
               value: /control/allowed-servers.json
             - name: MONOPLAYER_ALLOWED_SERVERS_SEED
               value: /config/allowed-servers.json
-            # The panel may move this puppet's backend, and an attached player
-            # keeps their connection through the move (#233). This is the one
-            # switch that lets an operator action reach the live session with no
-            # deploy; setting it to "0" turns the move into a named refusal.
-            - name: MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH
-              value: "1"
             - name: MONOPLAYER_VERSION
               value: "26.2"
             # Commands-only chat (#97): the human's commands are spoken as the

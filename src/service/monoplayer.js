@@ -154,18 +154,15 @@ export const DEFAULT_CONFIG = Object.freeze({
   // configurationBaseline refuses the join instead of inventing one, so a lane
   // cannot promise a picker it cannot show.
   picker: false,
-  // #229: the runtime control document an operator edits between deploys.
-  // `file` is the only switch. It names desired.json, the file that moves the
-  // puppet's backend, and setting it also turns on the attach whitelist's reload
-  // at each login (attachWhitelistFile). Null leaves every lane exactly as it
-  // was: the whitelist is read once at startup and no control file is opened.
-  // `allowBackendSwitch` gates only the move: with a desired.json present and
-  // this off, the lane logs once, named, and stays on the configured backend.
+  // #229/#264: the runtime control document an operator edits between deploys.
+  // Two keys are left, and each path is its own switch: null leaves the lane
+  // exactly as it was, and nothing is opened. The attach whitelist's path is
+  // attachWhitelistFile, and naming it is also what turns the document on.
   //
   // This module never reads either file. The core stays free of file I/O (#104),
   // and a bad control value is named and ignored at the point of use rather than
   // stopping the lane at boot. See src/service/control.js.
-  control: Object.freeze({ file: null, allowBackendSwitch: false }),
+  control: Object.freeze({ allowedServers: null, allowedServersSeed: null }),
   bounds: Object.freeze({
     maxPrefix: 8192,
     maxConfig: 1024,
@@ -257,15 +254,14 @@ export function loadConfig (doc = {}) {
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
   }
-  // #229: the control document's path is a config key, resolved once, so a value
-  // that cannot name a file is refused at boot. The file's contents are runtime
-  // state and are read at the point of use, never here.
-  if (merged.control.file !== null &&
-      (typeof merged.control.file !== 'string' || merged.control.file.trim() === '')) {
-    throw new TypeError('config.control.file must be a file path or null')
-  }
-  if (typeof merged.control.allowBackendSwitch !== 'boolean') {
-    throw new TypeError('config.control.allowBackendSwitch must be a boolean')
+  // #262: the allowed-server list's two paths, resolved once, so a value that
+  // cannot name a file is refused at boot. Neither file's contents are read here:
+  // they are runtime state, read at the point of use.
+  for (const key of ['allowedServers', 'allowedServersSeed']) {
+    const value = merged.control[key]
+    if (value !== null && (typeof value !== 'string' || value.trim() === '')) {
+      throw new TypeError('config.control.' + key + ' must be a file path or null')
+    }
   }
   if (!CHAT_MODES.has(merged.chat)) {
     throw new TypeError("config.chat must be 'full', 'commands', 'read-only', or 'off'")
@@ -365,7 +361,7 @@ export function createMonoplayer ({
   telemetry = NOOP_TELEMETRY,
   journal = NOOP_JOURNAL,
   // #229: a function returning the attach whitelist now, called at each login.
-  // The live orchestrator passes one when config.control.file is set, so a UUID
+  // The live orchestrator passes one when the whitelist file is named, so a UUID
   // added to the file takes effect on the next login with no restart. Null is the
   // default, and config.attachWhitelist is then the whole whitelist, frozen here.
   whitelistSource = null
@@ -401,9 +397,7 @@ export function createMonoplayer ({
     // actual backend connect (the core never touches the backend leg here).
     onReconnect: ({ delayMs, attempt }) => {
       const target = pendingTransfer
-      const moveTarget = pendingMove
       pendingTransfer = null
-      pendingMove = null
       // The dial starts now: the ended leg's late end event, if any, arrives
       // before this and must not be read as the target faulting (#22).
       legHandover = false
@@ -411,8 +405,7 @@ export function createMonoplayer ({
       // frames it brings are that body's. Any other reconnect dials the body the
       // session already serves, so its cache stays. A restore has already put the
       // session back on the body it came from (failTransfer).
-      const dialled = target ?? moveTarget
-      if (dialled !== null) activateBody(bodyKeyFor(dialled))
+      if (target !== null) activateBody(bodyKeyFor(target))
       // #22: after a restore the cache holds the snapshot the client was put
       // back on. The returning backend is a fresh session, and its frames must
       // not append to that snapshot: the client already has it, and a later
@@ -425,7 +418,7 @@ export function createMonoplayer ({
         pendingPacks.clear()
         log('cacheReset', { reason: 'transfer_restored' })
       }
-      emit('reconnect_due', { delayMs, attempt, target, moveTarget })
+      emit('reconnect_due', { delayMs, attempt, target })
     }
   })
 
@@ -585,11 +578,6 @@ export function createMonoplayer ({
   // what lets a second claim on the same body wait again instead of dialling a
   // second one, and it survives a wait that timed out: the body is still connected.
   let claimDial = null
-  // #233: the target an operator move dials on the next reconnect_due. It is a
-  // second slot rather than a flag on the first because the two dials differ in
-  // dialect: a transfer asks for the transfer handshake and keeps its cookies, an
-  // operator move is a fresh login on a server that never saw the puppet.
-  let pendingMove = null
   // The default path: a backend start_configuration ends the leg, and the end
   // handler turns that into a kick with the reconfiguration reason.
   let reconfigureRequested = false
@@ -1275,9 +1263,9 @@ export function createMonoplayer ({
     }
     // #260: the cache of the body whose session ended, and no other body's.
     cache.reset()
-    // #233: a reset under a move names the move, so an operator's reset is not
-    // filed under a transfer nobody sent. A retained teardown with no move is
-    // still the followed-transfer path it has always been.
+    // #233: a reset under a move names the move, so a reconfigure is not filed
+    // under a transfer nobody sent. A retained teardown with no move is still the
+    // followed-transfer path it has always been.
     log('cacheReset', {
       reason: retainFront ? (moveKind ?? 'transfer') : 'backend_down',
       backendLogins: session.backendLogins
@@ -1297,12 +1285,12 @@ export function createMonoplayer ({
       const outcome = session.backendDown({ reason })
       log('backendDown', { reason, frontEnded: true, outcome })
       frontLeg.end(kickReason)
-      emit('backend_down', { reason, target: pendingTransfer ?? pendingMove })
+      emit('backend_down', { reason, target: pendingTransfer })
       return outcome
     }
     const outcome = session.backendDown({ reason })
     log('backendDown', { reason, frontEnded: false, outcome })
-    emit('backend_down', { reason, target: pendingTransfer ?? pendingMove })
+    emit('backend_down', { reason, target: pendingTransfer })
     return outcome
   }
 
@@ -1448,91 +1436,6 @@ export function createMonoplayer ({
     // reports it here; the first configuration frame tries again below.
     startClientReconfiguration()
     return { began: true, kind, target }
-  }
-
-  // #233: an operator moved the puppet from the control document. No packet is
-  // behind the intent, so this is the only driver of the machine that is not the
-  // server talking.
-  //
-  // Two cases, and the difference is whether there is a connection to keep:
-  //
-  //   a client is attached: the same-connection reconfiguration carries it, the
-  //     pre-move state is held for a target that never answers, and the client
-  //     ends on the target's configuration and play state without reconnecting;
-  //
-  //   nobody is attached: there is nothing to keep, and the puppet moves alone.
-  //     The old session is torn down and one reconnect dials the target, which is
-  //     the shape a followed transfer already takes with no client.
-  //
-  // The counters are the reconfiguration ones. `transfersFollowed`,
-  // `transfersSeamless`, `transfersBlocked` and `transfersRefused` describe a
-  // server-initiated transfer and do not move here (docs/telemetry.md).
-  function startBackendMove ({ target = null, reason = 'operator' } = {}) {
-    const host = typeof target?.host === 'string' ? target.host.trim() : ''
-    const port = Number(target?.port)
-    const valid = host.length > 0 && Number.isInteger(port) && port > 0 && port <= 65535
-    const refuse = why => {
-      log('backendMoveRefused', { reason: why, host: valid ? host : null, port: valid ? port : null })
-      return { started: false, reason: why }
-    }
-    if (!valid) return refuse('invalid_target')
-    // One move at a time, for the same reason a second transfer is refused: a
-    // second one would tear down the connection the first is holding. A transfer
-    // that is waiting for its dial owns that dial, so the next one carries one
-    // target and the operator's would be the one dropped.
-    if (moveKind !== null || pendingTransfer !== null) return refuse('in_flight')
-    // A move needs a session to move from. `backendSessionOpen` is true only
-    // between this session's first frame and the teardown that ends it, so this
-    // refuses exactly when the puppet is between sessions: a restore's reconnect
-    // is still in flight, or a dial is. Starting a move there would hold a
-    // partial or empty snapshot for a client whose screen is not, and its own
-    // dial would race the one already out.
-    if (!backendSessionOpen) return refuse('backend_not_open')
-    // A client still finishing its own configuration cannot start a second one,
-    // and the move would write play frames into it. The operator's document is
-    // not lost: the next heartbeat asks again.
-    if (isAttached() && !frontPlayReady) return refuse('client_not_in_play')
-
-    // The target is handed over once, like a transfer's: the dial reads it on the
-    // next reconnect and the follow budget then owns the retries. A target fed
-    // again on every retry would reset that budget forever.
-    pendingMove = { host, port }
-    // An operator's act starts a new chain: a transfer back to a server this
-    // session visited before the move is not a redirect loop.
-    clearTransferChain('backend_move')
-
-    const attachable = isAttached()
-    const begun = beginKeptMove({ target: { host, port }, kind: TRANSFER_KINDS.OPERATOR, reason })
-    // With nobody attached the move is the dial itself, so the target stays
-    // pending. With a client attached and no move begun, there is no dial to
-    // hand a target to.
-    if (attachable && begun.began !== true) pendingMove = null
-    log('backendMove', {
-      host,
-      port,
-      reason,
-      kind: begun.began === true ? TRANSFER_KINDS.OPERATOR : null,
-      frontKept: begun.began === true,
-      backendLogins: session.backendLogins,
-      state: session.state
-    })
-    emit('backend_move', { host, port, frontKept: begun.began === true })
-
-    teardownBackend({
-      reason: 'backend_move',
-      retainFront: begun.began === true,
-      kickReason: TRANSFER_FOLLOW_REASON
-    })
-    // The core ended this leg on purpose. Its late end event belongs to the
-    // session being replaced, and a retained client keeps the session in
-    // `transferring`, so neither can be told apart from a fault by state alone.
-    legHandover = true
-    try {
-      backendLeg.end('backend_move')
-    } catch (error) {
-      log('backendMoveEndFailed', { error: String(error?.message ?? error).slice(0, 200) })
-    }
-    return { started: true, target: { host, port }, kind: begun.began === true ? TRANSFER_KINDS.OPERATOR : null }
   }
 
   // The orchestrator calls this when a followed target cannot be reached; the
@@ -1826,14 +1729,6 @@ export function createMonoplayer ({
     // #233: an operator move that failed says so by name, because the operator is
     // the one who has to act on it. The line below already carries `kind`; this
     // one is what a reader greps for.
-    if (kind === TRANSFER_KINDS.OPERATOR) {
-      log('backendMoveRestored', {
-        reason,
-        state: session.state,
-        clientConfiguration: clientReconfiguring,
-        scheduled: outcome.scheduled === true
-      })
-    }
     log('transferRestored', {
       kind,
       reason,
@@ -2082,10 +1977,10 @@ export function createMonoplayer ({
   // path named it.
   // #260: the body the leg is pointed at, read from the leg rather than assumed.
   // A claim and a move activate their body where they dial. The orchestrator also
-  // dials targets of its own: the control document's startup target, and a desired
-  // backend on a detached reconnect. Those name no move, so the first frame of the
-  // session is where the core learns which body it serves. A leg that cannot name
-  // its target leaves the binding alone.
+  // dials a target of its own: the backend the deployment configures, on a detached
+  // reconnect. That names no move, so the first frame of the session is where the
+  // core learns which body it serves. A leg that cannot name its target leaves the
+  // binding alone.
   function syncDialledBody () {
     const target = backendLeg.target
     if (target === null || typeof target?.host !== 'string' || !Number.isInteger(target?.port)) return cache
@@ -3237,10 +3132,6 @@ export function createMonoplayer ({
     spectateBody,
     spectateView,
     spectatorLeft,
-    // #233: the operator's move, driven from the control document rather than a
-    // packet. The orchestrator calls it when its heartbeat sees a desired backend
-    // that is not the one in use.
-    startBackendMove,
     // #22: the front leg reports the client answered the reconfiguration's
     // finish frame and is back in play on its own connection.
     frontReconfigured,
@@ -3294,15 +3185,6 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
   MONOPLAYER_DIALOG_ACTION                            configuration-gate answer: first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
-  MONOPLAYER_CONTROL_FILE                             desired.json: the control
-                                                      document that moves the
-                                                      puppet's backend, and turns
-                                                      on the whitelist's reload at
-                                                      each login (default null)
-  MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json, on the
-                                                      next connect and on every
-                                                      heartbeat tick; 0 leaves the
-                                                      configured backend (default 0)
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
   MONOPLAYER_PICKER                                   1 serves a joining client the recorded configuration

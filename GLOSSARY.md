@@ -93,16 +93,8 @@ The running Monoplayer process: config, core, both legs, custody, and the CLI. I
 _Avoid_: app, daemon, the proxy, the bot
 
 **Control document**:
-The two files an operator edits between deploys, named by `config.control.file` (`desired.json`) and `config.attachWhitelistFile` (`attach-whitelist.json`). Both are read at the point of use, the whitelist at each login and the desired backend before each connect, so an edit takes effect without a deploy and without a restart. Nothing watches either file, and `control.file` unset means no lane reads a control document at all.
+The files an operator edits between deploys, each named by its own path: `config.attachWhitelistFile` (`attach-whitelist.json`) and `config.control.allowedServers` (`allowed-servers.json`). Each is read at the point of use, the whitelist at each login and the server list at each offer, so an edit takes effect without a deploy and without a restart. Nothing watches either file, and a path left unset means no lane reads that key. The whitelist's path is also what turns the document on.
 _Avoid_: control file, runtime config, feature flag, control dialog
-
-**Desired backend**:
-_Superseded by_ the allowed-server list: a body's server is the one a player picked. Until then, the host and port in `desired.json`: where the next backend connect should go. It applies on the next connect, and only while no player is attached, because a reconnect is not an operator's act. Moving a session that has a player on it is the backend move, which the same document starts from the heartbeat. With `control.allowBackendSwitch` off, the lane names the file once and stays on its configured backend, whoever is attached.
-_Avoid_: target server, new backend, switch
-
-**Backend move**:
-_Superseded by_ the picker's claim: the front connects a body when a player picks it, so no operator moves a running one. Until then, an operator points a puppet at another backend by writing `desired.json`, and the puppet carries it out on its heartbeat. It is not a transfer: no server asked for it, and the target is dialled with a fresh login rather than a transfer intent. With a player attached, the player keeps their connection through it, and the move counts in the reconfiguration counters because it is that machine running. With nobody attached, the puppet moves alone, no reconfiguration happens, and only the `backendMove` log line records it. A failed move puts the player back on the backend they came from.
-_Avoid_: hot swap, live migration, transfer, redirect
 
 **Testbed front**:
 The testbed's published endpoint: its front Service, the Tailscale proxy pod the operator runs for it, and their tailnet name, `monoplayer-testbed.tail41e568.ts.net`. `down` deletes the front Service, and the Tailscale operator then removes the pod and the tailnet name.
@@ -181,7 +173,7 @@ A followed transfer that keeps the driver's connection and lands it in the targe
 _Avoid_: hot swap, live migration
 
 **Transfer**:
-A server instruction, sent on the puppet's connection, to move the session to another address. A backend move moves a session too, and is not this: nothing on the wire asked for it.
+A server instruction, sent on the puppet's connection, to move the session to another address.
 _Avoid_: redirect, handoff, switch
 
 **Transfer follow**:
