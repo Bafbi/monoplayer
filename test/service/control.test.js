@@ -55,6 +55,22 @@ test('#264 the attach whitelist file is the control document\'s one switch', () 
   assert.deepEqual(document.attachWhitelist(), [PLAYER], 'and the UUID in it is allowed')
 })
 
+// #264: the static lane read the whitelist once at boot and exited 2 when it was
+// empty. Every lane is now a control lane, because naming the whitelist file is
+// what turns the document on, so an empty file is a lane that starts and refuses
+// every login by name. The exit is gone on purpose: on the file the panel manages
+// it would crash-loop the pod on the file the operator is about to fill.
+test('#264 an empty whitelist file loads as an empty list, and the document stays on', () => {
+  const dir = controlDir('whitelist-empty')
+  const whitelistFile = path.join(dir, 'attach-whitelist.json')
+  writeWhitelist(whitelistFile, [])
+
+  const document = createControlDocument({ whitelistFile })
+  assert.equal(document.enabled, true)
+  assert.deepEqual(document.attachWhitelist(), [], 'an empty file denies every login rather than throwing')
+  assert.equal(document.whitelistStore.has(PLAYER), false)
+})
+
 test('#229 the attach whitelist reloads at each read, so a UUID added on disk is allowed next', () => {
   const dir = controlDir('whitelist')
   const whitelistFile = path.join(dir, 'attach-whitelist.json')
