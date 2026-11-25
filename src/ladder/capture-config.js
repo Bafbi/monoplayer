@@ -29,12 +29,12 @@
 // online-mode and this repository does not refresh the puppet's token as a side
 // effect of a capture:
 //
-//   kubectl -n monoplayer-gate-b apply -f .scratch/capture-paper.yaml  # gate image, online-mode off
-//   kubectl -n monoplayer-gate-b port-forward pod/capture-paper 25599:25565
+//   kubectl -n "$(scripts/gate-lane.sh name)" apply -f .scratch/capture-paper.yaml  # gate image, online-mode off
+//   kubectl -n "$(scripts/gate-lane.sh name)" port-forward pod/capture-paper 25599:25565
 //   node src/ladder/capture-config.js --host 127.0.0.1 --port 25599 --offline \
 //     --note 'online-mode is off: the puppet token is expired and a refresh is a human decision' \
 //     --out src/legs/configuration-baseline/26.2.json
-//   kubectl -n monoplayer-gate-b delete pod capture-paper
+//   kubectl -n "$(scripts/gate-lane.sh name)" delete pod capture-paper
 //
 // When the puppet's token is valid, scripts/online-cluster.sh runs the same
 // module in the cluster against the gate Paper with a real account:
@@ -50,6 +50,7 @@ import fs from 'node:fs'
 import md from 'minecraft-data'
 
 import { flag } from '../service/cli.js'
+import { resolveGateLane } from '../driver/lane.js'
 import { createBot } from './bot.js'
 import { resolveBotIdentity } from './observer-baseline.js'
 
@@ -59,16 +60,26 @@ const PER_LEG = new Set(['keep_alive', 'ping'])
 
 const DEFAULT_OUT = 'config-baseline.json'
 const DEFAULT_VERSION = process.env.MONOPLAYER_VERSION || '26.2'
-// What the recorded server is when the flags are not given: the gate lane's own
-// Paper (deploy/driver/paper.yaml), because that is the server a refresh records.
-// A capture from anywhere else passes its own values.
-const DEFAULT_LANE = process.env.MONOPLAYER_GATE_NAMESPACE || 'monoplayer-gate-b'
+// What the recorded server is when the flags are not given: this worktree's gate
+// lane, because that is the server a refresh records (deploy/driver/paper.yaml), and
+// scripts/gate-lane.sh is the one place its name comes from (#282). A capture from
+// anywhere else passes --lane.
 const DEFAULT_PAPER_BUILD = '135'
 const DEFAULT_IMAGE = 'itzg/minecraft-server:2026.10.1-java25'
 
 function fail (message, code = 2) {
   process.stderr.write('capture-config: ' + message + '\n')
   process.exit(code)
+}
+
+// The lane this worktree's scripts derive, or the sentence that says how to name one
+// by hand. gate-lane.sh's own sentence reaches the reader unchanged.
+function captureLane () {
+  try {
+    return resolveGateLane()
+  } catch (error) {
+    fail(error.message)
+  }
 }
 
 async function main (argv) {
@@ -80,8 +91,10 @@ async function main (argv) {
   const offline = argv.includes('--offline')
   const timeout = Number(flag(argv, '--timeout') ?? 120_000)
   // Provenance, so a reader can tell how the fixture was reached and how to reach
-  // it again: the lane and the Paper build are what make the recording checkable.
-  const lane = flag(argv, '--lane') ?? DEFAULT_LANE
+  // it again: the lane and the Paper build are what make the recording checkable. A
+  // capture that guessed a lane would record a provenance it cannot stand behind, so
+  // a lane that cannot be named is a setup failure here.
+  const lane = flag(argv, '--lane') ?? captureLane()
   const paperBuild = flag(argv, '--paper-build') ?? DEFAULT_PAPER_BUILD
   const image = flag(argv, '--image') ?? DEFAULT_IMAGE
   const reachedVia = flag(argv, '--reached-via') ?? ('kubectl -n ' + lane + ' port-forward pod/capture-paper ' + port + ':25565')

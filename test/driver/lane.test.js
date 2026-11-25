@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { LaneError, paperAddress, resolveGateLane, tailnetHost } from '../../src/driver/lane.js'
 import { createRcon } from '../../src/driver/rcon.js'
+import { laneTargets } from '../../src/driver/run.js'
 import { LANE, WORKTREE } from '../support/lane.js'
 
 const DRIVER = path.join(WORKTREE, 'src', 'driver')
@@ -74,6 +75,34 @@ test('the RCON client defaults to the one lane, and an override still wins', () 
   }
   const named = createRcon({ namespace: 'monoplayer-gate-x', exec: async () => ({ stdout: '', stderr: '' }) })
   assert.equal(named.namespace, 'monoplayer-gate-x', 'the caller still names a lane when it has one')
+})
+
+// --- the pair one run fills from the one name (#282) ---
+
+test("a run that names neither target takes both from this worktree's lane", () => {
+  const targets = laneTargets({ server: '', rconNamespace: '' }, 'monoplayer-gate-x')
+  assert.equal(targets.refused, undefined)
+  assert.equal(targets.server, 'monoplayer-gate-x-paper.tail41e568.ts.net:25565')
+  assert.equal(targets.rconNamespace, 'monoplayer-gate-x')
+})
+
+test('a run whose RCON namespace names another lane refuses instead of splitting', () => {
+  // MONOPLAYER_GATE_NAMESPACE names the lane the client joins, and
+  // GATEB_RCON_NAMESPACE names the Deployments RCON administers. A default run would
+  // take both from the lane; this one names two, so it stops rather than pick one.
+  const targets = laneTargets({ server: '', rconNamespace: 'monoplayer-gate-y' }, 'monoplayer-gate-x')
+  assert.match(targets.refused ?? '', /monoplayer-gate-y/, 'the refusal names the lane the environment gave')
+  assert.match(targets.refused ?? '', /monoplayer-gate-x/, "and this worktree's")
+  assert.equal(targets.server, undefined, 'and nothing is filled to dial')
+})
+
+test('a run handed both targets goes where it was told', () => {
+  // The caller owns the pair once it names the address, which is what #301 kept for
+  // --backend-host: an explicit address is not a second lane.
+  const targets = laneTargets({ server: '127.0.0.1:25565', rconNamespace: 'monoplayer-gate-y' }, 'monoplayer-gate-x')
+  assert.equal(targets.refused, undefined)
+  assert.equal(targets.server, '127.0.0.1:25565')
+  assert.equal(targets.rconNamespace, 'monoplayer-gate-y')
 })
 
 // One place means one place: a file that spells a lane is a second owner, and that is
