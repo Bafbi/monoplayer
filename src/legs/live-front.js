@@ -2326,12 +2326,9 @@ export function createOfflineFrontLeg (options = {}) {
     chat = 'read-only',
     dumpRaw = null,
     dumpFramed = null,
-    // #391: the loopback fence below is what keeps an offline front, which asks
-    // no server who a client is, inside a test rig. A deployed lane whose job is
-    // a test double binds a pod address, so the composition root lifts the fence
-    // with this option and nothing else does. The live lane cannot reach it: the
-    // service passes it only with MONOPLAYER_OFFLINE_LEGS on, and that key is
-    // barred from deploy/manifests (test/tooling/live-manifests.test.js).
+    // #391: the same fence-lift the offline backend leg takes, for the same
+    // reason. A deployed test lane binds a pod address, and only the composition
+    // root lifts it (docs/adr/the-product-may-be-a-test-double.md).
     allowNonLoopback = false
   } = options
 

@@ -380,6 +380,20 @@ export function createServiceLegs ({
     }
   }
 
+  // The front options both lanes run: one product, two pairs of adapters.
+  const sharedFront = {
+    // #201: the total cap on the sockets inside the pre-auth window.
+    preAuth: cfg.preAuth,
+    getSnapshotConfig,
+    ...pickerOffered,
+    wireCheck: payload => wire.check(payload),
+    wireMode: 'warn',
+    chat: cfg.chat,
+    log,
+    dumpRaw,
+    dumpFramed
+  }
+
   if (cfg.offlineLegs === true) {
     // #391: an offline body dials the lane's backend with auth 'offline' and a
     // fixed username, and the front asks no session server who a client is. No
@@ -403,8 +417,9 @@ export function createServiceLegs ({
         // hold a gate the server already closed.
         isHumanAttached,
         onDialogAnswered,
-        // #391: the two options that lift the offline legs' loopback fence. A
-        // deployed lane binds a pod address and dials a Paper in another pod.
+        // #391: the option that lifts this leg's loopback fence, as the front
+        // below lifts its own. A deployed lane binds a pod address and dials a
+        // Paper in another pod, and only this composition root sets it.
         allowNonLoopback: true,
         log
       }),
@@ -414,17 +429,8 @@ export function createServiceLegs ({
         version: cfg.version,
         whitelistStore: control?.whitelistStore ?? null,
         offlineWhitelist: control?.whitelistStore ? null : cfg.attachWhitelist,
-        // #201: the total cap on the sockets inside the pre-auth window.
-        preAuth: cfg.preAuth,
-        getSnapshotConfig,
-        ...pickerOffered,
-        wireCheck: payload => wire.check(payload),
-        wireMode: 'warn',
-        chat: cfg.chat,
         allowNonLoopback: true,
-        log,
-        dumpRaw,
-        dumpFramed
+        ...sharedFront
       })
     }
   }
@@ -470,16 +476,7 @@ export function createServiceLegs ({
     // the same file the core gate does, at each login. Null keeps the leg's one
     // startup read, which is every lane that names no whitelist file.
     whitelistStore: control?.whitelistStore ?? null,
-    // #201: the total cap on the sockets inside the pre-auth window.
-    preAuth: cfg.preAuth,
-    getSnapshotConfig,
-    ...pickerOffered,
-    wireCheck: payload => wire.check(payload),
-    wireMode: 'warn',
-    chat: cfg.chat,
-    log,
-    dumpRaw,
-    dumpFramed
+    ...sharedFront
   })
   return { backend, front }
 }
@@ -536,48 +533,48 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // with an account selector, because the selector would have nothing to
   // resolve against.
   let resolved = null
-  if (cfg.offlineLegs === true) {
-    // Nothing to resolve: the offline legs read no token.
-  } else if (cfg.puppet.cacheDir) {
-    if (cfg.puppet.account) {
-      stderr.write(
-        'monoplayer --start: config_conflict: puppet.cacheDir (raw dir override) ' +
-        'cannot be combined with puppet.account\n')
-      return 2
-    }
-  } else {
-    resolved = resolveAccount({
-      accountsDir: cfg.puppet.accountsDir,
-      selector: cfg.puppet.account ?? cfg.puppet.uuid
-    })
-    if (!resolved.ok) {
-      stderr.write(
-        `monoplayer --start: cannot resolve a puppet account in ${cfg.puppet.accountsDir}: ${resolved.reason}\n` +
-        `${candidateLines(resolved.candidates)}\n${accountHint()}\n`)
-      return 2
-    }
-    const account = resolved.account
-    if (cfg.puppet.uuid) {
-      const asserted = normalizeUuid(cfg.puppet.uuid)
-      if (asserted === null || asserted !== account.uuid) {
+  if (cfg.offlineLegs !== true) {
+    if (cfg.puppet.cacheDir) {
+      if (cfg.puppet.account) {
         stderr.write(
-          `monoplayer --start: puppet_uuid_mismatch: config asserts ${cfg.puppet.uuid}, ` +
-          `resolved account is ${account.uuid}\n`)
+          'monoplayer --start: config_conflict: puppet.cacheDir (raw dir override) ' +
+          'cannot be combined with puppet.account\n')
         return 2
       }
-    }
-    if (cfg.puppet.username) {
-      const profileName = account.profile?.name ?? null
-      if (typeof profileName !== 'string' ||
-          profileName.toLowerCase() !== String(cfg.puppet.username).toLowerCase()) {
+    } else {
+      resolved = resolveAccount({
+        accountsDir: cfg.puppet.accountsDir,
+        selector: cfg.puppet.account ?? cfg.puppet.uuid
+      })
+      if (!resolved.ok) {
         stderr.write(
-          `monoplayer --start: puppet_name_mismatch: config asserts ${cfg.puppet.username}, ` +
-          `resolved profile name is ${profileName ?? '(none)'}\n`)
+          `monoplayer --start: cannot resolve a puppet account in ${cfg.puppet.accountsDir}: ${resolved.reason}\n` +
+          `${candidateLines(resolved.candidates)}\n${accountHint()}\n`)
         return 2
       }
+      const account = resolved.account
+      if (cfg.puppet.uuid) {
+        const asserted = normalizeUuid(cfg.puppet.uuid)
+        if (asserted === null || asserted !== account.uuid) {
+          stderr.write(
+            `monoplayer --start: puppet_uuid_mismatch: config asserts ${cfg.puppet.uuid}, ` +
+            `resolved account is ${account.uuid}\n`)
+          return 2
+        }
+      }
+      if (cfg.puppet.username) {
+        const profileName = account.profile?.name ?? null
+        if (typeof profileName !== 'string' ||
+            profileName.toLowerCase() !== String(cfg.puppet.username).toLowerCase()) {
+          stderr.write(
+            `monoplayer --start: puppet_name_mismatch: config asserts ${cfg.puppet.username}, ` +
+            `resolved profile name is ${profileName ?? '(none)'}\n`)
+          return 2
+        }
+      }
+      cfg.puppet.uuid = account.uuid
+      cfg.puppet.username = account.profile?.name ?? cfg.puppet.username ?? null
     }
-    cfg.puppet.uuid = account.uuid
-    cfg.puppet.username = account.profile?.name ?? cfg.puppet.username ?? null
   }
 
   const skinWarning = unidentifiedSkinWarning(cfg)
