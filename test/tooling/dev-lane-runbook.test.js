@@ -51,7 +51,7 @@ function firstUse (text, task) {
 }
 
 // The lane table's answer to "may this run beside another agent?" (#319). #281
-// added the column so each run answers that question once. Nothing read the answer,
+// added the column so each run answers that question once. No code read the answer,
 // and an empty cell reads as "nobody asked", which is the drift the column exists
 // to stop.
 const LANE_SECTION = 'Which lane a run uses'
@@ -68,7 +68,7 @@ function table (text) {
 }
 
 // A run's first cell names its rung ids, as in "driver lane, rung 4" or "rungs 0,
-// 1, 2". An id has to follow the word, so a cell that mentions a number for another
+// 1, 2". An id has to follow the word. A cell that mentions a number for another
 // reason ("about 3 minutes") does not answer for that rung.
 function rungIds (cell) {
   const tokens = cell.split(/[^A-Za-z0-9]+/)
@@ -82,8 +82,8 @@ function rungIds (cell) {
 
 // The lane table as data. The header names the column, so the guard reports a
 // header that lost it once, rather than reading every row as one that answered
-// nothing. parseLadder reads the rungs table, so a rung it finds and the lane table
-// never names is a run with no lane answer at all.
+// nothing. parseLadder reads the rungs table. A rung it finds and the lane table
+// never names has no lane answer at all.
 function laneDrift (text) {
   const rows = table(section(text, LANE_SECTION))
   const header = rows[0] ?? []
