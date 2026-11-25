@@ -198,6 +198,49 @@ test('#262 allowed-servers.json parses to host and port, and every refusal is na
     'two rows for one address are two buttons that dial the same server')
 })
 
+// #314: DNS reads `paper.` and `paper` as one name. The root label is a full stop,
+// not a second label, so a list that spells one server both ways offers two picker
+// buttons for it, and each button's body gets its own cache (#260, #265). The case
+// check could not see it, and the split is the same one.
+test('#314 two rows that name one server with a trailing dot are refused, and the entry is named', () => {
+  const list = (...servers) => parseAllowedServers(JSON.stringify({ version: 1, servers }))
+
+  assert.deepEqual(list({ host: 'paper', port: 25565 }, { host: 'paper.', port: 25565 }),
+    { servers: null, reason: 'duplicate', at: 'servers[1]' },
+    'the root label makes the second row the same server as the first')
+  assert.deepEqual(list({ host: 'paper.', port: 25565 }, { host: 'paper', port: 25565 }),
+    { servers: null, reason: 'duplicate', at: 'servers[1]' },
+    'and a dot on the earlier entry is the same collision, not a different one')
+  assert.deepEqual(list({ host: 'PAPER.', port: 25565 }, { host: 'paper', port: 25565 }),
+    { servers: null, reason: 'duplicate', at: 'servers[1]' },
+    'case and the dot at once')
+
+  assert.deepEqual(list({ host: 'paper', port: 25565 }, { host: 'paper.', port: 25566 }).servers,
+    [{ host: 'paper', port: 25565 }, { host: 'paper.', port: 25566 }],
+    'one host on two ports is two servers, so the dot changes nothing there')
+  assert.deepEqual(list({ host: 'paper.', port: 25565 }).servers, [{ host: 'paper.', port: 25565 }],
+    'the list is refused for naming one server twice, not for a dotted host: the entry keeps what the operator wrote')
+  assert.deepEqual(list({ host: 'paper', port: 25565 }, { host: 'paper2', port: 25565 }).servers,
+    [{ host: 'paper', port: 25565 }, { host: 'paper2', port: 25565 }],
+    'a longer name is another server')
+})
+
+// #314: the lane refuses the list once, and the refusal names the entry. An operator
+// reading `controlRejected` at three in the morning has a document with two rows in
+// it, and needs to know which of the two is the one to fix.
+test('#314 the refusal names the entry that collided, not only the file', () => {
+  const file = path.join(controlDir('trailing-dot'), 'allowed-servers.json')
+  fs.writeFileSync(file, JSON.stringify({
+    version: 1,
+    servers: [{ host: 'paper', port: 25565 }, { host: 'paper.', port: 25565 }]
+  }))
+  const lines = []
+  const document = createControlDocument({ allowedServersFile: file, log: (event, fields) => lines.push({ event, fields }) })
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none' },
+    'a list that names one server twice offers nothing, rather than two buttons')
+  assert.deepEqual(lines, [{ event: 'controlRejected', fields: { file, reason: 'duplicate', at: 'servers[1]' } }])
+})
+
 test('#262 the allowed-server list is read from its own file, and the committed seed answers when it cannot be', () => {
   const dir = controlDir('allowed')
   const live = path.join(dir, 'allowed-servers.json')

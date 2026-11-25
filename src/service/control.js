@@ -29,6 +29,21 @@ import { createWhitelistStore } from '../custody/store.js'
 
 export const ALLOWED_SERVERS_VERSION = 1
 
+// One address, as DNS reads it, for the question "is this the same server as that
+// one?" A host name is case-insensitive, and a trailing dot is the root label rather
+// than a second name, so two rows that spell one host both ways are one server offered
+// twice: two picker buttons over one cache (#314, #260). The port is part of the
+// address, so one host on two ports is two servers.
+//
+// This key is for comparison only. What a row keeps is the host the operator wrote,
+// because a host is what the socket dials (#265), and both doors that ask the
+// question use this one function rather than a copy: the parser below, and the
+// panel's add and remove.
+export function addressKey (host, port) {
+  const name = String(host ?? '').trim().toLowerCase()
+  return (name.endsWith('.') ? name.slice(0, -1) : name) + ':' + port
+}
+
 // allowed-servers.json -> { servers, reason }. Each entry is one game server the
 // picker offers (#262), and the row it becomes is `host:port` (#258: a row's name
 // is the address a claim dials).
@@ -60,9 +75,9 @@ export function parseAllowedServers (raw) {
     if (host === '') return { servers: null, reason: 'host', at }
     if (!Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535) return { servers: null, reason: 'port', at }
     // Two rows for one address are two buttons that dial the same server, and a
-    // claim would land on whichever the picker happened to render first. A DNS name
-    // is case-insensitive, so the comparison is.
-    const address = host.toLowerCase() + ':' + entry.port
+    // claim would land on whichever the picker happened to render first. The
+    // comparison is the one a resolver makes, not the one a string does (#314).
+    const address = addressKey(host, entry.port)
     if (seen.has(address)) return { servers: null, reason: 'duplicate', at }
     seen.add(address)
     // An entry the seed wrote has no stamp, and a rewrite must not give it one: the
@@ -126,7 +141,11 @@ export function createControlDocument ({
       return { servers: null, reason: 'missing' }
     }
     const parsed = parseAllowedServers(raw)
-    if (parsed.reason !== null) sayOnce('controlRejected', { file: path, reason: parsed.reason })
+    // `at` is the entry the refusal is about. A document with two rows that name one
+    // server has one row to fix, and an operator reading this line is looking at both.
+    if (parsed.reason !== null) {
+      sayOnce('controlRejected', { file: path, reason: parsed.reason, ...(parsed.at ? { at: parsed.at } : {}) })
+    }
     return parsed
   }
 
