@@ -224,6 +224,14 @@ every third of that while the run goes. A lease that has expired is taken withou
 asking. `scripts/online-cluster.sh` holds the defaults and the rest of the
 `MONOPLAYER_LEASE_*` variables.
 
+A release is the last lease write a run makes (#355). The renewal loop outlives the run,
+and a renewal already inside its write is a `kubectl` child of that loop. Killing the loop
+therefore leaves that write running. So the release marks its state directory, drops the
+marker the loop's guard reads, waits for the tick already writing, stops the loop, and then
+writes. A tick that finds the mark writes nothing. Without that order the last write is the
+run's own holder identity. The next run then reads a lease held by a run that has exited,
+and it refuses or waits out the duration with nothing on the cluster to point at.
+
 Two ways a run can end without releasing the lease, and what happens:
 
 - **A run killed with `SIGKILL` runs no exit handler.** The renewal loop outlives it,
