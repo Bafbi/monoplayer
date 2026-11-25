@@ -372,11 +372,11 @@ test('B4-shape: non-whitelisted account is denied before Login Success', () => {
 
 // #312: #269 deleted the front leg's attach slot, and that slot was also what
 // refused a second client *before* the body's cached configuration frames were
-// replayed to it. A lane with no picker has no claim to refuse the rival at, so
-// the session answered `already_attached` at the attach — a kick the client only
+// replayed to it. A lane with no picker has no claim to refuse the rival at, so the
+// session answered `already_attached` at the attach. That is a kick the client only
 // reads after a configuration phase it should never have been shown. The login
-// decision is the one place this lane shape can refuse early: no picker to send
-// the client to, and no claim to make.
+// decision is the one place this lane shape can refuse early. There is no picker to
+// send the client to, and no claim to make.
 test('#312 a second client on a lane with no picker is refused at its login, before any configuration frame', () => {
   const logLines = []
   const rig = makeCore({ logLines })
@@ -402,9 +402,9 @@ test('#312 a second client on a lane with no picker is refused at its login, bef
   assert.equal(logged.length, 1)
   assert.equal(logged[0].lane, 'no_picker')
 
-  // The attach keeps its own answer for a client the login admitted earlier: a
-  // connection that failed between its login and its playerJoin leaves exactly
-  // that case, and the session stays the authority there.
+  // The attach keeps its own answer for a client the login admitted earlier. A
+  // connection that failed between its login and its playerJoin leaves exactly that
+  // case, and the session stays the authority there.
   const attempt = rig.core.attachPlayer({ name: 'Second', uuid: PLAYER })
   assert.equal(attempt.attached, false)
   assert.equal(attempt.reason, 'already_attached')
@@ -412,7 +412,7 @@ test('#312 a second client on a lane with no picker is refused at its login, bef
 })
 
 // #259: a lane that offers a picker is unchanged. The picker is the door, so the
-// second client's login passes and it is the claim that refuses it — refusing the
+// second client's login passes and it is the claim that refuses it. Refusing the
 // login here would keep it out of the body list it may spectate.
 test('#312 a lane that offers a picker still passes a second client to the picker', () => {
   const rig = makeCore({ config: { picker: true } })

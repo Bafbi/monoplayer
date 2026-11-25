@@ -1095,12 +1095,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
 
     // --- O67: a second client on a lane with no picker reads no configuration (#312) ---
     // #269 deleted the front leg's attach slot, and that slot was also what refused a
-    // second connection at beforeLogin. Without it the rival's login passed, the body's
-    // cached configuration frames were replayed to it, and only then did the session
-    // answer `already_attached` at its attach: a kick read after a phase the client
-    // should never have been shown. This lane offers no picker, so there is no claim for
-    // the rival to make and no dialog to send it to. Its login is the door, and the
-    // refusal lands there, before Login Success and before every configuration frame.
+    // second connection at beforeLogin. Without it the rival's login passed, and the
+    // body's cached configuration frames were replayed to it. Only then did the session
+    // answer `already_attached` at its attach. That is a kick read after a phase the
+    // client should never have been shown. This lane offers no picker, so there is no
+    // claim for the rival to make and no dialog to send it to. Its login is the door,
+    // and the refusal lands there, before Login Success and before every configuration
+    // frame.
     //
     // The rival is on the whitelist on purpose: what refuses it must be the lane's shape
     // and not the identity gate, which O11b already proves on its own.
@@ -4050,8 +4051,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       refusals: drivenRefusals,
       slotDenials: slotDenials.length,
       // #312: this lane offers a picker, so its login entrance must stay open. The
-      // rival read a login success and a configuration phase; a lane-shaped refusal
-      // in the core's login decision would have denied it before both.
+      // rival read a login success and a configuration phase. A lane-shaped refusal in
+      // the core's login decision would have denied it before both.
       loginSuccess: pickerBot7.received.success !== null,
       ended: pickerBot7.received.ended === null ? null : String(pickerBot7.received.ended).slice(0, 160),
       channels: channelsAfterRival.map(channel => ({ role: channel.role, name: channel.name })),
