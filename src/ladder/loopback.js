@@ -6,8 +6,8 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O66 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
-// O62, O63, O64, O65 and O66) are the contract
+// Assertions R0 and O1-O67 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
+// O62, O63, O64, O65, O66 and O67) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
 import fs from 'node:fs'
@@ -130,6 +130,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let commandsBase = null
   let commandsCore = null
   let stranger = null
+  // #312: the second client on the main rig's lane, which offers no picker, while
+  // a driver holds it.
+  let rivalBot = null
   let seamlessFront = null
   let seamlessBackend = null
   let seamlessCore = null
@@ -265,7 +268,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     evidence.handshakeProxyPort = handshakeProxy.port
     const baseTarget = { host: '127.0.0.1', port: fake.port }
 
-    const offlineWhitelist = [offlineUuid('Attach'), offlineUuid('Second')]
+    // #312: a third admitted name, so the rival of a driven body is refused by the
+    // lane's shape rather than by the whitelist.
+    const offlineWhitelist = [offlineUuid('Attach'), offlineUuid('Second'), offlineUuid('Rival')]
     const puppetUuid = offlineUuid('GlowSquidye')
     if (offlineWhitelist.includes(puppetUuid)) {
       throw new Error('the puppet offline UUID must not be whitelisted')
@@ -1086,6 +1091,76 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'second bot saw no leftover bytes and the wire stayed clean',
       b2.leftovers.length === 0 && front.wireStats.rejected === 0,
       { leftovers: b2.leftovers.length, rejected: front.wireStats.rejected }
+    )
+
+    // --- O67: a second client on a lane with no picker reads no configuration (#312) ---
+    // #269 deleted the front leg's attach slot, and that slot was also what refused a
+    // second connection at beforeLogin. Without it the rival's login passed, and the
+    // body's cached configuration frames were replayed to it. Only then did the session
+    // answer `already_attached` at its attach. That is a kick read after a phase the
+    // client should never have been shown. This lane offers no picker, so there is no
+    // claim for the rival to make and no dialog to send it to. Its login is the door,
+    // and the refusal lands there, before Login Success and before every configuration
+    // frame.
+    //
+    // The rival is on the whitelist on purpose: what refuses it must be the lane's shape
+    // and not the identity gate, which O11b already proves on its own.
+    const rivalMark = logs.length
+    const attachesBeforeRival = core.metrics.attaches
+    const attachCountBeforeRival = core.session.attachCount
+    const deniedBeforeRival = front.metrics.denied
+    rivalBot = createBot({ port: evidence.frontPort, username: 'Rival' })
+    await withTimeout(rivalBot.ended, 10_000, 'the rival ended')
+    const rivalConfiguration = rivalBot.received.byState.configuration ?? []
+    // The sentence the rival was actually given, off the disconnect frame it received
+    // rather than off a log line: a wrong write would still log the right words.
+    const rivalTold = rivalBot.received.disconnects.map(told => ({
+      state: told.state,
+      reason: JSON.stringify(told.packet?.reason ?? null)
+    }))
+    const rivalCoreDenials = core.logs()
+      .filter(line => line.includes('"reason":"already_driven"'))
+      .map(line => JSON.parse(line))
+    const rivalFrontDenials = logs
+      .slice(rivalMark)
+      .filter(entry => entry.event === 'attachDenied' && entry.fields?.reason === 'already_driven')
+      .map(entry => entry.fields)
+    evidence.secondJoin = {
+      attaches: core.metrics.attaches - attachesBeforeRival,
+      attachCount: core.session.attachCount - attachCountBeforeRival,
+      success: rivalBot.received.success !== null,
+      configurationFrames: rivalConfiguration.length,
+      told: rivalTold,
+      ended: rivalBot.received.ended === null ? null : String(rivalBot.received.ended).slice(0, 160),
+      denials: front.metrics.denied - deniedBeforeRival,
+      coreDenials: rivalCoreDenials,
+      frontDenials: rivalFrontDenials,
+      driverStillAttached: core.attached === true && b2.ended === null
+    }
+    check(
+      'O67',
+      'a second client on a lane with no picker is refused at its login in words, before any configuration frame',
+      // Refused before Login Success, so the configuration phase never opens.
+      rivalBot.received.success === null &&
+        rivalConfiguration.length === 0 &&
+        rivalTold.length === 1 &&
+        rivalTold[0].state === 'login' &&
+        /another player is already driving this server/.test(rivalTold[0].reason) &&
+        rivalBot.received.ended !== null &&
+        // The session was never asked: one driver, one attach record, no kick from
+        // `already_attached` after a replay.
+        evidence.secondJoin.attaches === 0 &&
+        evidence.secondJoin.attachCount === 0 &&
+        evidence.secondJoin.denials === 1 &&
+        // The refusal names its reason and the lane shape that produced it.
+        rivalCoreDenials.length === 1 &&
+        rivalCoreDenials[0].lane === 'no_picker' &&
+        /another player is already driving this server/.test(String(rivalCoreDenials[0].text ?? '')) &&
+        rivalFrontDenials.length === 1 &&
+        rivalFrontDenials[0].text === 'Monoplayer: another player is already driving this server. Try again when they leave.' &&
+        // The driver keeps the body: a refusal for the rival is nothing for them.
+        evidence.secondJoin.driverStillAttached === true,
+      evidence.secondJoin
     )
 
     // --- O37: the replay writes a bundled equipment frame's own bytes ---
@@ -3975,6 +4050,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       chosen: rivalClaim === null ? null : { id: rivalClaim.id, label: rivalClaim.label },
       refusals: drivenRefusals,
       slotDenials: slotDenials.length,
+      // #312: this lane offers a picker, so its login entrance must stay open. The
+      // rival read a login success and a configuration phase. A lane-shaped refusal in
+      // the core's login decision would have denied it before both.
+      loginSuccess: pickerBot7.received.success !== null,
       ended: pickerBot7.received.ended === null ? null : String(pickerBot7.received.ended).slice(0, 160),
       channels: channelsAfterRival.map(channel => ({ role: channel.role, name: channel.name })),
       driverEnded: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 160),
@@ -3999,8 +4078,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         drivenRefusals[1].claimedBy === 'Pilot' &&
         /already claimed by Pilot/.test(String(drivenRefusals[1].text ?? '')) &&
         pickerBot7.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect') &&
-        // The slot is gone: nothing denied this client before the claim did.
+        // The slot is gone: nothing denied this client before the claim did. #312's
+        // refusal is the same fact from the other side: it fires only where there is
+        // no picker to offer, so a picker lane's second client still logs in.
         slotDenials.length === 0 &&
+        pickerBot7.received.success !== null &&
         pickerCore.session.attachCount === 1 &&
         pickerCore.attached === true &&
         pickerBot5.received.ended === null &&
@@ -5024,7 +5106,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19]) {
+    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }

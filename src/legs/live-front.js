@@ -22,14 +22,14 @@
 //      sets client.uuid to the vanilla offline UUID (MD5 of
 //      "OfflinePlayer:<name>").
 //   2. beforeLogin (synchronous; createServer option): run the core login decision
-//      (fail closed) and the mode's check. A second client is not denied here: a lane
-//      that offers a picker sends it to the picker, where the claim refuses it, and a
-//      lane with no picker lets the session answer `already_attached` at the attach
-//      (#269). Deny = client.end('attach denied (...)'): the
-//      Server.end override writes the login-state disconnect then ends the
-//      serializer chain, so the library's follow-up compress/success writes in
-//      loginClient are mechanically dropped (client.write no-ops on an ended
-//      serializer).
+//      (fail closed) and the mode's check. No attach slot refuses a second client
+//      here: a lane that offers a picker sends it to the picker, where the claim
+//      refuses it (#259), and a lane with no picker is refused by the core's own
+//      login decision, before Login Success and before any configuration frame
+//      (#312). Deny = client.end(text ?? 'attach denied (...)'): the Server.end
+//      override writes the login-state disconnect then ends the serializer chain,
+//      so the library's follow-up compress/success writes in loginClient are
+//      mechanically dropped (client.write no-ops on an ended serializer).
 //   2b. #257/#267: a login the core allowed with no backend to attach to
 //      (`picker: true`) is served the recorded configuration baseline and the
 //      picker dialog. The click that claims a body is recorded here (#267), at that
@@ -383,7 +383,10 @@ function evaluateCoreDecision (coreDecision) {
     return { ok: false, reason: 'core_decision_invalid' }
   }
   if (decision.allowed !== true) {
-    return { ok: false, reason: decision.reason ?? 'core_denied' }
+    // #312: a denial may carry the words the client reads. The kick is the one
+    // message a refused client gets, so the sentence travels with it rather than
+    // a slug the player cannot act on.
+    return { ok: false, reason: decision.reason ?? 'core_denied', text: decision.text ?? null }
   }
   // #257: the core may allow a login that has no backend to attach to, and say so
   // with `picker: true`. The flag is carried, not inferred: the front serves the
@@ -802,8 +805,8 @@ function createFrontLeg ({
     })
     if (!decision.ok) {
       metrics.denied++
-      log('attachDenied', { username, uuid: uuid ?? null, reason: decision.reason })
-      denyConnection(client, decision.reason)
+      log('attachDenied', { username, uuid: uuid ?? null, reason: decision.reason, text: decision.text ?? null })
+      denyConnection(client, decision.reason, decision.text)
       return
     }
 
@@ -835,9 +838,10 @@ function createFrontLeg ({
 
     // #269: own the channel first, because the core's early attach streams the
     // cached configuration frames straight back through writeRaw and this client's
-    // configuration information is reported on the channel it holds. A lane that
-    // already has a driver opens nothing here: the session answers the second
-    // client at the attach, which is the one authority such a lane has.
+    // configuration information is reported on the channel it holds. A client that
+    // reaches here has already passed the login decision, so a driver holding the
+    // body is a channel refusal here and nowhere else: this shape of lane is
+    // refused at its login when it has no picker (#312).
     openChannel(client, { role: CHANNEL_ROLES.DRIVER })
 
     // #16: no cached configuration means the puppet is still configuring. The
@@ -858,7 +862,11 @@ function createFrontLeg ({
     }
   }
 
-  function denyConnection (client, reason) {
+  // `text`, when the core sent one, is the sentence the client reads: the
+  // server's own end() writes it into the login-state disconnect before the
+  // serializer ends, so the player sees words (#312). Without it the kick keeps
+  // the reason the operator greps for.
+  function denyConnection (client, reason, text = null) {
     // #201: a denial before the whitelist accepted — a second attach, or a UUID
     // that is not on the list — stays counted until its socket ends, which the
     // library's close timeout bounds. A denial after the accept, such as a
@@ -876,7 +884,7 @@ function createFrontLeg ({
         (name === 'compress' || name === 'success') ? false : originalWrite(name, ...args)
     }
     try {
-      client.end(`attach denied (${reason})`)
+      client.end(text ?? `attach denied (${reason})`)
     } catch {
       // The library's end failed, so its close timeout was never armed and no
       // close would ever take this connection out of the window. The socket has
@@ -1729,10 +1737,11 @@ function createFrontLeg ({
       return
     }
     // The driver, and a client this lane admitted without one. The core's session is
-    // the one authority left: it answers `already_attached` when a driver already
-    // holds the body, and a lane that refuses its client is a lane whose session said
-    // no (#269: the claim refuses a rival in a picker lane, and the session does it
-    // where there is no claim to make).
+    // the authority here, and it answers `already_attached` when a driver already
+    // holds the body. A rival on a lane with no picker never reaches this point,
+    // because its login was refused (#312). One on a lane with a picker is refused by
+    // the claim (#269). The session's answer covers the case neither of those can: a
+    // login admitted while another connection still held the body.
     // The channel has to exist before the core replays: the replay is written
     // synchronously, and it goes to the channels this leg holds. A client the session
     // accepts without one — its login was admitted while another connection still held
