@@ -1,5 +1,11 @@
 # The puppet's skin on the human's own player: yes, a 26.2 client accepts it
 
+> **Record, not documentation.** Taken 2026-11-10 by a dev-lane image of this
+> branch, a human session on the live lane, and
+> `node src/driver/run.js --lane skin`. Every number below belongs to that run:
+> read it as evidence of what happened, never as a current claim, and do not
+> update it to match today.
+
 Verdict: **the client accepts a `textures` property signed for a different
 profile UUID**, attached to the human's own UUID. It accepts an unsigned copy
 too. And the gap was larger than [#99](https://github.com/Bafbi/monoplayer/issues/99)

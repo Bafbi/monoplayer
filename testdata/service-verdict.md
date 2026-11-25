@@ -1,5 +1,10 @@
 # The deployed service carried a vanilla client onto Excalia Season 3
 
+> **Record, not documentation.** Taken 2026-11-07T23:51:50Z by the deployed
+> pod's heartbeat log and the `gate-b-player-262` Prism client on `nath`. Every
+> number below belongs to that run: read it as evidence of what happened, never
+> as a current claim, and do not update it to match today.
+
 Verdict: **PASS**, `passed: true`, with 8 assertions passed and V9 `not_observed`.
 Date: 2026-11-07T23:51:50Z.
 Command: the record names its own regeneration command, `kubectl -n monoplayer logs deploy/monoplayer | grep '"event":"heartbeat"' | tail -1`.
