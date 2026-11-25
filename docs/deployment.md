@@ -231,8 +231,10 @@ Common:
   **panel** writes (#232), not the Git ConfigMap. It is re-read at each login, so
   a UUID the panel adds is allowed on the next attempt with no restart. The
   ConfigMap in this repository is the seed the operator copies once; after that
-  the object the panel patches is the authority. Naming this path is also what
-  turns the control document on (#264 retired the variable that used to).
+  the object the panel patches is the authority. **Naming this path is the
+  attach whitelist's own switch**, and nothing else's: with it unset the
+  whitelist is the startup snapshot and no whitelist file is opened. The
+  allowed-server list below has its own path and, unlike this one, a fallback.
 - `MONOPLAYER_ALLOWED_SERVERS` and `MONOPLAYER_ALLOWED_SERVERS_SEED`: the list the
   picker offers and the copy Git commits behind it (#262).
 - `MONOPLAYER_PREAUTH_MAX_CONNECTIONS` (default `16`): the total concurrent
