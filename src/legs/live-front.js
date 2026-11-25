@@ -5,7 +5,8 @@
 // constructor, never a config flag:
 //   createLiveFrontLeg    online-mode=true, real sessionserver hasJoined,
 //                         UUID-keyed attach whitelist file (.secrets).
-//   createOfflineFrontLeg online-mode=false, loopback only, local offline
+//   createOfflineFrontLeg online-mode=false, loopback only unless allowNonLoopback,
+//                         local offline identities (#391)
 //                         UUID whitelist, no .secrets read.
 //
 // Flow per connection:
@@ -2324,13 +2325,22 @@ export function createOfflineFrontLeg (options = {}) {
     wireMode = 'throw',
     chat = 'read-only',
     dumpRaw = null,
-    dumpFramed = null
+    dumpFramed = null,
+    // #391: the same fence-lift the offline backend leg takes, for the same
+    // reason. A deployed test lane binds a pod address, and only the composition
+    // root lifts it (docs/adr/the-product-may-be-a-test-double.md).
+    allowNonLoopback = false
   } = options
 
   if (options.attachWhitelistFile !== undefined) {
     throw new TypeError('createOfflineFrontLeg does not accept attachWhitelistFile; use createLiveFrontLeg')
   }
-  if (!isLoopbackHost(host)) {
+  // A truthy string would lift the fence as surely as true, so the option is a
+  // boolean or it is refused.
+  if (typeof allowNonLoopback !== 'boolean') {
+    throw new TypeError('allowNonLoopback must be a boolean')
+  }
+  if (!allowNonLoopback && !isLoopbackHost(host)) {
     throw new TypeError(`offline front leg host must be 127.0.0.1 or ::1, got ${JSON.stringify(host)}`)
   }
   if (whitelistStore !== null && typeof whitelistStore.has !== 'function') {
