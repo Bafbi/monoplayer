@@ -9,13 +9,28 @@ gradle = "9.8.2"
 description = "Install the workspace dependencies."
 run = "pnpm install --frozen-lockfile"
 
+# Every rung below is a shell script, not an inline command, because mise hands a
+# task its arguments differently in each form. An inline command gets them
+# appended to the end of the whole string. On a rung, that is the next-rung hint,
+# so the rung never sees them. A shebang script gets them as script arguments
+# ($1, $@). The script forwards them to the command it runs (#320). mise
+# 2026.10.11 documents both forms under "Pass arguments":
+# https://mise.jdx.dev/tasks/running-tasks.html#pass-arguments
+
 [tasks.lint]
 description = "Syntax-check every source, test, tool, and shell script, and prove the panel's committed stylesheet is what its source compiles to."
 # The stylesheet check compiles Tailwind, which is a dev dependency, so lint needs
 # the install like the test rung does. Without it a fresh checkout would fail the
 # gate on a missing compiler instead of on a stale bundle.
 depends = ["install"]
-run = "(find src test tools \\( -name '*.js' -o -name '*.mjs' \\) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check) || node src/ladder/next-rung.js lint $?"
+run = '''
+#!/usr/bin/env bash
+# No stage of this chain reads an argument, so there is nothing to forward. It
+# refuses one instead of dropping it. A run that ignored what it was given would
+# report a check it did not make (#320).
+[ "$#" -eq 0 ] || { echo "lint takes no arguments: it checks every file in src, test and tools" >&2; exit 2; }
+(find src test tools \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check) || node src/ladder/next-rung.js lint $?
+'''
 
 
 [tasks."secrets:link"]
@@ -25,7 +40,10 @@ run = "scripts/link-secrets.sh"
 [tasks.test]
 description = "Run the unit/fake tests (loopback sockets only, no auth)."
 depends = ["install"]
-run = "node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling,testbed,support,panel}/*.test.js' || node src/ladder/next-rung.js test $?"
+run = '''
+#!/usr/bin/env bash
+node --test 'test/{core,legs,service,custody,observability,ladder,driver,tooling,testbed,support,panel}/*.test.js' "$@" || node src/ladder/next-rung.js test $?
+'''
 
 [tasks.spike]
 description = "Run the frozen protocol spike test (real sockets, offline protocol)."
@@ -36,13 +54,19 @@ run = "node --test test/spike/*.test.js"
 [tasks.loopback]
 description = "Run the product offline loopback rung (real legs, fake backend, protocol bot; no auth)."
 depends = ["install"]
-run = "node src/ladder/loopback.js || node src/ladder/next-rung.js loopback $?"
+run = '''
+#!/usr/bin/env bash
+node src/ladder/loopback.js "$@" || node src/ladder/next-rung.js loopback $?
+'''
 
 [tasks."parity:run"]
 description = "Run the client parity report: two protocol bots join a server, one directly and one through the proxy, compared (#13)."
 depends = ["install"]
 wait_for = ["check"]
-run = "node src/ladder/client-parity.js || node src/ladder/next-rung.js parity:run $?"
+run = '''
+#!/usr/bin/env bash
+node src/ladder/client-parity.js "$@" || node src/ladder/next-rung.js parity:run $?
+'''
 
 [tasks.online]
 description = "Attach a real Microsoft Bafbi bot through the online front (needs the GlowSquidye puppet, a backend this repo deploys named in MONOPLAYER_BACKEND_HOST, and the account lease, which needs kubectl)."
@@ -50,7 +74,10 @@ depends = ["install"]
 wait_for = ["check"]
 # The account is one refresh chain, so the bare rung takes the lease too (#280). Both
 # forms of the rung then exclude each other, and neither waits for a human.
-run = "scripts/online-cluster.sh hold node src/ladder/online.js || node src/ladder/next-rung.js online $?"
+run = '''
+#!/usr/bin/env bash
+scripts/online-cluster.sh hold node src/ladder/online.js "$@" || node src/ladder/next-rung.js online $?
+'''
 
 [tasks."online:cluster"]
 description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving. It holds the account lease, so a second run waits or is refused (#280)."
@@ -108,18 +135,27 @@ run = "gradle -p tools/driver --no-daemon build"
 description = "Run the driver-lane G0 scenario (2 consecutive runs; needs the driver SSH tunnel and the gate Paper)."
 depends = ["install"]
 wait_for = ["check", "driver:build"]
-run = "node src/driver/run.js --runs 2 || node src/ladder/next-rung.js driver:scenario $?"
+run = '''
+#!/usr/bin/env bash
+node src/driver/run.js --runs 2 "$@" || node src/ladder/next-rung.js driver:scenario $?
+'''
 
 [tasks."driver:g0"]
 description = "Driver-lane G0 verdict: run the two-run scenario, then verify both fresh reports plus the completed unmodded witness."
 depends = ["check", "driver:build", "driver:scenario"]
-run = "node src/driver/run.js --verify-g0 || node src/ladder/next-rung.js driver:g0 $?"
+run = '''
+#!/usr/bin/env bash
+node src/driver/run.js --verify-g0 "$@" || node src/ladder/next-rung.js driver:g0 $?
+'''
 
 [tasks."driver:parity"]
 description = "Client parity on the real client: join a backend directly, then through the proxy, and compare the client state (#62). Needs the driver tunnel and both endpoints."
 depends = ["install"]
 wait_for = ["check", "driver:build"]
-run = "node src/driver/run.js --lane parity --tunnel || node src/ladder/next-rung.js driver:parity $?"
+run = '''
+#!/usr/bin/env bash
+node src/driver/run.js --lane parity --tunnel "$@" || node src/ladder/next-rung.js driver:parity $?
+'''
 
 [tasks."image:build"]
 description = "Build and push the Monoplayer image to the cluster Zot registry."
@@ -243,4 +279,7 @@ run = "node src/testbed/switch.js down"
 [tasks."testbed:run"]
 description = "Full puppet transfer: up, transfer, down. Its down step restores the live deployment. An interrupt skips it, so the live front stays offline until an operator runs mise run testbed:down."
 depends = ["install"]
-run = "node src/testbed/switch.js run || node src/ladder/next-rung.js testbed:run $?"
+run = '''
+#!/usr/bin/env bash
+node src/testbed/switch.js run "$@" || node src/ladder/next-rung.js testbed:run $?
+'''
