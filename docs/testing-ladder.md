@@ -643,12 +643,11 @@ first dial and its target warms in five seconds.
   naming the driver (#261). A third 26.2 bot picks, then clicks `Disconnect` on the
   row the first client's claim stands on: a claim whose landing failed, which is a
   claim all the same (#295). The front reports verb `disconnect` with that id and the
-  server it named, and the click reaches the claim. The refusal is one sentence that
-  names `Attach`, and the client is disconnected with it rather than left in a dialog
-  nobody will read. Nothing else moves: no body closed, the claim is still the one on
-  that body, and the core's session is untouched. O64 is the half where a body is
-  unclaimed and does end. Spectate is refused in words, because nothing watches a
-  body from this phase.
+  server it named, and the click reaches the claim. The answer is one refusal that
+  names `Attach`, and the client that asked is disconnected with that sentence rather
+  than left in a dialog nobody will read. Nothing else moves: the count of granted
+  disconnects is zero, and the claim is still the one on that body. O64 is the half
+  where a body is unclaimed and does end.
 - `O57` the pick records an exclusive claim, and a second claim on that body is
   refused by name (#267). The first 26.2 bot claimed the row whose port answers
   nothing in O56 and is still connected, so it holds that body, and it is back at
