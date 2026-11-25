@@ -900,12 +900,19 @@ first dial and its target warms in five seconds.
   driving.
 
   What neither assertion can prove: that a vanilla client draws a body it does not
-  drive. Both clients here are protocol bots, and the picker is off on every lane this
-  repo deploys, so no real client has made a claim for another to watch (#325). A row
-  that witnesses one needs a lane serving a picker, and
-  [the driver runbook](../deploy/driver/README.md#no-spectator-row-this-lane-serves-no-body)
-  says what that lane would have to hold. The second registry round a real client takes
-  is #268's. The body's own entity stream is what such a row has to witness.
+  drive. Both clients here are protocol bots, so no real client has made a claim for
+  another to watch (#325). Since #392 the dev lane is the one deployed lane that serves
+  a picker: `monoplayer-dev` publishes its front on the tailnet under that name, seeds
+  one row for its own Paper, and runs that Paper offline, so a claim is reachable from
+  another machine. What it cannot do yet is take two bots: the service builds live legs
+  only, so a joining client is verified against Mojang before it sees the picker, and one
+  process admits one account (#391). A row that witnesses the vanilla half needs that
+  ticket, and
+  [the driver runbook](../deploy/driver/README.md#no-spectator-row-no-client-can-draw-a-body-yet)
+  says what else it would have to hold;
+  [the dev runbook](../deploy/dev/README.md#offline-and-why-that-is-allowed-here) says
+  what the lane holds now. The second registry round a real client takes is #268's. The
+  body's own entity stream is what such a row has to witness.
 - `O64` a claim lands on a body that is already standing, and a disconnect ends an
   unclaimed one (#261).
   O63 left the body standing with nobody driving it and two spectators on it. A

@@ -117,6 +117,19 @@ spec:
               value: devpuppet
             - name: MONOPLAYER_ATTACH_WHITELIST
               value: /config/attach-whitelist.json
+            # The one deployed lane that serves a picker (#392). A joining client
+            # lands in the picker instead of attaching as the body's driver, and
+            # can claim a row or watch one.
+            # Off by default (src/service/monoplayer.js), so this line is the
+            # whole difference between a lane a client can claim on and one it
+            # cannot.
+            - name: MONOPLAYER_PICKER
+              value: "1"
+            # The rows the picker offers, from the copy Git commits. This lane
+            # names no live key, so the seed is the list (#356): the dev Paper,
+            # at the address MONOPLAYER_BACKEND_HOST names.
+            - name: MONOPLAYER_ALLOWED_SERVERS_SEED
+              value: /config/allowed-servers.json
             - name: MONOPLAYER_CHAT
               value: read-only
             - name: HOME
@@ -171,6 +184,23 @@ data:
       "version": 1,
       "players": []
     }
+  # The row the picker offers (#392). One server, this lane's own Paper, at the
+  # name the proxy already dials. The file is the seed, not a live document: the
+  # lane names no MONOPLAYER_ALLOWED_SERVERS, so nothing rewrites it and an edit
+  # here reaches the lane on the next `mise run dev:up`.
+  #
+  # No addedAt stamp: a seed entry has none, and a rewrite must not invent one
+  # (src/service/control.js).
+  allowed-servers.json: |
+    {
+      "version": 1,
+      "servers": [
+        {
+          "host": "paper.monoplayer-dev.svc.cluster.local",
+          "port": 25565
+        }
+      ]
+    }
 ---
 apiVersion: v1
 kind: Service
@@ -182,6 +212,38 @@ metadata:
     app.kubernetes.io/part-of: monoplayer
 spec:
   type: ClusterIP
+  selector:
+    app.kubernetes.io/name: monoplayer
+  ports:
+    - name: minecraft
+      port: 25565
+      targetPort: minecraft
+      protocol: TCP
+---
+# The front on the tailnet (#392), so a client on another machine joins by name
+# instead of a port-forward:
+#   monoplayer-dev.tail41e568.ts.net:25565
+#
+# A second Service, not this file's first one converted: spec.loadBalancerClass
+# cannot be set on an existing Service, so converting would fail `kubectl apply`
+# on a lane that is up. deploy/driver/paper.yaml keeps its ClusterIP Service
+# beside a tailnet one for the same reason.
+#
+# The Paper has no Service here on purpose. A published Paper accepts a join that
+# never reached a picker, and the point of this lane is the picker.
+apiVersion: v1
+kind: Service
+metadata:
+  name: monoplayer-dev
+  namespace: monoplayer-dev
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+  annotations:
+    tailscale.com/hostname: monoplayer-dev
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
   selector:
     app.kubernetes.io/name: monoplayer
   ports:

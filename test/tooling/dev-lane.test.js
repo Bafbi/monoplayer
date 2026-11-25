@@ -318,11 +318,31 @@ test('up fills the empty dev attach whitelist from the live one', () => {
   fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
   const { status, output, calls } = run(space, ['up'])
   assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
-  const seed = calls.findIndex(line => line.includes('create configmap monoplayer-dev-config'))
+  const seed = calls.findIndex(line => line.includes('patch configmap monoplayer-dev-config'))
   const apply = calls.findIndex(line => line.includes('apply -k'))
   assert.ok(seed >= 0, 'the dev whitelist is written')
   assert.ok(seed > apply, 'it happens after the ConfigMap exists')
+  assert.match(calls[seed], /Bafbi/, 'the controller it writes is the live one')
   assert.match(output, /filled the dev attach whitelist from monoplayer/)
+})
+
+test('the attach whitelist seed rewrites one key and leaves its neighbours', () => {
+  // A client-side apply deletes every data key the previous one wrote and this
+  // one omits, so seeding through 'create configmap | apply' would strip the
+  // lane's allowed-servers.json and leave the picker offering nothing (#392).
+  // The seed is a merge patch of the one key it owns.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const patch = calls.filter(line => line.includes('patch configmap monoplayer-dev-config'))
+  assert.equal(patch.length, 1, 'the seed writes the ConfigMap once: ' + calls.join(' | '))
+  assert.match(patch[0], /^-n monoplayer-dev patch configmap monoplayer-dev-config --type merge -p /,
+    'the seed is a merge patch, which sets a key and leaves the rest: ' + patch[0])
+  assert.doesNotMatch(patch[0], /allowed-servers/,
+    'the seed names only the key it owns, so it cannot drop the picker row: ' + patch[0])
+  assert.equal(calls.some(line => line.includes('create configmap monoplayer-dev-config')), false,
+    'no step recreates the ConfigMap from one key: an apply of it would clear allowed-servers.json')
 })
 
 test('up leaves an operator whitelist alone', () => {
@@ -330,7 +350,7 @@ test('up leaves an operator whitelist alone', () => {
   fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), LIVE_WHITELIST + '\n')
   const { status, output, calls } = run(space, ['up'])
   assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
-  assert.equal(calls.some(line => line.includes('create configmap')), false, 'no overwrite')
+  assert.equal(calls.some(line => line.includes('patch configmap')), false, 'no overwrite')
   assert.match(output, /the dev attach whitelist has entries/)
 })
 
