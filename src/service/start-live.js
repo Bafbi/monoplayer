@@ -33,6 +33,13 @@
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
 //                                                       commands, full, or off
+//   MONOPLAYER_OFFLINE_LEGS                             1 composes the offline front and
+//                                                       backend legs, so the lane
+//                                                       needs no account, no custody
+//                                                       chain and no Microsoft auth.
+//                                                       A test lane only. The live
+//                                                       lane must never name it
+//                                                       (default 0)
 //   MONOPLAYER_PICKER                                   1 holds a joining client in
 //                                                       configuration and shows it the
 //                                                       server picker when the lane has
@@ -75,8 +82,9 @@ import { redact } from '../observability/redact.js'
 import { resolveAccount } from '../custody/accounts.js'
 import { accountTokenExpiry } from '../custody/status.js'
 import { normalizeUuid } from '../custody/util.js'
-import { createLiveBackendLeg } from '../legs/live-backend.js'
-import { createLiveFrontLeg } from '../legs/live-front.js'
+import { createLiveBackendLeg, createOfflineBackendLeg, OFFLINE_PUPPET_USERNAME } from '../legs/live-backend.js'
+import { createLiveFrontLeg, createOfflineFrontLeg } from '../legs/live-front.js'
+import { offlineUuid } from '../legs/offline-identity.js'
 import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
@@ -177,6 +185,15 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   } else if (pickerRaw !== undefined && pickerRaw !== '') {
     warn('MONOPLAYER_PICKER must be 1 or 0; ignoring ' + pickerRaw)
   }
+  // #391: the offline legs. Only "1" and "0" are read, so a typo leaves the lane
+  // on the live legs, which is the only safe thing for it to be: the mode that
+  // asks no server who a client is must never be reached by accident.
+  const offlineRaw = env.MONOPLAYER_OFFLINE_LEGS
+  if (offlineRaw === '1' || offlineRaw === '0') {
+    out.offlineLegs = offlineRaw === '1'
+  } else if (offlineRaw !== undefined && offlineRaw !== '') {
+    warn('MONOPLAYER_OFFLINE_LEGS must be 1 or 0; ignoring ' + offlineRaw)
+  }
   if (env.MONOPLAYER_VERSION) out.version = env.MONOPLAYER_VERSION
   if (env.MONOPLAYER_CHAT) out.chat = env.MONOPLAYER_CHAT
   // The kept connection (#22) is on in the defaults; this switch lets a lane
@@ -275,6 +292,195 @@ function accountHint () {
   ].join('\n')
 }
 
+// #391: the identity an offline body speaks as, derived from its name the way an
+// offline server derives it for every client (src/legs/offline-identity.js).
+//
+// A configured UUID can only agree with that derivation or be wrong. The backend
+// derives the UUID from the name on its side, so a lane that carried the other
+// one would name a player the server does not have: in the skin frame, and in the
+// start record. A disagreement is refused, never overridden.
+export function offlinePuppet ({ username = null, uuid = null } = {}) {
+  const name = username ?? OFFLINE_PUPPET_USERNAME
+  const derived = offlineUuid(name)
+  if (uuid !== null && normalizeUuid(uuid) !== derived) {
+    throw new TypeError(
+      'offline_puppet_uuid_mismatch: config asserts ' + uuid + ', and the offline UUID of ' +
+      name + ' is ' + derived)
+  }
+  return { username: name, uuid: derived }
+}
+
+// #391: the two legs this process builds, and the only place the offline branch
+// is decided. It opens no socket and resolves no account, so a unit test hands it
+// four recording constructors and reads the decision it made
+// (test/service/offline-legs.test.js).
+//
+// Both branches wire the same product: the dialog answerer (#16), the snapshot
+// the front replays, and the picker's offer. A lane with the switch on is this
+// product with two adapters swapped, not a second product.
+const SERVICE_LEG_CONSTRUCTORS = Object.freeze({
+  liveBackend: createLiveBackendLeg,
+  liveFront: createLiveFrontLeg,
+  offlineBackend: createOfflineBackendLeg,
+  offlineFront: createOfflineFrontLeg
+})
+
+export function createServiceLegs ({
+  cfg,
+  resolved = null,
+  control = null,
+  configurationBaseline = null,
+  telemetry = { metric () {} },
+  getSnapshotConfig = () => [],
+  isHumanAttached = () => false,
+  onDialogAnswered = null,
+  log = () => {},
+  dumpRaw = null,
+  dumpFramed = null,
+  legs = SERVICE_LEG_CONSTRUCTORS
+} = {}) {
+  // Strict frame check on every client-facing raw replay/relay. Both lanes run
+  // it in warn mode: a checker bug must not kick a real player, and a test lane
+  // has a real client too.
+  const wire = createWireChecker({ version: cfg.version })
+  // #257: the picker's configuration phase, and the list it offers. The
+  // recording is committed protocol data (src/legs/configuration-baseline.js).
+  // A lane with no fixture on disk refuses a picker join rather than inventing
+  // one. #265: the list is the allowed-server key (#262), read at each offer. A
+  // panel edit is therefore what the next join sees. A broken live file falls back
+  // to the seed Git commits rather than offering nothing. A lane with no key offers
+  // nothing, because the list is what a picker lane offers and not the backend it
+  // dials. The row says `down`, because with no session there is no body standing.
+  const pickerOffered = {
+    configurationBaseline,
+    pickerServers: cfg.picker === true ? createPickerServerReader({ control, log }) : null,
+    onPickerPick: pick => {
+      log('pickerPickRecorded', {
+        server: pick.server?.name ?? null,
+        slug: pick.slug,
+        id: pick.id,
+        uuid: pick.uuid,
+        username: pick.name
+      })
+      telemetry.metric('monoplayer.picker_picks', 1, { server: pick.server?.name ?? null })
+    },
+    // #266: the answer to a chosen server's own dialog. Recorded, not acted on.
+    // The verb names a body this lane does not connect from the configuration
+    // phase. #267 is the ticket that changes that.
+    onPickerVerb: verb => {
+      log('pickerVerbRecorded', {
+        verb: verb.verb,
+        server: verb.server?.name ?? null,
+        slug: verb.slug,
+        id: verb.id,
+        uuid: verb.uuid,
+        username: verb.name
+      })
+      telemetry.metric('monoplayer.picker_verbs', 1, { verb: verb.verb, server: verb.server?.name ?? null })
+    }
+  }
+
+  // The front options both lanes run: one product, two pairs of adapters.
+  const sharedFront = {
+    // #201: the total cap on the sockets inside the pre-auth window.
+    preAuth: cfg.preAuth,
+    getSnapshotConfig,
+    ...pickerOffered,
+    wireCheck: payload => wire.check(payload),
+    wireMode: 'warn',
+    chat: cfg.chat,
+    log,
+    dumpRaw,
+    dumpFramed
+  }
+
+  if (cfg.offlineLegs === true) {
+    // #391: an offline body dials the lane's backend with auth 'offline' and a
+    // fixed username, and the front asks no session server who a client is. No
+    // custody directory, no account selector, no token: the two legs a rung
+    // already builds, composed for a lane.
+    //
+    // The whitelist is the source the live front reads: the control document's
+    // store when the lane names a file, else the startup array. An offline
+    // client's UUID is derived from the name it claims, so that list holds
+    // offline UUIDs (docs/deployment.md).
+    const puppet = offlinePuppet(cfg.puppet)
+    return {
+      backend: legs.offlineBackend({
+        host: cfg.backend.host,
+        port: cfg.backend.port,
+        version: cfg.version,
+        username: puppet.username,
+        dialogAction: cfg.dialogAction,
+        // #16/#20: the same answerer split as the live branch. Without these the
+        // puppet would answer a gate a human is looking at, and the core would
+        // hold a gate the server already closed.
+        isHumanAttached,
+        onDialogAnswered,
+        // #391: the option that lifts this leg's loopback fence, as the front
+        // below lifts its own. A deployed lane binds a pod address and dials a
+        // Paper in another pod, and only this composition root sets it.
+        allowNonLoopback: true,
+        log
+      }),
+      front: legs.offlineFront({
+        host: cfg.front.host,
+        port: cfg.front.port,
+        version: cfg.version,
+        whitelistStore: control?.whitelistStore ?? null,
+        offlineWhitelist: control?.whitelistStore ? null : cfg.attachWhitelist,
+        allowNonLoopback: true,
+        ...sharedFront
+      })
+    }
+  }
+
+  const backend = resolved
+    ? legs.liveBackend({
+      host: cfg.backend.host,
+      port: cfg.backend.port,
+      version: cfg.version,
+      accountDir: resolved.account.dir,
+      account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
+      uuid: resolved.account.uuid,
+      authTitle: resolved.account.profile?.authTitle ?? null,
+      deviceType: resolved.account.profile?.deviceType ?? null,
+      dialogAction: cfg.dialogAction,
+      // #16/#20: the auto-click covers a configuration gate only, and it stands
+      // down as soon as a player can answer. A play dialog is never the
+      // puppet's, attached or not.
+      isHumanAttached,
+      // #16: an auto-answered dialog is not the next client's question.
+      onDialogAnswered,
+      log
+    })
+    : legs.liveBackend({
+      host: cfg.backend.host,
+      port: cfg.backend.port,
+      version: cfg.version,
+      cacheDir: cfg.puppet.cacheDir,
+      cacheAccount: cfg.puppet.cacheAccount,
+      // #16/#21: the same answerer split as the account branch. Without these,
+      // this branch fails open: the puppet would answer a gate a human is
+      // looking at, and the core would hold a gate the server already closed.
+      isHumanAttached,
+      onDialogAnswered,
+      log
+    })
+  const front = legs.liveFront({
+    host: cfg.front.host,
+    port: cfg.front.port,
+    version: cfg.version,
+    attachWhitelistFile: cfg.attachWhitelistFile,
+    // #229: the control document's store, so the leg's own whitelist check reads
+    // the same file the core gate does, at each login. Null keeps the leg's one
+    // startup read, which is every lane that names no whitelist file.
+    whitelistStore: control?.whitelistStore ?? null,
+    ...sharedFront
+  })
+  return { backend, front }
+}
+
 export async function startLive ({ argv = [], io = process } = {}) {
   const stdout = io.stdout ?? process.stdout
   const stderr = io.stderr ?? process.stderr
@@ -306,50 +512,69 @@ export async function startLive ({ argv = [], io = process } = {}) {
   ))
 
   // --- 1b. puppet account (before any leg exists) ---
+  // #391: an offline lane has no account to resolve. Its puppet is a name, and
+  // the UUID follows from it, so the custody tree is never opened and a lane
+  // boots on a pod with no account volume at all.
+  if (cfg.offlineLegs === true) {
+    // The same refusal the live branch gives a mismatched puppet UUID, with the
+    // name an offline lane can act on: there is no account to resolve, so the
+    // name is the identity and the UUID follows from it.
+    let puppet
+    try {
+      puppet = offlinePuppet(cfg.puppet)
+    } catch (error) {
+      stderr.write('monoplayer --start: ' + error.message + '\n')
+      return 2
+    }
+    cfg.puppet.username = puppet.username
+    cfg.puppet.uuid = puppet.uuid
+  }
   // Raw cacheDir override: use the directory as given. It cannot be combined
   // with an account selector, because the selector would have nothing to
   // resolve against.
   let resolved = null
-  if (cfg.puppet.cacheDir) {
-    if (cfg.puppet.account) {
-      stderr.write(
-        'monoplayer --start: config_conflict: puppet.cacheDir (raw dir override) ' +
-        'cannot be combined with puppet.account\n')
-      return 2
-    }
-  } else {
-    resolved = resolveAccount({
-      accountsDir: cfg.puppet.accountsDir,
-      selector: cfg.puppet.account ?? cfg.puppet.uuid
-    })
-    if (!resolved.ok) {
-      stderr.write(
-        `monoplayer --start: cannot resolve a puppet account in ${cfg.puppet.accountsDir}: ${resolved.reason}\n` +
-        `${candidateLines(resolved.candidates)}\n${accountHint()}\n`)
-      return 2
-    }
-    const account = resolved.account
-    if (cfg.puppet.uuid) {
-      const asserted = normalizeUuid(cfg.puppet.uuid)
-      if (asserted === null || asserted !== account.uuid) {
+  if (cfg.offlineLegs !== true) {
+    if (cfg.puppet.cacheDir) {
+      if (cfg.puppet.account) {
         stderr.write(
-          `monoplayer --start: puppet_uuid_mismatch: config asserts ${cfg.puppet.uuid}, ` +
-          `resolved account is ${account.uuid}\n`)
+          'monoplayer --start: config_conflict: puppet.cacheDir (raw dir override) ' +
+          'cannot be combined with puppet.account\n')
         return 2
       }
-    }
-    if (cfg.puppet.username) {
-      const profileName = account.profile?.name ?? null
-      if (typeof profileName !== 'string' ||
-          profileName.toLowerCase() !== String(cfg.puppet.username).toLowerCase()) {
+    } else {
+      resolved = resolveAccount({
+        accountsDir: cfg.puppet.accountsDir,
+        selector: cfg.puppet.account ?? cfg.puppet.uuid
+      })
+      if (!resolved.ok) {
         stderr.write(
-          `monoplayer --start: puppet_name_mismatch: config asserts ${cfg.puppet.username}, ` +
-          `resolved profile name is ${profileName ?? '(none)'}\n`)
+          `monoplayer --start: cannot resolve a puppet account in ${cfg.puppet.accountsDir}: ${resolved.reason}\n` +
+          `${candidateLines(resolved.candidates)}\n${accountHint()}\n`)
         return 2
       }
+      const account = resolved.account
+      if (cfg.puppet.uuid) {
+        const asserted = normalizeUuid(cfg.puppet.uuid)
+        if (asserted === null || asserted !== account.uuid) {
+          stderr.write(
+            `monoplayer --start: puppet_uuid_mismatch: config asserts ${cfg.puppet.uuid}, ` +
+            `resolved account is ${account.uuid}\n`)
+          return 2
+        }
+      }
+      if (cfg.puppet.username) {
+        const profileName = account.profile?.name ?? null
+        if (typeof profileName !== 'string' ||
+            profileName.toLowerCase() !== String(cfg.puppet.username).toLowerCase()) {
+          stderr.write(
+            `monoplayer --start: puppet_name_mismatch: config asserts ${cfg.puppet.username}, ` +
+            `resolved profile name is ${profileName ?? '(none)'}\n`)
+          return 2
+        }
+      }
+      cfg.puppet.uuid = account.uuid
+      cfg.puppet.username = account.profile?.name ?? cfg.puppet.username ?? null
     }
-    cfg.puppet.uuid = account.uuid
-    cfg.puppet.username = account.profile?.name ?? cfg.puppet.username ?? null
   }
 
   const skinWarning = unidentifiedSkinWarning(cfg)
@@ -456,101 +681,28 @@ export async function startLive ({ argv = [], io = process } = {}) {
   if (journalFull !== null) log('journalVolumeFull', journalFull)
 
   // --- 2. legs + core ---
-  const backend = resolved
-    ? createLiveBackendLeg({
-      host: configuredTarget.host,
-      port: configuredTarget.port,
-      version: cfg.version,
-      accountDir: resolved.account.dir,
-      account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid,
-      uuid: resolved.account.uuid,
-      authTitle: resolved.account.profile?.authTitle ?? null,
-      deviceType: resolved.account.profile?.deviceType ?? null,
-      dialogAction: cfg.dialogAction,
-      // #16/#20: the auto-click covers a configuration gate only, and it stands
-      // down as soon as a player can answer. A play dialog is never the
-      // puppet's, attached or not.
-      isHumanAttached: () => core.attached === true,
-      // #16: an auto-answered dialog is not the next client's question.
-      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
-      log
-    })
-    : createLiveBackendLeg({
-      host: configuredTarget.host,
-      port: configuredTarget.port,
-      version: cfg.version,
-      cacheDir: cfg.puppet.cacheDir,
-      cacheAccount: cfg.puppet.cacheAccount,
-      // #16/#21: the same answerer split as the account branch. Without these,
-      // this branch fails open: the puppet would answer a gate a human is
-      // looking at, and the core would hold a gate the server already closed.
-      isHumanAttached: () => core.attached === true,
-      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
-      log
-    })
-  // Strict frame check on every client-facing raw replay/relay. The live path
-  // runs it in warn mode first: a checker bug must not kick a real player, but
-  // every failure is logged and counted in front.wireStats.
-  const wire = createWireChecker({ version: cfg.version })
+  // #391: which legs this process runs is the composition function's decision.
+  // `core` is read through the callbacks below, and every one of them fires
+  // after core.start(), so the legs exist before the core does.
+  let core = null // assigned before any configured usage below
   // #257: the configuration phase this lane can serve when no backend is
   // connected. Read once, and only when the picker is on: a lane that never serves
   // a picker pays nothing for the recording, and a corrupt one cannot stop a lane
   // that would never have used it.
   const baseline = cfg.picker === true ? readConfigurationBaseline() : null
-  const front = createLiveFrontLeg({
-    host: cfg.front.host,
-    port: cfg.front.port,
-    version: cfg.version,
-    attachWhitelistFile: cfg.attachWhitelistFile,
-    // #229: the control document's store, so the leg's own whitelist check reads
-    // the same file the core gate does, at each login. Null keeps the leg's one
-    // startup read, which is every lane that names no whitelist file.
-    whitelistStore: control.whitelistStore,
-    // #201: the total cap on the sockets inside the pre-auth window.
-    preAuth: cfg.preAuth,
-    getSnapshotConfig: () => core.cache.snapshot().config,
-    // #257: the picker's configuration phase, and the list it offers. The
-    // recording is committed protocol data (src/legs/configuration-baseline.js).
-    // A lane with no fixture on disk refuses a picker join rather than inventing
-    // one. #265: the list is the allowed-server key (#262), read at each offer. A
-    // panel edit is therefore what the next join sees. A broken live file falls back
-    // to the seed Git commits rather than offering nothing. A lane with no key offers
-    // nothing, because the list is what a picker lane offers and not the backend it
-    // dials. The row says `down`, because with no session there is no body standing.
+  const { backend, front } = createServiceLegs({
+    cfg,
+    resolved,
+    control,
     configurationBaseline: baseline,
-    pickerServers: cfg.picker === true ? createPickerServerReader({ control, log }) : null,
-    onPickerPick: pick => {
-      log('pickerPickRecorded', {
-        server: pick.server?.name ?? null,
-        slug: pick.slug,
-        id: pick.id,
-        uuid: pick.uuid,
-        username: pick.name
-      })
-      telemetry.metric('monoplayer.picker_picks', 1, { server: pick.server?.name ?? null })
-    },
-    // #266: the answer to a chosen server's own dialog. Recorded, not acted on.
-    // The verb names a body this lane does not connect from the configuration
-    // phase. #267 is the ticket that changes that.
-    onPickerVerb: verb => {
-      log('pickerVerbRecorded', {
-        verb: verb.verb,
-        server: verb.server?.name ?? null,
-        slug: verb.slug,
-        id: verb.id,
-        uuid: verb.uuid,
-        username: verb.name
-      })
-      telemetry.metric('monoplayer.picker_verbs', 1, { verb: verb.verb, server: verb.server?.name ?? null })
-    },
-    wireCheck: payload => wire.check(payload),
-    wireMode: 'warn',
-    chat: cfg.chat,
+    telemetry,
+    getSnapshotConfig: () => core.cache.snapshot().config,
+    isHumanAttached: () => core.attached === true,
+    onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
     log,
     dumpRaw,
     dumpFramed
   })
-  let core = null // assigned before any configured usage below
 
   // Real timers for the session's reconnect delay. The core stays pure: it
   // announces reconnect_due, this orchestrator performs the backend connect.
@@ -812,6 +964,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
     version: cfg.version,
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
+    // #391: a lane that asks no session server who a client is says so in its
+    // own start record, and in the journal beside it.
+    offlineLegs: cfg.offlineLegs === true,
     // #257: whether a join with no backend is served a picker, and whether this
     // process found a recording to serve it with. The second is the difference
     // between a picker and a refusal, and it is a file that ships with the image.
@@ -843,6 +998,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     version: cfg.version,
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
+    offlineLegs: cfg.offlineLegs === true,
     front: `${cfg.front.host}:${cfg.front.port}`,
     backend: backendAddress,
     ...accountLogFields,
@@ -909,12 +1065,17 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // refresh moves it. Unknown is null, never a guess.
   const account = {
     alias: resolved?.account.alias ?? null,
-    expiresAt: () => resolved
-      ? accountTokenExpiry({
-        dir: resolved.account.dir,
-        account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid
-      })
-      : accountTokenExpiry({ dir: cfg.puppet.cacheDir, account: cfg.puppet.cacheAccount ?? null })
+    expiresAt: () => {
+      // #391: an offline lane holds no token, so nothing expires. It says so
+      // rather than reading a custody directory the lane was built without.
+      if (cfg.offlineLegs === true) return null
+      return resolved
+        ? accountTokenExpiry({
+          dir: resolved.account.dir,
+          account: resolved.account.alias ?? resolved.account.name ?? resolved.account.uuid
+        })
+        : accountTokenExpiry({ dir: cfg.puppet.cacheDir, account: cfg.puppet.cacheAccount ?? null })
+    }
   }
   await runForever({
     core,

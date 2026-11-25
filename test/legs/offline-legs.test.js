@@ -139,6 +139,34 @@ test('offline backend leg has no custody, no lock, and rejects account options',
   assert.equal(leg.forwarderStats(), null)
 })
 
+// #391: the one option that lifts the loopback fence, which the service's
+// composition root passes for a deployed test lane. An unset option is the
+// default, false. Each value below is truthy, so before the guard it lifted the
+// fence and built the leg.
+test('#391 allowNonLoopback is a boolean, not a truthy value', () => {
+  for (const value of ['yes', 1, {}]) {
+    assert.throws(
+      () => createOfflineFrontLeg({
+        host: '0.0.0.0', offlineWhitelist: [ATTACH_UUID], allowNonLoopback: value, getSnapshotConfig: snapshot
+      }),
+      /allowNonLoopback must be a boolean/,
+      'front ' + JSON.stringify(value)
+    )
+    assert.throws(
+      () => createOfflineBackendLeg({ host: 'paper.example', port: 25565, allowNonLoopback: value }),
+      /allowNonLoopback must be a boolean/,
+      'backend ' + JSON.stringify(value)
+    )
+  }
+
+  // With the boolean, both legs build off loopback. The service passes this.
+  assert.equal(createOfflineFrontLeg({
+    host: '0.0.0.0', offlineWhitelist: [ATTACH_UUID], allowNonLoopback: true, getSnapshotConfig: snapshot, wireMode: 'off'
+  }).kind, 'offline-front-leg')
+  assert.equal(createOfflineBackendLeg({ host: 'paper.example', port: 25565, allowNonLoopback: true }).kind,
+    'offline-backend-leg')
+})
+
 test('live backend leg requires an accountDir (or the deprecated cacheDir), no connect', () => {
   assert.throws(() => createLiveBackendLeg({ host: '127.0.0.1', port: 25565 }), TypeError)
 
