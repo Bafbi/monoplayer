@@ -19,24 +19,17 @@
 //                                                       stay in that window before
 //                                                       its socket is destroyed
 //                                                       (default 30000, #205)
-//   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
+//   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path.
+//                                                       Naming it reloads the list at
+//                                                       each login (#229), and it is
+//                                                       what turns the control
+//                                                       document on
 //   MONOPLAYER_ALLOWED_SERVERS                          allowed-servers.json, the
 //                                                       servers the picker offers
-//                                                       (#262). Its own switch: it is
-//                                                       read whether or not a desired
-//                                                       document is named
+//                                                       (#262)
 //   MONOPLAYER_ALLOWED_SERVERS_SEED                     the allowed-servers.json Git
 //                                                       commits, which answers when the
 //                                                       live file is absent or unreadable
-//   MONOPLAYER_CONTROL_FILE                             desired.json, the control
-//                                                       document that moves the
-//                                                       puppet's backend; setting it
-//                                                       also reloads the attach
-//                                                       whitelist at each login (#229)
-//   MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH             1 honours desired.json, on the
-//                                                       next connect and on every
-//                                                       heartbeat tick; 0 leaves the
-//                                                       configured backend (default 0)
 //   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
 //   MONOPLAYER_CHAT                                     read-only (default),
 //                                                       commands, full, or off
@@ -76,16 +69,9 @@
 import fs from 'node:fs'
 
 import { createMonoplayer, loadConfig } from './monoplayer.js'
-import {
-  createBackendMoveTick,
-  createControlDocument,
-  dialIntent,
-  dialTargetFor,
-  revertAfterRestore
-} from './control.js'
+import { createControlDocument, dialIntent, revertAfterRestore } from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
-import { createWhitelistStore } from '../custody/store.js'
 import { resolveAccount } from '../custody/accounts.js'
 import { accountTokenExpiry } from '../custody/status.js'
 import { normalizeUuid } from '../custody/util.js'
@@ -167,23 +153,13 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   }
   out.puppet = puppet
   if (env.MONOPLAYER_ATTACH_WHITELIST) out.attachWhitelistFile = env.MONOPLAYER_ATTACH_WHITELIST
-  // #229: the runtime control document. The path is the only switch, so an unset
-  // variable leaves the lane static. One accumulator for both keys, so a key
-  // written below cannot silently drop one written above it.
-  const control = { ...doc.control }
-  if (env.MONOPLAYER_CONTROL_FILE) control.file = env.MONOPLAYER_CONTROL_FILE
   // #262: the allowed-server list, and the copy Git commits. Two paths, because the
   // fallback names a file: a fallback nobody named is a fallback nobody can check.
+  // These are the control document's only environment switches since #264 retired
+  // the desired-backend key; the whitelist's own is MONOPLAYER_ATTACH_WHITELIST.
+  const control = { ...doc.control }
   if (env.MONOPLAYER_ALLOWED_SERVERS) control.allowedServers = env.MONOPLAYER_ALLOWED_SERVERS
   if (env.MONOPLAYER_ALLOWED_SERVERS_SEED) control.allowedServersSeed = env.MONOPLAYER_ALLOWED_SERVERS_SEED
-  // Only "1" and "0" are read, so a typo cannot quietly move a deployed lane's
-  // puppet to another server.
-  const controlSwitch = env.MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH
-  if (controlSwitch === '1' || controlSwitch === '0') {
-    control.allowBackendSwitch = controlSwitch === '1'
-  } else if (controlSwitch !== undefined && controlSwitch !== '') {
-    warn('MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH must be 1 or 0; ignoring ' + controlSwitch)
-  }
   if (Object.keys(control).length) out.control = control
   if (env.MONOPLAYER_DIALOG_ACTION) out.dialogAction = env.MONOPLAYER_DIALOG_ACTION
   // #257: the picker. Only "1" and "0" are read, so a typo leaves the lane
@@ -372,20 +348,11 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const skinWarning = unidentifiedSkinWarning(cfg)
   if (skinWarning !== null) stderr.write(`monoplayer --start: warning: ${skinWarning}\n`)
 
-  // A static lane keeps the order it always had: its whitelist is read here, and
-  // an empty one exits before a log stream or a diagnostic dump is opened. A
-  // control lane reads its file later, through the control document, because
-  // naming a file the service could not read needs the log sink.
-  if (cfg.control.file === null) {
-    if (!Array.isArray(cfg.attachWhitelist) || cfg.attachWhitelist.length === 0) {
-      const store = createWhitelistStore({ file: cfg.attachWhitelistFile })
-      cfg.attachWhitelist = store.list().map(player => player.uuid)
-    }
-    if (cfg.attachWhitelist.length === 0) {
-      stderr.write(`monoplayer --start: attach whitelist empty at ${cfg.attachWhitelistFile}\n`)
-      return 2
-    }
-  }
+  // #264: the whitelist file is the control document's one switch, so there is no
+  // static lane left to read it early. Every lane reads it through the control
+  // document below, which needs the log sink a file it could not read is named in.
+  // An empty list is a lane that refuses every login by name, and the live front
+  // leg requires the file anyway.
 
   // --- logging sink (JSONL; every line redacted) ---
   let sink = stdout
@@ -428,19 +395,17 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
 
   // --- 1c. the control document, and the attach whitelist it drives (#229) ---
-  // With control.file set, the attach whitelist is a file an operator edits: it is
-  // read at each login, so a UUID added through the panel is allowed on the next
-  // attempt with no restart. With it unset, the whitelist is the startup snapshot
-  // it has always been, and no control file is opened.
+  // With the whitelist file named, the attach whitelist is a file an operator edits:
+  // it is read at each login, so a UUID added through the panel is allowed on the
+  // next attempt with no restart. With no path, the whitelist is the startup
+  // snapshot it has always been and no control file is opened.
   const control = createControlDocument({
-    file: cfg.control.file,
     whitelistFile: cfg.attachWhitelistFile,
     // #262: the allowed-server list and the file Git commits behind it. Read here
     // for the start record below. #265 is the picker, which reads the same key again
     // at each offer.
     allowedServersFile: cfg.control.allowedServers ?? null,
     allowedServersSeedFile: cfg.control.allowedServersSeed ?? null,
-    allowBackendSwitch: cfg.control.allowBackendSwitch,
     log
   })
   const whitelistSource = control.whitelistStore === null ? null : control.attachWhitelist
@@ -450,7 +415,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
       // A control lane may start empty: the operator adds the first UUID through
       // the panel. Exiting here would crash-loop the pod on the same file, which
       // is the one thing the reload exists to avoid.
-      log('whitelistEmpty', { file: cfg.attachWhitelistFile, control: cfg.control.file })
+      log('whitelistEmpty', { file: cfg.attachWhitelistFile })
     }
   }
 
@@ -461,16 +426,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // call.
   const allowedServersAtStart = control.allowedServers()
 
-  // #229: the desired backend is read once before the first dial, and again
-  // before every reconnect. The target the process treats as its base is the one
-  // it actually dialled, so the follow controller's keepCookies decision and its
-  // revert compare like with like.
+  // The target the process dials first, and treats as its base: the one the
+  // deployment configured. #229 let a control document override it before the first
+  // dial; #264 retired that key with the backend move, so the first dial is now the
+  // configured one and every later target comes from a transfer.
   const configuredTarget = { host: cfg.backend.host, port: cfg.backend.port }
-  const desiredAtStart = control.desiredTarget()
-  const startupTarget = desiredAtStart ?? configuredTarget
-  if (desiredAtStart !== null) {
-    log('controlDesiredBackend', { host: startupTarget.host, port: startupTarget.port, source: 'startup' })
-  }
+  const startupTarget = configuredTarget
 
   // --- telemetry + journal (both inert unless their env is set) ---
   // Telemetry carries the puppet alias as a resource attribute; the alias and
@@ -535,7 +496,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     attachWhitelistFile: cfg.attachWhitelistFile,
     // #229: the control document's store, so the leg's own whitelist check reads
     // the same file the core gate does, at each login. Null keeps the leg's one
-    // startup read, which is every lane that never set control.file.
+    // startup read, which is every lane that names no whitelist file.
     whitelistStore: control.whitelistStore,
     // #201: the total cap on the sockets inside the pre-auth window.
     preAuth: cfg.preAuth,
@@ -663,8 +624,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // not always to the configured base.
   let currentTarget = { ...baseTarget }
   // Why it is off the base, when it is: a followed transfer keeps the transfer
-  // handshake on the next fault, and a desired backend does not. Before #229 the
-  // only reason was a transfer, which is why one boolean said it.
+  // handshake on the next fault, and a reconnect to the server the session is
+  // already on does not.
   let currentIsTransfer = false
   // The server the session last warmed on, which is the one whose state a
   // restored client holds. A given-up target reverts here, not to the base: on a
@@ -673,15 +634,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // Whether the settled server got there by a followed transfer. It decides the
   // dialect of a revert dial, exactly as `currentIsTransfer` decides a reconnect.
   let settledIsTransfer = false
-  // #233: the heartbeat's move, built once. The memory of the document whose move
-  // already failed lives in the tick, so the loopback rung can drive the same one
-  // instead of a copy of it.
-  const moveTick = createBackendMoveTick({
-    core,
-    control,
-    log,
-    current: () => currentTarget
-  })
   const isBase = target =>
     target.host === baseTarget.host && target.port === baseTarget.port
 
@@ -702,56 +654,30 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // One backend.connect() per reconnect_due: the guard refuses a second
   // attempt while one is in flight, so the reconnect can never loop.
   let reconnecting = false
-  // The last desired backend this process logged, so an unchanging edit is one
-  // line rather than one per reconnect.
-  let lastDesired = desiredAtStart
-  core.on('reconnect_due', async ({ delayMs, attempt, target, moveTarget } = {}) => {
+  core.on('reconnect_due', async ({ delayMs, attempt, target } = {}) => {
     if (reconnecting) return
     reconnecting = true
     core.session.backendConnecting({ initial: false })
 
-    // #233: an operator move hands its target over once, through the same
-    // controller a transfer uses, so one budget owns the retries and the give-up
-    // for both. A target fed again on every retry would reset that budget. The
-    // controller remembers the dialect as well as the address, because the retry
-    // hop carries neither.
-    //
-    // `moveTarget` is an optional field of the event, so it is normalized once:
-    // read as "not null", an event that omits it would claim to be an operator's
-    // move and dial a transfer's target as a fresh login.
-    const handedMove = moveTarget ?? null
-    const due = follow.onDue({
-      target: handedMove ?? target,
-      kind: handedMove !== null ? 'operator' : 'transfer'
-    })
-    // #229: the desired backend is read again here, before the dial, and only
-    // while no client is attached. #233's move is the one path that carries a
-    // desired backend onto an attached session, and it arrives as `moveTarget`
-    // because the core started it.
-    const chosen = dialTargetFor({
-      transfer: due.kind === 'transfer' ? due.target : null,
-      operator: due.kind === 'operator' ? due.target : null,
-      desired: control.desiredTarget(),
-      current: currentTarget,
-      attached: core.attached === true
-    })
-    const dialTarget = chosen.target
-    if (chosen.source === 'desired' &&
-        (lastDesired === null || lastDesired.host !== dialTarget.host || lastDesired.port !== dialTarget.port)) {
-      lastDesired = { ...dialTarget }
-      log('controlDesiredBackend', { host: dialTarget.host, port: dialTarget.port, source: 'reconnect' })
-    }
+    // A followed target is handed over once, through the controller, so one budget
+    // owns the retries and the give-up. A target fed again on every retry would
+    // reset that budget, and the controller remembers it across the hops that
+    // carry none.
+    const due = follow.onDue({ target })
+    // Two sources, and #264 removed the other two: a target the controller is
+    // following, or the server the session is already on. There is nothing left to
+    // rank, so the dial is the first that exists.
+    const dialTarget = due.target ?? currentTarget
     try {
       // A transfer dial, and the return to the server a transfer moved the session
       // to, ask the target for the transfer handshake and keep the cookies: the
-      // behaviour every lane had before this ticket. A desired backend is a fresh
-      // login on a server that never saw the puppet.
-      const transferDial = chosen.source === 'transfer' ||
-        (chosen.source === 'current' && currentIsTransfer)
+      // behaviour every lane had before this ticket. Anything else is a fresh login
+      // on the server the session is already on.
+      const transferDial = due.target !== null || currentIsTransfer
       backend.setTarget(dialTarget, dialIntent({ transfer: transferDial, target: dialTarget, base: baseTarget }))
-      if (chosen.source !== 'current') {
+      if (due.target !== null) {
         currentTarget = { ...dialTarget }
-        currentIsTransfer = chosen.source === 'transfer'
+        currentIsTransfer = true
       }
       if (due.target) {
         log('transferFollowConnect', {
@@ -805,17 +731,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
         // The followed target is unreachable; the next reconnect goes back to
         // the server the client was restored onto so the puppet is never
         // stranded and never lands where the client is not.
-        if (due.kind === 'operator') {
-          // #233: an operator's target the budget gave up on, named as such: the
-          // restore lines below are the machine's, and this is the one an
-          // operator greps for.
-          log('backendMoveFailed', {
-            host: failure.abandoned?.host ?? null,
-            port: failure.abandoned?.port ?? null,
-            attempt,
-            error: String(error?.message ?? error).slice(0, 300)
-          })
-        }
         core.abortTransfer('target_unreachable')
         revertToSettled('target_unreachable')
         log('transferFollowReverted', {
@@ -895,8 +810,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
     backend: `${startupTarget.host}:${startupTarget.port}`,
     backendConfigured: `${configuredTarget.host}:${configuredTarget.port}`,
     control: {
-      file: cfg.control.file,
-      allowBackendSwitch: cfg.control.allowBackendSwitch,
       whitelistReload: whitelistSource !== null,
       // #262: the two paths, which file answered, and how many servers it offers.
       // #265: the picker reads this key at each offer, so these numbers are the read
@@ -989,11 +902,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
       })
       : accountTokenExpiry({ dir: cfg.puppet.cacheDir, account: cfg.puppet.cacheAccount ?? null })
   }
-  // #233: the operator's move, asked for on the heartbeat the service already
-  // runs. There is no watcher and no second timer: the control document is read
-  // at the cadence the lane already reports at, which is the ticket's decision.
-  // The decision itself is `control.js`'s (`createBackendMoveTick`), so the
-  // loopback rung drives the same one.
   await runForever({
     core,
     backend,
@@ -1002,8 +910,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     sink,
     telemetry,
     journal,
-    account,
-    onHeartbeat: moveTick.tick
+    account
   })
   return 0
 }
@@ -1017,11 +924,6 @@ async function runForever ({
   telemetry,
   journal,
   account = { alias: null, expiresAt: () => null },
-  // #233: the work one heartbeat tick also does, beside the report the loop
-  // writes. It is injected rather than read from here because it needs the dial
-  // state this function does not hold: which backend the puppet is on, and the
-  // control document's last attempt.
-  onHeartbeat = () => {}
 }) {
   let stopping = false
   let lastRejected = front.wireStats.rejected
@@ -1085,13 +987,6 @@ async function runForever ({
     const stats = core.cache.stats()
     const forwarder = backend.forwarderStats()
     emitGauges()
-    // #233: after the report, so a tick that starts a move says what the lane
-    // looked like before it. A throw here must not stop the beating.
-    try {
-      onHeartbeat()
-    } catch (error) {
-      log('heartbeatHookFailed', { error: String(error?.message ?? error).slice(0, 200) })
-    }
     log('heartbeat', {
       attached: core.attached,
       backendLogins: core.session.backendLogins,

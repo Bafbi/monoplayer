@@ -17,7 +17,6 @@ const puppet = (overrides = {}) => ({
   seedConfigMap: 'monoplayer-config',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
-  allowBackendSwitch: true,
   ...overrides
 })
 
@@ -66,8 +65,10 @@ test('a document the panel cannot act on is refused with the field that broke it
     ['a backend at an address no dial can reach', document([puppet({ backend: '999.999.999.999:25565' })]), /backend/],
     ['a backend port out of range', document([puppet({ backend: 'play2.excalia.fr:70000' })]), /backend/],
     ['a front with a scheme', document([puppet({ frontHostname: 'https://glowsquidye.tail41e568.ts.net' })]), /frontHostname/],
-    ['a backend switch that is not a boolean', document([puppet({ allowBackendSwitch: 'yes' })]), /allowBackendSwitch/],
-    ['a puppet with no backend switch', document([{ ...puppet(), allowBackendSwitch: undefined }]), /allowBackendSwitch/],
+    // #264: the backend move is retired, so the field that asked for it is
+    // retired with it. A document that still carries one is refused by name rather
+    // than ignored, because a registry row is a claim about what the panel may do.
+    ['the retired backend switch', document([puppet({ allowBackendSwitch: true })]), /allowBackendSwitch/],
     ['the same puppet twice', document([puppet(), puppet({ controlConfigMap: 'monoplayer-control-two' })]), /name/],
     ['two puppets writing one ConfigMap', document([puppet(), puppet({ name: 'other' })]), /monoplayer-control/],
     ['an empty registry', document([]), /puppets/],

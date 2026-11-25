@@ -42,9 +42,9 @@
 //     log line. The caller sent a uuid, and that is the one worth printing.
 //
 // This module holds no cluster knowledge. The client arrives injected, the same one
-// `src/panel/routes/info.js` reads pods through and `routes/backend.js` patches a
+// `src/panel/routes/info.js` reads pods through and `routes/allowed.js` patches a
 // ConfigMap through, so a test hands in a fake and the route cannot tell it from the
-// cluster (#231, #233).
+// cluster (#231, #233, #262).
 import { createNameLookup, WHITELIST_VERSION } from '../../custody/store.js'
 import { normalizeUuid } from '../../custody/util.js'
 import { containerEnv } from '../kube.js'

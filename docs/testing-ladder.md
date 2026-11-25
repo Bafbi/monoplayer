@@ -10,7 +10,7 @@ cheapest rung that can fail for the defect you are chasing.
 |---|---|---|---|---|---|
 | 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers, and the front leg's status answer over a loopback socket (#200); no auth | socket framing beyond the status handshake, leg wiring, real timers, backend behavior |
-| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default, an operator's move from the control document, landing and failed (#233), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog, answers it, and lands a claiming client in the body it named (#257, #266, #258); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
+| 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default (#22), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog, answers it, and lands a claiming client in the body it named (#257, #266, #258); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
 | 2b transfer testbed | `mise run testbed:run` | about 3 minutes | cluster access, Argo app, custody PVC, Bafbi token | handshake intent 3, puppet follow to a second Paper server, the same-connection reconfiguration, and a registry difference (hub 4 vs target 5 `dimension_type` entries) | real client rendering and vanilla acceptance of the reconfiguration; the run takes the live front offline, so the operator starts it |
 | 3 online bot | `mise run online` | minutes | a backend this repo deploys, named by `MONOPLAYER_BACKEND_HOST`, both account custodians, and cluster access for the account lease | the same shape as rung 2 through the online front leg and a real backend | still not a vanilla client (the bot uses `minecraft-protocol`) |
@@ -575,43 +575,6 @@ first dial and its target warms in five seconds.
   `core.attached` true, a login success frame, and `backendLogins` unchanged
   across the edit, so the reload neither restarted the lane nor re-dialled the
   backend.
-- `O54` an operator's move keeps the client's connection and lands it in the
-  second backend's configuration and play state (#233). `desired.json` is a
-  control document with no packet behind it, so nothing but a run proves the #22
-  machine accepts the intent. The rig is its own, and it is the smallest one that
-  can say where each login landed: two fake backends, a real front leg, the
-  product core, a real client on the first backend, and a handshake proxy in front
-  of the second, which records the intent on the wire. It writes the document the
-  way the panel writes it and drives the service's own decision
-  (`createBackendMoveTick`, `dialTargetFor` and `dialIntent`), so what it asserts is
-  the product's choice and not the rig's. The tick starts a move whose kind is
-  `operator`;
-  the puppet dials the second backend, and the proxy records intent 2, a fresh
-  login, because a server that never sent a transfer rejects intent 3. The client
-  keeps the socket it had: the proxy's own `start_configuration` first, then the
-  target's configuration and its `finish_configuration`, then one play login, then
-  the target's block change, with no kick and one attach for the whole run. No
-  transfer counter moved, and the core's `cacheReset` reason is `operator`.
-
-  What no rung can cover, because `src/ladder/loopback.js` builds the core directly
-  and never runs `start-live`: that `runForever` calls that tick on every heartbeat,
-  and that the service sends the dial back to the settled backend after a restore.
-  The second is `revertAfterRestore` in `src/service/control.js`, asserted per kind
-  in `test/service/control.test.js`; the first is read in
-  `src/service/start-live.js` and asserted nowhere.
-- `O54b` a target that never answers leaves the client on the backend it was on,
-  connected (#233). The port is bound and closed before the move, so the refusal
-  is the kernel's. The move starts, the dial is refused three times (the budget's
-  own count, at the rig's reconnect backoff), the controller gives up, and the move
-  is restored: `backendMoveRestored` once, the previous server's
-  configuration and its finish streamed into the round the client already opened,
-  its play login replayed on the same socket, and the puppet back on that backend
-  with a second login of its own. The client is never kicked. This half runs after
-  O54, so "the backend it was on" is the second one here; the property does not
-  depend on which. The rig makes the redial itself, because it is standing in for
-  `start-live`; what it adds over O54 is that the restore leaves a client that is
-  still on its socket and a session that comes back, not that the service's own
-  revert is exercised.
 - `O55` a join with no backend receives the recorded configuration baseline and
   the picker, and its pick is recorded (#257). The rung's only 26.2 rig: its own
   `createOfflineFrontLeg`, its own `createWireChecker({ version: '26.2' })`, and

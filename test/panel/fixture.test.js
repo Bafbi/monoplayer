@@ -30,7 +30,6 @@ const puppet = (overrides = {}) => ({
   seedConfigMap: 'monoplayer-config',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
-  allowBackendSwitch: true,
   ...overrides
 })
 
@@ -108,9 +107,11 @@ test('fixture mode serves the recorded document, with no cluster at all', async 
     assert.match(page, /serving: the newest heartbeat was written 12 s ago/)
     assert.match(page, /quiet/)
     assert.match(page, /no heartbeat in the last \d+ lines of monoplayer-quiet-/)
-    // And the refused write: this puppet's registry row forbids the move, so the
-    // block says so instead of rendering a form.
-    assert.match(page, /move: refused by the registry/)
+    // And the one write the card offers: the attach whitelist's add form. The move
+    // is retired (#264), so the page a reviewer screenshots has no control that
+    // names another server.
+    assert.match(page, /data-write="add"/)
+    assert.doesNotMatch(page, /data-write="backend"/)
 
     const one = await fetch(url + '/api/puppets/glowsquidye')
     assert.equal(one.status, 200)
@@ -197,8 +198,6 @@ test('the committed fixture holds the states a reviewer has to see', () => {
   const states = registry.puppets.map(puppet => facts.get(puppet.name).state.state)
   assert.ok(states.includes('serving'), 'a puppet with a heartbeat: ' + states.join(', '))
   assert.ok(states.includes('no-heartbeat'), 'a puppet with none: ' + states.join(', '))
-  const refused = registry.puppets.filter(puppet => puppet.allowBackendSwitch === false)
-  assert.ok(refused.length >= 1, 'a write the registry refuses')
   // And the attach whitelist the block renders: one puppet with entries, one with an
   // empty list, so the block's two states are both on the page.
   const counts = registry.puppets.map(puppet => whitelists.get(puppet.name).document.players.length)
@@ -262,15 +261,16 @@ test('the panel serves a fixture and writes nothing', async () => {
     body: JSON.stringify(body)
   })
   try {
-    // A fixture has no cluster, so the one write the panel makes answers 503 and
-    // says why. It never pretends to have written a document.
-    const response = await fetch('http://127.0.0.1:' + panel.port + '/api/puppets/glowsquidye/backend', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ host: 'alt.excalia.fr', port: 25565 })
-    })
-    assert.equal(response.status, 503)
-    assert.match(await response.text(), /fixture mode is a recording, so no document was written/)
+    // A fixture has no cluster, so both writes the panel makes answer 503 and say
+    // why. Neither pretends to have written a document.
+    const refused = await post('/api/puppets/glowsquidye/whitelist', { uuid: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af' })
+    assert.equal(refused.status, 503)
+    assert.match(await refused.text(), /fixture mode is a recording, so no document was written/)
+    // The other write reads its document before it can replace it, so a recording
+    // that holds no copy answers there instead. Either way nothing is written.
+    const unreadable = await post('/api/puppets/glowsquidye/allowed-servers', { host: 'paper.example.net', port: 25565 })
+    assert.equal(unreadable.status, 503)
+    assert.match(await unreadable.text(), /no recorded puppet owns/)
   } finally {
     await panel.close()
   }

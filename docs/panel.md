@@ -11,7 +11,6 @@ beside the proxy, not inside it: same image, second entrypoint, its own namespac
 | `GET /api/puppets` | the registry document, as JSON |
 | `GET /api/puppets/<name>` | one puppet's facts, as JSON |
 | `GET /api/puppets/<name>/stream` | the live region, one fragment every 5 s |
-| `POST /api/puppets/<name>/backend` | the move, JSON in, a document written |
 | `GET /api/puppets/<name>/whitelist` | the attach whitelist, as JSON |
 | `POST /api/puppets/<name>/whitelist` | add one entry, by uuid or by name |
 | `DELETE /api/puppets/<name>/whitelist/<uuid>` | remove one entry |
@@ -113,7 +112,7 @@ A card has three parts, and the order is the contract:
 |---|---|---|
 | the head | the name, and the registry rows: namespace, Deployment, front, control ConfigMap | no, and no tick touches it |
 | the live region | the scene, the state sentence, and every number with the timestamp of its record | yes, replaced whole every 5 s |
-| the actions | the move form, and the whitelist block | no: a tick must not overwrite a half-typed host, and it must not disarm a remove button |
+| the actions | the whitelist block | no: a tick must not overwrite a half-typed name, and it must not disarm a remove button |
 
 The live region is filled by `GET /api/puppets/<name>/stream`, server-sent events
 ([#248](https://github.com/Bafbi/monoplayer/issues/248)):
@@ -186,7 +185,7 @@ holds is a read.
 
 | Object | Verbs | Where |
 |---|---|---|
-| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: three keys, `desired.json`, `attach-whitelist.json` and `allowed-servers.json` |
+| the control ConfigMaps the registry names | `get`, `patch`, `update` | each puppet's namespace: two keys, `attach-whitelist.json` and `allowed-servers.json` |
 | the seed ConfigMaps the registry names | `get` | each puppet's namespace: the `allowed-servers.json` copy Git commits, which answers when the live key cannot |
 | `pods`, `pods/log` | `get`, `list` | each puppet's namespace |
 | `deployments` | `get`, `list` | each puppet's namespace: the pod selector, the pods' readiness, and the caps its environment sets |
@@ -205,11 +204,11 @@ And, by design:
   grants `create`, `delete`, `secrets` or a wildcard, or when the Service stops
   being the tailscale class.
 
-The page uses the three read rules and the `get` on the control ConfigMap. Five
-routes exercise the write rule, and they patch one object: `desired.json` for
-`POST /api/puppets/:name/backend`, `attach-whitelist.json` for the two attach
-whitelist writes, and `allowed-servers.json` for the two allowed-server writes. Each
-patches its own key, and a merge patch of one key leaves the others where they were.
+The page uses the three read rules and the `get` on the control ConfigMap. Four
+routes exercise the write rule, and they patch one object: `attach-whitelist.json`
+for the two attach whitelist writes, and `allowed-servers.json` for the two
+allowed-server writes. Each patches its own key, and a merge patch of one key
+leaves the other where it was.
 
 The seed rule is `get` alone, and it exists because one key has a fallback. A
 missing or unreadable attach whitelist denies every login, which is safe and loud. A
@@ -219,82 +218,6 @@ so it lists the servers the lane is offering rather than an empty list, and it b
 the first write on that copy rather than on nothing.
 `test/tooling/panel-manifests.test.js` keeps the two `resourceNames` lists in step
 with the registry in both directions.
-
-## Point a puppet at another backend
-
-```bash
-curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/backend \
-  -H 'content-type: application/json' \
-  -d '{"host": "play.example.net", "port": 25565}'
-```
-
-That writes `desired.json` into the puppet's control ConfigMap, and nothing else:
-
-```json
-{
-  "version": 1,
-  "backend": { "host": "play.example.net", "port": 25565 },
-  "changedAt": "2026-11-18T09:41:07.512Z",
-  "changedBy": "panel"
-}
-```
-
-The puppet reads it on its next heartbeat, which is at most 30 seconds away, and
-moves its session. **A player who is attached keeps their connection**: they see a
-loading screen and land in the new server's world ([product-core.md](product-core.md)).
-With nobody attached the puppet moves alone.
-
-Two fences, and they are not the same one:
-
-- **the registry's `allowBackendSwitch`** decides whether the panel writes the
-  request. Set false, the route answers 409 and writes nothing.
-- **the puppet's `control.allowBackendSwitch`** decides whether it obeys. A
-  `desired.json` that reaches a lane with the switch off is named once
-  (`controlSwitchRefused`) and ignored.
-
-The two can disagree, and the puppet wins. The registry is a document in Git while
-the switch is the Deployment's environment, so a lane that never sets
-`MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1` refuses every move however the registry
-reads. That is deliberate: a panel that could move a lane the lane does not allow
-would be a second authorization path, and the puppet's own config is the one
-reviewers read beside the workload. The cost is that the panel's refusal is a
-courtesy and the puppet's is the truth.
-
-A third condition sits under both: **the lane must name the file.**
-`MONOPLAYER_CONTROL_FILE` is what makes a puppet read `desired.json` at all. Without
-it a write lands in a document nothing opens, and a 200 means "written", not "read" —
-with no log line to say so, because a lane that names no control file reads no file
-to report on.
-
-**The live lane names it.** `deploy/manifests/deployment.yaml` mounts
-`monoplayer-control` read-only at `/control` and sets all three variables, and
-`deploy/panel/registry.yaml` therefore ships `allowBackendSwitch: true`. That is the
-order they have to be turned on in, and it was shipped the other way round once: the
-lane was wired while the registry still said false, which is a page with no move
-control and a 409 on the route. **`test/tooling/live-manifests.test.js` now reads
-both files** and fails when a registry row says true over a lane that does not obey,
-so the next drift is a red gate instead of a silent no-op.
-
-Check the lane before you trust the answer:
-
-```bash
-kubectl -n monoplayer get deployment monoplayer \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MONOPLAYER_CONTROL_FILE")].value}'
-```
-
-`changedBy` is the word `panel`. The panel has no way to name a person: the
-tailnet ACL is the authorization (P4), and the Service is not in front of an
-identity provider. What the panel does record is the peer it answered, in its own
-log line:
-
-```json
-{"event":"panelBackendMove","puppet":"glowsquidye","backend":"play.example.net:25565","address":"100.64.0.9"}
-```
-
-A move that fails costs the player one configuration round and puts them back. The
-puppet logs `backendMoveFailed` and does not retry the same document: point it
-somewhere else, or send the same address again, which stamps a new `changedAt` and
-is therefore a new request.
 
 ## Add or remove an attach whitelist entry
 
@@ -421,9 +344,9 @@ kubectl -n monoplayer get deployment monoplayer \
 ## Add or remove an allowed server
 
 An allowed server is one game server the picker offers a joining player
-([GLOSSARY.md](../GLOSSARY.md)). The list is a third key of the same control
+([GLOSSARY.md](../GLOSSARY.md)). The list is a key of the same control
 ConfigMap, `allowed-servers.json`, and it is its own file: its own environment
-variable, its own reader, and its own route. It is not a field of `desired.json`.
+variable, its own reader, and its own route.
 
 ```bash
 curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers
@@ -574,11 +497,7 @@ Two prerequisites are not in Git, and each is one command:
    ```
 
    The whitelist's current content is `deploy/manifests/configmap.yaml`, so copy
-   `attach-whitelist.json` out of it rather than retyping it. **Do not seed
-   `desired.json`:** the puppet treats a missing control file as "no override", and
-   a document naming the backend it is already on would be an intent with a
-   `changedAt` that never meant anything. The panel creates the key on its first
-   move.
+   `attach-whitelist.json` out of it rather than retyping it.
 
    **Do not seed `allowed-servers.json` either.** That key has a fallback the
    whitelist does not: the lane offers the copy Git commits, mounted at `/config`,
@@ -597,7 +516,7 @@ Two prerequisites are not in Git, and each is one command:
 
 The registry is `deploy/panel/registry.yaml`: a ConfigMap whose `puppets.json` key
 names, per puppet, its `name`, `namespace`, `deployment`, `controlConfigMap`,
-`seedConfigMap`, `frontHostname`, `backend` and `allowBackendSwitch`. Edit it on
+`seedConfigMap`, `frontHostname` and `backend`. Edit it on
 `main` and merge.
 
 `controlConfigMap` is the object the panel writes. `seedConfigMap` is the object it
@@ -709,8 +628,7 @@ and a puppet with no recorded document, a record whose `name` disagrees, or a fa
 without a state sentence is refused by name.
 
 The committed fixture holds the states worth looking at: a puppet with a heartbeat,
-one with none, one whose registry row refuses the move, an attach whitelist with two
-entries and one with none.
+one with none, an attach whitelist with two entries and one with none.
 
 A fixture's cluster is the recording, so the whitelist block reads the recorded document
 through the same parser a pod uses, and a name resolves to nothing: the route then answers

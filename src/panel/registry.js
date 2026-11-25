@@ -22,7 +22,7 @@ export const REGISTRY_KEY = 'puppets.json'
 
 // Alphabetical, so the message that lists the expected fields reads the same
 // wherever it is printed.
-const FIELDS = ['allowBackendSwitch', 'backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace', 'seedConfigMap']
+const FIELDS = ['backend', 'controlConfigMap', 'deployment', 'frontHostname', 'name', 'namespace', 'seedConfigMap']
 
 // A name the API server accepts for a namespace, a Deployment, or a ConfigMap.
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
@@ -138,14 +138,6 @@ function puppet (entry, index, seen) {
     throw new Error('registry: ' + where + '.frontHostname must be a hostname with no scheme and no port, not ' + quote(entry.frontHostname))
   }
   const backend = hostPort(entry.backend, where + '.backend')
-  // #233: whether the panel may ask this puppet to move. It is not the fence:
-  // the puppet's own `control.allowBackendSwitch` decides whether it obeys, and
-  // this value only decides whether the panel writes the request at all
-  // (docs/panel.md).
-  if (typeof entry.allowBackendSwitch !== 'boolean') {
-    throw new Error('registry: ' + where + '.allowBackendSwitch must be true or false, not ' +
-      quote(entry.allowBackendSwitch))
-  }
 
   if (seen.names.has(entry.name)) {
     throw new Error('registry: the name ' + quote(entry.name) + ' appears twice, and a puppet has one name')
@@ -174,8 +166,7 @@ function puppet (entry, index, seen) {
     controlConfigMap: entry.controlConfigMap,
     seedConfigMap: entry.seedConfigMap,
     frontHostname: entry.frontHostname,
-    backend,
-    allowBackendSwitch: entry.allowBackendSwitch
+    backend
   }
 }
 

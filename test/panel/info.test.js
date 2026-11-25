@@ -40,7 +40,7 @@ const startLive = {
   backend: 'play2.excalia.fr:25565',
   backendConfigured: 'play2.excalia.fr:25565',
   whitelistCount: 1,
-  control: { file: '/etc/monoplayer/control', allowBackendSwitch: true, whitelistReload: true }
+  control: { whitelistReload: true }
 }
 
 const refusal = {

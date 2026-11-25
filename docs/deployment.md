@@ -231,18 +231,10 @@ Common:
   **panel** writes (#232), not the Git ConfigMap. It is re-read at each login, so
   a UUID the panel adds is allowed on the next attempt with no restart. The
   ConfigMap in this repository is the seed the operator copies once; after that
-  the object the panel patches is the authority.
-- `MONOPLAYER_CONTROL_FILE=/control/desired.json`: the runtime control document
-  (#229). Setting it is what turns the lane's whitelist from a boot-time snapshot
-  into a file read at each login. An absent `desired.json` is not an error, and
-  means no override; a file that is there but unreadable or malformed is named in
-  the log and ignored.
-- `MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1` on the live lane: `1` honours a
-  `desired.json` on the next backend connect and on every heartbeat tick. A tick
-  with a player attached moves them without dropping their connection; a tick with
-  nobody attached moves the puppet alone. `0` writes `controlSwitchRefused` once
-  and stays on `MONOPLAYER_BACKEND_HOST`. A value other than `1` or `0` is named
-  and ignored.
+  the object the panel patches is the authority. Naming this path is also what
+  turns the control document on (#264 retired the variable that used to).
+- `MONOPLAYER_ALLOWED_SERVERS` and `MONOPLAYER_ALLOWED_SERVERS_SEED`: the list the
+  picker offers and the copy Git commits behind it (#262).
 - `MONOPLAYER_PREAUTH_MAX_CONNECTIONS` (default `16`): the total concurrent
   connections the front accepts between a socket and the attach whitelist's
   accept. It is on by default, so exposing the port is not a switch to
