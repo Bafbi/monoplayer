@@ -40,6 +40,10 @@ const SHIM = [
   'ATTACH="$KUBECTL_ATTACH"',
   'PUPPET="$KUBECTL_PUPPET"',
   'last="${@: -1}"',
+  // Two writes can be in flight at once, and a case that holds one against the other needs
+  // the log to name an order. So one lock covers the log entry and the object, and the log
+  // reads in the order the writes landed.
+  'record() { until mkdir "$KUBECTL_LEASES.lock" 2>/dev/null; do sleep 0.01; done; printf \'%s\\n\' --- >> "$KUBECTL_LEASES"; printf \'%s\\n\' "$1" >> "$KUBECTL_LEASES"; printf \'%s\\n\' "$1" > "$KUBECTL_LEASE"; rmdir "$KUBECTL_LEASES.lock"; }',
   'case " $* " in',
   // The account lease (#280): the shim answers from a file, records every object the
   // script writes, and can answer one read as held and the next as absent, which is
@@ -49,7 +53,25 @@ const SHIM = [
   '    if [ -n "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ "$reads" -gt "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ -f "$KUBECTL_LEASE_FOREIGN" ]; then cat "$KUBECTL_LEASE_FOREIGN"; exit 0; fi',
   '    if [ -f "$KUBECTL_LEASE" ]; then cat "$KUBECTL_LEASE"; if [ "$KUBECTL_LEASE_ONCE" = 1 ]; then rm -f "$KUBECTL_LEASE"; fi; exit 0; fi',
   '    printf \'Error from server (NotFound): lease not found\\n\' >&2; exit 1 ;;',
-  '  *" create -f "*|*" replace -f "*) staged="${@: -1}"; { printf \'%s\\n\' ---; cat "$staged"; } >> "$KUBECTL_LEASES"; cp "$staged" "$KUBECTL_LEASE"; printf \'lease configured\\n\'; exit 0 ;;',
+  // A release is the write with an empty holder identity (#355). Read the object here, as
+  // kubectl reads it before it calls the API server. A write that is held up then lands
+  // with what it was given, not with what is on disk by then.
+  '  *" create -f "*|*" replace -f "*) body=$(cat "${@: -1}")',
+  '    if printf \'%s\' "$body" | grep -q \'"holderIdentity": ""\'; then',
+  '      record "$body"',
+  '      [ -z "$KUBECTL_RENEW_GO" ] || : > "$KUBECTL_RENEW_GO"',
+  '      printf \'lease released\\n\'; exit 0',
+  '    fi',
+  // The one window a kill cannot close: the write is this process, not the loop's, so it
+  // lands after the loop is dead.
+  '    if [ -n "$KUBECTL_RENEW_BLOCK" ] && [ -f "$KUBECTL_LEASE" ]; then',
+  '      : > "$KUBECTL_RENEW_BLOCKED"',
+  '      while [ ! -f "$KUBECTL_RENEW_GO" ]; do sleep 0.02; done',
+  '      record "$body"',
+  '      : > "$KUBECTL_RENEW_SETTLED"',
+  '      printf \'renewal landed\\n\'; exit 0',
+  '    fi',
+  '    record "$body"; printf \'lease configured\\n\'; exit 0 ;;',
   '  *" get deploy "*) printf \'{"spec":{"template":{"spec":{"containers":[{"image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PUPPET"; exit 0 ;;',
   '  *" apply "*) cat > "$KUBECTL_MANIFEST"; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*" pod/"*) exit 0 ;;',
@@ -83,12 +105,23 @@ function workspace () {
     bin,
     attach,
     log: path.join(root, 'kubectl.log'),
+    // Every case gets its own TMPDIR, which is where the script keeps the state
+    // directory its lease markers live in.
+    tmp: (() => {
+      const dir = path.join(root, 'tmp')
+      fs.mkdirSync(dir, { recursive: true })
+      return dir
+    })(),
     manifest: path.join(root, 'manifest.yaml'),
     // The lease the shim answers from, and every object the script wrote, in order.
     lease: path.join(root, 'lease.json'),
     leases: path.join(root, 'leases.log'),
     reads: path.join(root, 'lease-reads'),
-    foreign: path.join(root, 'lease-foreign.json')
+    foreign: path.join(root, 'lease-foreign.json'),
+    // The three files that order one renewal against one release.
+    renewBlocked: path.join(root, 'renew-blocked'),
+    renewGo: path.join(root, 'renew-go'),
+    renewSettled: path.join(root, 'renew-settled')
   }
 }
 
@@ -96,24 +129,31 @@ function podArgs (space) {
   return ['--report', path.join(space.root, 'report.json')]
 }
 
+// The environment every case hands the script: the shim on PATH, and the files the
+// shim answers from.
+function baseEnv (space, env = {}) {
+  return {
+    ...process.env,
+    PATH: space.bin + ':' + process.env.PATH,
+    TMPDIR: space.tmp,
+    KUBECTL_LOG: space.log,
+    KUBECTL_MANIFEST: space.manifest,
+    KUBECTL_PUPPET: PUPPET,
+    KUBECTL_ATTACH: ATTACH,
+    MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
+    KUBECTL_LEASE: space.lease,
+    KUBECTL_LEASES: space.leases,
+    KUBECTL_LEASE_READS: space.reads,
+    KUBECTL_LEASE_FOREIGN: space.foreign,
+    ...env
+  }
+}
+
 function run (space, env = {}, args = null) {
   const result = spawnSync('bash', [SCRIPT, ...(args ?? podArgs(space))], {
     cwd: space.root,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      PATH: space.bin + ':' + process.env.PATH,
-      KUBECTL_LOG: space.log,
-      KUBECTL_MANIFEST: space.manifest,
-      KUBECTL_PUPPET: PUPPET,
-      KUBECTL_ATTACH: ATTACH,
-      MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
-      KUBECTL_LEASE: space.lease,
-      KUBECTL_LEASES: space.leases,
-      KUBECTL_LEASE_READS: space.reads,
-      KUBECTL_LEASE_FOREIGN: space.foreign,
-      ...env
-    }
+    env: baseEnv(space, env)
   })
   const calls = fs.existsSync(space.log)
     ? fs.readFileSync(space.log, 'utf8').trim().split('\n').filter(Boolean)
@@ -432,6 +472,73 @@ test('a run longer than the lease renews it, so a live run keeps the account', (
   assert.equal(written[written.length - 1].spec.holderIdentity, '')
 })
 
+// #355: the renewal loop outlives the run, so a tick that has already passed its `held`
+// check can be inside its write when the run releases. A kill does not close that window.
+// The write is the tick's own kubectl child, so it lands after the loop is dead. The
+// release has to be the last write either way. A renewal that lands after it leaves the
+// lease held by a run that has exited, and the next run is refused for the rest of the
+// duration.
+//
+// The case orders the two writes itself, so a script that only hopes for the order fails
+// here. The shim holds the renewal inside its write, and the release's own write is what
+// lets it go. A script that orders the release instead marks its state directory before it
+// waits, and that mark is the signal this case uses.
+test('a renewal already inside its write cannot land after the release (#355)', async () => {
+  const space = workspace()
+  const child = spawn('bash', [SCRIPT, ...podArgs(space)], {
+    cwd: space.root,
+    stdio: 'ignore',
+    env: baseEnv(space, {
+      // Three seconds of lease and a renewal every one, with a rung that takes two: one
+      // renewal reaches its write before the run ends.
+      MONOPLAYER_LEASE_DURATION: '3',
+      KUBECTL_RUN_SLEEP: '2',
+      KUBECTL_RENEW_BLOCK: '1',
+      KUBECTL_RENEW_GO: space.renewGo,
+      KUBECTL_RENEW_BLOCKED: space.renewBlocked,
+      KUBECTL_RENEW_SETTLED: space.renewSettled
+    })
+  })
+  const closed = new Promise(resolve => child.on('close', resolve))
+  const settle = async (file) => {
+    for (let i = 0; i < 500; i += 1) {
+      if (fs.existsSync(file)) return true
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    return fs.existsSync(file)
+  }
+  // A marker in the state directory the script keeps beside the lease object, which this
+  // case finds through TMPDIR.
+  const marked = name => (fs.existsSync(space.tmp) ? fs.readdirSync(space.tmp) : [])
+    .map(entry => path.join(space.tmp, entry, name))
+    .find(file => fs.existsSync(file))
+
+  assert.ok(await settle(space.renewBlocked), 'the renewal never reached its write: ' +
+    JSON.stringify(leasesWritten(space).map(entry => entry.spec.holderIdentity)))
+
+  // The release begins here. A script that orders the release against the renewal marks
+  // the state directory before it waits, and that mark lets the held renewal go, so the
+  // release follows it. The shim lets a script that does not order them go, by writing the
+  // release first and then letting the renewal land.
+  for (let i = 0; i < 500 && !fs.existsSync(space.renewGo); i += 1) {
+    if (marked('releasing')) fs.writeFileSync(space.renewGo, '')
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  assert.ok(fs.existsSync(space.renewGo), 'the release never began: the held renewal was never let go')
+  assert.ok(await settle(space.renewSettled), 'the held renewal never wrote')
+  let ceiling
+  await Promise.race([closed, new Promise(resolve => { ceiling = setTimeout(resolve, 20000) })])
+  clearTimeout(ceiling)
+
+  const written = leasesWritten(space)
+  const order = written.map((entry, index) => entry.spec.holderIdentity === '' ? index + ' released' : index + ' held')
+  assert.equal(
+    written[written.length - 1].spec.holderIdentity,
+    '',
+    'the release is the last lease write, and this run wrote ' + written.length + ': ' + order.join(', ')
+  )
+})
+
 // The task is where the guarantee is delivered: `mise run online` is the bare rung, and
 // it is the form that reads this machine's copy of the chain.
 test('mise run online holds the lease, so both forms of the rung exclude each other', () => {
@@ -451,20 +558,12 @@ test('a run killed with SIGKILL releases its lease instead of renewing for ever'
   const child = spawn('bash', [SCRIPT, ...podArgs(space)], {
     cwd: space.root,
     stdio: 'ignore',
-    env: {
-      ...process.env,
-      PATH: space.bin + ':' + process.env.PATH,
-      KUBECTL_LOG: space.log,
-      KUBECTL_MANIFEST: space.manifest,
-      KUBECTL_PUPPET: PUPPET,
-      KUBECTL_ATTACH: ATTACH,
-      KUBECTL_LEASE: space.lease,
-      KUBECTL_LEASES: space.leases,
-      MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
-      // One second of lease and a rung that never ends on its own.
+    env: baseEnv(space, {
+      // A lease of three seconds, renewed every one, and a rung that never ends on its
+      // own.
       MONOPLAYER_LEASE_DURATION: '3',
       KUBECTL_RUN_SLEEP: '30'
-    }
+    })
   })
 
   const held = async () => {
