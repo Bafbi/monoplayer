@@ -158,6 +158,16 @@ test('#391 the offline puppet is named, and its UUID is the one that name derive
     username: 'devpuppet',
     uuid: offlineUuid('devpuppet')
   })
-  // An operator's own UUID claim stands: it is an assertion, not a derivation.
-  assert.equal(offlinePuppet({ username: 'devpuppet', uuid: ACCOUNT_UUID }).uuid, ACCOUNT_UUID)
+  // A UUID that agrees is accepted, so a lane may assert the identity it expects.
+  assert.equal(offlinePuppet({ username: 'devpuppet', uuid: offlineUuid('devpuppet') }).uuid,
+    offlineUuid('devpuppet'))
+})
+
+test('#391 a UUID the offline name does not derive is refused, not carried', () => {
+  // The backend derives the UUID from the name on its own side, so a lane that
+  // kept another one would name a player the server does not have.
+  assert.throws(
+    () => offlinePuppet({ username: 'devpuppet', uuid: ACCOUNT_UUID }),
+    /offline_puppet_uuid_mismatch: config asserts 7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af, and the offline UUID of devpuppet is/
+  )
 })

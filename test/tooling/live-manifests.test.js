@@ -12,9 +12,23 @@ import { fileURLToPath } from 'node:url'
 import { parseAllowedServers } from '../../src/service/control.js'
 import { DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
 
-const MANIFESTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'manifests')
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const MANIFESTS = path.join(ROOT, 'deploy', 'manifests')
 const read = name => fs.readFileSync(path.join(MANIFESTS, name), 'utf8')
 const manifests = () => fs.readdirSync(MANIFESTS).filter(name => name.endsWith('.yaml') && name !== 'kustomization.yaml')
+
+// Every manifest under deploy/manifests/, at any depth and under either suffix.
+// The kustomization only lists the top level, but a guard about what the lane
+// can apply must read what a future row could add.
+function everyManifest (dir = MANIFESTS) {
+  const found = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) found.push(...everyManifest(full))
+    else if (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml')) found.push(full)
+  }
+  return found
+}
 
 test('the live kustomization lists every manifest in the directory', () => {
   const listed = [...read('kustomization.yaml').matchAll(/^ {2}- (\S+\.yaml)$/gm)].map(match => match[1])
@@ -34,9 +48,9 @@ test('no live manifest switches the service onto the offline legs', () => {
   // The whole file, not the env list: a ConfigMap key imported through envFrom
   // sets the same variable, and a manifest that leaks the switch that way is the
   // failure this test exists to catch. Any appearance of the name is an alarm.
-  const setting = manifests()
-    .filter(name => read(name).includes('MONOPLAYER_OFFLINE_LEGS'))
-    .map(name => 'deploy/manifests/' + name)
+  const setting = everyManifest()
+    .filter(file => fs.readFileSync(file, 'utf8').includes('MONOPLAYER_OFFLINE_LEGS'))
+    .map(file => path.relative(ROOT, file))
   assert.deepEqual(setting, [],
     'a live manifest mentions MONOPLAYER_OFFLINE_LEGS: ' + setting.join(', ') + '. That lane would ask no ' +
     'session server who a client is, so anyone who names themself could play the live server, with no ' +
