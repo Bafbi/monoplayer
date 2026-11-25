@@ -262,11 +262,13 @@ Common:
 a front that asks no session server who a client is (no encryption, no
 `hasJoined`, and a UUID derived from the name the client claims), and a backend
 leg that joins as `auth: 'offline'` with a fixed username, from
-`MONOPLAYER_PUPPET_USERNAME` or `GlowSquidye`. The lane needs no custody
-directory, no account selector, and no Microsoft auth, so the puppet account
-variables above are ignored.
+`MONOPLAYER_PUPPET_USERNAME` or `GlowSquidye`. Its UUID follows from that name,
+so `MONOPLAYER_PUPPET_UUID` is an assertion about it, not a lookup. The lane
+needs no custody directory, no account selector, and no Microsoft auth:
+`MONOPLAYER_PUPPET_ACCOUNT`, `MONOPLAYER_PUPPET_ACCOUNTS_DIR` and
+`MONOPLAYER_PUPPET_CACHE_DIR` are ignored.
 
-Three facts follow, and a lane that sets the key has to satisfy all three:
+A lane that sets the key has to satisfy three facts:
 
 - The attach whitelist holds **offline** UUIDs. Each is `nameUUIDFromBytes` of
   `OfflinePlayer:<name>`, the value `src/legs/offline-identity.js` computes, not
@@ -277,9 +279,10 @@ Three facts follow, and a lane that sets the key has to satisfy all three:
   changes about the legs themselves. The offline legs refuse a host that is not
   loopback, and the composition root lifts that fence only when this key is on.
 
-Set the key on a lane whose job is a test double. Never set it in
-`deploy/manifests/`: `test/tooling/live-manifests.test.js` fails if a manifest
-there names it, and the reason is
+Who may set it: the person who writes a lane's own manifests, for a lane
+whose job is a test double. Never this repository's live lane: `deploy/manifests/`
+must not carry the key, `test/tooling/live-manifests.test.js` fails if any file
+there mentions it, and the reason is
 [the ADR](adr/the-product-may-be-a-test-double.md). The key is an environment
 decision, not a control-document key, so no operator action can turn it on in a
 running lane. A start record carries `offlineLegs: true`, so a lane says which

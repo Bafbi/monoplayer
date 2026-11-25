@@ -31,11 +31,14 @@ test('the live kustomization lists every manifest in the directory', () => {
 // reads every manifest the live lane applies, so the prohibition is asserted here,
 // beside the kustomization it protects. deploy/dev/ is the lane that sets it (#392).
 test('no live manifest switches the service onto the offline legs', () => {
+  // The whole file, not the env list: a ConfigMap key imported through envFrom
+  // sets the same variable, and a manifest that leaks the switch that way is the
+  // failure this test exists to catch. Any appearance of the name is an alarm.
   const setting = manifests()
-    .filter(name => /^\s*-\s*name:\s*MONOPLAYER_OFFLINE_LEGS\s*$/m.test(read(name)))
+    .filter(name => read(name).includes('MONOPLAYER_OFFLINE_LEGS'))
     .map(name => 'deploy/manifests/' + name)
   assert.deepEqual(setting, [],
-    'a live manifest sets MONOPLAYER_OFFLINE_LEGS: ' + setting.join(', ') + '. That lane would ask no ' +
+    'a live manifest mentions MONOPLAYER_OFFLINE_LEGS: ' + setting.join(', ') + '. That lane would ask no ' +
     'session server who a client is, so anyone who names themself could play the live server, with no ' +
     'account and no custody chain. The offline legs are for a lane whose job is a test double: set the ' +
     'key on the dev lane instead (deploy/dev/monoplayer.yaml, #392). If the live lane is really meant to ' +
