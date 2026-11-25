@@ -98,14 +98,19 @@ GATE_PREFIX=monoplayer-gate-
 # reaper use. The live and the dev namespace carry app.kubernetes.io/part-of alone, so
 # neither can be listed as a gate lane, let alone deleted as one.
 LANE_SELECTOR=app.kubernetes.io/component=gate-lane
-# The transfer testbed's namespace is the one listed lane this script does not derive
-# (#318). deploy/testbed/namespace.yaml carries the selector above, so `lanes` shows
-# it and the reaper reads it like any other lane: the tenant rule below keeps it while
+# The transfer testbed's namespace is the one namespace this script lists and does
+# not derive (#318). It is not a gate lane: a lane is a worktree's and disposable, and
+# this is neither. deploy/testbed/namespace.yaml carries the selector above, so `lanes`
+# shows it and the reaper reads it like a lane: the tenant rule below keeps it while
 # `paper-hub` and `paper-sky` are in it, and this name keeps it if those rows ever go.
 # It is not a worktree's lane, so no up, down or status here names it, and its clock
 # is the testbed's business: `lanes` prints "?" for an age it does not have.
 TESTBED_NAMESPACE=monoplayer-gate-b
 TESTBED_OWNER='transfer testbed'
+
+# The one question two places ask about that name: which owner to print, and whether to
+# refuse the delete. It is a function so the two cannot disagree about the spelling.
+is_testbed_namespace () { [ "$1" = "$TESTBED_NAMESPACE" ]; }
 # What up writes on the namespace: the two facts the listing needs, and the clock the
 # reaper reads. A lane without them is a lane nobody can find, and one nobody dates is
 # a lane no reap will touch.
@@ -605,7 +610,7 @@ reap_lane () {
   # operator who deletes them would leave a namespace of Services and Secrets that this
   # script's own rules would then delete. Its name is fixed and every worktree shares
   # it, and nothing puts it back, so no lane command deletes it (#318).
-  if [ "$ns" = "$TESTBED_NAMESPACE" ]; then
+  if is_testbed_namespace "$ns"; then
     say "keeping $ns: it is the transfer testbed, and no lane command deletes it"
     return 0
   fi
@@ -644,7 +649,7 @@ lanes () {
     touched=$(lane_annotation "$ns" "$ANNOTATION_TOUCHED")
     # The testbed is nobody's worktree: no up or down here stamps it, so reading its
     # owner off the annotation would print "unknown" and read as an orphan lane.
-    if [ "$ns" = "$TESTBED_NAMESPACE" ]; then
+    if is_testbed_namespace "$ns"; then
       worktree=$TESTBED_OWNER
     else
       worktree=$(lane_annotation "$ns" "$ANNOTATION_WORKTREE")

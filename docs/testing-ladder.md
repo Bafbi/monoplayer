@@ -111,8 +111,8 @@ this script too, so a renamed lane's run cannot administer the lane that shipped
 `MONOPLAYER_GATE_NAMESPACE` names a lane by hand for all of them at once.
 
 **The testbed's namespace is listed, and no lane command reaps it.** `monoplayer-gate-b`
-is the one lane-shaped namespace no worktree derives: every worktree shares it, and it
-holds the transfer testbed's two Papers. `deploy/testbed/namespace.yaml` carries the lane
+is the one namespace the listing names that no worktree derives, and it is not a gate
+lane: every worktree shares it, and it holds the transfer testbed's two Papers. `deploy/testbed/namespace.yaml` carries the lane
 selector, so `mise run lanes` lists it, with `?` for the age no `up` here wrote and
 `transfer testbed` in the owner column. The reaper keeps it for the `paper-hub` and
 `paper-sky` Deployments the gate tree does not declare, and refuses that name at the
