@@ -88,6 +88,16 @@ Issues and specs live as GitHub issues in `Bafbi/monoplayer`. Use the `gh` CLI. 
 
 Single-context: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
 
+## Where a fact lives
+
+A fact has one home, and it is the one that fails when it is wrong.
+
+1. **Code.** A default, a list, a shape, a state machine: the module that implements it is the source. A page that repeats it drifts, and nothing notices.
+2. **A task, a test, or CI.** When a human needs the fact written down, prefer the form that fails loudly: a guard under `test/tooling/`, a `mise` task, a manifest test. `mise run check` is where a claim about the repo is checked.
+3. **Prose.** Only when neither can carry it: a decision and its reason (an ADR), a record of a run (dated, and marked as one), or a fact that cannot change without somebody editing that sentence.
+
+So do not repeat a count, a total, an assertion range, an environment variable list or a task list in prose — point at the thing that knows. A record says when it was taken and what took it. **A number in a document that no test reads is a number that is already wrong.**
+
 ## Repo map
 
 `README.md` is the tour, `docs/product-core.md` the shipped design, `GLOSSARY.md` the vocabulary. Use the glossary's terms. `docs/architecture.md` is a proposal, not the built design.
