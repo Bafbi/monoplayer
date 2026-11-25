@@ -39,7 +39,7 @@ that leaves the deployment serving.
 | the online rung, with the deployment still serving | `mise run gate:up`, then `mise run online:cluster`. The rung names this worktree's lane in its lease and dials that lane's Paper (#301) |
 | a clientbound comparison, direct against proxied | `mise run parity:run` |
 | the server's view of a join | `mise run gate:up`, then `mise run observer:run`, then `mise run gate:down`. The rung measures and dials this worktree's lane, and each of its two joins takes the account lease, though the install and the restart do not (#282) |
-| the real client | `mise run gate:up`, then `mise run driver:scenario`. That rung joins this worktree's lane's Paper and reads RCON there, both from one name it resolves itself, and the task forwards no arguments (#282). `deploy/driver/README.md` holds the command |
+| the real client | `mise run gate:up`, then `mise run driver:scenario`. That rung joins this worktree's lane's Paper and reads RCON there, both from one name it resolves itself (#282), and any argument you pass reaches `src/driver/run.js` (#320). `deploy/driver/README.md` holds the command |
 | the transfer path | nothing: it takes the live front offline, so ask a human |
 
 `docs/testing-ladder.md` gives each run its cost and its blast radius.
@@ -118,6 +118,7 @@ Facts an agent cannot look up:
 - **The switches are config, not flags.** They are read once at startup and validated by `loadConfig`, which throws on a bad value rather than starting misconfigured. A feature-flag system was considered and declined: one service, one language, eight keys, and a compiled default for each. Do not propose one again without saying what changed.
 - **The install**: a fresh checkout has no `node_modules`. `mise run check` depends on `install`, so let it install; do not check first.
 - **Task list**: run `mise tasks ls --local` to see what this repo defines; `mise.toml` holds the definitions. Run the task, never the command behind it. Each `verify:<area>` task names the extra rung an area needs; `docs/testing-ladder.md` says which area maps to which.
+- **A rung task forwards what you pass it.** `mise run loopback -- --verbose` reaches `src/ladder/loopback.js`. Each rung is a shell script. mise appends an inline command's arguments after its next-rung hint, and `$@` is the forwarding that does not. `mise run lint -- anything` is refused, not ignored, because no stage of that chain reads an argument (#320).
 - **Dependency paths**: pnpm keeps packages in `node_modules/.pnpm`. `node_modules/<name>` is a symlink and exists for direct dependencies only, so do not type a `node_modules/...` path. Ask the resolver instead: `node -p "require.resolve('minecraft-data')"`.
 - **Throwaway scripts and artifacts**: put them in `.scratch/` and run them from the repo root. It is gitignored and may not exist yet, so create it. A script in `/tmp` cannot import the repo's dependencies.
 - **Reports**: a task run writes to `.reports/`, which is gitignored. `testdata/` holds the committed *verdict pages*, such as `testdata/spike-verdict.md`; the run reports they quote are gitignored. A verdict page is dated evidence, so leave its old numbers alone.
