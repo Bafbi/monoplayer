@@ -72,9 +72,9 @@ test("#260 the first frame of a session binds the body the leg was pointed at", 
   const dialled = pickSlug('127.0.0.1:25599')
   assert.equal(rig.core.bodies.stats().count, 1, 'the lane starts on its configured body')
 
-  // The orchestrator points the leg at a target of its own: the control document's
-  // startup target, or a desired backend on a detached reconnect. No move field
-  // names it (#229), so the leg's target is the only record of the dial.
+  // The orchestrator points the leg at a target of its own: the backend the
+  // deployment configures, dialled on a detached reconnect. No move field names it,
+  // so the leg's target is the only record of the dial.
   rig.backendLeg.setTarget({ host: '127.0.0.1', port: 25599 })
   rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
 

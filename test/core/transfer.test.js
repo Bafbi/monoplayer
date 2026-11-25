@@ -197,26 +197,10 @@ test('a server reconfiguration uses the same state, with no target', () => {
   assert.equal(cache.warm, true)
 })
 
-test('#233 an operator move is a kind of its own, and restores like the others', () => {
-  const { session, cache, transfer } = rig()
-  // No packet is behind it, so the target is the operator's document's address and
-  // the kind is the one that keeps every line that logs it honest.
-  const outcome = transfer.begin({
-    target: { host: '10.0.0.7', port: 25566 },
-    kind: TRANSFER_KINDS.OPERATOR,
-    reason: 'operator'
-  })
-  assert.equal(outcome.began, true)
-  assert.equal(transfer.kind, TRANSFER_KINDS.OPERATOR)
-  assert.deepEqual(transfer.target, { host: '10.0.0.7', port: 25566 })
-  assert.equal(session.state, STATES.TRANSFERRING)
-
-  cache.reset()
-  const failed = transfer.fail({ reason: 'target_unreachable' })
-  assert.equal(failed.restored, true)
-  assert.equal(failed.kind, TRANSFER_KINDS.OPERATOR)
-  assert.equal(cache.warm, true)
-  assert.equal(session.state, STATES.ATTACHED, 'the client keeps its session, as it does for a transfer')
-  assert.equal(session.detachCount, 0)
-  assert.equal(transfer.claimRestore(), true)
+// #264: the operator move is retired, and the machine keeps the two kinds a packet
+// can name. A third kind left in the frozen set is a value no caller can produce,
+// read by every line that logs a move.
+test('#264 the machine has two kinds, and neither is an operator', () => {
+  assert.deepEqual(Object.keys(TRANSFER_KINDS).sort(), ['RECONFIGURE', 'TRANSFER'])
 })
+

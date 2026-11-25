@@ -33,7 +33,6 @@ const puppet = (overrides = {}) => ({
   seedConfigMap: SEED,
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'paper.example.net:25565',
-  allowBackendSwitch: false,
   ...overrides
 })
 
@@ -70,7 +69,7 @@ function cluster ({
         assert.equal(name, CONTROL, 'the read asks for the ConfigMap the registry names')
         return {
           metadata: { name, namespace, resourceVersion: String(state.version) },
-          data: state.liveKey ? { [ALLOWED_KEY]: state.text, 'desired.json': '{"version":1}' } : { 'desired.json': '{"version":1}' }
+          data: state.liveKey ? { [ALLOWED_KEY]: state.text, 'attach-whitelist.json': '{}' } : { 'attach-whitelist.json': '{}' }
         }
       },
       async patchConfigMapKey (patch) {

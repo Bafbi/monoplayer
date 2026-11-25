@@ -1,4 +1,4 @@
-// The page's writes: the move, and the two attach-whitelist changes.
+// The page's writes: the two attach-whitelist changes.
 //
 // The write routes require Content-Type: application/json, and that is the guard
 // rather than a convention: it is not a CORS-safelisted content type, so a browser
@@ -10,7 +10,6 @@
 // only the writing. Each form names what it is in data-write, and the shape of the
 // request is that name's business:
 //
-//   backend   POST {host, port}, a move
 //   add       POST {uuid} or {name}, one of the two, never both
 //   remove    DELETE, with the uuid already in the form's action
 //
@@ -45,10 +44,7 @@ const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$
 const ARM_MS = 10_000
 let armed = null
 
-const resultOf = (form) => {
-  const block = form.closest('.attach-block')
-  return block === null ? form.querySelector('output') : block.querySelector('.block-result')
-}
+const resultOf = (form) => form.closest('.attach-block')?.querySelector('.block-result') ?? null
 
 const outcome = (form, text, kind) => {
   const out = resultOf(form)
@@ -87,13 +83,6 @@ function written (form, text) {
     return text.trim()
   }
   const kind = form.dataset.write
-  if (kind === 'backend') {
-    const host = answer?.document?.backend?.host ?? '?'
-    const port = answer?.document?.backend?.port ?? '?'
-    const at = answer?.document?.changedAt ?? 'no timestamp'
-    return 'wrote ' + (answer?.key ?? 'the control document') + ': ' + host + ':' + port + ', changedAt ' + at +
-      '. The puppet reads it on its next heartbeat.'
-  }
   if (kind === 'add' || kind === 'remove') {
     const who = answer?.name ?? answer?.uuid ?? 'the account'
     const already = answer?.changed === false ? 'already there, so nothing was rewritten: ' : ''
@@ -109,7 +98,6 @@ function written (form, text) {
 // The request body, or null for a verb that carries none.
 function body (form, data) {
   const kind = form.dataset.write
-  if (kind === 'backend') return { host: String(data.get('host') ?? ''), port: Number(data.get('port')) }
   if (kind === 'add') {
     const value = String(data.get('player') ?? '').trim()
     // One field, two shapes: the route takes a uuid or a name and refuses both at

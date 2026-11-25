@@ -23,7 +23,6 @@ const puppet = {
   seedConfigMap: 'monoplayer-config',
   frontHostname: 'glowsquidye.tail41e568.ts.net',
   backend: 'play2.excalia.fr:25565',
-  allowBackendSwitch: true
 }
 
 const HEARTBEAT_AT = '2026-11-18T10:37:12.906Z'

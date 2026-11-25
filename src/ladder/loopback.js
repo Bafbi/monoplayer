@@ -6,7 +6,7 @@
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
 // failure. The report is written in finally, even on failure.
 //
-// Assertions R0 and O1-O63 (including O11b, O24b, O41b, O54b, O55b, O56b, O56c, O60b,
+// Assertions R0 and O1-O63 (including O11b, O24b, O41b, O55b, O56b, O56c, O60b,
 // O62 and O63) are the contract
 // (docs/testing-ladder.md). A FAIL is a real finding; do not weaken a check to
 // get a green run.
@@ -29,7 +29,7 @@ import { createWireChecker } from '../core/wire-check.js'
 import { createJournal, readJournal, readManifests } from '../observability/journal.js'
 import { REPLAY_DOMAINS } from '../core/replay-summary.js'
 import { createBot } from './bot.js'
-import { createBackendMoveTick, createControlDocument, dialIntent, dialTargetFor } from '../service/control.js'
+import { createControlDocument } from '../service/control.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 import { advancementComplete, applyAdvancementFrames } from './client-state.js'
@@ -151,16 +151,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let controlCore = null
   let controlBot1 = null
   let controlBot2 = null
-  // #233: the operator-move rig. Its own two backends, because the assertion is
-  // that a client attached to the first one ends in the second one's state, and
-  // the run has to be able to say which login landed where.
-  let operatorBase = null
-  let operatorTargetFake = null
-  let operatorProxy = null
-  let operatorFront = null
-  let operatorBackend = null
-  let operatorCore = null
-  let operatorBot = null
   // #257: the picker rig. No backend, no cluster, and its own 26.2 wire checker,
   // because the baseline is a recording of a Paper 26.2 configuration phase.
   let pickerFront = null
@@ -213,7 +203,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     preAuthDeadline: null,
     attachRecord: null,
     controlDocument: null,
-    backendMove: null,
     bodyCaches: null,
     channels: null
   }
@@ -2610,7 +2599,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // again on the same process, with no restart and no reconnect.
     controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-control-'))
     const controlWhitelistFile = path.join(controlDir, 'attach-whitelist.json')
-    const controlDesiredFile = path.join(controlDir, 'desired.json')
     const firstUuid = offlineUuid('Attach')
     const lateUuid = offlineUuid('Second')
     const writeControlWhitelist = uuids => fs.writeFileSync(controlWhitelistFile, JSON.stringify({
@@ -2622,9 +2610,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The product's own reader, pointed at a temporary directory. The rig does not
     // reimplement the file: O53 is about the reload the service performs.
     const controlDocument = createControlDocument({
-      file: controlDesiredFile,
       whitelistFile: controlWhitelistFile,
-      allowBackendSwitch: true,
       log
     })
     controlBase = await createFakeBackend({ port: 0, logStream: null })
@@ -2652,8 +2638,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         attachWhitelist: [],
         front: { host: '127.0.0.1', port: 0 },
         backend: { host: '127.0.0.1', port: controlBase.port },
-        puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') },
-        control: { file: controlDesiredFile }
+        puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') }
       }),
       backendLeg: controlBackend,
       frontLeg: controlFront,
@@ -2737,313 +2722,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         controlBot2.received.success !== null &&
         controlCore.session.backendLogins === loginsBefore,
       evidence.controlDocument
-    )
-
-    // --- O54: an operator moves the puppet, and the human keeps the connection ---
-    // The whole proof is two fake backends and one real client, because the
-    // ticket forbids any of it running against Excalia, playit, or the live lane.
-    // A rig of its own, because the assertion names which backend each login
-    // landed on and the run's other rigs share their targets.
-    //
-    // The move is driven by the service's own tick (`createBackendMoveTick`), not
-    // by a copy of it: the whole question is whether the document an operator
-    // writes in the ConfigMap reaches the #22 machine, and a rig that decided for
-    // itself would not answer it.
-    operatorBase = await createFakeBackend({ port: 0, logStream: null })
-    operatorTargetFake = await createFakeBackend({ port: 0, logStream: null })
-    // The target's handshake intent is the one thing a fake backend cannot read
-    // for itself, and an operator's move must be a fresh login (2), not a
-    // transfer (3): intent 3 on a server that never sent a transfer is the
-    // rejection sky-2 answers with.
-    operatorProxy = await createHandshakeProxy({ targetPort: operatorTargetFake.port, log })
-    const operatorWire = createWireChecker({ version: VERSION })
-    operatorBackend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      port: operatorBase.port,
-      version: VERSION,
-      username: 'GlowSquidye',
-      log
-    })
-    operatorFront = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: VERSION,
-      offlineWhitelist,
-      getSnapshotConfig: () => operatorCore?.cache.snapshot().config ?? [],
-      wireCheck: payload => operatorWire.check(payload),
-      wireMode: 'throw',
-      log
-    })
-    operatorCore = createMonoplayer({
-      config: loadConfig({
-        version: VERSION,
-        // The same two clients the seamless rig allows: this rig is about the
-        // move, so its whitelist is the rung's ordinary one, on both gates.
-        attachWhitelist: offlineWhitelist,
-        front: { host: '127.0.0.1', port: 0 },
-        backend: { host: '127.0.0.1', port: operatorBase.port },
-        puppet: { username: 'GlowSquidye', uuid: puppetUuid },
-        control: { file: controlDesiredFile, allowBackendSwitch: true }
-      }),
-      backendLeg: operatorBackend,
-      frontLeg: operatorFront,
-      clock: {
-        now: Date.now,
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout
-      },
-      logStream: { write: line => log('operatorCore', { line }) }
-    })
-    operatorFront.setCoreAttachConfiguring(({ name, uuid }) => operatorCore.attachConfiguringPlayer({ name, uuid }))
-    operatorFront.setConfiguringHandler(({ name }) => operatorCore.configuringReady({ name }))
-    operatorFront.setClientSettingsHandler(settings => operatorCore.noteClientSettings(settings))
-    operatorFront.setCoreAttach(({ name, uuid }) => operatorCore.attachPlayer({ name, uuid, includeConfig: false }))
-
-    // The service's dial, for one rig: the same controller, the same dial policy,
-    // and the same revert. Nothing here is a copy of start-live's decision, which
-    // is what lets O54 assert the handshake intent the *product* chose rather than
-    // the one this rig handed it.
-    const operatorFollow = createTransferFollowController()
-    const operatorBaseTarget = { host: '127.0.0.1', port: operatorBase.port }
-    let operatorDocument = null
-    let operatorTarget = { ...operatorBaseTarget }
-    let operatorReconnecting = false
-    operatorCore.on('reconnect_due', async ({ target: dueTarget, moveTarget } = {}) => {
-      if (stopping || operatorReconnecting) return
-      operatorReconnecting = true
-      operatorCore.session.backendConnecting({ initial: false })
-      const handedMove = moveTarget ?? null
-      const due = operatorFollow.onDue({
-        target: handedMove ?? dueTarget,
-        kind: handedMove !== null ? 'operator' : 'transfer'
-      })
-      const chosen = dialTargetFor({
-        transfer: due.kind === 'transfer' ? due.target : null,
-        operator: due.kind === 'operator' ? due.target : null,
-        desired: operatorDocument === null ? null : operatorDocument.desiredTarget(),
-        current: operatorTarget,
-        attached: operatorCore.attached === true
-      })
-      const dialTarget = chosen.target
-      try {
-        operatorBackend.setTarget(dialTarget, dialIntent({
-          transfer: chosen.source === 'transfer',
-          target: dialTarget,
-          base: operatorBaseTarget
-        }))
-        await operatorBackend.connect()
-        operatorFollow.onSuccess()
-        operatorTarget = { host: dialTarget.host, port: dialTarget.port }
-      } catch (error) {
-        log('operatorDialFailed', {
-          error: String(error?.message ?? error).slice(0, 200),
-          backend: dialTarget.host + ':' + dialTarget.port,
-          source: chosen.source
-        })
-        // The budget, spent the way the service spends it: one failure is a retry,
-        // and the last one gives up on the target. The retries are the rig's
-        // reconnect backoff (1 s, then 2 s), which is why O54b's waits allow for
-        // three dials rather than one.
-        const failure = operatorFollow.onFailure()
-        if (failure.reverted) {
-          // As the service does on the give-up: the move is restored, and the next
-          // dial reads the settled backend from the controller's cleared memory.
-          operatorCore.abortTransfer('target_unreachable')
-          operatorBackend.setTarget(operatorTarget, dialIntent({ target: operatorTarget, base: operatorBaseTarget }))
-        }
-        operatorCore.session.fail()
-      } finally {
-        operatorReconnecting = false
-      }
-    })
-
-    operatorCore.start()
-    await operatorBackend.connect()
-    const operatorReadiness = await waitForReady({ core: operatorCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
-    if (!operatorReadiness.warm) throw new Error('the operator-move rig did not warm')
-    const operatorBound = await operatorFront.listen()
-    operatorBot = createBot({ port: operatorBound.port ?? operatorFront.port, username: 'Attach' })
-    await operatorBot.ready()
-    const bOperators = operatorBot.received
-
-    // The control document, written the way the panel writes it: the version, the
-    // backend, and the two fields that make a rewrite a new intent.
-    const writeDesiredBackend = (host, port, changedAt) => fs.writeFileSync(controlDesiredFile, JSON.stringify({
-      version: 1,
-      backend: { host, port },
-      changedAt,
-      changedBy: 'loopback'
-    }, null, 2) + '\n')
-    operatorDocument = createControlDocument({
-      file: controlDesiredFile,
-      allowBackendSwitch: true,
-      log: (event, fields) => log('operatorDocument', { event, ...fields })
-    })
-    const operatorTick = createBackendMoveTick({
-      core: operatorCore,
-      control: operatorDocument,
-      log: (event, fields) => log('operatorMove', { event, ...fields }),
-      current: () => operatorTarget
-    })
-
-    // The document names the proxy, which is the second backend's address as far
-    // as the puppet is concerned: the proxy records the intent and forwards.
-    const operatorTargetAddress = { host: '127.0.0.1', port: operatorProxy.port }
-    writeDesiredBackend(operatorTargetAddress.host, operatorTargetAddress.port, '2026-11-18T00:00:00.000Z')
-    const moveMark = bOperators.names.length
-    const moveLogMark = logs.length
-    const moveStarted = operatorTick.tick()
-    const intentsBefore = operatorProxy.nextStates.length
-    await operatorBot.waitFor(
-      () => bOperators.names.slice(moveMark).some(frame => frame.name === 'login'),
-      'the operator target play login on the kept connection',
-      25_000
-    )
-    await waitFor(
-      () => operatorCore.metrics.reconfigurationsCompleted === 1 &&
-        operatorCore.session.state === 'attached' &&
-        operatorCore.session.warmReady === true,
-      'the operator move to land',
-      20_000
-    )
-    await settleUntil(() => operatorProxy.nextStates.length > intentsBefore, 5_000)
-    // A block only the target sends, so "the client is in the second backend's
-    // world" is a frame the first backend could not have produced.
-    const OPERATOR_BLOCK = { x: 21, y: 0, z: 21 }
-    operatorTargetFake.sendBlockChange(OPERATOR_BLOCK)
-    const operatorBlockSeen = await settleUntil(
-      () => bOperators.blockChanges.some(change =>
-        change.location?.x === OPERATOR_BLOCK.x &&
-        change.location?.y === OPERATOR_BLOCK.y &&
-        change.location?.z === OPERATOR_BLOCK.z),
-      10_000
-    )
-    const movedFrames = bOperators.names.slice(moveMark).map(frame => ({ state: frame.state, name: frame.name }))
-    const movedNames = movedFrames.map(frame => frame.name)
-    const operatorEvents = coreLogEvents(moveLogMark, 'operatorCore')
-    evidence.backendMove = {
-      started: moveStarted,
-      backend: operatorTargetAddress.host + ':' + operatorTargetAddress.port,
-      fakeBackend: '127.0.0.1:' + operatorTargetFake.port,
-      handshakeIntent: operatorProxy.nextStates.at(-1) ?? null,
-      intents: operatorProxy.nextStates,
-      logins: { first: operatorBase.received.logins, second: operatorTargetFake.received.logins },
-      attaches: operatorCore.metrics.attaches,
-      reconfigurations: {
-        completed: operatorCore.metrics.reconfigurationsCompleted,
-        restored: operatorCore.metrics.reconfigurationsRestored
-      },
-      transfers: {
-        followed: operatorCore.metrics.transfersFollowed,
-        seamless: operatorCore.metrics.transfersSeamless
-      },
-      startedFrames: movedNames.slice(0, 5),
-      configuration: movedFrames.filter(frame => frame.state === 'configuration').map(frame => frame.name),
-      loginsOnClient: movedNames.filter(name => name === 'login').length,
-      blockSeen: operatorBlockSeen,
-      ended: bOperators.ended,
-      kick: bOperators.kick,
-      clientErrors: logs.slice(moveLogMark).filter(entry => entry.event === 'frontClientError').length,
-      moveLog: operatorEvents.filter(entry => entry.event === 'backendMove').map(entry => ({
-        kind: entry.kind,
-        frontKept: entry.frontKept
-      })),
-      cacheReset: operatorEvents.filter(entry => entry.event === 'cacheReset').map(entry => entry.reason),
-      // The old session was ended by the core and its late end event was read as a
-      // handover, not as the target faulting. Without that the first backend's
-      // socket would still be open under the second backend's session.
-      handedOver: operatorEvents.filter(entry => entry.event === 'backendEndHandedOver').length
-    }
-    check(
-      'O54',
-      "an operator's move keeps the client's connection and lands it in the second backend's configuration and play state",
-      moveStarted?.started === true &&
-        moveStarted.kind === 'operator' &&
-        evidence.backendMove.handshakeIntent === 2 &&
-        operatorTargetFake.received.logins === 1 &&
-        operatorBase.received.logins === 1 &&
-        operatorCore.metrics.attaches === 1 &&
-        operatorCore.metrics.reconfigurationsCompleted === 1 &&
-        operatorCore.metrics.reconfigurationsRestored === 0 &&
-        operatorCore.metrics.transfersFollowed === 0 &&
-        operatorCore.metrics.transfersSeamless === 0 &&
-        movedNames.includes('start_configuration') &&
-        evidence.backendMove.configuration.includes('registry_data') &&
-        evidence.backendMove.configuration.includes('finish_configuration') &&
-        evidence.backendMove.loginsOnClient === 1 &&
-        operatorBlockSeen === true &&
-        bOperators.ended === null && bOperators.kick === null &&
-        evidence.backendMove.clientErrors === 0 &&
-        operatorCore.moveKind === null &&
-        evidence.backendMove.moveLog.some(entry => entry.kind === 'operator' && entry.frontKept === true) &&
-        evidence.backendMove.cacheReset.includes('operator') &&
-        evidence.backendMove.handedOver === 1,
-      evidence.backendMove
-    )
-
-    // The failure half. The port is bound and closed again, so the refusal is the
-    // kernel's and not a fake's opinion. The client is on the second backend now,
-    // because O54 just landed it there, so that is the backend this half proves
-    // it stays on.
-    const deadOperatorPort = await freePort()
-    writeDesiredBackend('127.0.0.1', deadOperatorPort, '2026-11-18T00:10:00.000Z')
-    const restoreMark = bOperators.names.length
-    const restoreLogMark = logs.length
-    const restoresBefore = operatorCore.metrics.reconfigurationsRestored
-    const deadStarted = operatorTick.tick()
-    await waitFor(
-      () => operatorCore.metrics.reconfigurationsRestored === restoresBefore + 1,
-      'the give-up on the target that never answered',
-      25_000
-    )
-    await operatorBot.waitFor(
-      () => bOperators.names.slice(restoreMark).some(frame => frame.name === 'login'),
-      'the restored play state on the kept connection',
-      20_000
-    )
-    // The restore is half the answer: the other half is the puppet dialling the
-    // backend the client is on again, which is the second login the target sees.
-    // Waiting on the dial target alone would pass without a dial, because it never
-    // stopped pointing there.
-    await waitFor(
-      () => operatorCore.session.state === 'attached' &&
-        operatorTargetFake.received.logins === 2 &&
-        operatorTarget.port === operatorTargetAddress.port,
-      'the puppet back on the backend the client holds',
-      20_000
-    )
-    const restoredFrames = bOperators.names.slice(restoreMark).map(frame => ({ state: frame.state, name: frame.name }))
-    const restoredEvents = coreLogEvents(restoreLogMark, 'operatorCore')
-    evidence.backendMoveFailed = {
-      started: deadStarted,
-      backend: '127.0.0.1:' + deadOperatorPort,
-      restored: operatorCore.metrics.reconfigurationsRestored - restoresBefore,
-      backOn: '127.0.0.1:' + operatorTarget.port,
-      logins: operatorTargetFake.received.logins,
-      configuration: restoredFrames.filter(frame => frame.state === 'configuration').map(frame => frame.name),
-      plays: restoredFrames.filter(frame => frame.state === 'play').map(frame => frame.name).slice(0, 5),
-      ended: bOperators.ended,
-      kick: bOperators.kick,
-      restoredLogged: restoredEvents.filter(entry => entry.event === 'backendMoveRestored').length,
-      dialFailures: logs.slice(restoreLogMark).filter(entry => entry.event === 'operatorDialFailed').length,
-      failures: operatorFollow.failures
-    }
-    check(
-      'O54b',
-      'a target that never answers leaves the client on the backend it was on, connected',
-      deadStarted?.started === true &&
-        deadStarted.kind === 'operator' &&
-        evidence.backendMoveFailed.restored === 1 &&
-        evidence.backendMoveFailed.restoredLogged === 1 &&
-        evidence.backendMoveFailed.dialFailures === 3 &&
-        evidence.backendMoveFailed.failures === 0 &&
-        evidence.backendMoveFailed.configuration.includes('finish_configuration') &&
-        evidence.backendMoveFailed.plays.includes('login') &&
-        evidence.backendMoveFailed.backOn === operatorTargetAddress.host + ':' + operatorTargetAddress.port &&
-        operatorTargetFake.received.logins === 2 &&
-        bOperators.ended === null && bOperators.kick === null &&
-        operatorCore.session.state === 'attached',
-      evidence.backendMoveFailed
     )
 
     // --- O55: a join with no backend gets the picker, and a pick is recorded (#257) ---
@@ -4836,7 +4514,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
-    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, operatorBot, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12]) {
+    for (const bot of [attachBot2, attachBot1, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
@@ -4854,11 +4532,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { bodyLegB?.end?.() } catch { /* best effort */ }
     try { await bodyFakeA?.close?.() } catch { /* best effort */ }
     try { await bodyFakeB?.close?.() } catch { /* best effort */ }
-    try { await operatorFront?.close?.() } catch { /* best effort */ }
-    try { await operatorBackend?.close?.() } catch { /* best effort */ }
-    try { await operatorBase?.close?.() } catch { /* best effort */ }
-    try { await operatorTargetFake?.close?.() } catch { /* best effort */ }
-    try { await operatorProxy?.close?.() } catch { /* best effort */ }
     try { await attachBackend?.close?.() } catch { /* best effort */ }
     try { await attachBase?.close?.() } catch { /* best effort */ }
     try { await front?.close?.() } catch { /* best effort */ }
