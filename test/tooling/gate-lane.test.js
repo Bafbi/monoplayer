@@ -1065,6 +1065,47 @@ test("a reap keeps the testbed's namespace even when its own rows are gone", () 
   assert.match(output, new RegExp('keeping ' + TESTBED + ': it is the transfer testbed'))
 })
 
+// #360: the namespace is readable as a lane and not writable as one. Listing it and
+// sparing it were #318's half. These two cases hold the other half: the commands that
+// change a lane refuse it, in one sentence, before kubectl runs.
+test("gate:down refuses the testbed's namespace and writes nothing", () => {
+  // down is the destructive one. It takes five rows to 0, then deletes every Secret it
+  // generated, and the testbed's Papers read the Secret names this lane generates. So
+  // the assertion that matters is the last one: a refusal that still reached the shim
+  // would have written into a namespace two worktrees share.
+  const { status, output, calls } = run(space(), ['down'], { MONOPLAYER_GATE_NAMESPACE: TESTBED })
+  assert.equal(status, 2, output)
+  assert.match(output, new RegExp('refusing "' + TESTBED + '"'))
+  assert.match(output, /mise run testbed:up owns/, 'the sentence names the command that owns it: ' + output)
+  assert.equal(scaled(calls).length, 0, 'no scale was issued: ' + calls.join(' | '))
+  assert.deepEqual(calls, [], 'kubectl was never called, so nothing was read either: ' + calls.join(' | '))
+})
+
+test("gate:up refuses the testbed's namespace, and the reads keep working", () => {
+  // up is the other writer: applied there, it puts the gate tree and the lane's Secrets
+  // into a namespace the testbed owns. status is a read, and a reader debugging the
+  // testbed needs its rows, so the refusal must not reach it. lanes is the listing #318
+  // added, and the same refusal there would undo it.
+  const where = space()
+  laneState(where, TESTBED, { touched: '', worktree: '', pods: 0 })
+  const up = run(where, ['up'], { MONOPLAYER_GATE_NAMESPACE: TESTBED })
+  assert.equal(up.status, 2, up.output)
+  assert.match(up.output, /not a worktree's lane/, up.output)
+  assert.deepEqual(up.calls, [], 'the refused up called no kubectl: ' + up.calls.join(' | '))
+
+  const status = run(where, ['status'], { MONOPLAYER_GATE_NAMESPACE: TESTBED })
+  assert.equal(status.status, 0, status.output)
+  assert.match(status.output, new RegExp('gate lane ' + TESTBED + ': instance b'), 'status names what it read: ' + status.output)
+  assert.ok(status.calls.some(line => / get deploy /.test(line)), 'and read its rows: ' + status.calls.join(' | '))
+
+  laneList(where, [TESTBED])
+  const listed = run(where, ['lanes'])
+  assert.equal(listed.status, 0, listed.output)
+  const row = listed.output.split('\n').find(line => line.startsWith(TESTBED))
+  assert.ok(row, 'the testbed keeps its row: ' + listed.output)
+  assert.match(row, /transfer testbed$/, 'and its owner: ' + row)
+})
+
 test('a lane holding rows the tree does not declare is kept whatever its age', () => {
   // Contents outrank age. A namespace holding a Deployment the gate tree did not make
   // is not this script's lane at all, so the probe runs before the clock is read. That
