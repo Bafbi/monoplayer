@@ -18,7 +18,16 @@ const SCRIPT = path.join(
 const PUPPET = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const POD = 'paper-abc123'
-const PAPER_LABEL = 'monoplayer-gate-b-paper'
+
+// The lane this worktree's rung derives (#279), mirrored the way gate-lane.test.js
+// mirrors it: a script that typed a name instead of deriving one could not match.
+const WORKTREE = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'))
+const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
+const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
+const LANE = 'monoplayer-gate-' + COMMIT + '-' + (crc(WORKTREE) % 0x1000000).toString(16).padStart(6, '0')
+// The label the lane's Paper deployment carries: the tree spells
+// app.kubernetes.io/name: monoplayer-gate-__instance__-paper.
+const PAPER_LABEL = LANE + '-paper'
 
 // The shim answers the calls both scripts make, records every argv, and lets a
 // case choose what the observer recorded.
@@ -47,6 +56,10 @@ const SHIM = [
   '  *" wait "*) exit 0 ;;',
   // The gate Paper's own settings, which is where the absent reasons are read.
   '  *"server.properties"*) printf \'%s\\n\' "$KUBECTL_SERVER_PROPERTIES"; exit 0 ;;',
+  // The account lease each join takes (#280). The joins are scripts/online-cluster.sh,
+  // and the holder identity is where a run says which lane it holds the account for,
+  // so that record is the assertion.
+  '  *" create -f "*|*" replace -f "*) staged="\${@: -1}"; cp "$staged" "$KUBECTL_LEASE"; exit 0 ;;',
   // Two records per connection, as the plugin writes them: the join, then the
   // resource-pack status. The report has to merge each pair.
   '  *views.jsonl*) mkdir -p "$(dirname "$last")"; { printf \'%s\\n\' "$KUBECTL_BASELINE_VIEW"; printf \'%s\\n\' "$KUBECTL_BASELINE_LATE"; printf \'%s\\n\' "$KUBECTL_PUPPET_VIEW"; printf \'%s\\n\' "$KUBECTL_PUPPET_LATE"; } > "$last"; exit 0 ;;',
@@ -74,7 +87,7 @@ function workspace () {
   const state = path.join(root, 'kubectl-state')
   fs.mkdirSync(state, { recursive: true })
 
-  return { root, bin, jar, protocollib, state, log: path.join(root, 'kubectl.log') }
+  return { root, bin, jar, protocollib, state, log: path.join(root, 'kubectl.log'), lease: path.join(root, 'lease.json') }
 }
 
 const view = (overrides = {}) => JSON.stringify({
@@ -94,33 +107,39 @@ const view = (overrides = {}) => JSON.stringify({
 })
 
 function run (space, env = {}, args = []) {
+  const childEnv = {
+    ...process.env,
+    PATH: space.bin + ':' + process.env.PATH,
+    KUBECTL_LOG: space.log,
+    KUBECTL_STATE: space.state,
+    KUBECTL_STUCK: '0',
+    KUBECTL_SERVER_PROPERTIES: [
+      'enable-code-of-conduct=false',
+      'resource-pack=',
+      'online-mode=true'
+    ].join('\n'),
+    KUBECTL_PUPPET: PUPPET,
+    KUBECTL_ATTACH: ATTACH,
+    KUBECTL_POD: POD,
+    KUBECTL_PAPER_LABEL: PAPER_LABEL,
+    KUBECTL_BASELINE_VIEW: view({ address: '203.0.113.7:52001', resourcePack: null }),
+    KUBECTL_BASELINE_LATE: view({ address: '203.0.113.7:52001', resourcePack: 'accepted' }),
+    KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000', resourcePack: null }),
+    KUBECTL_PUPPET_LATE: view({ address: '198.51.100.9:40000', resourcePack: 'accepted' }),
+    KUBECTL_LEASE: space.lease,
+    MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
+    MONOPLAYER_OBSERVER_JAR: space.jar,
+    MONOPLAYER_PROTOCOLLIB_JAR: space.protocollib,
+    ...env
+  }
+  // A lane in this machine's environment would make the mirror above and the
+  // script's own derivation disagree, so the default case would measure the
+  // environment instead of the derivation (#282).
+  if (!Object.hasOwn(env, 'MONOPLAYER_GATE_NAMESPACE')) delete childEnv.MONOPLAYER_GATE_NAMESPACE
   const result = spawnSync('bash', [SCRIPT, ...args], {
     cwd: space.root,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      PATH: space.bin + ':' + process.env.PATH,
-      KUBECTL_LOG: space.log,
-      KUBECTL_STATE: space.state,
-      KUBECTL_STUCK: '0',
-      KUBECTL_SERVER_PROPERTIES: [
-        'enable-code-of-conduct=false',
-        'resource-pack=',
-        'online-mode=true'
-      ].join('\n'),
-      KUBECTL_PUPPET: PUPPET,
-      KUBECTL_ATTACH: ATTACH,
-      KUBECTL_POD: POD,
-      KUBECTL_PAPER_LABEL: PAPER_LABEL,
-      KUBECTL_BASELINE_VIEW: view({ address: '203.0.113.7:52001', resourcePack: null }),
-      KUBECTL_BASELINE_LATE: view({ address: '203.0.113.7:52001', resourcePack: 'accepted' }),
-      KUBECTL_PUPPET_VIEW: view({ address: '198.51.100.9:40000', resourcePack: null }),
-      KUBECTL_PUPPET_LATE: view({ address: '198.51.100.9:40000', resourcePack: 'accepted' }),
-      MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
-      MONOPLAYER_OBSERVER_JAR: space.jar,
-      MONOPLAYER_PROTOCOLLIB_JAR: space.protocollib,
-      ...env
-    }
+    env: childEnv
   })
   const calls = fs.existsSync(space.log)
     ? fs.readFileSync(space.log, 'utf8').trim().split('\n').filter(Boolean)
@@ -181,8 +200,8 @@ test('the run measures the gate-serving Paper by default', () => {
   assert.ok(deployment.includes('get deploy paper-conduct'), 'the install targets the conduct lane: ' + deployment)
   const joins = calls.filter(line => line.includes(' /work && node '))
   assert.equal(joins.length, 2, 'both joins run: ' + calls.join(' / '))
-  assert.equal(joins.every(line => line.includes('paper-conduct.monoplayer-gate-b.svc.cluster.local')), true,
-    'both joins speak to the conduct lane: ' + joins.join(' / '))
+  assert.equal(joins.every(line => line.includes('paper-conduct.' + LANE + '.svc.cluster.local')), true,
+    "both joins speak to this worktree's lane: " + joins.join(' / '))
 })
 
 test('the run never changes the live deployment', () => {
@@ -253,7 +272,78 @@ test('the plugin install only ever names the gate namespace', () => {
   assert.equal(status, 0, output)
   const installs = calls.filter(line => line.includes('/data/plugins') || line.includes('kill 1'))
   assert.ok(installs.length > 0, 'the install ran')
-  assert.equal(installs.every(line => line.startsWith('-n monoplayer-gate-b ')), true, installs.join(' / '))
+  assert.equal(installs.every(line => line.startsWith('-n ' + LANE + ' ')), true, installs.join(' / '))
+})
+
+// --- one lane per run (#282) ---------------------------------------------------
+//
+// The backend host was computed from MONOPLAYER_GATE_NAMESPACE before the argument
+// parser that sets it ran, so --namespace moved the install and left the joins on
+// the default lane. The run then reported a comparison of a backend nobody
+// measured. The lane is decided once now, after the arguments, and both joins and
+// both leases read that one value.
+
+test('--namespace names the lane the run measures and the backend it dials', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, {}, ['--namespace', 'monoplayer-gate-x'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+
+  const installs = calls.filter(line => line.includes('/data/plugins') || line.includes('kill 1'))
+  assert.ok(installs.length > 0, 'the install ran')
+  assert.equal(installs.every(line => line.startsWith('-n monoplayer-gate-x ')), true,
+    'the install reads the lane the argument named: ' + installs.join(' / '))
+
+  const joins = calls.filter(line => line.includes(' /work && node '))
+  assert.equal(joins.length, 2, 'both joins run: ' + calls.join(' / '))
+  assert.equal(joins.every(line => line.includes('MONOPLAYER_BACKEND_HOST=paper-conduct.monoplayer-gate-x.svc.cluster.local')), true,
+    'both joins dial the lane the argument named: ' + joins.join(' / '))
+  assert.equal(calls.some(line => line.includes('monoplayer-gate-b')), false,
+    'nothing names the lane that shipped: ' + calls.join(' / '))
+})
+
+test('both joins hold the account for the lane the run measures', () => {
+  // The joins are scripts/online-cluster.sh, and after #301 each one names its lane
+  // in the account lease. A run whose install named one lane and whose lease named
+  // another would be two lanes again, one level down.
+  const space = workspace()
+  const { status, output, calls } = run(space, {}, ['--namespace', 'monoplayer-gate-x'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const lease = JSON.parse(fs.readFileSync(space.lease, 'utf8'))
+  assert.ok(lease.spec.holderIdentity.startsWith('monoplayer-gate-x on '),
+    'the lease names the lane the backend dials: ' + lease.spec.holderIdentity)
+})
+
+test('a lane named two ways is refused rather than picked', () => {
+  // Two names for one run is the defect this ticket closes, so the run stops
+  // instead of choosing. Nothing is installed and no join starts.
+  const space = workspace()
+  const { status, output, calls } = run(space, { MONOPLAYER_GATE_NAMESPACE: 'monoplayer-gate-y' }, ['--namespace', 'monoplayer-gate-x'])
+  assert.equal(status, 2, output)
+  assert.match(output, /monoplayer-gate-x/, 'the refusal names the lane the argument gave: ' + output)
+  assert.match(output, /monoplayer-gate-y/, 'and the lane the variable gave: ' + output)
+  assert.deepEqual(calls, [], 'kubectl was never called: ' + calls.join(' / '))
+})
+
+test("a run that names no lane measures this worktree's", () => {
+  const space = workspace()
+  const { status, output, calls } = run(space)
+  assert.equal(status, 0, output)
+  const joins = calls.filter(line => line.includes(' /work && node '))
+  assert.equal(joins.every(line => line.includes('MONOPLAYER_BACKEND_HOST=paper-conduct.' + LANE + '.svc.cluster.local')), true,
+    "the default backend is this worktree's lane: " + joins.join(' / '))
+  const lease = JSON.parse(fs.readFileSync(space.lease, 'utf8'))
+  assert.ok(lease.spec.holderIdentity.startsWith(LANE + ' on '),
+    'and the same lane holds the account: ' + lease.spec.holderIdentity)
+})
+
+test('a lane that cannot be derived refuses, and keeps the sentence that says how', () => {
+  const space = workspace()
+  const notGit = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-not-git-'))
+  const { status, output, calls } = run(space, { MONOPLAYER_GATE_WORKTREE: notGit })
+  assert.equal(status, 2, output)
+  assert.match(output, /cannot derive this worktree's lane/)
+  assert.match(output, /Set MONOPLAYER_GATE_NAMESPACE to name one by hand/)
+  assert.equal(calls.some(line => line.includes('observer-baseline.js')), false, 'nothing dialled: ' + calls.join(' / '))
 })
 
 test('an asleep gate lane is named, with the task that wakes it', () => {
