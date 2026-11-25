@@ -14,6 +14,7 @@ import {
   buildPickAnswer,
   claimFailureText,
   claimRestoreTitle,
+  disconnectRefusalText,
   pickIdFor,
   pickRefusalText,
   pickTarget,
@@ -330,6 +331,20 @@ test('#259 every reason a spectator is refused with says what to do about it', (
   // A spectator is never told the body has no driver, because that is not a refusal.
   assert.equal(spectateRefusalText({ reason: 'no_claim', server: 'sky' }),
     'Monoplayer: sky cannot be watched right now.', 'no reason claims a body must be driven first')
+})
+
+// #261: the sentence a claimed body refuses a disconnect with. The driver is the
+// one fact the client needs: the body is theirs until their connection ends, so
+// the client can ask them or wait.
+test('#261 a disconnect on a claimed body is refused in a sentence naming the driver', () => {
+  const text = disconnectRefusalText({ server: 'sky', driver: 'Bafbi' })
+  assert.match(text, /sky is claimed by Bafbi/)
+  assert.match(text, /cannot be disconnected/)
+  assert.match(text, /while nobody claims it/)
+  // A claim recorded without a name is still named as a player, because a
+  // sentence with a hole in it reads as a bug in the lane.
+  assert.match(disconnectRefusalText({ server: 'sky', driver: null }), /claimed by another player/)
+  assert.match(disconnectRefusalText({ server: null, driver: 'Bafbi' }), /that server is claimed by Bafbi/)
 })
 
 // ---- #265: the allowed-server list, and a row's canonical name ----

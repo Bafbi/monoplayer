@@ -114,6 +114,151 @@ test('initial backend connect could not be made: fail fast, no reconnect', () =>
   assert.equal(s.backendLogins, 0)
 })
 
+// #261: a body nobody claims stays down. A claim is the reason to keep a
+// session, so a lane whose body nobody holds does not pay for a retry: the fault
+// lands in `down`, which is a body a claim may dial again and no client may enter.
+test('#261 a body nobody claims stays down when its session faults, and arms no retry', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, claimHeld: () => false })
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+  s.detach({ reason: 'player_quit' })
+  assert.equal(s.state, STATES.DETACHED)
+
+  const outcome = s.backendDown({ reason: 'body_fault' })
+  assert.equal(s.state, STATES.DOWN)
+  assert.equal(outcome.scheduled, false)
+  assert.equal(outcome.unclaimed, true)
+  assert.equal(clock.pending, 0, 'no retry is armed for a body nobody holds')
+  assert.equal(s.isAttachReady(), false, 'nothing may attach to a body that is down')
+
+  // A claim is what brings it back: the dial is the entry the first one used.
+  s.backendConnecting({ initial: true })
+  assert.equal(s.state, STATES.BOOT)
+  s.backendLogin({})
+  assert.equal(s.state, STATES.WARM)
+})
+
+test('#261 a body whose claim is held still reconnects, and stops when the claim goes', () => {
+  const clock = fakeClock()
+  let claimed = true
+  const s = createSession({ clock, reconnectDelayMs: 1000, claimHeld: () => claimed })
+  s.backendLogin({}); s.warmComplete({})
+  s.detach({ reason: 'player_quit' })
+
+  // Nobody is attached, and a claim is held: this is #295's parked claimant, and
+  // the body is kept for it exactly as it was before this rule.
+  const outcome = s.backendDown({ reason: 'body_fault' })
+  assert.equal(s.state, STATES.RECONNECTING)
+  assert.equal(outcome.scheduled, true)
+  assert.equal(clock.pending, 1)
+
+  // The claim ends while the retry is pending. The retry that fires has no body
+  // to come back to, so the attempt it spends is the last one.
+  claimed = false
+  clock.tick(1000)
+  assert.equal(s.state, STATES.BOOT)
+  const failed = s.backendDown({ reason: 'connection_refused' })
+  assert.equal(s.state, STATES.DOWN)
+  assert.equal(failed.scheduled, false)
+  assert.equal(clock.pending, 0)
+})
+
+test('#261 a lane with no claim board keeps today\'s reconnect contract', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000 })
+  s.backendLogin({}); s.warmComplete({})
+  s.detach({ reason: 'player_quit' })
+
+  // No oracle: the lane has no picker, so no claim exists to keep or drop the
+  // body, and the fault contract is the one every lane had before this rule.
+  s.backendDown({ reason: 'body_fault' })
+  assert.equal(s.state, STATES.RECONNECTING)
+  assert.equal(clock.pending, 1)
+})
+
+test('#261 a body can be ended on request, and a claim is what brings it back', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, claimHeld: () => false })
+  s.backendLogin({}); s.warmComplete({})
+
+  const ended = s.end({ reason: 'requested' })
+  assert.equal(ended.ended, true)
+  assert.equal(ended.reason, 'requested')
+  assert.equal(s.state, STATES.DOWN)
+  assert.equal(clock.pending, 0)
+  assert.equal(s.isAttachReady(), false)
+  // The transition says why the body is down, and the oracle is what it asked: a
+  // reader of the run does not have to guess whether a claim was in the way.
+  const down = s.events().filter(event => event.to === STATES.DOWN).at(-1)
+  assert.equal(down.unclaimed, true, 'nobody claimed the body that was ended')
+
+  s.backendConnecting({ initial: true })
+  assert.equal(s.state, STATES.BOOT)
+})
+
+test('#261 a body a driver holds cannot be ended on request', () => {
+  const s = createSession()
+  s.backendLogin({}); s.warmComplete({})
+  s.attachAttempt({ uuid: PLAYER, name: 'Bafbi' })
+
+  const ended = s.end({ reason: 'requested' })
+  assert.equal(ended.ended, false)
+  assert.equal(ended.reason, 'client_attached')
+  assert.equal(s.state, STATES.ATTACHED, 'the driver keeps the body they are standing in')
+  assert.equal(s.isAttachReady(), false)
+})
+
+test('#261 a fault while the body is down is recorded, and dials nothing', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000, claimHeld: () => false })
+  s.backendLogin({}); s.warmComplete({})
+  s.backendDown({ reason: 'body_fault' })
+  assert.equal(s.state, STATES.DOWN)
+
+  // The socket of the session that ended reports its close late. It belongs to a
+  // body that is not there, so it arms no second timer and announces nothing.
+  const late = s.backendDown({ reason: 'socket_closed' })
+  assert.equal(late.scheduled, false)
+  assert.equal(s.state, STATES.DOWN)
+  assert.equal(clock.pending, 0)
+  assert.equal(s.events().filter(event => event.type === 'fault_while_down').length, 1)
+})
+
+test('#261 an oracle that throws keeps the body, because nobody can be asked', () => {
+  const clock = fakeClock()
+  const s = createSession({
+    clock,
+    reconnectDelayMs: 1000,
+    claimHeld: () => { throw new Error('claim board unreadable') }
+  })
+  s.backendLogin({}); s.warmComplete({})
+  s.detach({ reason: 'player_quit' })
+
+  const outcome = s.backendDown({ reason: 'body_fault' })
+  assert.equal(outcome.scheduled, true, 'a body nobody can be asked about is kept, not dropped')
+  assert.equal(s.state, STATES.RECONNECTING)
+  assert.equal(clock.pending, 1)
+  const failure = s.events().filter(event => event.type === 'claim_oracle_failed').at(-1)
+  assert.equal(failure.error, 'claim board unreadable')
+})
+
+test('#261 ending a body cancels the retry it had armed', () => {
+  const clock = fakeClock()
+  const s = createSession({ clock, reconnectDelayMs: 1000 })
+  s.backendLogin({}); s.warmComplete({})
+  s.backendDown({ reason: 'body_fault' })
+  assert.equal(clock.pending, 1)
+
+  const ended = s.end({ reason: 'requested' })
+  assert.equal(ended.ended, true)
+  assert.equal(ended.cancelled, true)
+  assert.equal(clock.pending, 0, 'the armed retry is cleared, not left to fire at a body that ended')
+  clock.tick(60_000)
+  assert.equal(s.state, STATES.DOWN)
+  assert.equal(s.backendLogins, 1)
+})
+
 test('backend fault while attached: front is ended and counted detached', () => {
   const clock = fakeClock()
   const s = createSession({ clock, reconnectDelayMs: 1000 })

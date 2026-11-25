@@ -106,6 +106,12 @@ test('#259 a body nobody drives is still watchable, and watching attaches nobody
 test('#259 a body that is not up is refused in words, and the word says which', async () => {
   const rig = makeCore({ config: { picker: true } })
   await landABody(rig)
+  // #261: a body nobody claims stays down, so this fault would end the body rather
+  // than arm a retry. The claim is held here because the two answers a spectator can
+  // get — waiting for a body that is coming back, and a body that is down — need a
+  // body that is coming back first. The claim is dropped by #261's own rule and not
+  // by this one: a claim is what keeps a body alive.
+  rig.frontLeg.claim(CLAIMED.body, { name: 'Pilot' })
   // The body's session ends with nobody attached: the session arms its one
   // reconnect, and a spectator is asked to wait rather than served a frozen world.
   rig.backendLeg.deliverEnd({ reason: 'body_fault' })
