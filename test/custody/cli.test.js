@@ -432,6 +432,35 @@ test('every command the dispatch handles declares the options it reads', () => {
   }
 })
 
+// What separates this case: every refusal prints the usage text, so a flag the text
+// omits is a flag the operator cannot discover, and a flag the text invents is a
+// claim the command does not honour. The table and the text are two lists of the
+// same facts, and this case holds them together (#377).
+test('the usage text lists exactly the options each command reads', () => {
+  const source = fs.readFileSync(CLI, 'utf8')
+  const constants = { CUSTODY_ROOT: 'secrets-dir', ACCOUNT_TREE: 'accounts-dir' }
+  const tableSource = source.slice(source.indexOf('const COMMAND_FLAGS = {'))
+  const usageSource = source.slice(source.indexOf('const USAGE = ['), source.indexOf('].join'))
+
+  const rows = new Map()
+  for (const match of tableSource.matchAll(/^ {2}'?([a-z-]+(?: [a-z]+)?)'?: \[([^\]]*)\]/gm)) {
+    const flags = [...match[2].matchAll(/\w+|'[^']*'/g)]
+      .map(token => token[0].replace(/'/g, ''))
+      .map(name => constants[name] ?? name)
+    rows.set(match[1], flags)
+  }
+  assert.ok(rows.size > 0, 'COMMAND_FLAGS was not found in ' + CLI)
+
+  for (const [command, flags] of rows) {
+    // A command may print more than one form: device-code has `--dir <accountDir>` on
+    // its own line, and both lines describe the same command.
+    const lines = usageSource.split('\n').filter(candidate => candidate.includes('cli.js ' + command + ' '))
+    assert.ok(lines.length > 0, command + ' has no usage line')
+    const listed = lines.flatMap(line => [...line.matchAll(/--[a-z-]+/g)].map(match => match[0].slice(2)))
+    assert.deepEqual([...listed].sort(), [...flags].sort(), command + ' usage lines: ' + lines.map(line => line.trim()).join(' | '))
+  }
+})
+
 test('device-code refuses a text selector it does not know, before any request', (t) => {
   const h = harness(t)
   seedAccounts(h.accountsDir)
