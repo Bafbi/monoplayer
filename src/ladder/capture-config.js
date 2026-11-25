@@ -8,13 +8,13 @@
 //
 // What the fixture may claim (#367). `capturedFrom` records provenance the capture
 // had. The build and the image are named by the operator and never defaulted, because
-// no frame a client receives carries either: Paper answers a status ping with
-// `serverModName() + ' ' + serverVersion()` — "Paper 26.2" — and no build
-// (PaperServerListPingEventImpl, paper-server), and a container image is packaging the
+// no frame a client receives carries either. Paper answers a status ping with
+// `serverModName() + ' ' + serverVersion()`, which is "Paper 26.2" and no build
+// (PaperServerListPingEventImpl, paper-server). A container image is packaging the
 // server never sends. So a capture with no --paper-build stops before the join, and one
 // that names no --image records `image: null`, which says nobody named one. The
-// recorded command carries every flag that decided the recording, so a reader who
-// repeats it reaches the same lane, build and image from another worktree.
+// recorded command carries every flag that decided the recording. A reader who repeats
+// it reaches the same lane, build and image from another worktree.
 //
 // The front leg serves a configuration phase of its own when no backend is
 // connected (the picker, #257). It cannot invent that phase: minecraft-protocol
@@ -56,9 +56,9 @@
 //   mise run gate:down
 //
 // That rung is handed no flags: scripts/online-cluster.sh runs the module with its own
-// argv alone, so the capture stops on the build before the join (#367). A capture that
-// needs the real account names the build and the image, and runs the module where it can
-// reach the gate Paper's tailnet name.
+// argv alone. The capture therefore stops on the build before the join (#367). A capture
+// that needs the real account names the build and the image, and runs the module where it
+// can reach the gate Paper's tailnet name.
 //
 // Exit codes: 0 a capture was written, 1 the join failed, 2 setup failed.
 import fs from 'node:fs'
@@ -106,10 +106,10 @@ export function captureLane ({ lane = null, resolve = resolveGateLane } = {}) {
 // The Paper build, named or refused (#367). No frame a client receives carries it: a
 // status ping answers "Paper 26.2" (the module header says where that comes from) and the
 // configuration phase carries registries and packs. The one place a build is written down
-// is the deployment that ran it, `PAPER_BUILD` in deploy/driver/paper.yaml, which a
-// capture cannot read from the socket — so a default here would record the gate lane's
-// build for every server, and the sentence instead asks the operator for the one value
-// only they have.
+// is the deployment that ran it, `PAPER_BUILD` in deploy/driver/paper.yaml. A capture
+// cannot read that from the socket, so a default here would record the gate lane's build
+// for every server. The sentence instead asks the operator for the one value only they
+// have.
 export function captureBuild ({ paperBuild = null } = {}) {
   const build = typeof paperBuild === 'string' ? paperBuild.trim() : ''
   if (build === '') {
@@ -122,19 +122,19 @@ export function captureBuild ({ paperBuild = null } = {}) {
 
 // The container image, or null when nobody named one (#367). A protocol client cannot see
 // an image: it is packaging around the server, not something the server sends. So the
-// fixture records the one an operator names and records null when nobody did, because the
-// gate lane's image in a fixture taken from another image is the claim this replaces.
+// fixture records the one an operator names, and records null when nobody did. The gate
+// lane's image in a fixture taken from another image is the claim this replaces.
 export function captureImage ({ image = null } = {}) {
   const named = typeof image === 'string' ? image.trim() : ''
   return named === '' ? null : named
 }
 
 // The command that repeats a capture (#367): every flag that decided what the fixture
-// holds, so a reader who repeats it in another worktree reaches the same server and
-// records the same lane, build and image rather than that worktree's. --note,
-// --reached-via, --account and --timeout are commentary, how it was reached, identity
-// and patience: a replay leaves those to the operator, and --out is the reader's choice
-// of file. Every value here is one token, so the line runs as written.
+// holds. A reader who repeats it in another worktree reaches the same server, and records
+// the same lane, build and image rather than that worktree's. --note, --reached-via,
+// --account and --timeout are commentary, how it was reached, identity and patience. A
+// replay leaves those to the operator, and --out is the reader's choice of file. Every
+// value here is one token, so the line runs as written.
 export function captureCommand ({ host, port, version, offline, lane, paperBuild, image }) {
   const parts = [
     'node src/ladder/capture-config.js',
@@ -150,8 +150,8 @@ export function captureCommand ({ host, port, version, offline, lane, paperBuild
 }
 
 // What a capture resolves from its flags, before it dials (#322, #367). Pure apart from
-// the lane resolver, so a case proves what a fixture claims — and what a replay of that
-// fixture's own command claims — with no socket.
+// the lane resolver, so a case proves what a fixture claims with no socket. It also proves
+// what a replay of that fixture's own command claims.
 export function captureInputs (argv, { resolve = resolveGateLane, env = process.env } = {}) {
   const host = flag(argv, '--host') ?? env.MONOPLAYER_BACKEND_HOST ?? '127.0.0.1'
   const port = Number(flag(argv, '--port') ?? env.MONOPLAYER_BACKEND_PORT ?? 25565)
@@ -166,9 +166,9 @@ export function captureInputs (argv, { resolve = resolveGateLane, env = process.
 }
 
 // The provenance a reader needs to reach this server again, and to know when the
-// recording is old. Pure, so a case proves what lands in `capturedFrom` — the lane a
-// capture was given, the build and image it had, and the command that repeats it — with
-// no socket (#322, #367).
+// recording is old. Pure, so a case proves what lands in `capturedFrom` with no socket
+// (#322, #367): the lane a capture was given, the build and image it had, and the command
+// that repeats it.
 export function captureProvenance ({ version, lane, paperBuild, image, host, port, offline, reachedVia, note, at }) {
   return {
     kind: 'paper',
@@ -190,8 +190,8 @@ async function main (argv) {
   const selector = flag(argv, '--account') ?? process.env.MONOPLAYER_CAPTURE_ACCOUNT ?? 'glowsquidye'
   const timeout = Number(flag(argv, '--timeout') ?? 120_000)
   // Provenance, so a reader can tell how the fixture was reached and how to reach it
-  // again. A lane nobody can name, and a build nobody states, are setup failures here:
-  // a fixture that guessed either points the next reader at another server (#322, #367).
+  // again. A lane nobody can name, and a build nobody states, are setup failures here. A
+  // fixture that guessed either points the next reader at another server (#322, #367).
   let inputs
   try {
     inputs = captureInputs(argv)
