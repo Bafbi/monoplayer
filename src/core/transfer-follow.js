@@ -8,7 +8,7 @@
 //
 // Every followed hop reports `kind: 'transfer'`, and nothing else (#332). It
 // once ranked two dialects, and #264 deleted the other one with the operator
-// move it served, so the controller no longer reads `event.kind`: the dial
+// move it served. So the controller no longer reads `event.kind`: the dial
 // intent is `target !== null`, decided by the caller.
 //
 // Pure: no timers, no sockets. Used by start-live and the offline loopback, and
