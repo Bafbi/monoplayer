@@ -172,9 +172,13 @@ test('the allowed servers render beside the attach whitelist, with the two write
   assert.match(card, /<input name="server"/)
   assert.doesNotMatch(card, /name="port"/, 'the route takes two fields, and the page asks for one name')
   assert.match(card, /add an allowed server/, 'the glossary names it, and the button uses the name')
-  // One answer area for the block, outside the list the tick replaces.
+  // One answer area for the block, outside the list the tick replaces, and no clock inside
+  // the block: the read instant and the version are in the card's footer, which is
+  // rewritten every tick, and a clock in a list redrawn on change would be the time of the
+  // last change.
   const block = card.slice(card.indexOf('<section class="allowed-block'), card.indexOf('</section>', card.indexOf('<section class="allowed-block')))
-  assert.match(block, /<output class="result block-result"/)
+  assert.equal([...block.matchAll(/<output/g)].length, 1, 'one answer area for the block')
+  assert.doesNotMatch(block, /2026-11-18T10:37:24\.906Z/, 'the list carries no clock')
   const rows = [...block.matchAll(/<li class="entry">([\s\S]*?)<\/li>/g)].map(match => match[1])
   assert.equal(rows.length, 2, 'one row per server')
   for (const row of rows) assert.doesNotMatch(row, /<output/, 'no answer is printed inside a row')
