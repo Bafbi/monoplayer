@@ -783,13 +783,19 @@ Two files an operator changes without a deploy:
 
 | Path | Shape | Read |
 | --- | --- | --- |
-| `attachWhitelistFile` | `{version, players:[{uuid,name,addedAt}]}` | at each login |
-| `control.allowedServers` (`allowed-servers.json`) | `{version:1, servers:[{host,port,addedAt}]}` | at each offer the picker makes |
+| `config.attachWhitelistFile` (`MONOPLAYER_ATTACH_WHITELIST`, `attach-whitelist.json`) | `{version, players:[{uuid,name,addedAt}]}` | at each login |
+| `config.control.allowedServers` (`MONOPLAYER_ALLOWED_SERVERS`, `allowed-servers.json`) | `{version:1, servers:[{host,port,addedAt}]}` | at each offer the picker makes |
+| `config.control.allowedServersSeed` (`MONOPLAYER_ALLOWED_SERVERS_SEED`, the committed `allowed-servers.json`) | the same shape | whenever the key above names no list |
 
-Naming the whitelist's path is the switch. With it `null`, the compiled default
-is a lane that names no file, the attach whitelist is the startup snapshot it has
-always been, and no control file is opened. #264 retired the third key, the
-desired backend that moved a running lane, with the routing that superseded it.
+**Each key is its own switch.** Naming the whitelist's path turns the attach
+whitelist into a file; with it `null`, the compiled default is a lane that names
+no file and the whitelist is the startup snapshot it has always been. Naming the
+server list's path does the same for that list, and the list has a fallback the
+whitelist does not: when the named file offers no list, the committed seed
+answers.
+
+#264 retired the third key, the desired backend that moved a running lane, with
+the routing that superseded it.
 
 The whitelist is read through `createWhitelistStore` (`src/custody/store.js`), in
 the shape it already has, with `reloadEachUse` on. The core's login review takes
