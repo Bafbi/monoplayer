@@ -38,26 +38,18 @@ to `image@sha256:<digest>`.
 
 ## Secrets (never committed)
 
-Two secrets; only `gate-b-velocity` is new. The RCON secret already exists
-from G0.
+`gate:up` creates the two Secrets the M4 rows read, with random values, when they
+are absent: `gate-<instance>-rcon` (key `password`) and
+`gate-<instance>-velocity` (key `forwarding-secret`). The instance is what follows
+`monoplayer-gate-` in the name `scripts/gate-lane.sh name` prints. It creates only the
+ones the rows it wakes read. `gate:down` deletes the ones it made, so a stopped lane
+leaves no value behind. An operator's Secret survives every `down`
+([deploy/driver/README.md](../deploy/driver/README.md)).
 
-```bash
-# forwarding secret shared by Velocity and the Paper backend.
-# Created by kubectl; the value lives in the cluster only.
-kubectl -n monoplayer-gate-b create secret generic gate-b-velocity \
-  --from-literal=forwarding-secret="$(openssl rand -hex 16)" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# gate-b-rcon: only if it does not exist yet (G0 step, unchanged):
-kubectl -n monoplayer-gate-b create secret generic gate-b-rcon \
-  --from-literal=password="$(openssl rand -hex 16)" \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-How the secret travels without landing in a ConfigMap:
+Neither value is ever in git. How the secret travels:
 
 - Velocity: secret mounted as a file and referenced by an absolute path
-  (`velocity.toml` → `forwarding-secret-file=/run/secrets/gate-b-velocity/forwarding-secret`).
+  (`velocity.toml` → `forwarding-secret-file=/run/secrets/gate-<instance>-velocity/forwarding-secret`).
 - Paper backend: the official `PAPER_VELOCITY_SECRET` environment override
   (docs.papermc.io/paper/reference/system-properties, Paper PR #10127).
 
@@ -82,8 +74,8 @@ three to 1, and says how long it waits before it waits (#115):
 ```bash
 mise run gate:up -- velocity paper-m4 toxiproxy
 
-kubectl -n monoplayer-gate-b logs deploy/paper-m4 --tail=100 | grep -E "proxies.velocity|Done"
-kubectl -n monoplayer-gate-b logs deploy/velocity --tail=50
+kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/paper-m4 --tail=100 | grep -E "proxies.velocity|Done"
+kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/velocity --tail=50
 ```
 
 `mise run gate:down` puts them back to sleep. Every gate world is an `emptyDir`,
@@ -97,7 +89,7 @@ secret comes from the env override. If Paper logs the Velocity-support error
 fall back by patching the ConfigMap in-cluster to add
 `proxies.velocity.secret: '<forwarding secret>'` (operator action, recorded in
 the transcript, the value still never goes into git) and
-`kubectl -n monoplayer-gate-b rollout restart deploy/paper-m4`. Do not
+`kubectl -n "$(scripts/gate-lane.sh name)" rollout restart deploy/paper-m4`. Do not
 silently ignore this checkpoint.
 
 SLP smoke (server list ping must answer from Velocity; nothing joins yet):
@@ -110,23 +102,23 @@ import("minecraft-protocol").then(mc => {
     if (err) { console.error("SLP failed:", err.message); process.exit(1) }
     console.log("SLP ok:", r.description ?? r.motd)
   })
-})' monoplayer-gate-b-velocity.tail41e568.ts.net
+})' "$(scripts/gate-lane.sh name)-velocity.tail41e568.ts.net"
 ```
 
-`kubectl -n monoplayer-gate-b get svc velocity-m4` publishes the Tailscale
+`kubectl -n "$(scripts/gate-lane.sh name)" get svc velocity-m4` publishes the Tailscale
 hostname (pre-Monoplayer only). Then the **login smoke**, run manually on
 `nath` with the Bafbi/Prism client (this is what G0 already proved bare-metal):
-join `monoplayer-gate-b-velocity.tail41e568.ts.net:25565`, render, move,
-disconnect. Evidence:
+join `<lane>-velocity.tail41e568.ts.net:25565`, where the lane is what
+`scripts/gate-lane.sh name` prints, then render, move, disconnect. Evidence:
 
 ```bash
 # exactly ONE backend login for the whole smoke — the future backendLogins=1
-kubectl -n monoplayer-gate-b exec deploy/paper-m4 -- rcon-cli list
-kubectl -n monoplayer-gate-b logs deploy/paper-m4 | grep -E "logged in with entity id|joined the game"
+kubectl -n "$(scripts/gate-lane.sh name)" exec deploy/paper-m4 -- rcon-cli list
+kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/paper-m4 | grep -E "logged in with entity id|joined the game"
 # Bafbi/Velocity must appear on the backend, the backend must NOT show
 # Velocity as a player name, and a *second* join after reconnect must add a
 # *second* login line — which on the B-lane becomes part of the invariant.
-kubectl -n monoplayer-gate-b logs deploy/velocity | grep -E "joined|connected" 
+kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/velocity | grep -E "joined|connected" 
 ```
 
 Note Velocity's `login-ratelimit = 3000`: a quit-rejoin inside 3 s is
@@ -169,19 +161,19 @@ enable verb in `toxiproxy-cli`; flip listeners via the HTTP API (ClusterIP-only,
 reachable from inside the namespace):
 
 ```bash
-kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \
+kubectl -n "$(scripts/gate-lane.sh name)" run toxiproxy-curl --rm -i --restart=Never \
   --image=curlimages/curl:8.11.1 \
   -- -s -X POST -H 'content-type: application/json' \
        -d '{"enabled":true}' http://toxiproxy-api:8474/proxies/puppet-paper-m4
 
 # state (jq-free; the API answers JSON):
-kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \
+kubectl -n "$(scripts/gate-lane.sh name)" run toxiproxy-curl --rm -i --restart=Never \
   --image=curlimages/curl:8.11.1 \
   -- -s http://toxiproxy-api:8474/proxies
 
 # nuke-switch: /reset re-enables everything AND clears all toxics (between
 # fault reps the B-lane runner should prefer it over hand-cleanup):
-kubectl -n monoplayer-gate-b run toxiproxy-curl --rm -i --restart=Never \
+kubectl -n "$(scripts/gate-lane.sh name)" run toxiproxy-curl --rm -i --restart=Never \
   --image=curlimages/curl:8.11.1 \
   -- -s -X POST -d '{}' http://toxiproxy-api:8474/reset
 ```
@@ -208,7 +200,7 @@ ships inside the velocity/mc-proxy image, so no extra image is pulled):
 
 ```bash
 # SLP through the toxiproxy listener, run from the velocity pod:
-kubectl -n monoplayer-gate-b exec deploy/velocity -- \
+kubectl -n "$(scripts/gate-lane.sh name)" exec deploy/velocity -- \
   mc-monitor status --host toxiproxy --port 25570
 # expect: a status line answering from Velocity (ping passthrough is off on
 # purpose, so the motd comes from velocity.toml, not from paper-m4).
@@ -286,21 +278,13 @@ The F1-F6 fault rows remain pending; that is the B3 lane.
 
 ## Teardown (operator; never leaves secrets behind casually)
 
-`mise run gate:down` is the resting state: every workload at 0 replicas, and the
-objects, the ConfigMaps and the Secrets still there, so the next `mise run gate:up`
-is one command. Removing the lane for good is a separate, destructive run:
+`mise run gate:down` is the resting state: every workload at 0 replicas, the
+Deployments, the Services and the ConfigMaps still there, and the Secrets `gate:up`
+generated already deleted. So the next `mise run gate:up` is one command, and it pays
+the cold start.
 
-```bash
-kubectl -n monoplayer-gate-b get svc velocity-m4        # capture hostname first
-# delete exactly the M4 files' objects; G0's paper.yaml objects stay.
-# (kubectl delete -k deploy/driver would ALSO delete the G0 paper pod —
-#  do NOT use -k for teardown while paper.yaml is in the same kustomization.)
-kubectl delete -f deploy/driver/velocity.yaml \
-                -f deploy/driver/paper-m4.yaml \
-                -f deploy/driver/toxiproxy.yaml
-kubectl -n monoplayer-gate-b delete secret gate-b-velocity
-```
-
-Both files group their objects with `---` and carry a namespace, so
-`kubectl delete -f` removes configmap + deployment + services per file and
-leaves the G0 backend (`deploy/driver/paper.yaml`) untouched.
+A lane that is done for good is the reaper's. `mise run lanes -- --reap` deletes one
+idle past six hours. It reads the clock `gate:up` wrote. It keeps a lane that still
+runs a pod, or that holds a Secret this script did not make. It never deletes the
+transfer testbed's own namespace either, which is fixed and belongs to no worktree
+(#318, #360).
