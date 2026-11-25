@@ -15,6 +15,7 @@ import {
   claimFailureText,
   claimRestoreTitle,
   disconnectRefusalText,
+  pickEmptyText,
   pickIdFor,
   pickRefusalText,
   pickTarget,
@@ -163,9 +164,22 @@ test('#257 a library-shaped click is not read as a pick', () => {
 })
 
 test('#257 the refusal says what happened, and names the server', () => {
-  assert.match(pickRefusalText({ server: 'sky' }), /sky/)
-  assert.match(pickRefusalText({ server: null }), /that server/)
-  assert.match(pickRefusalText({}), /could not be offered on this lane/)
+  assert.equal(pickRefusalText({ server: 'sky' }), 'Monoplayer: sky could not be offered on this lane.')
+})
+
+// #315: a lane that offers nothing tells the client about the lane. The client
+// clicked nothing, so a sentence about a server names a choice nobody made, and one
+// it cannot make again. The operator's half of the same fact is the offer's log line,
+// which carries the reason the list is empty (src/service/start-live.js).
+test('#315 a lane with no list refuses the join in a sentence about the lane', () => {
+  assert.equal(pickEmptyText(), 'Monoplayer: this lane is not offering any server to join.')
+  assert.doesNotMatch(pickEmptyText(), /that server/)
+
+  // A dialog this leg could not write is the lane's too: the servers exist and none of
+  // them reached the client. It is a different fact from an empty list, so it keeps a
+  // sentence of its own.
+  assert.equal(pickRefusalText({ server: null }), 'Monoplayer: this lane could not show its server list.')
+  assert.equal(pickRefusalText({}), 'Monoplayer: this lane could not show its server list.')
 })
 
 // #265: the name a row is offered under is the address its claim dials, so a
@@ -390,6 +404,7 @@ test('#265 the picker offers the allowed-server list, and says which file answer
   }))
   assert.deepEqual(control, {
     source: 'control',
+    reason: null,
     rows: [
       { name: 'paper:25565', state: 'down', driver: null, spectators: 0 },
       { name: '127.0.0.1:25566', state: 'down', driver: null, spectators: 0 }
@@ -399,14 +414,21 @@ test('#265 the picker offers the allowed-server list, and says which file answer
   // The seed answers when the live file cannot, and the source says so.
   assert.deepEqual(pickerOfferedRows(() => ({ servers: [{ host: 'sky', port: 25565 }], source: 'seed' })), {
     source: 'seed',
+    reason: null,
     rows: [{ name: 'sky:25565', state: 'down', driver: null, spectators: 0 }]
   })
 
   // A lane with no allowed-server key offers nothing, and says that too rather
   // than inventing the configured backend.
-  assert.deepEqual(pickerOfferedRows(null), { source: 'none', rows: [] })
-  assert.deepEqual(pickerOfferedRows(() => ({ servers: [], source: 'none' })), { source: 'none', rows: [] })
+  assert.deepEqual(pickerOfferedRows(null), { source: 'none', reason: null, rows: [] })
+  // #315: the reason an empty list is empty travels with the offer, so the log line
+  // that says "nothing offered" also says what to edit. The picker does not invent
+  // one: a reader that reports no reason leaves it null.
+  assert.deepEqual(pickerOfferedRows(() => ({ servers: [], source: 'none', reason: 'no_key' })),
+    { source: 'none', reason: 'no_key', rows: [] })
+  assert.deepEqual(pickerOfferedRows(() => ({ servers: [], source: 'none' })), { source: 'none', reason: null, rows: [] })
   // A reader that answers with no list is the broken-file case: the picker has
   // nothing to offer, and no throw reaches the join.
-  assert.deepEqual(pickerOfferedRows(() => ({ servers: null, source: 'none' })), { source: 'none', rows: [] })
+  assert.deepEqual(pickerOfferedRows(() => ({ servers: null, source: 'none', reason: 'unreadable' })),
+    { source: 'none', reason: 'unreadable', rows: [] })
 })

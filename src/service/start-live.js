@@ -98,6 +98,9 @@ import { MAX_DEADLINE_MS, PREAUTH_CLOSE_REASON } from '../core/preauth-window.js
 // #265: the rows a picker lane offers. The list is the allowed-server key (#262),
 // read at each offer, so a panel edit shows at the next join. Each row is named for
 // the address a claim dials (src/core/picker.js).
+//
+// #315: the answer is the offer itself, `{ source, reason, rows }`. A lane's picker
+// hands it to the front, which draws the rows and names the reason when there are none.
 export function createPickerServerReader ({ control, log = () => {} } = {}) {
   if (typeof control?.allowedServers !== 'function') {
     throw new TypeError('createPickerServerReader: control must offer allowedServers')
@@ -105,16 +108,20 @@ export function createPickerServerReader ({ control, log = () => {} } = {}) {
   // The last answer this lane offered, as one string. A join reads the list more
   // than once, and an operator needs one line per answer, not one per read. The
   // names are compared as one JSON array, because a host can hold a separator a
-  // joined string would read as another row.
+  // joined string would read as another row. #315: the reason is part of the answer,
+  // because a lane that stays empty for a second reason is a second fact to fix.
   let lastAnswer = null
-  return function pickerServerRows () {
+  return function pickerOffer () {
     const offered = pickerOfferedRows(control.allowedServers)
-    const answer = offered.source + '|' + JSON.stringify(offered.rows.map(row => row.name))
+    const answer = offered.source + '|' + String(offered.reason ?? '') + '|' +
+      JSON.stringify(offered.rows.map(row => row.name))
     if (answer !== lastAnswer) {
       lastAnswer = answer
-      log('pickerOffered', { source: offered.source, servers: offered.rows.length })
+      log('pickerOffered', { source: offered.source, servers: offered.rows.length, reason: offered.reason })
     }
-    return offered.rows
+    // The offer, not only its rows: the front says why the lane offers nothing when it
+    // has nothing to draw (#315).
+    return offered
   }
 }
 

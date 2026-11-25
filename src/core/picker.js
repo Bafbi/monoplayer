@@ -170,10 +170,14 @@ export function pickerOfferedRows (read = null) {
   const servers = Array.isArray(list?.servers) ? list.servers : []
   return {
     source: typeof list?.source === 'string' ? list.source : 'none',
+    // #315: why there is no list when there is none, so the offer's log line can name
+    // what to edit. The picker passes the reason through and never invents one: a
+    // reader that reports no reason leaves it null.
+    reason: typeof list?.reason === 'string' ? list.reason : null,
     rows: servers.map(server => ({
       name: String(server?.host ?? '') + ':' + String(server?.port ?? ''),
       // The list names servers, not bodies: what a body is doing is the lane's
-      // answer at the offer (src/legs/live-front.js, `pickerServerRows`).
+      // answer at the offer (src/legs/live-front.js, `pickerOffer`).
       state: 'down',
       driver: null,
       spectators: 0
@@ -426,12 +430,24 @@ export function claimFailureText ({ server = null } = {}) {
   return 'Monoplayer: ' + named + ' accepted the connection and could not be entered.'
 }
 
-// What the client is told when the picker cannot go on: no servers to offer, or a
-// dialog that could not be written. A pick that names an offered server opens that
-// server's dialog (#266), and a claim on it dials that body (#258), so neither of
-// those is what this sentence is for. It is for a lane that cannot show the list at
-// all.
+// #315: what the client is told when the lane has no server to offer it. The client
+// clicked nothing, so the sentence is about the lane. "That server could not be
+// offered" named a choice nobody made, and a choice it cannot make again.
+//
+// One sentence for every empty state, because the fix is never the client's. An
+// operator reads which of the five states it was on the offer's log line
+// (src/service/control.js), and a player can do nothing with that.
+export function pickEmptyText () {
+  return 'Monoplayer: this lane is not offering any server to join.'
+}
+
+// What the client is told when a dialog could not be written. A pick that names an
+// offered server opens that server's dialog (#266), and a claim on it dials that
+// body (#258), so neither of those is what this sentence is for. It is for a lane
+// that cannot show the list at all, and the servers exist: none of them reached the
+// client. A named server keeps its own sentence, because then one row is the one
+// that failed.
 export function pickRefusalText ({ server = null } = {}) {
-  const named = server === null ? 'that server' : server
-  return 'Monoplayer: ' + named + ' could not be offered on this lane.'
+  if (server === null) return 'Monoplayer: this lane could not show its server list.'
+  return 'Monoplayer: ' + server + ' could not be offered on this lane.'
 }
