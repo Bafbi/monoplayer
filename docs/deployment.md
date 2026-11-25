@@ -284,9 +284,10 @@ Who may set it: the person who writes a lane's own manifests, for a lane
 whose job is a test double. Never this repository's live lane: `deploy/manifests/`
 must not carry the key, `test/tooling/live-manifests.test.js` fails if any file
 there mentions it, and the reason is
-[the ADR](adr/the-product-may-be-a-test-double.md). The key is an environment
-decision, not a control-document key, so no operator action can turn it on in a
-running lane. A start record carries `offlineLegs: true`, so a lane says which
+[the ADR](adr/the-product-may-be-a-test-double.md). The key is a
+startup decision, from this lane's manifests or from a `--config` document, and
+never a control-document key. No operator action can turn it on in a running
+lane. A start record carries `offlineLegs: true`, so a lane says which
 legs it built.
 
 Telemetry and journal:
