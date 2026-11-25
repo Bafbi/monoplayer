@@ -76,8 +76,11 @@ mise run driver:scenario
 
 `src/driver/lane.js` is the driver's reader, and it asks `scripts/gate-lane.sh name`.
 `--server` and `--rcon-namespace` remain per-run overrides for a caller that knows a
-better address; they are not a second way to choose a lane. `MONOPLAYER_GATE_NAMESPACE`
-names a lane for every rung at once.
+better address; they are not a second way to choose a lane. A run that names
+`GATEB_RCON_NAMESPACE` (or `--rcon-namespace`) and leaves the join address to this
+worktree stops instead, because it would join one lane's Paper and administer another
+lane's Deployments. Pass `--server` too when that is what you mean.
+`MONOPLAYER_GATE_NAMESPACE` names a lane for every rung at once.
 
 That is the task's own command with the lane named. One run at a time on the
 display host: the rung relaunches one Prism instance over SSH and drives its
