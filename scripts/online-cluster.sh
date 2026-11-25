@@ -100,6 +100,9 @@ LEASE_DURATION=${MONOPLAYER_LEASE_DURATION:-900}
 LEASE_WAIT=${MONOPLAYER_LEASE_WAIT:-0}
 LEASE_POLL=${MONOPLAYER_LEASE_POLL:-5}
 LEASE_RENEW_INTERVAL=0
+# How often the release re-reads the marker a renewal in flight clears. It is not a delay:
+# the wait ends when that write lands, and it is bounded by one kubectl call.
+LEASE_TICK_POLL=0.05
 LEASE_HELD=''
 LEASE_HOLDER=''
 LEASE_JSON=''
@@ -436,13 +439,58 @@ lease_acquire () {
   done
 }
 
-# One renewal. A read or a write that failed is a tick to skip, not a lost lease: the
-# account is only in danger once another run holds the lease.
+# --- ordering the release after the renewal (#355) ----------------------------
+#
+# The renewal loop outlives the run, so a tick can be inside its write when the run
+# releases. Killing the loop does not stop that write. The write is the tick's own kubectl
+# child, so it lands after the loop is dead. Removing `held` stops the next tick and says
+# nothing about the tick that is already writing. Two markers in the state directory say
+# which is which:
+#
+#   releasing   the release has started: a tick that sees it writes nothing
+#   tick        a renewal is inside its write: the release waits for that write
+#
+# The release marks, then waits, then writes. The tick marks, checks, writes, unmarks.
+# Whichever of the two runs first, the release writes last. Either the tick saw `releasing`
+# and wrote nothing, or the release saw `tick` and waited for that write to land.
+lease_releasing () { [ -e "$LEASE_STATE/releasing" ]; }
+lease_tick_begin () { : >"$LEASE_STATE/tick"; }
+lease_tick_end () { rm -f "$LEASE_STATE/tick"; }
+
+# A condition wait, not a delay. What it waits for is one read, one decision and one
+# write, and the wait ends when that write lands. It assumes kubectl returns, as every
+# other lease call here does. A lease that is never released expires instead.
+lease_wait_tick () {
+  [ -e "$LEASE_STATE/tick" ] || return 0
+  while [ -e "$LEASE_STATE/tick" ]; do sleep "$LEASE_TICK_POLL"; done
+  return 0
+}
+
+# One renewal, inside the marker the release waits on. The marker covers the write and
+# nothing else. The tick creates it before the release-in-progress check and removes it
+# after the write, so a release that finds the marker waits for that one write.
 lease_renew_once () {
+  local status=0
+  lease_tick_begin
+  lease_renew_tick || status=$?
+  lease_tick_end
+  return "$status"
+}
+
+# The renewal itself. A read or a write that failed is a tick to skip, not a lost lease:
+# the account is only in danger once another run holds the lease.
+lease_renew_tick () {
   lease_load lenient || return 0
   lease_decide renew
   case "$LEASE_ACTION" in
-    replace) lease_write replace || return 0 ;;
+    replace)
+      # The release sets this before it waits for the marker above. A tick that finds it
+      # has nothing to add, because the release writes last.
+      if lease_releasing; then
+        say "the account lease $(lease_ns)/$LEASE_NAME is being released, so this renewal was dropped"
+        return 0
+      fi
+      lease_write replace || return 0 ;;
     lost)
       # Another run has the account now. Two runs on one refresh chain is the thing the
       # lease exists to prevent, so this one stops instead of going on as a second writer.
@@ -473,6 +521,10 @@ parent_gone () {
 # taken the lease, which ends the run.
 lease_renew_loop () {
   local parent=$$
+  # A tick's marker must not outlive this loop, or a release waits for a tick that has
+  # already ended. This runs when the loop leaves for any reason of its own, including a
+  # read that stops it.
+  trap 'rm -f "$LEASE_STATE/tick"' EXIT
   while [ -f "$LEASE_STATE/held" ]; do
     sleep "$LEASE_RENEW_INTERVAL" || exit 0
     if parent_gone "$parent"; then
@@ -490,11 +542,27 @@ lease_renew_loop () {
 }
 
 # Released on every path, and only by the run that took it: a run whose lease expired
-# and was taken by another leaves that one alone.
+# and was taken by another leaves that one alone. The release is written after the last
+# renewal, never before it.
 lease_release () {
   [ -n "$LEASE_HELD" ] || return 0
   LEASE_HELD=''
+  # The release is the last write. These five steps are the order (#355):
+  #
+  #   1. `releasing` stops a tick that has not written yet, so it drops its write.
+  #   2. removing `held` stops the next tick from starting.
+  #   3. the release waits for the tick that is already inside its write, so that write
+  #      lands first. A kill at step 4 cannot close this window. The write belongs to the
+  #      tick's kubectl, which outlives the loop.
+  #   4. the release stops the loop, now that nothing is in flight and no tick can start.
+  #   5. the release writes.
+  #
+  # The other order, kill then write, is the race this replaced. The kill reaches the loop,
+  # and the loop's kubectl writes after the release. The lease then names a run that has
+  # exited, and the next run is refused for the rest of the duration.
+  [ -z "$LEASE_STATE" ] || : >"$LEASE_STATE/releasing"
   [ -z "$LEASE_STATE" ] || rm -f "$LEASE_STATE/held"
+  [ -z "$LEASE_STATE" ] || lease_wait_tick
   [ -z "$LEASE_RENEW_PID" ] || kill "$LEASE_RENEW_PID" 2>/dev/null || true
   LEASE_RENEW_PID=''
   lease_load lenient || return 0
@@ -544,7 +612,7 @@ hold () {
   [ $# -gt 0 ] || die 'hold needs a command: scripts/online-cluster.sh hold [--lease-wait SECONDS] CMD [ARG...]' 2
   [ -d "$SECRETS/accounts" ] ||
     die "no accounts in $SECRETS/accounts. Run mise run secrets:link first, because the account this run holds the lease for lives there" 2
-  LEASE_STATE=$(mktemp -d)
+  LEASE_STATE=$(mktemp -d "${TMPDIR:-/tmp}/monoplayer-lease.XXXXXXXX")
   LEASE_WRITE=$LEASE_STATE/lease.json
   trap on_exit EXIT
   lease_acquire
@@ -583,7 +651,7 @@ for (const entry of fs.readdirSync(root)) {
 [ -n "$attach_dir" ] || die "no account with alias $ATTACH_ALIAS in $SECRETS/accounts"
 
 # Taken before the custody is read, so a run that is refused has touched no token.
-LEASE_STATE=$(mktemp -d)
+LEASE_STATE=$(mktemp -d "${TMPDIR:-/tmp}/monoplayer-lease.XXXXXXXX")
 LEASE_WRITE=$LEASE_STATE/lease.json
 trap on_exit EXIT
 lease_acquire
