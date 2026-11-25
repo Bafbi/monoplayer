@@ -346,6 +346,13 @@ const NOOP_JOURNAL = Object.freeze({
 // (0x04). The speeds are the protocol's own defaults. Proof of the field names:
 // `node tools/protocol.mjs frame 26.1 play toClient game_state_change` and `... abilities`;
 // 26.2 declares the same two frames unchanged.
+// #312: the words a second client reads on a lane that offers no picker. One
+// sentence, because the client has no action left: there is no dialog to answer
+// and no claim to make. It rides the login-state disconnect, so it is the whole
+// of what the player is told.
+export const ALREADY_DRIVEN_TEXT =
+  'Monoplayer: another player is already driving this server. Try again when they leave.'
+
 const GAME_MODE_CHANGE_REASON = 3
 const GAME_MODE_SPECTATOR = 3
 const SPECTATOR_ABILITY_FLAGS = 0x07
@@ -726,12 +733,12 @@ export function createMonoplayer ({
       emit('attach_denied', decision)
       return decision
     }
-    // Warm/WARM-or-DETACHED is the attach-ready set. A second login while
-    // already attached still passes here so attachPlayer can answer
-    // 'already_attached' with the reason the caller expects.
-    // #16: a client may also attach while the backend connection is still in
-    // its configuration phase. It follows the puppet's configuration stream
-    // and lands in play when the backend logs in.
+    // Warm is the attach-ready set. #16: a client may also attach while the
+    // backend connection is still in its configuration phase. It follows the
+    // puppet's configuration stream and lands in play when the backend logs in.
+    // A second client is not refused here on a lane with a picker: it is sent to
+    // the picker, and the claim refuses it (#259). A lane with no picker refuses
+    // it below (#312).
     const canAttachConfiguring = backendConfiguring && session.state === STATES.BOOT
     // #257/#259: on a lane with a picker, the picker is the door. Every admitted
     // join reads it, whatever the session is doing, because the claim is the only
@@ -749,15 +756,40 @@ export function createMonoplayer ({
       telemetry.metric('monoplayer.pickers', 1, { player: payload.name })
       return { ...decision, allowed: true, phase: 'picker', picker: true }
     }
-    // #269: a body that already has a driver is not attachable. The second client on
-    // a lane without the picker has no claim to make, so the session answers at the
-    // attach, which is the one authority such a lane has.
-    const attachable = (session.isAttachReady() || canAttachConfiguring) && !attached
-    if (!attachable) {
-      // #269: a lane with no picker has no claim for a second client to make, so
-      // its login passes and the session answers `already_attached` at the attach.
-      // A join with no body at all is a denial the front turns into a clear kick.
-      if (attached) return decision
+    // #312: the picker branch above returned, so this is a lane that offers no
+    // picker: there is no dialog to send the second client to, and no claim for it
+    // to make. #269 deleted the attach slot that used to refuse it at beforeLogin,
+    // and that slot was what made the refusal early. Left to the attach, the only
+    // answer is the session's `already_attached` at playerJoin — which the client
+    // reads AFTER the body's cached configuration frames have been written to it.
+    // The login decision is the last place this lane can say no before any of
+    // them, so it says no here, in words a player reads.
+    if (attached) {
+      const denied = {
+        allowed: false,
+        reason: 'already_driven',
+        text: ALREADY_DRIVEN_TEXT,
+        phase: decision.phase,
+        // The refusal names the lane shape that produced it: no picker, so the
+        // claim had nothing to refuse and the login is the door.
+        lane: 'no_picker',
+        uuid: payload.uuid,
+        name: payload.name
+      }
+      metrics.denials++
+      telemetry.metric('monoplayer.denials', 1, { reason: denied.reason, phase: denied.phase, lane: denied.lane })
+      log('attachDenied', {
+        reason: denied.reason,
+        phase: denied.phase,
+        lane: denied.lane,
+        uuid: payload.uuid,
+        text: denied.text
+      })
+      emit('attach_denied', denied)
+      return denied
+    }
+    // A join with no body at all is a denial the front turns into a clear kick.
+    if (!(session.isAttachReady() || canAttachConfiguring)) {
       const denied = {
         allowed: false,
         reason: 'backend_not_ready',

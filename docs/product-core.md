@@ -2,8 +2,8 @@
 
 Status: **live-verified** for attach, render, move, break, place, and
 detach/reattach against Paper G0 (see [testdata/live-attach-verdict.md](../testdata/live-attach-verdict.md)).
-The socket-free unit suite runs 1057 tests (`mise run test`), and `mise run check` also runs the
-52-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
+The socket-free unit suite runs 1486 tests (`mise run test`), and `mise run check` also runs the
+74-assertion offline loopback. The protocol spike (`src/spike/proxy.js`) is frozen
 and untouched.
 
 Live note: the first live attach failed with `add_entity ... 114 bytes
@@ -284,6 +284,37 @@ staggered silent sockets in the window never lets it empty.
 A sustained flood is not ended by this. An attacker who reconnects every 30 s
 still closes the window for the moments it is full. The deadline bounds one
 socket's occupancy; the per-source limits that answer a flood arrive with #204.
+
+### One driver, and the lanes that can refuse a second client (#269, #312)
+
+A body carries one driver. Which mechanism refuses the second client depends on the
+lane's shape, and the two shapes refuse at different points.
+
+A lane that offers a picker refuses by claim. Every admitted join reads the picker,
+and the claim is what refuses a second client on a driven body: one sentence naming
+the holder, and the client is still connected, in the picker, able to spectate or
+pick something else (#259).
+
+A lane that offers no picker has no claim to refuse at, and #269 deleted the front
+leg's attach slot, which is what used to refuse the second client at `beforeLogin`.
+Refusing at the attach is one phase too late: the client's configuration has already
+been replayed to it from the body's cache, and the `already_attached` answer arrives
+at `playerJoin` — a kick read after a phase the client should never have been shown
+(#312). So the core's login decision refuses it, before Login Success and before
+every configuration frame, with reason `already_driven`, the field `lane:
+no_picker`, and one sentence the front writes into the login-state `disconnect`:
+`Monoplayer: another player is already driving this server. Try again when they
+leave.` The login decision is the last place this lane shape can refuse, and the
+only one it needs.
+
+The session keeps `already_attached` for a client the login admitted earlier: a
+connection that fails between its login and its `playerJoin` leaves a login decision
+that is no longer true, and the session is still the authority at the attach.
+
+What a loopback proves: O67 refuses a second client on a pickerless lane with no
+configuration frame and no login success, and O60b sends one to the picker on a lane
+that offers it. What a loopback cannot prove: what a vanilla client draws for either
+sentence.
 
 ### The configuration baseline and the picker (#257)
 

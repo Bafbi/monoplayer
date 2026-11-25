@@ -383,7 +383,10 @@ function evaluateCoreDecision (coreDecision) {
     return { ok: false, reason: 'core_decision_invalid' }
   }
   if (decision.allowed !== true) {
-    return { ok: false, reason: decision.reason ?? 'core_denied' }
+    // #312: a denial may carry the words the client reads. The kick is the one
+    // message a refused client gets, so the sentence travels with it rather than
+    // a slug the player cannot act on.
+    return { ok: false, reason: decision.reason ?? 'core_denied', text: decision.text ?? null }
   }
   // #257: the core may allow a login that has no backend to attach to, and say so
   // with `picker: true`. The flag is carried, not inferred: the front serves the
@@ -802,8 +805,8 @@ function createFrontLeg ({
     })
     if (!decision.ok) {
       metrics.denied++
-      log('attachDenied', { username, uuid: uuid ?? null, reason: decision.reason })
-      denyConnection(client, decision.reason)
+      log('attachDenied', { username, uuid: uuid ?? null, reason: decision.reason, text: decision.text ?? null })
+      denyConnection(client, decision.reason, decision.text)
       return
     }
 
@@ -858,7 +861,11 @@ function createFrontLeg ({
     }
   }
 
-  function denyConnection (client, reason) {
+  // `text`, when the core sent one, is the sentence the client reads: the
+  // server's own end() writes it into the login-state disconnect before the
+  // serializer ends, so the player sees words (#312). Without it the kick keeps
+  // the reason the operator greps for.
+  function denyConnection (client, reason, text = null) {
     // #201: a denial before the whitelist accepted — a second attach, or a UUID
     // that is not on the list — stays counted until its socket ends, which the
     // library's close timeout bounds. A denial after the accept, such as a
@@ -876,7 +883,7 @@ function createFrontLeg ({
         (name === 'compress' || name === 'success') ? false : originalWrite(name, ...args)
     }
     try {
-      client.end(`attach denied (${reason})`)
+      client.end(text ?? `attach denied (${reason})`)
     } catch {
       // The library's end failed, so its close timeout was never armed and no
       // close would ever take this connection out of the window. The socket has
