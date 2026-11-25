@@ -6,10 +6,14 @@
 //   service/deployment  <deployment>  (in the run's lane, from src/driver/lane.js)
 //   rcon                kubectl exec deploy/<rcon.deployment> -- rcon-cli
 //
-// No row carries a lane (#282). A lane is the run's, not the registry's: one worktree
-// gets one, and a row that spelled one told a renamed lane's run to administer the
-// lane that shipped. rconTarget takes the lane as an argument, and the tailnet name
-// comes from lane.js's tailnetHost and the row's deployment.
+// No row carries a gate lane's namespace (#282). A gate lane is the run's, not the
+// registry's: one worktree gets one, and a row that spelled one told a renamed lane's
+// run to administer the lane that shipped. rconTarget takes the namespace as an
+// argument, and the tailnet name comes from lane.js's tailnetHost and the row's
+// deployment.
+//
+// `lane` on a row is the M-row (M1 to M5), which is a different word: it is not a gate
+// lane (GLOSSARY.md).
 
 // Toxiproxy listeners ("puppet leg" per the plan: Monoplayer back leg ->
 // Toxiproxy -> Velocity/Vanilla/Fabric). The M1 vanilla and M3 fabric rows are
@@ -179,9 +183,9 @@ export function activeBackends () {
   return BACKENDS.filter(b => b.status === 'running')
 }
 
-// The row's RCON target in the lane the run named. The lane is a parameter because
-// it is decided at the run's boundary, by src/driver/lane.js, and a registry that
-// carried one would be a second answer (#282).
+// The row's RCON target in the gate lane the run named. The namespace is a parameter
+// because the lane is decided at the run's boundary, by src/driver/lane.js, and a
+// registry that carried one would be a second answer (#282).
 export function rconTarget (id, namespace) {
   const backend = getBackend(id)
   return backend ? { namespace, deployment: backend.rcon.deployment } : null

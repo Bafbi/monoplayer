@@ -23,12 +23,12 @@ test('each backend row has a unique id, deployment and lane', () => {
   assert.equal(BACKENDS.length, deployments.size, 'deployments unique')
 })
 
-test('rows carry no lane, and an rcon target takes the one the run names', () => {
-  // #282: a row spelled the lane that shipped, and a renamed lane's run then
-  // administered it. The lane belongs to the run, so the registry has none and
-  // rconTarget is handed the one src/driver/lane.js resolved.
+test('rows carry no gate namespace, and an rcon target takes the one the run names', () => {
+  // #282: a row spelled the lane's namespace that shipped, and a renamed lane's run
+  // then administered it. The namespace belongs to the run, so the registry has none
+  // and rconTarget is handed the one src/driver/lane.js resolved.
   for (const backend of BACKENDS) {
-    assert.equal('namespace' in backend, false, 'the row names no lane: ' + backend.id)
+    assert.equal('namespace' in backend, false, 'the row names no gate namespace: ' + backend.id)
     assert.equal('namespace' in backend.rcon, false, 'and its rcon target names none: ' + backend.id)
     assert.equal(backend.rcon.deployment, backend.deployment)
     assert.equal(rconTarget(backend.id, LANE).deployment, backend.deployment)
