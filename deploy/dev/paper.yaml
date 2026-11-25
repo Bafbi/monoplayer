@@ -1,9 +1,26 @@
 # The dev Paper server. Disposable: emptyDir, no world persistence.
 #
-# Online mode and secure profile are on, like the live backend region, so the
-# lane exercises the same sign-in and chat-signing path. The whitelist is on and
-# empty in the manifest: the puppet account has to be added by the operator, or
-# the backend rejects the join.
+# Offline, for the lane #391 builds (#392). The front is this Paper's only client:
+# it replays the puppet's session to the attaching player, so the mode here
+# decides nothing about who may join the lane, and the front still verifies that
+# player against Mojang and the attach whitelist before a picker or a claim.
+# What the mode is for is the offline legs the composition root does not have
+# yet: a lane that exists to be joined by bots cannot run a Paper that refuses a
+# login Mojang never verified.
+#
+# Offline mode means the name is the identity, so a pod that can reach this
+# Service could join as any name it likes, and the tree carries no NetworkPolicy.
+# What keeps that a dev lane's problem is scope: this Paper has no tailnet
+# Service and no published port, its world is one flat disposable map, it holds
+# a second account and not GlowSquidye, and nothing sits behind it. The live
+# lane is the opposite case: it fronts Excalia for real players, and nothing in
+# this repository turns its online mode off.
+#
+# ENFORCE_SECURE_PROFILE is off for the same reason: a bot has no profile keys to
+# sign a chat line with, and this server has nothing worth signing.
+#
+# The whitelist is off and empty in the manifest, because offline mode means the
+# name is the identity and a whitelist would commit an account name to a manifest.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,13 +59,12 @@ spec:
             - name: MEMORY
               value: 1536M
             - name: ONLINE_MODE
-              value: "TRUE"
+              value: "FALSE"
             - name: ENFORCE_SECURE_PROFILE
-              value: "TRUE"
-            # Off on purpose. Online mode already decides who may join, this
-            # server is reachable only inside the cluster, and a whitelist here
-            # would mean committing an account name to a manifest. It is
-            # disposable, so a second gate buys nothing.
+              value: "FALSE"
+            # Off on purpose. This server is reachable only inside the cluster,
+            # and a whitelist here would mean committing an account name to a
+            # manifest. It is disposable, so a second gate buys nothing.
             - name: ENFORCE_WHITELIST
               value: "FALSE"
             - name: LEVEL_TYPE
