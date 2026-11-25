@@ -207,13 +207,13 @@ Run the container as uid `1000` (`node`). The image sets `USER node` and
 `EXPOSE 25565`.
 
 `envOverlay` in `src/service/start-live.js` owns the service's configuration
-surface: a name it does not read changes nothing in the config document, and
+surface. A name it does not read changes nothing in the config document, and
 `loadConfig` ignores it in silence. `MONOPLAYER_LOG` and the `OTEL_*` names
 below are read outside it, in `start-live.js` and
 `src/observability/telemetry.js`. The defaults behind the names live in the
-config document, and `node src/service/monoplayer.js --print-config` prints the
+config document. `node src/service/monoplayer.js --print-config` prints the
 values this environment resolves to. This section names what a deployment sets
-and why. It does not restate a default.
+and why, and restates no default of its own.
 
 Required:
 
@@ -227,15 +227,15 @@ Common:
 - `MONOPLAYER_VERSION`: the protocol version. The image also carries the 26.2
   data, so set `26.2` for Excalia Season 3.
 - `MONOPLAYER_PUPPET_ACCOUNT=glowsquidye`
-- `MONOPLAYER_CHAT=read-only` (default): relay server chat to the attached
-  client and drop the client's own text. `full` also speaks the client's chat
+- `MONOPLAYER_CHAT`: `read-only` relays server chat to the attached client and
+  drops the client's own text. `full` also speaks the client's chat
   and commands on the puppet leg as the account, and relays the server's signed
   player chat back. `off` blocks both directions. Set `full` only after a live
   run shows `chatCapability` with `signed: true`: a leg without profile keys
   sends an unsigned frame, and a server that enforces secure profiles answers
   that by closing the connection.
-- `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts` (the default, relative to the
-  `WORKDIR`) or the mount path
+- `MONOPLAYER_PUPPET_ACCOUNTS_DIR=/data/accounts`, relative to the `WORKDIR`,
+  or the mount path
 - `MONOPLAYER_ATTACH_WHITELIST=/control/attach-whitelist.json`: the file the
   **panel** writes (#232), not the Git ConfigMap. It is re-read at each login, so
   a UUID the panel adds is allowed on the next attempt with no restart. The

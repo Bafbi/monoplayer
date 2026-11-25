@@ -16,9 +16,9 @@ Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch a
 
 The two OTLP names are read in `src/observability/telemetry.js`. The journal
 names are `envOverlay`'s in `src/service/start-live.js`, and that function is
-the authority for them: a `MONOPLAYER_*` name it does not read changes nothing,
+the authority for them. A `MONOPLAYER_*` name it does not read changes nothing,
 and `loadConfig` ignores it in silence. The defaults behind the journal names
-live in the config document, and `node src/service/monoplayer.js --print-config`
+live in the config document. `node src/service/monoplayer.js --print-config`
 prints the values an environment resolves to.
 
 | Variable | Effect |
