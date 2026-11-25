@@ -1078,7 +1078,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
     front: `${bound.host}:${bound.port}`,
     ...accountLogFields,
     boot: boot.dialled ? 'dialled' : 'skipped',
-    backendConnected: boot.dialled ? !backend.ended : false,
+    // Null, not false: a lane that dialled nothing has no connection to report
+    // on, and false would name a fault that did not happen.
+    backendConnected: boot.dialled ? !backend.ended : null,
     configFrames: readiness?.configFrames ?? null,
     prefixFrames: readiness?.prefixFrames ?? null,
     warm: readiness?.warm ?? null,
