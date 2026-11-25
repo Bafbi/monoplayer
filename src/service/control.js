@@ -30,8 +30,8 @@ import { createWhitelistStore } from '../custody/store.js'
 export const ALLOWED_SERVERS_VERSION = 1
 
 // One address, as DNS reads it, for the question "is this the same server as that
-// one?" A host name is case-insensitive, and a trailing dot is the root label rather
-// than a second name, so two rows that spell one host both ways are one server offered
+// one?" A host name is case-insensitive. A trailing dot is the root label, not a
+// second name. So two rows that spell one host both ways are one server offered
 // twice: two picker buttons over one cache (#314, #260). The port is part of the
 // address, so one host on two ports is two servers.
 //
@@ -105,8 +105,8 @@ export function createControlDocument ({
 
   // One line per distinct refusal. A reconnect loop re-reads the same file every
   // few seconds, and a heartbeat of identical warnings is not a diagnosis. The entry
-  // is part of the refusal: an operator fixes row 1, the collision moves to row 2,
-  // and the second refusal is a second row to fix rather than the first one again.
+  // is part of the refusal. An operator fixes row 1, the collision moves to row 2,
+  // and the second refusal has a second row to fix.
   function sayOnce (event, fields) {
     const key = [event, fields.file, fields.reason ?? fields.code, fields.at]
       .map(value => String(value ?? '')).join(':')
