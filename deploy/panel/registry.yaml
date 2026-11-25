@@ -18,23 +18,9 @@
 # It is a read because it is Argo's: a write to it would be reverted by the next
 # sync, which is the whole reason the control ConfigMap is not in Git.
 #
-# `allowBackendSwitch` is whether this puppet may be pointed at another backend
-# from the panel (#233). It is the panel's own declaration, not the fence: the
-# puppet reads a desired backend only when its lane sets MONOPLAYER_CONTROL_FILE,
-# and obeys it only when it also sets MONOPLAYER_CONTROL_ALLOW_BACKEND_SWITCH=1.
-#
-# **The two halves must agree, and a test now says so.** This flag answers "may the
-# panel ask"; the lane's variables answer "will the puppet obey". True over a lane
-# that says 0 is a button that writes a document the puppet refuses once and names;
-# true over a lane with no control file is a button that writes into a file nothing
-# opens, which is the failure that was live for an hour after the panel shipped.
-# `test/tooling/live-manifests.test.js` reads both files and fails when they
-# disagree, so flipping one without the other is a red gate rather than a silent
-# no-op.
-#
-# True, because `deploy/manifests/deployment.yaml` mounts the control ConfigMap and
-# sets all three variables. `docs/panel.md` records the order the two are meant to
-# be turned on in.
+# The two keys the panel writes here are the attach whitelist and the allowed-server
+# list (#232, #262). #264 retired the third: the panel used to be able to point a
+# puppet at another backend, and its registry field went with the route.
 #
 # The control ConfigMap itself is deliberately not here. RBAC cannot scope
 # `create` by name, so the panel is given no create verb at all; the operator
@@ -65,8 +51,7 @@ data:
           "controlConfigMap": "monoplayer-control",
           "seedConfigMap": "monoplayer-config",
           "frontHostname": "glowsquidye.tail41e568.ts.net",
-          "backend": "play2.excalia.fr:25565",
-          "allowBackendSwitch": true
+          "backend": "play2.excalia.fr:25565"
         }
       ]
     }

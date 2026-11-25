@@ -1,17 +1,21 @@
 // The runtime control document (#229, #262): the files an operator edits between
 // deploys, each re-read at the point of use.
 //
-//   control.file          desired.json           {version:1, backend:{host,port}, changedAt, changedBy}
 //   attachWhitelistFile   attach-whitelist.json  {version:1, players:[{uuid,name,addedAt}]}
 //   allowedServersFile    allowed-servers.json   {version:1, servers:[{host,port,addedAt}]}
 //
 // There is no single control document, and no watcher. Each key is its own file
 // with its own environment variable and its own reader, and each read is one file
-// read at the moment the value is needed: the whitelist at every login, the desired
-// backend before every backend connect, the allowed-server list when the picker
-// offers it (#265).
+// read at the moment the value is needed: the whitelist at every login, the
+// allowed-server list when the picker offers it (#265).
 //
-// One key differs from the other two: the allowed-server list has a fallback. A
+// Naming a file is the switch for its key. The whitelist file is the one whose
+// presence turns this module on at all: it is the first key, and a lane that names
+// it loads the list. #264 removed the desired-backend key, and this is the line
+// that had to survive it — a whitelist that does not load is a front that refuses
+// every login with no error.
+//
+// One key differs from the other: the allowed-server list has a fallback. A
 // missing or broken whitelist denies a login, which is safe and loud; a missing or
 // broken server list offers a joining client nothing. So the list Git commits
 // answers when the live file cannot.
@@ -23,34 +27,7 @@ import fs from 'node:fs'
 
 import { createWhitelistStore } from '../custody/store.js'
 
-export const DESIRED_VERSION = 1
 export const ALLOWED_SERVERS_VERSION = 1
-
-// desired.json -> { target, reason }. The shape is the ticket's: a version, one
-// backend, and the two fields a dial needs. A reason is a word an operator can
-// find in the log, never a message that repeats the document.
-//
-// `changedAt` rides along untouched. Nothing dials with it: it is how #233 tells
-// a new operator intent from the one whose move already failed, so a rewrite of
-// the same address retries once and an unchanged document never retries.
-export function parseDesiredTarget (raw) {
-  let doc
-  try {
-    doc = JSON.parse(String(raw))
-  } catch {
-    return { target: null, reason: 'not_json' }
-  }
-  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-    return { target: null, reason: 'not_an_object' }
-  }
-  if (doc.version !== DESIRED_VERSION) return { target: null, reason: 'version' }
-  const host = doc.backend?.host
-  const port = doc.backend?.port
-  if (typeof host !== 'string' || host.trim() === '') return { target: null, reason: 'host' }
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return { target: null, reason: 'port' }
-  const changedAt = typeof doc.changedAt === 'string' && doc.changedAt.trim() !== '' ? doc.changedAt : null
-  return { target: { host: host.trim(), port, changedAt }, reason: null }
-}
 
 // allowed-servers.json -> { servers, reason }. Each entry is one game server the
 // picker offers (#262), and the row it becomes is `host:port` (#258: a row's name
@@ -103,15 +80,13 @@ const named = value => typeof value === 'string' && value.trim() !== ''
 // One reader for every file. Each path is its own switch: with all of them unset
 // nothing is read and the lane behaves exactly as it did before #229.
 export function createControlDocument ({
-  file = null,
   whitelistFile = null,
   allowedServersFile = null,
   allowedServersSeedFile = null,
-  allowBackendSwitch = false,
   readFile = fs.readFileSync,
   log = () => {}
 } = {}) {
-  const enabled = named(file)
+  const enabled = named(whitelistFile)
   const said = new Set()
 
   // One line per distinct refusal. A reconnect loop re-reads the same file every
@@ -126,7 +101,7 @@ export function createControlDocument ({
   // One store for the whole process: the core reads the list through
   // attachWhitelist() and the front legs read has(). Every read reloads, so the
   // file is the only authority and a broken one is named, not silently empty.
-  const whitelistStore = enabled && named(whitelistFile)
+  const whitelistStore = enabled
     ? createWhitelistStore({
       file: whitelistFile,
       reloadEachUse: true,
@@ -176,135 +151,7 @@ export function createControlDocument ({
     return { servers: [], source: 'none' }
   }
 
-  function desiredTarget () {
-    if (!enabled) return null
-    let raw
-    try {
-      raw = String(readFile(file, 'utf8'))
-    } catch (error) {
-      // A control document the operator has not written yet is the normal state,
-      // not an error. Anything else is named: a directory path, a bad mount.
-      if (error?.code !== 'ENOENT') sayOnce('controlUnreadable', { file, code: error?.code ?? null })
-      return null
-    }
-    if (!allowBackendSwitch) {
-      // Settled in #229: log once, named, and continue on the configured backend.
-      sayOnce('controlSwitchRefused', { file })
-      return null
-    }
-    const parsed = parseDesiredTarget(raw)
-    if (parsed.target === null) {
-      sayOnce('controlRejected', { file, reason: parsed.reason })
-      return null
-    }
-    return parsed.target
-  }
-
-  return { enabled, file, whitelistStore, attachWhitelist, allowedServers, desiredTarget }
-}
-
-// The target the next backend connect dials. A followed transfer wins, because a
-// transfer is the server moving the session. Then an operator move (#233), which
-// is the one path that may carry a desired backend onto an attached session: the
-// core started it, so the dial belongs to it and not to the next connect. A
-// desired backend on its own still applies only while no client is attached,
-// because a reconnect is not an operator's act. Everything else dials the target
-// the session is already on.
-export function dialTargetFor ({ transfer = null, operator = null, desired = null, current = null, attached = false } = {}) {
-  if (transfer !== null) return { target: address(transfer), source: 'transfer' }
-  if (operator !== null) return { target: address(operator), source: 'operator' }
-  if (desired !== null && attached !== true) return { target: address(desired), source: 'desired' }
-  return { target: current, source: 'current' }
-}
-
-// A dial target is host and port, nothing else. The control document's
-// `changedAt` identifies an operator intent and must not travel into the state
-// this orchestrator compares targets with.
-function address (target) {
-  return { host: target.host, port: target.port }
-}
-
-// #233: the heartbeat's one question, asked on the tick the service already runs.
-//
-// `desired` is what the control document names now, or null, which is the case
-// both when no operator wrote one and when `allowBackendSwitch` refused it
-// (desiredTarget() has named that refusal once already). `current` is the backend
-// the puppet is on. `attempted` is the document whose move already failed: with
-// the old backend restored, an unchanged document would otherwise start the same
-// doomed move every tick, and each attempt costs the human a configuration round.
-// A rewrite of the same address is a new document, because the panel stamps a new
-// `changedAt`, so the operator's retry stays available.
-export function moveDue ({ desired = null, current = null, attempted = null } = {}) {
-  if (desired === null) return { move: null, reason: 'no_desired' }
-  if (current !== null && desired.host === current.host && desired.port === current.port) {
-    return { move: null, reason: 'in_use' }
-  }
-  if (attempted !== null && sameDocument(attempted, desired)) {
-    return { move: null, reason: 'already_attempted' }
-  }
-  return { move: { host: desired.host, port: desired.port, changedAt: desired.changedAt ?? null }, reason: null }
-}
-
-function sameDocument (a, b) {
-  return a.host === b.host && a.port === b.port && (a.changedAt ?? null) === (b.changedAt ?? null)
-}
-
-// #233: the tick. The service's heartbeat calls `tick`, and so does the loopback
-// rung, which is why the memory this needs lives in a closure here rather than in
-// `runForever` where no rung can reach it.
-//
-// It reads the control document at every tick, because that is the cadence the
-// ticket recorded and a document is a small file. What it does not do is retry:
-// a move that failed cost the human a configuration round, so the document that
-// failed is skipped, once with a reason, until the operator writes a new one.
-export function createBackendMoveTick ({ core, control, log = () => {}, current = () => null } = {}) {
-  if (typeof core?.startBackendMove !== 'function') {
-    throw new TypeError('createBackendMoveTick: core must offer startBackendMove')
-  }
-  if (typeof control?.desiredTarget !== 'function') {
-    throw new TypeError('createBackendMoveTick: control must offer desiredTarget')
-  }
-  // The document whose move already started. Not cleared on success: a successful
-  // move makes the target equal `current`, so the document stops being a move on
-  // its own.
-  let attempted = null
-  // The deferred document this tick has already named, so a client parked in its
-  // own configuration is one line and not one per tick. A different document, or a
-  // move that started, clears it.
-  let deferred = null
-
-  function tick () {
-    const desired = control.desiredTarget()
-    const decision = moveDue({ desired, current: current(), attempted })
-    if (decision.move === null) {
-      if (decision.reason === 'already_attempted' && attempted.said !== true) {
-        attempted.said = true
-        log('backendMoveNotRetried', {
-          host: desired.host,
-          port: desired.port,
-          changedAt: desired.changedAt ?? null,
-          reason: 'previous_failure'
-        })
-      }
-      return null
-    }
-    attempted = decision.move
-    const outcome = core.startBackendMove({ target: decision.move, reason: 'heartbeat' })
-    if (outcome.started !== true) {
-      // Nothing was spent, so the next tick asks again. The core named the
-      // refusal; a client still in its own configuration is the usual reason, and
-      // one line per distinct refusal is enough to see it.
-      attempted = null
-      const key = `${outcome.reason}:${decision.move.host}:${decision.move.port}`
-      if (deferred !== key) {
-        deferred = key
-        log('backendMoveDeferred', { reason: outcome.reason, host: decision.move.host, port: decision.move.port })
-      }
-    }
-    return outcome
-  }
-
-  return { tick, get attempted () { return attempted } }
+  return { enabled, whitelistStore, attachWhitelist, allowedServers }
 }
 
 // #233: what a restored move does to the dial. A move that a target did not answer
@@ -323,10 +170,9 @@ export function revertAfterRestore ({ kind = null } = {}) {
 
 // The leg options for a dial. A transfer, and the return to a server a transfer
 // moved the session to, ask for the transfer handshake and keep their cookies:
-// that is the behaviour every lane had before this ticket. A desired backend, and
-// the operator move #233 starts from one, is a fresh login on a server that never
-// saw the puppet: intent 3 on a server that did not send a transfer is the
-// rejection sky-2 answers with.
+// that is the behaviour every lane had before this ticket. Anything else is a fresh
+// login on the server the session is already on: intent 3 on a server that did not
+// send a transfer is the rejection sky-2 answers with.
 //
 // `transfer` is the provenance of the target, not the source of the dial: the
 // caller knows whether this server was reached by a followed transfer, and the
