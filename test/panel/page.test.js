@@ -227,6 +227,7 @@ test('the client arming selector names every removal the page renders', () => {
   const script = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'panel', 'public', 'panel.js'), 'utf8')
   const paint = script.slice(script.indexOf('function paintArmed'), script.indexOf('function written'))
   const selector = /querySelectorAll\('([^']+)'\)/.exec(paint)?.[1] ?? ''
+  assert.notEqual(selector, '', 'the paint function still holds one selector this test can read')
   for (const kind of kinds) {
     assert.match(selector, new RegExp('data-write="' + kind + '"'), 'the armed paint covers data-write="' + kind + '"')
   }

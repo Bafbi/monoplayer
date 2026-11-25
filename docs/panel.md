@@ -132,10 +132,11 @@ puppet that stopped writing still gets a fragment every five seconds that says s
 
 A tick reads five objects: a Deployment, a pod list, a pod log, and the control
 ConfigMap's two keys, `attach-whitelist.json` and `allowed-servers.json`. The reads run
-together, so a tick waits for the slowest of them and not for each in turn. A tick that finds the previous read still pending
-is **skipped** and logged as `panelStreamTickSkipped`: a slow API server can outlast a
-tick, and overlapping reads would answer out of order. A skipped tick costs one interval
-of freshness. An out-of-order one costs trust in the page.
+together, so a tick waits for the slowest of them and not for each in turn. A tick that
+finds the previous read still pending is **skipped** and logged as
+`panelStreamTickSkipped`: a slow API server can outlast a tick, and overlapping reads
+would answer out of order. A skipped tick costs one interval of freshness. An out-of-order
+one costs trust in the page.
 
 A stream that ends is logged as `panelStreamEnd`, with the puppet's name and the ticks
 and beats it wrote. Both intervals are cleared before that record is written, so the
