@@ -10,10 +10,25 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseAllowedServers } from '../../src/service/control.js'
+import { DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
 
-const MANIFESTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'manifests')
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const MANIFESTS = path.join(ROOT, 'deploy', 'manifests')
 const read = name => fs.readFileSync(path.join(MANIFESTS, name), 'utf8')
 const manifests = () => fs.readdirSync(MANIFESTS).filter(name => name.endsWith('.yaml') && name !== 'kustomization.yaml')
+
+// Every manifest under deploy/manifests/, at any depth and under either suffix.
+// The kustomization only lists the top level, but a guard about what the lane
+// can apply must read what a future row could add.
+function everyManifest (dir = MANIFESTS) {
+  const found = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) found.push(...everyManifest(full))
+    else if (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml')) found.push(full)
+  }
+  return found
+}
 
 test('the live kustomization lists every manifest in the directory', () => {
   const listed = [...read('kustomization.yaml').matchAll(/^ {2}- (\S+\.yaml)$/gm)].map(match => match[1])
@@ -22,6 +37,36 @@ test('the live kustomization lists every manifest in the directory', () => {
     'deploy/manifests holds a manifest the kustomization does not apply')
   assert.deepEqual(listed.filter(name => !files.includes(name)), [],
     'the kustomization names a file deploy/manifests does not hold')
+})
+
+// #391: the service can compose the offline legs. They ask no session server who
+// a client is, so anyone who types a name can play: exactly what a test lane
+// needs, and exactly what the live lane must never become. This file already
+// reads every manifest the live lane applies, so the prohibition is asserted here,
+// beside the kustomization it protects. deploy/dev/ is the lane that sets it (#392).
+test('no live manifest switches the service onto the offline legs', () => {
+  // The whole file, not the env list, and both spellings of the switch. A
+  // ConfigMap key imported through envFrom sets MONOPLAYER_OFFLINE_LEGS, and a
+  // ConfigMap holding a JSON document that names `offlineLegs` is the same mode
+  // reached through --config. Both are a manifest edit turning the live lane into
+  // an anonymous one, which is the failure this test exists to catch.
+  const setting = everyManifest()
+    .filter(file => {
+      const text = fs.readFileSync(file, 'utf8')
+      return text.includes('MONOPLAYER_OFFLINE_LEGS') || text.includes('offlineLegs')
+    })
+    .map(file => path.relative(ROOT, file))
+  assert.deepEqual(setting, [],
+    'a live manifest carries the offline switch: ' + setting.join(', ') + '. That lane would ask no ' +
+    'session server who a client is, so anyone who names themself could play the live server, with no ' +
+    'account and no custody chain. The offline legs are for a lane whose job is a test double: set the ' +
+    'key on the dev lane instead (deploy/dev/monoplayer.yaml, #392). If the live lane is really meant to ' +
+    'serve anonymous clients, reopen docs/adr/the-product-may-be-a-test-double.md first, then delete this test.')
+
+  // The default is the other half: a manifest that names no switch must not
+  // arrive at the offline legs either.
+  assert.equal(DEFAULT_CONFIG.offlineLegs, false,
+    'the offline-legs default changed to true, so every lane serves anonymous clients without naming the key')
 })
 
 test('the public route reads its secret from the cluster Secret', () => {
