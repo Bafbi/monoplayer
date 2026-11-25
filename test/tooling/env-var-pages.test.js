@@ -1,17 +1,18 @@
 // #402: a page may name only an environment variable the code reads.
 //
-// The prose of this repo names MONOPLAYER_* variables on nearly every page, and
-// the service's half of that surface is one function: envOverlay in
-// src/service/start-live.js. A page that lists a variable nothing reads teaches
-// the next reader to set nothing: loadConfig ignores the name in silence, so the
-// page reads as true and the lane does nothing. The repo's rule asks for a guard
-// rather than a paragraph, because the list is useful in a runbook and the list
-// is what drifts.
+// The prose of this repo names MONOPLAYER_* variables on nearly every page. The
+// service's half of that surface is one function: envOverlay in
+// src/service/start-live.js.
 //
-// The read set is any code line that names a variable, comments excepted. A
-// help string counts as code: the USAGE block in src/service/monoplayer.js lists
-// the switches, so a name it keeps after the switch retires would still pass this
-// guard. That is the same rule one layer up, and #407 is the ticket for it.
+// A page that lists a variable nothing reads teaches the next reader to set
+// nothing. loadConfig ignores the name in silence, so the page reads as true and
+// the lane does nothing. That fact can drift, so it gets a guard rather than a
+// paragraph: the list is useful in a runbook, and the list is what drifts.
+//
+// The read set is any code line that names a variable, comments excepted. A help
+// string counts as code. The USAGE block in src/service/monoplayer.js lists the
+// switches, so it keeps a name alive after the switch retires. That is the same
+// rule one layer up, and #407 is the ticket for it.
 //
 // Nothing here reaches a cluster or a network: every case reads a file.
 import { test } from 'node:test'
@@ -23,9 +24,9 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 // The token a page carries, from MONOPLAYER_ to the last character that could
-// belong to it. A name is not a token: MONOPLAYER_LEASE_* names a family of
-// variables, and a family is not something the code can read, so a token a
-// star follows is dropped rather than reported.
+// belong to it. A name is not a token. MONOPLAYER_LEASE_* names a family of
+// variables, and a family is not something the code can read, so a token a star
+// follows is dropped rather than reported.
 const TOKEN = /MONOPLAYER_[A-Z0-9_]*/g
 
 function names (line) {
@@ -76,7 +77,7 @@ const withoutComments = text => text.split('\n')
   .join('\n')
 
 // Every name the code reads, and the file that reads it. envOverlay is one reader
-// among them: a rung's variable is read by the script that uses it, and that
+// among them. A rung's variable is read by the script that uses it, and that
 // script is code, so a page documenting a lane may still name it.
 function readers () {
   const found = new Map()
@@ -97,9 +98,9 @@ function readers () {
   return found
 }
 
-// What one page says that no file reads. The message is the whole product of this
-// guard: a page, a line, a variable, and the two places it would have to be read,
-// so the next reader fixes the page or wires the variable rather than guessing.
+// What one page says that no file reads. The message is the product of this
+// guard: a page, a line, a variable, and the two places it would have to be read.
+// The next reader fixes the page or wires the variable, rather than guessing.
 function unread (page, text, read) {
   const found = []
   text.split('\n').forEach((line, index) => {

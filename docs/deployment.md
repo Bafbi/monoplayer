@@ -213,7 +213,7 @@ below are read outside it, in `start-live.js` and
 `src/observability/telemetry.js`. The defaults behind the names live in the
 config document. `node src/service/monoplayer.js --print-config` prints the
 values this environment resolves to. This section names what a deployment sets
-and why, and restates no default of its own.
+and why, and gives a default only to say what happens when you leave it unset.
 
 Required:
 
