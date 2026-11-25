@@ -6,11 +6,10 @@
 // controller must remember the target until a connect succeeds or the follow
 // budget runs out.
 //
-// It remembers the `kind` for the same reason (#233): a retry of an operator's
-// move is still an operator's move, and it must dial as a fresh login rather than
-// with the transfer handshake. Deriving the kind from the event would get it
-// right once and wrong on every retry, which is the one hop where the difference
-// costs a rejected connection.
+// Every followed hop reports `kind: 'transfer'`, and nothing else (#332). It
+// once ranked two dialects, and #264 deleted the other one with the operator
+// move it served, so the controller no longer reads `event.kind`: the dial
+// intent is `target !== null`, decided by the caller.
 //
 // Pure: no timers, no sockets. Used by start-live and the offline loopback, and
 // unit-tested on its own.
@@ -23,11 +22,14 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
   }
 
   let target = null // { host, port } or null for the configured base backend
-  // 'transfer' (the server moved the session) or 'operator' (an operator did,
-  // #233). Meaningless while `target` is null, and reset with it.
-  let kind = null
   let failures = 0
   let reverts = 0
+
+  // The dialect of a followed hop. There is one, since #264 deleted the operator
+  // move, and it goes with the target: a state with no target follows nothing.
+  function followedKind () {
+    return target === null ? null : 'transfer'
+  }
 
   function normalize (value) {
     if (!value || typeof value !== 'object') return null
@@ -39,23 +41,19 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
 
   return {
     // A reconnect is due. A non-null `event.target` starts a new followed hop.
-    // `event.kind` names who started it, and a value it does not recognise is a
-    // transfer: the dialect every lane had before #233.
     onDue (event = {}) {
       const next = normalize(event.target)
       if (next) {
         target = next
-        kind = event.kind === 'operator' ? 'operator' : 'transfer'
         failures = 0
       }
-      return { target, kind: target === null ? null : kind, failures }
+      return { target, kind: followedKind(), failures }
     },
 
     // The connect succeeded: the followed target (if any) is now the session.
     onSuccess () {
       const followed = target !== null
       target = null
-      kind = null
       failures = 0
       return { followed }
     },
@@ -68,7 +66,6 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
       if (failures >= maxTargetFailures) {
         const abandoned = target
         target = null
-        kind = null
         failures = 0
         reverts++
         return { target: null, failures: 0, reverted: true, abandoned }
@@ -81,14 +78,13 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
     abort (reason = 'aborted') {
       const abandoned = target
       target = null
-      kind = null
       failures = 0
       return { expected: false, abandoned, reason }
     },
 
     // The dial address for the current state; null means the configured base.
     get target () { return target },
-    get kind () { return target === null ? null : kind },
+    get kind () { return followedKind() },
     get failures () { return failures },
     get reverts () { return reverts }
   }
