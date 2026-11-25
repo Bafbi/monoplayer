@@ -29,8 +29,10 @@
 //
 // The stream ends when the client closes. Nothing else ends it: a pod that stops
 // writing still gets a fragment every five seconds that says so.
+import { renderAllowedSwap } from '../views/allowed.js'
 import { renderLive } from '../views/live.js'
 import { renderWhitelistSwap } from '../views/whitelist.js'
+import { readAllowedList } from './allowed.js'
 import { readPuppet } from './info.js'
 import { readAttachList } from './whitelist.js'
 
@@ -142,21 +144,25 @@ export function createStreamRoute ({
       pending = true
       try {
         const at = now()
-        // Two objects, one instant, read together: the card's facts from the pod's log
-        // and the attach whitelist from the control ConfigMap. The page waits for the
-        // slower read, not for both in turn.
-        const [facts, list] = await Promise.all([
+        // The card's facts (a Deployment, a pod list, and a pod log) and the control
+        // ConfigMap's two keys, one instant, read together. A puppet whose live
+        // allowed-servers key is absent adds one seed read inside the allowed read. The
+        // page waits for the slower read, not for each in turn.
+        const [facts, list, servers] = await Promise.all([
           readPuppet({ kubernetes, puppet, recorded, now: at, log }),
-          readAttachList({ kubernetes, puppet, now: at, log })
+          readAttachList({ kubernetes, puppet, now: at, log }),
+          readAllowedList({ kubernetes, puppet, now: at, log })
         ])
         if (closed) return
         // An event stream carries text lines, so each line of the fragment is its
         // own data field. The browser joins them with a newline and htmx swaps the
         // result, which is why the fragment is written once and not escaped.
-        // The live region, and the whitelist list beside it as an out-of-band swap. The
+        // The live region, and both control lists beside it as out-of-band swaps. Each
         // list sits outside the live region so a tick cannot disarm a remove button or
-        // clear a half-typed name, and it still refreshes with the card (#248).
-        const fragment = renderLive(facts, list) + renderWhitelistSwap({ puppet, list })
+        // clear a half-typed name, and each still refreshes with the card (#248, #309).
+        const fragment = renderLive(facts, list, servers) +
+          renderWhitelistSwap({ puppet, list }) +
+          renderAllowedSwap({ puppet, list: servers })
         if (write(fragment.split('\n').map(line => 'data: ' + line).join('\n') + '\n\n')) ticks += 1
       } catch (error) {
         log('panelStreamTickFailed', { puppet: puppet.name, reason: String(error?.message ?? error).slice(0, 200) })

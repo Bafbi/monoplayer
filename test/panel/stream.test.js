@@ -63,17 +63,29 @@ const ATTACH = {
   ]
 }
 
-function kube ({ log = tail(heartbeat), delayMs = 0, calls = { podLog: 0 }, attach = ATTACH, attachFails = false } = {}) {
+// The other control key (#309): the servers the picker offers, read by the same
+// tick and carried in the same fragment as an out-of-band swap.
+const ALLOWED = {
+  version: 1,
+  servers: [
+    { host: 'paper.example.net', port: 25565, addedAt: '2026-11-23T12:00:00.000Z' }
+  ]
+}
+
+function kube ({ log = tail(heartbeat), delayMs = 0, calls = { podLog: 0 }, attach = ATTACH, allowed = ALLOWED, attachFails = false } = {}) {
   return {
     calls,
-    // The attach whitelist comes from the control ConfigMap, through the same read the
-    // route uses (#232). A stream tick reads it too, so the block's list refreshes
-    // with the card (#248).
+    // Both control keys come from the control ConfigMap, through the same readers the
+    // routes use (#232, #262). A stream tick reads them too, so each block's list
+    // refreshes with the card (#248, #309).
     async configMap () {
       if (attachFails) throw new Error('read ConfigMap monoplayer/monoplayer-control: the API server answered 403 Forbidden')
       return {
         metadata: { resourceVersion: '41221' },
-        data: { 'attach-whitelist.json': JSON.stringify(attach) }
+        data: {
+          'attach-whitelist.json': JSON.stringify(attach),
+          'allowed-servers.json': JSON.stringify(allowed)
+        }
       }
     },
     async deployment () {
@@ -208,6 +220,27 @@ test('a tick carries the attach whitelist beside the live region, as an out-of-b
   }
 })
 
+test('a tick carries the allowed servers beside the live region, as an out-of-band swap', async () => {
+  const panel = await serve()
+  try {
+    const { text } = await read(panel.url + '/api/puppets/glowsquidye/stream', {
+      until: value => datas(value).length >= 1
+    })
+    const fragment = dataOf(datas(text)[0])
+    // The list is in the fragment, marked for a swap into the element that holds it:
+    // an added server appears without a reload, and a half-typed address survives.
+    assert.match(fragment, /<div class="allowed" id="allowed-glowsquidye" hx-swap-oob="true">/)
+    assert.match(fragment, /paper\.example\.net:25565/)
+    assert.match(fragment, /added 2026-11-23T12:00:00\.000Z/)
+    assert.match(fragment, /and the allowed servers read at 2026-11-18T10:37:24\.906Z at ConfigMap resourceVersion 41221 \(a version, not a time\)/)
+    // The add form and the answer area are outside the swapped element, so a tick
+    // cannot clear what the operator typed or a refusal they are reading.
+    assert.doesNotMatch(fragment, /data-write="add-server"/)
+  } finally {
+    await panel.close()
+  }
+})
+
 test('a whitelist read that failed is a sentence in the block, not a lost tick', async () => {
   const panel = await serve({ kubernetes: kube({ attachFails: true }) })
   try {
@@ -216,6 +249,9 @@ test('a whitelist read that failed is a sentence in the block, not a lost tick',
     })
     const fragment = dataOf(datas(text)[0])
     assert.match(fragment, /the attach whitelist could not be read: read ConfigMap monoplayer\/monoplayer-control: the API server answered 403 Forbidden/)
+    // The same failed read is the other block's sentence too: one refused ConfigMap
+    // read, two lists that say why they are missing.
+    assert.match(fragment, /the allowed servers could not be read: read ConfigMap monoplayer\/monoplayer-control: the API server answered 403 Forbidden/)
     // And the card is still the card: one failed read of one object does not cost the
     // rest of the fragment.
     assert.match(fragment, /serving: the newest heartbeat was written 12 s ago/)

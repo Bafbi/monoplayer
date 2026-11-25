@@ -13,15 +13,25 @@
 //     "facts": { "<puppet name>": { ...what GET /api/puppets/<name> returned... } },
 //     "whitelist": { "<puppet name>": { "resourceVersion": "41221",
 //                                       "puppetUuid": "…",
-//                                       "document": { "version": 1, "players": [...] } } }
+//                                       "document": { "version": 1, "players": [...] } } },
+//     "allowed": { "<puppet name>": { "document": { "version": 1, "servers": [...] },
+//                                     "seed": { "version": 1, "servers": [...] } } }
 //   }
 //
+// `allowed` is the second control key (#309). `document` is the live key in the control
+// ConfigMap and `seed` is the copy Git commits, which answers when the live key is
+// absent. A record names at least one of the two, and both when the recording should
+// show which file answered. It holds no `resourceVersion`, because a version belongs to
+// the ConfigMap and not to a key. The whitelist record names the object's version, and
+// both keys are read from that one object.
+//
 // The puppets are checked by src/panel/registry.js itself, so a fixture cannot
-// describe a puppet the panel would refuse in a pod, and the whitelist document is
+// describe a puppet the panel would refuse in a pod, the whitelist document is
 // checked by src/panel/routes/whitelist.js, so a fixture cannot hold an attach
-// whitelist the route would refuse to rewrite. Every field it does not name is
-// refused, by name: a typo that is silently ignored is a fixture that renders
-// something other than what its author meant.
+// whitelist the route would refuse to rewrite, and the allowed servers are checked by
+// the lane's own parser, so a recording cannot hold a list the lane would not offer.
+// Every field it does not name is refused, by name: a typo that is silently ignored is
+// a fixture that renders something other than what its author meant.
 //
 // It is re-read on every request, like the registry, and that is a feature: an
 // edit to the file reaches an open page on its next tick, which is how the stream
@@ -34,14 +44,19 @@
 // claiming a write that never happened.
 import fs from 'node:fs'
 
+import { ALLOWED_SERVERS_VERSION, parseAllowedServers } from '../service/control.js'
 import { WriteRefused } from './kube.js'
 import { parseRegistry } from './registry.js'
+import { ALLOWED_KEY, refusalText } from './routes/allowed.js'
 import { parseWhitelist, WHITELIST_KEY } from './routes/whitelist.js'
 
-export const FIXTURE_FIELDS = ['facts', 'puppets', 'version', 'whitelist']
+export const FIXTURE_FIELDS = ['allowed', 'facts', 'puppets', 'version', 'whitelist']
 // One recorded attach whitelist: the document the route writes, the version it was read
 // at, and the puppet's own account uuid, which the route's rule compares against.
 export const WHITELIST_FIELDS = ['document', 'puppetUuid', 'resourceVersion']
+// One recorded allowed-server list: the live key if the recording has one, and the copy
+// Git commits if the puppet's lane is offering that instead.
+export const ALLOWED_FIELDS = ['document', 'seed']
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const quote = value => JSON.stringify(value ?? null)
@@ -120,6 +135,47 @@ export function parseFixture (text) {
     }
   }
 
+  // The allowed servers, one record per puppet, judged by the lane's own parser. The
+  // block is drawn for every puppet the page shows, so a recording that omitted one
+  // would be the hole this ticket closed.
+  if (!isObject(doc.allowed)) {
+    throw new Error('fixture: allowed must be an object keyed by puppet name, so the allowed-server block has a list to show')
+  }
+  const allowed = new Map()
+  for (const puppet of registry.puppets) {
+    const recorded = doc.allowed[puppet.name]
+    if (!isObject(recorded)) {
+      throw new Error('fixture: allowed has no entry for ' + quote(puppet.name) +
+        '; the page reads the allowed servers of every puppet it draws')
+    }
+    for (const key of Object.keys(recorded)) {
+      if (!ALLOWED_FIELDS.includes(key)) {
+        throw new Error('fixture: allowed[' + quote(puppet.name) + '] has the unknown key ' + quote(key) +
+          '; one of ' + ALLOWED_FIELDS.join(', ') + ' is expected')
+      }
+    }
+    const live = recorded.document === undefined ? null : recordedServers(recorded, 'document', puppet.name)
+    const seed = recorded.seed === undefined ? null : recordedServers(recorded, 'seed', puppet.name)
+    if (live === null && seed === null) {
+      throw new Error('fixture: allowed[' + quote(puppet.name) + '] names neither a live document nor a seed; ' +
+        'write document, seed, or both')
+    }
+    // What a read answers, and which file it came from: the live key wins, and the seed
+    // answers only when the live key is absent, exactly as in a pod
+    // (src/panel/routes/allowed.js).
+    allowed.set(puppet.name, {
+      document: live ?? seed,
+      live,
+      seed,
+      source: live === null ? 'seed' : 'control'
+    })
+  }
+  for (const key of Object.keys(doc.allowed)) {
+    if (!names.has(key)) {
+      throw new Error('fixture: allowed has an entry for ' + quote(key) + ', which no puppet in the document names')
+    }
+  }
+
   const facts = new Map()
   for (const puppet of registry.puppets) {
     const recorded = doc.facts[puppet.name]
@@ -137,7 +193,18 @@ export function parseFixture (text) {
     }
     facts.set(puppet.name, recorded)
   }
-  return { registry, facts, whitelists }
+  return { registry, facts, whitelists, allowed }
+}
+
+// One recorded allowed-server document, as the lane's parser reads it. The refusal is
+// the route's own sentence, so a fixture that fails here names the entry and the rule
+// an operator would have to fix in the file.
+function recordedServers (recorded, field, name) {
+  const parsed = parseAllowedServers(JSON.stringify(recorded[field]))
+  if (parsed.reason !== null) {
+    throw new Error('fixture: allowed[' + quote(name) + '].' + field + ': ' + refusalText(parsed))
+  }
+  return { version: ALLOWED_SERVERS_VERSION, servers: parsed.servers }
 }
 
 // The recording, read on every call so an edit to the file reaches an open page.
@@ -164,21 +231,43 @@ export function fixtureReader (file) {
 export function createFixtureClient (load) {
   const entryFor = (namespace, name, field) => {
     const document = load()
-    const puppet = document.registry.puppets.find(row =>
-      row.namespace === namespace && (field === 'configMap' ? row.controlConfigMap : row.deployment) === name)
+    const puppet = document.registry.puppets.find(row => row.namespace === namespace &&
+      (field === 'deployment' ? row.deployment : row.controlConfigMap === name || row.seedConfigMap === name))
     if (puppet === undefined) {
       throw new Error('fixture: no recorded puppet owns ' + namespace + '/' + name)
     }
-    return { puppet, recorded: document.whitelists.get(puppet.name) ?? null }
+    return {
+      puppet,
+      recorded: document.whitelists.get(puppet.name) ?? null,
+      servers: document.allowed.get(puppet.name) ?? null
+    }
   }
 
   return {
+    // Two control keys, and the seed object one of them falls back to. A read answers
+    // the recorded document for the object it asked for, so the panel's readers cannot
+    // tell a recording from a cluster (#309).
     async configMap (namespace, name) {
-      const { recorded } = entryFor(namespace, name, 'configMap')
+      const { puppet, recorded, servers } = entryFor(namespace, name, 'configMap')
+      if (name === puppet.seedConfigMap) {
+        return {
+          metadata: {},
+          data: servers?.seed === null || servers?.seed === undefined
+            ? {}
+            : { [ALLOWED_KEY]: JSON.stringify(servers.seed, null, 2) + '\n' }
+        }
+      }
       if (recorded === null) throw new Error('fixture: no recorded attach whitelist for ' + namespace + '/' + name)
       return {
         metadata: recorded.resourceVersion === null ? {} : { resourceVersion: recorded.resourceVersion },
-        data: { [WHITELIST_KEY]: JSON.stringify(recorded.document, null, 2) + '\n' }
+        data: {
+          [WHITELIST_KEY]: JSON.stringify(recorded.document, null, 2) + '\n',
+          // The live key is the one the recording has, and its absence is a fact too:
+          // it is what makes the seed answer.
+          ...(servers?.live === null || servers?.live === undefined
+            ? {}
+            : { [ALLOWED_KEY]: JSON.stringify(servers.live, null, 2) + '\n' })
+        }
       }
     },
     async deployment (namespace, name) {

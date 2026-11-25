@@ -112,7 +112,7 @@ A card has three parts, and the order is the contract:
 |---|---|---|
 | the head | the name, and the registry rows: namespace, Deployment, front, control ConfigMap | no, and no tick touches it |
 | the live region | the scene, the state sentence, and every number with the timestamp of its record | yes, replaced whole every 5 s |
-| the actions | the whitelist block | no: a tick must not overwrite a half-typed name, and it must not disarm a remove button |
+| the actions | the attach whitelist's block and the allowed servers' block | no: a tick must not overwrite a half-typed name, and it must not disarm a remove button |
 
 The live region is filled by `GET /api/puppets/<name>/stream`, server-sent events
 ([#248](https://github.com/Bafbi/monoplayer/issues/248)):
@@ -130,12 +130,14 @@ One fragment per tick, as `data:` lines. A comment line every 15 s is the heartb
 quiet connection. The stream ends when the client closes, and nothing else ends it: a
 puppet that stopped writing still gets a fragment every five seconds that says so.
 
-A tick reads four objects: a Deployment, a pod list, a pod log, and the control
-ConfigMap's attach whitelist. They run as two pairs, so a tick waits for the slower of
-the two and not for all four in turn. A tick that finds the previous read still pending
-is **skipped** and logged as `panelStreamTickSkipped`: a slow API server can outlast a
-tick, and overlapping reads would answer out of order. A skipped tick costs one interval
-of freshness. An out-of-order one costs trust in the page.
+A tick reads a Deployment, a pod list, a pod log, and the control ConfigMap's two keys,
+`attach-whitelist.json` and `allowed-servers.json`. A puppet whose live
+`allowed-servers.json` key is absent adds one read of its seed ConfigMap, which is the copy
+that answers. The reads run together, so a tick waits for the slowest of them and not for
+each in turn. A tick that finds the previous read still pending is **skipped** and logged as
+`panelStreamTickSkipped`: a slow API server can outlast a tick, and overlapping reads
+would answer out of order. A skipped tick costs one interval of freshness. An out-of-order
+one costs trust in the page.
 
 A stream that ends is logged as `panelStreamEnd`, with the puppet's name and the ticks
 and beats it wrote. Both intervals are cleared before that record is written, so the
@@ -143,9 +145,9 @@ record is the point after which the stream starts no new read. A read a tick had
 started still finishes. A test waits on that record instead of on a clock, which is why
 the order matters.
 
-The whitelist list travels in the same frame as an out-of-band swap, so the block
+Both control lists travel in the same frame as an out-of-band swap, so each block
 redraws with the card while the form beside it keeps what the operator typed. A failed
-whitelist read is a sentence in that block, and the rest of the card still arrives.
+read is a sentence in that block, and the rest of the card still arrives.
 
 The cadence is deliberately not a setting. The page says "every 5 s" in words, and a
 Deployment detail behind that sentence is a sentence that can be wrong.
@@ -354,6 +356,28 @@ An allowed server is one game server the picker offers a joining player
 ConfigMap, `allowed-servers.json`, and it is its own file: its own environment
 variable, its own reader, and its own route.
 
+The page does this, and so does `curl`. The allowed servers' block sits under each card,
+beside the attach whitelist's, and it is the same block: the servers with the time each
+was added, then the form that adds one.
+
+- **one field, two fields.** The list, the removal's path, and a picker row all name a
+  server by its `host:port` address, so the form asks for that one name and the page splits
+  it into the `host` and `port` the route takes. A value the route refuses comes back in
+  the route's own sentence, behind the value that was sent: the sentence names the rules for
+  a host and a port, and an address it could not parse is not one it can name.
+- **removing asks twice.** The first press arms the button and sends nothing, the second
+  sends the `DELETE`, and an arm nobody uses disarms after ten seconds. The arm is held by
+  the page, keyed by the card and the row, because a tick replaces the row it sits in and one
+  address can be listed by two puppets.
+- **the list refreshes through the stream**, as an out-of-band swap: a server appears or
+  goes within five seconds of the write, without a reload.
+- **the answers sit outside the list**, one area per block, and a refusal is printed whole,
+  in the route's words. A 404 names the address it did not find, and the block prints it.
+- **the block says which file answered.** While the live key is absent the lane offers the
+  copy Git commits, so the list names that ConfigMap and says the next write is built on it.
+  That sentence sits in the list, where a phone shows it, and it goes away once the live key
+  exists.
+
 ```bash
 curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers
 curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers \
@@ -434,11 +458,13 @@ Four rules are deliberate, and each is a decision rather than an accident:
   Removing a server stops it being offered, and a body already running on it is left
   alone until its claim ends.
 
-**A write is stored, and nothing offers it to a client yet.** The lane reads the file
-for its own start record; the picker that puts a row on a joining player's screen is
-#265, so until that lands the list is stored and offered to nobody, and **every write
-answer** says which of the two it is in `takesEffect`. The start record reports the
-key, inside its `control` object:
+**A write is stored, and whether a client is offered it depends on one switch.** The
+picker landed in #265 behind `MONOPLAYER_PICKER`, and it reads this list at each offer, so
+a write reaches a joining player's next attempt on a lane that sets it. No lane this repo
+deploys sets it, so on those the list is stored and offered to nobody. The route's answer
+still says that in `takesEffect`, in the sentence #262 settled, and the block says it too:
+a lane whose `MONOPLAYER_PICKER` is off offers nothing. The start record reports the key,
+inside its `control` object:
 
 ```json
 "allowedServers": {
@@ -623,24 +649,44 @@ reads a cluster nobody can reach proves nothing. Fixture mode serves a recorded
 document instead:
 
 ```bash
-mise run panel:fixture                      # test/panel/fixtures/dashboard.json
+mise run panel:fixture                      # test/panel/fixtures/panel.json
 node src/panel/start.js --fixture <file> --host 127.0.0.1 --port 8080
 ```
 
-The document is `{ "version": 1, "puppets": [...], "facts": { "<name>": {...} } }`, where
-each puppet is a registry row and each fact is what `GET /api/puppets/<name>` answered.
-`src/panel/fixture.js` validates it: the puppets go through the registry's own parser,
-and a puppet with no recorded document, a record whose `name` disagrees, or a fact
-without a state sentence is refused by name.
+The document is a registry's puppets, the facts each one answered, and both control keys:
 
-The committed fixture holds the states worth looking at: a puppet with a heartbeat,
-one with none, an attach whitelist with two entries and one with none.
+```json
+{
+  "version": 1,
+  "puppets": ["...the registry rows, exactly as the registry validates them..."],
+  "facts": { "<name>": "...what GET /api/puppets/<name> answered..." },
+  "whitelist": { "<name>": { "resourceVersion": "41221", "puppetUuid": "…", "document": { "version": 1, "players": [] } } },
+  "allowed": { "<name>": { "document": { "version": 1, "servers": [] },
+                           "seed": { "version": 1, "servers": [] } } }
+}
+```
 
-A fixture's cluster is the recording, so the whitelist block reads the recorded document
-through the same parser a pod uses, and a name resolves to nothing: the route then answers
-the 400 that asks for the uuid, which is the instruction the block has to render. Every
-write is refused by name ("fixture mode is a recording, so no document was written"), and
-a uuid the recording already lists answers 200 with `changed: false`, exactly as it does
+`document` is the live key in the control ConfigMap and `seed` is the copy Git commits,
+which answers when the live key is absent. A record names at least one of the two, and both
+when the recording should show which file answered. That record holds no
+`resourceVersion`, because a version belongs to the ConfigMap and not to a key. The
+whitelist record names the object's version, and both keys are read from that one object.
+
+`src/panel/fixture.js` validates it: the puppets go through the registry's own parser, the
+whitelist document through the whitelist route's, and the allowed servers through the lane's
+own reader. A puppet with no recorded document, a record whose `name` disagrees, a fact
+without a state sentence, a control key with no recording, or an unknown field is refused
+by name.
+
+The committed fixture holds the states worth looking at: a puppet with a heartbeat and one
+with none, an attach whitelist with two entries and one with none, allowed servers with two,
+and a puppet whose live key is absent so the copy Git commits answers, with nothing in it.
+
+A fixture's cluster is the recording, so each block reads its recorded document through the
+same reader a pod uses, and a name resolves to nothing: the whitelist route then answers the
+400 that asks for the uuid, which is the instruction the block has to render. Every write is
+refused by name ("fixture mode is a recording, so no document was written"), and an entry or
+a server the recording already holds answers 200 with `changed: false`, exactly as it does
 against a cluster.
 
 **It refuses to start when the in-cluster ServiceAccount token is mounted**, and that
