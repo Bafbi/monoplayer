@@ -1,5 +1,9 @@
 # The server's view of the puppet: 13 fields, 12 with a value, one absent and explained
 
+> **Record, not documentation.** Taken 2026-11-10 by `mise run observer:run`.
+> Every number below belongs to that run: read it as evidence of what happened,
+> never as a current claim, and do not update it to match today.
+
 Verdict: **PASS**, `passed: true`, `observer: PASS 13 fields, 1 expected, 3 absent`
 became `1 absent` once the run measured a Paper that serves the gate.
 Date: 2026-11-10. Command: `mise run observer:run`, which writes

@@ -69,9 +69,10 @@ completed witness, and it refuses evidence older than 24 hours
 (`--max-age-hours`). The runbook with commands, evidence rules,
 and failure modes is [docs/driver-lane.md](docs/driver-lane.md).
 
-The driver lane passed **2/2** on 2026-11-06 (38/38 assertions per run), and
-the manual unmodded witness passed the full join/render/move/break/place/
-disconnect/rejoin row. **G0 is green.**
+[The driver verdict](testdata/driver-verdict.md) is the record of that run: two
+consecutive runs on 2026-11-06 and the manual unmodded witness's full
+join/render/move/break/place/disconnect/rejoin row. Read it as dated evidence,
+not as a standing claim. `mise run driver:g0` runs both again and verifies them.
 
 **Custody and the attach check** have live evidence from 2026-11-07: `GlowSquidye` was bootstrapped
 headlessly (Switch/Nintendo title), stable across silent refreshes,
@@ -92,7 +93,8 @@ glowsquidye`; the runbook is [docs/custody.md](docs/custody.md).
 **Paper behind Velocity** is up: Velocity 4.3.1 build 45 in front of Paper 26.1.2 b74 with modern
 forwarding; the authenticated puppet joined through the proxy. The official
 26.1.2 client has since attached through the full Velocity + Paper path,
-rendered, moved, and edited blocks. B1 live is green. `mise run driver:parity`
+rendered, moved, and edited blocks; [the live attach verdict](testdata/live-attach-verdict.md)
+is that record. `mise run driver:parity`
 passed on the dev lane on 2026-11-09 ([docs/driver-lane.md](docs/driver-lane.md)).
 The F1-F6 fault rows are still pending
 ([docs/testing-ladder.md](docs/testing-ladder.md)).

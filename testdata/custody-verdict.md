@@ -1,5 +1,10 @@
 # The puppet authenticated headlessly, and the attach check allowed and denied before play
 
+> **Record, not documentation.** Taken 2026-11-07 by `node src/custody/cli.js`
+> and `node src/custody/fixture-cli.js`. Every number below belongs to that run:
+> read it as evidence of what happened, never as a current claim, and do not
+> update it to match today.
+
 Verdict: **PASS** on 2026-11-07T13:06:00.000Z for row `G1 — auth readiness`.
 Date: 2026-11-07.
 Commands: the record lists five. `node src/custody/cli.js device-code --account puppet --dir .secrets/puppet` bootstrapped the account. `node src/custody/cli.js status --refresh --account puppet --dir .secrets/puppet` ran twice. `node src/custody/cli.js whitelist attach add Bafbi --file .secrets/attach-whitelist.json` and `node src/custody/cli.js whitelist backend add GlowSquidye` set the two whitelists. `node src/custody/fixture-cli.js --port 25565 --file .secrets/attach-whitelist.json` served the attach check.

@@ -91,6 +91,9 @@ run stops the loop unless `--force`.
 
 ## Result — 2026-11-06
 
+This is the record of that day, not a standing claim: `mise run driver:g0` runs
+the two runs again and verifies them.
+
 `node src/driver/run.js --runs 2 --tunnel` passed **2/2**, with 38/38 assertions
 per run. Both runs used fresh client processes, server-verified movement,
 break/place, disconnect, and rejoin.

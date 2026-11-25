@@ -1,5 +1,10 @@
 # Paper behind Velocity carried a real client through the front leg
 
+> **Record, not documentation.** Taken 2026-11-07 by a one-off
+> `minecraft-protocol` script and two runs of the official 26.1.2 client. Every
+> number below belongs to that run: read it as evidence of what happened, never
+> as a current claim, and do not update it to match today.
+
 Verdict: **PASS** for the forwarding row, **PASS** for the real-client row, **PARTIAL** for the unmodded row. The F1-F6 fault rows never ran.
 Date: 2026-11-07, three records between `13:28Z` and `19:52Z`.
 Commands: the forwarding record names its own, a one-off `node --input-type=module` script calling `minecraft-protocol` `createClient` with `auth=microsoft`, `profilesFolder=.secrets/puppet`, and `version=26.1`. The real-client and unmodded rows attached the official 26.1.2 client to Monoplayer, the shape `node src/driver/run.js` drives. Neither of those two records names the flags it used.
