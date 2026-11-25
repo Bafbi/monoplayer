@@ -117,7 +117,7 @@ Monoplayer's client-side connection: the socket that holds one body's session on
 _Avoid_: backend, puppet leg, egress
 
 **Offline leg**:
-A front leg or backend leg that runs on loopback without Microsoft auth, using vanilla offline UUIDs. It exists for the cheaper rungs.
+A front leg or backend leg that runs without Microsoft auth, using vanilla offline UUIDs. A rung runs the pair on loopback. A lane whose job is a test double composes them for a cluster. That is why each leg takes `allowNonLoopback`, and why the composition root is the only caller that sets it (`docs/adr/the-product-may-be-a-test-double.md`).
 _Avoid_: test leg, fake leg, dev mode
 
 **Core**:
@@ -411,6 +411,10 @@ _Avoid_: gate cluster, gate-b environment
 **Gate Paper**:
 The disposable Papers in a gate lane's namespace that the observer, the online rung, the driver lane, and the transfer testbed run against.
 _Avoid_: test server, gate-b backend
+
+**Test lane**:
+A lane whose job is a test double rather than a product: it may serve clients the product does not authenticate, by composing the offline legs. The live lane is never one.
+_Avoid_: offline lane, unauthenticated lane
 
 **Protocol spike**:
 The frozen two-leg relay that came before the core. It stays green as a regression check on the wire, and it grows no features.
