@@ -123,14 +123,18 @@ this script too, so a renamed lane's run cannot administer the lane that shipped
 
 `MONOPLAYER_GATE_NAMESPACE` names a lane by hand for all of them at once.
 
-**The testbed's namespace is listed, and no lane command reaps it.** `monoplayer-gate-b`
+**The testbed's namespace is listed, and no lane command changes it.** `monoplayer-gate-b`
 is the one namespace the listing names that no worktree derives, and it is not a gate
 lane: every worktree shares it, and it holds the transfer testbed's two Papers. `deploy/testbed/namespace.yaml` carries the lane
 selector, so `mise run lanes` lists it, with `?` for the age no `up` here wrote and
 `transfer testbed` in the owner column. The reaper keeps it for the `paper-hub` and
 `paper-sky` Deployments the gate tree does not declare, and refuses that name at the
 delete as well, so the shared namespace survives a testbed whose own rows are gone
-(#318).
+(#318). The listing names it and changes nothing, and `gate:status` reads its rows for a
+reader debugging the testbed. `gate:up` and `gate:down` refuse the name, in a sentence
+that names `mise run testbed:up` as the command that owns the namespace (#360). A `down`
+there would scale five rows to 0 and delete the lane's generated Secrets, which are the
+names its Papers read. An `up` would apply the gate tree over it.
 
 **The loopback assertion numbers are one sequence.** An id is a bullet in
 [the assertion contract](#loopback-assertion-contract) and a `check('O<n>', …)`
@@ -158,7 +162,7 @@ The transfer testbed never runs beside anything. It takes the live front offline
 and its two Papers live in the fixed namespace `monoplayer-gate-b`, which every
 worktree shares (`src/testbed/switch.js`). That namespace is the testbed's, not a
 worktree's lane: `mise run lanes` lists it and `mise run lanes -- --reap` never deletes
-it (#318).
+it (#318), and `gate:up` and `gate:down` refuse it (#360).
 
 This machine's ports are not lanes either. `mise run image:build` port-forwards
 buildkitd on 1234, `mise run panel:run` binds 127.0.0.1:8080, and a bare
