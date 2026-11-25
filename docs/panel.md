@@ -361,11 +361,13 @@ was added, then the form that adds one.
 
 - **one field, two fields.** The list, the removal's path, and a picker row all name a
   server by its `host:port` address, so the form asks for that one name and the page splits
-  it into the `host` and `port` the route takes. A value that does not split is sent as a
-  host the route refuses, in its own words: the page does not invent a sentence about it.
+  it into the `host` and `port` the route takes. A value the route refuses comes back in
+  the route's own sentence, behind the value that was sent: the sentence names the rules for
+  a host and a port, and an address it could not parse is not one it can name.
 - **removing asks twice.** The first press arms the button and sends nothing, the second
   sends the `DELETE`, and an arm nobody uses disarms after ten seconds. The arm is held by
-  the page, keyed by the address, because a tick replaces the row it sits in.
+  the page, keyed by the card and the row, because a tick replaces the row it sits in and one
+  address can be listed by two puppets.
 - **the list refreshes through the stream**, as an out-of-band swap: a server appears or
   goes within five seconds of the write, without a reload.
 - **the answers sit outside the list**, one area per block, and a refusal is printed whole,
