@@ -12,10 +12,11 @@ row. It is the G0 host baseline (row M2 in the plan).
 
 ## Prerequisites (one-time)
 
-1. **Backend:** Paper 26.2 b135 running in `monoplayer-gate-b` (see
+1. **Backend:** Paper 26.2 b135 in this worktree's lane. `scripts/gate-lane.sh name`
+   prints the lane, and `mise run gate:up` wakes it (see
    [deploy/driver/README.md](../deploy/driver/README.md)). RCON lives behind
-   `kubectl -n monoplayer-gate-b exec deploy/paper -- rcon-cli`; the browser
-   password is a cluster Secret and never leaves the pod.
+   `kubectl -n "$(scripts/gate-lane.sh name)" exec deploy/paper -- rcon-cli list`;
+   the RCON password is a cluster Secret and never leaves the pod.
    The driver client and this backend serve the same version. The scenario still
    refuses a target the driver was not built for, before the first launch
    (`versionRefusal` in `src/driver/checks.js`), so a version skew is named
@@ -194,6 +195,11 @@ The dev proxy's attach whitelist must name the account the client joins with
 (`mise run dev:up`). Stop the three background processes when the run ends.
 
 ### The transfer testbed
+
+`paper-hub` and `paper-sky` are not a lane. They live in `monoplayer-gate-b`, the
+fixed namespace the transfer testbed owns, and no lane command wakes it or reaps it
+(#318). The gate Paper in "Prerequisites" is in this worktree's lane, which
+`scripts/gate-lane.sh name` prints.
 
 The testbed front is a Tailscale load balancer, so only its backend needs a
 forward:
