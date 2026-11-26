@@ -304,13 +304,17 @@ node src/custody/cli.js whitelist attach add <player-name-or-uuid>
 node src/custody/cli.js whitelist attach remove <name-or-uuid>
 
 # backend whitelist (puppet only; through src/driver/rcon.js). --namespace is
-# required: one command writes one Paper's whitelist. It names the namespace
-# that holds the Paper Deployment: monoplayer-dev here, a gate lane from
-# `mise run lanes` for the gate Papers. The live namespace monoplayer holds the
-# proxy and the playit agent, not a Paper, so this command cannot edit a Paper
-# there:
+# required: one command writes one Paper's whitelist, and it reaches a Paper
+# Deployment inside this cluster — monoplayer-dev here, a gate lane from
+# `mise run lanes` for the gate Papers. No command writes the live backend's
+# whitelist; "The live backend's whitelist" below says where that one is edited:
 node src/custody/cli.js whitelist backend add <puppet-name> --namespace monoplayer-dev   # add + reload
 node src/custody/cli.js whitelist backend remove <puppet-name> --namespace monoplayer-dev
+
+# a gate lane's Paper, from the worktree that owns the lane. A lane rests at 0
+# replicas, and the write needs a pod: wake it with `mise run gate:up`, and put it back
+# with `mise run gate:down`. `mise run lanes` lists them:
+node src/custody/cli.js whitelist backend add <puppet-name> --namespace "$(scripts/gate-lane.sh name)"
 ```
 
 - `whitelist backend` addresses its Paper with `--namespace` (required) and
@@ -331,6 +335,10 @@ node src/custody/cli.js whitelist backend remove <puppet-name> --namespace monop
   profile lookup first, legacy `api.mojang.com` fallback); the file stores
   `{uuid, name, addedAt}` normalized lowercase-hyphenated. Display names are
   cosmetic; all decisions are UUID-keyed.
+- The dev Paper and the gate lanes' `paper` and `paper-conduct` run with the
+  whitelist unenforced (`ENFORCE_WHITELIST: FALSE`), and `paper-m4` is the one that
+  enforces it. A write to those Papers configures the lane; it gates no join. The
+  list that decides who may play is the live backend's.
 - Never merge: the attach whitelist answers "may this client control the
   puppet?", the backend whitelist "may the puppet occupy a player slot?".
   Adding a UUID present on the other role's whitelist prints a warning to
@@ -338,6 +346,44 @@ node src/custody/cli.js whitelist backend remove <puppet-name> --namespace monop
 - The researched file shape and reload-without-restart behavior are already
   what `src/spike/proxy.js` will consume (`store.has(uuid)`), so B1/B4 wiring is
   additive.
+
+### The live backend's whitelist
+
+The live deployment fronts `play2.excalia.fr`, the Season 3 backend
+`MONOPLAYER_BACKEND_HOST` names ([docs/deployment.md](deployment.md)). This
+repository does not run that server: `deploy/manifests/` holds the proxy and the
+playit agent, and `test/tooling/live-manifests.test.js` fails if a Paper ever joins
+them.
+
+So no command above writes the live backend's whitelist:
+
+- `whitelist backend` runs `kubectl -n <ns> exec deploy/<dep> -- rcon-cli
+  "whitelist …"` (`src/driver/rcon.js`). It writes one Paper Deployment inside
+  this cluster, and the trees that declare those Papers are `deploy/dev`,
+  `deploy/driver` and `deploy/testbed`.
+- The live lane holds no Paper, so `--namespace monoplayer` reaches a Deployment
+  that is not there. kubectl answers NotFound, and the command exits 1.
+
+This repository holds no RCON credential for a server it does not run, so there
+is no route here to build.
+
+The live backend's whitelist is edited on that server, by whoever administers it,
+in that server's own console:
+
+1. Add the puppet to that whitelist: `whitelist add GlowSquidye`, then
+   `whitelist reload` — the two commands the CLI itself sends
+   (`src/custody/store.js`). The list stores the puppet's UUID, the one in
+   [Accounts](#accounts) above; the name is only how the console finds it. When
+   you cannot type it yourself, this is a request to the server's administrator.
+2. Do not copy the list back into this repository. It belongs to that server, and
+   a copy here would read as authority while the real gate drifted.
+3. Read the result there, with `whitelist list`: pass = it names the puppet and
+   no other account. From here the puppet's session is the only evidence, and
+   while the puppet has no session the front refuses an attach with
+   `backend_not_ready` ([docs/deployment.md](deployment.md)).
+
+If the backend enforces no whitelist, there is nothing to add. The puppet's join
+is still the check.
 
 ## Embedding the check in Monoplayer's front leg
 
@@ -398,9 +444,11 @@ Everything except step 2 is unattended.
    UUID enters the vault through `whitelist attach add <player>` (record the
    resolved UUID). The two UUIDs must differ; a missing multi-account
    situation is a smoke, never a pass (`twoAccount=false` in reports).
-   Backend whitelist (`whitelist backend add <puppet> --namespace <ns>`, the
-   namespace that holds the Paper) then holds exactly the puppet; the attach
-   whitelist exactly the player.
+   The attach whitelist holds exactly the player. The backend whitelist holds
+   exactly the puppet, and a human adds that entry on the backend host:
+   `whitelist backend` reaches only a Paper in this cluster
+   ([The live backend's whitelist](#the-live-backends-whitelist)). Pass = that
+   server's `whitelist list` names the puppet and no other account.
 5. **Attach allow (live fixture)** — run the Monoplayer front leg (or the
    minimal `src/custody/fixture.js` fixture) with the attach whitelist as
    configured; log into `127.0.0.1:25565` from Prism as the player. Pass =

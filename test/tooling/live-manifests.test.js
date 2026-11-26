@@ -185,3 +185,22 @@ test('the committed seed is a list the lane can read, and it offers what the lan
     'the seed offers no server twice')
 })
 
+
+// docs/custody.md sends an operator's backend-whitelist write to a Paper, and a Paper is
+// the one thing this lane does not run (#378). `whitelist backend --namespace monoplayer`
+// reaches a Deployment that either is not there or runs no rcon-cli, and the page says so
+// in "The live backend's whitelist". This is the assertion that fails when a manifest
+// makes that sentence untrue, which is the only form of the fact that can fail loudly.
+test('the live lane declares no Paper for a backend whitelist to write', () => {
+  // A Paper, by the image every Paper manifest in this repository runs.
+  const PAPER = /^\s+image: itzg\/minecraft-server/m
+  const papers = everyManifest()
+    .map(file => ({ file: path.relative(ROOT, file), text: fs.readFileSync(file, 'utf8') }))
+    .filter(({ text }) => /^kind: Deployment$/m.test(text) && PAPER.test(text))
+    .map(({ file }) => file)
+  assert.deepEqual(papers, [],
+    'a live manifest declares a Paper: ' + papers.join(', ') + '. The live lane fronts an external ' +
+    'backend (docs/deployment.md), so docs/custody.md tells an operator that no command here writes ' +
+    'its whitelist. A Paper in this lane would make that page wrong, and rcon-cli reachable in ' +
+    'monoplayer, which is not a lane an rcon write should find')
+})
