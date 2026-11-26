@@ -164,7 +164,10 @@ export function createConfigPathInterceptor ({
   // phase. This is the first moment a configuration frame can reach the client
   // in a state it parses; the attach call-in runs during login, before the
   // library writes Login Success.
-  onConfiguring = null
+  onConfiguring = null,
+  // #541: a configuration frame written after the phase's finish, which is
+  // dropped. The leg counts it and records it; the interceptor owns no log.
+  onSuppressed = null
 }) {
   if (typeof originalWrite !== 'function') throw new TypeError('write is required')
   if (typeof writeRaw !== 'function') throw new TypeError('writeRaw is required')
@@ -178,6 +181,14 @@ export function createConfigPathInterceptor ({
   let resolved = false
   let notified = false
   const stashed = [] // library-authored registry_data params (fallback only)
+  // #541: the phase's finish is the last configuration frame a client can parse.
+  // The client answers it and is in play from that moment; this leg learns the
+  // answer only when the client's finish arrives, so a frame written in between
+  // carries a configuration packet id into a connection reading the play table.
+  // The library's own keep-alive does exactly that, on the interval the vendored
+  // copy of it runs.
+  // A round opens the phase again through reopenConfiguration.
+  let finishSent = false
   const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, baselineFrames: 0, unavailable: 0, finishedByCore: 0 }
 
   // #16: the client is in its configuration phase now. One notification per
@@ -227,11 +238,19 @@ export function createConfigPathInterceptor ({
       return
     }
     originalWrite('finish_configuration', {}) // the library call, now ordered after the replay
+    finishSent = true
   }
 
   function wrappedWrite (name, params) {
     if (!isConfigurationState()) {
       return originalWrite(name, params)
+    }
+    if (finishSent) {
+      // #541: past this phase's finish, a configuration frame is one the client
+      // reads in play. Nothing is written, and the caller is told so it does not
+      // count the frame as delivered.
+      onSuppressed?.({ name })
+      return false
     }
     if (name === 'registry_data' && !resolved) {
       stashed.push({ name, params })
@@ -249,15 +268,27 @@ export function createConfigPathInterceptor ({
   // client already has that frame on the wire, so the library's deferred write
   // must never follow it.
   function finishFromCore () {
+    // #541: every round on the connection closes here, not only the first. A
+    // login-phase replay already resolved the interceptor, and a later followed
+    // move still ends its phase on the core's finish frame.
+    finishSent = true
     if (resolved) return false
     resolved = true
     stats.finishedByCore++
     return true
   }
 
+  // #541: a round on the connection the client already holds opens the phase
+  // again. The leg calls this where it decides the round starts, because the
+  // frame that starts it is written in play and is not a configuration write.
+  function reopenConfiguration () {
+    finishSent = false
+  }
+
   return {
     write: wrappedWrite,
     finishFromCore,
+    reopenConfiguration,
     get live () { return live },
     get resolved () { return resolved },
     get replayMode () {
@@ -1181,6 +1212,13 @@ function createFrontLeg ({
       onUnavailable: () => {
         record(client, 'configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
         denyConnection(client, 'backend_not_ready')
+      },
+      // #541: one line per dropped frame, and the leg's own counter. The client it
+      // was aimed at has left the phase, so this never reaches the wire.
+      // #541: one line per dropped frame, with its name. The client it was
+      // aimed at has left the phase, so this never reaches the wire.
+      onSuppressed: ({ name: dropped = null } = {}) => {
+        record(client, 'configFrameAfterFinish', { name: dropped })
       }
     })
     client.write = interceptor.write
@@ -2115,6 +2153,10 @@ function createFrontLeg ({
       record(driver, 'frontReconfigureRefused', { reason: 'client_not_in_play', state: driver.state })
       return { started: false, reason: 'client_not_in_play', state: driver.state }
     }
+    // #541: the round opens the phase again, before the frame that starts it.
+    // The start_configuration is written in play, so it is not a configuration
+    // write and the interceptor cannot see the round begin.
+    ctx?.interceptor?.reopenConfiguration?.()
     try {
       driver.write('start_configuration', {})
     } catch (error) {
@@ -2149,6 +2191,15 @@ function createFrontLeg ({
       if (sent) noteDelivered(client, frame.meta, { bytes: frame.buffer.length })
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
+    // #541: a finish that arrived before this acknowledgement was held here and
+    // is on the wire above, so it never reached the writeRawTo branch that
+    // closes the phase. Closing it here is the same fact, marked where the frame
+    // it belongs to is written.
+    const heldFinish = pending.frames.some(frame =>
+      frame.meta?.state === 'configuration' && frame.meta?.name === 'finish_configuration')
+    if (heldFinish && ctx.interceptor?.finishFromCore()) {
+      record(client, 'configFinishedByCore', { username: client.username ?? null })
+    }
     record(client, 'frontReconfigurationAcknowledged', {
       username: client.username ?? null,
       flushedFrames: pending.frames.length,
@@ -2164,7 +2215,9 @@ function createFrontLeg ({
   // cannot carry trailing bytes.
   function writePacketTo (client, name, packet) {
     if (!client || typeof client.write !== 'function') return false
-    client.write(name, packet)
+    // #541: the interceptor answers false for a frame it dropped, and a frame
+    // that never reached the wire is not a frame the channel was delivered.
+    if (client.write(name, packet) === false) return false
     // #417: no length, because this path holds a packet object and the library
     // serializes it. The frames it carries are the synthesized position, the skin
     // and a notice: a fixed handful per connection, and the one gap in a channel's

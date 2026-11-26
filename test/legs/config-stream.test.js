@@ -16,9 +16,11 @@ function rig ({ live = true, cached = [] } = {}) {
   const writes = []
   const raws = []
   const configuring = []
+  const suppressed = []
   let configuration = true
   const interceptor = createConfigPathInterceptor({
     onConfiguring: () => configuring.push('configuring'),
+    onSuppressed: ({ name }) => suppressed.push({ name }),
     write: (name, params) => writes.push({ name, params }),
     writeRaw: (buffer, meta) => raws.push({ buffer, meta }),
     isConfigurationState: () => configuration,
@@ -27,7 +29,15 @@ function rig ({ live = true, cached = [] } = {}) {
     allowLibraryFallback: false,
     onUnavailable: () => { throw new Error('must not be unavailable in live mode') }
   })
-  return { interceptor, writes, raws, configuring, endConfiguration: () => { configuration = false } }
+  return {
+    interceptor,
+    writes,
+    raws,
+    configuring,
+    suppressed,
+    endConfiguration: () => { configuration = false },
+    startConfiguration: () => { configuration = true }
+  }
 }
 
 test('live mode holds the library registry and finish writes', () => {
@@ -109,6 +119,53 @@ test('#257 the baseline replays the recording and keeps the phase open', () => {
   assert.equal(r.interceptor.stats.baselineFrames, 3)
   assert.equal(r.interceptor.stats.replayedConfigFrames, 0, 'the library registry is not a fallback here')
   assert.equal(r.interceptor.stats.unavailable, 0)
+})
+
+// #541: the phase's finish is the last configuration frame a client can parse.
+// The client answers it in play, and this leg does not learn that until the
+// answer arrives, so a frame written inside that window carries a configuration
+// packet id into a connection that is already reading the play table. The
+// library's keep-alive does exactly that on its four-second interval: the
+// offline rung recorded 9 bytes of configuration keep_alive read in play as
+// acknowledge_player_digging, seven bytes left over.
+test('#541 a configuration frame written after the phase finish never reaches the client', () => {
+  const r = rig()
+  r.interceptor.finishFromCore()
+  assert.equal(r.interceptor.write('keep_alive', { keepAliveId: 7n }), false, 'and the caller is told nothing was written')
+  assert.deepEqual(r.writes, [], 'the keep-alive does not follow the phase finish')
+  assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
+})
+
+test('#541 the next round opens the phase again, so its keep-alives are sent', () => {
+  const r = rig()
+  r.interceptor.finishFromCore()
+  r.endConfiguration()
+  // The leg opens the next round on the connection it holds: it reopens the
+  // phase, writes the play-state start_configuration, and flips its own state
+  // when the client answers it.
+  r.interceptor.reopenConfiguration()
+  r.interceptor.write('start_configuration', {})
+  r.startConfiguration()
+  r.interceptor.write('keep_alive', { keepAliveId: 8n })
+  assert.deepEqual(r.writes.map(write => write.name), ['start_configuration', 'keep_alive'])
+  assert.deepEqual(r.suppressed, [])
+})
+
+test('#541 a later round in cached mode closes the phase as well', () => {
+  // The login replay resolves the interceptor on the first finish. A followed
+  // move on the same connection opens a second round, and its finish frame is
+  // the core's too, so the phase has to close again.
+  const r = rig({ live: false, cached: [{ name: 'registry_data', buffer: Buffer.from('r') }] })
+  r.interceptor.write('finish_configuration', {})
+  assert.equal(r.interceptor.replayMode, 'cached_replay')
+  r.endConfiguration()
+  r.interceptor.reopenConfiguration()
+  r.interceptor.write('start_configuration', {})
+  r.startConfiguration()
+  assert.equal(r.interceptor.finishFromCore(), false, 'the login replay already resolved the interceptor')
+  r.interceptor.write('keep_alive', { keepAliveId: 9n })
+  assert.deepEqual(r.writes.map(write => write.name), ['finish_configuration', 'start_configuration'])
+  assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }])
 })
 
 test('#257 a baseline for another protocol version is not a baseline', () => {

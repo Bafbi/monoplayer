@@ -1768,6 +1768,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       restored: seamlessCore.metrics.reconfigurationsRestored
     }
     const seamlessMark = b5.names.length
+    const seamlessLeftoverMark = b5.leftovers.length
     const seamlessLogMark = logs.length
     seamlessBase.sendTransfer(target.host, target.port)
     await waitFor(
@@ -1887,6 +1888,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the client on the kept connection is in the target state without rejoining',
       b5.login?.entityId === 42 &&
         seamlessCore.metrics.attaches === 1 &&
+        // Every round this connection went through counts, not only this hop: a
+        // client whose decoder is one frame out of step stays out of step, so a
+        // leftover anywhere on the connection is a frame it could not parse.
+        // #541: `leftoversBeforeHop` below says which round it came from.
         b5.leftovers.length === 0 &&
         b5.errors.length === 0,
       {
@@ -1894,6 +1899,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         attaches: seamlessCore.metrics.attaches,
         blocks: b5.blockChanges.map(change => change.location),
         leftovers: b5.leftovers.length,
+        // #541: a count alone cannot be read. The frames say what the client
+        // could not parse, and the mark says whether they arrived on this hop or
+        // on an earlier round the same connection went through.
+        leftoverDetails: b5.leftovers.slice(),
+        leftoversBeforeHop: seamlessLeftoverMark,
         errors: b5.errors.length
       }
     )
