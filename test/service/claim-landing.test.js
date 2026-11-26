@@ -6,6 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { CLAIM_REFUSAL, createClaims } from '../../src/core/claims.js'
 import { pickSlug } from '../../src/core/picker.js'
 import { CLAIM_WARM_GRACE_MS, CLAIM_WARM_TIMEOUT_MS } from '../../src/service/monoplayer.js'
 import { makeCore } from '../support/harness.js'
@@ -351,4 +352,32 @@ test('#597 a claim on a served body reads as one snapshot', async () => {
     spectators: 0,
     warm: true
   })
+})
+
+// #631: the claim a test plants is the claim the board records, because the double
+// holds the board (`createClaims` in src/core/claims.js) instead of a map and a
+// literal of its own. The board is the oracle here, not a hand-written row: `#597`
+// above pins what a reader sees, and this pins where that row comes from.
+test('#631 a claim planted on the fake is the claim the board records', async () => {
+  const { frontLeg } = makeCore({ config: { picker: true } })
+  const body = CLAIMED_SERVER
+  const recorded = createClaims().claim({ body, server: body, holder: 'holder-7', name: 'Pilot', at: 0 })
+
+  // A body's claim carries every field the board's own copy carries, and no other.
+  const planted = frontLeg.claim(body, { name: 'Pilot', holder: 'holder-7', at: 0 })
+  assert.deepEqual(planted, recorded.claim, 'the double records the claim the board records')
+  assert.deepEqual(frontLeg.claimOn(body), recorded.claim, 'and reads it back as the board reads it')
+
+  // The board's two rules reach the double, so a test cannot plant a state
+  // production cannot reach: a second holder on a claimed body is refused, and the
+  // claim that refused it stands.
+  assert.throws(() => frontLeg.claim(body, { name: 'Rival', holder: 'holder-8' }),
+    new RegExp(CLAIM_REFUSAL.TAKEN), 'a rival claim is refused, as the board refuses it')
+  assert.equal(frontLeg.claimOn(body).holder, 'holder-7', 'and the incumbent claim is the one left holding it')
+
+  // A read is a copy: writing into what a reader got back does not change the
+  // claim the next reader sees, which is what the real leg's `claimOn` gives.
+  const copy = frontLeg.claimOn(body)
+  copy.holder = 'someone-else'
+  assert.equal(frontLeg.claimOn(body).holder, 'holder-7', 'a reader cannot write into the claim it read')
 })
