@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { isData, rules, section, withoutComments } from './manifest-reader.js'
 import { parseRegistry } from '../../src/panel/registry.js'
 import { ALLOWED_KEY } from '../../src/panel/routes/allowed.js'
 import { WHITELIST_KEY } from '../../src/panel/routes/whitelist.js'
@@ -38,13 +39,6 @@ const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8')
 
 // Every document in a directory, with the file it came from. kustomization.yaml
 // is included: it is an object, and its resource list is one of the assertions.
-// Comments are not data. A Service that says in prose "there is no tunnel here
-// and there must never be one" is not a Service that publishes one, and a guard
-// that cannot tell the two apart would make the comment the load-bearing part.
-const withoutComments = text => text.split('\n')
-  .filter(line => !line.trimStart().startsWith('#'))
-  .join('\n')
-
 function documentsIn (dir, files) {
   return files.flatMap(file => read(dir, file).split(/^---$/m)
     .map(text => ({ file, text: withoutComments(text) }))
@@ -63,68 +57,6 @@ function describe (text) {
 }
 
 const scalar = (text, key) => (text.match(new RegExp('^' + key + ':\\s*(\\S+)\\s*$', 'm')) ?? [])[1] ?? null
-
-// The lines under a key, up to the next line indented no deeper than the key.
-function section (text, indent, key) {
-  const lines = text.split('\n')
-  const start = lines.findIndex(line => line === ' '.repeat(indent) + key + ':')
-  if (start === -1) return ''
-  const body = []
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line.trim() === '') { body.push(line); continue }
-    if (line.length - line.trimStart().length <= indent) break
-    body.push(line)
-  }
-  return body.join('\n')
-}
-
-// The one line policy every reader here shares: a blank line is nothing, and a
-// comment is not data. Two readers with two policies would disagree about the
-// same manifest, which is the shape of bug this file exists to prevent.
-const isData = line => line.trim() !== '' && !line.trimStart().startsWith('#')
-
-const RULE_KEYS = ['apiGroups', 'resources', 'resourceNames', 'verbs']
-
-// The rules of a Role. A key this reader does not know, or a line it cannot
-// place, throws: the guard has to read every rule it is asked to judge.
-function rules (text) {
-  const body = text.split(/^rules:\s*$/m)[1]
-  if (body === undefined) return []
-  const parsed = []
-  let current = null
-  for (const line of body.split('\n')) {
-    if (!isData(line)) continue
-    if (line.length - line.trimStart().length < 2) break
-    const opening = line.match(/^ {2}- (\S.*)$/)
-    if (opening) {
-      current = {}
-      parsed.push(current)
-      assign(current, opening[1])
-      continue
-    }
-    const entry = line.match(/^ {4}(\S.*)$/)
-    if (!entry || current === null) {
-      throw new Error('this guard cannot read the rule line: ' + JSON.stringify(line))
-    }
-    assign(current, entry[1])
-  }
-  return parsed
-}
-
-function assign (rule, text) {
-  const entry = text.match(/^([A-Za-z]+):\s*(\[.*\]|\S+)$/)
-  if (!entry) throw new Error('this guard cannot read the rule value: ' + JSON.stringify(text))
-  const [, key, value] = entry
-  if (!RULE_KEYS.includes(key)) throw new Error('this guard does not know the rule key ' + key)
-  if (key in rule) throw new Error('the rule sets ' + key + ' twice')
-  rule[key] = value.startsWith('[')
-    ? [...value.matchAll(/"([^"]*)"/g)].map(match => match[1])
-    : [value]
-  if (value.startsWith('[') && !value.endsWith(']')) {
-    throw new Error('this guard reads flow-style lists only: ' + key + ' ' + value)
-  }
-}
 
 // --- the checks ---
 

@@ -1,0 +1,55 @@
+# The one authority a run needs to take the account lease (#302), and nothing else.
+#
+# A run that uses the real account takes a Kubernetes Lease first (#280): one Minecraft
+# identity is one refresh chain, so one run uses it at a time. scripts/online-cluster.sh
+# makes three calls on it from the operator's machine, before and after the throwaway pod
+# the same script runs: `get lease`, `create -f` and `replace -f`. The credential is the
+# operator's, which is why this grant lives in the lane rather than in a workload's
+# ServiceAccount: no object in this repository holds the lease.
+#
+# The verbs are `get`, `create` and `update`. `update` is the one worth explaining:
+# `replace` is a kubectl subcommand and not an RBAC verb, and a `kubectl replace` is an
+# HTTP PUT, which the API server scores as `update`. The cluster says which verbs the
+# resource has, and `replace` is not one of them:
+#
+#   kubectl api-resources --verbs=update --namespaced | grep leases
+#   kubectl api-resources --verbs=replace --namespaced | grep leases   # nothing
+#
+# Two rules, not one, because RBAC ignores `resourceNames` on a create: the name of a new
+# object is not known when the request is authorized. So `get` and `update` are scoped to
+# the one lease, and `create` stands alone with nothing to scope it. One rule carrying all
+# three with `resourceNames` would read narrow and not be, which is the shape
+# deploy/panel/role.yaml refuses from the other side by granting no `create` at all.
+#
+# A Role, never a ClusterRole: the lease lives where the custody does, and this grant is
+# about the lease alone. A run does write another object there, the throwaway pod it applies
+# and deletes, and those permissions are not this file's. No `delete`, `deletecollection`
+# or `patch`: a run releases its
+# lease by writing an empty holder identity, and a lease nobody releases expires on its
+# own. No `list` and no `watch`: the script reads the one object it names.
+#
+# The lease name and the namespace below are the defaults scripts/online-cluster.sh ships.
+# A run that overrides MONOPLAYER_LEASE_NAME or MONOPLAYER_CLUSTER_NAMESPACE writes a lease
+# this file does not name, or writes in a namespace this file is not in, and nothing here
+# follows that: pairing an override with a Role of its own is the operator's.
+#
+# account-lease-rolebinding.yaml is who holds this, and
+# test/tooling/live-manifests.test.js fails when a verb, the lease name, the namespace or
+# the subject moves.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: account-lease
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["monoplayer-online-account"]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]

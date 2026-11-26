@@ -1,0 +1,36 @@
+# Who may take the account lease: the group an operator's cluster credential carries.
+#
+# The subject is a Group and not a ServiceAccount, because the lease is no workload's.
+# scripts/online-cluster.sh writes it with the operator's own kubectl, in both forms of the
+# rung, and the pod it creates mounts no token. A binding to a ServiceAccount here would
+# hand the grant to an identity that never makes the call.
+#
+# Group membership is asserted when the request is authenticated, never by a manifest, so
+# this file can name a group and not create one. That is why it also says what to do when
+# nobody carries the group yet.
+#
+# RBAC is additive. A credential in `system:masters` is answered before RBAC is consulted,
+# so this grant subtracts nothing from such a credential and adds nothing to it; `kubectl
+# auth whoami` on the machine that runs the rung prints the groups a credential carries.
+#
+# What it is for is the credential that is narrower than the admin one, which is the case
+# #302 was filed about: issue a credential carrying this group, or map the group from an
+# identity provider, and the three verbs arrive with it. docs/deployment.md is the
+# bootstrap step, and test/tooling/live-manifests.test.js fails when the subject moves or
+# that page stops naming it.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: account-lease
+  namespace: monoplayer
+  labels:
+    app.kubernetes.io/name: monoplayer
+    app.kubernetes.io/part-of: monoplayer
+subjects:
+  - kind: Group
+    name: monoplayer-operators
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: account-lease
