@@ -52,15 +52,12 @@ const BLOCK_FRAMES = new Set([
 // The frames join-synth merges out of `generic` are deliberately absent, and
 // join-synth's `ENTITY_GENERIC_FRAMES` is the one list of them. They stay in
 // `generic`, and join-synth replays the two domains merged in capture order, so
-// a frame still lands where it was captured. Two groups need that:
-//
-//   per-tick position deltas   a slot holds the newest frame for its key, so
-//                              routing a delta here would replay the last one
-//                              and none of the ones it built on (issue #35)
-//   whole-value body state     attributes, equipment, passengers: each frame
-//                              replaces a value the client keeps, so a fixed
-//                              section order applies the newer frame before
-//                              the older one it superseded (issue #222)
+// a frame still lands where it was captured. Two groups need that. A per-tick
+// position delta is additive, and a slot holds the newest frame for its key, so
+// routing one here would replay the last delta and none of the ones it built on
+// (issue #35). A body's attributes, equipment, and passengers replace a value
+// the client keeps, so a fixed section order applies the newer frame before the
+// older one it superseded (issue #222).
 //
 // `remove_entity_effect` is the exception: it belongs here, under the effect's
 // own slot, because it is the newest word about an effect rather than a step in

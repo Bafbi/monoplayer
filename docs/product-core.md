@@ -1002,9 +1002,8 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   own ticket. Until it lands, `sizes` rides the warm and login log lines;
   `entitySlots`, `entityRemovals`, and the three overflow counters are on
   `stats()`, and the attach record #218 adds is where they reach an operator.
-- Only the frames in `join-synth.ENTITY_GENERIC_FRAMES` (the relative-move frames,
-  `entity_update_attributes`, `entity_equipment`, `set_passengers`) leave
-  `generic`'s place in the replay. Every other generic frame keeps it. Chunks and
+- Only the frames `join-synth.ENTITY_GENERIC_FRAMES` lists leave `generic`'s
+  place in the replay. Every other generic frame keeps it. Chunks and
   blocks still replay before it, and `latest` and `inventories` keep their
   latest-wins and base-then-slots rules, so their `seq` is a recency stamp rather
   than a place in the stream. Merging those by sequence would put a chunk after

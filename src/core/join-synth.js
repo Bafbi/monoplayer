@@ -42,14 +42,12 @@ const REPLAY_SECTIONS = Object.freeze([
 // The `generic` frames that replay with entity state, because their value belongs
 // to a body the client already holds. A fixed section order sends every one of
 // them after every entity-domain frame, whatever order they were captured in, and
-// that is wrong in two ways:
-//
-//   a relative move only means   so it replays in the entity state's stream
-//   something after the          instead of at the end of the replay (#35)
-//   absolute it followed
-//   a body's attributes,         so they replay inside the body's lifetime: an
-//   equipment, and passengers    id that died and was reused must not inherit
-//   are state the client keeps   the dead body's value (#222)
+// that is wrong in two ways. A relative move only means something after the
+// absolute it followed, so a delta has to replay in the entity state's stream
+// instead of at the end of the replay (#35). A body's attributes, equipment, and
+// passengers are state the client keeps, so they have to replay inside the
+// body's lifetime: an id that died and was reused must not inherit the dead
+// body's value (#222).
 //
 // A frame joins this set only when `client-state.js` decodes it, so the
 // equivalence harness and the parity guard can see the order it landed in, and
@@ -125,16 +123,16 @@ export function replayFrames (snapshot, { includeConfig = true } = {}) {
 function mergeByCapture (entityFrames, entityState) {
   const merged = []
   let e = 0
-  let m = 0
-  while (e < entityFrames.length || m < entityState.length) {
+  let g = 0
+  while (e < entityFrames.length || g < entityState.length) {
     const nextEntity = entityFrames[e]
-    const nextMove = entityState[m]
-    if (nextMove === undefined || (nextEntity !== undefined && captureSeq(nextEntity) <= captureSeq(nextMove))) {
+    const nextState = entityState[g]
+    if (nextState === undefined || (nextEntity !== undefined && captureSeq(nextEntity) <= captureSeq(nextState))) {
       merged.push(nextEntity)
       e++
     } else {
-      merged.push(nextMove)
-      m++
+      merged.push(nextState)
+      g++
     }
   }
   return merged

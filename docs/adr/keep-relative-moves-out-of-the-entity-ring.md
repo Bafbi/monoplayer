@@ -53,19 +53,22 @@ ignores them on both sides and cannot see the position a moved entity ends at.
   captures them, so N13 compares where a moved entity ends and what state a body
   holds. Without the decode the check was blind to the defect both sides agreed
   on.
-- `ENTITY_FRAMES` in the cache is where a protocol rename for entity routing
-  is tracked, and `ENTITY_GENERIC_FRAMES` in join-synth is where a frame that
-  carries a body's state but lives in `generic` is tracked. A name missing from
-  both routes to `generic` and keeps that section's place, so a rename costs a
-  stale value, not a crash. `test/core/entity-body-frames.test.js` derives the
-  body frames from the vendored protocol and fails until a new one is placed in
-  one of the three lists.
+- A protocol rename costs a stale value, not a crash. The cache's
+  `ENTITY_FRAMES` tracks which names route to the entity domain, join-synth's
+  `ENTITY_GENERIC_FRAMES` tracks which generic names carry a body's state, and a
+  name missing from both keeps its section's place.
+  `test/core/entity-body-frames.test.js` derives the body-carrying frames from
+  the vendored protocol and fails until a new one lands in one of the two lists
+  or in its table of frames that keep their place.
 - `vehicle_move` is absolute and stays in `generic`'s place, undecoded by the
   parity model. A replayed vehicle can sit one frame stale, and the error does
   not accumulate. `move_minecart` stays with it, for the same reason.
-- The rule is not "relative moves only". It is "a generic frame whose value the
-  client keeps for a body", so `entity_update_attributes`, `entity_equipment`,
-  and `set_passengers` replay by the same merge (#222). The effect pair is the
-  exception that proves the direction: its add and its removal must share the
-  entity domain's slot, because a slot outlives the 512-frame generic ring and
-  the ring would keep the add after evicting the removal.
+- The rule covers more than relative moves. It is "a generic frame whose value
+  the client keeps for a body". Issue #222 offers one mechanism or the other,
+  and the two hazards are different, so this change uses each where it is exact:
+  `entity_update_attributes`,
+  `entity_equipment`, and `set_passengers` replay by the same merge (#222). The
+  effect pair goes the other way, into one slot: a slot outlives the 512-frame
+  generic ring, so a merged removal would age out while its add stayed and the
+  replay would keep an effect the backend removed. The file keeps its name
+  because the decision does: these frames stay out of the entity domain.

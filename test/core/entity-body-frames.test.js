@@ -18,6 +18,7 @@ import fs from 'node:fs'
 
 import { classifyPlay } from '../../src/core/state-cache.js'
 import { ENTITY_GENERIC_FRAMES } from '../../src/core/join-synth.js'
+import { PARITY_FRAME_NAMES } from '../../src/ladder/state-parity.js'
 import { applyFrames, createClientState, stateSnapshot } from '../../src/ladder/client-state.js'
 
 const protocol = JSON.parse(fs.readFileSync(
@@ -93,6 +94,10 @@ test('the merge set holds generic body frames only, and the model keeps their st
   }
   for (const name of ENTITY_GENERIC_FRAMES) {
     assert.equal(classifyPlay(name).domain, 'generic', name + ' still routes to generic, so the merge is what orders it')
+    // attachParity cuts the client's stream by this set, so a merged frame the set
+    // omits would be decoded on the expectation side and missing on the client
+    // side, and every attach would compare two different streams.
+    assert.ok(PARITY_FRAME_NAMES.has(name), name + ' is in PARITY_FRAME_NAMES, or the parity cut skips it')
     const frames = samples[name]
     assert.ok(frames !== undefined, name + ' needs a sample frame for the model check below')
     const state = applyFrames(createClientState(), frames)
