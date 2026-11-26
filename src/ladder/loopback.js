@@ -64,6 +64,12 @@ const DEFAULT_REPORT = '.reports/loopback-report.json'
 // carries the other's value.
 const O73_PUPPET_SKIN = { name: 'textures', value: 'cHVwcGV0LXNraW4tYnk=', signature: 'cHVwcGV0LXNpZw==' }
 const O73_OWN_SKIN = { name: 'textures', value: 'd2F0Y2hlci1za2luLWJ5', signature: 'd2F0Y2hlci1zaWc=' }
+// #685: two more accounts, each distinct from the others in every field, so one payload
+// carrying all three skins is a payload that can tell them apart. The names are this row's
+// own: it lands both of its clients, and a name an earlier row's bot still holds is a name
+// the front may resolve to a socket that has gone.
+const O76_SIGHTED_SKIN = { name: 'textures', value: 'c2lnaHRlZC1za2luLWJ5', signature: 'c2lnaHRlZC1zaWc=' }
+const O76_BYSTANDER_SKIN = { name: 'textures', value: 'YnlzdGFuZGVyLXNraW4tYnk=', signature: 'YnlzdGFuZGVyLXNpZw==' }
 
 // Every assertion this rung makes, in the order it makes them. This list is the
 // declaration `test/ladder/loopback-contract.test.js` reads: a bullet in
@@ -96,7 +102,7 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   // until the run started checking the order (#623).
   // #618: O73 lands a spectator on the body O65 leaves driven, so it runs between O65 and
   // O66, before O66 empties the lane's allowed-server list.
-  'O63', 'O69', 'O64', 'O65', 'O73', 'O66'
+  'O63', 'O69', 'O64', 'O65', 'O73', 'O76', 'O66'
 ])
 
 // #623: the list is the run order, and this is the rule that holds the run to it. The
@@ -326,6 +332,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot22 = null
   // #618: the client whose own player is read for the skin its account sent.
   let pickerBot23 = null
+  // #685: the two clients that land together, so one channel is told about two players and
+  // each entry can be read for the skin it carries.
+  let pickerBot24 = null
+  let pickerBot25 = null
   // #602: the leg and the client O72 builds. They are this check's own because its
   // body configuration is, and createLoopbackLane takes a rig, whose front leg reads
   // the core's cache.
@@ -2962,7 +2972,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Nearby'),
       // #618: the client whose own player is read for the skin its account sent, and the
       // only one this rig supplies properties for.
-      offlineUuid('OwnSkin')
+      offlineUuid('OwnSkin'),
+      // #685: the two accounts that land together, so one socket is told about two
+      // spectators and each entry can be read for its own skin.
+      offlineUuid('Sighted'), offlineUuid('Bystander')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -3033,10 +3046,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // No cached backend configuration exists, and none is invented: the front's
         // cached replay path must find nothing here.
         configurationBaseline: pickerBaseline,
-        // #618: the one thing an offline lane cannot get from a sessionserver, supplied
-        // the way a deployed lane gets it from one: the properties the account's answer
-        // carried. Only OwnSkin has any, and only that client's landing is read for it.
-        profiles: { OwnSkin: [O73_OWN_SKIN] },
+        // #618/#685: the one thing an offline lane cannot get from a sessionserver,
+        // supplied the way a deployed lane gets it from one: the properties the account's
+        // answer carried. O73's client is read for its own entry, and O76's two are read for
+        // the entry naming each of them on another channel, so all three carry one.
+        profiles: {
+          OwnSkin: [O73_OWN_SKIN],
+          Sighted: [O76_SIGHTED_SKIN],
+          Bystander: [O76_BYSTANDER_SKIN]
+        },
         pickerServers: createPickerServerReader({ control: pickerControl, log }),
         onPickerPick: pick => pickerPicks.push(pick),
         onPickerVerb: verb => pickerVerbs.push(verb),
@@ -5790,6 +5808,146 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     await waitFor(
       () => pickerCore.laneState().bodies[0].spectators === 0,
       'the landing gone before the lane with no list is read',
+      15_000
+    )
+
+
+    // --- O76: the entry that tells one channel about another client carries its skin (#685) ---
+    // #618 gave a spectator's own player its account's skin, on that spectator's channel alone
+    // (O73). This is the other half, and it is the one a driver reads: the entry that tells one
+    // channel about **another** client's body carried no property, so a driver drew every
+    // spectator in a vanilla default, and one spectator drew another in one.
+    //
+    // The skin is held with the spectator, in the one record the service keeps per channel, and
+    // the entry `entryFor` builds reads it. Two accounts land, each supplied the properties its
+    // sessionserver answer would have carried (the front's `profiles` option, the stand-in O73
+    // uses), and two sockets are read: the driver's, which O65 leaves holding the body, and the
+    // spectator that lands first. One socket then carries three bodies and three skins, and the
+    // assertion fails if any entry carries another player's.
+    const driverSkins = { entries: [] }
+    pickerBot18.client.on('player_info', packet => driverSkins.entries.push(packet))
+    const sightedUuid = offlineUuid('Sighted')
+    const bystanderUuid = offlineUuid('Bystander')
+    const watchedSkins = { entries: [] }
+    pickerBot24 = createBot({ port: picker.port, username: 'Sighted', version: pickerVersion })
+    await pickerBot24.waitFor(
+      () => pickerBot24.received.dialogs.length === 1,
+      'the picker at the spectator whose socket is read for the other one',
+      15_000
+    )
+    pickerBot24.client.on('player_info', packet => watchedSkins.entries.push(packet))
+    const sightedLanding = pickerFront.spectate({
+      username: 'Sighted',
+      body: pickSlug(pickerBodyName),
+      server: pickerBodyName
+    })
+    await pickerBot24.waitFor(
+      () => pickerBot24.received.login !== null,
+      'the body at the first of the two spectators',
+      30_000
+    )
+    pickerBot25 = createBot({ port: picker.port, username: 'Bystander', version: pickerVersion })
+    await pickerBot25.waitFor(
+      () => pickerBot25.received.dialogs.length === 1,
+      'the picker at the second spectator',
+      15_000
+    )
+    const bystanderLanding = pickerFront.spectate({
+      username: 'Bystander',
+      body: pickSlug(pickerBodyName),
+      server: pickerBodyName
+    })
+    await pickerBot25.waitFor(
+      () => pickerBot25.received.login !== null,
+      'the body at the second spectator',
+      30_000
+    )
+    // The entries as the socket states them: the name each entry names and the textures values
+    // it carries. A frame listing both players is read per entry, so an entry carrying the
+    // other one's value is a value this read sees and the equality below fails on.
+    const skinsIn = (frames, uuid) => frames
+      .flatMap(packet => packet.data ?? [])
+      .filter(entry => sameUuid(entry.uuid, uuid))
+      .map(entry => ({
+        name: entry.player?.name ?? null,
+        textures: (entry.player?.properties ?? [])
+          .filter(property => property.name === 'textures')
+          .map(property => property.value)
+      }))
+    await waitFor(
+      () => skinsIn(driverSkins.entries, sightedUuid).length >= 1 &&
+        skinsIn(watchedSkins.entries, bystanderUuid).length >= 1,
+      "the first spectator at the driver, and the second at the first one's socket",
+      15_000
+    )
+    await waitFor(
+      () => skinsIn(driverSkins.entries, bystanderUuid).length >= 1 &&
+        skinsIn(driverSkins.entries, puppetUuid).length >= 1,
+      "the second spectator and the body, at the driver",
+      15_000
+    )
+    const seen = {
+      driver: {
+        sighted: skinsIn(driverSkins.entries, sightedUuid),
+        bystander: skinsIn(driverSkins.entries, bystanderUuid),
+        puppet: skinsIn(driverSkins.entries, puppetUuid)
+      },
+      spectator: {
+        sighted: skinsIn(watchedSkins.entries, sightedUuid),
+        bystander: skinsIn(watchedSkins.entries, bystanderUuid)
+      }
+    }
+    evidence.skinsAcrossChannels = {
+      landings: { sighted: sightedLanding, bystander: bystanderLanding },
+      seen,
+      supplied: {
+        sighted: O76_SIGHTED_SKIN.value,
+        bystander: O76_BYSTANDER_SKIN.value,
+        puppet: O73_PUPPET_SKIN.value
+      },
+      driverEnded: pickerBot18.received.ended === null ? null : String(pickerBot18.received.ended).slice(0, 120)
+    }
+    const allCarry = (entries, value) =>
+      entries.length >= 1 && entries.every(entry => entry.textures.length === 1 && entry.textures[0] === value)
+    check(
+      'O76',
+      "a channel told about a spectator is told that spectator's own skin, and the entry naming the puppet keeps the puppet's: one socket, three bodies, three skins, and no entry carrying another player's",
+      sightedLanding.watching === true &&
+        bystanderLanding.watching === true &&
+        // The name and the skin, on the entry a driver draws each spectator from. This is the
+        // half #618 left out: before it, both entries carried no property at all.
+        allCarry(seen.driver.sighted, O76_SIGHTED_SKIN.value) &&
+        seen.driver.sighted.every(entry => entry.name === 'Sighted') &&
+        allCarry(seen.driver.bystander, O76_BYSTANDER_SKIN.value) &&
+        seen.driver.bystander.every(entry => entry.name === 'Bystander') &&
+        // The body's entry, on the same socket: the puppet's own value, which is O73's half
+        // of the rule and unchanged here. Three bodies, three skins, in one payload.
+        allCarry(seen.driver.puppet, O73_PUPPET_SKIN.value) &&
+        // One spectator draws another: the entry naming the second one, on the first one's
+        // socket, with the second one's skin.
+        allCarry(seen.spectator.bystander, O76_BYSTANDER_SKIN.value) &&
+        seen.spectator.bystander.every(entry => entry.name === 'Bystander') &&
+        // The one entry naming the player that socket speaks for is #618's, written on its own
+        // channel: one, not two, because the other-channel write never reaches the channel it
+        // speaks for. And it carries the value the driver's copy of the same player carries,
+        // which is the two writes agreeing: one record, read by both.
+        allCarry(seen.spectator.sighted, O76_SIGHTED_SKIN.value) &&
+        seen.spectator.sighted.length === 1 &&
+        JSON.stringify(seen.spectator.sighted[0].textures) === JSON.stringify(seen.driver.sighted[0].textures) &&
+        // Three values, three players, and none on another's entry.
+        O73_PUPPET_SKIN.value !== O76_SIGHTED_SKIN.value &&
+        O76_SIGHTED_SKIN.value !== O76_BYSTANDER_SKIN.value &&
+        O73_PUPPET_SKIN.value !== O76_BYSTANDER_SKIN.value &&
+        pickerBot18.received.ended === null,
+      evidence.skinsAcrossChannels
+    )
+    // The row leaves the rig as O65 left it: both spectators go, and the body keeps the driver
+    // that holds it, so O66 reads the same lane O73 read.
+    await pickerBot24.close()
+    await pickerBot25.close()
+    await waitFor(
+      () => pickerCore.laneState().bodies[0].spectators === 0,
+      'both landings gone again',
       15_000
     )
 

@@ -581,3 +581,97 @@ test('#633 a body that respawns tells each spectator again, and never the driver
   assert.equal(rig.core.metrics.spectatorViews, 1, 'a respawn is not a landing')
 })
 
+// #685: the other half of #618. #618 named a spectator on its own channel, carrying its
+// account's skin. The entry that tells one channel about **another** client's body carried
+// no property, so a driver drew a spectator in a vanilla default, and one spectator drew
+// another in one. The property is held with the spectator, in the one record both writes
+// read, and every channel told about that player is told its skin.
+const SECOND = '33333333-4444-4555-8666-777777777777'
+const SECOND_TEXTURES = { value: 'c2Vjb25kIHNraW4=', signature: 'c2Vjb25kIHNpZ2c=' }
+
+// The entries a channel received for one UUID, as the textures values they carried.
+const entriesFor = (frontLeg, channel, uuid) => frontLeg.frames()
+  .filter(frame => frame.name === 'player_info' && frame.kind === 'packet' && frame.channel === channel)
+  .flatMap(frame => frame.packet.data ?? [])
+  .filter(entry => entry.uuid === uuid)
+  .map(entry => (entry.player.properties ?? [])
+    .filter(property => property.name === 'textures')
+    .map(property => property.value))
+
+test('#685 a channel told about a spectator is told that spectator\'s skin, and never the puppet\'s', async () => {
+  const rig = makeCore({ config: skinConfig() })
+  await landABody(rig)
+  deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  // The driver's own socket, which the fake owns no record of until a test names it.
+  rig.frontLeg.channelRecord({ id: 'driver-channel' })
+
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'a-channel', skin: WATCHER_TEXTURES })
+
+  // The driver draws the spectator from this entry: the account's own property, on the
+  // driver's channel, which is the frame this ticket is about.
+  assert.deepEqual(entriesFor(rig.frontLeg, 'driver-channel', WATCHER), [[WATCHER_TEXTURES.value]],
+    "the driver is told the spectator's own skin, not a vanilla default and never the puppet's")
+
+  // A second spectator, with a skin of its own: the first one's channel is told about it,
+  // and neither channel is told about itself.
+  rig.core.spectateView({ name: 'Second', uuid: SECOND, channel: 'b-channel', skin: SECOND_TEXTURES })
+  assert.deepEqual(entriesFor(rig.frontLeg, 'a-channel', SECOND), [[SECOND_TEXTURES.value]],
+    "one spectator draws another with that spectator's own skin")
+  assert.deepEqual(entriesFor(rig.frontLeg, 'b-channel', WATCHER), [[WATCHER_TEXTURES.value]],
+    "and the second is told the first one's")
+  assert.deepEqual(entriesFor(rig.frontLeg, 'a-channel', WATCHER), [],
+    'no channel is told about its own player')
+  assert.deepEqual(entriesFor(rig.frontLeg, 'b-channel', SECOND), [])
+
+  // The body's entry is the other skin in the same payload, and it keeps the puppet's:
+  // two entries naming two players, two skins, and neither on the other's body.
+  const bodyEntries = skinFrames(rig.frontLeg).filter(frame => frame.packet.data[0].uuid === PUPPET)
+  assert.ok(bodyEntries.length >= 1, 'the body is announced to every channel')
+  for (const frame of bodyEntries) {
+    assert.deepEqual(frame.packet.data[0].player.properties, [TEXTURES], "the body's entry carries the puppet's")
+  }
+  assert.notEqual(TEXTURES.value, WATCHER_TEXTURES.value)
+  assert.notEqual(WATCHER_TEXTURES.value, SECOND_TEXTURES.value)
+})
+
+test('#685 with the skin switch off, the entry naming a spectator carries no property', async () => {
+  const rig = makeCore({
+    config: { picker: true, skin: { showPuppetSkin: false }, puppet: { username: 'Wiriaw', uuid: PUPPET } }
+  })
+  await landABody(rig)
+  deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  rig.frontLeg.channelRecord({ id: 'driver-channel' })
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'a-channel', skin: WATCHER_TEXTURES })
+
+  // The entry is still written, because the body needs it to be drawn at all, and it
+  // claims no skin: one switch, and off means no entry carrying one.
+  assert.deepEqual(entriesFor(rig.frontLeg, 'driver-channel', WATCHER), [[]],
+    'the entry is written and carries no texture')
+})
+// #685: a property the entry builder would refuse is no skin, and it must not cost the body
+// either. A client drops a spawn whose UUID it holds no entry for, so an entry withheld for a
+// bad property would delete the spectator from every other channel's world.
+test('#685 a landing handed a property the builder refuses is announced without a skin, and the body still stands', async () => {
+  const rig = makeCore({ config: skinConfig() })
+  await landABody(rig)
+  deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  rig.frontLeg.channelRecord({ id: 'driver-channel' })
+
+  const view = rig.core.spectateView({
+    name: 'Watcher',
+    uuid: WATCHER,
+    channel: 'a-channel',
+    skin: { value: '' }
+  })
+
+  assert.equal(view.ownSkin, false, 'no entry names the spectator on its own channel')
+  assert.deepEqual(entriesFor(rig.frontLeg, 'driver-channel', WATCHER), [[]],
+    'the entry is written and claims no skin')
+  const spawned = rig.frontLeg.frames()
+    .filter(frame => frame.name === 'spawn_entity' && frame.channel === 'driver-channel')
+    .map(frame => frame.packet.objectUUID)
+  assert.ok(spawned.includes(WATCHER), 'and the body it belongs to is still spawned')
+})

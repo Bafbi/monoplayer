@@ -645,12 +645,15 @@ export function createMonoplayer ({
   // would take one spectator away for it, and the relay would stop under a spectator
   // that stayed.
   //
-  // The value is the player that channel is (its name and UUID) and where its client is.
-  // All three are the core's own copy: the leg's channel record (src/core/channels.js)
-  // holds what the leg answers from its socket, and the core is told a spectator's identity
-  // once, when it lands. #636: the pose joins them, seeded from the body's own pose at the
-  // landing, because the proxy is what put that client there, and moved by the frames the
-  // front hands over after it (#269 drops the frame and keeps the position).
+  // The value is the player that channel is (its name and UUID), where its client is, and
+  // the skin its account's answer carried. All of it is the core's own copy: the leg's
+  // channel record (src/core/channels.js) holds what the leg answers from its socket, and
+  // the core is told a spectator's identity once, when it lands. #636: the pose joins them,
+  // seeded from the body's own pose at the landing, because the proxy is what put that
+  // client there, and moved by the frames the front hands over after it (#269 drops the
+  // frame and keeps the position). #685: the skin joins them too, and it is the one home of
+  // it: the entry on that spectator's own channel and the announcement of that player on
+  // every other channel both read this field and neither keeps a copy.
   const spectators = new Map()
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
@@ -2055,10 +2058,14 @@ export function createMonoplayer ({
   // measured in testdata/skin-verdict.md, and not the account's skin the ticket asked
   // for. The rule this code holds now is: an entry names the spectator, and it carries
   // the textures property the account's own hasJoined answer carried. Never the
-  // puppet's: the property is the verified client's, and it is written on that
-  // client's channel alone, because it is one client's own body. sendSpectatorSkin is
-  // that entry, and the front is what supplies the property, because the front is
-  // where the account was verified.
+  // puppet's: the property is the verified client's. The front is what supplies it,
+  // because the front is where the account was verified, and `spectators` is what
+  // holds it, one record per channel.
+  //
+  // #685: two writers read that one record, and neither keeps a copy: this one, on the
+  // spectator's own channel, and the announcement below, on every other channel of the
+  // body. A third party draws a player from the entry naming it, so a channel told about
+  // a spectator is told that spectator's skin or it draws a vanilla default.
   function owedSkinEntries () {
     const owed = []
     if (canDeliverPlay()) {
@@ -2140,6 +2147,11 @@ export function createMonoplayer ({
   // that makes a spectator's own player wear its own account's skin instead of the
   // vanilla default a client resolves without one (testdata/skin-verdict.md).
   //
+  // #685: the property is read off the `spectators` record and not passed in, because
+  // that record is its one home. The announcement `entryFor` builds reads the same
+  // record for the same player on every other channel of the body, and two readers of
+  // one record cannot disagree about a skin.
+  //
   // The property is the front's, never the puppet's and never the proxy's: this
   // function invents nothing, and a spectator whose answer carried no property gets
   // no entry at all rather than an entry that claims a skin nobody sent. That is the
@@ -2148,10 +2160,13 @@ export function createMonoplayer ({
   //
   // The switch is the one switch for skin entries: with `skin.showPuppetSkin` off the
   // proxy writes none, and that includes this one (docs/transparency.md).
-  function sendSpectatorSkin ({ channel = null, name = null, uuid = null, skin = null } = {}) {
+  function sendSpectatorSkin ({ channel = null } = {}) {
     if (!cfg.skin.showPuppetSkin) return false
-    if (skin === null) return false
     if (typeof channel !== 'string' || channel === '') return false
+    const spectator = spectators.get(channel)
+    if (spectator === undefined) return false
+    const { name = null, uuid = null, skin = null } = spectator
+    if (skin === null) return false
     if (uuid == null || name == null) {
       // A profile the front did not name is a client left on a vanilla default, and no
       // later frame repairs it. One line, because each is one client.
@@ -2260,18 +2275,26 @@ export function createMonoplayer ({
           if (typeof spectator.uuid !== 'string' || spectator.uuid === '') continue
           if (typeof spectator.name !== 'string' || spectator.name === '') continue
           if (spectator.pose === null || spectator.pose === undefined) continue
-          players.push({ uuid: spectator.uuid, name: spectator.name, pose: spectator.pose })
+          // #685: the skin goes with the row, because the row is what `entryFor` reads
+          // when it announces this player to another channel. It is the same record the
+          // spectator's own entry is written from, so the two cannot disagree.
+          players.push({
+            uuid: spectator.uuid,
+            name: spectator.name,
+            pose: spectator.pose,
+            skin: spectator.skin ?? null
+          })
         }
         return players
       }
     },
     channels: () => channelRoster(),
     // #636: the entry a client needs before it places a body. The puppet's is #614's, and
-    // this answers null for it. A spectator's carries a name and no property: this frame
-    // tells one channel about another client, and the skin a third party draws for that
-    // player is not what #618 settled. #618 gives a spectator's own player its own account's
-    // skin on its own channel (sendSpectatorSkin); this entry, and the one a driver holds
-    // for a spectator, still carry none.
+    // this answers null for it. A spectator's carries the name and the skin #618 gave it,
+    // and #685 is the reason: this frame tells one channel about another client's body, and
+    // a client with no property in that entry draws a vanilla default. The property is read
+    // off the spectator's own record, the one `sendSpectatorSkin` writes its own entry from,
+    // so a spectator wears one skin on every channel of the body.
     entryFor: playerEntry,
     // A player entity type belongs to a protocol version, and a lane pinned to one must not
     // draw the other's body. The config's version is the pin every leg reads.
@@ -2321,8 +2344,14 @@ export function createMonoplayer ({
       log('virtualPlayerAnnounceRefused', { reason: 'no_identity', uuid: uuid ?? null, name: name ?? null })
       return null
     }
+    // #685: one switch for every entry carrying a skin (`skin.showPuppetSkin`), so an
+    // entry written with it off claims none, and the body is still announced. The record
+    // holds a property the builder takes or none at all (`spectateView` drops what it would
+    // refuse), because a client drops a spawn whose UUID it holds no entry for: a bad
+    // property that cost the entry would cost the body, which is worse than a default skin.
+    const property = cfg.skin.showPuppetSkin ? player.skin ?? null : null
     try {
-      return { name: SKIN_FRAME, packet: playerInfoEntry({ uuid, name }) }
+      return { name: SKIN_FRAME, packet: playerInfoEntry({ uuid, name, property }) }
     } catch (error) {
       metrics.virtualPlayersRefused++
       log('virtualPlayerAnnounceRefused', {
@@ -2960,7 +2989,16 @@ export function createMonoplayer ({
     // #636: the pose starts where the proxy put that client. The replay's synthesized
     // position is the body's own pose, so a spectator that has not moved is standing in
     // the body, and a spectator nobody can place would be drawn nowhere at all.
-    spectators.set(channel, { name, uuid, pose: session.currentPose })
+    // #685: and the skin is recorded with it, once, because the record is the one home of
+    // it: the entry on this channel below and the announcement of this player on every
+    // other channel both read it, and neither holds a copy that could drift.
+    //
+    // A property `playerInfoEntry` would refuse is no skin, and it is dropped at this one
+    // write rather than in each reader: the record then holds a property the builder takes
+    // or none, and one test serves both frames. The front's own `skinSupplied` record and
+    // this landing's `ownSkin` are the two lines that show a client got no entry from it.
+    const recordedSkin = typeof skin?.value === 'string' && skin.value !== '' ? skin : null
+    spectators.set(channel, { name, uuid, pose: session.currentPose, skin: recordedSkin })
     // #614: the body's entry, naming the puppet, on every channel of the body. Written
     // before the mode frames below, which are the last word on this socket (#259).
     //
@@ -2972,8 +3010,10 @@ export function createMonoplayer ({
     sendPuppetSkin({ reason: 'spectate' })
     // #618: and the entry that names this spectator's own player, with the skin its
     // account sent. Written after the body's entry, so a client that reads both has the
-    // puppet for the body and its own account for the body it controls.
-    const ownSkin = sendSpectatorSkin({ channel, name, uuid, skin })
+    // puppet for the body and its own account for the body it controls. #685: it reads the
+    // skin back off the record written above, so this frame and the announcement below are
+    // two writes of one fact.
+    const ownSkin = sendSpectatorSkin({ channel })
     // #635: and the entity the entry is for. The order is the module's: the entry above
     // names the puppet, and a spawn is what gives a client a body for it. Written after
     // the replay and outside it, so the parity rung's expectation still sees a join
