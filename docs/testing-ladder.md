@@ -978,8 +978,9 @@ first dial and its target warms in five seconds.
 - `O66` a lane with no list refuses a join in a sentence about the lane, and its offer
   says why the list is empty (#315). O61 proved the offer falls back to the seed when
   the live file cannot be parsed. This is the case with nothing behind it: both files
-  the lane names are unparseable, so `control.allowedServers()` answers with no servers
-  and the reason `unreadable`.
+  the lane names are unparseable, so `control.allowedServers()` answers with no servers,
+  the parser's own code (`not_json`), and the live file, because the live file is the
+  first one an operator must repair (#372).
 
   A client joins and gets no dialog at all, because a dialog with no buttons is a phase
   with nothing on screen. It gets one sentence and a configuration `disconnect`:
@@ -987,15 +988,16 @@ first dial and its target warms in five seconds.
   lane, because the client clicked nothing. The sentence it used to get named "that
   server", which is a choice the client never made and cannot make again.
 
-  The operator's half is the offer's line. `pickerOffered` carries `reason` beside
-  `source` and the count. The reason is part of the answer the reader deduplicates on,
-  so a cause that changes is a second line. The refusal's own line carries the same
-  reason and the sentence, so an operator reading the end of a log does not have to
-  scroll back to the join.
+  The operator's half is the offer's line. `pickerOffered` carries `reason`, `file` and
+  `at` beside `source` and the count. All three are part of the answer the reader
+  deduplicates on, so a cause, or a second entry to fix, is a second line. The refusal's
+  own line carries the same reason and the sentence, so an operator reading the end of a
+  log does not have to scroll back to the join.
 
-  What it cannot prove: the other four reasons an empty list carries — `no_key`,
-  `live_missing`, `empty_list` and `seed_missing` — because this rig names both files and
-  can only break them. `test/service/control.test.js` proves each one, and
+  What it cannot prove: the words an absent or empty file answers with — `no_key`,
+  `live_missing`, `empty_list`, `seed_missing` and `unreadable` — because this rig names
+  both files and can only break them, and neither break leaves an entry to name.
+  `test/service/control.test.js` proves each word and each entry, and
   `test/core/picker.test.js` proves both sentences.
 
 - `O67` a second client on a lane with no picker is refused at its login, in words a

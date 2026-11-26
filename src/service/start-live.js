@@ -122,12 +122,26 @@ export function createPickerServerReader ({ control, log = () => {} } = {}) {
   // because a lane that stays empty for a second reason is a second fact to fix.
   let lastAnswer = null
   return function pickerOffer () {
-    const offered = pickerOfferedRows(control.allowedServers)
-    const answer = offered.source + '|' + String(offered.reason ?? '') + '|' +
-      JSON.stringify(offered.rows.map(row => row.name))
+    // One read per offer, so the line and the rows are one answer: a file edited
+    // between two reads would name an entry from a list nobody offered.
+    const read = control.allowedServers()
+    const offered = pickerOfferedRows(() => read)
+    // The whole answer is the key (#315, #372). The code, the file, the entry and the
+    // rows are four different facts, and a second entry to fix in one file is a second
+    // fact: an operator repairs row 1 and the refusal moves to row 2.
+    const answer = [offered.source, offered.reason ?? '', read?.file ?? '', read?.at ?? '',
+      JSON.stringify(offered.rows.map(row => row.name))].join('|')
     if (answer !== lastAnswer) {
       lastAnswer = answer
-      log('pickerOffered', { source: offered.source, servers: offered.rows.length, reason: offered.reason })
+      log('pickerOffered', {
+        source: offered.source,
+        servers: offered.rows.length,
+        reason: offered.reason,
+        // #372: which file to edit, and which entry of it. The parser's own code is
+        // `reason`, so one vocabulary reaches this line and the refusal's.
+        file: read?.file ?? null,
+        at: read?.at ?? null
+      })
     }
     // The offer, not only its rows: the front says why the lane offers nothing when it
     // has nothing to draw (#315).

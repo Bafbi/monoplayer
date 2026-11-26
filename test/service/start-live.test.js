@@ -323,7 +323,13 @@ test('#262 the list is read without the whitelist file, and one unset path leave
 // offer, so a panel edit shows at the next join. The row a lane offers names the
 // address a claim dials.
 test('#265 the picker reader offers the allowed-server list, and names the source once per answer', () => {
-  let answer = { servers: [{ host: 'paper', port: 25565 }], source: 'seed' }
+  let answer = {
+    servers: [{ host: 'paper', port: 25565 }],
+    source: 'seed',
+    file: '/control/seed/allowed-servers.json',
+    reason: null,
+    at: null
+  }
   const said = []
   const offered = createPickerServerReader({
     control: { allowedServers: () => answer },
@@ -341,35 +347,54 @@ test('#265 the picker reader offers the allowed-server list, and names the sourc
   })
   // The list is read at each offer, so an edit made from the panel is what the next
   // join sees. The picker is not a snapshot taken at start.
-  answer = { servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25566 }], source: 'control' }
+  answer = {
+    servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25566 }],
+    source: 'control',
+    file: '/control/allowed-servers.json',
+    reason: null,
+    at: null
+  }
   assert.deepEqual(offered().rows.map(row => row.name), ['paper:25565', 'sky:25566'])
 
   // One line per answer, not one per read. A join reads the list more than once, and
   // an operator does not need the same fact three times.
   offered()
   assert.deepEqual(said, [
-    { event: 'pickerOffered', source: 'seed', servers: 1, reason: null },
-    { event: 'pickerOffered', source: 'control', servers: 2, reason: null }
+    { event: 'pickerOffered', source: 'seed', servers: 1, reason: null, file: '/control/seed/allowed-servers.json', at: null },
+    { event: 'pickerOffered', source: 'control', servers: 2, reason: null, file: '/control/allowed-servers.json', at: null }
   ])
 
   // A lane with no list offers nothing, and says so. It does not fall back to the
   // configured backend: the list is what a picker lane offers.
-  answer = { servers: [], source: 'none', reason: 'no_key' }
+  answer = { servers: [], source: 'none', file: null, reason: 'no_key', at: null }
   assert.deepEqual(offered().rows, [])
   assert.equal(said.length, 3)
-  assert.deepEqual(said[2], { event: 'pickerOffered', source: 'none', servers: 0, reason: 'no_key' })
+  assert.deepEqual(said[2],
+    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'no_key', file: null, at: null })
 
   // #315: the reason is part of the answer, so a reason that changes is a new line. An
   // operator fixes the mount only to find the file it exposes is broken, and the second
   // fact is the one they need now.
-  answer = { servers: [], source: 'none', reason: 'live_missing' }
+  answer = { servers: [], source: 'none', file: '/control/allowed-servers.json', reason: 'live_missing', at: null }
   assert.deepEqual(offered().rows, [])
-  answer = { servers: [], source: 'none', reason: 'unreadable' }
+  answer = { servers: [], source: 'none', file: '/control/allowed-servers.json', reason: 'unreadable', at: null }
   assert.deepEqual(offered().rows, [])
   assert.deepEqual(said.slice(-2), [
-    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'live_missing' },
-    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'unreadable' }
+    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'live_missing', file: '/control/allowed-servers.json', at: null },
+    { event: 'pickerOffered', source: 'none', servers: 0, reason: 'unreadable', file: '/control/allowed-servers.json', at: null }
   ])
+
+  // #372: the entry the refusal names is part of the answer too, so the line names the
+  // row to fix. A second row to fix is a second line: the operator repairs row 1, the
+  // collision moves to row 2, and the first line would be silent about row 2.
+  answer = { servers: [], source: 'none', file: '/control/allowed-servers.json', reason: 'duplicate', at: 'servers[1]' }
+  assert.deepEqual(offered().rows, [])
+  answer = { servers: [], source: 'none', file: '/control/allowed-servers.json', reason: 'duplicate', at: 'servers[2]' }
+  assert.deepEqual(offered().rows, [])
+  assert.deepEqual(said.slice(-2).map(line => [line.reason, line.at]), [
+    ['duplicate', 'servers[1]'],
+    ['duplicate', 'servers[2]']
+  ], 'one row to fix is one line, and the next row is the next line')
 
   // Composed where a lane can see the mistake at start, not at a join.
   assert.throws(() => createPickerServerReader({ control: {} }), /allowedServers/)
@@ -390,6 +415,6 @@ test('#356 a lane that names only the seed offers the seed to the picker', () =>
 
   assert.deepEqual(offer().rows.map(row => row.name), ['paper:25565'],
     'the row the seed holds is the row the picker draws')
-  assert.deepEqual(said, [{ event: 'pickerOffered', source: 'seed', servers: 1, reason: null }],
-    'and the line says the seed answered')
+  assert.deepEqual(said, [{ event: 'pickerOffered', source: 'seed', servers: 1, reason: null, file: seedFile, at: null }],
+    'and the line says the seed answered, and which file that was')
 })

@@ -270,8 +270,8 @@ test('#314 the refusal names the entry that collided, not only the file', () => 
   }))
   const lines = []
   const document = createControlDocument({ allowedServersFile: file, log: (event, fields) => lines.push({ event, fields }) })
-  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', reason: 'unreadable' },
-    'a list that names one server twice offers nothing, rather than two buttons')
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', file, reason: 'duplicate', at: 'servers[1]' },
+    'a list that names one server twice offers nothing, and names the row to fix')
   assert.deepEqual(lines, [{ event: 'controlRejected', fields: { file, reason: 'duplicate', at: 'servers[1]' } }])
 
   // The refusal is said once, and "once" is per entry. The operator fixes row 1 and
@@ -281,9 +281,32 @@ test('#314 the refusal names the entry that collided, not only the file', () => 
     version: 1,
     servers: [{ host: 'paper', port: 25565 }, { host: 'sky', port: 25565 }, { host: 'paper.', port: 25565 }]
   }))
-  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', file, reason: 'duplicate', at: 'servers[2]' })
   assert.deepEqual(lines.map(line => line.fields.at), ['servers[1]', 'servers[2]'],
     'a collision that moved is a new refusal, naming the row to fix now')
+})
+
+// #372: the answer the picker reads is the operator's edit list, and the parser
+// already knows which entry to fix. The answer carries the parser's own code and the
+// entry, so a join's offer names the row of the file instead of one word that stands
+// for nine repairs.
+test('#372 the answer names the parser code and the entry an operator must fix', () => {
+  const duplicated = controlFile('answer-entry')
+  fs.writeFileSync(duplicated, JSON.stringify({
+    version: 1,
+    servers: [{ host: 'paper', port: 25565 }, { host: 'paper.', port: 25565 }]
+  }))
+  assert.deepEqual(createControlDocument({ allowedServersFile: duplicated }).allowedServers(),
+    { servers: [], source: 'none', file: duplicated, reason: 'duplicate', at: 'servers[1]' },
+    'the answer names the row to fix, not only that the file is broken')
+
+  // A refusal about the document has no entry to point at. It still carries its own
+  // code and the file, so "repair the file" is one repair rather than nine.
+  const versioned = controlFile('answer-version')
+  fs.writeFileSync(versioned, JSON.stringify({ version: 9, servers: [] }))
+  assert.deepEqual(createControlDocument({ allowedServersFile: versioned }).allowedServers(),
+    { servers: [], source: 'none', file: versioned, reason: 'version', at: null },
+    'a document refusal names its code and its file, with no entry to point at')
 })
 
 test('#262 the allowed-server list is read from its own file, and the committed seed answers when it cannot be', () => {
@@ -297,13 +320,13 @@ test('#262 the allowed-server list is read from its own file, and the committed 
   // in until an operator edits the list, and it is why the seed exists.
   const document = createControlDocument({ allowedServersFile: live, allowedServersSeedFile: seedFile })
   assert.deepEqual(document.allowedServers(),
-    { servers: [{ host: 'play2.excalia.fr', port: 25565 }], source: 'seed', reason: null })
+    { servers: [{ host: 'play2.excalia.fr', port: 25565 }], source: 'seed', file: seedFile, reason: null, at: null })
 
   // The live key wins, and it is re-read at each read: a panel write takes effect
   // without a restart, the way the attach whitelist's does.
   writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }])
   assert.deepEqual(document.allowedServers(),
-    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control', reason: null })
+    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control', file: live, reason: null, at: null })
   writeAllowed(live, [{ host: 'paper.example.net', port: 25565 }, { host: 'sky.example.net', port: 25565 }])
   assert.equal(document.allowedServers().servers.length, 2, 'the file is the only authority')
 
@@ -325,7 +348,7 @@ test('#262 the allowed-server list is read from its own file, and the committed 
 
 test('#262 a list nobody named is off, and two files that both fail are named by their own paths', () => {
   const off = createControlDocument({ log: () => { throw new Error('an unset switch logs nothing') } })
-  assert.deepEqual(off.allowedServers(), { servers: [], source: 'none', reason: 'no_key' })
+  assert.deepEqual(off.allowedServers(), { servers: [], source: 'none', file: null, reason: 'no_key', at: null })
 
   // Its own file is its own switch: a picker lane offers a list with no whitelist
   // file named at all.
@@ -345,7 +368,10 @@ test('#262 a list nobody named is off, and two files that both fail are named by
     allowedServersSeedFile: seedFile,
     log: (event, fields) => lines.push({ event, fields })
   })
-  assert.deepEqual(document.allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  // The answer names the first file to repair, and both refusals are lines of their
+  // own: the live file is the one whose repair brings the list back.
+  assert.deepEqual(document.allowedServers(),
+    { servers: [], source: 'none', file: broken, reason: 'version', at: null })
   assert.deepEqual(lines.map(line => [line.event, line.fields.file, line.fields.reason]),
     [['controlRejected', broken, 'version'], ['controlRejected', seedFile, 'duplicate']],
     'both files are named, and each with its own reason')
@@ -359,7 +385,8 @@ test('#262 a list nobody named is off, and two files that both fail are named by
     allowedServersSeedFile: absentSeed,
     log: (event, fields) => absentLines.push({ event, fields })
   })
-  assert.deepEqual(absent.allowedServers(), { servers: [], source: 'none', reason: 'seed_missing' })
+  assert.deepEqual(absent.allowedServers(),
+    { servers: [], source: 'none', file: absentSeed, reason: 'seed_missing', at: null })
   assert.deepEqual(absentLines.map(line => [line.event, line.fields.code]),
     [['controlUnreadable', 'ENOENT']],
     'a seed that is not mounted is one named line, not silence')
@@ -377,25 +404,28 @@ test('#315 an empty list carries the reason it is empty', () => {
   // No key: nothing names a list. #356: a seed on its own is a key, so only a lane
   // that names neither variable reaches this word, and the seed's own cases are below.
   assert.deepEqual(createControlDocument({}).allowedServers(),
-    { servers: [], source: 'none', reason: 'no_key' })
+    { servers: [], source: 'none', file: null, reason: 'no_key', at: null })
 
   // The key names a file nobody has written, and no seed answers behind it. That is the
-  // normal state before the first panel edit, and it is not a broken file.
-  assert.deepEqual(createControlDocument({ allowedServersFile: fileIn('unwritten') }).allowedServers(),
-    { servers: [], source: 'none', reason: 'live_missing' })
+  // normal state before the first panel edit, and it is not a broken file. The answer
+  // names the file to write.
+  const unwritten = fileIn('unwritten')
+  assert.deepEqual(createControlDocument({ allowedServersFile: unwritten }).allowedServers(),
+    { servers: [], source: 'none', file: unwritten, reason: 'live_missing', at: null })
 
   // The file is there, it parses, and the list holds nothing: an operator removed the
   // last server. The answer is still the live file's.
   const emptied = fileIn('emptied')
   writeAllowed(emptied, [])
   assert.deepEqual(createControlDocument({ allowedServersFile: emptied }).allowedServers(),
-    { servers: [], source: 'control', reason: 'empty_list' })
+    { servers: [], source: 'control', file: emptied, reason: 'empty_list', at: null })
 
   // A seed the lane names and the mount did not deliver: a mount to fix, not an edit.
+  const unmountedSeed = fileIn('unwritten-seed')
   assert.deepEqual(createControlDocument({
     allowedServersFile: fileIn('unwritten-seed-live'),
-    allowedServersSeedFile: fileIn('unwritten-seed')
-  }).allowedServers(), { servers: [], source: 'none', reason: 'seed_missing' })
+    allowedServersSeedFile: unmountedSeed
+  }).allowedServers(), { servers: [], source: 'none', file: unmountedSeed, reason: 'seed_missing', at: null })
 
   // Both files are there and neither parses, so nothing answered: the live file is the
   // one to fix, and the seed is the one to repair behind it.
@@ -406,7 +436,8 @@ test('#315 an empty list carries the reason it is empty', () => {
   assert.deepEqual(createControlDocument({
     allowedServersFile: brokenLive,
     allowedServersSeedFile: brokenSeed
-  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  }).allowedServers(), { servers: [], source: 'none', file: brokenLive, reason: 'not_json', at: null },
+  'the word is the one the parser refused with, and the file is the first one to repair')
 
   // A file that is there and cannot be read is not a file nobody wrote. An operator with
   // a permissions problem must not be told to write a list that is already there.
@@ -415,19 +446,21 @@ test('#315 an empty list carries the reason it is empty', () => {
     error.code = 'EACCES'
     throw error
   }
+  const deniedLive = fileIn('denied')
   assert.deepEqual(createControlDocument({
-    allowedServersFile: fileIn('denied'),
+    allowedServersFile: deniedLive,
     readFile: deny
-  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' },
+  }).allowedServers(), { servers: [], source: 'none', file: deniedLive, reason: 'unreadable', at: null },
   'a live file that cannot be read is not a missing one')
 
   const deniedLines = []
+  const deniedBothLive = fileIn('denied-live')
   assert.deepEqual(createControlDocument({
-    allowedServersFile: fileIn('denied-live'),
+    allowedServersFile: deniedBothLive,
     allowedServersSeedFile: fileIn('denied-seed'),
     readFile: deny,
     log: (event, fields) => deniedLines.push({ event, fields })
-  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  }).allowedServers(), { servers: [], source: 'none', file: deniedBothLive, reason: 'unreadable', at: null })
   assert.deepEqual(deniedLines.map(line => [line.event, line.fields.code]),
     [['controlUnreadable', 'EACCES'], ['controlUnreadable', 'EACCES']],
     'both files are named with the code that stopped the read')
@@ -437,7 +470,7 @@ test('#315 an empty list carries the reason it is empty', () => {
   const answered = fileIn('answered')
   writeAllowed(answered, [{ host: 'paper', port: 25565 }])
   assert.deepEqual(createControlDocument({ allowedServersFile: answered }).allowedServers(),
-    { servers: [{ host: 'paper', port: 25565 }], source: 'control', reason: null })
+    { servers: [{ host: 'paper', port: 25565 }], source: 'control', file: answered, reason: null, at: null })
 })
 
 // #356: the live key is not the switch. The list is. A lane an operator configured with
@@ -453,49 +486,50 @@ test('#356 the seed answers when the live key offers no list, including when it 
   const seedOnly = fileIn('seed-only-file')
   writeAllowed(seedOnly, SEED)
   assert.deepEqual(createControlDocument({ allowedServersSeedFile: seedOnly }).allowedServers(),
-    { servers: SEED, source: 'seed', reason: null },
+    { servers: SEED, source: 'seed', file: seedOnly, reason: null, at: null },
     'a lane that names only the seed offers the seed')
 
   // Both keys, and the file the live key names is not there: the seed answers, and the
   // source says which file it was.
   const liveFile = fileIn('live-unwritten')
   const both = createControlDocument({ allowedServersFile: liveFile, allowedServersSeedFile: seedOnly })
-  assert.deepEqual(both.allowedServers(), { servers: SEED, source: 'seed', reason: null },
+  assert.deepEqual(both.allowedServers(), { servers: SEED, source: 'seed', file: seedOnly, reason: null, at: null },
     'a live key nobody has written yet is the normal state, not an empty list')
 
   // The live file wins the moment it answers, so the order is one answer rather than one
   // branch per state.
   writeAllowed(liveFile, [{ host: 'paper.example.net', port: 25565 }])
   assert.deepEqual(both.allowedServers(),
-    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control', reason: null },
+    { servers: [{ host: 'paper.example.net', port: 25565 }], source: 'control', file: liveFile, reason: null, at: null },
     'the live key still comes first')
 
   // A live file that parses and holds nothing is the operator's answer, not a missing
   // list, so the seed stays behind it. docs/panel.md: showing the seed there would hide
   // the file that needs fixing.
   writeAllowed(liveFile, [])
-  assert.deepEqual(both.allowedServers(), { servers: [], source: 'control', reason: 'empty_list' },
+  assert.deepEqual(both.allowedServers(), { servers: [], source: 'control', file: liveFile, reason: 'empty_list', at: null },
     'an emptied live list is not a reason to serve the seed')
 
   // Neither key: nothing names a list, and #315's word still says so.
   assert.deepEqual(createControlDocument({}).allowedServers(),
-    { servers: [], source: 'none', reason: 'no_key' })
+    { servers: [], source: 'none', file: null, reason: 'no_key', at: null })
 
   // A seed that parses and holds nothing is a list the operator emptied. The answer
   // says which file it came from, and that the file holds no server.
   const emptiedSeed = fileIn('seed-emptied')
   writeAllowed(emptiedSeed, [])
   assert.deepEqual(createControlDocument({ allowedServersSeedFile: emptiedSeed }).allowedServers(),
-    { servers: [], source: 'seed', reason: 'empty_list' })
+    { servers: [], source: 'seed', file: emptiedSeed, reason: 'empty_list', at: null })
 
   // A seed the lane named and the mount did not deliver is a mount to fix. It is not
   // `no_key`, which would send the operator to a variable they did set, and it is one
   // named line: on a lane that names only the seed, that line is the whole signal.
   const mountLines = []
+  const notMounted = fileIn('seed-not-mounted')
   assert.deepEqual(createControlDocument({
-    allowedServersSeedFile: fileIn('seed-not-mounted'),
+    allowedServersSeedFile: notMounted,
     log: (event, fields) => mountLines.push({ event, fields })
-  }).allowedServers(), { servers: [], source: 'none', reason: 'seed_missing' })
+  }).allowedServers(), { servers: [], source: 'none', file: notMounted, reason: 'seed_missing', at: null })
   assert.deepEqual(mountLines.map(line => [line.event, line.fields.code]),
     [['controlUnreadable', 'ENOENT']])
 
@@ -507,7 +541,7 @@ test('#356 the seed answers when the live key offers no list, including when it 
   assert.deepEqual(createControlDocument({
     allowedServersSeedFile: brokenSeed,
     log: (event, fields) => lines.push({ event, fields })
-  }).allowedServers(), { servers: [], source: 'none', reason: 'unreadable' })
+  }).allowedServers(), { servers: [], source: 'none', file: brokenSeed, reason: 'not_json', at: null })
   assert.deepEqual(lines.map(line => [line.event, line.fields.file, line.fields.reason]),
     [['controlRejected', brokenSeed, 'not_json']], 'the seed that failed is the file the line names')
 })
