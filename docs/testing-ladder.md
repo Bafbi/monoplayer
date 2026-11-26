@@ -154,15 +154,19 @@ that names `mise run testbed:up` as the command that owns the namespace (#360). 
 there would scale five rows to 0 and delete the lane's generated Secrets, which are the
 names its Papers read. An `up` would apply the gate tree over it.
 
-**The loopback assertion numbers are one sequence.** An id is a bullet in
-[the assertion contract](#loopback-assertion-contract) and a `check('O<n>', …)`
-call in `src/ladder/loopback.js`, and `test/ladder/loopback-contract.test.js`
-requires the two lists to agree in both directions. Two rows that each add an
-assertion take the same next number, the one above the highest the file already
-declares, and edit the same bullet list. No lane helps here: the sequence belongs to the repository, not to a
-worktree. Add assertions one row at a time. A row that adds no assertion runs
-beside any other. Four consecutive rows on the board that wrote this section
-serialised for this reason alone, with no code in common.
+**The loopback assertion numbers are one sequence.** An id is an entry in
+`LOOPBACK_ASSERTION_IDS` in `src/ladder/loopback.js`, one `check(…)` call that
+names it, and a bullet in
+[the assertion contract](#loopback-assertion-contract).
+`test/ladder/loopback-contract.test.js` requires the declaration and the bullets to
+agree in both directions, and a finished run fails on a declared id that no check
+ran. The guard reads the declaration rather than the call, so a `check` call
+outside this file is not drift (#593). Two rows that each add an assertion take
+the same next number, the one above the highest the file already declares, and
+edit the same bullet list. No lane helps here: the sequence belongs to the
+repository, not to a worktree. Add assertions one row at a time. A row that adds
+no assertion runs beside any other. Four consecutive rows on the board that wrote
+this section serialised for this reason alone, with no code in common.
 
 **The display host carries one client.** Rung 4 relaunches one Prism instance over
 SSH, `gate-b-player-262-fabric` unless `--instance` names another, and drives its
