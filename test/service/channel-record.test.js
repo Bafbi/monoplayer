@@ -1,5 +1,5 @@
-// #416: the identity every record carries — the account the lane speaks for, the
-// body it serves, and the channel a connection holds.
+// #416: the identity every record carries. The account is the lane's, the body is
+// what a record is about, and the channel is what a connection holds.
 //
 // The account is stamped where the line is written (src/service/start-live.js,
 // src/service/monoplayer.js) and the channel where a connection holds one
@@ -65,7 +65,7 @@ test('#416 a core record names the account it serves and the body it holds', () 
   })
   const body = pickSlug(core.config.backend.host + ':' + core.config.backend.port)
 
-  // The first frame of a session is what tells the core which body it holds; a
+  // The first frame of a session is what tells the core which body it holds. A
   // picker lane sends none until a claim dials one.
   backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
   frontLeg.loginStart({ name: 'Stranger', uuid: STRANGER })
@@ -145,10 +145,13 @@ test('#416 no metric carries a channel, however much it carries beside it', () =
 // something other than the connection's own channel.
 const PRE_CHANNEL_RECORDS = new Set([
   // The process and its sockets, before any login.
-  'frontError', 'frontServerError', 'frontListening', 'wireReject',
-  'preAuthRefused', 'preAuthExpired',
-  // A login under review, and a connection refused or ended before it held a channel.
-  'frontLoginReview', 'attachDenied', 'attachAllowed', 'channelRefused', 'configUnavailable',
+  'frontError', 'frontServerError', 'frontListening', 'preAuthRefused', 'preAuthExpired',
+  // The wire checker writes its record through the log it is handed, and the leg
+  // hands it one bound to the connection. A caller that hands it the raw log names
+  // no connection, because it has none.
+  'wireReject',
+  // A login under review, and a connection refused before it held a channel.
+  'frontLoginReview', 'attachDenied', 'attachAllowed', 'channelRefused',
   // A picker client holds no channel: it watches no body until its claim or its
   // Spectate lands, so its records name the account and the connection's own facts.
   'pickerServed', 'pickerEmpty', 'pickerDialog', 'pickerDialogFailed', 'pickerPick',
@@ -157,9 +160,6 @@ const PRE_CHANNEL_RECORDS = new Set([
   'pickerServerDialogFailed', 'pickerDisconnect', 'pickerDisconnectRefused',
   'pickerDisconnectHandlerError', 'pickerClaim', 'pickerClaimRefused', 'pickerClaimLanding',
   'pickerClaimRestored', 'pickerClaimAbandoned',
-  // A claim being released names the claim's body, which need not be the body this
-  // connection's channel is on.
-  'pickerClaimReleased',
   // A Spectate the core refused: the client is still a picker client.
   'spectateRefused',
   // A settings frame from a connection the lane admitted with no channel.
@@ -175,4 +175,9 @@ test('#416 a record about a connection goes through the seam that names its chan
     'the seam this guard reads is still the leg\'s own')
   assert.deepEqual(stray, [],
     'a record written on a channel must use record() or recordOfChannel(): ' + stray.join(', '))
+
+  // A computed event name is the other way past the guard: the two the seam itself
+  // writes are the only ones, because every other call site names its event.
+  const computed = [...source.matchAll(/\blog\((?!')/g)]
+  assert.equal(computed.length, 2, 'only record() and recordOfChannel() forward a computed event name')
 })

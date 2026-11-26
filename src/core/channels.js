@@ -67,9 +67,9 @@ export function recordIdentity ({ account = null, body = null, channel = null } 
 }
 
 // One record's field map with the identity filled in. A field the caller names
-// itself wins, because a record about another body — a claim's, a pick the lane
-// refused — knows better than the context does; a null or empty identity key is
-// removed from the caller's fields rather than written.
+// itself wins, because a record about another body knows better than the context
+// does. That covers a claim's body and a pick the lane refused. A null or empty
+// identity key is removed from the caller's fields rather than written.
 export function stampIdentity (fields = {}, identity = {}) {
   const stamped = {}
   for (const [key, value] of Object.entries(fields ?? {})) {

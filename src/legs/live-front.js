@@ -950,6 +950,12 @@ function createFrontLeg ({
     return log(event, stampIdentity(fields, channelIdentity(channel)))
   }
 
+  // A log function bound to one connection, for the helpers that write their own
+  // records and hold a socket rather than the leg's registry (the wire checker).
+  function recordFor (client) {
+    return (event, fields = {}) => record(client, event, fields)
+  }
+
   function closeChannel (client) {
     const id = holderIds.get(client)
     if (id === undefined) return null
@@ -1081,7 +1087,7 @@ function createFrontLeg ({
         if (dumpRaw) {
           dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
         }
-        return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
+        return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
       },
       isConfigurationState: () => client.state === 'configuration',
       cachedConfigFrames,
@@ -1100,7 +1106,7 @@ function createFrontLeg ({
       // client on missing registry tags, so deny and let the player retry.
       allowLibraryFallback: false,
       onUnavailable: () => {
-        log('configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
+        record(client, 'configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
         denyConnection(client, 'backend_not_ready')
       }
     })
@@ -1595,7 +1601,7 @@ function createFrontLeg ({
         wireCheck,
         wireMode,
         stats: wireStats,
-        log
+        log: recordFor(client)
       })
       if (sent) {
         written++
@@ -2016,7 +2022,7 @@ function createFrontLeg ({
     }
     ctx.reconfiguring = true
     for (const frame of pending.frames) {
-      const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log })
+      const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
       if (sent) noteDelivered(client, frame.meta)
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
@@ -2106,7 +2112,7 @@ function createFrontLeg ({
         record(client, 'configFinishedByCore', { username: client.username ?? null })
       }
     }
-    const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
+    const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
     if (sent) noteDelivered(client, meta)
     return sent
   }

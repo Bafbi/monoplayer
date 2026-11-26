@@ -395,7 +395,7 @@ export function createMonoplayer ({
   telemetry = NOOP_TELEMETRY,
   journal = NOOP_JOURNAL,
   // #416: the account every record this core writes names, as one identifier. The
-  // service passes the one it resolved; a core built from a config document alone
+  // service passes the one it resolved. A core built from a config document alone
   // derives it from the puppet it holds. Null names none, and then no record here
   // carries an account key.
   account = null,
@@ -712,11 +712,12 @@ export function createMonoplayer ({
   // The body a record names, or null when the lane holds none. A picker lane dials
   // nothing until a claim does, so its records before a pick name the account and no
   // body: the configured address is a body it would serve, not one it holds (#263
-  // D2). A body whose session ended is still the body the lane serves, and
-  // `claimedBody` outlives the connection for exactly that reason.
+  // D2). The session is what says the lane holds one at all, and `claimedBody`
+  // outlives the connection for the records that name a body after it ended: those
+  // pass their own `body`, so the identity here never has to guess.
   function recordBody () {
-    if (claimedBody !== null) return claimedBody
-    return backendSessionOpen ? activeBody : null
+    if (!backendSessionOpen) return null
+    return claimedBody ?? activeBody
   }
 
   function log (event, fields = {}) {

@@ -76,12 +76,12 @@ The sinks stamp the identity on the records they write, so no call site composes
 | Key | Where it is written | What it holds |
 | --- | --- | --- |
 | `account` | Every log record the service and both legs write, every OTLP log record, and every journal frame and event. | The lane's account, as one identifier: the alias custody resolved, else its UUID, else the name an offline lane joins as. A lane that holds no account writes no `account` key. |
-| `body` | Every core record written while the core holds a body, the front leg's records about a connection, every journal frame record, and the heartbeat's `channels` rows. | The body's server slug, `pickSlug(host:port)` (`src/core/picker.js`). It is the name a claim uses, and the `body` attribute of the `monoplayer.body.*` gauges. |
+| `body` | Every core record written while the core holds a body, the front leg's records about a connection that holds a channel, every journal frame record, and the heartbeat's `channels` rows. | The body's server slug, `pickSlug(host:port)` (`src/core/picker.js`). It is the name a claim uses, and the `body` attribute of the `monoplayer.body.*` gauges. |
 | `channel` | The front leg's records about a connection, and the heartbeat's `channels` rows. | The channel's id, which is the holder id the front leg gave that connection (`src/core/channels.js`). |
 
 A key is written where the thing it names exists, and left out where it does not (#263 D2). A record written before a body exists therefore carries `account` and no `body` key. A picker join is served before the client picks a server, and a picker lane dials no body until a claim does. Writing `body: null` on such a record would make "every record with a body" a query that returns records without one.
 
-The core names the body it holds and never a channel. A channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry. A record written after a channel closed names no channel either.
+The core names the body it holds and never a channel. A channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry. The records a closing connection writes name the channel that closed, which `closeChannel` hands back for them. A picker client holds no channel until its claim or its Spectate lands, so its records carry the account and its own facts, and no channel.
 
 A record carries `channel` in the log and the journal, and never as a metric attribute. The allowed-server list bounds how many bodies there are. A channel is one connection, so a channel attribute would be one series per socket (#415, #263 D1). No metric carries a channel.
 
@@ -387,7 +387,7 @@ A lifecycle event record:
 {"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","account":"glowsquidye","accountUuid":"...","warm":true}
 ```
 
-Every event carries `account`. An event about a body carries `body` too, and the heartbeat's `channels` rows carry `body` and `channel`; the identity keys and where each is written are the table under "The identity on a record".
+Every event carries `account`. An event about a body carries `body` too, and the heartbeat's `channels` rows carry `body` and `channel`. The table under "The identity on a record" says which key each record carries.
 
 The service writes `startLive`, `liveReady`, `startLiveFailed`, `shutdown`, and the heartbeat's `channels` event from `src/service/start-live.js`. The core writes none.
 
