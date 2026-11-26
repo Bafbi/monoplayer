@@ -48,17 +48,27 @@
 //   kubectl -n "$(scripts/gate-lane.sh name)" delete pod capture-paper
 //
 // When the puppet's token is valid, scripts/online-cluster.sh runs the same
-// module in the cluster against the gate Paper with a real account:
+// module in the cluster against the gate Paper with a real account. Everything after
+// `--` is this module's own argv, so the recipe names the build and the image (#384):
 //
 //   mise run gate:up
-//   scripts/online-cluster.sh --rung src/ladder/capture-config.js --keep-pod
+//   scripts/online-cluster.sh --rung src/ladder/capture-config.js --keep-pod \
+//     -- --paper-build 135 --image itzg/minecraft-server:2026.10.1-java25 \
+//        --lane "$(scripts/gate-lane.sh name)" \
+//        --reached-via 'scripts/online-cluster.sh --rung src/ladder/capture-config.js' \
+//        --note 'in the cluster, against the gate Paper'
 //   kubectl -n monoplayer cp <pod>:/work/config-baseline.json <fixture>
 //   mise run gate:down
 //
-// That rung is handed no flags: scripts/online-cluster.sh runs the module with its own
-// argv alone. The capture therefore stops on the build before the join (#367). A capture
-// that needs the real account names the build and the image, and runs the module where it
-// can reach the gate Paper's tailnet name.
+// A capture with no `--paper-build` stops before the join with exit 2: no frame a client
+// receives carries the build.
+//
+// --lane is named because the pod cannot name it: /work is not a git checkout, and the
+// pod is handed ./src and ./package.json but not ./scripts, so resolveGateLane has no
+// gate-lane.sh to ask. The lane that is named is the one the wrapper measures.
+//
+// --reached-via is named because its default describes the port-forward recipe above,
+// and this recipe reaches the server through the pod's own network, not a port-forward.
 //
 // Exit codes: 0 a capture was written, 1 the join failed, 2 setup failed.
 import fs from 'node:fs'
