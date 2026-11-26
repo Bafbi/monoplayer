@@ -620,6 +620,11 @@ export function createMonoplayer ({
   // that closes before it was handed the body closes as a spectator's too. A count
   // would take one spectator away for it, and the relay would stop under a spectator
   // that stayed.
+  //
+  // #516: the player each channel is, and whether it holds the entry that names it.
+  // The identity is kept here rather than on the channel record
+  // (src/core/channels.js) because that record's fields are the ones the leg already
+  // answers from its own socket, and a UUID is needed by one frame the core writes.
   const spectators = new Map()
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
@@ -1985,8 +1990,9 @@ export function createMonoplayer ({
         log('puppetSkinWithheld', { name: entry.name, reason: 'no_identity', channel: channel.id })
         continue
       }
+      let delivered
       try {
-        frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: channel.id })
+        delivered = frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: channel.id })
       } catch (error) {
         metrics.skinFramesRefused++
         log('puppetSkinRefused', {
@@ -1994,6 +2000,14 @@ export function createMonoplayer ({
           error: String(error?.message ?? error).slice(0, 200),
           channel: channel.id
         })
+        continue
+      }
+      // #516: the leg answers false when it found no socket for that channel, so the
+      // frame reached no client. It is not marked sent, because a channel that comes
+      // back is still owed the entry, and a later pass is what gives it one.
+      if (delivered === false) {
+        metrics.skinFramesRefused++
+        log('puppetSkinRefused', { reason: 'write_failed', channel: channel.id })
         continue
       }
       markSkinSent(channel)

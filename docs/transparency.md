@@ -26,7 +26,7 @@ observer run are in [testbed-transfer.md](testbed-transfer.md).
 | The server sees the driver's locale, skin parts, main hand, chat settings | done | [#18](https://github.com/Bafbi/monoplayer/issues/18) |
 | A driver can claim a body while its server is still configuring | done | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The driver's chat and commands are spoken as the account | built, off by default | [#19](https://github.com/Bafbi/monoplayer/issues/19) |
-| The driver's own player wears the puppet's skin | built, on by default | [#99](https://github.com/Bafbi/monoplayer/issues/99) |
+| A client's own player wears the puppet's skin | built, on by default | [#99](https://github.com/Bafbi/monoplayer/issues/99), [#516](https://github.com/Bafbi/monoplayer/issues/516) |
 | A dialog reaches the driver, who answers it, and the answer reaches the server | built | [#16](https://github.com/Bafbi/monoplayer/issues/16) |
 | The driver answers every play dialog, and the puppet never clicks one | built | [#20](https://github.com/Bafbi/monoplayer/issues/20) |
 | The driver answers configuration gates, including the code of conduct | built | [#21](https://github.com/Bafbi/monoplayer/issues/21) |
@@ -77,7 +77,12 @@ the core logs both under `backendViewDistance` on every backend login, so the
 number comes from the running proxy rather than from a table. Optimising that
 memory is a later task.
 
-## The driver's own player
+## A client's own player
+
+This is the one section on this page that is not a claim about the server. The
+frame below is clientbound, written by the proxy for the client that reads it, so
+it reaches the body's driver and each of its spectators
+([#516](https://github.com/Bafbi/monoplayer/issues/516)).
 
 The front leg authenticates the driver's client as that player, so the body the
 client draws is the driver's own. The relayed `player_info` lists the puppet and
@@ -98,7 +103,7 @@ draws its own body ([#516](https://github.com/Bafbi/monoplayer/issues/516)):
 |---|---|
 | The property is the server's own | The proxy holds no skin. A proxy that saw no `player_info` from the backend writes no frame, and a property it cannot read is not a property it has. The property is the one the puppet's own entry carries, chosen by the UUID the config resolved for the account, so a frame that also lists other players never donates their skins |
 | The entry carries no `update_listed` action | The client's tab list is its own listed set, which only that action fills, so the driver's UUID gains no line beside the puppet's |
-| One entry per client, on that client's own channel | A client resolves its own body's skin from its own entry, and a body's driver and its spectators are different accounts. One frame built from the attach names the driver on a spectator's socket and leaves the spectator's own body vanilla, so a spectator's entry is a per-channel packet ([#516](https://github.com/Bafbi/monoplayer/issues/516)) |
+| A spectator's entry is its own, on its own channel | A client resolves its own body's skin from its own entry, and a body's driver and its spectators are different accounts. One frame built from the attach names the driver on a spectator's socket and leaves the spectator's own body vanilla, so a spectator is written an entry naming itself on its own channel ([#516](https://github.com/Bafbi/monoplayer/issues/516)). The driver's frame is still the body's write, so a spectator also holds an entry naming the driver, which its client draws nothing from ([#525](https://github.com/Bafbi/monoplayer/issues/525)) |
 | One frame per play state, per client | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame for one play state would be a write nobody sees. The fact is the client's, so a spectator that lands holds one of its own. A reconfiguration is a new play state: the client builds a new `ClientPacketListener`, whose entry map starts empty, so the frame goes out again after a transfer ([#134](https://github.com/Bafbi/monoplayer/issues/134)) |
 | An unsigned property would work too | The client asks for a secure property only for players other than the one it controls. The frame carries the property as it arrived, so the proxy adds no signature and strips none |
 
@@ -126,7 +131,7 @@ What the proxy says about it, one event per thing that happened:
 |---|---|---|
 | `puppetSkinKnown` | `uuid`, `signed`, `was`, `value` | A `player_info` frame carried the puppet's own textures property whose value differs from the one held. `was` is the value it replaced, and null the first time. Once per change, not once per frame, so a value the backend repeats after another logs again |
 | `puppetSkinSent` | `name`, `reason`, `signed`, `channel` | One entry was written for one client, named by `name`. `channel` says which: absent for the driver's frame, which is written to the body, and the spectator's channel otherwise. Whether the client applied it is the client's business, and only a client reading says. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, `spectate`, or `property_arrived` |
-| `puppetSkinRefused` | `reason`, `error` | The packet could not be built or written: `packet` or `write_failed` |
+| `puppetSkinRefused` | `reason`, `error`, `channel` | The packet could not be built (`packet`), or the write failed (`write_failed`): the leg threw, or it found no socket for `channel`. An entry that reached no client is not counted as sent, so a later frame tries again |
 | `puppetSkinWithheld` | `name`, `reason`, `channel` | A frame could not be written because the front gave no UUID to name (`no_identity`) for that channel, at the replay, at a spectator's landing, or when the property arrived. No later frame repairs that. A missing property is not reported: it normally arrives a moment after the attach, and the frame then goes out under `property_arrived`. A packet or write failure is `puppetSkinRefused` |
 | `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process, and only while `skin.showPuppetSkin` is on, because with it off no frame would be written either |
 
