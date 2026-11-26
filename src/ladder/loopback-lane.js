@@ -45,9 +45,10 @@
 // (src/observability/journal.js drops a write after close without an error).
 //
 // No call-in is registered by hand here, and wireLegToCore is not called: the
-// core applies its own table in start() (#592), so a lane inherits every row of
-// LEG_CALL_INS (src/service/wire-leg-to-core.js) from the rig. A helper that
-// registers one itself is a helper that has bypassed createRig.
+// core applies its own tables in start() (#592, #605), so a lane inherits every
+// row of FRONT_LEG_CALL_INS and BACKEND_LEG_CALL_INS
+// (src/service/wire-leg-to-core.js) from the rig. A helper that registers one
+// itself is a helper that has bypassed createRig.
 import net from 'node:net'
 
 import { createBot } from './bot.js'
