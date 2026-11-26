@@ -56,7 +56,11 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 | `src/observability/redact.js` | Log redaction with fixed sentinel `[REDACTED]`; every core log line passes through it | pure |
 | `src/observability/secrets.js` | Secret scanner for reports: findings with index and kind, spans rewritten to `[REDACTED]<kind>`. Custody and the driver lane both import it here | pure |
 | `src/legs/fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
-| `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
+| `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), metrics, logs; CLI skeleton | adapters injected |
+| `src/service/wire-leg-to-core.js` | The core-to-leg wiring: `FRONT_LEG_CALL_INS` and `BACKEND_LEG_CALL_INS`, one table per interface, and `wireLegToCore`, the function that applies one table to a leg (#592, #605, #607) | pure |
+| `src/service/control.js` | The runtime control document (`createControlDocument`): one file per key, each re-read where it is used, and the allowed-server list the picker offers, live file first (#229, #262, #356) | file reads, no sockets |
+| `src/service/readiness.js` | Readiness helpers the live CLI and the ladder runner share: the cache stats line, the warm wait, and the fallback that settles a cold lane | timers, no sockets |
+| `src/service/start-live.js` | `--start`: the environment overlay over the config document, the live legs, readiness, the journal, the reconnect handler, and the panel's readers | real I/O |
 | `src/service/cli.js` | CLI plumbing every entry point shares: `flag`, `detail`, `candidateLines`, `withTimeout`, `waitFor` | pure; at most one pending timer per call, no sockets |
 
 ### Cache domains and bounds (`state-cache`)
@@ -940,53 +944,60 @@ The allowed-server list is its own key with its own fallback: see
 real legs plug in here; the fake legs (`src/legs/fake-legs.js`) are the
 executable spec.
 
+The call-ins each leg carries are declared in `src/service/wire-leg-to-core.js`:
+one table per interface, one row per call-in. This page names those rows and
+states no shape; a row's shape, and the method a registration reaches, are the table's.
+
+`BACKEND_LEG_CALL_INS`:
+
+```
+setFrameHandler
+setEndHandler
+setErrorHandler
+answerHeldGate
+chat
+```
+
+`FRONT_LEG_CALL_INS`:
+
+```
+setCoreAttach
+setCoreAttachConfiguring
+setConfiguringHandler
+setClientSettingsHandler
+setLoginStartHandler
+setServerboundHandler
+setDetachHandler
+setReconfiguredHandler
+setConnectClaimedBody
+setSpectateBody
+setSpectatorAttach
+setDisconnectBody
+setBodyServed
+setSpectatorLeft
+setSpectatorPose
+preAuthStats
+```
+
+The rest of each interface is what those tables cannot name: members the core calls
+on the leg directly, and no row declares.
+
 ```js
 backendLeg = {                    // = the GlowSquidye puppet session
   connect()                       // prismarine-auth + minecraft-protocol client (G1 kid)
-  setFrameHandler(({ state, name, buffer, data }) => {})   // configuration + play frames:
-                                  // `buffer` is the frame exactly as the backend sent it,
-                                  // and stays re-frameable with writeRaw: the core relays and
-                                  // caches those bytes, so no decoder may rewrite them (#82)
-  setEndHandler(({ reason }) => {}), setErrorHandler(({ error }) => {})
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
   writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
-  chat(text)                      // speak as the puppet: sign with this connection's keys (#19)
-  answerHeldGate({ state, name, data })   // optional: answer a configuration gate the last client
-                                  // detached from (#73)
-                                  // -> { answered, reason, name, responses }
   end(reason)                     // deliberate close (stop backendDown reinvention)
 }
 
 frontLeg = {                      // a body's channels: its driver and its spectators (#269)
-  setLoginStartHandler(payload => decision)   // -> createMonoplayer().processLoginStart
-                                              //    denied => end(uuid-deny) BEFORE Login Success
-  setServerboundHandler(({ state, name, buffer, data }) => {})
-  setDetachHandler(({ reason }) => {})        // the driver's channel ended; the body survives
-  setClientSettingsHandler(settings => {})    // -> createMonoplayer().noteClientSettings
-                                              //    the driver's Client Information, read-only
-  setConfiguringHandler(({ name }) => {})     // -> createMonoplayer().configuringReady
-                                              //    the client entered its own configuration
-                                              //    phase (#16)
-  setSpectateBody(fn)                         // optional (#269): registers
-                                              //    fn({ body, server, name }) ->
-                                              //    createMonoplayer().spectateBody, which
-                                              //    answers whether the body may be watched
-  setSpectatorAttach(fn)                      // optional (#269): registers
-                                              //    fn({ name, uuid, channel }) ->
-                                              //    createMonoplayer().spectateView, the
-                                              //    body's play state on that one channel,
-                                              //    the entry that names the body, and the
-                                              //    packs the body holds (#614)
-  setDisconnectBody(fn)                       // optional (#261): registers
-                                              //    fn({ body, server, name }) ->
-                                              //    createMonoplayer().disconnectBody, which
-                                              //    ends an unclaimed body on request
-  claimOn(body)                               // (#261) the claim on one body, or null:
-                                              //    the session's claimHeld oracle reads it
+  claimOn(body)                   // (#261) the claim on one body, or null:
+                                  //    the session's claimHeld oracle reads it
   write(name, packet, { synth, channel }), writeRaw(buffer, meta, { channel })
   end(reason)                     // deny/kick/close, to every channel
 }
+```
 
 A write without `channel` goes to every channel on the body: its driver, and the
 spectators watching it. A write with one goes to that connection alone, which is
@@ -995,16 +1006,14 @@ The leg keeps one channel per connection: its role, what it has been sent, and i
 own client information (`src/core/channels.js`). The claim decides who drives
 (`src/core/claims.js`); a channel is what each connection is handed, and a
 spectator's frames never reach the core's pipeline.
-```
 
-The front leg calls, in order: `core.processLoginStart` (the whitelist review),
+The front leg calls, in order, `core.processLoginStart` (the whitelist review),
 `core.processVerifySession` (session verification, only with a real verifier),
-then after sending the forged puppet Login Success: `core.attachPlayer({ name, uuid })`
-(forged profile comes from `config.puppet`; profile capture is leg work).
+then `core.attachPlayer` after the leg sends the forged puppet Login Success.
+The forged profile comes from `config.puppet`; profile capture is leg work.
 
-Core call-ins the legs must drive, and everything else (`backendFrame`
-routing, chat blocking, pose, keep-alive answering, warm marker) is inside
-`createMonoplayer` already.
+Everything else (`backendFrame` routing, chat blocking, pose, keep-alive
+answering, warm marker) is inside `createMonoplayer` already.
 
 ## AC1–AC5 direct-Paper sequence (what B1 proves vs what needs M2)
 
