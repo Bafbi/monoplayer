@@ -67,17 +67,24 @@ reads the returned directory with a glob rather than `find -printf`, which BSD `
 not have (#370).
 
 A capture is the one run here that writes a fixture instead of a report.
-`src/ladder/capture-config.js` records the lane it ran in (#322). It takes that lane from
-`scripts/gate-lane.sh name`, this worktree's lane, with no literal fallback. A capture
-with no lane to name and no `--lane` stops with exit 2 before it joins. A fixture naming
-the wrong Paper is worse than a capture that failed. `--lane` names the lane for a
-capture whose endpoint is not this worktree's: a port-forward to another lane, another
-cluster, or a Paper started by hand. A port-forward cannot say which lane it forwards
-to, so the flag is that capture's only provenance. `MONOPLAYER_GATE_NAMESPACE` names the
-lane for a rung and for a capture at once: the script answers it, and the capture records
-it. The committed
-`src/legs/configuration-baseline/26.2.json` still reads `monoplayer-gate-b`, because
-that is where it was captured. A fixture is dated evidence, and it keeps its own lane.
+`src/ladder/capture-config.js` records the lane it ran in, the Paper build and the image
+(#322, #367). It takes that lane from `scripts/gate-lane.sh name`, this worktree's lane,
+with no literal fallback. A capture with no lane to name and no `--lane` stops with exit
+2 before it joins. A fixture naming a server, a build or an image nobody measured is
+worse than a capture that failed. `--lane` names the lane for a capture whose endpoint is
+not this worktree's: a port-forward to another lane, another cluster, or a Paper started
+by hand. A port-forward cannot say which lane it forwards to, so the flag is where the
+lane comes from. `MONOPLAYER_GATE_NAMESPACE` names the lane for a rung and for a capture
+at once: the script answers it, and the capture records it. The build and the image are
+named by the operator, because no frame a client receives carries either. A status ping
+answers with the server's name and version and no build. An image is packaging the server
+never sends. A capture with no `--paper-build` stops with exit 2 before it joins. The
+build is in `PAPER_BUILD` in the manifest that deployed the server,
+`deploy/driver/paper.yaml` for the gate Paper. A capture with no `--image` records
+`image: null`, which says nobody named one rather than naming the gate lane's image. The
+committed `src/legs/configuration-baseline/26.2.json` still reads `monoplayer-gate-b`,
+because that is where it was captured. A fixture is dated evidence, and it keeps its own
+lane, build and image.
 
 The gate lane sleeps: its five Deployments commit `replicas: 0`, so an apply wakes
 nothing — and stops whatever was awake, since it reconciles every row to the tree.
