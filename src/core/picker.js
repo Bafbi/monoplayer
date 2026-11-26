@@ -27,6 +27,8 @@
 // committed baseline (src/legs/configuration-baseline/26.2.json): its
 // `exit_action` carries `label` and `width` inline, which is the same flattening.
 import { decodeVarInt, encodeVarInt } from './client-settings.js'
+import { CHANNEL_ROLES } from './channels.js'
+import { claimRefusalText } from './claims.js'
 
 export const PICK_NAMESPACE = 'monoplayer:pick'
 // #266: the second level's verbs. One namespace per verb, not one namespace with
@@ -450,4 +452,153 @@ export function pickEmptyText () {
 export function pickRefusalText ({ server = null } = {}) {
   if (server === null) return 'Monoplayer: this lane could not show its server list.'
   return 'Monoplayer: ' + server + ' could not be offered on this lane.'
+}
+
+// ---- #595: the picker's decisions, as a value ----
+
+// The front leg holds the socket, the dialog bytes and the writes. What it should
+// not hold is the answer to three questions, each of which was reachable only
+// through a real connection: what a row reads as, what a click means, and which
+// sentence a refusal gets.
+//
+//   offer: each row, composed from the body this lane is serving, the claims it
+//          holds and the channels it opened.
+//   click: a pick, a verb, a refusal, or a frame that is not this dialog's.
+//   refuse: the sentence a refusal gets, from the verb that was answered and the
+//          reason the board decided.
+//
+// The ports are the two boards the answer reads, `claims` and `channels`, and they
+// are held for the caller's lifetime, the way `createTransfer` holds a session and a
+// cache (src/core/transfer.js). The facts that change per call are arguments: the
+// rows an offer was read from, and the body the session is serving. Nothing here
+// writes, logs, counts, opens a channel or reads a clock; every landing is still the
+// leg's own, and this module only decides.
+//
+// A lane that serves no picker passes neither port, and the board answers every row
+// as a body nobody holds and nobody watches.
+export function createPickerBoard ({ claims = null, channels = null } = {}) {
+  // A port is the board itself, never a copy of it: a copy is what drifts from the
+  // claim the leg records and the channel it opened.
+  if (claims !== null && typeof claims?.claimOn !== 'function') {
+    throw new TypeError('createPickerBoard requires a claims board that answers claimOn(body)')
+  }
+  if (channels !== null && typeof channels?.on !== 'function') {
+    throw new TypeError('createPickerBoard requires a channels board that answers on(body)')
+  }
+
+  // #316: a row is what this lane can offer, not what it has dialled. A body whose
+  // claim is held but which is not up reads `down`, and names nobody, because a
+  // claim outlives a dial that failed (#295) and a row that reads `claimed` about a
+  // body nobody can enter sends the player into a refusal. A claim on an up body is
+  // the one fact that makes a row `claimed`, and a watcher is a spectator channel,
+  // never a driver's.
+  function offer ({ rows = [], served = null } = {}) {
+    return pickerRows(rows ?? []).map(row => {
+      const claim = claims === null ? null : claims.claimOn(row.slug)
+      const watching = channels === null ? [] : (channels.on(row.slug) ?? [])
+      const spectators = watching.filter(channel => channel.role === CHANNEL_ROLES.SPECTATOR).length
+      const up = served !== null && served.body === row.slug && served.up === true
+      return pickerRowForBody(row, { up, driver: claim === null ? null : claim.name, spectators })
+    })
+  }
+
+  // #266: one click on a dialog this lane authored, at either level. The level is
+  // the id's namespace, not a connection's memory, so the frame alone says which
+  // dialog it answers and nothing has to be kept in step between two clients.
+  //
+  // The pick is read before the verb: the two levels are told apart by the
+  // namespace, and a level-one answer read as a verb is an unknown verb.
+  //
+  // The order the leg's socket function used to hold is here, as the answer: a body
+  // nobody holds is the act, and a claimed body refuses a disconnect before the act
+  // is reached (#261). A row the offer does not name is refused at whichever level
+  // the click came from, and the answer says which, so the leg answers a stale pick
+  // with the pick's words and a stale verb with the verb's.
+  function click ({ buffer = null, rows = [] } = {}) {
+    const offered = pickerRows(rows ?? [])
+    const pick = readPickAction(buffer)
+    if (pick !== null) {
+      const row = offered.find(candidate => candidate.slug === pick.slug) ?? null
+      if (row === null) return refusal({ id: pick.id, slug: pick.slug, reason: 'unknown_server', level: 'pick' })
+      return { kind: 'pick', level: 'pick', id: pick.id, slug: pick.slug, row }
+    }
+    const action = readServerAction(buffer)
+    if (action.ok === true) {
+      const row = offered.find(candidate => candidate.slug === action.slug) ?? null
+      if (row === null) {
+        return refusal({ id: action.id, verb: action.verb, slug: action.slug, reason: 'unknown_server', level: 'verb' })
+      }
+      // #261: a disconnect acts on a body, so a claim is what stands in the way. The
+      // claim is answered with the answer rather than turned into a refusal here,
+      // because the leg records the verb before it answers it, and a refused
+      // disconnect is still a verb the lane was asked for. `held` is the claim that
+      // will refuse it, and null for every other click.
+      const held = action.verb === 'disconnect' && claims !== null ? claims.claimOn(row.slug) : null
+      return { kind: 'verb', level: 'verb', id: action.id, verb: action.verb, slug: action.slug, row, held }
+    }
+    if (action.reason === 'not_a_click') {
+      // Not a click this dialog can read at all: another packet's bytes, or a frame
+      // from another state. The dialog stays on screen, so the client can still
+      // choose (#257).
+      return { kind: 'ignore', level: null, reason: 'not_a_pick', id: null }
+    }
+    // Ours to read and it did not read, so the client is told what was wrong.
+    return refusal({ id: action.id, verb: action.verb, slug: action.slug, reason: action.reason })
+  }
+
+  // #542: the sentence a refusal gets, chosen in one place. The verb that was
+  // answered knows its family: a claim names who holds the body, a disconnect names
+  // its driver, a Spectate names what to do about the body. A verb no lane carries
+  // is refused in words that name it. A click that never named a verb is refused by
+  // its own reason: the part of the id that did not read, or the lane's inability to
+  // show a list at all (#315).
+  //
+  // The three reasons a Spectate is refused with after the body's answer allowed it
+  // (#435) reach the Spectate family here, and #542 is the ticket that gives each
+  // one its own sentence. This dispatch is where that lands.
+  function refuse ({ verb = null, reason = null, server = null, driver = null, holder = null, claimed = null, id = null } = {}) {
+    // A click this lane could not read is refused in words about the id, whatever
+    // verb a fragment of it looked like.
+    if (reason === 'unknown_id' || reason === 'malformed' || reason === 'unknown_verb') {
+      return serverActionProblemText({ reason, id, verb })
+    }
+    // A server this lane does not offer is refused in the same sentence at either
+    // level, whatever verb the frame named: the dialog on screen is older than the
+    // list, and no claim or disconnect on it happened.
+    if (reason === 'unknown_server') return pickUnknownText({ id })
+    // A verb this lane does not carry is refused in words that name it, and that is
+    // the only sentence this branch gives: a click that did not read never reaches it,
+    // because its reason is answered above.
+    if (verb !== null && !PICK_VERBS.includes(verb)) return verbRefusalText({ verb, server })
+    switch (verb) {
+      case 'claim':
+        return claimRefusalText({ reason, server, holder, claimed })
+      case 'spectate':
+        return spectateRefusalText({ server, reason })
+      // One refusal, one sentence: a disconnect is refused by a claim and by nothing
+      // else, so this family does not switch on the reason.
+      case 'disconnect':
+        return disconnectRefusalText({ server, driver })
+    }
+    switch (reason) {
+      // #315: the client clicked nothing, so a lane with nothing to offer speaks
+      // about itself. `empty_offer` is this module's own word for that sentence and
+      // is not a counted reason: nothing failed, so the leg logs it and counts no
+      // refusal.
+      case 'empty_offer':
+        return pickEmptyText()
+      case 'picker_unavailable':
+        return pickRefusalText({ server })
+      default:
+        return serverActionProblemText({ reason, id, verb })
+    }
+  }
+
+  // Every refusal the board names, in one shape: the reason, the level it came
+  // from, and the facts its sentence needs.
+  function refusal ({ id = null, verb = null, slug = null, row = null, reason = null, level = null }) {
+    return { kind: 'refuse', level, id, verb, slug, row, reason }
+  }
+
+  return { offer, click, refuse }
 }
