@@ -13,6 +13,11 @@ function one (body, key) {
   return match ? match[1] : ''
 }
 
+// A boolean is written bare in TOML, so it takes its own reader.
+function flag (body, key) {
+  return new RegExp(`^\\s*${key}\\s*=\\s*true\\s*$`, 'm').test(body)
+}
+
 function list (body, key) {
   const match = body.match(new RegExp(`^\\s*${key}\\s*=\\s*\\[(.*)\\]\\s*$`, 'm'))
   return match ? [...match[1].matchAll(/"([^"]+)"/g)].map(item => item[1]) : []
@@ -65,6 +70,9 @@ export function readMiseTasks (file = MISE_TOML) {
       name,
       body,
       description: one(body, 'description'),
+      // A hidden task is one a reader is meant to reach through a task that
+      // composes it, never by name.
+      hide: flag(body, 'hide'),
       depends: list(body, 'depends'),
       wait_for: list(body, 'wait_for'),
       run: run(body)

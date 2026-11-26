@@ -17,7 +17,8 @@ cheapest rung that can fail for the defect you are chasing.
 | 4 real client | `mise run driver:parity`, `mise run driver:scenario`, then `mise run driver:g0` | tens of minutes | Fabric driver build, SSH tunnel, the gate Paper, the dev lane for parity, real client, two accounts | vanilla acceptance, render, movement deltas, break/place against a real server, a real detach/reattach window, and what the client shows joined directly against joined through the proxy. Passed on Velocity + Paper on 2026-11-07; the fault rows are pending. | it is expensive and flaky, so it stays the last rung |
 
 `mise run check` runs rungs 0, 1, and 2: lint, unit tests, and the offline
-loopback. It is the default gate.
+loopback. It is the default gate. It runs all three to their end, so a red gate
+names every rung that failed (#215).
 
 A live rung needs custody that holds a live token, and it needs no exclusive
 session: several clients may play one account at once, and only a refresh from a
@@ -306,6 +307,15 @@ Next rung: mise run loopback (rung 2, loopback) — about 55 seconds
 `src/ladder/next-rung.js` reads those sentences from the rungs table above, so
 editing the table edits the failure output. `test/tooling/mise-tasks.test.js` fails when
 a rung task stops printing the hint.
+
+The gate is the one place where the hint alone was not enough. mise sends
+SIGTERM to every still-running sibling when a rung fails, and a cancelled rung
+prints the reason it was killed as if it were the reason it failed: a unit file
+terminated mid-run reported `Promise resolution is still pending` for a test
+file that holds no promise. So `mise run check` has no dependency edge. It runs
+a hidden graph task through `mise run --continue-on-error`, which lets every
+rung finish and then names each one that failed (`ERROR 1 task(s) failed: [lint]
+exited with status 1`). `test/tooling/mise-tasks.test.js` holds that shape.
 
 A rung that exits 2 (its setup failed before the run) or that is interrupted
 prints no hint. A rung above cannot catch a missing prerequisite.
