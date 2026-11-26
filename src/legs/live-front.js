@@ -205,9 +205,9 @@ export function createConfigPathInterceptor ({
         // The recording carries the server's finish. The picker never sends one.
         if (frame.name === finishName) continue
         // #602: `writeRaw` is the leg's funnel now, and it answers false for a frame it
-        // refuses. The hold's answer is the other true, and it cannot reach this loop: a
-        // frame is held only for a client in play with a reconfiguration pending, and this
-        // replay runs in the client's configuration phase.
+        // refuses. The hold is the other way it answers true without writing, and it cannot
+        // reach this loop: a frame is held only for a client in play with a reconfiguration
+        // pending, and this replay runs in the client's configuration phase.
         if (writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) {
           stats.baselineFrames++
         }
