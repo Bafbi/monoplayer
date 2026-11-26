@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
 import { COMMIT, INSTANCE, LANE, WORKTREE, instanceOf, pathHash } from '../support/lane.js'
 import { readMiseTasks } from './mise-toml.js'
+import { ANY, REST, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -22,6 +23,10 @@ const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 // test/support/lane.js, so the files that assert against a derived lane share one
 // oracle. A script that typed a name instead of deriving one could not match it.
 const LANE_SECRET = role => 'gate-' + INSTANCE + '-' + role
+
+// Every rule that fired, in one file for the whole test file: the last case reads it
+// to prove no arm is dead (#152).
+const HITS = path.join(tempRoot('monoplayer-gate-lane-hits-'), 'hits')
 
 const TOXIPROXY = read('deploy/driver/toxiproxy.yaml')
 
@@ -106,75 +111,202 @@ const drivenWorkloads = () => script().match(/^DRIVEN_WORKLOADS="([^"]+)"/m)[1].
 
 // The shim answers every call the script makes and prints each argv to stdout,
 // so a case can assert not only what was called but in what order it happened.
-const SHIM = [
-  '#!/usr/bin/env bash',
-  'printf \'%s\n\' "$*" >> "$KUBECTL_LOG"',
-  // The trace goes to stderr, which run() merges back in: a shim that wrote it
-  // to stdout would land inside the script's own command substitutions.
-  'printf \'shim %s\n\' "$*" >&2',
-  'state="$KUBECTL_STATE"',
-  'count () { n=0; [ -f "$state/$1" ] && n=$(cat "$state/$1"); echo $((n+1)) > "$state/$1"; printf \'%s\' "$n"; }',
-  // The word after "secret" in an argv: every Secret call the script makes is
-  // `-n <ns> <verb> secret <name>`, so this reads the script's intent without
-  // parsing its output.
-  'arg_after () { local n=$1 prev="" w; shift; for w in "$@"; do [ "$prev" = "$n" ] && { printf "%s" "$w"; return; }; prev=$w; done; }',
-  // The Secrets a case says are absent are the ones up has to generate. A list of
-  // names, or "all", keeps one switch for every Secret in the lane.
-  'absent () { case " ${KUBECTL_SECRET_MISSING:-} " in *" all "*) return 0 ;; *" $1 "*) return 0 ;; esac; return 1; }',
-  'case " $* " in',
+// The shim answers the calls `gate-lane.sh` makes, and nothing else (#152). A rule is
+// one call: its words, their order, and their count. `ns` is part of the rule, so a
+// call that loses `-n` matches nothing rather than answering for the wrong lane.
+const SHIM_RULES = [
   // An apply reconciles the tree, so a case's awake row only reads as awake before one.
   // Removing that marker makes the read-after-apply ordering fail, which is the point.
-  '  *" apply -k "*) cat > /dev/null; touch "$state/applied"; printf \'configured\n\'; exit 0 ;;',
-  '  *" scale "*) printf \'scaled\n\'; exit 0 ;;',
+  {
+    cluster: 'kubectl apply -k names the tree, and the tree names its namespace',
+    match: ['apply', '-k', ANY],
+    body: `cat > /dev/null
+touch "$state/applied"
+echo configured
+exit 0`
+  },
+  // A wake and a stop both name the rows they scale, and a wake may name several.
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names',
+    match: ['scale', 'deploy', REST],
+    body: `echo scaled
+exit 0` },
   // A Secret that exists is answered as it is: up must leave it alone. A missing one
   // answers the way kubectl does with and without --ignore-not-found, which is the
   // difference between "absent" and "this read failed".
-  '  *" get secret "*) name=$(arg_after secret "$@")',
-  '    if [ -n "${KUBECTL_SECRET_READ_ERROR:-}" ]; then printf \'Error from server (Forbidden): secrets "%s" is forbidden\n\' "$name" >&2; exit 1; fi',
-  '    if absent "$name"; then case " $* " in *" --ignore-not-found "*) exit 0 ;; esac; printf \'Error from server (NotFound): secrets "%s" not found\n\' "$name" >&2; exit 1; fi',
-  '    printf \'secret/%s\n\' "$name"; exit 0 ;;',
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'secret', ANY, '--ignore-not-found', '-o', 'name'],
+    body: `name="\${5}"
+if [ -n "\${KUBECTL_SECRET_READ_ERROR:-}" ]; then echo "Error from server (Forbidden): secrets \"$name\" is forbidden" >&2; exit 1; fi
+if absent "$name"; then exit 0; fi
+echo "secret/$name"
+exit 0`
+  },
   // A generated Secret reaches kubectl on stdin, so a case reads exactly what up
-  // wrote without up ever printing a value.
-  // `printf "%s\\n" ---`, not `printf ---`: bash reads a format that starts with a
-  // dash as an option and prints nothing, so the marker would vanish.
-  '  *" apply -f -"*) { printf "%s\\n" ---; cat; } >> "$state/secrets.yaml"; printf \'configured\n\'; exit 0 ;;',
-  // A lane with nothing to delete fails without the flag and is a no-op with it, so
-  // a case proves the delete tolerates absence instead of reading the script.
-  '  *" delete secret "*) case " $* " in *" --ignore-not-found "*) printf \'No resources found\n\' >&2; exit 0 ;; esac; printf \'Error from server (NotFound): nothing to delete\n\' >&2; exit 1 ;;',
-  // A readiness read answers empty until the case lets it answer 1. The counter
-  // is per call, so "not ready yet" is a first read rather than a fixed answer.
+  // wrote without up ever printing a value. `printf '%s\\n' ---`, not `printf ---`:
+  // bash reads a format that starts with a dash as an option and prints nothing.
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['apply', '-f', '-'],
+    body: `{ printf '%s\\n' ---; cat; } >> "$state/secrets.yaml"
+echo configured
+exit 0`
+  },
+  // A lane with nothing to delete is a no-op with the flag, which is what a stop
+  // relies on: a case proves the delete tolerates absence instead of reading the
+  // script.
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['delete', 'secret', '-l', ANY, '--ignore-not-found'],
+    body: `echo 'No resources found' >&2
+exit 0`
+  },
   // The two replica reads, answered apart: spec.replicas is what the lane claims, and
   // KUBECTL_AWAKE names one row a case leaves running, so a second up can be shown to
-  // keep it running.
-  '  *".spec.replicas"*) awake="${KUBECTL_AWAKE:-none}"; if [ -f "$state/applied" ]; then printf \'0\'; exit 0; fi; case " $* " in *" $awake "*) printf \'1\' ;; *) printf \'0\' ;; esac; exit 0 ;;',
-  '  *"readyReplicas"*) if [ "$(count ready)" -lt "${KUBECTL_READY_AFTER:-0}" ]; then exit 0; fi; printf \'1\'; exit 0 ;;',
-  // The pod listing a stop waits on: a pod on the first listing, none after.
-  // A lane the listing reads has its own pod count, so one shim can answer for two
-  // namespaces at once. A namespace with no file keeps the stop-wait behaviour below.
-  '  *" get pods "*) ns=$(arg_after -n "$@")',
-  '    if [ -n "$ns" ] && [ -f "$state/$ns.pods" ]; then n=$(cat "$state/$ns.pods"); i=0; while [ "$i" -lt "$n" ]; do printf \'pod/p%s\n\' "$i"; i=$((i+1)); done; exit 0; fi',
-  '    if [ "${KUBECTL_PODS_STUCK:-0}" = 1 ]; then printf \'pod/gate-stuck\n\'; exit 0; fi; if [ "$(count pods)" -lt 1 ]; then printf \'pod/gate-abc\n\'; fi; exit 0 ;;',
+  // keep it running. The readiness read is a counter, so "not ready yet" is a first
+  // read rather than a fixed answer.
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'deploy', ANY, '-o', 'jsonpath={.spec.replicas}'],
+    body: `awake="\${KUBECTL_AWAKE:-none}"
+if [ -f "$state/applied" ]; then printf '%s' 0; exit 0; fi
+case " $* " in *" $awake "*) printf '%s' 1 ;; *) printf '%s' 0 ;; esac
+exit 0`
+  },
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'deploy', ANY, '-o', 'jsonpath={.status.readyReplicas}'],
+    body: `if [ "$(count ready)" -lt "\${KUBECTL_READY_AFTER:-0}" ]; then exit 0; fi
+printf '%s' 1
+exit 0`
+  },
+  // The pod listing a stop waits on: a pod on the first listing, none after. A lane the
+  // listing reads has its own pod count, so one shim answers for two namespaces at once.
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'pods', '-l', ANY, '-o', 'name'],
+    body: `ns="\${2}"
+if [ -n "$ns" ] && [ -f "$state/$ns.pods" ]; then n=$(cat "$state/$ns.pods"); i=0; while [ "$i" -lt "$n" ]; do echo "pod/p$i"; i=$((i+1)); done; exit 0; fi
+if [ "\${KUBECTL_PODS_STUCK:-0}" = 1 ]; then echo 'pod/gate-stuck'; exit 0; fi
+if [ "$(count pods)" -lt 1 ]; then echo 'pod/gate-abc'; fi
+exit 0`
+  },
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'pods', '-o', 'name'],
+    body: `ns="\${2}"
+if [ -f "$state/$ns.pods" ]; then n=$(cat "$state/$ns.pods"); i=0; while [ "$i" -lt "$n" ]; do echo "pod/p$i"; i=$((i+1)); done; fi
+exit 0`
+  },
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'pods', '--no-headers'],
+    body: "exit 0"
+  },
   // The lane listing and the reaper: the namespaces the cluster offers, then one
   // namespace's annotations, so a case writes the lane it wants read.
-  '  *" get namespaces "*) [ -f "$state/lanes" ] && cat "$state/lanes"; exit 0 ;;',
-  '  *" get namespace "*) ns=$(arg_after namespace "$@")',
-  // A read that fails for any other reason is not an absence, so a case can make the
-  // probe answer a Forbidden the way kubectl would.
-  '    if [ -n "${KUBECTL_NAMESPACE_READ_ERROR:-}" ]; then printf \'Error from server (Forbidden): namespaces "%s" is forbidden\\n\' "$ns" >&2; exit 1; fi',
-  // A lane that exists answers its own name. A case that wants a lane nobody created yet
-  // writes the absent marker, which is the first up on a new commit's lane.
-  '    case " $* " in *" -o name"*) [ -f "$state/$ns.absent" ] || printf \'namespace/%s\\n\' "$ns"; exit 0 ;; esac',
-  '    case "$*" in *lane-touched*) field=touched ;; *lane-worktree*) field=worktree ;; *lane-commit*) field=commit ;; *status.phase*) field=phase ;; *) field=other ;; esac',
-  '    [ -f "$state/$ns.$field" ] && cat "$state/$ns.$field"; exit 0 ;;',
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the listing carries no -n',
+    match: ['get', 'namespaces', '-l', ANY, '-o', 'name'],
+    body: `[ -f "$state/lanes" ] && cat "$state/lanes"
+exit 0`
+  },
+  // A lane that exists answers its own name. A case that wants a lane nobody created
+  // yet writes the absent marker, which is the first up on a new commit's lane. A read
+  // that fails for any other reason is not an absence, so a case can make the probe
+  // answer a Forbidden the way kubectl would.
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the probe carries no -n',
+    match: ['get', 'namespace', ANY, '-o', 'name', '--ignore-not-found'],
+    body: `ns="\${3}"
+if [ -n "\${KUBECTL_NAMESPACE_READ_ERROR:-}" ]; then echo "Error from server (Forbidden): namespaces \"$ns\" is forbidden" >&2; exit 1; fi
+[ -f "$state/$ns.absent" ] || echo "namespace/$ns"
+exit 0`
+  },
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the annotation read carries no -n',
+    match: ['get', 'namespace', ANY, '-o', 'jsonpath={.status.phase}'],
+    body: `ns="\${3}"
+[ -f "$state/$ns.phase" ] && cat "$state/$ns.phase"
+exit 0`
+  },
+  // One annotation of one namespace. The dotted key needs its dot escaped in the
+  // jsonpath, so each key is its own word and its own rule: a field nobody reads is a
+  // call nobody modelled.
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the annotation read carries no -n',
+    match: ['get', 'namespace', ANY, '-o', 'jsonpath={.metadata.annotations.monoplayer\\.eu/lane-touched}'],
+    body: `ns="\${3}"
+[ -f "$state/$ns.touched" ] && cat "$state/$ns.touched"
+exit 0`
+  },
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the annotation read carries no -n',
+    match: ['get', 'namespace', ANY, '-o', 'jsonpath={.metadata.annotations.monoplayer\\.eu/lane-worktree}'],
+    body: `ns="\${3}"
+[ -f "$state/$ns.worktree" ] && cat "$state/$ns.worktree"
+exit 0`
+  },
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the annotation read carries no -n',
+    match: ['get', 'namespace', ANY, '-o', 'jsonpath={.metadata.annotations.monoplayer\\.eu/lane-commit}'],
+    body: `ns="\${3}"
+[ -f "$state/$ns.commit" ] && cat "$state/$ns.commit"
+exit 0`
+  },
   // The Deployments a lane runs, and the Secrets in it this script did not make: the
   // two things that say the namespace is more than the gate tree before a reap.
-  '  *" get deploy -o name"*) ns=$(arg_after -n "$@"); [ -f "$state/$ns.deploys" ] && cat "$state/$ns.deploys"; exit 0 ;;',
-  '  *" get secrets "*) ns=$(arg_after -n "$@"); case " $* " in *"!app.kubernetes.io/managed-by"*) [ -f "$state/$ns.operator" ] && cat "$state/$ns.operator" ;; esac; exit 0 ;;',
-  '  *" get deploy "*) printf \'1\'; exit 0 ;;',
-  '  *) exit 0 ;;',
-  'esac',
-  ''
-].join('\n')
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'deploy', '-o', 'name'],
+    body: `ns="\${2}"
+[ -f "$state/$ns.deploys" ] && cat "$state/$ns.deploys"
+exit 0`
+  },
+  {
+    ns: ANY,
+    why: 'the lane is this worktree\'s or one a case names, and the reaper reads lanes that are neither',
+    match: ['get', 'secrets', '-l', ANY, '-o', 'name'],
+    body: `ns="\${2}"
+case "$*" in *!app.kubernetes.io/managed-by*) [ -f "$state/$ns.operator" ] && cat "$state/$ns.operator" ;; esac
+exit 0`
+  },
+  // The reaper's two writes. A lane nobody stamped is still a lane the reaper reads.
+  {
+    cluster: 'the Namespace object carries its own name',
+    match: ['annotate', 'namespace', ANY, '--overwrite', REST],
+    body: "exit 0"
+  },
+  {
+    cluster: 'the Namespace object carries its own name, so a reap names it directly',
+    match: ['delete', 'namespace', ANY, '--wait=false'],
+    body: "exit 0"
+  },
+]
+
+const { script: SHIM, ids: SHIM_IDS } = kubectlShim(SHIM_RULES, {
+  prelude: [
+    // The trace goes to stderr, which run() merges back in: a shim that wrote it to
+    // stdout would land inside the script's own command substitutions.
+    "printf 'shim %s\\n' \"$*\" >&2",
+    'state="$KUBECTL_STATE"',
+    'count () { n=0; [ -f "$state/$1" ] && n=$(cat "$state/$1"); echo $((n+1)) > "$state/$1"; printf \'%s\' "$n"; }',
+    // The Secrets a case says are absent are the ones up has to generate. A list of
+    // names, or "all", keeps one switch for every Secret in the lane.
+    'absent () { case " ${KUBECTL_SECRET_MISSING:-} " in *" all "*) return 0 ;; *" $1 "*) return 0 ;; esac; return 1; }'
+  ]
+})
 
 function space () {
   const root = tempRoot('monoplayer-gate-lane-')
@@ -200,6 +332,7 @@ function run (where, args = [], env = {}) {
       PATH: where.bin + ':' + process.env.PATH,
       KUBECTL_LOG: where.log,
       KUBECTL_STATE: where.state,
+      KUBECTL_HITS: HITS,
       // Nothing here should wait: the real interval is five seconds.
       MONOPLAYER_GATE_POLL: '0',
       ...env
@@ -208,6 +341,10 @@ function run (where, args = [], env = {}) {
   const calls = fs.existsSync(where.log)
     ? fs.readFileSync(where.log, 'utf8').trim().split('\n').filter(Boolean)
     : []
+  // A call the shim does not model fails there and lands here, so a case reports it
+  // even when the script swallowed the status.
+  const refused = unmodelled(where.log)
+  assert.deepEqual(refused, [], 'the shim modelled every call: ' + refused.join(' | '))
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
 }
 
@@ -553,6 +690,7 @@ function rendered (where, dir, env = {}) {
       PATH: where.bin + ':' + process.env.PATH,
       KUBECTL_LOG: where.log,
       KUBECTL_STATE: where.state,
+      KUBECTL_HITS: HITS,
       MONOPLAYER_GATE_POLL: '0',
       ...env
     }
@@ -1239,3 +1377,8 @@ test('a lane list that offers the live namespace is refused before anything is d
 })
 
 
+test('every rule of the shim is reached by a case', () => {
+  // An arm no case reaches is an arm nobody checks: it models a call the script no
+  // longer makes, or a case is missing for a call it does make (#152).
+  assert.deepEqual(deadRules(HITS, SHIM_IDS), [], 'no rule is dead: every one fired in some case')
+})
