@@ -18,6 +18,11 @@
 # namespace no worktree derives, and `scripts/gate-lane.sh` finds a lane by a
 # label on it (#318). The object is also what lets this tree apply to a cluster
 # that never ran the old driver tree at all.
+#
+# The Secret both Papers read is not here, and must not be: `src/testbed/switch.js`
+# applies this namespace, then makes `gate-b-rcon` with a random value when it is
+# absent, then applies this tree (#362). A committed Secret is a credential in git,
+# and a cluster with none is what left both Papers in CreateContainerConfigError.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
