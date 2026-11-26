@@ -28,6 +28,12 @@ import { createOfflineFrontLeg } from '../../src/legs/live-front.js'
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 const count = (source, literal) => source.split(literal).length - 1
+// A comment is not a read: a module that names a literal while explaining why it
+// spells no such thing wires nothing. The rig guard reads a file the same way
+// (test/ladder/rig.test.js:41).
+const code = source => source.split('\n')
+  .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+  .join('\n')
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 
@@ -174,6 +180,10 @@ test('#592 a leg missing a call-in is named, and the required ones are named apa
     'the required ones are named separately: a lane without setCoreAttach refuses every attach through the leg\'s own default')
   assert.deepEqual(answered.missing, ['setCoreAttach', 'setSpectateBody'],
     'and both holes are in the one list, in table order: setCoreAttach is a required row and comes first')
+  // #607: the report claims the handlers it installed, and no others. A row this
+  // leg did not carry was given a setter by nobody, so the report cannot offer one.
+  assert.equal(answered.handlers.setCoreAttach, undefined,
+    'a row the leg did not carry has no handler in the report')
 })
 
 // #605: a backend leg's hole is the report's business too. The two calls are the
@@ -331,6 +341,111 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
     'src/ladder/client-parity.js registers none')
   assert.equal(count(LANES['src/ladder/loopback.js'], '.setCoreAttach('), 0,
     'src/ladder/loopback.js registers none')
+})
+
+// #607: the wrapper a lane adds around one call-in needs the handler the table
+// installed, not the payload shape. The report carries it, so a lane calls the
+// function the leg was handed and adds its record around it. A wrapper that
+// rebuilds the payload is a second copy of the row, which is the defect here.
+test('#607 the wiring reports the handlers it installed, so a wrapper adds its side effect around one', () => {
+  const { core, calls } = recordingCore(FRONT_LEG_CALL_INS)
+  const { leg, handlers } = recordingLeg(FRONT_LEG_CALL_INS)
+
+  const wiring = wireLegToCore({ core, leg, table: FRONT_LEG_CALL_INS })
+
+  assert.equal(wiring.handlers.setCoreAttach, handlers.get('setCoreAttach'),
+    'the handler the report carries is the one the leg was handed, not a second copy of it')
+
+  // The wrapper #607 is about: a record of its own, then the installed handler
+  // with the leg's payload untouched.
+  const record = []
+  const player = { name: 'Bafbi', uuid: PLAYER }
+  const wrapped = payload => {
+    record.push(payload)
+    return wiring.handlers.setCoreAttach(payload)
+  }
+  const outcome = wrapped(player)
+  assert.deepEqual(record, [{ name: 'Bafbi', uuid: PLAYER }],
+    'the wrapper passes the payload the leg sent, unreshaped and unextended')
+  assert.deepEqual(outcome, {
+    name: 'attachPlayer',
+    args: [{ name: 'Bafbi', uuid: PLAYER, includeConfig: false }]
+  }, 'and the table still builds the shape: includeConfig:false comes from one place')
+  assert.equal(calls.length, 1, 'the wrapper reaches the core once, not twice')
+})
+
+// #607: a caller reaches that handler off the started core, so no module imports a
+// table to wrap one call-in. It is there because this leg carried the setter: the
+// report offers the handlers it installed, and `wired` names them.
+test('#607 a started core carries the installed attach handler, and it attaches as the table says', () => {
+  const frontLeg = createOfflineFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    offlineWhitelist: [PLAYER],
+    getSnapshotConfig: () => [],
+    wireMode: 'off'
+  })
+  const backendLeg = createFakeBackendLeg()
+  const core = createMonoplayer({
+    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
+    backendLeg,
+    frontLeg,
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout }
+  })
+  core.start()
+
+  const { handlers, wired } = core.legWiring.front
+  assert.ok(wired.includes('setCoreAttach'),
+    'the core wired this leg\'s attach call-in, so the handler in the report is the one it registered')
+  assert.equal(typeof handlers.setCoreAttach, 'function',
+    'and a caller reads it off the started core, without importing the table')
+
+  // The attach itself: the replay omits the configuration domain, which is the
+  // half of the row a wrapper passing the payload through must not lose.
+  backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 42 } })
+  backendLeg.deliver({ state: 'play', name: 'map_chunk', data: { x: 0, z: 0 } })
+  core.cache.forceWarm()
+  core.session.warmComplete({ marker: 'warm_fallback_join_settled' })
+
+  const outcome = handlers.setCoreAttach({ name: 'Bafbi', uuid: PLAYER })
+  assert.equal(outcome.attached, true, 'the handler attaches through the core it was built for')
+  assert.equal(outcome.frames.map(frame => frame.name).includes('registry_data'), false,
+    'and the configuration phase is not re-sent: includeConfig:false is the table\'s, not the lane\'s')
+})
+
+// #607: the acceptance criterion, as a count. A caller that writes the literal has
+// a second copy of the table's row, and a change to the table leaves it on the old
+// value in silence. Comments are stripped: a module explaining why it spells no
+// such thing wires nothing (test/ladder/rig.test.js:41).
+//
+// The set is the directory, not a list of three files. A module added under
+// src/ladder is a caller too, and a hand-kept list would let it through, which is
+// the "fails loudly" rule in AGENTS.md rather than a claim in prose. The live lane
+// is the one caller outside it, and it registers no wrapper.
+test('#607 no module that builds a core over legs rebuilds the handler\'s argument', () => {
+  const callers = fs.readdirSync(path.join(ROOT, 'src/ladder'))
+    .filter(name => name.endsWith('.js'))
+    .map(name => 'src/ladder/' + name)
+  callers.push('src/service/start-live.js')
+  assert.ok(callers.includes('src/ladder/rig.js') && callers.includes('src/ladder/online.js'),
+    'the walk found the modules it reads, so an empty or moved directory fails here rather than passing')
+
+  for (const file of callers) {
+    // The defect's other spelling: a direct call with no includeConfig at all, which
+    // rebinds the core's `includeConfig = true` and brings the configuration replay
+    // back. Counting only the literal would let that through.
+    assert.equal(count(code(read(file)), '.attachPlayer('), 0,
+      file + ' attaches through the handler the core installed: a direct attachPlayer is a payload of its own')
+    assert.equal(count(code(read(file)), 'includeConfig: false'), 0,
+      file + ' leaves the attach\'s argument to the table: a caller that writes includeConfig is holding a second copy of the row')
+  }
+  // The table still names the key. Counted without its value, so lifting the value
+  // into a named constant keeps this case true while the property it guards stands;
+  // the payload itself is pinned by the recorded attach at the top of this file.
+  assert.equal(count(code(read('src/service/wire-leg-to-core.js')), 'includeConfig'), 1,
+    'and src/service/wire-leg-to-core.js is the one place the key is named for this shape')
 })
 
 // #605: both doubles are hand-built, so a row added to a table and not to the

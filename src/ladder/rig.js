@@ -132,8 +132,21 @@ export async function createRig ({
   // is what sets the default it wraps. The hook a call supplies carries the record
   // its assertion reads and returns the attach outcome, so a rig that names no
   // `attach` gets the plain call-in.
+  //
+  // #607: the hook adds that record around the handler start() installed, which is
+  // the report's `handlers.setCoreAttach`, and hands it on as `attachPlayer`. The
+  // payload stays the table's: a rig passes the one the leg sent, untouched.
   core.start()
-  if (attach !== null) front.setCoreAttach(player => attach({ rig, player }))
+  if (attach !== null) {
+    const attachPlayer = core.legWiring.front.handlers.setCoreAttach
+    // #607: the report offers the handlers it installed, so a leg that carried no
+    // setter has none here. Say that rather than meeting it as a TypeError inside
+    // the leg's own login path.
+    if (attachPlayer === undefined) {
+      throw new TypeError('createRig: the front leg carries no setCoreAttach, so a rig with an attach hook has nothing to wrap')
+    }
+    front.setCoreAttach(player => attach({ rig, player, attachPlayer }))
+  }
 
   // Registered after start(), as every rig did before this factory: start() emits
   // only 'start', so a due reconnect comes from a later fault, never from start.

@@ -21,10 +21,10 @@
 // body legs (O59) — says so at the line. A lane that wants a different
 // registration wraps one call-in after start(), and both lanes that do say so at
 // the line: the rig reads the attach record, and the online rung cuts its
-// evidence. A wrapper that rebuilds its call-in's payload repeats that one shape,
-// which #607 is about. A leg that carries none of them is a leg with no core in
-// front of it, which the two pre-auth rungs build on purpose. They never come
-// here.
+// evidence. #607: a wrapper calls the handler this file built, reported as
+// `handlers`, so neither of them writes a payload shape a second time. A leg that
+// carries none of them is a leg with no core in front of it, which the two pre-auth
+// rungs build on purpose. They never come here.
 //
 // The report is what a reader checks. `missing` names every declared call-in the
 // leg does not carry, and `requiredMissing` names the subset the leg's own
@@ -257,6 +257,11 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
 // handler reaches a method of it, and a table applied to the wrong object would
 // register every call-in against nothing. The table is required too, so a leg is
 // never measured against the other interface's rows.
+//
+// #607: the report carries every registration's handler, so a caller that wraps one
+// after start() calls the handler the leg was handed and adds its record around it,
+// rather than writing the payload a second time. The core puts the whole report on
+// `legWiring`, one per interface, which is where a caller reads it from.
 export function wireLegToCore ({ core, leg, table } = {}) {
   if (core === null || typeof core !== 'object') {
     throw new TypeError('wireLegToCore needs the core its call-ins reach: wireLegToCore({ core, leg, table })')
@@ -268,6 +273,7 @@ export function wireLegToCore ({ core, leg, table } = {}) {
   const called = []
   const missing = []
   const requiredMissing = []
+  const handlers = {}
   for (const entry of table) {
     const method = leg === null || leg === undefined ? undefined : leg[entry.name]
     if (typeof method !== 'function') {
@@ -281,8 +287,16 @@ export function wireLegToCore ({ core, leg, table } = {}) {
       called.push(entry.name)
       continue
     }
-    method.call(leg, entry.handler(core))
+    // #607: the handler is built once, here, and reported, so a caller that wraps
+    // this row after start() calls the function the leg was handed rather than
+    // writing the payload a second time. A row this leg does not carry has no
+    // handler: nothing installed it, and `wired` says so.
+    handlers[entry.name] = entry.handler(core)
+    method.call(leg, handlers[entry.name])
     wired.push(entry.name)
   }
-  return { wired, called, missing, requiredMissing }
+  // #607: the handlers ride the report so a caller reaches one off the started core
+  // without importing a table. The object is frozen for the reason the rows are: a
+  // handler a reader can replace at run time is a payload shape with two authors.
+  return { wired, called, missing, requiredMissing, handlers: Object.freeze(handlers) }
 }

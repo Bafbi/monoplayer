@@ -635,10 +635,18 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // client decoded with the replay, and a serverbound settings frame is on
     // neither side of that cut. What the leg is sent for a real backend is N14's
     // subject, read off the leg's own write above.
-    front.setCoreAttach(({ name, uuid }) => {
+    //
+    // #607: the cut is taken around the handler start() installed, which is the
+    // report's `handlers.setCoreAttach`, so the payload the core is handed stays the
+    // table's and this wrapper adds nothing to it.
+    const attachPlayer = core.legWiring.front.handlers.setCoreAttach
+    if (attachPlayer === undefined) {
+      throw new Error('online: the front leg carries no setCoreAttach, so N13 has no attach to cut')
+    }
+    front.setCoreAttach(player => {
       const attachSnapshot = core.cache.snapshot()
       const attachPose = core.session.currentPose
-      const outcome = core.attachPlayer({ name, uuid, includeConfig: false })
+      const outcome = attachPlayer(player)
       // N13 checks the first attach. A later reattach must not replace the cut:
       // the captured frames it would compare against belong to the first.
       if (outcome.attached && attachCut === null) {
