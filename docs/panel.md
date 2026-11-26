@@ -98,10 +98,12 @@ rather than guessing:
   `requiredBytes`, and those rows appear.
 
 The two groups #415 added to the heartbeat are drawn beside the cache rows: one row
-set per body the process holds a cache for, and one per channel the front holds open.
-[telemetry.md](telemetry.md) defines every field of both, and the card's labels are its
+set per body and one per channel. [telemetry.md](telemetry.md) defines every field of
+both, and the card's labels are its
 own words for them. A lane older than #415 writes neither group, and the card then says
-nothing about them rather than drawing a group of zeros. An empty group is its own
+nothing about them rather than drawing a group of zeros. A group the record carries but
+the card cannot read says nothing either, which is the other reason a row set is
+missing. An empty group is its own
 sentence: the process holds no body cache, or the front holds no channel open. A body
 nobody claimed has no claim age, and a spectator holds none. A connection the lane
 admitted itself names no body. Those rows say so in words instead of printing a zero

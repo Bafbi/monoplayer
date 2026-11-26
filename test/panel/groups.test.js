@@ -57,8 +57,17 @@ function facts (heartbeat = {}) {
 // it in this file would be the second one. A table row may name two fields, which is
 // why this collects every backticked name on the line rather than one per row.
 function documented (group) {
-  const found = [...DOC.matchAll(new RegExp('`' + group + '\\[\\]\\.([A-Za-z]+)`', 'g'))]
-    .map(match => match[1])
+  const marker = group + '[].'
+  const found = []
+  for (const line of DOC.split('\n')) {
+    const cells = line.split('|')
+    if (cells.length < 3) continue
+    // The Field column only, which is the second cell: the Meaning column names
+    // files and metrics in backticks too, and none of those is a field.
+    for (const match of (cells[1] ?? '').matchAll(/`([^`]+)`/g)) {
+      if (match[1].startsWith(marker)) found.push(match[1].slice(marker.length))
+    }
+  }
   return [...new Set(found)]
 }
 
@@ -141,6 +150,25 @@ test('#419 an age reads in the unit a reader compares to the heartbeat interval'
   assert.match(rowFor('holder-2'), /<dt>open for<\/dt><dd>3 min<\/dd>/, 'two and a half minutes is a minute count')
   assert.match(rowFor('holder-3'), /<dt>open for<\/dt><dd>2 hours<\/dd>/, 'an age of hours is a count of hours, not milliseconds')
   assert.match(rowFor('holder-4'), /<dt>open for<\/dt><dd>2 days<\/dd>/, 'and an age of days is a count of days')
+})
+
+test('#419 a duration that rounds over its unit crosses into the next one', () => {
+  // 59.5 s rounds to 60 s, which is a minute: a unit has one zero, and it is the
+  // next unit's.
+  const channel = (id, ageMs) => ({ channel: id, body: 'sky', role: 'spectator', ageMs, frames: 0, play: 0, configuration: 0, bytes: 0, replays: 0, spectators: 1 })
+  const page = renderLive(facts({ channels: [channel('holder-1', 59_500), channel('holder-2', 3_599_000), channel('holder-3', 86_390_000)] }))
+  const rowFor = id => page.slice(page.indexOf('<h4>Channel ' + id + '</h4>'), page.indexOf('</dl>', page.indexOf('<h4>Channel ' + id + '</h4>')))
+  assert.match(rowFor('holder-1'), /<dt>open for<\/dt><dd>1 min<\/dd>/)
+  assert.match(rowFor('holder-2'), /<dt>open for<\/dt><dd>1 hour<\/dd>/)
+  assert.match(rowFor('holder-3'), /<dt>open for<\/dt><dd>1 day<\/dd>/)
+})
+
+test('#419 a row with no role says so, and prints no blank line', () => {
+  // docs/telemetry.md says `channel` and `role` are always written, so a null one
+  // is a record the page cannot explain. A blank row would be the page printing a
+  // field with no value, which it never does.
+  const page = renderLive(facts({ channels: [{ channel: 'holder-1', role: null, frames: 0, play: 0, configuration: 0, bytes: 0, replays: 0, spectators: 0 }] }))
+  assert.match(page, /<dt>role<\/dt><dd>the record carries no role<\/dd>/)
 })
 
 test('#419 a heartbeat older than #415 renders as it did, and says nothing about the groups', () => {

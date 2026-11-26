@@ -51,12 +51,14 @@ function allowedRead (allowed) {
 // for 45000 ms is "45 s", not a number of milliseconds to divide in the head.
 function duration (ms) {
   if (!present(ms)) return null
-  if (ms < 60_000) return Math.round(ms / 1000) + ' s'
-  if (ms < 3_600_000) return Math.round(ms / 60_000) + ' min'
-  if (ms < 86_400_000) {
-    const hours = Math.round((ms / 3_600_000) * 10) / 10
-    return hours + (hours === 1 ? ' hour' : ' hours')
-  }
+  // The unit is chosen from the rounded count, so 59 500 ms reads "1 min" and not
+  // "60 s": a unit that has just overflowed is the next unit's zero.
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return seconds + ' s'
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 60) return minutes + ' min'
+  const hours = Math.round((ms / 3_600_000) * 10) / 10
+  if (hours < 24) return hours + (hours === 1 ? ' hour' : ' hours')
   const days = Math.round((ms / 86_400_000) * 10) / 10
   return days + ' ' + dayWord(days)
 }
@@ -95,7 +97,9 @@ function renderBodies (bodies) {
 function renderChannels (channels) {
   return channels.map(channel => group('Channel ' + (channel.channel ?? 'with no id'), [
     row('body', present(channel.body) ? channel.body : 'no claim: the lane admitted this connection itself'),
-    row('role', channel.role),
+    // `role` is always written (docs/telemetry.md), so a null here is a record the
+    // page cannot explain, and it says that rather than printing no line at all.
+    row('role', channel.role ?? 'the record carries no role'),
     row('open for', duration(channel.ageMs) ?? 'the front stamped no open'),
     row('frames', count(channel.frames)),
     row('play frames', count(channel.play)),

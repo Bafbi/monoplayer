@@ -134,7 +134,7 @@ function pick (source, keys) {
 // and none of them could be read the answer is null and not an empty list: the page
 // reads an empty list as "the lane holds none", and that is a measurement the record
 // just contradicted.
-function picks (source, keys) {
+function pickRows (source, keys) {
   if (!Array.isArray(source)) return null
   const rows = source
     .filter(isObject)
@@ -297,8 +297,8 @@ function heartbeatFacts (record, now) {
     wire: pick(record.wire, WIRE),
     // #419: one row per body the process holds a cache for, and one per channel the
     // front holds open. Neither group exists on a lane older than #415.
-    bodies: picks(record.bodies, BODIES),
-    channels: picks(record.channels, CHANNELS),
+    bodies: pickRows(record.bodies, BODIES),
+    channels: pickRows(record.channels, CHANNELS),
     telemetry: telemetryFacts(record.telemetry),
     account: accountFacts(record.account, now)
   }
