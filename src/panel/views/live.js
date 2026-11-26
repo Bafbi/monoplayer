@@ -46,60 +46,67 @@ function allowedRead (allowed) {
   return ', and the allowed servers read at ' + allowed.observedAt + version
 }
 
-// An age, in the unit a reader compares to the heartbeat interval: seconds under a
-// minute, minutes under an hour, and then the units the cap rows use. A claim age of
-// 45000 ms is "45 s" and not a number of milliseconds to divide in the head.
-function age (ms) {
+// A duration, in the unit a reader compares to the heartbeat interval: seconds under
+// a minute, minutes under an hour, and then the units the cap rows use. A claim held
+// for 45000 ms is "45 s", not a number of milliseconds to divide in the head.
+function duration (ms) {
   if (!present(ms)) return null
   if (ms < 60_000) return Math.round(ms / 1000) + ' s'
   if (ms < 3_600_000) return Math.round(ms / 60_000) + ' min'
-  return span(ms)
+  if (ms < 86_400_000) {
+    const hours = Math.round((ms / 3_600_000) * 10) / 10
+    return hours + (hours === 1 ? ' hour' : ' hours')
+  }
+  const days = Math.round((ms / 86_400_000) * 10) / 10
+  return days + ' ' + dayWord(days)
 }
 
-// #419: the per-body group #415 added to the heartbeat. One row set per body, so a
-// lane that holds several names which one a number belongs to. A body nobody claimed
-// says so rather than printing a claim age of zero, because absent is the fact and
-// zero would read as a claim held for no time (#263 D2).
+// One group the heartbeat carries as a list of records (#419). Null is a record that
+// does not carry it at all, which is a lane older than the groups, and the page then
+// says nothing: not a heading with nothing under it, and not a zero. An empty list is
+// a lane that holds none, which is a fact and gets its own sentence. `rowsFor` draws
+// the group when there is something to draw.
+function renderRows (rows, title, empty, rowsFor) {
+  if (rows === null || rows === undefined) return []
+  if (rows.length === 0) return [group(title, [row('none', empty)])]
+  return rowsFor(rows)
+}
+
+// The per-body group #415 added to the heartbeat. One row set per body, so a lane
+// that holds several names which one a number belongs to. A body nobody claimed says
+// so rather than printing a claim age of zero, because absent is the fact and zero
+// would read as a claim held for no time (#263 D2).
 function renderBodies (bodies) {
-  const rows = bodies ?? null
-  if (rows === null) return []
-  if (rows.length === 0) {
-    return [group('Bodies', [row('bodies', 'none: the process holds no cache for a body')])]
-  }
-  return rows.map(body => group('Body ' + (body.body ?? 'with no slug'), [
+  return bodies.map(body => group('Body ' + (body.body ?? 'with no slug'), [
     row('active', yesno(body.active)),
     row('warm', yesno(body.warm)),
     row('frames', count(body.frames)),
     row('chunk bytes', bytes(body.chunkBytes)),
     row('frames cached', count(body.framesCached)),
     row('frames dropped', count(body.framesDropped)),
-    row('claim held', present(body.claimMs) ? age(body.claimMs) : 'no claim stands')
+    row('claim held', duration(body.claimMs) ?? 'no claim stands')
   ]))
 }
 
-// #419: the per-channel group. `claim held` is the claim on the channel's body and
+// The per-channel group. `claim held` is the claim on the channel's body and
 // `spectator channels` is the audience of that body, which is what the doc's two rows
 // say. A spectator holds no claim, so its row says that in words. A connection the
 // lane admitted with no claim names no body, and the row says which case that is.
 function renderChannels (channels) {
-  const rows = channels ?? null
-  if (rows === null) return []
-  if (rows.length === 0) {
-    return [group('Channels', [row('channels', 'none: the front holds no channel open')])]
-  }
-  return rows.map(channel => group('Channel ' + (channel.channel ?? 'with no id'), [
+  return channels.map(channel => group('Channel ' + (channel.channel ?? 'with no id'), [
     row('body', present(channel.body) ? channel.body : 'no claim: the lane admitted this connection itself'),
     row('role', channel.role),
-    row('open for', present(channel.ageMs) ? age(channel.ageMs) : 'the front stamped no open'),
+    row('open for', duration(channel.ageMs) ?? 'the front stamped no open'),
     row('frames', count(channel.frames)),
     row('play frames', count(channel.play)),
     row('configuration frames', count(channel.configuration)),
     row('bytes', bytes(channel.bytes)),
     row('replays', count(channel.replays)),
     row('spectator channels', count(channel.spectators)),
-    row('claim held', present(channel.claimMs)
-      ? age(channel.claimMs)
-      : channel.role === 'spectator' ? 'a spectator holds no claim' : 'no claim stands')
+    // The doc says a spectator's row is the only one with no claim age, so a driver's
+    // row without one says that about the record and not about the lane.
+    row('claim held', duration(channel.claimMs) ??
+      (channel.role === 'spectator' ? 'a spectator holds no claim' : 'the record carries no claim age'))
   ]))
 }
 
@@ -137,8 +144,8 @@ function renderHeartbeat (facts) {
     row('chunk bytes', bytes(heartbeat.chunkBytes))
   ]))
 
-  lines.push(...renderBodies(heartbeat.bodies))
-  lines.push(...renderChannels(heartbeat.channels))
+  lines.push(...renderRows(heartbeat.bodies, 'Bodies', 'the process holds no cache for a body', renderBodies))
+  lines.push(...renderRows(heartbeat.channels, 'Channels', 'the front holds no channel open', renderChannels))
 
   const journal = heartbeat.journal ?? {}
   const caps = facts.caps ?? {}

@@ -103,9 +103,9 @@ set per body the process holds a cache for, and one per channel the front holds 
 own words for them. A lane older than #415 writes neither group, and the card then says
 nothing about them rather than drawing a group of zeros. An empty group is its own
 sentence: the process holds no body cache, or the front holds no channel open. A body
-nobody claimed has no claim age, a spectator holds none, and a connection the lane
-admitted itself names no body, so those rows say so in words instead of printing a
-zero or a blank (#263 D2).
+nobody claimed has no claim age, and a spectator holds none. A connection the lane
+admitted itself names no body. Those rows say so in words instead of printing a zero
+or a blank (#263 D2).
 
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning

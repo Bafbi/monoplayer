@@ -133,12 +133,14 @@ test('#419 an age reads in the unit a reader compares to the heartbeat interval'
     channel: id, body: 'sky', role: 'spectator', ageMs, frames: 0, play: 0, configuration: 0, bytes: 0, replays: 0, spectators: 1
   })
   const page = renderLive(facts({
-    channels: [channel('holder-1', 10_500), channel('holder-2', 150_000), channel('holder-3', 7_200_000)]
+    channels: [channel('holder-1', 10_500), channel('holder-2', 150_000), channel('holder-3', 7_200_000),
+      channel('holder-4', 172_800_000)]
   }))
   const rowFor = id => page.slice(page.indexOf('<h4>Channel ' + id + '</h4>'), page.indexOf('</dl>', page.indexOf('<h4>Channel ' + id + '</h4>')))
   assert.match(rowFor('holder-1'), /<dt>open for<\/dt><dd>11 s<\/dd>/, 'ten seconds is a second count')
   assert.match(rowFor('holder-2'), /<dt>open for<\/dt><dd>3 min<\/dd>/, 'two and a half minutes is a minute count')
-  assert.match(rowFor('holder-3'), /<dt>open for<\/dt><dd>7200000 ms \(2 hours\)<\/dd>/, 'an age over an hour uses the unit the cap rows do')
+  assert.match(rowFor('holder-3'), /<dt>open for<\/dt><dd>2 hours<\/dd>/, 'an age of hours is a count of hours, not milliseconds')
+  assert.match(rowFor('holder-4'), /<dt>open for<\/dt><dd>2 days<\/dd>/, 'and an age of days is a count of days')
 })
 
 test('#419 a heartbeat older than #415 renders as it did, and says nothing about the groups', () => {
@@ -153,18 +155,35 @@ test('#419 a heartbeat older than #415 renders as it did, and says nothing about
 
 test('#419 an empty group is a lane that holds none, in words', () => {
   const page = renderLive(facts({ bodies: [], channels: [] }))
-  assert.match(page, /<dt>bodies<\/dt><dd>none: the process holds no cache for a body<\/dd>/)
-  assert.match(page, /<dt>channels<\/dt><dd>none: the front holds no channel open<\/dd>/)
+  assert.match(page, /<h4>Bodies<\/h4>\s*<dl>\s*<div><dt>none<\/dt><dd>the process holds no cache for a body<\/dd>/)
+  assert.match(page, /<h4>Channels<\/h4>\s*<dl>\s*<div><dt>none<\/dt><dd>the front holds no channel open<\/dd>/)
 })
 
-test('#419 a group that is not a list of records is not a crash', () => {
-  // The shape a future record could take by mistake, and the shape a torn line
-  // could parse into. Neither may take the page down.
+test('#419 a group of rows the panel cannot read is silence, never "the lane holds none"', () => {
+  // The shape a future record could take by mistake. A page that said "the process
+  // holds no cache for a body" here would report a measurement the record just
+  // contradicted, and the page exists to keep a number and its record together.
   for (const group of [{ bodies: {} }, { bodies: 'sky' }, { bodies: [null, 'x', 7] }, { channels: {} }, { channels: [null] }]) {
     const card = facts(group)
     for (const name of ['bodies', 'channels']) {
       assert.ok(card.heartbeat[name] === null || Array.isArray(card.heartbeat[name]), name + ' is null or a list')
     }
     assert.doesNotThrow(() => renderLive(card))
+    assert.doesNotMatch(renderLive(card), /<h4>Bodies<\/h4>|<h4>Channels<\/h4>|<h4>Body |<h4>Channel /)
   }
+})
+
+test('#419 one unreadable row does not take the rows beside it with it', () => {
+  const card = facts({ bodies: [{ body: 'sky', warm: true }, null, 'x'] })
+  assert.deepEqual(card.heartbeat.bodies, [{ body: 'sky', warm: true }])
+  assert.match(renderLive(card), /<h4>Body sky<\/h4>/)
+})
+
+test('#419 a driver row with no claim age says that about the record, not the lane', () => {
+  const page = renderLive(facts({
+    channels: [{ channel: 'holder-1', role: 'driver', ageMs: 5_000, frames: 0, play: 0, configuration: 0, bytes: 0, replays: 0, spectators: 0 }]
+  }))
+  assert.match(page, /<dt>claim held<\/dt><dd>the record carries no claim age<\/dd>/,
+    'the doc says a spectator is the only row without a claim age, so a driver without one is a record the panel cannot explain')
+  assert.match(page, /<dt>body<\/dt><dd>no claim: the lane admitted this connection itself<\/dd>/)
 })
