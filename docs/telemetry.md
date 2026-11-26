@@ -8,7 +8,7 @@ Monoplayer exports OpenTelemetry logs and metrics over OTLP/HTTP JSON, and write
 | --- | --- | --- |
 | Logs | OTLP/HTTP JSON, `POST <endpoint>/v1/logs` | Lifecycle events (`start`, `attach`, `detach`, `backendLogin`, denials, shutdown). Never one record per frame. The skin reports through five events: `puppetSkinKnown`, `puppetSkinSent`, `puppetSkinRefused`, `puppetSkinWithheld`, and `puppetSkinUnidentified`. `docs/transparency.md` gives each one's fields. |
 | Metrics | OTLP/HTTP JSON, `POST <endpoint>/v1/metrics` | Frame counters, attach and denial counters, replay and wire counters, heartbeat gauges. |
-| Journal | Local NDJSON | Every backend and front frame, plus lifecycle events. |
+| Journal | Local NDJSON | Every backend and front frame, plus lifecycle events and the heartbeat's `channels` event. |
 
 Logs are batched at 512 records or 5 seconds. Metrics are aggregated per batch and exported every 30 seconds. Both timers are unref'd. A failed export is retried once on a 5xx response or a network error, then dropped. Each attempt times out after 5000 ms. Failures never reach the product; `stats()` counts them.
 
@@ -128,7 +128,6 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.frames` | sum | `direction` (`s2c`/`c2s`), `state`, `name`, `result` | Backend frames received and front frames delivered. `result` is `forwarded` or `dropped` on `c2s`, and `forwarded` or `ignored` on `s2c`. |
 | `monoplayer.attaches` | sum | `player` | Successful attach attempts. |
 | `monoplayer.denials` | sum | `reason`, `phase` | Login-start and verify-session denials. |
-| `monoplayer.backend.logins` | sum | `entityId` | Backend logins counted by the session. |
 | `monoplayer.replay.frames` | sum | `player` | Frames written by the join replay per attach. |
 | `monoplayer.skin.frames` | sum | `player` | `player_info` skin frames written to the attaching player: one per play state that is owed one, plus one whenever the puppet's property changes while attached. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
@@ -138,8 +137,11 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |
 | `monoplayer.backend.logins` | gauge | none | Current backend login count. |
 | `monoplayer.cache.frames` | gauge | none | The entries the cache domains hold, summed over `stats().sizes`. Every domain contributes frames except `entities`, which contributes the number of entities it tracks, so read this as one number for "how full is the cache", not as a frame count. |
+| `monoplayer.body.frames` | gauge | `body` | One body's copy of the sum above. The served body's figure is the same number under both names, because `monoplayer.cache.frames` was charted before a lane held more than one body. |
+| `monoplayer.body.chunkBytes` | gauge | `body` | The bytes one body's chunk ring holds now, the same figure its heartbeat row carries. |
+| `monoplayer.body.warm` | gauge | `body` | `1` when one body's cache is warm. |
 
-The four gauges are emitted at startup and on the 30-second heartbeat.
+Every gauge in this table is emitted at startup and on the 30-second heartbeat. The three that name a body emit one data point per body the process holds, so a reader that wants the served body alone filters on `active` in the heartbeat row beside it.
 
 ## The heartbeat record
 
@@ -200,6 +202,65 @@ Every cumulative field counts from the start of the process except the top-level
 | `journal.enabled`, `.disabledReason`, `.dir` | gauge | Whether the journal is on, why it is off, and its directory. A write that hits a full volume turns `enabled` to `false` and sets `disabledReason` mid-run. |
 | `journal.file` | gauge | The shard written most recently. The directory can hold one more shard per kind beside it, and a seal moves this to the next one. |
 | `journal.freeBytes`, `.requiredBytes` | gauge | Present only on a journal disabled before its first write: the bytes free on the volume and the budget it needed. Both are `null` when the reason was not a full volume. A journal that stops mid-run for a full volume sets `disabledReason` and carries neither field. |
+
+### The per-body and per-channel groups
+
+The `bodies` and `channels` objects are the measurements a cap is decided from
+(#415). `bodies` holds one row per body the process has a cache for (#260), and
+`channels` one row per channel the front leg holds open (#269). Every field is read at the heartbeat, so every
+one of them is a value at one instant; the ones that only grow carry `cumulative`
+in the `Kind` column and say so there. These two tables use a third word, `label`,
+for the fields that name something rather than count it. The heartbeat table above
+keeps the two the section is built on.
+
+The registry holds caches, not stages. A body's row therefore says what its cache
+holds and whether it is the body the session serves. A stage per body would need a
+session per body, and this process serves one at a time (`src/core/body-caches.js`),
+so the top-level `warm` and `attached` describe the served body only.
+
+| Field | Kind | Meaning |
+| --- | --- | --- |
+| `bodies[].body` | label | The body's server slug, the name a claim uses and the `body` attribute of the three `monoplayer.body.*` gauges. The allowed-server list is what bounds how many rows there are, so this is a bounded attribute and a channel is not. |
+| `bodies[].active` | gauge | This body is the one the session serves: the body whose cache `core.cache` returns. Exactly one row carries `true`. |
+| `bodies[].warm` | gauge | This body's cache is warm. |
+| `bodies[].frames` | gauge | The entries this body's cache holds now, summed over its `stats().sizes` the way `monoplayer.cache.frames` sums the served body's. |
+| `bodies[].chunkBytes` | gauge | The bytes this body's chunk ring holds now. Before the cache is warm the chunk frames sit in the join prefix, so `0` here does not mean the body sent no terrain. |
+| `bodies[].framesCached` | cumulative | Frames this body's cache kept, from the cache's own counter. It starts at 0 when the cache is created, which is the first time the process serves that body. |
+| `bodies[].framesDropped` | cumulative | Frames this body's cache discarded instead of keeping. Every frame the cache was offered falls in one of these two, so their sum is what that body's cache saw. |
+| `bodies[].claimMs` | gauge | How long the claim on this body has been held: now minus the moment the picker recorded it. **Absent when no claim stands.** A body nobody claimed has no claim age, and a `null` would make "every body with a claim age" a query that returns the ones without (#263 D2). |
+
+| Field | Kind | Meaning |
+| --- | --- | --- |
+| `channels[].channel` | label | The channel's id, which is the holder id the front leg gave that connection. |
+| `channels[].body` | label | The body this channel was delivered. **Absent** for a connection the lane admitted without a claim, which is the lane's own body, and a claim on that body is recorded against its slug, so the two rows never join on this field. |
+| `channels[].role` | label | `driver` or `spectator`. One body carries one driver (src/core/channels.js). |
+| `channels[].ageMs` | gauge | How long this channel has been open: now minus the moment the front opened it. A driver's channel opens at its landing, after the claim, so this is not the claim's age: `claimMs` is. Absent when the leg stamped no open. |
+| `channels[].frames` | cumulative | Frames written to this channel since it opened. |
+| `channels[].play`, `channels[].configuration` | cumulative | The same count split by the protocol state each frame was written in. Their sum is `frames`. |
+| `channels[].replays` | cumulative | Replays this channel was handed. A channel holds one at most, so this is 0 or 1. |
+| `channels[].spectators` | gauge | The spectator channels on this body, this channel included when it is one. |
+| `channels[].claimMs` | gauge | How long the claim on this channel's body has been held: now minus the moment the picker recorded it. **Absent** on a spectator's row: a spectator holds no claim, so there is no age to report, and a zero would read as one held for no time. |
+
+The channel rows are also written to the packet journal, as one `channels` event per
+heartbeat: `open` is how many channels the record holds, and `channels` is the rows
+above at that instant. A frame record names no channel, so this event is the
+journal's only record of which connection was sent what.
+
+A key is written where the thing it names exists, and left out where it does not:
+`body`, `ageMs` and `claimMs` are the three that can be absent (#263 D2).
+`channel` and `role` are always written, because a row is always a channel with a
+role. The rest are counts, and a count of nothing is `0`.
+
+Six measurements #415 names are not carried here, and the file each one needs is the
+reason. The three per-picker numbers — time from login to a pick, refusals by reason,
+and the dialog's payload size — are all written by the front leg: it holds the
+dialog, it opens the picker connection, and it counts a refusal without a reason.
+Per-channel bytes delivered is the fourth, and it needs the same leg, because its
+`noteDelivery` call passes no length. Per-body reconnects with a reason is the
+fifth: `src/core/session.js` drops the reason before the caller that dials sees it.
+A per-body frame-out total is the sixth, and no file fixes it: a channel that closed
+takes its delivered count with it, so the channels group is that number's honest
+form.
 
 The heartbeat also carries the front leg's own counters under `front`, which
 the core cannot hold because the core never sees a socket. Abbreviated to the
@@ -267,7 +328,7 @@ The directory holds one shard per hour and frame kind:
 | --- | --- |
 | `journal-<YYYY-MM-DDTHH>-frames-<pid>[-<n>].ndjson` | Frames with a body: the frames a diagnosis reads. |
 | `journal-<YYYY-MM-DDTHH>-bulk-<pid>[-<n>].ndjson` | Terrain, length only. |
-| `journal-<YYYY-MM-DDTHH>-events-<pid>[-<n>].ndjson` | Lifecycle events. |
+| `journal-<YYYY-MM-DDTHH>-events-<pid>[-<n>].ndjson` | Lifecycle events, and the heartbeat's periodic ones. |
 | `<same>.ndjson.gz` | The same shard, sealed and gzipped. |
 | `<same>.manifest.json` | What the sealed shard holds. |
 
@@ -308,7 +369,7 @@ A lifecycle event record:
 {"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","accountUuid":"...","warm":true}
 ```
 
-The service writes `startLive`, `liveReady`, `startLiveFailed`, and `shutdown` events from `src/service/start-live.js`. The core writes none.
+The service writes `startLive`, `liveReady`, `startLiveFailed`, `shutdown`, and the heartbeat's `channels` event from `src/service/start-live.js`. The core writes none.
 
 A picker lane dials no body before the front listens, because a claim is what dials a body. Its JSONL log carries `{"event":"backendBootSkipped","reason":"picker"}`, and its `liveReady` says `"boot":"skipped"`. That `liveReady` also reads `"backendConnected":null`, and `null` for `warm`, `configFrames` and `prefixFrames`: no body was dialled, so there is no cache to describe. A lane that dialled says `"boot":"dialled"` and the numbers of the body it dialled.
 

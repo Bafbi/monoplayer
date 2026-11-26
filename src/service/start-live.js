@@ -89,6 +89,7 @@ import { offlineUuid } from '../legs/offline-identity.js'
 import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
+import { bodyKey } from '../core/channels.js'
 import { pickerOfferedRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
@@ -146,6 +147,135 @@ export function unidentifiedSkinWarning ({ skin, puppet } = {}) {
     'and the human keeps a default skin. Prefer selecting the account with ' +
     'MONOPLAYER_PUPPET_ACCOUNT, which resolves the UUID. On the raw cacheDir override there is ' +
     'no account to check against, and MONOPLAYER_PUPPET_UUID is taken as given.'
+}
+
+// #415: the per-body and per-channel groups the heartbeat carries.
+//
+// `docs/telemetry.md`, under "The per-body and per-channel groups", defines every
+// field below and names the measurements this does not take, with the file each one
+// needs. That page is their home: a list repeated here would drift from it.
+//
+// Purity: no sockets, no timers, no I/O. The moment is the caller's, and a caller
+// that gives none gets the wall clock. It reads the handles the composition root
+// already holds: the body registry and each body's cache on the core, and the
+// channel and claim snapshots on the front leg.
+export function sampleHeartbeatGroups ({ core = null, front = null, now = Date.now() } = {}) {
+  // One read of the claim board for both groups, so a claim recorded between the
+  // two rows cannot age differently in each.
+  const claims = claimsByBody(front)
+  return {
+    bodies: sampleBodies({ core, claims, now }),
+    channels: sampleChannels({ front, claims, now })
+  }
+}
+
+// The claims the front holds, by body. A lane with no picker holds none: a claim is
+// what the picker records, so an empty map is the lane that never offered one.
+function claimsByBody (front) {
+  const claims = new Map()
+  for (const claim of Array.isArray(front?.claims) ? front.claims : []) {
+    if (typeof claim?.body === 'string') claims.set(claim.body, claim)
+  }
+  return claims
+}
+
+// How long a claim has been held, or null when there is none to measure. A claim
+// the front did not stamp is not an age of zero.
+function claimAgeMs (claim, now) {
+  if (claim === null || claim === undefined || !Number.isFinite(claim.at)) return null
+  return Math.max(0, now - claim.at)
+}
+
+// An entry count for one body's cache, the same sum `monoplayer.cache.frames`
+// carries for the served body.
+function cachedFrames (stats) {
+  if (stats === null || typeof stats.sizes !== 'object' || stats.sizes === null) return 0
+  return Object.values(stats.sizes).reduce((sum, count) => sum + count, 0)
+}
+
+// One row per body the registry holds a cache for (#260). The registry holds
+// caches, not stages: a body can say what its cache holds and whether it is the one
+// the session serves, and a stage per body would need a session per body
+// (src/core/body-caches.js).
+function sampleBodies ({ core = null, claims = new Map(), now = Date.now() } = {}) {
+  const registry = core?.bodies ?? null
+  if (registry === null || typeof registry.stats !== 'function') return []
+  const serving = core?.cache ?? null
+  return (registry.stats().bodies ?? []).map(body => {
+    const cache = registry.get(body)
+    const stats = typeof cache?.stats === 'function' ? cache.stats() : null
+    const claim = claims.get(body) ?? null
+    const row = {
+      body,
+      active: cache !== null && cache === serving,
+      warm: stats?.warm === true,
+      frames: cachedFrames(stats),
+      chunkBytes: stats?.chunkBytes ?? 0,
+      // The cache's own counters (#216 counts the same two process-wide). They
+      // start at 0 with the cache, which lives as long as the body does.
+      framesCached: stats?.metrics?.framesCached ?? 0,
+      framesDropped: stats?.metrics?.framesDropped ?? 0
+    }
+    // Absent, never null, when no claim stands: a body nobody claimed has no claim
+    // age, and a `null` would make "every body with a claim age" a query that
+    // returns the ones without (#263 D2).
+    const claimMs = claimAgeMs(claim, now)
+    if (claimMs !== null) row.claimMs = claimMs
+    return row
+  })
+}
+
+// One row per channel the front holds open (src/core/channels.js). The counts are
+// the channel's own, so a spectator that arrived mid-stream is never reported as
+// having seen what the driver saw.
+function sampleChannels ({ front = null, claims = new Map(), now = Date.now() } = {}) {
+  const records = Array.isArray(front?.channels) ? front.channels : []
+  const spectators = new Map()
+  for (const record of records) {
+    if (record?.role !== 'spectator') continue
+    const key = bodyKey(record.body)
+    spectators.set(key, (spectators.get(key) ?? 0) + 1)
+  }
+  return records.map(record => {
+    const sent = record.delivered ?? {}
+    // A key is written only where the thing it names exists (#263 D2): a connection
+    // the lane admitted with no claim names no body, and a leg that stamped no open
+    // has no age. `null` would make a query for either return the rows without one.
+    const body = typeof record.body === 'string' && record.body.length > 0 ? record.body : null
+    const ageMs = Number.isFinite(record.at) ? Math.max(0, now - record.at) : null
+    // A driver's claim, held since the pick. A spectator holds none, so its row
+    // carries no claim age rather than a zero.
+    const claimMs = claimAgeMs(record.role === 'driver' ? claims.get(record.body) : null, now)
+    return {
+      channel: record.id ?? null,
+      ...(body === null ? {} : { body }),
+      role: record.role ?? null,
+      ...(ageMs === null ? {} : { ageMs }),
+      frames: sent.frames ?? 0,
+      play: sent.play ?? 0,
+      configuration: sent.configuration ?? 0,
+      replays: sent.replays ?? 0,
+      // The spectator channels on this body, this one included. A body's audience
+      // is what the cap decides, and one number per row keeps a reader from having
+      // to regroup the array.
+      spectators: spectators.get(bodyKey(record.body)) ?? 0,
+      ...(claimMs === null ? {} : { claimMs })
+    }
+  })
+}
+
+// The bounded half of the two groups, as OTLP gauges. The body is the only
+// attribute and it is bounded by the allowed-server list; a channel attribute would
+// be one series per connection, which is the cardinality bomb #415 and #263 D1
+// forbid. `monoplayer.cache.frames` is the same sum for the served body, kept
+// beside these because it was documented and charted before they existed.
+export function emitBodyGauges (telemetry, bodies = []) {
+  if (typeof telemetry?.metric !== 'function') return
+  for (const row of bodies) {
+    telemetry.metric('monoplayer.body.frames', row.frames, { body: row.body }, 'gauge')
+    telemetry.metric('monoplayer.body.chunkBytes', row.chunkBytes, { body: row.body }, 'gauge')
+    telemetry.metric('monoplayer.body.warm', row.warm ? 1 : 0, { body: row.body }, 'gauge')
+  }
 }
 
 export function envOverlay (doc, env = process.env, warn = () => {}) {
@@ -1161,13 +1291,16 @@ async function runForever ({
   let lastPreAuthExpired = front.metrics.preAuthExpired
 
   // Heartbeat gauges: the same values the JSONL heartbeat logs, as OTLP gauges.
-  function emitGauges () {
+  // `bodies` is the sample the tick already took, so a gauge and the record beside
+  // it are one reading rather than two instants. A caller with none takes its own.
+  function emitGauges (bodies = null) {
     const stats = core.cache.stats()
-    const cacheFrames = Object.values(stats.sizes).reduce((sum, count) => sum + count, 0)
     telemetry.metric('monoplayer.attached', core.attached ? 1 : 0, {}, 'gauge')
     telemetry.metric('monoplayer.warm', stats.warm ? 1 : 0, {}, 'gauge')
     telemetry.metric('monoplayer.backend.logins', core.session.backendLogins, {}, 'gauge')
-    telemetry.metric('monoplayer.cache.frames', cacheFrames, {}, 'gauge')
+    telemetry.metric('monoplayer.cache.frames', cachedFrames(stats), {}, 'gauge')
+    // #415: one point per body the lane holds, and never a channel.
+    emitBodyGauges(telemetry, bodies ?? sampleBodies({ core }))
     const rejected = front.wireStats.rejected
     if (rejected > lastRejected) {
       telemetry.metric('monoplayer.wire.rejected', rejected - lastRejected, {})
@@ -1216,7 +1349,10 @@ async function runForever ({
   const heartbeat = setInterval(() => {
     const stats = core.cache.stats()
     const forwarder = backend.forwarderStats()
-    emitGauges()
+    // #415: the per-body and the per-channel group, one sample for both the gauges
+    // and the record.
+    const groups = sampleHeartbeatGroups({ core, front })
+    emitGauges(groups.bodies)
     log('heartbeat', {
       attached: core.attached,
       backendLogins: core.session.backendLogins,
@@ -1228,6 +1364,10 @@ async function runForever ({
       // read the byte figure from the pod log.
       sizes: stats.sizes,
       chunkBytes: stats.chunkBytes,
+      // #415: what each body holds, and what each open channel was sent. The
+      // channels are here and in the journal, and never as an OTLP attribute: a
+      // channel is one connection, so a series per channel is unbounded.
+      ...groups,
       // #201: the front leg's own counters, which the core cannot hold: the
       // accepted sockets, the logins allowed and denied, and the pre-auth
       // refusals this heartbeat is the place to watch.
@@ -1243,6 +1383,11 @@ async function runForever ({
       telemetry: telemetry.stats(),
       journal: journal.stats()
     })
+    // #415: the per-channel half of that record goes to the journal too, so the one
+    // artifact built for a diagnosis holds the third group the ticket names. An
+    // event per heartbeat, because a channel's numbers are its own and no frame
+    // record names one.
+    journal.event('channels', { open: groups.channels.length, channels: groups.channels })
   }, 30_000)
   heartbeat.unref?.()
   // The process stays up: the backend leg's end handler routes through the core.
