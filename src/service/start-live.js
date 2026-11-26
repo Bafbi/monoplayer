@@ -254,6 +254,10 @@ function sampleChannels ({ front = null, claims = new Map(), now = Date.now() } 
       frames: sent.frames ?? 0,
       play: sent.play ?? 0,
       configuration: sent.configuration ?? 0,
+      // #417: the bytes those frames took, as the leg measured them at the write.
+      // A channel the leg counted no length for is 0, the same way a channel it
+      // wrote no frame to is 0: the count is what was measured.
+      bytes: sent.bytes ?? 0,
       replays: sent.replays ?? 0,
       // The spectator channels on this body, this one included. A body's audience
       // is what the cap decides, and one number per row keeps a reader from having

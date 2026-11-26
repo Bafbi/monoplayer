@@ -196,6 +196,7 @@ Every cumulative field counts from the start of the process except the top-level
 | `account.expiresAt` | gauge | Epoch milliseconds when the puppet's Minecraft (`mca`) token expires: the cache's `obtainedOn` plus `expires_in`, the same projection `node src/custody/cli.js status` prints. Read at each heartbeat, so a token refresh moves it. `null` when the custody cache does not say, which is not the same as "no expiry". |
 | `front.denied`, `front.allowed`, `front.attaches` | cumulative | Login-start denials, allows, and attaches. |
 | `front.pickers`, `front.pickerPicks` | cumulative | Joins a picker was served to because the lane had no backend session, and picks the picker recorded (#257). A picker join is not a denial, so `front.denied` does not count it and these two are its only counters. |
+| `front.pickerRefusals`, `front.pickerRefusalsByReason.*` | cumulative | Picker requests the lane refused: the total, and the same count keyed by the reason that refusal's own record carries (#417). One function writes both, so the total is the sum of the map. The keys are a closed set the leg already writes. From a click it could not read: `unknown_id`, `malformed`, `unknown_verb`. From a click naming a server the lane does not offer: `unknown_server`. From a dialog it could not write: `picker_unavailable`. From the claim (`src/core/claims.js`): `body_claimed`, `claim_held`. From the Spectate verb: `no_spectator_sink`, `unwatchable`, `picker_off`, `no_body`, `body_not_served`, `body_down`, `body_not_warm`. A reason past the cap `MAX_REFUSAL_REASONS` (`src/legs/live-front.js`) lands in `other`, and a refusal that carried no reason counts as `unknown`, which is the shape `bumpName` uses in `src/service/monoplayer.js`. |
 | `front.policyRefused`, `front.stateRefused` | cumulative | Clientbound frames the policy refused to pass to the client, and frames refused because the client's protocol state could not parse them. |
 | `front.reconfigurations`, `front.reconfigured` | cumulative | Reconfiguration attempts and completions. |
 | `front.reconfigurationFramesFlushed`, `front.reconfigurationFramesDropped` | cumulative | Held configuration frames flushed when the client acknowledged, and held frames dropped when the queue overflowed. |
@@ -253,6 +254,7 @@ so the top-level `warm` and `attached` describe the served body only.
 | `channels[].ageMs` | gauge | How long this channel has been open: now minus the moment the front opened it. A driver's channel opens at its landing, after the claim, so this is not the claim's age: `claimMs` is. Absent when the leg stamped no open. |
 | `channels[].frames` | cumulative | Frames written to this channel since it opened. |
 | `channels[].play`, `channels[].configuration` | cumulative | The same count split by the protocol state each frame was written in. Their sum is `frames`. |
+| `channels[].bytes` | cumulative | The bytes those frames took, counted where the frame is written (`src/core/channels.js`, `noteDelivery`). It is the length of every frame the leg held a buffer for: the body stream, its replay, and the cached configuration. **It leaves out the frames the leg writes as a packet object**, because the library serializes those and the leg holds no buffer to measure. Those are the synthesized position, the skin and a notice, at most one of each per connection, and `game_state_change` and `abilities`, which the core writes to a spectator's channel when it lands. A spectator's row is therefore short by those two, and no row is short by anything else. |
 | `channels[].replays` | cumulative | Replays this channel was handed. A channel holds one at most, so this is 0 or 1. |
 | `channels[].spectators` | gauge | The spectator channels on this body, this channel included when it is one. |
 | `channels[].claimMs` | gauge | How long the claim on this channel's body has been held: now minus the moment the picker recorded it. **Absent** on a spectator's row: a spectator holds no claim, so there is no age to report, and a zero would read as one held for no time. |
@@ -267,16 +269,27 @@ A key is written where the thing it names exists, and left out where it does not
 `channel` and `role` are always written, because a row is always a channel with a
 role. The rest are counts, and a count of nothing is `0`.
 
-Six measurements #415 names are not carried here, and the file each one needs is the
-reason. The three per-picker numbers — time from login to a pick, refusals by reason,
-and the dialog's payload size — are all written by the front leg: it holds the
-dialog, it opens the picker connection, and it counts a refusal without a reason.
-Per-channel bytes delivered is the fourth, and it needs the same leg, because its
-`noteDelivery` call passes no length. Per-body reconnects with a reason is the
-fifth: `src/core/session.js` drops the reason before the caller that dials sees it.
-A per-body frame-out total is the sixth, and no file fixes it: a channel that closed
-takes its delivered count with it, so the channels group is that number's honest
-form.
+Two measurements #415 names are not carried here. Per-body reconnects with a reason
+needs `src/core/session.js`, which drops the reason before the caller that dials
+sees it. A per-body frame-out total was refused on purpose (#415): a counter beside
+the three write sites could total a body, but the total a cap needs is what a body
+*outlived*, and a channel that closed takes its delivered count with it. That sum
+would be short by an amount nothing can name, so the channels group is the honest
+form of the number instead.
+
+The four the front leg took (#417) are not rows here, and each is written where the
+thing it measures exists.
+
+A channel's bytes are on its own row above. The dialog's size and the time from
+login to a pick are on the records of the connection they belong to, because a
+picker client holds no channel until its claim or its Spectate lands, so it has no
+row in this group. The `pickerDialog` line carries `bytes`, the encoded frame the
+join was shown, measured from the one encode that also wrote it. The `pickerPick`
+line carries `loginToPickMs`: the time from that connection's login to its pick. A
+join on a player name could not say that, because two picker connections of one
+account read the picker at once. The refusals are the one lane-wide number of the
+four: a map by reason under `front` in the heartbeat table above, where every front
+counter lives.
 
 The heartbeat also carries the front leg's own counters under `front`, which
 the core cannot hold because the core never sees a socket. Abbreviated to the
@@ -327,10 +340,13 @@ start, so a start record is absent from a tail more often than not.
 A picker join writes its own four records, and they are the whole story of one
 client that never reached a backend (#257): `pickerServed` (the recording's frame
 count and the number of servers offered), `pickerDialog` (the action ids the
-client was given), `pickerPick` (the id the client answered, the server it maps
-to, and whether that server was on the list), and `pickerPickRecorded` from the
-service, which is the pick as product state rather than as a frame. A picker that
-collapses on the way writes one of `pickerEmpty`, `pickerDialogFailed`,
+client was given, and `bytes`, the encoded dialog frame it was shown, absent when
+the frame was never built), `pickerPick` (the id the client answered, the server it
+maps to, whether that server was on the list, and `loginToPickMs`, that
+connection's own time from its login to its pick, absent when the leg stamped no
+login), and `pickerPickRecorded` from the service, which is the pick as product
+state rather than as a frame. A picker that collapses on the way writes one of
+`pickerEmpty`, `pickerDialogFailed`,
 `pickerUnavailable`, or `pickerPickIgnored` with the reason, and the client is
 ended with a configuration `disconnect` the log names.
 

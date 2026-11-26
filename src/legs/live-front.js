@@ -367,6 +367,54 @@ export function reportsClientInformation ({ role = null, state = null } = {}) {
   return state !== 'play'
 }
 
+// #417: the picker's numbers, measured where only this leg can. The helpers below
+// are exported because the leg itself is reached through a listening socket, and a
+// number that only a listening socket can be asked about is a number no test reads.
+
+// A bounded map of counts keyed by an open-ended string: the shape `bumpName` uses
+// in src/service/monoplayer.js. A key already in the map counts up, a new one is
+// added while there is room, and every name past the cap lands in `other`, so a
+// lane cannot grow a map nobody asked for. A key that is not a name counts as
+// `unknown`, which is the word that map already uses.
+export const MAX_REFUSAL_REASONS = 16
+export function bumpReason (map, reason) {
+  const key = typeof reason === 'string' && reason.length > 0 ? reason : 'unknown'
+  if (map[key] !== undefined) { map[key]++; return map }
+  if (Object.keys(map).length >= MAX_REFUSAL_REASONS) { map.other = (map.other ?? 0) + 1; return map }
+  map[key] = 1
+  return map
+}
+
+// How long ago a moment the leg stamped was, or null when it stamped none. A clock
+// that stepped backwards gives an age of 0, never a negative one: the moment was
+// real, and the difference between two clocks is not a duration a reader can use.
+export function elapsedSince (at, now = Date.now()) {
+  if (!Number.isFinite(at)) return null
+  return Math.max(0, now - at)
+}
+
+// A frame the leg authors, as the bytes it hands the socket (#417). Framing and
+// compression happen after this, in the library's own stream, so this is the frame
+// and not the wire's length for it. The encode is the connection's own serializer
+// in the state the frame is written in, so the number and the write are one encode
+// of one frame and cannot disagree about what was sent.
+//
+// `ok: false` when there is nothing to measure: no serializer, or one that cannot
+// build this frame in this state. The reason comes back with it, because a codec
+// that refuses a frame is the one failure an operator cannot guess at.
+export function encodeFrame ({ serializer = null, name, params = {} } = {}) {
+  if (typeof serializer?.createPacketBuffer !== 'function') {
+    return { ok: false, buffer: null, error: 'no serializer for this connection' }
+  }
+  try {
+    const buffer = serializer.createPacketBuffer({ name, params })
+    if (!Buffer.isBuffer(buffer)) return { ok: false, buffer: null, error: 'the codec returned no bytes' }
+    return { ok: true, buffer, error: null }
+  } catch (error) {
+    return { ok: false, buffer: null, error: String(error?.message ?? error).slice(0, 200) }
+  }
+}
+
 // Core loginStart decisions fail closed: an exception, a missing decision from
 // a handler that ran, or any decision that is not allowed === true denies.
 function evaluateCoreDecision (coreDecision) {
@@ -571,8 +619,11 @@ function createFrontLeg ({
   let closePromise = null
   let lastInterceptor = null
 
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
-  const clients = new Map() // Client -> { interceptor, channel }
+  // #417: `pickerRefusals` is the total and `pickerRefusalsByReason` the split. Both
+  // are written by bumpPickerRefusal and by nothing else, so the total and the map
+  // cannot disagree about how many refusals there were.
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
   // its own client information. The claim decides who may drive a body
@@ -580,6 +631,16 @@ function createFrontLeg ({
   // attach slot is gone with the one pointer that used to be all three.
   const channels = createChannels()
   const clientByChannel = new Map() // channel id -> the socket that holds it
+
+  // #417: one refused picker request, counted twice on purpose: a total an operator
+  // charts, and a map by reason a reader greps. The reason is the word the site's
+  // own record already carries, so the map cannot say something the log does not.
+  // Both counters are written here and only here.
+  function bumpPickerRefusal (reason) {
+    metrics.pickerRefusals++
+    bumpReason(metrics.pickerRefusalsByReason, reason)
+  }
+
   // #267: the claims this leg holds, one per body. A claim is recorded where a
   // client answers a body's own dialog, and released when its connection ends. The
   // holder is an id this leg gives a connection, so the board holds no socket and
@@ -1042,13 +1103,16 @@ function createFrontLeg ({
 
   // One frame reached one channel. The counter is the channel's, so a spectator
   // that arrived mid-stream is never reported as having seen what the driver saw.
-  function noteDelivered (client, meta, { replay = false } = {}) {
+  // #417: the frame's length rides beside the count, passed by the caller that holds
+  // the buffer. A caller writing a packet object holds none, and passes none.
+  function noteDelivered (client, meta, { replay = false, bytes = null } = {}) {
     const channel = channelFor(client)
     if (channel === null) return
     channels.noteDelivery({
       id: channel.id,
       state: meta?.state === 'configuration' ? 'configuration' : 'play',
-      name: typeof meta?.name === 'string' ? meta.name : null
+      name: typeof meta?.name === 'string' ? meta.name : null,
+      bytes
     })
     if (replay) channels.markReplay(channel.id)
   }
@@ -1111,7 +1175,12 @@ function createFrontLeg ({
       }
     })
     client.write = interceptor.write
-    clients.set(client, { interceptor, picker: picker !== null })
+    // #417: the moment this connection logged in, on the connection's own entry.
+    // This runs inside the synchronous beforeLogin window, so it is the login and
+    // not the landing: the picker's dialog is written from this same phase. The
+    // picker's duration is this stamp subtracted at the pick, so it is one
+    // connection's time and never one player name's.
+    clients.set(client, { interceptor, picker: picker !== null, loginAt: Date.now() })
     lastInterceptor = interceptor
     return interceptor
   }
@@ -1198,23 +1267,52 @@ function createFrontLeg ({
       endConfiguration(client, 'picker_empty', text)
       return
     }
-    let written = false
+    // #417: the dialog goes out as the bytes it is. A configuration-phase
+    // show_dialog carries the dialog inline (CONTEXT_FREE_STREAM_CODEC in the 26.2
+    // client), so no registry entry is involved and this leg can author one. The
+    // encode is the connection's own serializer, in the state the dialog is written
+    // in, which is the codec `client.write` would have used: one encode, so the
+    // size written to the record is the size of the frame that was sent.
+    // The params build is inside the guard as well as the encode: a throw here would
+    // otherwise leave this function for the library's own finish hook, and the one
+    // client this leg can answer would be lost instead of told why.
+    let encoded = { ok: false, buffer: null, error: 'the dialog was never built' }
     try {
-      // A configuration-phase show_dialog carries the dialog inline
-      // (CONTEXT_FREE_STREAM_CODEC in the 26.2 client), so no registry entry is
-      // involved and this leg can author one.
-      client.write('show_dialog', pickerDialogParams({ rows, title }))
-      written = true
+      encoded = encodeFrame({
+        serializer: client.serializer ?? null,
+        name: 'show_dialog',
+        params: pickerDialogParams({ rows, title })
+      })
     } catch (error) {
-      log('pickerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      encoded = { ok: false, buffer: null, error: String(error?.message ?? error).slice(0, 200) }
+    }
+    let written = false
+    if (!encoded.ok) {
+      log('pickerDialogFailed', { error: encoded.error })
+    } else {
+      try {
+        client.writeRaw(encoded.buffer)
+        written = true
+      } catch (error) {
+        log('pickerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      }
     }
     log('pickerDialog', {
       username: client.username ?? null,
       servers: rows.length,
       title,
-      actions: rows.map(row => row.id)
+      actions: rows.map(row => row.id),
+      // #417: how large the dialog this join was shown is, the one number that says
+      // what the picker costs a client. Absent unless the frame was written, because
+      // a size for a dialog that never went out would read as one that did.
+      ...(written ? { bytes: encoded.buffer.length } : {})
     })
-    if (!written) endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: null }))
+    if (!written) {
+      // A dialog that could not be written is a refusal like any other: the client
+      // is ended with the same sentence, so the counters say so too.
+      bumpPickerRefusal('picker_unavailable')
+      endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: null }))
+    }
   }
 
   // #266: one click on a dialog this leg authored, at either level. The level is
@@ -1243,7 +1341,7 @@ function createFrontLeg ({
     // Ours to read and it did not read. The click is refused with the sentence
     // that says what was wrong, and the client is answered. A client left in a
     // dialog nobody will read is worse off than one that is told why.
-    metrics.pickerRefusals++
+    bumpPickerRefusal(action.reason)
     const text = serverActionProblemText(action)
     log('pickerVerbRefused', {
       username: client.username ?? null,
@@ -1277,7 +1375,7 @@ function createFrontLeg ({
       verbs: PICK_VERBS.map(verb => verbIdFor(verb, server.name))
     })
     if (!written) {
-      metrics.pickerRefusals++
+      bumpPickerRefusal('picker_unavailable')
       endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: server.name }))
     }
   }
@@ -1296,7 +1394,7 @@ function createFrontLeg ({
       server: server === null ? null : server.name
     }
     if (server === null) {
-      metrics.pickerRefusals++
+      bumpPickerRefusal('unknown_server')
       const text = pickUnknownText({ id: action.id })
       log('pickerVerbRefused', { ...fields, reason: 'unknown_server', text })
       endConfiguration(client, 'verb_refused', text)
@@ -1541,8 +1639,8 @@ function createFrontLeg ({
       text: spectateRefusalText({ server: named, reason })
     })
     if (answer?.watching !== true) {
-      metrics.pickerRefusals++
       const outcome = refused(answer?.reason ?? 'unwatchable')
+      bumpPickerRefusal(outcome.reason)
       log('spectateRefused', {
         username: client.username ?? null,
         body,
@@ -1605,7 +1703,7 @@ function createFrontLeg ({
       })
       if (sent) {
         written++
-        noteDelivered(client, { state: 'configuration', name: frame.name })
+        noteDelivered(client, { state: 'configuration', name: frame.name }, { bytes: frame.buffer.length })
       }
     }
     return { frames: frames.length, written }
@@ -1645,7 +1743,7 @@ function createFrontLeg ({
       log('pickerClaim', fields)
       return { ...outcome, text: null }
     }
-    metrics.pickerRefusals++
+    bumpPickerRefusal(outcome.reason)
     const text = claimRefusalText({
       reason: outcome.reason,
       server: server.name,
@@ -1660,13 +1758,20 @@ function createFrontLeg ({
     const rows = pickerOffer().rows
     const picked = rows.find(row => row.slug === action.slug) ?? null
     metrics.pickerPicks++
+    // #417: the pick is one connection's, timed from that connection's own login.
+    // Both moments are this leg's, so nothing joins two picker connections of one
+    // account by name: a second connection reading the picker cannot be charged
+    // with the first one's time. Absent when the leg stamped no login for this
+    // socket, because an age of 0 would read as a pick in the same millisecond.
+    const loginToPickMs = elapsedSince(clients.get(client)?.loginAt, Date.now())
     log('pickerPick', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
       id: action.id,
       slug: action.slug,
       server: picked === null ? null : picked.name,
-      known: picked !== null
+      known: picked !== null,
+      ...(loginToPickMs === null ? {} : { loginToPickMs })
     })
     try {
       onPickerPick?.({
@@ -1680,10 +1785,12 @@ function createFrontLeg ({
       log('pickerPickHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
     }
     if (picked === null) {
-      // The dialog on screen is older than the list it came from.
-      metrics.pickerRefusals++
+      // The dialog on screen is older than the list it came from, which is the same
+      // refusal a verb on an unknown server gets: the frame named a server this lane
+      // does not offer.
+      bumpPickerRefusal('unknown_server')
       const text = pickUnknownText({ id: action.id })
-      log('pickerPickRefused', { username: client.username ?? null, id: action.id, slug: action.slug, text })
+      log('pickerPickRefused', { username: client.username ?? null, id: action.id, slug: action.slug, reason: 'unknown_server', text })
       endConfiguration(client, 'pick_refused', text)
       return
     }
@@ -2023,7 +2130,7 @@ function createFrontLeg ({
     ctx.reconfiguring = true
     for (const frame of pending.frames) {
       const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
-      if (sent) noteDelivered(client, frame.meta)
+      if (sent) noteDelivered(client, frame.meta, { bytes: frame.buffer.length })
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
     record(client, 'frontReconfigurationAcknowledged', {
@@ -2042,6 +2149,10 @@ function createFrontLeg ({
   function writePacketTo (client, name, packet) {
     if (!client || typeof client.write !== 'function') return false
     client.write(name, packet)
+    // #417: no length, because this path holds a packet object and the library
+    // serializes it. The frames it carries are the synthesized position, the skin
+    // and a notice: a fixed handful per connection, and the one gap in a channel's
+    // byte count, which docs/telemetry.md names.
     noteDelivered(client, { state: client.state === 'configuration' ? 'configuration' : 'play', name })
     return true
   }
@@ -2113,7 +2224,7 @@ function createFrontLeg ({
       }
     }
     const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
-    if (sent) noteDelivered(client, meta)
+    if (sent) noteDelivered(client, meta, { bytes: buffer.length })
     return sent
   }
 
