@@ -928,9 +928,10 @@ frontLeg = {                      // a body's channels: its driver and its spect
                                               //    createMonoplayer().spectateBody, which
                                               //    answers whether the body may be watched
   setSpectatorAttach(fn)                      // optional (#269): registers
-                                              //    fn({ name, channel }) ->
+                                              //    fn({ name, uuid, channel }) ->
                                               //    createMonoplayer().spectateView, the
-                                              //    body's play state on that one channel
+                                              //    body's play state on that one channel,
+                                              //    and the entry that names it (#516)
   setDisconnectBody(fn)                       // optional (#261): registers
                                               //    fn({ body, server, name }) ->
                                               //    createMonoplayer().disconnectBody, which

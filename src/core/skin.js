@@ -123,6 +123,34 @@ export function skinPlayerInfoPacket ({ uuid, name, property } = {}) {
   }
 }
 
+// One entry per channel, naming that channel's own player (#516).
+//
+// #99 wrote one entry, for the driver's UUID, and a write with no channel reaches
+// every channel on the body (src/legs/live-front.js). So a spectator's client held
+// an entry naming the driver and none naming itself, and the body it draws — the
+// front authenticated it as itself and handed it the puppet's world — fell back to
+// a vanilla default. Every client on a body is a different account, so the entry is
+// a function of the channel it goes to, and a spectator's names the spectator.
+//
+// The caller says which channels the frame is owed to, and this answers one row per
+// channel in the same order, so a caller marks what it wrote: `packet` is the entry
+// for that channel, and null where the channel names no player, which the caller
+// records rather than writes. `channel` is echoed as given, null included: a body's
+// driver keeps the frame #99 proved, which names no channel, and a spectator's names
+// its own.
+export function skinEntriesFor ({ property = null, channels = [] } = {}) {
+  if (!Array.isArray(channels)) throw new TypeError('skinEntriesFor needs the channels it writes to')
+  return channels.map(addressee => {
+    const channel = addressee?.channel ?? null
+    const name = typeof addressee?.name === 'string' && addressee.name !== '' ? addressee.name : null
+    const uuid = typeof addressee?.uuid === 'string' && addressee.uuid !== '' ? addressee.uuid : null
+    // A channel that names no profile cannot be given an entry. It is reported, not
+    // dropped: no later frame repairs a client left without one (#134).
+    if (uuid === null || name === null) return { channel, name, packet: null }
+    return { channel, name, packet: skinPlayerInfoPacket({ uuid, name, property }) }
+  })
+}
+
 // The same property with its signature removed. Nothing in the product sends
 // this: it exists so the measured run can ask the client whether an unsigned
 // property would work too, which decides whether a future change could drop the

@@ -10,10 +10,11 @@ import mc from 'minecraft-protocol'
 
 import {
   ADD_PLAYER_ONLY, TEXTURES_PROPERTY,
-  carriesTextures, pickTextures, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
+  carriesTextures, pickTextures, skinEntriesFor, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
 } from '../../src/core/skin.js'
 
 const HUMAN = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
+const WATCHER = '11111111-2222-3333-4444-555555555555'
 const PUPPET = 'ea45ba2e-f47d-43ee-9604-b20af90be1f1'
 const PROPERTY = { name: TEXTURES_PROPERTY, value: 'dGV4dHVyZXM=', signature: 'c2lnbmF0dXJl' }
 
@@ -155,3 +156,52 @@ test('an unsigned frame round-trips too, so the measured case is the shipped fra
   })
   assert.ok(buffer.length < signedBuffer.length, 'the unsigned frame is smaller by the signature')
 })
+// #516: the frame is a function of the channel it goes to. The entry names one
+// player, and a body's two clients are two accounts: the driver's own body and a
+// spectator's own body are both drawn from that client's entry, and one entry cannot
+// name both. The builder answers one row per channel, in the caller's order, so the
+// caller can mark what it wrote and the driver's row keeps the frame #99 proved.
+test('the frame is one entry per channel, naming that channel\'s own player', () => {
+  const entries = skinEntriesFor({
+    property: PROPERTY,
+    channels: [
+      { channel: null, uuid: HUMAN, name: 'Bafbi' },
+      { channel: 'spectator-1', uuid: WATCHER, name: 'Watcher' }
+    ]
+  })
+
+  assert.equal(entries.length, 2, 'one row per channel, in the order the caller gave them')
+  assert.deepEqual(entries.map(entry => entry.channel), [null, 'spectator-1'],
+    'the driver keeps the frame with no channel, and a spectator\'s names its own')
+  assert.deepEqual(entries.map(entry => entry.packet.data[0].uuid), [HUMAN, WATCHER],
+    'each entry names the player of the channel it goes to')
+  assert.deepEqual(entries.map(entry => entry.packet.data[0].player.name), ['Bafbi', 'Watcher'])
+  for (const entry of entries) {
+    assert.deepEqual(entry.packet.data[0].player.properties, [PROPERTY],
+      'the property is the backend\'s own, signature and all, for either client')
+    assert.equal(entry.packet.action.add_player, true)
+    assert.equal(entry.packet.action.update_listed, undefined,
+      'the tab list gains no line beside the puppet\'s, for either client')
+  }
+})
+
+test('a channel that names no player gets no entry, and is reported', () => {
+  const entries = skinEntriesFor({
+    property: PROPERTY,
+    channels: [
+      { channel: null, uuid: null, name: 'Bafbi' },
+      { channel: 'spectator-1', uuid: WATCHER, name: null },
+      { channel: 'spectator-2', uuid: WATCHER, name: 'Watcher' }
+    ]
+  })
+
+  assert.deepEqual(entries.map(entry => entry.packet === null), [true, true, false],
+    'a profile the front did not name is a client left on a vanilla default, not a frame')
+  assert.deepEqual(entries.slice(0, 2).map(entry => entry.name), ['Bafbi', null],
+    'the report carries the name it had, so the line can say who it was')
+  assert.equal(entries[2].packet.data[0].uuid, WATCHER)
+  assert.deepEqual(skinEntriesFor({ property: PROPERTY }), [], 'no channel is nobody owed a frame')
+  assert.throws(() => skinEntriesFor({ property: PROPERTY, channels: 'holder-1' }), TypeError,
+    'a caller that hands a string instead of a list hears about it')
+})
+
