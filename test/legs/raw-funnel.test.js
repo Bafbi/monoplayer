@@ -34,4 +34,16 @@ test('#602 the leg has one raw funnel, and no second writer beside it', () => {
   // client.writeRaw is a raw frame the leg wrote for itself, unchecked.
   assert.equal(count(source, '.writeRaw('), 1,
     'the socket writer is called once, inside emitCheckedRaw')
+
+  // The landing is the path #602 was about, so it is read on its own rather than inferred
+  // from the counts above: a landing that wrote a body's frame itself, as
+  // `client.write('registry_data', …)` or through a writer of its own, would leave every
+  // count above unchanged.
+  const landing = source.slice(
+    source.indexOf('function sendBodyConfiguration'),
+    source.indexOf('function claimReport')
+  )
+  assert.ok(landing.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.equal(count(landing, 'writeRawTo('), 1, 'the landing writes its frames through the funnel')
+  assert.equal(count(landing, 'emitCheckedRaw('), 0, 'and calls nothing beside it')
 })

@@ -1422,11 +1422,10 @@ function createFrontLeg ({
   // client gets that server's own dialog. A pick is the first half of a choice, not
   // the end of the connection (#266).
   //
-  // The one clientbound configuration frame the leg still writes as a packet object, and
-  // this names what it does not take: no policy backstop, no state check, no wire check.
-  // The library serializes it against whatever state the client holds, which is the gap
-  // #600 is about, and the raw funnel cannot carry it until that ledger exists. The bytes
-  // are the dialog's own params, so there is nothing a wire check could compare them to.
+  // A packet-object configuration write, and this names what it does not take: no policy
+  // backstop, no state check, no wire check. The library serializes it against whatever
+  // state the client holds, which is the gap #600 is about. The bytes are the dialog's own
+  // params, so there is nothing a wire check could compare them to.
   function sendServerDialog (client, server) {
     let written = false
     try {
@@ -1687,6 +1686,10 @@ function createFrontLeg ({
       frames: written,
       warm: outcome.warm ?? null
     })
+    // The landing's finish stays on the library's writer, and the checks it does not take
+    // are the ones that cannot apply: it is not a relayed frame, so there is no policy
+    // question (the table replays a `finish_configuration`), and the interceptor's
+    // `finishSent` machinery is what sends it once and drops the library's own copy.
     try {
       client.write('finish_configuration', {})
     } catch (error) {
@@ -1754,6 +1757,8 @@ function createFrontLeg ({
       return refused('no_cached_configuration')
     }
     leavePicker(client)
+    // The library's writer, for the reason landClaimedClient gives at its own finish: it is
+    // not a relayed frame, and the interceptor sends it once.
     try {
       client.write('finish_configuration', {})
     } catch (error) {

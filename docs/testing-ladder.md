@@ -1257,8 +1257,9 @@ first dial and its target warms in five seconds.
   The funnel's own refusal of a blocked frame is not this row's to read, and it cannot be: the
   reader strips such a frame before the funnel sees it. That gate is
   `test/legs/config-landing-policy.test.js`, at the leg's raw entry, which is the write a landing
-  makes. That the landing takes that write is what the call-site count below pins, and the two
-  together are what #602's second criterion asks for.
+  makes. That the landing takes that write is the other half, and it is
+  `test/legs/raw-funnel.test.js`: the guard reads `sendBodyConfiguration` on its own and finds the
+  funnel there and nothing else. Those two together are #602's second criterion.
 
   What it cannot prove: that no other writer in the leg has a way past the funnel. That is
   `test/legs/raw-funnel.test.js`, which counts the call sites.
