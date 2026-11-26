@@ -26,10 +26,13 @@ The frozen protocol spike is in `src/spike/` and `test/spike/`. It proves the
 two-leg relay, synthesized play join, detach survival, reattach state, and
 single backend login on loopback, and it grows no features.
 
-The default gate runs the bottom three rungs of the testing ladder:
+`mise run check` is the default gate: it runs the bottom three rungs of the
+testing ladder. The block below holds that command and its three rungs one at a
+time:
 
 ```bash
-mise run check             # lint + node:test + offline loopback
+mise run check             # the gate: lint, unit tests and offline loopback
+mise run lint              # every script parses, and the panel's stylesheet is current
 mise run test              # unit tests only (loopback sockets, no auth)
 mise run loopback          # product offline loopback rung (real legs, fake backend)
 mise run spike             # frozen protocol spike (real sockets, offline protocol)
