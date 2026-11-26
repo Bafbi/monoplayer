@@ -117,7 +117,7 @@ Where to look: a decision lives in `src/core/` (pure), the wiring in `src/servic
 | `src/testbed/`, `deploy/testbed/` | The two-Paper transfer testbed. |
 | `src/panel/`, `deploy/panel/` | The ops panel on the tailnet: `start.js` the entrypoint, `server.js` the dispatch and the read routes, `routes/` one module per write route, `kube.js` the ConfigMap patch, `registry.js` the registry document. It has no Application of its own: the one Argo Application syncs `deploy/kustomization.yaml`, which includes it beside the proxy. Runbook: `docs/panel.md`. Its tests stay in `test/panel/`, one level, because `mise run test` globs that level only. |
 | `deploy/` | Manifests and Argo CD. `scripts/build-image.sh` publishes the image. |
-| `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` covers `tools/`, `mise.toml`, and the manifests under `deploy/`; `test/support/` holds the shared fake-integration rig, `harness.js`, and no test of its own. |
+| `test/<area>/` | One directory per area, named after `src/<area>/`. `test/tooling/` has no `src/` peer. It holds the guards for the claims the repo makes about itself, each pinning one claim to the file that owns the fact, and each opening with a header naming its subject. So `ls test/tooling/` answers what is there, and this row names none of it. `test/support/` holds the shared fake-integration rig and no test of its own. |
 
 Facts an agent cannot look up:
 
