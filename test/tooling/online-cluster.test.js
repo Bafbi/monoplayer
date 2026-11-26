@@ -42,6 +42,11 @@ const BRANCH = (() => {
 const SHIM = [
   '#!/usr/bin/env bash',
   'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
+  // One line per argv word, so a case can tell one argument that holds a space from
+  // two arguments. `$*` cannot (#384).
+  // A marker at the start of each call, so a case can read one call's words and stop.
+  'printf \'<<call>>\\n\' >> "$KUBECTL_ARGV_LOG"',
+  'printf \'<<%s>>\\n\' "$@" >> "$KUBECTL_ARGV_LOG"',
   'ATTACH="$KUBECTL_ATTACH"',
   'PUPPET="$KUBECTL_PUPPET"',
   'last="${@: -1}"',
@@ -154,6 +159,8 @@ function workspace ({ strictFind = true } = {}) {
     bin,
     attach,
     log: path.join(root, 'kubectl.log'),
+    // Every argv word of every kubectl call, one per line and bracketed (#384).
+    argv: path.join(root, 'kubectl-argv.log'),
     // Every case gets its own TMPDIR, which is where the script keeps the state
     // directory its lease markers live in.
     tmp: (() => {
@@ -186,6 +193,7 @@ function baseEnv (space, env = {}) {
     PATH: space.bin + ':' + process.env.PATH,
     TMPDIR: space.tmp,
     KUBECTL_LOG: space.log,
+    KUBECTL_ARGV_LOG: space.argv,
     KUBECTL_MANIFEST: space.manifest,
     KUBECTL_PUPPET: PUPPET,
     KUBECTL_ATTACH: ATTACH,
@@ -474,6 +482,106 @@ test('a copy-back kubectl cannot fetch fails the run (#370)', () => {
     JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
     { old: true },
     'nothing was written from a copy that never arrived'
+  )
+})
+
+// --- a rung is handed the flags the operator gives it (#384) ------------------
+
+// The pod command was `sh -c "cd /work && node $RUNG $rung_args"`, and rung_args held
+// `--report /work/online-report.json` for the online rung and nothing for every other
+// module. So a --rung received no flag from the operator. That was harmless until
+// src/ladder/capture-config.js refused to run without --paper-build (#367): the recipe
+// in its header then produced a refusal instead of a capture.
+//
+// These cases read the argv the pod is handed, one word per line. Two properties matter
+// and `$*` shows neither: a flag and its value arrive as two words, and one word that
+// holds a space and a comma arrives as one word.
+
+// The flags of the recipe in the capture-config header, so the case that proves the
+// forwarding is the case that proves the recipe. The lane is one a shim can name, and the
+// note is this case's own: the header derives the lane and writes a note about the run.
+const CAPTURE_ARGS = [
+  '--rung', 'src/ladder/capture-config.js', '--keep-pod', '--',
+  '--paper-build', '135',
+  '--image', 'itzg/minecraft-server:2026.10.1-java25',
+  '--lane', 'monoplayer-gate-x',
+  // One argument holding a space and a comma. A pod command built by string
+  // concatenation splits it, or loses the comma to the pod's shell.
+  '--note', 'online-mode is off, the puppet token is lapsed'
+]
+
+function argvLog (space) {
+  if (!fs.existsSync(space.argv)) return []
+  return fs.readFileSync(space.argv, 'utf8').split('\n').filter(Boolean)
+}
+
+// The words the pod's own command line was handed, after the shell fragment. Anchored on
+// that fragment, so a command line that stops forwarding its arguments fails these cases
+// instead of passing them: the shim answers the exec without running the pod's shell, and
+// this anchor is the closest the seam gets to the module's argv (#384).
+const POD_COMMAND = '<<cd /work && node "$0" "$@">>'
+
+function rungArgv (space, message) {
+  const words = argvLog(space)
+  const at = words.indexOf(POD_COMMAND)
+  assert.notEqual(at, -1, 'the pod was handed the forwarding command line: ' + message)
+  const rest = words.slice(at + 1)
+  const end = rest.indexOf('<<call>>')
+  return end === -1 ? rest : rest.slice(0, end)
+}
+
+test('a --rung is handed the flags the operator passes after --', () => {
+  const space = workspace()
+  const { status, calls, output } = run(space, {}, CAPTURE_ARGS)
+  assert.equal(status, 0, 'status ' + status + ' calls: ' + calls.join(' | ') + ' output: ' + output)
+
+  // The whole slice, in order: the module, then each flag as one word with its value as
+  // the next. One deepEqual rather than a search, so a flag attached to another kubectl
+  // call, a word split in two, or a reordered argv all fail.
+  assert.deepEqual(rungArgv(space, calls.join(' | ')), [
+    '<<src/ladder/capture-config.js>>',
+    '<<--paper-build>>', '<<135>>',
+    '<<--image>>', '<<itzg/minecraft-server:2026.10.1-java25>>',
+    '<<--lane>>', '<<monoplayer-gate-x>>',
+    '<<--note>>', '<<online-mode is off, the puppet token is lapsed>>'
+  ])
+})
+
+test('an argument with a space and a comma reaches the rung as one word', () => {
+  const space = workspace()
+  const { calls } = run(space, {}, CAPTURE_ARGS)
+
+  const argv = rungArgv(space, calls.join(' | '))
+  assert.deepEqual(argv.slice(-2), ['<<--note>>', '<<online-mode is off, the puppet token is lapsed>>'],
+    'a comma-bearing argument is one word, not several, and keeps its comma: ' + argv.join(' '))
+})
+
+test('the online rung still copies its report back', () => {
+  const space = workspace()
+  const { status, calls, output } = run(space)
+  assert.equal(status, 0, output)
+  assert.ok(
+    calls.some(line => line.includes('cp') && line.includes('online-report.json')),
+    'the report is copied out of the pod: ' + calls.join(' | ')
+  )
+  assert.match(output, /report written to/)
+})
+
+test('hold takes -- as the delimiter, the way the rung does', () => {
+  const space = workspace()
+  const { status, output } = run(space, {}, ['hold', '--', 'sh', '-c', 'exit 5'])
+  assert.equal(status, 5, output)
+})
+
+test('a rung other than the online rung copies no report back', () => {
+  const space = workspace()
+  const { status, calls, output } = run(space, {}, [
+    '--rung', 'src/ladder/capture-config.js', '--keep-pod', '--', '--paper-build', '135'
+  ])
+  assert.equal(status, 0, 'status ' + status + ' output: ' + output)
+  assert.equal(
+    calls.some(line => line.includes('cp') && line.includes('online-report.json')), false,
+    'a capture writes no online-report.json, so no copy-back of one runs: ' + calls.join(' | ')
   )
 })
 

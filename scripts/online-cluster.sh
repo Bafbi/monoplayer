@@ -5,13 +5,27 @@
 #   scripts/online-cluster.sh [--backend-host H] [--backend-port P]
 #                             [--rung FILE] [--report PATH] [--rotate] [--keep-pod]
 #                             [--lease-wait SECONDS] [--lease-duration SECONDS]
-#   scripts/online-cluster.sh hold [--lease-wait SECONDS] [--lease-duration SECONDS] CMD [ARG...]
+#                             [-- ARG...]
+#   scripts/online-cluster.sh hold [--lease-wait SECONDS] [--lease-duration SECONDS]
+#                             [--] CMD [ARG...]
 #
 # `--rung` runs another ladder module in the same pod instead of the online
 # rung, which is how the observer report gets its direct baseline join
 # (scripts/observer-report.sh). The custody handling, the token expiry refusal,
 # and the pod lifecycle are identical; only the module differs. A rung other
 # than online.js writes no report, so the report copy-back is skipped.
+#
+# Everything after `--` is the rung's own argv, so a module that needs a flag gets one:
+#
+#   scripts/online-cluster.sh --rung <module> --keep-pod -- --some-flag <value>
+#
+# src/ladder/capture-config.js's header carries the worked recipe, with the build, the
+# image and the lane that capture needs.
+#
+# Each argument reaches the module as one word, whatever it holds, because the pod runs
+# the module from an argv and not from a string a shell splits again. The online rung's
+# own `--report /work/online-report.json` comes first and this script copies that path
+# back, so a `--report` of yours is ignored: the first one wins.
 #
 # `hold` is the same guarantee without the pod: it takes the account lease, runs
 # the command on this machine, and releases the lease however that ends. That is
@@ -131,6 +145,10 @@ LEASE_WRITE=''
 # that command, so the loop below stops at the first argument it does not know.
 HOLD=0
 HOLD_COMMAND=()
+# The rung's own argv, from everything after `--` (#384). Kept as an array, because a
+# flag is one word however it is spelled: a note with a space and a comma in it stays
+# one argument all the way to the module.
+RUNG_ARGS=()
 
 die() { printf 'online-cluster: %s\n' "$1" >&2; exit "${2:-2}"; }
 say() { printf 'online-cluster: %s\n' "$1"; }
@@ -147,6 +165,15 @@ while [ $# -gt 0 ]; do
     --lease-duration) LEASE_DURATION=${2:?--lease-duration needs a value}; shift 2 ;;
     --lease-poll) LEASE_POLL=${2:?--lease-poll needs a value}; shift 2 ;;
     hold) HOLD=1; shift ;;
+    --)
+      # Everything after this is the rung's, the way `mise run loopback -- --verbose`
+      # reaches the rung it names (#320).
+      shift
+      # `hold -- CMD` says the same thing the other form does, so one file keeps one
+      # rule for the token.
+      if [ "$HOLD" = 1 ]; then HOLD_COMMAND=("$@"); break; fi
+      RUNG_ARGS=("$@")
+      break ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *)
       # In hold mode the first argument this loop does not know is the command, and
@@ -704,16 +731,25 @@ hold () {
 }
 
 if [ "$HOLD" = 1 ]; then
-  hold "${HOLD_COMMAND[@]}"
+  # Guarded for bash 3.2, where an empty array is an unbound variable under `set -u`:
+  # `hold --` reaches here with no command and has to get the sentence below.
+  hold ${HOLD_COMMAND[@]+"${HOLD_COMMAND[@]}"}
 fi
 
 [ -f "$ROOT/$RUNG" ] || die "no such rung: $RUNG"
 # Only the online rung writes a report; another module's exit status is its
-# whole result.
-rung_args=
+# whole result. The operator's flags follow, so the report path this script copies back
+# is the first --report the module reads (`flag` takes the first one, service/cli.js).
+#
+# One home for "this module writes a report": the flag it is given and the copy-back that
+# collects it read the same decision, so a rung cannot get one without the other.
+WRITES_REPORT=0
+rung_args=()
 if [ "$RUNG" = src/ladder/online.js ]; then
-  rung_args='--report /work/online-report.json'
+  WRITES_REPORT=1
+  rung_args=(--report /work/online-report.json)
 fi
+rung_args+=(${RUNG_ARGS[@]+"${RUNG_ARGS[@]}"})
 [ -d "$SECRETS/accounts" ] || die "no accounts in $SECRETS/accounts; run mise run secrets:link first"
 
 # The attach account, by alias, from the working copy.
@@ -852,11 +888,13 @@ kubectl -n "$NAMESPACE" exec "$pod" -- env \
   MONOPLAYER_BACKEND_HOST="$BACKEND_HOST" MONOPLAYER_BACKEND_PORT="$BACKEND_PORT" \
   MONOPLAYER_FRONT_HOST="${MONOPLAYER_FRONT_HOST:-}" MONOPLAYER_FRONT_PORT="${MONOPLAYER_FRONT_PORT:-}" \
   MONOPLAYER_VERSION="${MONOPLAYER_VERSION:-}" \
-  sh -c "cd /work && node $RUNG $rung_args"
+  sh -c 'cd /work && node "$0" "$@"' "$RUNG" ${rung_args[@]+"${rung_args[@]}"}
 run_status=$?
 set -e
 
-if [ -n "$rung_args" ]; then
+# The module that writes the report decides this, not whether it was handed flags: a
+# capture run with --paper-build writes no online-report.json (#384).
+if [ "$WRITES_REPORT" = 1 ]; then
   kubectl cp "$NAMESPACE/$pod:/work/online-report.json" "$REPORT" >/dev/null 2>&1 \
     && say "report written to $REPORT"
 fi
