@@ -1,6 +1,8 @@
-// Unit target: envOverlay in src/service/start-live.js, the env-to-config
-// mapping a deployed lane reads. The kept connection (#22) is the case that
-// matters: its default is off, and a lane turns it on through this overlay.
+// Unit target: src/service/start-live.js, the parts a test can reach without a
+// process — the env-to-config mapping a deployed lane reads, the picker's offer, the
+// journal's volume answer, the skin warning, and the reconnect handler the lane
+// registers (#540). The kept connection (#22) is the overlay's case that matters:
+// its default is off, and a lane turns it on through this overlay.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

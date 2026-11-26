@@ -22,10 +22,9 @@ description = "Syntax-check every source, test, tool, and shell script, resolve 
 # The stylesheet check compiles Tailwind, which is a dev dependency, so lint needs
 # the install like the test rung does. Without it a fresh checkout would fail the
 # gate on a missing compiler instead of on a stale bundle.
-# The resolve stage is ESLint with one rule, `no-undef` (eslint.config.js, #540). A
-# parse cannot see a free variable, so a name declared in one block and read from
-# the next reached production as a `ReferenceError`. It is a dev dependency for the
-# same reason as the compiler: the gate runs it and the image never does.
+# The resolve stage is ESLint with one rule, `no-undef` (eslint.config.js, #540). It
+# is a dev dependency for the same reason as the compiler: the gate runs it and the
+# image never does.
 depends = ["install"]
 run = '''
 #!/usr/bin/env bash

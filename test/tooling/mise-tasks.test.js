@@ -213,3 +213,15 @@ test('every rung task names the next rung when it fails', () => {
     }
   }
 })
+// #540: the resolve stage is the whole point of the lint rung's second half, and a
+// stage with no guard is one a later cleanup deletes while the description still
+// claims it runs. The rule is read from the config the stage uses.
+test('the lint rung resolves every identifier its files read, not only their syntax (#540)', () => {
+  const lint = tasks.get('lint')
+
+  assert.match(lint.body, /pnpm exec eslint/, 'lint runs the resolve stage')
+  assert.match(lint.description, /resolve every identifier/, 'and the description says so, so deleting the stage is a visible edit')
+
+  const config = fs.readFileSync(new URL('../../eslint.config.js', import.meta.url), 'utf8')
+  assert.match(config, /'no-undef': 'error'/, 'no-undef is the rule that catches a read of a name no scope declares')
+})

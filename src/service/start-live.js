@@ -724,7 +724,7 @@ export function createReconnectHandler ({
   settleWarm,
   baseTarget,
   log = () => {}
-} = {}) {
+}) {
   // The server the puppet is on now. A plain backend fault reconnects here,
   // not always to the configured base.
   let currentTarget = { ...baseTarget }
@@ -1175,7 +1175,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     backend,
     follow: createTransferFollowController(),
     settleWarm,
-    baseTarget: { ...configuredTarget },
+    baseTarget: configuredTarget,
     log
   })
   // One reconnect_due runs one attempt: the handler's own guard refuses a second
