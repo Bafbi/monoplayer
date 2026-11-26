@@ -563,7 +563,7 @@ export function createMonoplayer ({
   // its picker refusal reasons with. The cap below is this service's own fact.
   const MAX_NAMES = 128
   function bumpName (map, name) {
-    bumpBounded(map, name, MAX_NAMES)
+    return bumpBounded(map, name, MAX_NAMES)
   }
   // Interactions are rare and are the ones that fail silently on a real
   // backend, so each one gets its own log line (name only, no payload).

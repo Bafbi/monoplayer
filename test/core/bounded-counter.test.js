@@ -77,6 +77,18 @@ test('#438 a key that is not a name counts as unknown, and the empty string is n
     'an empty key is not a label of its own: it reads as a label with nothing in it, which says less than unknown does')
 })
 
+// The header promises this runs in a live session's relay path and adds no throw of
+// its own. A cap that is not a number is the shape of that promise: no throw, and a
+// count still lands somewhere.
+test('#438 a cap that is not a number neither throws nor loses a count', () => {
+  const map = {}
+
+  for (const cap of [undefined, Number.NaN, 'four']) bumpBounded(map, 'chat', cap)
+
+  assert.equal(map.chat, 3, 'the count lands on its own key, because the cap bounded nothing')
+  assert.doesNotThrow(() => bumpBounded({}, 'chat', null), 'and a cap that is not a number is not an error')
+})
+
 test('#438 the helper answers the map it was handed, and writes no copy', () => {
   const map = { held: 1 }
 
