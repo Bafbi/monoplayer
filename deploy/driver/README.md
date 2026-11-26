@@ -290,7 +290,7 @@ live lane serves the same picker, and its rows are the live servers.
 A spectator is the product's, not a server's. The Spectate verb is the picker's
 (`src/core/picker.js:37,39`), and the claim is the front's own registry
 (`src/core/claims.js:1-17`). The frames that tell a spectator what it is are written by
-the service (`writeSpectatorMode`, `src/service/monoplayer.js:2398`). The tree declares
+the service (`writeSpectatorMode`, `src/service/monoplayer.js`). The tree declares
 no product row (`deploy/driver/kustomization.yaml:8-14`), and the ladder already says no
 proxy stands in front of the gate Paper.
 

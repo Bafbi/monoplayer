@@ -931,6 +931,38 @@ first dial and its target warms in five seconds.
   before the click, and none of them names the spectator. A spectator leaving takes its
   own channel and nothing else: the driver and the other spectator stay, and the body
   is still attached to the same claim.
+- `O70` a spectator is put in spectator game mode on its own channel, and the
+  driver's socket carries none of it (#633).
+
+  O62 reads what a spectator's socket is told. This is the other half of the same write,
+  and the half a mistake breaks the product with. A driver is a player in the world: a
+  lane that wrote the pair on every channel would hide the driver's own body, take its
+  controls, and put it in the air. The front withholds a body's own mode frames from a
+  spectator (`bodyFrameWithheld`, src/legs/live-front.js), so a broadcast pair would
+  reach the driver alone and not the spectator at all. The positive and the negative
+  cannot stand for each other, which is why O62 and this assertion both exist.
+
+  The driver is O62's, still in play on the body. A fresh client lands beside it through
+  the front's own `spectate` seam, which is the call the Spectate verb makes. Both
+  sockets register their own listeners before that landing, because the bot records frame
+  names and not these packets.
+
+  The spectator's socket carries a `game_state_change` with reason `change_game_mode` and
+  game mode 3, and an `abilities`. Its one mode-3 frame is the one this write made: the
+  body's own copy arrives from the replay carrying the body's mode, which is not 3. The
+  driver's socket carries no mode-3 frame and no `abilities` at all in that window, and
+  both clients keep their connections.
+
+  What each frame makes a client do, and which fields it needs, is
+  `src/core/spectator-mode.js`'s header, read from the client's own code. It is not what
+  the ticket assumed: flight is the mode frame's, and the abilities frame pins the speeds
+  and is the only one that can revoke flight. `test/core/spectator-mode.test.js` holds the
+  reason and the field names to the protocol data of 26.1 and 26.2.
+
+  What it cannot prove: that a client in spectator mode draws no body of its own, and it
+  does not. The bot speaks the wire and records no pixels, and the client decides that
+  from the player-list entry for its own UUID, which #614 does not send (#647). The witness
+  is #634, still open: two real clients on the dev lane.
 - `O63` a body nobody drives stays up and stays watchable, and a join reads the
   picker instead of taking the empty driver seat (#259). A claim is held by the
   connection that made it, so O62's driver leaving releases the body and nothing

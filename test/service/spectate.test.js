@@ -472,3 +472,31 @@ test('#614 a pack held on a body reaches the spectator watching it, in the state
   assert.equal(relayed[0].kind, 'raw')
   assert.equal(relayed[0].channel, null, 'and it goes to the body, the spectator included')
 })
+
+// #633: a body that respawns states its own game mode, so a spectator is told what it is
+// again. `respawn` is ordinary state and reaches every channel of the body, which is where
+// a dimension change would undo #259's pair: no flight, its own body drawn again, and the
+// driver's hotbar back. So the same two frames follow it on the spectator's own channel.
+test('#633 a body that respawns tells each spectator again, and never the driver', async () => {
+  const rig = makeCore({ config: { picker: true } })
+  await landABody(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: null })
+  rig.core.spectateView({ name: 'Watcher', channel: 'spectator-channel' })
+  const mark = rig.frontLeg.frames().length
+  rig.backendLeg.deliver({ state: 'play', name: 'respawn', buffer: Buffer.from('play:respawn'), data: {} })
+  const frames = rig.frontLeg.frames().slice(mark)
+
+  const respawn = frames.find(frame => frame.name === 'respawn')
+  assert.ok(respawn, 'the body respawns')
+  assert.equal(respawn.channel, null, 'and the frame reaches every channel of the body')
+
+  const told = frames.filter(frame => frame.name === 'game_state_change' || frame.name === 'abilities')
+  assert.deepEqual(told.map(frame => frame.name), ['game_state_change', 'abilities'],
+    'the mode, then the abilities that mode holds')
+  assert.deepEqual(told.map(frame => frame.channel), ['spectator-channel', 'spectator-channel'],
+    'on the spectator and no other socket')
+  assert.deepEqual(told[0].packet, { reason: 3, gameMode: 3 })
+  assert.equal(told[1].packet.flags, 7)
+  assert.equal(rig.core.metrics.spectatorViews, 1, 'a respawn is not a landing')
+})
+
