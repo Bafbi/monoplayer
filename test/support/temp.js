@@ -11,9 +11,10 @@
 // importing file's suite, which runs once, after every test in that file, whether
 // they passed or failed.
 //
-// One limit, measured: a file that throws while it is still being evaluated never
-// collects its hooks, so roots it made would stay. No file in this tree makes one
-// at module scope, so nothing reaches that path today.
+// A limit, measured: a file that throws while it is still being evaluated never
+// collects its hooks, so a root it made at module scope would stay. No file in this
+// tree makes one there. The same holds for a process killed by a signal: no hook of
+// any kind runs, so a run killed on a timeout still leaves its roots.
 //
 // Not a test file: `mise run test` runs `test/*/*.test.js`, so nothing here runs
 // on its own.

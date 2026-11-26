@@ -14,7 +14,7 @@ import { createJournal } from '../../src/observability/journal.js'
 const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools', 'journal.mjs')
 const NOW = 1_700_000_000_000
 
-function harness (t) {
+function harness () {
   const dir = tempRoot('monoplayer-journal-cli-')
   return {
     dir,
@@ -48,8 +48,8 @@ const records = text => text.trim().split('\n').filter(Boolean).map(line => JSON
 // tail
 // ---------------------------------------------------------------------------
 
-test('tail prints the last records of the newest session, one JSON per line', t => {
-  const h = harness(t)
+test('tail prints the last records of the newest session, one JSON per line', () => {
+  const h = harness()
   writeJournal(h.dir, [['one'], ['two'], ['three']])
 
   const result = h.run('tail', '2', '--path', h.dir)
@@ -65,8 +65,8 @@ test('tail prints the last records of the newest session, one JSON per line', t 
   })
 })
 
-test('tail defaults to the last ten records', t => {
-  const h = harness(t)
+test('tail defaults to the last ten records', () => {
+  const h = harness()
   writeJournal(h.dir, Array.from({ length: 12 }, (_, index) => ['frame_' + index]))
 
   const result = h.run('tail', '--path', h.dir)
@@ -74,8 +74,8 @@ test('tail defaults to the last ten records', t => {
   assert.equal(records(result.stdout).length, 10)
 })
 
-test('tail reads one sealed shard given directly', t => {
-  const h = harness(t)
+test('tail reads one sealed shard given directly', () => {
+  const h = harness()
   writeJournal(h.dir, [['one'], ['two']])
   const file = path.join(h.dir, fs.readdirSync(h.dir).find(name => name.endsWith('.ndjson.gz')))
 
@@ -84,8 +84,8 @@ test('tail reads one sealed shard given directly', t => {
   assert.deepEqual(records(result.stdout).map(record => record.name), ['two'])
 })
 
-test('tail reads a chunk as length only, from the bulk shard', t => {
-  const h = harness(t)
+test('tail reads a chunk as length only, from the bulk shard', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk'], ['login']])
 
   const result = h.run('tail', '5', '--path', h.dir)
@@ -100,8 +100,8 @@ test('tail reads a chunk as length only, from the bulk shard', t => {
 // manifest
 // ---------------------------------------------------------------------------
 
-test('manifest answers one line per shard, with the frames each one holds', t => {
-  const h = harness(t)
+test('manifest answers one line per shard, with the frames each one holds', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk'], ['login'], ['login']])
 
   const result = h.run('manifest', '--path', h.dir)
@@ -121,7 +121,7 @@ test('manifest answers one line per shard, with the frames each one holds', t =>
 })
 
 test('manifest derives one for the shard still being written', t => {
-  const h = harness(t)
+  const h = harness()
   // The writer is left open, so nothing sealed and no manifest exists on disk.
   const journal = createJournal({ dir: h.dir, clock: () => NOW })
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('login') })
@@ -136,8 +136,8 @@ test('manifest derives one for the shard still being written', t => {
   assert.deepEqual(row.names, { login: 1 })
 })
 
-test('manifest takes no argument, and a bad invocation exits 2', t => {
-  const h = harness(t)
+test('manifest takes no argument, and a bad invocation exits 2', () => {
+  const h = harness()
   writeJournal(h.dir, [['one']])
   const result = h.run('manifest', 'extra', '--path', h.dir)
   assert.equal(result.status, 2)
@@ -145,8 +145,8 @@ test('manifest takes no argument, and a bad invocation exits 2', t => {
 })
 
 
-test('tail filters by frame name, so the last frame of one name is one command', t => {
-  const h = harness(t)
+test('tail filters by frame name, so the last frame of one name is one command', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk'], ['map_chunk'], ['keep_alive']])
 
   const result = h.run('tail', '1', '--name', 'map_chunk', '--path', h.dir)
@@ -159,8 +159,8 @@ test('tail filters by frame name, so the last frame of one name is one command',
 // invocation errors
 // ---------------------------------------------------------------------------
 
-test('a bare or unknown invocation exits 2 with the usage on stderr', (t) => {
-  const h = harness(t)
+test('a bare or unknown invocation exits 2 with the usage on stderr', () => {
+  const h = harness()
   for (const args of [[], ['nope'], ['window'], ['tail', '--dir']]) {
     const result = h.run(...args)
     assert.equal(result.status, 2, args.join(' '))
@@ -168,15 +168,15 @@ test('a bare or unknown invocation exits 2 with the usage on stderr', (t) => {
   }
 })
 
-test('no path and no environment exits 1 with the variable to set', t => {
-  const h = harness(t)
+test('no path and no environment exits 1 with the variable to set', () => {
+  const h = harness()
   const result = h.run('tail')
   assert.equal(result.status, 1)
   assert.match(result.stderr, /MONOPLAYER_JOURNAL_DIR/)
 })
 
-test('a path that does not exist exits 1', t => {
-  const h = harness(t)
+test('a path that does not exist exits 1', () => {
+  const h = harness()
   const result = h.run('tail', '--path', path.join(h.dir, 'missing'))
   assert.equal(result.status, 1)
   assert.match(result.stderr, /cannot read/)
@@ -186,8 +186,8 @@ test('a path that does not exist exits 1', t => {
 // names
 // ---------------------------------------------------------------------------
 
-test('names aggregates frames by name, direction, and state', t => {
-  const h = harness(t)
+test('names aggregates frames by name, direction, and state', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk'], ['map_chunk'], ['position', 'c2s']])
 
   const result = h.run('names', '--path', h.dir)
@@ -198,8 +198,8 @@ test('names aggregates frames by name, direction, and state', t => {
   ])
 })
 
-test('names narrows to a substring pattern', t => {
-  const h = harness(t)
+test('names narrows to a substring pattern', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk'], ['update_light'], ['map']])
 
   const result = h.run('names', 'map', '--path', h.dir)
@@ -207,8 +207,8 @@ test('names narrows to a substring pattern', t => {
   assert.deepEqual(records(result.stdout).map(record => record.name), ['map', 'map_chunk'])
 })
 
-test('names prints nothing and exits 0 when nothing matches', t => {
-  const h = harness(t)
+test('names prints nothing and exits 0 when nothing matches', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk']])
 
   const result = h.run('names', 'no_such_frame', '--path', h.dir)
@@ -216,8 +216,8 @@ test('names prints nothing and exits 0 when nothing matches', t => {
   assert.equal(result.stdout, '')
 })
 
-test('--dir and --state filter the frames, and an unknown direction is a usage error', t => {
-  const h = harness(t)
+test('--dir and --state filter the frames, and an unknown direction is a usage error', () => {
+  const h = harness()
   writeJournal(h.dir, [['position', 'c2s'], ['position', 's2c']])
 
   const c2s = h.run('names', '--dir', 'c2s', '--path', h.dir)
@@ -233,8 +233,8 @@ test('--dir and --state filter the frames, and an unknown direction is a usage e
 // window
 // ---------------------------------------------------------------------------
 
-test('window counts the frames in the last N seconds of the journal', t => {
-  const h = harness(t)
+test('window counts the frames in the last N seconds of the journal', () => {
+  const h = harness()
   writeJournal(h.dir, [['old'], ['edge'], ['middle'], ['recent'], ['newest']])
 
   // The newest frame is at NOW + 4000, so a three second window starts at
@@ -249,8 +249,8 @@ test('window counts the frames in the last N seconds of the journal', t => {
   ])
 })
 
-test('window needs a positive number of seconds', t => {
-  const h = harness(t)
+test('window needs a positive number of seconds', () => {
+  const h = harness()
   writeJournal(h.dir, [['one']])
   for (const seconds of [[], ['0'], ['-1'], ['soon']]) {
     const result = h.run('window', ...seconds, '--path', h.dir)
@@ -269,8 +269,8 @@ function writeLog (file, events) {
   fs.writeFileSync(file, events.map(event => JSON.stringify(event)).join('\n') + '\n')
 }
 
-test('heartbeat prints the last heartbeat record from the log', t => {
-  const h = harness(t)
+test('heartbeat prints the last heartbeat record from the log', () => {
+  const h = harness()
   const file = path.join(h.dir, 'monoplayer.jsonl')
   const last = { t: '2026-11-09T01:01:00.000Z', event: 'heartbeat', attached: true, warm: true, backendLogins: 1 }
   writeLog(file, [
@@ -284,8 +284,8 @@ test('heartbeat prints the last heartbeat record from the log', t => {
   assert.deepEqual(records(result.stdout), [last])
 })
 
-test('heartbeat falls back to MONOPLAYER_LOG', t => {
-  const h = harness(t)
+test('heartbeat falls back to MONOPLAYER_LOG', () => {
+  const h = harness()
   const file = path.join(h.dir, 'monoplayer.jsonl')
   const line = { t: '2026-11-09T01:00:30.000Z', event: 'heartbeat', warm: false }
   writeLog(file, [line])
@@ -295,8 +295,8 @@ test('heartbeat falls back to MONOPLAYER_LOG', t => {
   assert.deepEqual(records(result.stdout), [line])
 })
 
-test('heartbeat against a journal directory says which file to pass', t => {
-  const h = harness(t)
+test('heartbeat against a journal directory says which file to pass', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk']])
 
   const result = h.run('heartbeat', '--path', h.dir)
@@ -305,8 +305,8 @@ test('heartbeat against a journal directory says which file to pass', t => {
   assert.match(result.stderr, /MONOPLAYER_LOG/)
 })
 
-test('a misspelled --state exits 2 instead of answering empty', t => {
-  const h = harness(t)
+test('a misspelled --state exits 2 instead of answering empty', () => {
+  const h = harness()
   writeJournal(h.dir, [['map_chunk']])
 
   const result = h.run('names', '--state', 'playy', '--path', h.dir)
@@ -314,8 +314,8 @@ test('a misspelled --state exits 2 instead of answering empty', t => {
   assert.match(result.stderr, /--state must be one of handshaking, status, login, configuration, play/)
 })
 
-test('a path that is not a directory or a regular file exits 1', t => {
-  const h = harness(t)
+test('a path that is not a directory or a regular file exits 1', () => {
+  const h = harness()
   const result = h.run('tail', '--path', '/dev/null')
   assert.equal(result.status, 1)
   assert.match(result.stderr, /not a journal directory or a regular file/)

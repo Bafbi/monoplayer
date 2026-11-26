@@ -107,8 +107,8 @@ test('the installer prints a placeholder and the way out when the lane cannot be
 })
 
 // A Prism root with one base instance, installed into by the real script. Each
-// run writes under its own temp directory, so no host Prism root is touched, and
-// the case removes it.
+// run writes under its own temp directory, so no host Prism root is touched.
+// test/support/temp.js removes it when this file's tests finish.
 function runInstall ({ env = {} } = {}) {
   const scratch = tempRoot('driver-install-')
   const prism = path.join(scratch, 'PrismLauncher')
