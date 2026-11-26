@@ -20,8 +20,8 @@ The tree now names everything after the domain, but names that live outside the 
 |---|---|---|
 | namespace `monoplayer-gate-b`, labels `app.kubernetes.io/name: monoplayer-gate-b-*`, Secrets `gate-b-rcon` and `gate-b-velocity` | Argo CD, kubectl, the operator | the manifests in `deploy/driver/`. #277 made the namespace and the label prefix derivable from one instance value. #278 generates the Secrets |
 | Tailscale hostnames `monoplayer-gate-b-paper`, `monoplayer-gate-b-velocity` | the driver lane's `--server` default, the display host's launch command | `src/driver/backends.js`, `src/driver/run.js` |
-| Prism instances `gate-b-player` and `gate-b-player-fabric` (the 26.1.2 pair, kept as the G0 record) | the display host, `tools/nath.sh`, `tools/driver/install.sh` | the driver-lane runbook |
-| Prism instances `gate-b-player-262` and `gate-b-player-262-fabric` (the 26.2 pair) | the display host, `src/driver/run.js`, `docs/driver-lane.md` | the driver-lane runbook, in the same display-host step |
+| Prism instances `gate-b-player` and `gate-b-player-fabric` (the 26.1.2 pair, kept as the G0 record) | the display host | the driver-lane runbook |
+| Prism instances `gate-b-player-262` and `gate-b-player-262-fabric` (the 26.2 pair) | the display host, `src/driver/run.js`, `tools/nath.sh`, `docs/driver-lane.md` | the driver-lane runbook, in the same display-host step |
 | `GATEB_*` variables (`GATEB_DRIVER_*`, `GATEB_RCON_*`, `GATEB_DISPLAY`, `GATEB_ACCOUNTS_DIR`, `GATEB_AUTH_*`) | the operator's shell, `tools/nath.sh`, `src/driver/`, `src/custody/cli.js` | the driver-lane runbook and the custody CLI |
 | `gateb.driver.port`, `gateb.driver.token`, `gateb.window.title` | the launch command | the client driver |
 | window title `Monoplayer Gate B` | the operator's Hyprland rule | the client driver, together with that rule |

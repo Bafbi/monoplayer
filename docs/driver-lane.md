@@ -27,6 +27,9 @@ row. It is the G0 host baseline (row M2 in the plan).
    `gate-b-player-262` 26.2 instance is the one the witness lane uses. The older
    `gate-b-player-fabric` 26.1.2 instance stays on the host as the record of the
    G0 run on that version, and the 26.2 client cannot join with it.
+   A `tools/nath.sh` command that names no instance acts on
+   `gate-b-player-262-fabric`, the one a driver run launches. `NATH_INSTANCE`
+   names another, and `launch` refuses to guess.
 3. **Cluster access:** `kubectl` context that can `exec` into the Paper pod.
 
 ## Driver tunnel (required each session)

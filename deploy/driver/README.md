@@ -210,7 +210,7 @@ Each needs its own migration step:
 | Name | Where it lives | Migration |
 |---|---|---|
 | server motd `Monoplayer Gate B` | `velocity.yaml` | a config value players see |
-| Prism instances `gate-b-player`, `gate-b-player-fabric` | display host | clone into a new instance id |
+| Prism instances `gate-b-player`, `gate-b-player-fabric`, `gate-b-player-262`, `gate-b-player-262-fabric` | display host | clone into a new instance id |
 | `GATEB_*` environment variables, `gateb.*` JVM properties, window title `Monoplayer Gate B` | operator shell, launch flags, Hyprland rule | rename together, in one operator run |
 
 The namespace, the labels, the Secrets and the two tailnet hostnames are derived
@@ -241,7 +241,9 @@ kubectl -n "$(scripts/gate-lane.sh name)" get svc paper-g0 -w
 The Tailscale service should publish a hostname like
 `monoplayer-gate-<instance>-paper.tail41e568.ts.net:25565`, where the instance is
 what `scripts/gate-lane.sh name` prints. Join that address from the 26.2 Prism
-instance for G0.
+instance `gate-b-player-262-fabric` for G0: it is the one
+`node src/driver/run.js` launches, and the one `tools/nath.sh` acts on when a
+command names no instance.
 
 ## Notes
 

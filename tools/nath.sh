@@ -15,7 +15,8 @@
 #
 # Environment:
 #   NATH_HOST            SSH target       (default bafbi@nath.tail41e568.ts.net)
-#   NATH_INSTANCE        default instance (default gate-b-player-fabric)
+#   NATH_INSTANCE        instance a command acts on when it names none
+#                        (--help prints the one it resolves to)
 #   NATH_DRIVER_PORT     driver port      (default 25599)
 #   NATH_SSH             SSH command      (default ssh -o BatchMode=yes -o ConnectTimeout=10 HOST)
 #   NATH_SCP             SCP command      (default scp -q)
@@ -29,14 +30,23 @@
 set -euo pipefail
 
 host=${NATH_HOST:-bafbi@nath.tail41e568.ts.net}
-default_instance=${NATH_INSTANCE:-gate-b-player-fabric}
+# The client the driver lane launches. This script reads nothing from the tree, so
+# the name is one copy here; test/tooling/nath.test.js holds it to the driver's
+# (#190).
+default_instance=${NATH_INSTANCE:-gate-b-player-262-fabric}
 driver_port=${NATH_DRIVER_PORT:-25599}
 
 read -r -a ssh_cmd <<<"${NATH_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 ${host}}"
 read -r -a scp_cmd <<<"${NATH_SCP:-scp -q}"
 
 die() { printf 'nath: %s\n' "$1" >&2; exit "${2:-1}"; }
-usage() { sed -n '/^# Drive the driver display host/,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+usage() {
+  sed -n '/^# Drive the driver display host/,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+  # The value, not a second copy of it: the header names the variable, and this
+  # prints what the commands below resolve, so a version's instance cannot sit in
+  # the help text and drift from the one they act on (#190).
+  printf '\nThe default instance is %s, the client the driver lane launches.\n' "$default_instance"
+}
 
 # Values that reach a remote shell are whitelisted, never escaped.
 require_instance() {

@@ -34,6 +34,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const TESTDATA = path.join(root, 'testdata')
 const MOD_METADATA = path.join(root, 'tools', 'driver', 'src', 'main', 'resources', 'fabric.mod.json')
 
+// The Prism instance a driver run launches (#190): the 26.2 Fabric instance,
+// because the gate Paper serves 26.2 and the 26.1.2 pair cannot join it
+// (docs/driver-lane.md). tools/nath.sh keeps one copy of the name, and
+// test/tooling/nath.test.js holds the copy to this one.
+const DEFAULT_INSTANCE = 'gate-b-player-262-fabric'
+
 const HELP = `
 Driver lane: the G0 scenario, the unmodded witness checklist, and the client
 parity lane (#62).
@@ -81,7 +87,7 @@ Options:
                      N hours ago, so a copied report set cannot pass (default 24).
   --host             Display host for relaunch/screenshot/tunnel
                      (default: bafbi@nath.tail41e568.ts.net).
-  --instance         Prism instance to launch (default: gate-b-player-262-fabric).
+  --instance         Prism instance to launch (default: ${DEFAULT_INSTANCE}).
   --server           Join address (default: the Paper of this worktree's gate lane,
                      monoplayer-gate-<instance>-paper.tail41e568.ts.net:25565).
   --account          Account name (default: Bafbi).
@@ -108,9 +114,7 @@ const DEFAULTS = {
   force: false,
   lane: 'driver',
   host: 'bafbi@nath.tail41e568.ts.net',
-  // The Fabric instance built from the 26.2 vanilla instance. The older
-  // gate-b-player-fabric pair stays on disk as the 26.1.2 record (#71).
-  instance: 'gate-b-player-262-fabric',
+  instance: DEFAULT_INSTANCE,
   // Empty means the lane this worktree derives: main fills both from
   // src/driver/lane.js, so the address a client joins and the RCON target a run
   // administers are one name and cannot disagree (#282).
