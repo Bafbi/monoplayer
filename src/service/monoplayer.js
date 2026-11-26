@@ -621,10 +621,10 @@ export function createMonoplayer ({
   // would take one spectator away for it, and the relay would stop under a spectator
   // that stayed.
   //
-  // #516: the player each channel is, and whether it holds the entry that names it.
-  // The identity is kept here rather than on the channel record
-  // (src/core/channels.js) because that record's fields are the ones the leg already
-  // answers from its own socket, and a UUID is needed by one frame the core writes.
+  // The value is the player that channel is (its name and UUID) and whether it holds
+  // the entry that names it (#516). Both fields are the core's own copy: the leg's
+  // channel record (src/core/channels.js) holds what the leg answers from its socket,
+  // and the core is told a spectator's identity once, when it lands.
   const spectators = new Map()
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
@@ -1953,12 +1953,12 @@ export function createMonoplayer ({
   // frame for one play state is a write nobody sees. The fact is kept where the frame
   // went: the driver's play state, which is the entry that names no channel, and each
   // spectator's own.
-  function markSkinSent (channel) {
-    if (channel.id === null) {
+  function markSkinSent (entry) {
+    if (entry.id === null) {
       skinSent = true
       return
     }
-    const spectator = spectators.get(channel.id)
+    const spectator = spectators.get(entry.id)
     if (spectator !== undefined) spectator.skinSent = true
   }
 
@@ -1980,41 +1980,39 @@ export function createMonoplayer ({
       return
     }
     const signed = typeof puppetSkinProperty.signature === 'string'
-    for (let index = 0; index < owed.length; index++) {
-      const channel = owed[index]
-      const entry = entries[index]
+    for (const entry of entries) {
       if (entry.packet === null) {
         // #134: a channel the front named no UUID for cannot be given an entry, and
-        // no later frame repairs it. One line per channel, because each is a client
-        // that reads its own body as vanilla for the rest of its connection.
-        log('puppetSkinWithheld', { name: entry.name, reason: 'no_identity', channel: channel.id })
+        // no later frame repairs it. One line per channel, because each is a player
+        // who reads their own body as vanilla for the rest of the connection.
+        log('puppetSkinWithheld', { name: entry.name, reason: 'no_identity', channel: entry.id })
         continue
       }
       let delivered
       try {
-        delivered = frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: channel.id })
+        delivered = frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: entry.id })
       } catch (error) {
         metrics.skinFramesRefused++
         log('puppetSkinRefused', {
           reason: 'write_failed',
           error: String(error?.message ?? error).slice(0, 200),
-          channel: channel.id
+          channel: entry.id
         })
         continue
       }
       // #516: the leg answers false when it found no socket for that channel, so the
-      // frame reached no client. It is not marked sent, because a channel that comes
-      // back is still owed the entry, and a later pass is what gives it one.
+      // frame reached nobody. It is not marked sent, because a channel that comes back
+      // is still owed the entry, and a later pass is what gives it one.
       if (delivered === false) {
         metrics.skinFramesRefused++
-        log('puppetSkinRefused', { reason: 'write_failed', channel: channel.id })
+        log('puppetSkinRefused', { reason: 'write_failed', channel: entry.id })
         continue
       }
-      markSkinSent(channel)
+      markSkinSent(entry)
       metrics.skinFramesWritten++
       telemetry.metric('monoplayer.skin.frames', 1, { player: entry.name })
-      log('puppetSkinSent', { name: entry.name, reason, signed, channel: channel.id })
-      emit('puppet_skin', { name: entry.name, signed, channel: channel.id })
+      log('puppetSkinSent', { name: entry.name, reason, signed, channel: entry.id })
+      emit('puppet_skin', { name: entry.name, signed, channel: entry.id })
     }
   }
 
