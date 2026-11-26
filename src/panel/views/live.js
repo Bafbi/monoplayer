@@ -46,6 +46,74 @@ function allowedRead (allowed) {
   return ', and the allowed servers read at ' + allowed.observedAt + version
 }
 
+// A duration, in the unit a reader compares to the heartbeat interval: seconds under
+// a minute, minutes under an hour, and then the units the cap rows use. A claim held
+// for 45000 ms is "45 s", not a number of milliseconds to divide in the head.
+function duration (ms) {
+  if (!present(ms)) return null
+  // The unit is chosen from the rounded count, so 59 500 ms reads "1 min" and not
+  // "60 s": a unit that has just overflowed is the next unit's zero.
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return seconds + ' s'
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 60) return minutes + ' min'
+  const hours = Math.round((ms / 3_600_000) * 10) / 10
+  if (hours < 24) return hours + (hours === 1 ? ' hour' : ' hours')
+  const days = Math.round((ms / 86_400_000) * 10) / 10
+  return days + ' ' + dayWord(days)
+}
+
+// One group the heartbeat carries as a list of records (#419). Null is a record that
+// does not carry it at all, which is a lane older than the groups, and the page then
+// says nothing: not a heading with nothing under it, and not a zero. An empty list is
+// a lane that holds none, which is a fact and gets its own sentence. `rowsFor` draws
+// the group when there is something to draw.
+function renderRows (rows, title, empty, rowsFor) {
+  if (rows === null || rows === undefined) return []
+  if (rows.length === 0) return [group(title, [row('none', empty)])]
+  return rowsFor(rows)
+}
+
+// The per-body group #415 added to the heartbeat. One row set per body, so a lane
+// that holds several names which one a number belongs to. A body nobody claimed says
+// so rather than printing a claim age of zero, because absent is the fact and zero
+// would read as a claim held for no time (#263 D2).
+function renderBodies (bodies) {
+  return bodies.map(body => group('Body ' + (body.body ?? 'with no slug'), [
+    row('active', yesno(body.active)),
+    row('warm', yesno(body.warm)),
+    row('frames', count(body.frames)),
+    row('chunk bytes', bytes(body.chunkBytes)),
+    row('frames cached', count(body.framesCached)),
+    row('frames dropped', count(body.framesDropped)),
+    row('claim held', duration(body.claimMs) ?? 'no claim stands')
+  ]))
+}
+
+// The per-channel group. `claim held` is the claim on the channel's body and
+// `spectator channels` is the audience of that body, which is what the doc's two rows
+// say. A spectator holds no claim, so its row says that in words. A connection the
+// lane admitted with no claim names no body, and the row says which case that is.
+function renderChannels (channels) {
+  return channels.map(channel => group('Channel ' + (channel.channel ?? 'with no id'), [
+    row('body', present(channel.body) ? channel.body : 'no claim: the lane admitted this connection itself'),
+    // `role` is always written (docs/telemetry.md), so a null here is a record the
+    // page cannot explain, and it says that rather than printing no line at all.
+    row('role', channel.role ?? 'the record carries no role'),
+    row('open for', duration(channel.ageMs) ?? 'the front stamped no open'),
+    row('frames', count(channel.frames)),
+    row('play frames', count(channel.play)),
+    row('configuration frames', count(channel.configuration)),
+    row('bytes', bytes(channel.bytes)),
+    row('replays', count(channel.replays)),
+    row('spectator channels', count(channel.spectators)),
+    // The doc says a spectator's row is the only one with no claim age, so a driver's
+    // row without one says that about the record and not about the lane.
+    row('claim held', duration(channel.claimMs) ??
+      (channel.role === 'spectator' ? 'a spectator holds no claim' : 'the record carries no claim age'))
+  ]))
+}
+
 function renderHeartbeat (facts) {
   const heartbeat = facts.heartbeat
   if (heartbeat === null) return ''
@@ -79,6 +147,9 @@ function renderHeartbeat (facts) {
     row('domains', domains === '' ? null : domains),
     row('chunk bytes', bytes(heartbeat.chunkBytes))
   ]))
+
+  lines.push(...renderRows(heartbeat.bodies, 'Bodies', 'the process holds no cache for a body', renderBodies))
+  lines.push(...renderRows(heartbeat.channels, 'Channels', 'the front holds no channel open', renderChannels))
 
   const journal = heartbeat.journal ?? {}
   const caps = facts.caps ?? {}
