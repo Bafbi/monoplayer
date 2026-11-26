@@ -21,7 +21,14 @@ function rig ({ live = true, cached = [] } = {}) {
     allowLibraryFallback: false,
     onUnavailable: () => { throw new Error('must not be unavailable in live mode') }
   })
-  return { interceptor, writes, raws, configuring, endConfiguration: () => { configuration = false } }
+  return {
+    interceptor,
+    writes,
+    raws,
+    configuring,
+    endConfiguration: () => { configuration = false },
+    startConfiguration: () => { configuration = true }
+  }
 }
 
 test('live mode holds the library registry and finish writes', () => {
@@ -103,6 +110,35 @@ test('#257 the baseline replays the recording and keeps the phase open', () => {
   assert.equal(r.interceptor.stats.baselineFrames, 3)
   assert.equal(r.interceptor.stats.replayedConfigFrames, 0, 'the library registry is not a fallback here')
   assert.equal(r.interceptor.stats.unavailable, 0)
+})
+
+// #541: the phase's finish is the last configuration frame a client can parse.
+// The client answers it in play, and this leg does not learn that until the
+// answer arrives, so a frame written inside that window carries a configuration
+// packet id into a connection that is already reading the play table. The
+// library's keep-alive does exactly that on its four-second interval: the
+// offline rung recorded 9 bytes of configuration keep_alive read in play as
+// acknowledge_player_digging, seven bytes left over.
+test('#541 a configuration frame written after the phase finish never reaches the client', () => {
+  const r = rig()
+  r.interceptor.finishFromCore()
+  r.interceptor.write('keep_alive', { keepAliveId: 7n })
+  assert.deepEqual(r.writes, [], 'the keep-alive does not follow the phase finish')
+  assert.equal(r.interceptor.stats.suppressedAfterFinish, 1)
+})
+
+test('#541 the next round opens the phase again, so its keep-alives are sent', () => {
+  const r = rig()
+  r.interceptor.finishFromCore()
+  r.endConfiguration()
+  // The leg opens the next round on the connection it holds by writing the
+  // play-state start_configuration, and flips its own state when the client
+  // answers it.
+  r.interceptor.write('start_configuration', {})
+  r.startConfiguration()
+  r.interceptor.write('keep_alive', { keepAliveId: 8n })
+  assert.deepEqual(r.writes.map(write => write.name), ['start_configuration', 'keep_alive'])
+  assert.equal(r.interceptor.stats.suppressedAfterFinish, 0)
 })
 
 test('#257 a baseline for another protocol version is not a baseline', () => {

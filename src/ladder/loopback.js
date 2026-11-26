@@ -1894,6 +1894,14 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         attaches: seamlessCore.metrics.attaches,
         blocks: b5.blockChanges.map(change => change.location),
         leftovers: b5.leftovers.length,
+        // A count alone cannot be read: the frame that carried the trailing
+        // bytes is what says whether the proxy sent something it should not.
+        leftoverFrames: b5.leftovers.map(entry => ({
+          state: entry.state,
+          name: entry.name,
+          total: entry.total,
+          leftover: entry.leftover
+        })),
         errors: b5.errors.length
       }
     )

@@ -173,7 +173,20 @@ export function createConfigPathInterceptor ({
   let resolved = false
   let notified = false
   const stashed = [] // library-authored registry_data params (fallback only)
-  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, baselineFrames: 0, unavailable: 0, finishedByCore: 0 }
+  // #541: the phase's finish is the last configuration frame a client can parse.
+  // The client answers it and is in play from that moment; this leg learns that
+  // only when the answer arrives, so a frame written in between still carries a
+  // configuration packet id into a connection reading the play table. The
+  // library's own keep-alive does exactly that on its four-second interval.
+  let finished = false
+  const stats = {
+    suppressedRegistryData: 0,
+    replayedConfigFrames: 0,
+    baselineFrames: 0,
+    unavailable: 0,
+    finishedByCore: 0,
+    suppressedAfterFinish: 0
+  }
 
   // #16: the client is in its configuration phase now. One notification per
   // connection, whichever path resolves first.
@@ -222,11 +235,26 @@ export function createConfigPathInterceptor ({
       return
     }
     originalWrite('finish_configuration', {}) // the library call, now ordered after the replay
+    finished = true
   }
 
   function wrappedWrite (name, params) {
     if (!isConfigurationState()) {
+      // #541: a round starts on the connection the client holds with the
+      // play-state start_configuration, and the play state between rounds is
+      // where the next round's opening frame belongs. Either way the phase is
+      // open again, and the next configuration frame is legitimate.
+      finished = false
       return originalWrite(name, params)
+    }
+    if (finished) {
+      // #541: nothing follows the finish in the configuration state. A frame
+      // that did would be read by a client already in play, as a different
+      // packet with the rest of the frame left over (#541, the offline rung's
+      // O35: a 9-byte configuration keep_alive read in play as
+      // acknowledge_player_digging, seven bytes left over).
+      stats.suppressedAfterFinish++
+      return
     }
     if (name === 'registry_data' && !resolved) {
       stashed.push({ name, params })
@@ -246,6 +274,7 @@ export function createConfigPathInterceptor ({
   function finishFromCore () {
     if (resolved) return false
     resolved = true
+    finished = true
     stats.finishedByCore++
     return true
   }
