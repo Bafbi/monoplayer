@@ -39,6 +39,14 @@ export const CHANNEL_REFUSAL = Object.freeze({
   IN_USE: 'in_use'
 })
 
+// The key one body's channels live under. A connection the lane admitted with no
+// claim names no body, and the empty body is what it is filed under. Two callers
+// read this: the registry below, and #415's heartbeat, which groups the same way so
+// a body's rows and its audience cannot disagree about where a channel belongs.
+export function bodyKey (body) {
+  return body === null || body === undefined ? '' : body
+}
+
 function requiredString (value, field) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(field + ' must be a non-empty string')
@@ -103,7 +111,7 @@ export function createChannels () {
   // lane's own: a connection the lane admits without a claim was opened there
   // because no claim named a server.
   function channelsOn (body) {
-    const key = body === null ? '' : body
+    const key = bodyKey(body)
     let onBody = byBody.get(key)
     if (onBody === undefined) {
       onBody = new Map()
@@ -122,7 +130,7 @@ export function createChannels () {
     byId.delete(id)
     const onBody = channelsOn(record.body)
     onBody.delete(id)
-    if (onBody.size === 0) byBody.delete(record.body === null ? '' : record.body)
+    if (onBody.size === 0) byBody.delete(bodyKey(record.body))
     return channelView(record)
   }
 
