@@ -32,8 +32,8 @@ which lane each run belongs on.
 ## Offline, and why that is allowed here
 
 The dev lane is the repository's offline picker lane
-([#392](https://github.com/Bafbi/monoplayer/issues/392)). Three things make it one,
-and each is a line in `deploy/dev/`:
+([#392](https://github.com/Bafbi/monoplayer/issues/392)): the one whose Paper is
+disposable. Three things make it one, and each is a line in `deploy/dev/`:
 
 - **The front serves the picker.** `MONOPLAYER_PICKER=1` lands a joining client in
   the picker instead of attaching it to a body as the driver, so it can claim a row
@@ -48,6 +48,12 @@ and each is a line in `deploy/dev/`:
   joins `monoplayer-dev.tail41e568.ts.net:25565` with no port-forward. The Paper is
   not published: a Paper anyone can join directly is a join that never reached a
   picker.
+
+The live lane serves a picker too since
+[#579](https://github.com/Bafbi/monoplayer/issues/579), so this is no longer the only
+lane with one. What the dev lane adds is a Paper a claim can reach without the live
+servers: the live picker offers Excalia, and a claim there moves the puppet in a world
+real players are standing in. Every run below stays on this lane.
 
 The Paper runs `ONLINE_MODE=FALSE` and `ENFORCE_SECURE_PROFILE=FALSE`. That is the
 half of [#391](https://github.com/Bafbi/monoplayer/issues/391) this lane can land first:

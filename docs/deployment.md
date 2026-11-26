@@ -273,6 +273,11 @@ Common:
   allowed-server list below has its own path and, unlike this one, a fallback.
 - `MONOPLAYER_ALLOWED_SERVERS` and `MONOPLAYER_ALLOWED_SERVERS_SEED`: the list the
   picker offers and the copy Git commits behind it (#262).
+- `MONOPLAYER_PICKER=1`: the lane serves a picker, so a client that joins while no
+  body is claimed meets the dialog instead of a `backend_not_ready` refusal, and the
+  rows it offers are the allowed-server list above. The live lane sets it (#579).
+  [The picker section](product-core.md#the-configuration-baseline-and-the-picker-257)
+  says what a claim does to a body, and what a body no claim holds is.
 - `MONOPLAYER_PREAUTH_MAX_CONNECTIONS`: the total concurrent connections the
   front accepts between a socket and the attach whitelist's accept. It is on by
   default, so exposing the port is not a switch to remember. A value below `1`
@@ -377,8 +382,10 @@ See `docs/telemetry.md` for the signals and the journal layout.
   `preAuth.deadlineMs` is destroyed with reason `preauth_deadline`, so a set of
   silent sockets cannot hold the window closed (#205).
 - **The front never attaches without a warm backend.** While the puppet has no
-  session, a login is denied with `backend_not_ready` instead of being handed
-  an incomplete configuration.
+  session and the lane serves no picker, a login is denied with `backend_not_ready`
+  instead of being handed an incomplete configuration. A lane that serves a picker
+  meets the login with the dialog instead, and the claim's dial is what warms the
+  body (#579).
 - **The front client is never told to connect elsewhere.** Clientbound
   `transfer`, `start_configuration`, cookies, dialogs, and kicks are blocked by
   `clientbound-policy.js`, and the cache never holds them, so a later attach

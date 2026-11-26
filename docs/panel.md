@@ -472,8 +472,8 @@ Four rules are deliberate, and each is a decision rather than an accident:
 
 **A write is stored, and whether a client is offered it depends on one switch.** The
 picker landed in #265 behind `MONOPLAYER_PICKER`, and it reads this list at each offer, so
-a write reaches a joining player's next attempt on a lane that sets it. No lane this repo
-deploys sets it, so on those the list is stored and offered to nobody. The route's answer
+a write reaches a joining player's next attempt on a lane that sets it. Both lanes this
+repo deploys set it since #579, so a write reaches a player on either. The route's answer
 still says that in `takesEffect`, in the sentence #262 settled, and the block says it too:
 a lane whose `MONOPLAYER_PICKER` is off offers nothing. The start record reports the key,
 inside its `control` object:

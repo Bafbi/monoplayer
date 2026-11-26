@@ -116,6 +116,12 @@ spec:
               value: /control/allowed-servers.json
             - name: MONOPLAYER_ALLOWED_SERVERS_SEED
               value: /config/allowed-servers.json
+            # #257's picker, on the lane real players join (#579). A client that
+            # joins while no body is claimed meets the dialog instead of a
+            # `backend_not_ready` refusal. docs/product-core.md says what a claim
+            # does to a body.
+            - name: MONOPLAYER_PICKER
+              value: "1"
             - name: MONOPLAYER_VERSION
               value: "26.2"
             # Commands-only chat (#97): the human's commands are spoken as the

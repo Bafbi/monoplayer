@@ -13,7 +13,9 @@
 # MONOPLAYER_ALLOWED_SERVERS_SEED names this key, so it answers whenever the live
 # key in the control ConfigMap is absent or unreadable (#262). It is also the base
 # the panel's first edit is built on, so a first write cannot silently drop the
-# servers listed here.
+# servers listed here. Since #579 the live lane serves a picker, so these rows are
+# what a rebuilt cluster offers before the panel writes its own list: the fallback,
+# and not the live list, which is the key in `monoplayer-control`.
 
 apiVersion: v1
 kind: ConfigMap
@@ -38,6 +40,10 @@ data:
       "servers": [
         {
           "host": "play2.excalia.fr",
+          "port": 25565
+        },
+        {
+          "host": "sm.hyvers.fr",
           "port": 25565
         }
       ]

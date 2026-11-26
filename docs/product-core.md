@@ -344,6 +344,16 @@ that joins it is refused. `MONOPLAYER_PICKER=1` changes that one case and nothin
 else. A whitelisted client is held in the configuration phase and shown a dialog
 listing the lane's allowed servers.
 
+Two deployed lanes serve a picker since #579: the live lane, where a real player meets
+it, and the dev lane, which runs the same front against a disposable Paper. The switch
+is off by default, so a lane that names no `MONOPLAYER_PICKER` still refuses a
+backendless join.
+
+On a lane with a picker nothing is dialled before a claim, and a claim is what keeps a
+body's retry armed. A driver that leaves releases the claim, and the body stands
+unclaimed, which is a body a client may watch.
+[The session invariants](#session-invariants-sessionjs) carry the rest.
+
 - **The phase is a recording, never a construction.** `minecraft-protocol` writes
   registry frames only from `options.registryCodec`, and the codec it can write is
   the one vendored in minecraft-data: no registry tags, and for 26.2 one registry
@@ -476,8 +486,8 @@ listing the lane's allowed servers.
   that puts a client into a body. Before this, a join while a warm body stood with
   nobody driving it was attached as that body's driver down the pre-picker path with
   no claim recorded: the body was driven by a player the claim registry had never
-  heard of, and nobody could watch it. A lane without the picker is unchanged, and
-  that is the live lane.
+  heard of, and nobody could watch it. A lane without the picker is unchanged, and no
+  deployed lane is that since #579: the live lane serves one too.
 - **A row says what a chooser needs (#259).** The row carries the body's state
   (claimed, unclaimed, or down), the driver's name from the claim, and how many
   channels on that body are spectators. A row is read at every dialog, so a claim

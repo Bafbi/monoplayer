@@ -1,14 +1,16 @@
-// #392 turns the dev lane into the offline picker lane: the one deployed lane that
-// serves a picker, the row it offers, the tailnet name a client reaches it by, and
-// the Paper that accepts the bots which arrive. #325 asks for a driver-lane scenario
-// where one real client claims a body and a second watches it in spectator mode.
-// This lane makes the claim reachable from outside the loopback rung; it does not
-// make the row runnable, because the service still builds live legs only (#391).
+// #392 turned the dev lane into an offline picker lane: the row it offers, the
+// tailnet name a client reaches it by, and the Paper that accepts the bots which
+// arrive. #325 asks for a driver-lane scenario where one real client claims a body and
+// a second watches it in spectator mode. This lane makes the claim reachable from
+// outside the loopback rung; it does not make the row runnable, because the service
+// still builds live legs only (#391).
 //
-// These cases pin both facts to the files that decide them. The day a second lane
-// turns the picker on, the first case fails and names it. The day the dev lane stops
-// serving one, the same case fails the other way. Nothing here reaches a cluster:
-// every case reads a file or the config default.
+// #579 turned the picker on for the live lane, so two deployed lanes serve one. The
+// first case below pins that pair: a third lane naming the switch fails it, and so does
+// either of these two dropping it. A change to the pair leaves the O63 tail in
+// docs/testing-ladder.md and deploy/driver/README.md saying where a claim is reachable.
+//
+// Nothing here reaches a cluster: every case reads a file or the config default.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -23,6 +25,7 @@ const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 const DRIVER_README = read('deploy/driver/README.md')
 const LADDER = read('docs/testing-ladder.md')
 const DEV_MONOPLAYER = 'deploy/dev/monoplayer.yaml'
+const LIVE_MONOPLAYER = 'deploy/manifests/deployment.yaml'
 const DEV_PAPER = 'deploy/dev/paper.yaml'
 
 // Every YAML file under deploy/, with the directory that holds it.
@@ -91,29 +94,33 @@ function bullet (text, needle) {
   return flat(found[0])
 }
 
-test('exactly one deployed lane serves the picker, and it is the dev lane', () => {
+test('two deployed lanes serve the picker: the live lane, and the dev lane', () => {
   const naming = deployed()
     .filter(({ text }) => /^\s*-\s*name:\s*MONOPLAYER_PICKER\s*$/m.test(text))
     .map(({ file }) => file)
+    .sort()
   // Any value counts, not just "1": a lane writing "0" is still a decision about
   // who may make a claim, and it is the kind of line a reader takes as truth.
-  assert.deepEqual(naming, [DEV_MONOPLAYER],
-    'the lanes naming MONOPLAYER_PICKER are ' + (naming.join(', ') || 'none') + '. Exactly one deployed ' +
-    'lane names it, and it is the dev lane: the lane whose job is validation, whose Paper is ' +
-    'disposable, and whose account is not GlowSquidye. A second lane naming it makes two places a ' +
-    'claim is offered or refused, so the lane table in AGENTS.md, the driver runbook and the O63 ' +
-    'tail have to say which one a run means.')
+  assert.deepEqual(naming, [DEV_MONOPLAYER, LIVE_MONOPLAYER].sort(),
+    'the lanes naming MONOPLAYER_PICKER are ' + (naming.join(', ') || 'none') + '. Since #579 two ' +
+    'deployed lanes name it: the live lane, so a player who joins while no body is claimed meets ' +
+    'the picker instead of a refusal, and the dev lane, whose job is validation and whose Paper is ' +
+    'disposable. A third lane naming it is a third place a claim is offered or refused, and the ' +
+    'lane table in AGENTS.md, the driver runbook and the O63 tail would each have to say which one ' +
+    'a run means. A lane dropped from this list took the picker off the lane a page still names.')
 
   // The switch is on, not merely named: a lane that writes "0" says the opposite.
-  assert.match(read(DEV_MONOPLAYER), /- name: MONOPLAYER_PICKER\n\s*value: "1"/,
-    'the dev lane sets MONOPLAYER_PICKER to 1')
+  for (const lane of [DEV_MONOPLAYER, LIVE_MONOPLAYER]) {
+    assert.match(read(lane), /- name: MONOPLAYER_PICKER\n\s*value: "1"/,
+      lane + ' sets MONOPLAYER_PICKER to 1')
+  }
 
   // The default is the other half: a lane that names no switch still cannot serve one.
   assert.equal(DEFAULT_CONFIG.picker, false,
     'the picker default changed to true, so every lane serves a claim without naming the switch')
 })
 
-test('the picker lane offers the row its ConfigMap seeds, and nothing else', () => {
+test('the dev lane offers the row its ConfigMap seeds, and nothing else', () => {
   const text = read(DEV_MONOPLAYER)
   assert.match(text, /- name: MONOPLAYER_ALLOWED_SERVERS_SEED\n\s*value: \/config\/allowed-servers\.json/,
     'the dev lane reads its allowed-server list from /config/allowed-servers.json')
@@ -166,10 +173,15 @@ test('the dev Paper accepts the bots the lane exists to run', () => {
     'and it does not require a secure profile a bot does not have')
 })
 
-test('the O63 tail says which lane serves a body, and what still needs a real client', () => {
+test('the O63 tail says which lanes serve a body, and what still needs a real client', () => {
   const tail = bullet(LADDER, 'vanilla client draws a body it does not drive')
   assert.match(tail, /#325/, 'the claim still names the ticket that would measure it')
-  assert.match(tail, /dev lane/, 'it names the one deployed lane that serves a picker')
+  // Two lanes serve a picker since #579, so the sentence names both. A reader looking
+  // for a lane to run a claim on has two answers, and this tail is where they are
+  // written.
+  assert.match(tail, /#579/, 'it names the ticket that turned the picker on for the live lane')
+  assert.match(tail, /live lane/, 'it names the live lane as one that serves a picker')
+  assert.match(tail, /dev lane/, 'and the dev lane, the one a claim reaches without the live servers')
   assert.match(tail, /#391/, 'and the ticket that has to land before two bots can join one')
   assert.match(tail, /deploy\/dev\/README\.md/, 'pointing at the runbook that says what the lane holds')
 })
@@ -179,8 +191,10 @@ test('the gate runbook states what a spectator row would need', () => {
   const note = section(DRIVER_README, 'No spectator row: no client can draw a body yet').replace(/\s+/g, ' ')
 
   // The lane that now serves a body, and the three things it still does not have.
-  assert.match(note, /dev lane/, 'the dev lane is named as the one lane that serves a claim')
+  assert.match(note, /dev lane/, 'the dev lane is named as the lane a claim can reach without the live servers')
   assert.match(note, /MONOPLAYER_PICKER/, 'the picker switch is named, because a lane with it off offers no claim')
+  assert.match(note, /#579/, 'it names the ticket that turned the picker on for the live lane')
+  assert.match(note, /live lane/, 'and says the live lane serves the same picker')
   assert.match(note, /#391/, 'the missing offline legs are named as the ticket that owns them')
   assert.match(note, /src\/service\/start-live\.js/, 'the leg the service builds is named')
   assert.match(note, /src\/legs\/live-backend\.js/, 'and the account directory the backend leg refuses without')
