@@ -109,6 +109,34 @@ const OPERATOR_WHITELIST = '{"version":1,"players":[{"uuid":"0b7f5a4c-9d21-4c6e-
 const LIVE_SECRET = '{"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"e30="}}'
 const PLAYER_LIST = 'There are 1 of a max of 8 players online: DevPuppet'
 
+// #676: the proxy's own records, one JSON object per line, which is what the lane says
+// about itself. A picker lane's `startLive` carries `picker: true` and it logs
+// `backendBootSkipped` with reason `picker` at boot (dialBodyAtBoot,
+// src/service/start-live.js); a claim writes `claimDial`, then `claimBodyWarm` when the
+// body lands or `claimDialFailed` when it does not (src/service/monoplayer.js).
+const BOOT = '{"t":"2026-01-01T00:00:00.000Z","event":"startLive","picker":true}'
+const BOOT_SKIPPED = '{"t":"2026-01-01T00:00:00.001Z","event":"backendBootSkipped","reason":"picker"}'
+const CLAIM_DIAL = '{"t":"2026-01-01T00:01:00.000Z","event":"claimDial","body":"paper_25565"}'
+const CLAIM_WARM = '{"t":"2026-01-01T00:01:02.000Z","event":"claimBodyWarm","body":"paper_25565","state":"attachable"}'
+const CLAIM_FAILED = '{"t":"2026-01-01T00:01:00.000Z","event":"claimDialFailed","body":"paper_25565","reason":"connect_failed","error":"ECONNREFUSED"}'
+const CLAIM_REFUSED = '{"t":"2026-01-01T00:01:00.000Z","event":"claimDialRefused","body":"paper_25565","reason":"no_target"}'
+const HEARTBEAT = '{"t":"2026-01-01T00:02:00.000Z","event":"heartbeat","backendLogins":0}'
+// The default fixture: a claim that dialled and landed, which is the lane a successful
+// `dev:join` is run against.
+const LANDED_LOG = [BOOT, BOOT_SKIPPED, CLAIM_DIAL, CLAIM_WARM].join('\n') + '\n'
+const IDLE_LOG = [BOOT, BOOT_SKIPPED].join('\n') + '\n'
+// A claim that dialled and has not landed, which is the first seconds of every claim.
+const CLAIMED_LOG = [BOOT, BOOT_SKIPPED, CLAIM_DIAL].join('\n') + '\n'
+// A claim that failed writes both records, in this order: the state is read from the
+// last of them.
+const CLAIM_FAILED_LOG = [BOOT, BOOT_SKIPPED, CLAIM_DIAL, CLAIM_FAILED].join('\n') + '\n'
+// A claim refused before it dialled: the row named no target, or the leg refused it.
+const CLAIM_REFUSED_LOG = [BOOT, BOOT_SKIPPED, CLAIM_REFUSED].join('\n') + '\n'
+// A lane with the picker off dials at boot, so its boot record carries no skip.
+const BOOT_DIALLED_LOG = '{"t":"2026-01-01T00:00:00.000Z","event":"startLive","picker":false}\n'
+// A log whose boot records have rotated away: records, but nothing about the boot.
+const NO_BOOT_LOG = HEARTBEAT + '\n'
+
 // The shim answers from fixture files, so a JSON answer never has to survive a
 // shell quoting layer. It answers the calls `dev-lane.sh` makes, and nothing else (#152). A rule is
 // one call: the words the script sends, in the order it sends them, and the count it
@@ -279,6 +307,15 @@ exit 0`
     body: `echo "$KUBECTL_RCON"
 exit 0`
   },
+  // The proxy's records, which is where the lane says whether it is a picker and
+  // whether a claim has dialled (#676). The container is named, because the pod has
+  // init containers too and a default would put kubectl's warning on stderr.
+  {
+    ns: DEV_NAMESPACE,
+    match: ['logs', 'deploy/monoplayer', '-c', 'monoplayer'],
+    body: `cat "$fixtures/proxy-log.jsonl"
+exit $?`
+  },
 ]
 
 const { script: SHIM, ids: SHIM_IDS } = kubectlShim(SHIM_RULES, { prelude: ['fixtures="$KUBECTL_FIXTURES"'] })
@@ -314,6 +351,7 @@ function workspace () {
   fs.writeFileSync(path.join(fixtures, 'live-secret.json'), LIVE_SECRET + '\n')
   fs.writeFileSync(path.join(fixtures, 'dev-whitelist.json'), EMPTY_WHITELIST + '\n')
   fs.writeFileSync(path.join(fixtures, 'live-whitelist.json'), EMPTY_WHITELIST + '\n')
+  fs.writeFileSync(path.join(fixtures, 'proxy-log.jsonl'), LANDED_LOG)
   return {
     dir,
     bin,
@@ -360,6 +398,13 @@ function run (space, args, env = {}) {
   const refused = unmodelled(space.log)
   assert.deepEqual(refused, [], 'the shim modelled every call: ' + refused.join(' | '))
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
+}
+
+// The report `join` writes, read back. Its `state` is the lane's own word for what
+// it saw, which is what a script reads: exit 0 covers an idle lane as well as a join
+// (#676).
+function reportOf (space) {
+  return JSON.parse(fs.readFileSync(path.join(space.dir, 'dev-join.json'), 'utf8'))
 }
 
 // A call against the live namespace. The lookahead is required: the prefix test
@@ -642,7 +687,8 @@ test('join reports the dev proxy own account on the dev Paper', () => {
     account: 'DevPuppet',
     players: ['DevPuppet'],
     evidence: 'There are 1 of a max of 8 players online: DevPuppet',
-    joined: true
+    joined: true,
+    state: 'landed'
   })
 })
 
@@ -654,6 +700,170 @@ test('join fails when the dev Paper does not list the account', () => {
   })
   assert.equal(status, 1, output)
   assert.match(output, /DevPuppet is not on the dev Paper/)
+  // The lane is a picker and a claim landed, so the failure names the claim rather than
+  // the lane's boot: the boot dialled nothing on purpose (#676).
+  assert.match(output, /a claim's body landed and has since disconnected/)
+  assert.equal(reportOf(space).state, 'landed')
+})
+
+test('join says a claim has not landed yet while its dial is in flight', () => {
+  // `claimDial` is written before the socket opens (src/service/monoplayer.js:2715), and
+  // the connect budget is 240 s against a 60 s poll. So a claim a player just made is
+  // not a failed login, and the sentence must not say it is.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'proxy-log.jsonl'), CLAIMED_LOG)
+  const { status, output } = run(space, ['join'], {
+    KUBECTL_RCON: 'There are 0 of a max of 8 players online:',
+    MONOPLAYER_DEV_JOIN_TIMEOUT: '0'
+  })
+  assert.equal(status, 1, output)
+  assert.match(output, /no landing followed/, 'it names what it did not see')
+  assert.match(output, /no claimBodyWarm/, 'and the record it looked for')
+  assert.match(output, /wait, then run this again/, 'and what to do about it')
+  assert.doesNotMatch(output, /did not land/, 'a dial in flight is not a failed login')
+  assert.equal(reportOf(space).state, 'claimed')
+})
+
+// #676. A picker lane dials no body at boot, so with nothing claimed the account is
+// not on the Paper and the lane is working exactly as designed
+// (dialBodyAtBoot, src/service/start-live.js). Reporting that as a failed login is a
+// red line an operator reads as a broken lane, which is what these cases pin.
+test('join says the lane is idle when nothing has claimed, and exits 0', () => {
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'proxy-log.jsonl'), IDLE_LOG)
+  const { status, output, calls } = run(space, ['join'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  // Not a word of failure, and the record that proves the lane is a picker.
+  assert.doesNotMatch(output, /did not land/, 'an idle picker lane is not a failed login')
+  assert.match(output, /nothing has claimed/, 'the answer is that no claim has arrived yet')
+  assert.match(output, /backendBootSkipped/, 'the record that proves it is named')
+  assert.match(output, /DevPuppet/, 'and the account the report is about')
+  assert.match(output, /claim a row/, 'and what to do about it')
+  // The lane holds still until a claim, so there is nothing to wait for: a 60 s
+  // poll would end at the same answer, later, and as a failure.
+  assert.equal(calls.some(line => line.includes('rcon-cli list')), false,
+    'it does not poll the Paper for a body no claim dialled: ' + calls.join(' | '))
+  // No player list and no evidence: RCON never ran, and a read that did not run is not
+  // a report about the Paper (see the same rule in `status`).
+  assert.deepEqual(reportOf(space), {
+    namespace: DEV_NAMESPACE,
+    account: 'DevPuppet',
+    joined: false,
+    state: 'idle'
+  })
+})
+
+test('join fails when a claim dialled no body', () => {
+  // The other half of #676: the lane is a picker and a claim did arrive, and its body
+  // did not land. Nothing is connected, so this is the lane's failure and not its rest.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'proxy-log.jsonl'), CLAIM_FAILED_LOG)
+  const { status, output, calls } = run(space, ['join'])
+  assert.equal(status, 1, output)
+  assert.match(output, /claimDialFailed/, 'the record that proves the claim\'s body did not land is named')
+  assert.doesNotMatch(output, /nothing has claimed/, 'a claim did arrive, so the lane is not idle')
+  assert.match(output, /DevPuppet is not on the dev Paper/)
+  assert.equal(calls.some(line => line.includes('rcon-cli list')), false,
+    'it does not poll the Paper for a body that never opened: ' + calls.join(' | '))
+  assert.equal(reportOf(space).state, 'claim-failed')
+})
+
+test('join fails when a claim was refused before it dialled', () => {
+  // A row with no target, or a leg that refuses the target, refuses the claim before any
+  // dial: `claimDialRefused` with `no_target` or `target_refused`
+  // (src/service/monoplayer.js:2664, :2696). The lane did have a claim, so "nothing has
+  // claimed, claim a row again" would be advice that cannot converge.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'proxy-log.jsonl'), CLAIM_REFUSED_LOG)
+  const { status, output } = run(space, ['join'])
+  assert.equal(status, 1, output)
+  assert.match(output, /claimDialRefused/, 'the record that proves the refusal is named')
+  assert.doesNotMatch(output, /nothing has claimed/, 'a claim arrived, so the lane is not idle')
+  assert.equal(reportOf(space).state, 'claim-failed')
+})
+
+test('join does not call a rotated log a lane that dials at boot', () => {
+  // A picker lane whose boot records have rotated away still holds heartbeats. Reading
+  // that absence as "the picker is off" would print the sentence #676 exists to delete,
+  // from a log that never said so.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'proxy-log.jsonl'), NO_BOOT_LOG)
+  const { status, output } = run(space, ['join'], {
+    KUBECTL_RCON: 'There are 0 of a max of 8 players online:',
+    MONOPLAYER_DEV_JOIN_TIMEOUT: '0'
+  })
+  assert.equal(status, 1, output)
+  assert.match(output, /says nothing about this lane's boot \(no-boot-record\)/, 'it names what it could not see')
+  assert.doesNotMatch(output, /did not land\b(?! *\()/, 'a log that said nothing is not a failed login')
+  assert.equal(reportOf(space).state, 'unknown')
+})
+
+test('join removes the last run report before it answers', () => {
+  // The report is what a script reads, and a run that dies before writing one must not
+  // leave the previous answer behind: a stale "joined": true is the one confidently
+  // wrong yes this command could give.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.dir, 'dev-join.json'), JSON.stringify({ joined: true }) + '\n')
+  const { status } = run(space, ['join'], { KUBECTL_ACCOUNT_NAME: '' })
+  assert.equal(status, 2, 'the profile read refused')
+  assert.equal(fs.existsSync(path.join(space.dir, 'dev-join.json')), false, 'the stale report is gone')
+})
+
+test('the runbook lists every state the script can write', () => {
+  // The report's `state` is the machine-readable half of `join` (#676): exit 0 covers an
+  // idle lane as well as a join, so a script reads this word. The list is taken from the
+  // docblock that declares the states rather than restated, so a state added to the code
+  // and not to the runbook is a failure here, not a reader left looking.
+  const script = fs.readFileSync(SCRIPT, 'utf8')
+  const runbook = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
+  const states = [...script.matchAll(/^#   ([a-z][a-z-]*) {2,}\S/gm)].map(match => match[1])
+  assert.ok(states.length > 1, 'the docblock declares the states it can write: ' + states.join(', '))
+  for (const state of states) {
+    assert.ok(script.includes('"' + state + '"'), 'dev-lane.sh can write the state ' + state)
+    assert.ok(runbook.includes('`' + state + '`'), 'deploy/dev/README.md lists the state ' + state)
+  }
+})
+
+test('the join sentences name records the service writes', () => {
+  // #676: the idle sentence tells an operator which record proves the lane is a
+  // picker, and the failure sentences name the records a claim leaves. A message that
+  // names a record nothing writes is a reader with no way to check the claim, so the
+  // names are held to the modules that write them.
+  const sentences = fs.readFileSync(SCRIPT, 'utf8').split('\n')
+  const said = line => line.trim().startsWith('say "') || line.trim().startsWith('die "')
+  const idle = sentences.filter(line => said(line) && line.includes('nothing has claimed'))
+  assert.equal(idle.length, 1, 'one sentence reports the idle lane, found ' + idle.length)
+  assert.match(idle[0], /backendBootSkipped reason picker/, 'the idle sentence names the boot record')
+  assert.match(fs.readFileSync(path.join(ROOT, 'src', 'service', 'start-live.js'), 'utf8'),
+    /log\('backendBootSkipped', \{ reason: 'picker' \}\)/,
+    'src/service/start-live.js writes backendBootSkipped with reason picker')
+  const failed = sentences.filter(line => said(line) && line.includes('did not land ('))
+  assert.equal(failed.length, 1, 'one sentence reports a claim whose body did not land')
+  assert.match(failed[0], /logs deploy\/monoplayer/, 'and names the command that shows why')
+  // Every record the states are read from, held to the module that writes it.
+  const service = fs.readFileSync(path.join(ROOT, 'src', 'service', 'monoplayer.js'), 'utf8')
+  for (const record of ['claimDial', 'claimDialFailed', 'claimDialRefused', 'claimBodyWarm']) {
+    assert.ok(fs.readFileSync(SCRIPT, 'utf8').includes('"' + record + '"'), 'dev-lane.sh reads ' + record)
+    assert.ok(service.includes("log('" + record + "'"), 'src/service/monoplayer.js writes ' + record)
+  }
+  // And the boot answer the picker state is read from, which is the start record's own
+  // field rather than the absence of a skip record.
+  assert.match(fs.readFileSync(path.join(ROOT, 'src', 'service', 'start-live.js'), 'utf8'),
+    /picker: cfg\.picker,/, 'the startLive record carries the picker answer')
+})
+
+test('join keeps the login-failure sentence on a lane that dialled at boot', () => {
+  // A lane with the picker off has the login at boot, so its failure is the one this
+  // script has always reported, and the picker branch must not swallow it.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'proxy-log.jsonl'), BOOT_DIALLED_LOG)
+  const { status, output } = run(space, ['join'], {
+    KUBECTL_RCON: 'There are 0 of a max of 8 players online:',
+    MONOPLAYER_DEV_JOIN_TIMEOUT: '0'
+  })
+  assert.equal(status, 1, output)
+  assert.match(output, /the proxy is up but the backend login did not land/)
+  assert.equal(reportOf(space).state, 'boot')
 })
 
 test('the join no longer borrows the live account', () => {

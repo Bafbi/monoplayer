@@ -130,7 +130,8 @@ the lane up.
    ```
 
    A lane with an account and an attach whitelist is up. `mise run dev:join`
-   proves the account reached the dev Paper ([Join it](#join-it)).
+   reports whether the account is on the dev Paper yet. Until a client claims a row
+   it says the lane is idle. That is not a failure ([Join it](#join-it)).
 
 After this, `mise run dev:down` stops the lane and **keeps the account**: the
 claim, the namespace, and the Secrets stay, so coming back is `mise run dev:up`.
@@ -215,7 +216,7 @@ mise run dev:custody:up
 mise run dev:custody
 mise run dev:custody:down
 mise run dev:up
-mise run dev:join          # the account is on the dev Paper again
+mise run dev:join          # idle until a claim dials the body
 ```
 
 `mise run dev:down` returns before the old proxy pod is gone, and
@@ -255,16 +256,39 @@ Delete the line once the lane moves back to `:main`.
 
 ## Join it
 
-This reports the account on the Paper only while somebody holds a claim, because a claim is
-what dials a body (#258). Before that it says the login did not land, and the lane is still
-serving: it has a picker to offer and no body to serve.
+A picker lane dials no backend at boot: the proxy logs `backendBootSkipped` with reason
+`picker`, and the first claim is what dials a body (#258, #266). So the command reports the
+state it read from the lane's log, and then, once a claim has dialled, whether the Paper
+lists the account.
 
 ```bash
 mise run dev:join
 ```
 
+With nothing claimed it says the lane is idle and exits 0. That is the lane working: it has a
+picker to offer, no body to serve, and it is waiting for a claim. Claim a row in the picker,
+then run the command again to prove the account reached the dev Paper.
+
+Once a claim has dialled, the task waits for the dev Paper to list the account, and passes
+when it does. When the claim's body did not land, it exits 1 and the sentence names
+`claimDialFailed`, the record whose `reason` says why.
+
 The task waits for the dev proxy, reads the account from its volume, and reads
-the dev Paper's player list over RCON. It writes `.reports/dev-join.json`.
+the dev Paper's player list over RCON. It writes `.reports/dev-join.json`, and a script
+reads `joined` from it, because exit 0 covers an idle lane as well as a join. Its `state`
+says why the answer is what it is: what the script read from the lane's log.
+
+| `state` | what the lane's log said |
+|---|---|
+| `idle` | a picker lane with no claim record at all |
+| `claimed` | a claim dialled a body, and no landing followed it yet |
+| `landed` | a claim's body landed, and it is not connected now |
+| `claim-failed` | a claim did not land: `claimDialFailed`, or a `claimDialRefused` before any dial |
+| `boot` | the lane's own record says the picker is off, so it dials at boot |
+| `unknown` | the log said nothing about the boot, or could not be read |
+
+`unknown` is the state where the command could not see the lane, rather than the lane
+being wrong. Read the log it names before reading anything into the Paper's player list.
 
 An earlier version ran a throwaway pod that copied the live account. That pod was
 safe, because it could not refresh, but it made the live token part of a dev run.
@@ -323,10 +347,10 @@ mise run dev:status                      # both pods up, and whether the whiteli
 `mise run dev:image` needs the branch workflow's image: `mise run image:build` publishes to
 Zot, which this namespace cannot resolve.
 
-Nothing is on the Paper yet, and that is the lane working. A picker lane dials no backend at
-boot: the proxy logs `backendBootSkipped` with reason `picker`, and the first claim is what
-dials a body (#258). `mise run dev:join` says the login did not land until somebody claims,
-and passes afterwards.
+Nothing is on the Paper yet, and that is the lane working: a picker lane dials no backend at
+boot, so the proxy logs `backendBootSkipped` with reason `picker` and the first claim is
+what dials a body (#258). Until somebody claims, `mise run dev:join` says the lane is idle
+and exits 0 ([Join it](#join-it)).
 
 ### Drive it
 
