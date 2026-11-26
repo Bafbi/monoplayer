@@ -198,12 +198,15 @@ test('POST adds one server, and the lane\'s own reader sees it', async () => {
     assert.equal(body.changed, true)
     assert.equal(body.count, 2)
     assert.equal(body.source, 'control')
-    // The window is the next offer, not the next boot. The lane already reads the key
-    // for its start record, and the picker that offers it is #265, so the answer may
-    // neither promise an offer that does not exist nor deny the read that does.
-    assert.match(body.takesEffect, /nothing offers the list to a client yet/)
+    // The window is the next offer, not the next boot (#352). The picker landed in #265
+    // behind MONOPLAYER_PICKER and reads this list at each offer. The answer names the
+    // switch that decides it, instead of claiming nothing offers the list.
+    assert.match(body.takesEffect, /MONOPLAYER_PICKER/)
+    assert.match(body.takesEffect, /each offer/)
     assert.match(body.takesEffect, /start record/)
     assert.match(body.takesEffect, /#265/)
+    assert.doesNotMatch(body.takesEffect, /nothing offers the list to a client yet/,
+      'the picker has offered this list since #265, and the answer may not say otherwise')
 
     const audit = rig.lines().find(line => line.event === 'panelAllowedServerAdd')
     assert.ok(audit, 'the write is audited')
@@ -247,9 +250,9 @@ test('a server already in the list is a no-op, not a second row', async () => {
 })
 
 // #339: one address, one rule. The panel used to build its own `toLowerCase() + ':' +
-// port` key, so a dotted row and the plain spelling were two servers: an add appended a
-// second row the lane's parser then refused as a duplicate, and the panel could not
-// repair the list it wrote.
+// port` key, so a dotted row and the plain spelling were two servers. An add then appended
+// a second row the lane's parser refused as a duplicate, and the panel could not repair
+// the list it wrote.
 test('#339 an add of the plain spelling finds a row written with the root dot', async () => {
   const rig = await panel({ cluster: cluster({ live: text(document([DOTTED])) }) })
   try {

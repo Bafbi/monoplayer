@@ -62,12 +62,14 @@ export const MAX_ATTEMPTS = 3
 // Where a human makes the change permanent. The seed key lives in the ConfigMap Git
 // owns, so the answer carries the block to paste into the file that holds it.
 export const PASTE_INTO = 'deploy/manifests/configmap.yaml'
-// Both halves of this are true and neither is obvious: the document is stored, and
-// nothing offers it yet. The lane reads the file for its own start record, and the
-// picker that puts a row on a client's screen is #265, so the answer says which of
-// the two it is rather than letting a 200 read as "offered".
-export const WRITTEN_ONLY = 'the document is written. The lane reads this key for its own start record, ' +
-  'and nothing offers the list to a client yet: the picker that does is #265. Nothing here stops a running ' +
+// What a write reaches, because a 200 reads as "offered" and this route writes one key.
+// The lane reads it for its own start record. The picker that puts a row on a client's
+// screen (#265) reads it at each offer on a lane whose MONOPLAYER_PICKER is on. Which
+// lanes set that switch is the manifests' fact, so this names the switch, not the lanes
+// (#352).
+export const TAKES_EFFECT = 'the document is written. The lane reads this key for its own start record, ' +
+  'and a lane whose MONOPLAYER_PICKER is on offers this list to a joining client at each offer, which is ' +
+  'the picker #265 added. A lane that leaves the switch off offers nothing. Nothing here stops a running ' +
   'session either: this route writes one key of one ConfigMap. A lane whose MONOPLAYER_ALLOWED_SERVERS names ' +
   'another file does not read this key at all.'
 
@@ -95,7 +97,8 @@ export function refusalText ({ reason: code, at = null }) {
   return where + ' cannot be read: ' + String(code)
 }
 
-// A host and port as one address, which is what a picker row is called (#258).
+// A host and port as one address, which is what a picker row is called (#258). Display
+// only: the answer to "is this the same address as that one" is `addressKey` (#339).
 export function addressOf (server) {
   return server.host + ':' + server.port
 }
@@ -426,9 +429,9 @@ export function createAllowedRoute ({
   // retried request and a double click the same request.
   function mutate (current, { action, target, addedAt }) {
     const servers = Array.isArray(current.document.servers) ? current.document.servers : []
-    // The lane's own rule for "is this the same address" (#339), not a second copy of
-    // it: a row hand-written with the root dot on its host is the row this add names,
-    // and a second copy of the comparison appended a duplicate the lane then refused.
+    // The lane's own rule for "is this the same address" (#339), not a second copy of it.
+    // A row hand-written with the root dot on its host is the row this add names, and a
+    // second copy of the comparison appended a duplicate the lane then refused.
     const wanted = addressKey(target.host, target.port)
     const index = servers.findIndex(entry => addressKey(entry.host, entry.port) === wanted)
     if (action === 'remove') {
@@ -463,7 +466,7 @@ export function createAllowedRoute ({
       // A removal answers with the entry it dropped, so a caller can put it back.
       ...(action === 'remove' ? { removed: record } : {}),
       attempts: attempt,
-      takesEffect: WRITTEN_ONLY,
+      takesEffect: TAKES_EFFECT,
       pasteInto: PASTE_INTO,
       yaml: configMapYaml(allowedText(current.document), ALLOWED_KEY)
     }
