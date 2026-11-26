@@ -105,7 +105,19 @@ const heartbeat = {
     prunedBytes: 1000,
     dirBytes: 7_000_000
   },
-  account: { alias: 'GlowSquidye', expiresAt: Date.parse('2026-11-25T00:00:00.000Z') }
+  account: { alias: 'GlowSquidye', expiresAt: Date.parse('2026-11-25T00:00:00.000Z') },
+  // #419: the two groups #415 added. Three shapes the page has to survive are here:
+  // a body nobody claimed, a spectator with no claim, and a connection the lane
+  // admitted itself, which names no body and carries no open.
+  bodies: [
+    { body: 'sky', active: true, warm: true, frames: 923, chunkBytes: 2_243_099, framesCached: 51_260, framesDropped: 12, claimMs: 45_000 },
+    { body: 'nether', active: false, warm: false, frames: 0, chunkBytes: 0, framesCached: 0, framesDropped: 0 }
+  ],
+  channels: [
+    { channel: 'holder-1', body: 'sky', role: 'driver', ageMs: 120_000, frames: 900, play: 880, configuration: 20, bytes: 1_048_576, replays: 1, spectators: 2, claimMs: 45_000 },
+    { channel: 'holder-2', body: 'sky', role: 'spectator', ageMs: 60_000, frames: 400, play: 395, configuration: 5, bytes: 524_288, replays: 1, spectators: 2 },
+    { channel: 'holder-3', role: 'spectator', frames: 0, play: 0, configuration: 0, bytes: 0, replays: 0, spectators: 0 }
+  ]
 }
 
 const pod = {
@@ -185,6 +197,39 @@ test('the heartbeat fields are the documented ones, projected by name', () => {
   assert.equal(beat.wire.checked, 0)
   assert.equal(beat.telemetry.queuedSeries, 67, 'metrics.queued is distinct series, kept apart from the log queue')
   assert.equal(beat.telemetry.queuedLogRecords, 0)
+  // #419: the per-body and per-channel groups, projected field by field like every
+  // group above. The doc's three keys that can be absent stay absent: a body nobody
+  // claimed has no claim age, a spectator holds no claim, and a connection the lane
+  // admitted itself names no body (#263 D2).
+  assert.deepEqual(beat.bodies[0], {
+    body: 'sky',
+    active: true,
+    warm: true,
+    frames: 923,
+    chunkBytes: 2_243_099,
+    framesCached: 51_260,
+    framesDropped: 12,
+    claimMs: 45_000
+  })
+  assert.equal(beat.bodies[1].body, 'nether')
+  assert.ok(!('claimMs' in beat.bodies[1]), 'a body nobody claimed has no claim age, and not a zero')
+  assert.deepEqual(beat.channels[0], {
+    channel: 'holder-1',
+    body: 'sky',
+    role: 'driver',
+    ageMs: 120_000,
+    frames: 900,
+    play: 880,
+    configuration: 20,
+    bytes: 1_048_576,
+    replays: 1,
+    spectators: 2,
+    claimMs: 45_000
+  })
+  assert.equal(beat.channels[1].role, 'spectator')
+  assert.ok(!('claimMs' in beat.channels[1]), 'a spectator holds no claim, so its row carries no claim age')
+  assert.ok(!('body' in beat.channels[2]), 'a connection the lane admitted itself names no body')
+  assert.ok(!('ageMs' in beat.channels[2]), 'a leg that stamped no open has no age')
   // The effective backend comes from the start record, and the registry's copy is
   // a different fact with no timestamp.
   assert.deepEqual(backend.effective, { value: 'play2.excalia.fr:25565', source: 'start', at: START_AT })
@@ -423,7 +468,8 @@ test('/ is the card for each puppet, under the timestamp of every record', async
       '2243099 (2.1 MiB)', 'monoplayer-84855d7f8b-5h5bd',
       'play2.excalia.fr:25565 (start, ' + START_AT + ')',
       '1 entry (startLive, ' + START_AT + '); re-read at each login',
-      'monoplayer-control', 'glowsquidye.tail41e568.ts.net']) {
+      'monoplayer-control', 'glowsquidye.tail41e568.ts.net',
+      '<h4>Body sky</h4>', '<h4>Channel holder-1</h4>']) {
       assert.ok(page.includes(text), 'the page shows ' + text)
     }
     // Every asset the page loads is served by the panel itself. The tailnet

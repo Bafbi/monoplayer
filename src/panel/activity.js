@@ -29,6 +29,14 @@ const JOURNAL = ['enabled', 'disabledReason', 'dir', 'file', 'frames', 'events',
   'pruned', 'prunedBytes', 'skipped', 'dropped', 'truncated', 'errors', 'dirBytes', 'freeBytes', 'requiredBytes']
 const WIRE = ['checked', 'rejected']
 const DOMAINS = ['config', 'prefix', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic']
+// #419: the two groups #415 added, from the two tables under "The per-body and
+// per-channel groups" in docs/telemetry.md. That page is still their home:
+// test/panel/groups.test.js compares these lists to its Field column in both
+// directions, so a documented field with no entry here is a red gate and not a
+// number the page silently drops.
+const BODIES = ['body', 'active', 'warm', 'frames', 'chunkBytes', 'framesCached', 'framesDropped', 'claimMs']
+const CHANNELS = ['channel', 'body', 'role', 'ageMs', 'frames', 'play', 'configuration', 'bytes',
+  'replays', 'spectators', 'claimMs']
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const clean = value => (typeof value === 'string' ? redact(value) : value)
@@ -114,6 +122,19 @@ function pick (source, keys) {
     any = true
   }
   return any ? out : null
+}
+
+// Every row of a group, projected by the same rule. A group the record does not
+// carry is null, which is a lane older than the groups; an empty list is a lane that
+// holds none. The page says different things for the two, so this does not merge
+// them. A row that is not an object, or that carries none of the named fields, is
+// dropped rather than rendered as a heading with nothing under it.
+function picks (source, keys) {
+  if (!Array.isArray(source)) return null
+  return source
+    .filter(isObject)
+    .map(row => pick(row, keys))
+    .filter(row => row !== null)
 }
 
 // What the API server said about the pod: the name, whether it is ready, when it
@@ -267,6 +288,10 @@ function heartbeatFacts (record, now) {
     chunkBytes: counter(record, 'chunkBytes'),
     journal: pick(record.journal, JOURNAL),
     wire: pick(record.wire, WIRE),
+    // #419: one row per body the process holds a cache for, and one per channel the
+    // front holds open. Neither group exists on a lane older than #415.
+    bodies: picks(record.bodies, BODIES),
+    channels: picks(record.channels, CHANNELS),
     telemetry: telemetryFacts(record.telemetry),
     account: accountFacts(record.account, now)
   }
