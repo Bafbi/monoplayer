@@ -6,42 +6,29 @@
 // clock. With no --start flag the CLI never opens a socket and no Microsoft
 // auth is touched — B1 is the pure core plus fake integration only.
 //
-// Adapter interfaces (real legs, built in G1/M4, implement these):
+// Adapter interfaces (real legs, built in G1/M4, implement these). The call-ins
+// each leg carries, the method of the core each one reaches, and its payload
+// shape are declared in src/service/wire-leg-to-core.js: one table per interface,
+// one row per call-in. This block names what those tables cannot: the rest of
+// each interface, which the core calls on the leg directly.
 //
 //   backendLeg = {
 //     connect(): Promise                          // starts the puppet session
-//     setFrameHandler(({ state, name, buffer, data }): void)
-//     setEndHandler(({ reason }): void)           // backend hangup/fault
-//     setErrorHandler(({ error }): void)
 //     write(name, packet)                         // serverbound, packet level
 //     writeRaw(buffer, meta)                      // serverbound, frame level
 //     target                                      // { host, port }: the address
 //                                                 // the leg is dialled at
-//     chat(text): void                            // sign and send as the puppet
-//     answerHeldGate({ state, name, data })        // optional: answer a configuration
-//                                                 // gate its last client left (#73)
 //     end(reason)                                 // deliberate close
 //   }
 //
-// `chat` and `answerHeldGate` are optional: a leg without the first drops the
-// human's chat and counts it, and a leg without the second leaves a
-// configuration gate held when its last client detaches (#73).
 // The leg owns the signing, because the signature needs the puppet's profile
 // keys and the puppet connection's own last-seen window, and neither belongs to
-// the core.
+// the core. The two calls the core makes on it that way are rows of
+// BACKEND_LEG_CALL_INS: `chat` and `answerHeldGate` (#19, #73). A leg without
+// the first drops the human's chat and counts it, and a leg without the second
+// leaves a configuration gate held when its last client detaches.
 //
 //   frontLeg = {                                  // a body's channels (#269)
-//     setLoginStartHandler(({ uuid, name }): decision[])   // -> whitelist review
-//     setServerboundHandler(({ state, name, buffer, data }): void)
-//     setDetachHandler(({ reason }): void)
-//     setSpectateBody(fn)                         // optional: fn({ body, server, name })
-//                                                 //   -> { watching, reason }
-//     setSpectatorAttach(fn)                      // optional: fn({ name, uuid, channel })
-//                                                 //   -> { watching, frames, replayed }
-//     setSpectatorPose(fn)                        // optional: fn({ channel, name, data })
-//                                                 //   a spectator's own movement frame,
-//                                                 //   which never reaches the pipeline (#636)
-//     setSpectatorLeft(fn)                        // optional: fn({ channel, name })
 //     channels                                    // the channels this leg holds, as records:
 //                                                 //   { id, body, role, ... }. Read for the
 //                                                 //   driver's channel id, which the core has
@@ -65,15 +52,12 @@
 // and its spectators each hold one, with their own delivery record and client
 // information (src/core/channels.js). A write with no `channel` reaches every
 // channel on the body; a write with one reaches that connection alone, which is how
-// a spectator is handed its body's replay. The last two call-ins are the spectator's
-// and a leg without them refuses that verb in words.
+// a spectator is handed its body's replay.
 //
-// #592: the call-ins the core registers from a table, and what each one reaches,
-// are declared in src/service/wire-leg-to-core.js. The login review, the
-// serverbound pipeline and the detach are still registered inline in start()
-// (#605). The core applies the table there and reports what the leg carried as
-// `legWiring`, with the names it did not carry on the start record. A lane adds no
-// row to it: it builds a leg and starts a core.
+// #592, #605: the core applies both tables in start() and reports what each leg
+// carried as `legWiring`, one report per interface, with the names it did not
+// carry on the start record. A lane adds no row to them: it builds a leg and
+// starts a core.
 
 import { bumpBounded } from '../core/bounded-counter.js'
 import { WARM_MARKER } from '../core/state-cache.js'
@@ -81,7 +65,7 @@ import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
 import { accountIdentifier, stampIdentity } from '../core/channels.js'
 import { forceWarm, shouldForceWarm } from './readiness.js'
-import { wireLegToCore } from './wire-leg-to-core.js'
+import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS, wireLegToCore } from './wire-leg-to-core.js'
 import {
   FABRIC_BRAND,
   brandFrame,
@@ -628,9 +612,10 @@ export function createMonoplayer ({
   const listeners = new Map() // type -> Set<fn>
   const unclassifiedLogged = new Set()
   let started = false
-  // #592: what the leg carried when the core wired it, or null before start().
-  // It is the report wireLegToCore gives, which the start record carries the
-  // missing names from and which the tests read back off a started core.
+  // #592, #605: what each leg carried when the core wired it, or null before
+  // start(). It is the report wireLegToCore gives, one per interface, which the
+  // start record carries the missing names from and which the tests read back off
+  // a started core.
   let legWiring = null
   // #269: a driver is delivered a body. Delivery is the front leg's channels now, so
   // this is only what the session knows: one driver, one body, one attach.
@@ -3044,7 +3029,11 @@ export function createMonoplayer ({
     }
     const frame = pendingDialog.forAttach(held.state)
     let outcome = { answered: false, reason: 'leg_cannot_answer' }
-    if (typeof backendLeg.answerHeldGate === 'function') {
+    // #605: whether the leg carries this is a row of BACKEND_LEG_CALL_INS, whose
+    // report names it on the start record when it does not. A `typeof` guard here
+    // would be a second home for the same fact, and a leg without the method would
+    // go on saying nothing.
+    if (backendCarries('answerHeldGate')) {
       try {
         outcome = backendLeg.answerHeldGate({ state: held.state, name: held.name, data: frame?.data ?? null })
       } catch (error) {
@@ -3086,335 +3075,341 @@ export function createMonoplayer ({
 
   // --- wiring ---
 
+  // #605: whether the backend leg carries a call-in the core makes on it. The
+  // table owns the list, the report says what the leg carried, and the start record
+  // names a hole, so the core reads the report instead of testing the leg's shape a
+  // second time.
+  function backendCarries (name) {
+    return legWiring !== null && legWiring.backend.called.includes(name)
+  }
+
   function start () {
     if (started) return
     started = true
 
-    backendLeg.setEndHandler(({ reason = 'backend_end' } = {}) => {
-      // #258: a body that ended is not a body this session is waiting on. The
-      // claim bookkeeping that survives is `claimedBody`, which is what refuses a
-      // second body (#260).
-      claimDial = null
-      // #22: the leg the core ended for a handover reports its end late.
-      if (legHandover) {
-        legHandover = false
-        log('backendEndHandedOver', { reason })
-        return
-      }
-      // #22: the moved-to session faulted while the client follows it, at any
-      // stage of the move: before its configuration, during it, or after its
-      // play login. The client is restored from the pre-transfer snapshot on
-      // the connection it kept; it is never kicked for a move it can survive.
-      if (moveKind !== null) {
-        // #87: a dial that never opened a session is not the target dying. The
-        // target closed the socket before its first frame — the race a transfer
-        // intent from the same account makes — so the move waits for the next
-        // dial and the follow budget owns the give-up. Failing here restores a
-        // client the target may still accept.
-        if (!backendSessionOpen) {
-          log('backendDialClosed', { reason, kind: moveKind, state: session.state })
-          teardownBackend({ reason, retainFront: true })
-          return
-        }
-        log('backendEndDuringMove', { reason, kind: moveKind, state: session.state })
-        failTransfer({ reason: `target_lost:${reason}` })
-        return
-      }
-      const reconfigured = reconfigureRequested
-      reconfigureRequested = false
-      // A transfer already tore the session down synchronously; the late
-      // socket end is recorded, not replayed.
-      if (session.state === STATES.RECONNECTING) {
-        const outcome = session.backendDown({ reason })
-        log('backendEndLate', { reason, outcome })
-        return
-      }
-      // A normal fault resets the redirect chain; a followed transfer keeps it.
-      if (pendingTransfer === null) clearTransferChain('backend_end')
-      teardownBackend({
-        reason,
-        kickReason: reconfigured ? RECONFIGURE_REASON : 'backend_disconnected'
-      })
-    })
-
-    backendLeg.setErrorHandler(({ error } = {}) => {
-      log('backendError', { error: String(error?.message ?? error) })
-    })
-
-    backendLeg.setFrameHandler(frame => {
-      const { state, name, buffer, data = {} } = frame
-      // #22: a frame from the leg the core ended for a handover belongs to the
-      // dead session. It must not enter the target's cache, and it must not
-      // clear the handover flag: the old socket's end would then read as the
-      // target faulting.
-      if (legHandover) {
-        metrics.lateFramesAfterHandover++
-        return
-      }
-      // #260: the first frame of a session binds its body's cache, which is where a
-      // dial the orchestrator made on its own is learned.
-      if (!backendSessionOpen) syncDialledBody()
-      backendSessionOpen = true
-      // Exact packet journal + one frame counter per backend frame. Lifecycle
-      // log records come only from the log() funnel, never one per frame.
-      // #416: the body this frame crossed. Never a channel: one body's stream reaches
-      // every channel on it (src/core/channels.js).
-      journal.frame({ dir: 's2c', state, name, buffer, body: activeBody })
-      const metricPolicy = state === 'play' || state === 'configuration'
-        ? clientboundPolicy(state, name)
-        : null
-      telemetry.metric('monoplayer.frames', 1, {
-        direction: 's2c',
-        state,
-        name,
-        result: !metricPolicy
-          ? 'ignored'
-          : metricPolicy.decision === DECISION.BLOCK
-            ? 'blocked'
-            : metricPolicy.decision === DECISION.CONTROL ? 'control' : 'forwarded'
-      })
-      if (state === 'configuration') {
-        metrics.configFrames++
-        backendSessionOpen = true
-        // #22: the first configuration frame of a followed move is where the
-        // client's loading screen starts. The target has accepted the session,
-        // so there is a configuration to serve.
-        if (moveKind !== null && !clientReconfiguring) startClientReconfiguration()
-        announceBrand()
-        const policy = clientboundPolicy('configuration', name)
-        if (name === 'ping') {
-          // Per-leg latency ping: answer on the puppet leg, never replay.
-          backendLeg.write('pong', { id: data.id })
-          return
-        }
-        if (name === 'transfer') {
-          // A configuration-phase transfer happens before the play login, when
-          // the session has no warm state to move. v1 blocks it (counted) and
-          // leaves the session where it is; the play-state follow path is the
-          // product behavior.
-          metrics.transfersBlocked++
-          log('transferBlocked', {
-            state: 'configuration',
-            host: typeof data.host === 'string' ? data.host : null,
-            port: Number.isInteger(data.port) ? data.port : null
-          })
-          return
-        }
-        // #16: the backend is in its configuration phase, whatever this frame
-        // turns out to be. Record it first, so a client may attach now and
-        // follow this stream live — a gate can be the first frame of the phase.
-        if (!backendConfiguring) {
-          backendConfiguring = true
-          log('backendConfiguring', { state: session.state })
-        }
-        // #98: a configuration-phase pack is the human's to answer, like a gate,
-        // and the held copy is what a client arriving later receives.
-        if (name === 'add_resource_pack' || name === 'remove_resource_pack') {
-          handleResourcePack({ state: 'configuration', name, buffer, data })
-          return
-        }
-        if (policy.decision === DECISION.CONTROL) {
-          // #16: a configuration gate is the human's to answer. The holder keeps
-          // it while no client follows this stream.
-          handleControlDialog({ state: 'configuration', name, buffer, data })
-          return
-        }
-        if (policy.decision === DECISION.BLOCK) {
-          blockClientbound('configuration', name, policy, data)
-          return
-        }
-        if (!policy.cache) return
-        const pushed = cache.push('configuration', name, buffer, data)
-        const clientInConfiguration = session.state === STATES.CONFIGURING || clientReconfiguring
-        if (pushed.cached && policy.relay && clientInConfiguration) {
-          if (frontLeg.writeRaw(buffer, { state: 'configuration', name }) !== false) {
-            metrics.configFramesRelayed++
-            if (clientReconfiguring) metrics.configFramesReconfigured++
-          }
-        }
-        // #87: the round now covers the dial as well, so a target that is
-        // configuring is not a target that stalled. Each frame the target sends
-        // re-arms the deadline; one that stops sending still ends the round.
-        if (clientReconfiguring) armReconfigurationTimer()
-        return
-      }
-      if (state !== 'play') {
-        // Handshake/login frames (encryption_begin, compress, login success)
-        // belong to the puppeted backend connection only. Replaying them in
-        // the front's play state makes the client read packet id 0x01 as
-        // add_entity and reject the joining client.
-        metrics.nonPlayFramesIgnored++
-        return
-      }
-      backendPlayFrame({ name, buffer, data })
-    })
-
-    frontLeg.setLoginStartHandler(payload => {
-      const decision = processLoginStart(payload)
-      // The core cannot send Login Success; it only decides. A denial
-      // returning to the adapter happens before any Login Success packet.
-      return decision
-    })
-
-    frontLeg.setServerboundHandler(serverbound => {
-      const name = serverbound.name
-      const state = serverbound.state ?? 'play'
-      const attachedNow = isAttached()
-      // Classify before recording so the frame counter carries the outcome.
-      const decision = attachedNow
-        ? classifyServerbound(name, serverbound.data, { mode: cfg.chat, state })
-        : { action: 'drop', chat: false }
-      journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer, body: activeBody })
-      telemetry.metric('monoplayer.frames', 1, {
-        direction: 'c2s',
-        state,
-        name,
-        result: decision.action === 'forward' ? 'forwarded' : 'dropped'
-      })
-      if (!attachedNow) {
-        metrics.serverboundNotAttached++
-        log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
-        return
-      }
-      // #22: a retained client outlives the backend leg for the length of a
-      // move. The frame belongs to the connection being handed over and cannot
-      // be written into the new one, so it is dropped and counted.
-      if (!backendSessionOpen) {
-        metrics.serverboundDropped++
-        bumpName(metrics.serverboundDroppedByName, name)
-        log('serverboundDropped', { name, state, reason: 'backend_moving' })
-        return
-      }
-      if (decision.action === 'rewrite') {
-        // #18: the human's client information reaches the backend only in the
-        // form the proxy owns. noteClientSettings records it and writes the
-        // merged packet, so the client's own view distance never crosses.
-        const outcome = noteClientSettings(serverbound.data ?? {})
-        if (outcome.sent) {
-          metrics.clientSettingsRewritten++
-          metrics.serverboundForwarded++
-          bumpName(metrics.serverboundByName, serverbound.name)
-        } else {
-          // No usable fields, no learned cap, or a failed write: the frame did
-          // not reach the backend, so the ledger says dropped, not forwarded.
-          metrics.serverboundDropped++
-          bumpName(metrics.serverboundDroppedByName, serverbound.name)
-        }
-        log('serverboundRewrite', {
-          name: serverbound.name,
-          noted: outcome.noted === true,
-          sent: outcome.sent === true,
-          reason: outcome.reason ?? null
-        })
-        return
-      }
-      if (decision.action === 'speak') {
-        // #19: the human's text is spoken by the puppet leg, never forwarded.
-        // The frame carried the human's signature and offset, which the backend
-        // cannot use; the leg signs the text again as the puppet.
-        const spoken = chatText(name, serverbound.data)
-        if (!spoken || typeof backendLeg.chat !== 'function') {
-          dropChat(name, spoken ? 'leg_has_no_chat' : 'no_text')
-          return
-        }
-        try {
-          backendLeg.chat(spoken.text)
-          metrics.chatSent++
-          log('chatSent', { name, command: spoken.command, chars: spoken.text.length })
-          emit('chat_sent', { name, command: spoken.command })
-        } catch (error) {
-          dropChat(name, 'send_failed', { error: String(error?.message ?? error).slice(0, 200) })
-        }
-        return
-      }
-      if (decision.action === 'drop') {
-        if (decision.chat) {
-          dropChat(name, decision.reason)
-          return
-        }
-        metrics.serverboundDropped++
-        bumpName(metrics.serverboundDroppedByName, serverbound.name)
-        return
-      }
-      // #16: the packet id is state-scoped, so the frame must be written into
-      // the state it was sent in. A configuration answer that arrives after the
-      // play login, or a play frame while the puppet is still configuring, is
-      // the wrong packet id and would end the backend session.
-      if ((state === 'configuration') !== backendConfiguring) {
-        metrics.serverboundDropped++
-        bumpName(metrics.serverboundDroppedByName, name)
-        log('serverboundDropped', { name, state, reason: 'puppet_state_mismatch' })
-        // #98: a client that replayed a configuration-phase pack after the
-        // puppet left configuration can still load it; its answer has no packet
-        // id to travel under, and the puppet already said accepted and loaded.
-        if (name === 'resource_pack_receive') {
-          log('resourcePackAnswerUnforwardable', { state, uuid: serverbound.data?.uuid ?? null })
-        }
-        return
-      }
-      if (state === 'play') {
-        session.setPose(
-          capturePose(session.currentPose, serverbound.name, serverbound.data)
-        )
-        // #635: where the puppet's own client says it is, the spectator's copy of it
-        // follows. A channel that is not watching costs one comparison.
-        if (spectators.size > 0) writeVirtualPlayers({ reason: 'movement' })
-      }
-      // #16: the frame carries its own state. A configuration answer reaches a
-      // puppet that is still in configuration, where a play-state write would
-      // be a different packet id.
-      backendLeg.writeRaw(serverbound.buffer, { state, name: serverbound.name })
-      // The human answered a control dialog: the held copy is no longer
-      // pending, so a later attach is not shown a question already answered.
-      const answered = pendingDialog.answer({ state, name: serverbound.name })
-      if (answered.answered) {
-        metrics.controlDialogsAnswered++
-        log('controlDialogAnswered', { name: serverbound.name, state: answered.state, dialog: answered.name })
-      }
-      // #98: the human's own pack status reached the backend. The held copy is
-      // not released: the pack stays installed for the next client.
-      if (name === 'resource_pack_receive') {
-        const packUuid = serverbound.data?.uuid ?? null
-        const result = serverbound.data?.result ?? null
-        const noted = pendingPacks.answered({ uuid: packUuid, result })
-        metrics.resourcePacksAnswered++
-        log('resourcePackAnswered', {
-          state,
-          uuid: packUuid,
-          result,
-          terminal: noted.terminal === true,
-          held: pendingPacks.held
-        })
-        emit('resource_pack_answer', { state, uuid: packUuid, result })
-      }
-      metrics.serverboundForwarded++
-      bumpName(metrics.serverboundByName, serverbound.name)
-      if (ACTION_SERVERBOUND.has(serverbound.name)) {
-        log('serverboundAction', { name: serverbound.name, attached: true })
-      }
-    })
-
-    frontLeg.setDetachHandler(({ reason = 'player_quit' } = {}) => {
-      detachPlayer({ reason })
-    })
-
-    // #592: the call-ins this core needs on the leg it was handed, in one place,
-    // with each one's payload shape. The lanes used to register these by hand, and
-    // a leg that lacked one kept its own default and said nothing. The caller keeps
-    // the leg it built and registers nothing on it. A lane that wants a different
-    // registration wraps one call-in after this runs.
-    legWiring = wireLegToCore({ core: handle, leg: frontLeg })
+    // #592, #605: the call-ins each leg interface carries, in one place per
+    // interface, with each one's payload shape. The core applies both tables
+    // here and nothing else, so no lane registers a call-in by hand and a leg
+    // that lacks one keeps its own default rather than a silent hole. A lane
+    // that wants a different registration wraps one call-in after this runs.
+    legWiring = {
+      backend: wireLegToCore({ core: handle, leg: backendLeg, table: BACKEND_LEG_CALL_INS }),
+      front: wireLegToCore({ core: handle, leg: frontLeg, table: FRONT_LEG_CALL_INS })
+    }
 
     // #592: a leg that lacks a call-in is silent otherwise: it answers the attach
     // from its own fallback, in words the lane never reads. The names it did not
-    // carry ride the start record.
+    // carry ride the start record, one list per interface.
     log('start', {
       whitelist: identity.whoAmI().whitelist,
       puppet: cfg.puppet,
       started: true,
-      legMissing: legWiring.missing
+      legMissing: { front: legWiring.front.missing, backend: legWiring.backend.missing }
     })
     emit('start')
+  }
+
+  // #605: the call-ins the tables name land on these, so the registration is a
+  // table row and the core keeps the behaviour it always had. Each was a closure
+  // inside start() until the tables took the registration.
+
+  function backendEnd ({ reason = 'backend_end' } = {}) {
+    // #258: a body that ended is not a body this session is waiting on. The
+    // claim bookkeeping that survives is `claimedBody`, which is what refuses a
+    // second body (#260).
+    claimDial = null
+    // #22: the leg the core ended for a handover reports its end late.
+    if (legHandover) {
+      legHandover = false
+      log('backendEndHandedOver', { reason })
+      return
+    }
+    // #22: the moved-to session faulted while the client follows it, at any
+    // stage of the move: before its configuration, during it, or after its
+    // play login. The client is restored from the pre-transfer snapshot on
+    // the connection it kept; it is never kicked for a move it can survive.
+    if (moveKind !== null) {
+      // #87: a dial that never opened a session is not the target dying. The
+      // target closed the socket before its first frame — the race a transfer
+      // intent from the same account makes — so the move waits for the next
+      // dial and the follow budget owns the give-up. Failing here restores a
+      // client the target may still accept.
+      if (!backendSessionOpen) {
+        log('backendDialClosed', { reason, kind: moveKind, state: session.state })
+        teardownBackend({ reason, retainFront: true })
+        return
+      }
+      log('backendEndDuringMove', { reason, kind: moveKind, state: session.state })
+      failTransfer({ reason: `target_lost:${reason}` })
+      return
+    }
+    const reconfigured = reconfigureRequested
+    reconfigureRequested = false
+    // A transfer already tore the session down synchronously; the late
+    // socket end is recorded, not replayed.
+    if (session.state === STATES.RECONNECTING) {
+      const outcome = session.backendDown({ reason })
+      log('backendEndLate', { reason, outcome })
+      return
+    }
+    // A normal fault resets the redirect chain; a followed transfer keeps it.
+    if (pendingTransfer === null) clearTransferChain('backend_end')
+    teardownBackend({
+      reason,
+      kickReason: reconfigured ? RECONFIGURE_REASON : 'backend_disconnected'
+    })
+  }
+
+  function backendError ({ error } = {}) {
+    log('backendError', { error: String(error?.message ?? error) })
+  }
+
+  function backendFrame (frame) {
+    const { state, name, buffer, data = {} } = frame
+    // #22: a frame from the leg the core ended for a handover belongs to the
+    // dead session. It must not enter the target's cache, and it must not
+    // clear the handover flag: the old socket's end would then read as the
+    // target faulting.
+    if (legHandover) {
+      metrics.lateFramesAfterHandover++
+      return
+    }
+    // #260: the first frame of a session binds its body's cache, which is where a
+    // dial the orchestrator made on its own is learned.
+    if (!backendSessionOpen) syncDialledBody()
+    backendSessionOpen = true
+    // Exact packet journal + one frame counter per backend frame. Lifecycle
+    // log records come only from the log() funnel, never one per frame.
+    // #416: the body this frame crossed. Never a channel: one body's stream reaches
+    // every channel on it (src/core/channels.js).
+    journal.frame({ dir: 's2c', state, name, buffer, body: activeBody })
+    const metricPolicy = state === 'play' || state === 'configuration'
+      ? clientboundPolicy(state, name)
+      : null
+    telemetry.metric('monoplayer.frames', 1, {
+      direction: 's2c',
+      state,
+      name,
+      result: !metricPolicy
+        ? 'ignored'
+        : metricPolicy.decision === DECISION.BLOCK
+          ? 'blocked'
+          : metricPolicy.decision === DECISION.CONTROL ? 'control' : 'forwarded'
+    })
+    if (state === 'configuration') {
+      metrics.configFrames++
+      backendSessionOpen = true
+      // #22: the first configuration frame of a followed move is where the
+      // client's loading screen starts. The target has accepted the session,
+      // so there is a configuration to serve.
+      if (moveKind !== null && !clientReconfiguring) startClientReconfiguration()
+      announceBrand()
+      const policy = clientboundPolicy('configuration', name)
+      if (name === 'ping') {
+        // Per-leg latency ping: answer on the puppet leg, never replay.
+        backendLeg.write('pong', { id: data.id })
+        return
+      }
+      if (name === 'transfer') {
+        // A configuration-phase transfer happens before the play login, when
+        // the session has no warm state to move. v1 blocks it (counted) and
+        // leaves the session where it is; the play-state follow path is the
+        // product behavior.
+        metrics.transfersBlocked++
+        log('transferBlocked', {
+          state: 'configuration',
+          host: typeof data.host === 'string' ? data.host : null,
+          port: Number.isInteger(data.port) ? data.port : null
+        })
+        return
+      }
+      // #16: the backend is in its configuration phase, whatever this frame
+      // turns out to be. Record it first, so a client may attach now and
+      // follow this stream live — a gate can be the first frame of the phase.
+      if (!backendConfiguring) {
+        backendConfiguring = true
+        log('backendConfiguring', { state: session.state })
+      }
+      // #98: a configuration-phase pack is the human's to answer, like a gate,
+      // and the held copy is what a client arriving later receives.
+      if (name === 'add_resource_pack' || name === 'remove_resource_pack') {
+        handleResourcePack({ state: 'configuration', name, buffer, data })
+        return
+      }
+      if (policy.decision === DECISION.CONTROL) {
+        // #16: a configuration gate is the human's to answer. The holder keeps
+        // it while no client follows this stream.
+        handleControlDialog({ state: 'configuration', name, buffer, data })
+        return
+      }
+      if (policy.decision === DECISION.BLOCK) {
+        blockClientbound('configuration', name, policy, data)
+        return
+      }
+      if (!policy.cache) return
+      const pushed = cache.push('configuration', name, buffer, data)
+      const clientInConfiguration = session.state === STATES.CONFIGURING || clientReconfiguring
+      if (pushed.cached && policy.relay && clientInConfiguration) {
+        if (frontLeg.writeRaw(buffer, { state: 'configuration', name }) !== false) {
+          metrics.configFramesRelayed++
+          if (clientReconfiguring) metrics.configFramesReconfigured++
+        }
+      }
+      // #87: the round now covers the dial as well, so a target that is
+      // configuring is not a target that stalled. Each frame the target sends
+      // re-arms the deadline; one that stops sending still ends the round.
+      if (clientReconfiguring) armReconfigurationTimer()
+      return
+    }
+    if (state !== 'play') {
+      // Handshake/login frames (encryption_begin, compress, login success)
+      // belong to the puppeted backend connection only. Replaying them in
+      // the front's play state makes the client read packet id 0x01 as
+      // add_entity and reject the joining client.
+      metrics.nonPlayFramesIgnored++
+      return
+    }
+    backendPlayFrame({ name, buffer, data })
+  }
+
+  function frontServerbound (serverbound) {
+    const name = serverbound.name
+    const state = serverbound.state ?? 'play'
+    const attachedNow = isAttached()
+    // Classify before recording so the frame counter carries the outcome.
+    const decision = attachedNow
+      ? classifyServerbound(name, serverbound.data, { mode: cfg.chat, state })
+      : { action: 'drop', chat: false }
+    journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer, body: activeBody })
+    telemetry.metric('monoplayer.frames', 1, {
+      direction: 'c2s',
+      state,
+      name,
+      result: decision.action === 'forward' ? 'forwarded' : 'dropped'
+    })
+    if (!attachedNow) {
+      metrics.serverboundNotAttached++
+      log('serverboundIgnored', { name: serverbound.name, reason: 'not_attached' })
+      return
+    }
+    // #22: a retained client outlives the backend leg for the length of a
+    // move. The frame belongs to the connection being handed over and cannot
+    // be written into the new one, so it is dropped and counted.
+    if (!backendSessionOpen) {
+      metrics.serverboundDropped++
+      bumpName(metrics.serverboundDroppedByName, name)
+      log('serverboundDropped', { name, state, reason: 'backend_moving' })
+      return
+    }
+    if (decision.action === 'rewrite') {
+      // #18: the human's client information reaches the backend only in the
+      // form the proxy owns. noteClientSettings records it and writes the
+      // merged packet, so the client's own view distance never crosses.
+      const outcome = noteClientSettings(serverbound.data ?? {})
+      if (outcome.sent) {
+        metrics.clientSettingsRewritten++
+        metrics.serverboundForwarded++
+        bumpName(metrics.serverboundByName, serverbound.name)
+      } else {
+        // No usable fields, no learned cap, or a failed write: the frame did
+        // not reach the backend, so the ledger says dropped, not forwarded.
+        metrics.serverboundDropped++
+        bumpName(metrics.serverboundDroppedByName, serverbound.name)
+      }
+      log('serverboundRewrite', {
+        name: serverbound.name,
+        noted: outcome.noted === true,
+        sent: outcome.sent === true,
+        reason: outcome.reason ?? null
+      })
+      return
+    }
+    if (decision.action === 'speak') {
+      // #19: the human's text is spoken by the puppet leg, never forwarded.
+      // The frame carried the human's signature and offset, which the backend
+      // cannot use; the leg signs the text again as the puppet.
+      const spoken = chatText(name, serverbound.data)
+      // #605: `chat` is a row of BACKEND_LEG_CALL_INS, so the report says whether
+      // this leg carries it rather than a guard here guessing at its shape.
+      if (!spoken || !backendCarries('chat')) {
+        dropChat(name, spoken ? 'leg_has_no_chat' : 'no_text')
+        return
+      }
+      try {
+        backendLeg.chat(spoken.text)
+        metrics.chatSent++
+        log('chatSent', { name, command: spoken.command, chars: spoken.text.length })
+        emit('chat_sent', { name, command: spoken.command })
+      } catch (error) {
+        dropChat(name, 'send_failed', { error: String(error?.message ?? error).slice(0, 200) })
+      }
+      return
+    }
+    if (decision.action === 'drop') {
+      if (decision.chat) {
+        dropChat(name, decision.reason)
+        return
+      }
+      metrics.serverboundDropped++
+      bumpName(metrics.serverboundDroppedByName, serverbound.name)
+      return
+    }
+    // #16: the packet id is state-scoped, so the frame must be written into
+    // the state it was sent in. A configuration answer that arrives after the
+    // play login, or a play frame while the puppet is still configuring, is
+    // the wrong packet id and would end the backend session.
+    if ((state === 'configuration') !== backendConfiguring) {
+      metrics.serverboundDropped++
+      bumpName(metrics.serverboundDroppedByName, name)
+      log('serverboundDropped', { name, state, reason: 'puppet_state_mismatch' })
+      // #98: a client that replayed a configuration-phase pack after the
+      // puppet left configuration can still load it; its answer has no packet
+      // id to travel under, and the puppet already said accepted and loaded.
+      if (name === 'resource_pack_receive') {
+        log('resourcePackAnswerUnforwardable', { state, uuid: serverbound.data?.uuid ?? null })
+      }
+      return
+    }
+    if (state === 'play') {
+      session.setPose(
+        capturePose(session.currentPose, serverbound.name, serverbound.data)
+      )
+      // #635: where the puppet's own client says it is, the spectator's copy of it
+      // follows. A channel that is not watching costs one comparison.
+      if (spectators.size > 0) writeVirtualPlayers({ reason: 'movement' })
+    }
+    // #16: the frame carries its own state. A configuration answer reaches a
+    // puppet that is still in configuration, where a play-state write would
+    // be a different packet id.
+    backendLeg.writeRaw(serverbound.buffer, { state, name: serverbound.name })
+    // The human answered a control dialog: the held copy is no longer
+    // pending, so a later attach is not shown a question already answered.
+    const answered = pendingDialog.answer({ state, name: serverbound.name })
+    if (answered.answered) {
+      metrics.controlDialogsAnswered++
+      log('controlDialogAnswered', { name: serverbound.name, state: answered.state, dialog: answered.name })
+    }
+    // #98: the human's own pack status reached the backend. The held copy is
+    // not released: the pack stays installed for the next client.
+    if (name === 'resource_pack_receive') {
+      const packUuid = serverbound.data?.uuid ?? null
+      const result = serverbound.data?.result ?? null
+      const noted = pendingPacks.answered({ uuid: packUuid, result })
+      metrics.resourcePacksAnswered++
+      log('resourcePackAnswered', {
+        state,
+        uuid: packUuid,
+        result,
+        terminal: noted.terminal === true,
+        held: pendingPacks.held
+      })
+      emit('resource_pack_answer', { state, uuid: packUuid, result })
+    }
+    metrics.serverboundForwarded++
+    bumpName(metrics.serverboundByName, serverbound.name)
+    if (ACTION_SERVERBOUND.has(serverbound.name)) {
+      log('serverboundAction', { name: serverbound.name, attached: true })
+    }
   }
 
   // Backend play frame routing (per-leg keep-alive/pong answering, pose
@@ -3742,8 +3737,12 @@ export function createMonoplayer ({
     on,
     log,
     logs: () => [...logs],
-    // front pipeline call-ins (real front-leg adapter drives these):
+    // front pipeline call-ins (real front-leg adapter drives these). They run only
+    // after start(), which is what wired them: a caller that reaches one first
+    // reaches a leg nothing has registered on.
     processLoginStart,
+    // #605: the client's own frames, which used to be a closure in start().
+    frontServerbound,
     attachConfiguringPlayer,
     configuringReady,
     notePuppetDialogAnswer,
@@ -3752,6 +3751,11 @@ export function createMonoplayer ({
     attachPlayer,
     detachPlayer,
     abortTransfer,
+    // #605: the backend pipeline, which start() registered by hand until the table
+    // owned the three registrations. Each is one row of BACKEND_LEG_CALL_INS.
+    backendFrame,
+    backendEnd,
+    backendError,
     // #258: the landing. The front leg calls this when a claim is granted, and it
     // is the only place a claim dials a body.
     connectClaimedBody,
@@ -3784,9 +3788,10 @@ export function createMonoplayer ({
     start,
     stop,
     get started () { return started },
-    // #592: which call-ins the leg carried, and which it did not. An empty `missing`
-    // is a leg that answers every call-in the table declares. The tests read it back
-    // off a started core, and `start` carries the missing names.
+    // #592, #605: which call-ins each leg carried, and which it did not, one
+    // report per interface. An empty `missing` is a leg that answers every call-in
+    // its table declares. The tests read it back off a started core, and `start`
+    // carries the missing names.
     get legWiring () { return legWiring },
     get attached () { return isAttached() },
     get backendViewDistance () { return backendViewDistance },

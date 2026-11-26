@@ -8,7 +8,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { makeCore } from '../support/harness.js'
+import { fakeClock, makeCore } from '../support/harness.js'
+import { createMonoplayer, loadConfig } from '../../src/service/monoplayer.js'
+import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 
@@ -190,8 +192,23 @@ test('#73 a shutdown detaches without answering the held gate', async () => {
 })
 
 test('#73 a leg that cannot answer leaves the gate held, and says so', () => {
-  const rig = makeCore()
-  delete rig.backendLeg.answerHeldGate
+  // The leg that cannot answer is the one that never carried the call-in: the core
+  // learns that from BACKEND_LEG_CALL_INS when it wires the leg (#605), so the hole
+  // is made before the core is built and the start record names it. A leg that
+  // carried it and then throws is the case below.
+  const backendLeg = createFakeBackendLeg()
+  delete backendLeg.answerHeldGate
+  const frontLeg = createFakeFrontLeg()
+  const core = createMonoplayer({
+    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
+    backendLeg,
+    frontLeg,
+    clock: fakeClock()
+  })
+  core.start()
+  assert.deepEqual(core.legWiring.backend.missing, ['answerHeldGate'],
+    'the leg that cannot answer is named at start, before a gate is ever held')
+  const rig = { backendLeg, frontLeg, core }
   attachConfiguring(rig)
   rig.backendLeg.deliver(gate())
 

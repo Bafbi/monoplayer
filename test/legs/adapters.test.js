@@ -12,12 +12,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createBackendFrameForwarder, MAX_BACKEND_FRAME_NAMES } from '../../src/legs/live-backend.js'
+import { createBackendFrameForwarder, createOfflineBackendLeg, MAX_BACKEND_FRAME_NAMES } from '../../src/legs/live-backend.js'
 import minecraftData from 'minecraft-data'
 
 import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
 import { createConfigPathInterceptor, createLiveFrontLeg, createOfflineFrontLeg } from '../../src/legs/live-front.js'
-import { LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
+import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 import { synthAttach, LEG_OWNED } from '../../src/core/join-synth.js'
 import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { createStateCache } from '../../src/core/state-cache.js'
@@ -359,24 +359,31 @@ test('the live front leg accepts every chat mode the config accepts', () => {
   assert.throws(() => build('write'), /chat must be one of/)
 })
 
-// #592: the call-ins the core declares are the leg's contract, and every front leg
-// a lane builds is measured against them through a real core's start(). A leg that
-// drops one keeps its own fallback and says nothing: live-front answers every
+// #592, #605: the call-ins the tables declare are the leg's contract, and every
+// leg a lane builds is measured against them through a real core's start(). A leg
+// that drops one keeps its own fallback and says nothing: live-front answers every
 // attach from a default that refuses, and reads a missing setBodyServed as a null
-// body. The double in src/legs/fake-legs.js carries setClientSettingsHandler and
-// setConfiguringHandler of the required rows and lacks setCoreAttach and
-// setCoreAttachConfiguring, so its holes are asserted too and a setter added to it
-// is a fact a reader sees.
-function startedOn (frontLeg, version = '26.1') {
+// body. The doubles' holes are declared in test/service/wire-leg-to-core.test.js,
+// which is the tables' own test.
+function startedOn (frontLeg, backendLeg = createFakeBackendLeg()) {
   const core = createMonoplayer({
     config: { ...DEFAULT_CONFIG, attachWhitelist: [PLAYER] },
-    backendLeg: createFakeBackendLeg(),
+    backendLeg,
     frontLeg,
     clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout }
   })
   core.start()
   return core
 }
+
+const offlineFront = () => createOfflineFrontLeg({
+  host: '127.0.0.1',
+  port: 0,
+  version: '26.1',
+  offlineWhitelist: [PLAYER],
+  getSnapshotConfig: () => [],
+  wireMode: 'off'
+})
 
 test('every front leg a lane builds carries the call-ins the core declares', () => {
   const live = startedOn(createLiveFrontLeg({
@@ -387,32 +394,84 @@ test('every front leg a lane builds carries the call-ins the core declares', () 
     getSnapshotConfig: () => [],
     wireMode: 'off'
   }))
-  assert.deepEqual(live.legWiring.missing, [],
+  assert.deepEqual(live.legWiring.front.missing, [],
     'the live front leg carries every call-in: an absent one is a lane that refuses a client and logs nothing')
 
-  const offline = startedOn(createOfflineFrontLeg({
-    host: '127.0.0.1',
-    port: 0,
-    version: '26.1',
-    offlineWhitelist: [PLAYER],
-    getSnapshotConfig: () => [],
-    wireMode: 'off'
-  }))
-  assert.deepEqual(offline.legWiring.missing, [],
+  const offline = startedOn(offlineFront())
+  assert.deepEqual(offline.legWiring.front.missing, [],
     'and so does the offline front leg every rig builds')
 
   // The other half of the contract: a row that names a method the core does not
   // have would register a handler that throws the first time the leg calls it.
-  for (const { reaches } of LEG_CALL_INS) {
+  // Both interfaces are walked: a backend row's typo is otherwise found by a
+  // frame arriving, not by the gate.
+  for (const { reaches } of [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]) {
+    if (reaches === undefined) continue
     assert.equal(typeof offline[reaches], 'function',
       'the core the table is applied to carries ' + reaches)
   }
+})
 
-  // The double is not a front leg a client joins: a test attaches through the core
-  // instead, so its holes are the ones the rigs never give it.
+// #605: the backend leg's contract is measured the same way. The offline leg is
+// the real one with auth 'offline', the factory every gate lane builds.
+test('#605 every backend leg a lane builds carries the call-ins the core declares', () => {
+  const real = startedOn(offlineFront(), createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' }))
+  assert.deepEqual(real.legWiring.backend.missing, [],
+    'the real backend leg carries every call-in and both calls: a missing frame handler serves no client at all')
+
   const fake = startedOn(createFakeFrontLeg())
-  assert.deepEqual(fake.legWiring.requiredMissing.sort(), ['setCoreAttach', 'setCoreAttachConfiguring'],
-    'the fake front leg carries neither attach setter, and a case that relied on one would attach through the core')
-  assert.ok(fake.legWiring.missing.includes('setBodyServed'),
-    'and it carries no setBodyServed, which is the call-in whose absence the real leg reads as a null body')
+  assert.deepEqual(fake.legWiring.backend.missing, [],
+    'and the backend double every service test builds carries them too, so a rig cannot meet a hole here')
+})
+
+// #605: the report names what a leg lacks. This is the other direction, which the
+// report cannot see: a setter a leg carries and no row names is a hook nothing
+// calls, and it reads as part of the interface. Each exception below is a real
+// hook with a reason, and a retired one fails the case rather than lingering.
+const UNWIRED_SETTERS = {
+  'live front leg': {
+    setErrorHandler: 'the front leg logs its own socket errors through this hook; the core registers none, and the backend row of this name is that leg\'s (#667)'
+  },
+  'offline front leg': {
+    setErrorHandler: 'the same hook as the live front leg\'s: both build through one factory (src/legs/live-front.js)'
+  },
+  'fake front leg': {
+    setClient: 'the double\'s test hook, which never crosses to a real leg: Test helpers in src/legs/fake-legs.js'
+  },
+  'real backend leg': {
+    setTarget: '#258: the core hands it the body to dial, which is a dial and not a registration'
+  },
+  'fake backend leg': {
+    setTarget: 'the double records the same dial the real leg makes'
+  }
+}
+
+test('#605 a leg carries no setter its table does not name, but the ones declared here', () => {
+  const legs = [
+    ['live front leg', createLiveFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: '26.1',
+      attachWhitelistFile: path.join(os.tmpdir(), 'monoplayer-leg-setters-whitelist.json'),
+      getSnapshotConfig: () => [],
+      wireMode: 'off'
+    }), FRONT_LEG_CALL_INS],
+    ['offline front leg', offlineFront(), FRONT_LEG_CALL_INS],
+    ['fake front leg', createFakeFrontLeg(), FRONT_LEG_CALL_INS],
+    ['real backend leg', createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' }), BACKEND_LEG_CALL_INS],
+    ['fake backend leg', createFakeBackendLeg(), BACKEND_LEG_CALL_INS]
+  ]
+  for (const [label, leg, table] of legs) {
+    const declared = new Set(table.filter(row => row.kind === 'register').map(row => row.name))
+    const exceptions = UNWIRED_SETTERS[label]
+    const settled = new Set()
+    for (const name of Object.keys(leg).filter(key => key.startsWith('set'))) {
+      if (declared.has(name)) continue
+      assert.ok(exceptions[name] !== undefined,
+        label + ' carries ' + name + ', which no row of its table names: a hook nothing registers belongs in the table or in the exceptions above')
+      settled.add(name)
+    }
+    assert.deepEqual([...settled].sort(), Object.keys(exceptions).sort(),
+      label + ' keeps exactly the setters declared here: an exception for a hook the leg no longer has is a claim a reader cannot check')
+  }
 })

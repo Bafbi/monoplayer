@@ -1,38 +1,49 @@
-// The core-to-leg wiring (#592): the one home of the call-ins the core registers
-// on the front leg it is handed, apart from the three it still wires inline
-// (#605).
+// The core-to-leg wiring (#592, #605): the one home of what each leg interface
+// carries.
 //
-// One table, one row per call-in, each with the method it reaches and its payload
-// shape. A row is either one the core cannot serve a client without, or one it
-// uses when the leg carries it. The lanes used to register four of them by hand.
-// The live lane and the rig copied all four (src/service/start-live.js,
-// src/ladder/rig.js, where the loopback rungs reached it), and the parity lane
-// copied three. The rest sat behind `typeof` guards in the core's own start(). A
-// lane that lacked one of the four got no error: src/legs/live-front.js answers
-// every attach from its own default, so it would refuse every client and say
-// nothing.
+// One table per interface, one row per call-in, each with the method it reaches
+// and its payload shape. A row is either one the core registers on the leg
+// (`kind: 'register'`, with the function it hands over), or one the core calls
+// on a leg that carries it (`kind: 'call'`). Either kind is one the core cannot
+// work without, or one it uses when the leg carries it.
 //
-// The core applies this table once, in its start(), so no lane can forget a
-// call-in and the payload shapes live in one file. A lane that wants a different
+// The lanes used to register the front ones by hand. The live lane and the rig
+// copied all four (src/service/start-live.js, src/ladder/rig.js, where the
+// loopback rungs reached it), and the parity lane copied three. The rest sat
+// behind `typeof` guards in the core's own start(), and so did the backend
+// leg's three registrations until #605. A lane that lacked one of the four got
+// no error: src/legs/live-front.js answers every attach from its own default, so
+// it would refuse every client and say nothing.
+//
+// The core applies both tables once, in its start(), so no lane can forget a
+// call-in on the leg it hands the core, and the payload shapes live in one file. A
+// lane that wires a leg it built for something else — src/ladder/loopback.js's two
+// body legs (O59) — says so at the line. A lane that wants a different
 // registration wraps one call-in after start(), and both lanes that do say so at
 // the line: the rig reads the attach record, and the online rung cuts its
 // evidence. A wrapper that rebuilds its call-in's payload repeats that one shape,
-// which #607 is about. A leg that carries none of them is a leg with no core in front of it,
-// which the two pre-auth rungs build on purpose. They never come here.
+// which #607 is about. A leg that carries none of them is a leg with no core in
+// front of it, which the two pre-auth rungs build on purpose. They never come
+// here.
 //
 // The report is what a reader checks. `missing` names every declared call-in the
-// leg does not carry, and `requiredMissing` names the subset the leg's own default
-// hides. The core puts the missing names on its start line, and a test holds the
-// real legs to an empty list. A missing one is not thrown on:
-// src/legs/fake-legs.js carries neither setCoreAttach nor setCoreAttachConfiguring,
-// and the tests that build a core on it attach through the core instead.
+// leg does not carry, and `requiredMissing` names the subset the leg's own
+// default hides. The core puts the missing names on its start line, one list per
+// interface, and a test holds the real legs to an empty list. A missing one is not
+// thrown on: src/legs/fake-legs.js carries neither setCoreAttach nor
+// setCoreAttachConfiguring, and the tests that build a core on it attach through
+// the core instead.
 // test/service/wire-leg-to-core.test.js reads the report, and
-// test/legs/adapters.test.js holds the real legs to this table, `reaches` and all.
-export const LEG_CALL_INS = Object.freeze([
+// test/legs/adapters.test.js holds the real legs to these tables, `reaches` and
+// all.
+// A row is frozen too, so a reader cannot rewrite a payload shape at run time: the
+// shape is the fact this file is the home of.
+export const FRONT_LEG_CALL_INS = Object.freeze([
   // The rows a leg cannot serve a client without. Each has a default inside the
   // leg, so an absent one is silent rather than fatal: the leg refuses the attach
   // and records a reason the lane never reads.
   {
+    kind: 'register',
     name: 'setCoreAttach',
     required: true,
     reaches: 'attachPlayer',
@@ -42,6 +53,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => ({ name, uuid } = {}) => core.attachPlayer({ name, uuid, includeConfig: false })
   },
   {
+    kind: 'register',
     name: 'setCoreAttachConfiguring',
     required: true,
     reaches: 'attachConfiguringPlayer',
@@ -50,6 +62,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => ({ name, uuid } = {}) => core.attachConfiguringPlayer({ name, uuid })
   },
   {
+    kind: 'register',
     name: 'setConfiguringHandler',
     required: true,
     reaches: 'configuringReady',
@@ -58,6 +71,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => ({ name } = {}) => core.configuringReady({ name })
   },
   {
+    kind: 'register',
     name: 'setClientSettingsHandler',
     required: true,
     reaches: 'noteClientSettings',
@@ -66,9 +80,43 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => settings => core.noteClientSettings(settings)
   },
 
+  // The session pipeline (#605), which start() registered by hand until the
+  // table owned it. A leg without these serves no client either: no login is
+  // reviewed, no frame the client sends reaches the backend, and a client that
+  // leaves is never noticed.
+  {
+    kind: 'register',
+    name: 'setLoginStartHandler',
+    required: true,
+    reaches: 'processLoginStart',
+    // The core decides and the leg acts: the core cannot send Login Success, so
+    // a denial returns to the adapter before any Login Success packet.
+    handler: core => payload => core.processLoginStart(payload)
+  },
+  {
+    kind: 'register',
+    name: 'setServerboundHandler',
+    required: true,
+    reaches: 'frontServerbound',
+    // The client's own frames, in the state they were sent in: the chat speech,
+    // the client information rewrite, the configuration answers, and the relay
+    // into the backend.
+    handler: core => payload => core.frontServerbound(payload)
+  },
+  {
+    kind: 'register',
+    name: 'setDetachHandler',
+    required: true,
+    reaches: 'detachPlayer',
+    // A client going away. The reason is the leg's to name, and player_quit is
+    // the one it names when it names none.
+    handler: core => ({ reason = 'player_quit' } = {}) => core.detachPlayer({ reason })
+  },
+
   // The rows a lane uses when its leg carries them. A leg without one keeps its
   // own fallback, and the core counts the difference.
   {
+    kind: 'register',
     name: 'setReconfiguredHandler',
     required: false,
     reaches: 'frontReconfigured',
@@ -77,6 +125,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => ({ name = null, uuid = null } = {}) => core.frontReconfigured({ name, uuid })
   },
   {
+    kind: 'register',
     name: 'setConnectClaimedBody',
     required: false,
     reaches: 'connectClaimedBody',
@@ -85,6 +134,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.connectClaimedBody(payload)
   },
   {
+    kind: 'register',
     name: 'setSpectateBody',
     required: false,
     reaches: 'spectateBody',
@@ -92,6 +142,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.spectateBody(payload)
   },
   {
+    kind: 'register',
     name: 'setSpectatorAttach',
     required: false,
     reaches: 'spectateView',
@@ -99,6 +150,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.spectateView(payload)
   },
   {
+    kind: 'register',
     name: 'setDisconnectBody',
     required: false,
     reaches: 'disconnectBody',
@@ -107,6 +159,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.disconnectBody(payload)
   },
   {
+    kind: 'register',
     name: 'setBodyServed',
     required: false,
     reaches: 'bodyServed',
@@ -115,6 +168,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => () => core.bodyServed()
   },
   {
+    kind: 'register',
     name: 'setSpectatorLeft',
     required: false,
     reaches: 'spectatorLeft',
@@ -123,6 +177,7 @@ export const LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.spectatorLeft(payload)
   },
   {
+    kind: 'register',
     name: 'setSpectatorPose',
     required: false,
     reaches: 'spectatorPose',
@@ -132,27 +187,92 @@ export const LEG_CALL_INS = Object.freeze([
     // channels, which is the only thing it is for.
     handler: core => payload => core.spectatorPose(payload)
   }
-])
+].map(Object.freeze))
 
-// Hand every declared call-in to the leg that carries it, and report the ones it
-// does not. The core is required: every handler reaches a method of it, and a
-// table applied to the wrong object would register every call-in against nothing.
-export function wireLegToCore ({ core, leg } = {}) {
+// The backend leg's interface (#605). It was the copy start() registered by hand
+// beside the front's table, which is the same defect one leg further along: two
+// homes for one shape of fact, and a hand-built leg learned which call-ins exist
+// from the core's body.
+export const BACKEND_LEG_CALL_INS = Object.freeze([
+  // The session's inbound pipeline. A leg that cannot deliver a frame serves no
+  // client: every cached frame and every live relay arrives through this one.
+  {
+    kind: 'register',
+    name: 'setFrameHandler',
+    required: true,
+    reaches: 'backendFrame',
+    handler: core => frame => core.backendFrame(frame)
+  },
+  {
+    kind: 'register',
+    name: 'setEndHandler',
+    required: true,
+    reaches: 'backendEnd',
+    // #22: the session ended, one way or another. A leg that keeps that to itself
+    // leaves the core attached to a session that is gone.
+    handler: core => ({ reason = 'backend_end' } = {}) => core.backendEnd({ reason })
+  },
+  {
+    kind: 'register',
+    name: 'setErrorHandler',
+    required: false,
+    reaches: 'backendError',
+    // The leg's own socket errors, which the core records and nothing else. A leg
+    // that reports none still serves every client; what is lost is the log line.
+    handler: core => ({ error } = {}) => core.backendError({ error })
+  },
+
+  // The calls the core makes on the leg, so a leg that does not carry one is named
+  // in the same report as a missing registration.
+  {
+    kind: 'call',
+    name: 'answerHeldGate',
+    required: false,
+    // #73: answerHeldGateOnDetach asks the leg for the answer a configuration gate
+    // its last client left would have had from a headless session; without this the
+    // gate stays held and the core logs leg_cannot_answer.
+  },
+  {
+    kind: 'call',
+    name: 'chat',
+    required: false,
+    // #19: frontServerbound has this leg speak the human's text as the puppet,
+    // because the signature needs the puppet's profile keys. Without it the core
+    // drops the text as leg_has_no_chat and counts it.
+  }
+].map(Object.freeze))
+
+// Hand every declared registration to the leg that carries it, measure every call
+// it answers, and report the rows it lacks either way. The core is required: every
+// handler reaches a method of it, and a table applied to the wrong object would
+// register every call-in against nothing. The table is required too, so a leg is
+// never measured against the other interface's rows.
+export function wireLegToCore ({ core, leg, table } = {}) {
   if (core === null || typeof core !== 'object') {
-    throw new TypeError('wireLegToCore needs the core its call-ins reach: wireLegToCore({ core, leg })')
+    throw new TypeError('wireLegToCore needs the core its call-ins reach: wireLegToCore({ core, leg, table })')
+  }
+  if (!Array.isArray(table)) {
+    throw new TypeError('wireLegToCore needs the table of the interface it wires: FRONT_LEG_CALL_INS or BACKEND_LEG_CALL_INS')
   }
   const wired = []
+  const called = []
   const missing = []
   const requiredMissing = []
-  for (const entry of LEG_CALL_INS) {
-    const register = leg === null || leg === undefined ? undefined : leg[entry.name]
-    if (typeof register !== 'function') {
+  for (const entry of table) {
+    const method = leg === null || leg === undefined ? undefined : leg[entry.name]
+    if (typeof method !== 'function') {
       missing.push(entry.name)
       if (entry.required === true) requiredMissing.push(entry.name)
       continue
     }
-    register.call(leg, entry.handler(core))
+    // A call-in the core calls needs nothing registered; its presence is the whole
+    // contract, and the report is where a reader learns it.
+    if (entry.kind === 'call') {
+      called.push(entry.name)
+      continue
+    }
+    method.call(leg, entry.handler(core))
     wired.push(entry.name)
   }
-  return { wired, missing, requiredMissing }
+  return { wired, called, missing, requiredMissing }
 }
