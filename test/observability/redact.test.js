@@ -65,6 +65,55 @@ test('redact() leaves a line it already redacted alone', () => {
   assert.equal(redact('Authorization=' + SENTINEL), 'Authorization=' + SENTINEL)
 })
 
+// #183: the log path has no bare token, secret or bearer key. The report path has
+// all three, and `redact()` is the last stop before a journal line or a telemetry
+// attribute, so a value pasted as `secret=…` survived into the JSONL record.
+test('a bare token, secret or bearer key is redacted on the log path (#183)', () => {
+  const value = 'abcdef123456789'
+  for (const key of ['token', 'secret', 'bearer']) {
+    assert.equal(redact(JSON.stringify({ [key]: value })), `{${key}=${SENTINEL}}`, `JSON form, ${key}`)
+    assert.equal(redact(`${key}=${value}`), `${key}=${SENTINEL}`, `form, ${key}`)
+  }
+})
+
+// #182: the field rule took the scheme word as the value and stopped at the space,
+// so the credential survived beside a label that said REDACTED. Worst on `Basic`,
+// because `SCHEME` knew only `bearer`: a line that looks redacted is worse than a
+// line that shows a gap.
+test('an Authorization credential is redacted whatever its scheme (#182)', () => {
+  const credential = 'dXNlcjpwYXNzd29yZA=='
+  for (const scheme of ['Basic', 'Digest', 'Negotiate', 'Bearer', 'Arkose']) {
+    const line = redact(`Authorization: ${scheme} ${credential}`)
+    assert.equal(line, 'Authorization=' + SENTINEL, `${scheme} must not survive`)
+    assert.equal(line.includes(credential), false)
+  }
+  assert.equal(redact('Proxy-Authorization: Basic ' + credential).includes(credential), false, 'the proxy header is the same shape')
+
+  // Prose that names a scheme and carries no credential is left alone. "Basic
+  // authentication" is the trap: the word after the scheme is long enough to pass
+  // any bare length floor, so the floor alone is not the guard.
+  for (const prose of ['the Bearer header is required', 'the Basic auth header is required', 'Basic authentication is required', 'Digest authentication is required']) {
+    assert.equal(redact(prose), prose)
+  }
+})
+
+// The label is the key, never part of the value. A base64 credential ends in =
+// padding, and the label group was greedy over = as well as over letters, so it
+// republished the tail of the credential beside the sentinel — a line that says
+// REDACTED and still carries the secret (#182, #183).
+test('a value that ends in = padding does not leak into the label', () => {
+  for (const [line, key] of [
+    ['secret=YWJjZA==', 'secret'],
+    ['token=YWJjZA==', 'token'],
+    ['bearer=YWJjZA==', 'bearer'],
+    ['Authorization=dXNlcjpwYXNzd29yZA==', 'Authorization'],
+    ['password=YWJjZA==', 'password']
+  ]) {
+    const out = redact(line)
+    assert.equal(out, key + '=' + SENTINEL, `the label is the key: ${line}`)
+  }
+})
+
 // A bare value stops at the punctuation that ends it. A JSON number under a
 // guarded key must not eat the brace after it, and a form value that holds a
 // comma must not lose its tail to it.

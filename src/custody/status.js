@@ -11,7 +11,7 @@
 // pasted into a field, a JWT in a message) is tagged, not emitted.
 import fs from 'node:fs'
 
-import { scanSecrets, redactSecrets, tagForValue } from '../observability/secrets.js'
+import { scanSecrets, redactSecrets } from '../observability/secrets.js'
 import { createTokenCustody, readCacheFile } from './cache.js'
 import { createMsaAuth, describeIdentity } from './msa.js'
 
@@ -185,50 +185,19 @@ export function createAuthStatus ({
 // strings used in tests (assigned to `token`, `access_token`, `refresh_token`,
 // `device_code`, or bare JWT shapes) must never survive.
 //
-// Two passes: our local, auth-specific assignment prepass (device/refresh/
-// access code-and-token keys, which the shared secret scanner does not know
-// about) first, then the repo-wide scanner for the general shapes.
-// A key may be JSON-quoted, so the separator can sit behind a closing quote
-// (#92). A value that is already a sentinel is the result of this prepass, not
-// a secret: the shared scanner runs over this pass's output, and reading the
-// sentinel as a value would eat the kind this pass just wrote.
-const LOCAL_ASSIGNMENT =
-  /\b(device[_-]?code|refresh[_-]?token|access[_-]?token|client[_-]?secret)"?\s*[:=]\s*(?:"((?!\[REDACTED\])[^"]{6,})"|'((?!\[REDACTED\])[^']{6,})'|((?!\[REDACTED\])[^\s"',;}\]]{6,}))/gi
-
-function localRedact (text) {
-  const source = String(text ?? '')
-  let out = ''
-  let last = 0
-  for (const match of source.matchAll(LOCAL_ASSIGNMENT)) {
-    const key = match[1]
-    const value = match[2] ?? match[3] ?? match[4] ?? ''
-    const start = match.index
-    const valueStart = source.indexOf(value, start)
-    if (start !== -1 && valueStart !== -1) {
-      out += source.slice(last, valueStart) + tagForValue(source, valueStart, key)
-      last = valueStart + value.length
-    }
-  }
-  out += source.slice(last)
-  return out
-}
-
+// One pass, the shared scanner. This module used to run its own auth-specific
+// assignment prepass first, for the device-code and token keys the scanner did not
+// know about, and that prepass had two defects of its own: it missed its own
+// `device_code_pairing` sibling, and a report carrying `access_token` produced two
+// findings, so the CLI's warning counted one secret twice (#181). The scanner's
+// key list is now the log path's list, so a name redacted on one path is redacted
+// on both, and there is no second pass left to disagree with the first.
 export function redactForReport (text) {
-  return redactSecrets(localRedact(text)).text
+  return redactSecrets(text).text
 }
 
 export function scanForLeaks (text) {
-  const source = String(text ?? '')
-  const seen = new Set()
-  const findings = []
-  for (const finding of [...scanSecrets(source)]) {
-    const key = `${finding.kind}|${finding.index}`
-    if (!seen.has(key)) { seen.add(key); findings.push({ kind: finding.kind, index: finding.index }) }
-  }
-  for (const match of source.matchAll(LOCAL_ASSIGNMENT)) {
-    findings.push({ kind: `local:${match[1]}`, index: match.index })
-  }
-  return findings
+  return scanSecrets(text).map(finding => ({ kind: finding.kind, index: finding.index }))
 }
 
 export function stringifyForReport (value) {

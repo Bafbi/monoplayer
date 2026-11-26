@@ -132,41 +132,44 @@ test('redaction sentinel: synthetic tokens anywhere in a report are tagged, not 
   assert.doesNotThrow(() => JSON.parse(redacted), 'redacted reports must stay parseable')
 })
 
-// Custody's own prepass had the same JSON-quoted-key gap as the shared
-// scanner, so the report path missed {"device_code":"…"} while the log path
-// caught the same shape (#92). The prepass runs first, so its fix is what
-// makes the report path see the quote.
+// The report path reads one key list now, the log path's. It used to run its own
+// auth-specific prepass with a second list, and that list lacked its own
+// `device_code_pairing` sibling (#181). A JSON-quoted key is matched, and the
+// tripwire sees what the redactor rewrites.
 test('redaction sentinel: a JSON-quoted auth key is tagged, and the tripwire sees it', () => {
   const deviceCode = 'ABCD-1234-EFGH'
+  const pairing = 'PAIR-1234-5678'
   const token = 'abcdef123456789'
-  const raw = JSON.stringify({ device_code: deviceCode, access_token: token })
+  const raw = JSON.stringify({ device_code: deviceCode, device_code_pairing: pairing, access_token: token })
 
   const found = scanForLeaks(raw)
-  assert.ok(found.some(f => f.kind === 'local:device_code'), `the tripwire must see device_code (saw ${found.map(f => f.kind).join(', ')})`)
+  assert.equal(found.length, 3, `one finding per secret, not two for one (saw ${found.map(f => f.kind).join(', ')})`)
+  assert.ok(found.every(f => f.kind === 'assignment'), 'the scanner kinds them, and names no prepass')
 
   const redacted = redactForReport(raw)
-  assert.equal(redacted.includes(deviceCode), false, 'the device code must not survive')
-  assert.equal(redacted.includes(token), false, 'the access token must not survive')
+  for (const value of [deviceCode, pairing, token]) {
+    assert.equal(redacted.includes(value), false, 'the value must not survive')
+  }
   assert.doesNotThrow(() => JSON.parse(redacted), 'redacted reports must stay parseable')
   // The tripwire runs over the redacted text in src/custody/cli.js. It must not
-  // report the sentinel this pass just wrote, or it counts its own output.
+  // report the sentinel the redactor just wrote, or it counts its own output.
   assert.deepEqual(scanForLeaks(redacted), [])
 
   // A number under an auth key is a JSON value with no quotes to hide behind,
   // so the tag takes its place as a string and the report still parses.
   const numeric = redactForReport('{"device_code":123456789}')
-  assert.equal(numeric, '{"device_code":"[REDACTED]<device_code>"}')
+  assert.equal(numeric, '{"device_code":"[REDACTED]<assignment>"}')
   assert.doesNotThrow(() => JSON.parse(numeric), 'redacted reports must stay parseable')
 })
 
-// The prepass tags a value, then the shared scanner runs over its output. A
-// sentinel is the result of redacting, so the second pass must not read it as
-// a value and overwrite the kind the prepass just wrote (#92, and the chaining
-// bug the ADR records).
-test('redaction sentinel: a sentinel the prepass wrote is left as it is', () => {
-  const redacted = redactForReport("access_token = 'SYNTHETIC_ACCESS_TOKEN_000111'")
-  assert.equal(redacted.includes('SYNTHETIC_ACCESS_TOKEN_000111'), false)
-  assert.ok(redacted.includes('<access_token>'), `the prepass kind survives the shared pass (saw ${redacted})`)
+// A sentinel is the result of redacting, so no pass reads it as a value and
+// overwrites the kind beside it (the chaining bug the ADR records). One pass
+// cannot chain, so what this pins is that a report already carrying a sentinel is
+// left byte-identical rather than re-tagged.
+test('redaction sentinel: a sentinel already in the report is left as it is', () => {
+  const already = "access_token = '[REDACTED]<assignment>'"
+  assert.equal(redactForReport(already), already)
+  assert.deepEqual(scanForLeaks(already), [])
 })
 
 test('redaction sentinel: a token-string field added by a future code path is caught too', () => {
@@ -174,6 +177,53 @@ test('redaction sentinel: a token-string field added by a future code path is ca
   const redacted = redactForReport(JSON.stringify(leaky))
   assert.equal(redacted.includes(SENTINELS[0]), false, 'device_code values must be tagged')
   assert.ok(redacted.includes('device_code'), 'the (non-secret) key name stays')
+})
+
+// #181: three field names the log path redacted and the report path did not. The
+// report path was two rules — the scanner's key list and custody's own prepass —
+// and neither named these. They are one list now, so a name the log path knows is
+// a name the report path knows.
+test('redaction sentinel: user_code, device_code_pairing and cookie are tagged (#181)', () => {
+  const value = 'abcdef123456789'
+  for (const key of ['user_code', 'device_code_pairing', 'cookie']) {
+    const raw = JSON.stringify({ [key]: value })
+    const found = scanForLeaks(raw)
+    assert.equal(found.length, 1, `one finding for ${key}, not ${found.length}: ${found.map(f => f.kind).join(', ')}`)
+    const redacted = redactForReport(raw)
+    assert.equal(redacted.includes(value), false, `${key} must not survive the report path`)
+    assert.doesNotThrow(() => JSON.parse(redacted), 'a redacted report must still parse')
+  }
+
+  // The form shape takes the same three names.
+  const form = redactForReport('user_code=abcdef123456789 device_code_pairing=zyxwvu987654321')
+  assert.equal(form.includes('abcdef123456789'), false)
+  assert.equal(form.includes('zyxwvu987654321'), false)
+})
+
+// #182: a Basic credential is a base64 pair of a name and a password, and it is the
+// shape an operator pastes into a bug report. Neither rule set knew a scheme but
+// Bearer, so the report printed it whole and the tripwire stayed silent.
+test('redaction sentinel: an Authorization credential is tagged whatever its scheme (#182)', () => {
+  const credential = 'dXNlcjpwYXNzd29yZA=='
+  for (const scheme of ['Basic', 'Digest', 'Negotiate', 'Bearer']) {
+    const raw = `Authorization: ${scheme} ${credential}`
+    assert.ok(scanForLeaks(raw).length >= 1, `the tripwire must see a ${scheme} credential`)
+    assert.equal(redactForReport(raw).includes(credential), false, `${scheme} must not survive`)
+  }
+  // A header with no scheme word is a credential too. The scheme group is greedy
+  // over a credential's own letters, so a missing space let it take the value and
+  // leave the tail behind.
+  for (const value of ['opaqueTokenValue123', 'dXNlcjpwYXNzd29yZA==']) {
+    const schemeless = `Authorization: ${value}`
+    assert.equal(redactForReport(schemeless).includes(value), false, `no scheme word: ${value}`)
+    assert.equal(redactForReport(schemeless), 'Authorization: [REDACTED]<authorization>')
+  }
+
+  // The report path writes JSON, and a redacted report must still parse.
+  const json = JSON.stringify({ note: `proxy said: Authorization: Basic ${credential}` })
+  const redacted = redactForReport(json)
+  assert.equal(redacted.includes(credential), false)
+  assert.doesNotThrow(() => JSON.parse(redacted), 'a redacted report must still parse')
 })
 
 // #229: the one "info" fact the panel cannot otherwise reach. The heartbeat

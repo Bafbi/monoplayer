@@ -91,6 +91,45 @@ test('a bearer value that is also a JWT keeps both kinds in one span', () => {
   assert.equal(text.includes(jwt), false)
 })
 
+// #182: the report path had a Bearer rule and no other scheme. The kind names the
+// scheme, so a report still says which shape leaked: <bearer> stays what it was,
+// and <basic> is new.
+test('an Authorization credential is tagged with its scheme (#182)', () => {
+  const credential = 'dXNlcjpwYXNzd29yZA=='
+  const { text, findings } = redactSecrets(`Authorization: Basic ${credential}`)
+  assert.deepEqual(findings.map(f => f.kind), ['basic'])
+  assert.equal(findings[0].value, credential)
+  assert.equal(text.includes(credential), false)
+  assert.equal(text, 'Authorization: Basic [REDACTED]<basic>', 'the scheme stays as the label')
+
+  // The pinned Bearer shape does not move.
+  const bearer = redactSecrets('Authorization: Bearer opaqueTokenValue123')
+  assert.deepEqual(bearer.findings.map(f => f.kind), ['bearer'])
+  assert.equal(bearer.text, 'Authorization: Bearer [REDACTED]<bearer>')
+
+  // A header with no scheme word is a credential too, and the tag names the
+  // header. The scheme group is greedy over a credential's own letters, so it
+  // needs a space to separate it from the value: without one it ate all but the
+  // last character and called the credential the scheme.
+  for (const value of ['opaqueTokenValue123', 'dXNlcjpwYXNzd29yZA==', 'PMT-1-abcdef123456789']) {
+    const schemeless = redactSecrets(`Authorization: ${value}`)
+    assert.deepEqual(schemeless.findings.map(f => f.kind), ['authorization'], `no scheme word in ${value}`)
+    assert.equal(schemeless.text, 'Authorization: [REDACTED]<authorization>', `the whole value goes: ${value}`)
+  }
+})
+
+// A report can be redacted twice: the driver redacts an output, then redacts the
+// report that holds it (#92's chaining rule). The credential rule gave the field
+// branch no sentinel guard, so a second pass read the scheme word as a value and
+// tagged it again.
+test('a redacted credential header is left alone by a second pass', () => {
+  for (const header of ['Authorization: Basic dXNlcjpwYXNzd29yZA==', 'Authorization: dXNlcjpwYXNzd29yZA==', 'Authorization: Bearer opaqueTokenValue123']) {
+    const once = redactSecrets(header).text
+    assert.equal(redactSecrets(once).text, once, `byte-identical on the second pass: ${header}`)
+    assert.deepEqual(redactSecrets(once).findings, [], `nothing found the second time: ${header}`)
+  }
+})
+
 // Redaction is a rewrite, not a map over the original: a sentinel already in
 // the text is the result of redacting, never a value to redact again. Without
 // this, a second pass eats the tag it just wrote and the report loses the kind.
@@ -99,6 +138,22 @@ test('an existing sentinel is not treated as a value', () => {
   const { text, findings } = redactSecrets(already)
   assert.deepEqual(findings, [])
   assert.equal(text, already)
+})
+
+// #181: the log path named these three keys and the report path's two rules named
+// none of them, so a device-code pairing value or a stored cookie reached stdout
+// while the tripwire stayed silent.
+test('the scanner knows the names the log path knows (#181)', () => {
+  const value = 'abcdef123456789'
+  for (const key of ['user_code', 'device_code_pairing', 'cookie']) {
+    const input = JSON.stringify({ [key]: value })
+    const findings = scanSecrets(input)
+    assert.equal(findings.length, 1, `one finding for ${key} (saw ${findings.length})`)
+    assert.equal(findings[0].kind, 'assignment')
+    const { text } = redactSecrets(input)
+    assert.equal(text.includes(value), false, `${key} must not survive`)
+    assert.doesNotThrow(() => JSON.parse(text), 'redacted JSON must still parse')
+  }
 })
 
 test('a realistic report blob containing a leaked token gets redacted end to end', () => {
