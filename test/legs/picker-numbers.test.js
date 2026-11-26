@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import mc from 'minecraft-protocol'
 
 import { bumpReason, elapsedSince, encodeFrame, MAX_REFUSAL_REASONS } from '../../src/legs/live-front.js'
+import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
 import { pickerDialogParams, pickerRows } from '../../src/core/picker.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -86,30 +87,29 @@ test('#417 the picker dialog is written and measured from one encode', () => {
 // #417: a refusal's reason, as a bounded map. The reasons are a closed set the leg
 // already writes, and the cap is what keeps a lane from growing a map no reader
 // asked for if one ever is not.
-test('#417 a refusal reason counts up, and a name past the cap lands in one bucket', () => {
-  const map = {}
-  bumpReason(map, 'unknown_server')
-  bumpReason(map, 'unknown_server')
-  bumpReason(map, 'body_claimed')
-  assert.deepEqual(map, { unknown_server: 2, body_claimed: 1 })
+//
+// #555: what the leg owns here is the cap it passes and the seam a reader counts
+// through. The count-up, the overflow bucket and what an empty key becomes are
+// src/core/bounded-counter.js's rule, and that rule is asserted once, in
+// test/core/bounded-counter.test.js. Restating it here would leave one of the two
+// stale the day the rule changes, and would read as coverage that proves the leg.
+test('#417 the leg passes its own cap to the shared rule, and its map stops at that cap', () => {
+  // As many distinct words as a reason can be, far past the cap, so a map that grew
+  // one key per word would show it.
+  const reasons = Array.from({ length: MAX_REFUSAL_REASONS * 50 }, (_, index) => 'reason-' + index)
+  const leg = {}
+  const shared = {}
+  for (const reason of reasons) {
+    bumpReason(leg, reason)
+    bumpBounded(shared, reason, MAX_REFUSAL_REASONS)
+  }
 
-  const full = {}
-  for (let index = 0; index < MAX_REFUSAL_REASONS; index++) bumpReason(full, 'reason-' + index)
-  assert.equal(Object.keys(full).length, MAX_REFUSAL_REASONS)
-  bumpReason(full, 'one-too-many')
-  bumpReason(full, 'one-too-many-again')
-  assert.equal(Object.keys(full).length, MAX_REFUSAL_REASONS + 1,
-    'the overflow bucket is the one key past the cap')
-  assert.equal(full.other, 2, 'and it counts every name the cap turned away')
-  assert.equal(full['one-too-many'], undefined, 'a name the cap turned away is not in the map')
-
-  // A reason that is not a name is the caller's mistake, and a counter is no place
-  // to discover it: the frame that carried no reason counts as `unknown`, which is
-  // the word `bumpName` already uses.
-  const unnamed = {}
-  bumpReason(unnamed, null)
-  bumpReason(unnamed, '')
-  assert.deepEqual(unnamed, { unknown: 2 })
+  assert.deepEqual(leg, shared,
+    'the leg hands the shared rule its own cap, so the rule the map follows is the one in src/core/bounded-counter.js')
+  assert.ok(Object.keys(leg).length <= MAX_REFUSAL_REASONS + 1,
+    'and the map the leg hands a reader stops at that cap, with the one bucket the rule adds past it')
+  assert.ok(leg[OVERFLOW_KEY] > 0,
+    'and the cap is a bound that bites: a thousand words cannot fit under it, so the leg\'s number is headroom and not a second vocabulary')
 })
 
 // #417: the duration is one connection's. Both moments are the leg's: it sees the

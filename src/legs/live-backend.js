@@ -45,6 +45,7 @@
 // objects, or session secrets. Errors are logged name-only.
 import mc from 'minecraft-protocol'
 
+import { bumpBounded } from '../core/bounded-counter.js'
 import { buildCustomClickAction, chooseDialogAction, decideDialogAutoAnswer } from '../core/dialog-codec.js'
 import { stampIdentity } from '../core/channels.js'
 import { pickSlug } from '../core/picker.js'
@@ -286,6 +287,14 @@ export function keepWireBytes (client) {
   return client
 }
 
+// #554: how many distinct clientbound frames this leg's name map holds. The 26.1 and
+// 26.2 clientbound vocabulary is 167 `state/name` pairs — login 6, configuration 20,
+// play 141, one line each from `node tools/protocol.mjs packets <version> <state>
+// toClient` — so the cap is that vocabulary plus room for a version to add frames
+// before anyone looks again. The map is copied into every heartbeat line, so its size
+// is a log line's size: past the cap it holds one bucket more and grows no further.
+export const MAX_BACKEND_FRAME_NAMES = 256
+
 // Decoded data capture: minecraft-protocol emits, synchronously and in order,
 // `packet` (decoded) then the named event then `raw` (frame buffer) for every
 // parsed clientbound frame. This forwarder pairs them up: each raw frame is
@@ -309,7 +318,7 @@ export function createBackendFrameForwarder ({ deliver, swallowed = LEG_SWALLOWE
     const sameFrame = decoded.state === meta.state && decoded.byName[meta.name] !== undefined
     const data = sameFrame ? decoded.byName[meta.name] : {}
     decoded.byName[meta.name] = undefined
-    nameCounts[`${meta.state}/${meta.name}`] = (nameCounts[`${meta.state}/${meta.name}`] ?? 0) + 1
+    bumpBounded(nameCounts, `${meta.state}/${meta.name}`, MAX_BACKEND_FRAME_NAMES)
 
     // Delimiters group packets for client-side batching; they are not state.
     // Drop the delimiter and relay the enclosed packets as normal frames, so
