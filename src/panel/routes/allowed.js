@@ -50,12 +50,10 @@
 // through, so a test hands in a fake and the route cannot tell it from the cluster.
 import { ALLOWED_SERVERS_VERSION, addressKey, parseAllowedServers } from '../../service/control.js'
 import { isTargetHost } from '../registry.js'
-import { readBody } from './body.js'
+import { BODY_TOO_LARGE, readBody } from './body.js'
 import { configMapYaml } from './whitelist.js'
 
 export const ALLOWED_KEY = 'allowed-servers.json'
-// A request body is two small fields.
-export const MAX_BODY_BYTES = 4096
 // One write that lost a race is retried. Three patches in a row is contention the
 // caller should see rather than have the panel keep spinning against.
 export const MAX_ATTEMPTS = 3
@@ -316,13 +314,13 @@ export function createAllowedRoute ({
 
     let body
     try {
-      body = await readBody(req, MAX_BODY_BYTES)
+      body = await readBody(req)
     } catch (error) {
       log('panelAllowedBodyFailed', { puppet: puppet.name, error: reason(error) })
       return send(res, 400, TEXT, 'the request body could not be read\n')
     }
     if (body.tooLarge === true) {
-      return send(res, 413, TEXT, 'the request body must be at most ' + MAX_BODY_BYTES + ' bytes\n')
+      return send(res, 413, TEXT, BODY_TOO_LARGE)
     }
 
     let wanted
