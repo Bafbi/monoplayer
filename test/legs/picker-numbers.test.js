@@ -1,0 +1,155 @@
+// #417: the numbers #415 could not reach are the front leg's, because the leg is
+// where the frame is written and where the picker connection lives.
+//
+// Four of them, and each is measured at the only place that knows it: the bytes at
+// the buffer handed to the socket, the picker's duration on the connection's own
+// context, a refusal's reason at the site that refuses, and the dialog's size from
+// the one encode that also writes it.
+//
+// The seams below are exported for exactly this: the leg itself is reached only
+// through a listening server, and a number that only a listening server can be
+// asked about is a number no test reads.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import mc from 'minecraft-protocol'
+
+import { bumpReason, elapsedSince, encodeFrame, MAX_REFUSAL_REASONS } from '../../src/legs/live-front.js'
+import { pickerDialogParams, pickerRows } from '../../src/core/picker.js'
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const SOURCE = fs.readFileSync(path.join(ROOT, 'src', 'legs', 'live-front.js'), 'utf8')
+const VERSION = '26.1'
+
+// A row is named for the host:port its claim dials (GLOSSARY.md, *Allowed server*),
+// and pickerRows derives the slug and the id from that name.
+const ROWS = pickerRows([
+  { name: 'paper:25565' },
+  { name: 'sky:25565' }
+])
+
+function serializer (state = 'configuration') {
+  return mc.createSerializer({ state, isServer: true, version: VERSION })
+}
+
+test("#417 the picker dialog's encoded size is the frame the codec builds", () => {
+  const params = pickerDialogParams({ rows: ROWS })
+  const { ok, buffer } = encodeFrame({ serializer: serializer(), name: 'show_dialog', params })
+
+  assert.equal(ok, true)
+  assert.ok(Buffer.isBuffer(buffer), 'the encode answers the bytes, not a length to trust separately')
+  assert.deepEqual(buffer, serializer().createPacketBuffer({ name: 'show_dialog', params }),
+    'and they are the frame the library itself encodes from the same params')
+  assert.ok(buffer.length > 0, 'a dialog with two rows is more than a header')
+
+  const wider = pickerDialogParams({ rows: [...ROWS, ...pickerRows([{ name: 'nether:25565' }])] })
+  assert.ok(encodeFrame({ serializer: serializer(), name: 'show_dialog', params: wider }).buffer.length > buffer.length,
+    'a third row costs bytes, so the number follows what the dialog carries')
+})
+
+test('#417 a frame the codec cannot build is absent, never a size of zero', () => {
+  const params = pickerDialogParams({ rows: ROWS })
+
+  assert.deepEqual(encodeFrame({ serializer: null, name: 'show_dialog', params }),
+    { ok: false, buffer: null, error: 'no serializer for this connection' },
+    'a connection with no serializer builds nothing, and says why')
+  assert.equal(encodeFrame({ serializer: {}, name: 'show_dialog', params }).ok, false,
+    'and neither does one whose serializer cannot encode a packet')
+
+  const refused = encodeFrame({
+    serializer: { createPacketBuffer () { throw new Error('no such frame in this state') } },
+    name: 'show_dialog',
+    params
+  })
+  assert.equal(refused.ok, false, 'a codec that refuses the frame answers nothing rather than failing the join')
+  assert.equal(refused.error, 'no such frame in this state',
+    'and the reason comes back with it, because an operator cannot guess at a codec refusal')
+})
+
+// The dialog is the one frame a picker connection is shown, so its size is the
+// number a reader is looking for when they ask how large the picker is. It is
+// written and measured from one encode: a second one could disagree with it.
+test('#417 the picker dialog is written and measured from one encode', () => {
+  const dialog = SOURCE.slice(SOURCE.indexOf('function sendPickerDialog'), SOURCE.indexOf('function handlePickerClick'))
+  assert.ok(dialog.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.match(dialog, /encoded = encodeFrame\(/, 'the dialog is encoded once')
+  assert.equal((dialog.match(/encodeFrame\(/g) ?? []).length, 1, 'and only once')
+  assert.match(dialog, /client\.writeRaw\(encoded\.buffer\)/, 'the bytes written are the bytes measured')
+  assert.match(dialog, /log\('pickerDialog', \{/, 'the pickerDialog record is still written')
+  assert.match(dialog, /bytes: encoded\.buffer\.length/, 'and it carries the size it wrote')
+  assert.match(dialog, /try \{\s*encoded = encodeFrame\(/, 'the params build is inside a guard too')
+})
+
+// #417: a refusal's reason, as a bounded map. The reasons are a closed set the leg
+// already writes, and the cap is what keeps a lane from growing a map no reader
+// asked for if one ever is not.
+test('#417 a refusal reason counts up, and a name past the cap lands in one bucket', () => {
+  const map = {}
+  bumpReason(map, 'unknown_server')
+  bumpReason(map, 'unknown_server')
+  bumpReason(map, 'body_claimed')
+  assert.deepEqual(map, { unknown_server: 2, body_claimed: 1 })
+
+  const full = {}
+  for (let index = 0; index < MAX_REFUSAL_REASONS; index++) bumpReason(full, 'reason-' + index)
+  assert.equal(Object.keys(full).length, MAX_REFUSAL_REASONS)
+  bumpReason(full, 'one-too-many')
+  bumpReason(full, 'one-too-many-again')
+  assert.equal(Object.keys(full).length, MAX_REFUSAL_REASONS + 1,
+    'the overflow bucket is the one key past the cap')
+  assert.equal(full.other, 2, 'and it counts every name the cap turned away')
+  assert.equal(full['one-too-many'], undefined, 'a name the cap turned away is not in the map')
+
+  // A reason that is not a name is the caller's mistake, and a counter is no place
+  // to discover it: the frame that carried no reason counts as `unknown`, which is
+  // the word `bumpName` already uses.
+  const unnamed = {}
+  bumpReason(unnamed, null)
+  bumpReason(unnamed, '')
+  assert.deepEqual(unnamed, { unknown: 2 })
+})
+
+// #417: the duration is one connection's. Both moments are the leg's: it sees the
+// login, and it sees the pick on the same socket. A number keyed by player name
+// cannot say which of two connections from one account picked.
+test("#417 a connection's login-to-pick age is its own, and absent when it never logged in", () => {
+  assert.equal(elapsedSince(1000, 4000), 3000, 'the pick came 3 s after the login')
+  assert.equal(elapsedSince(null, 4000), null, 'a connection the leg never stamped has no age')
+  assert.equal(elapsedSince(undefined, 4000), null)
+  assert.equal(elapsedSince(Number.NaN, 4000), null)
+  assert.equal(elapsedSince(4000, 1000), 0, 'a clock that stepped backwards is 0, never a negative age')
+  assert.equal(elapsedSince(1000, 1000), 0, 'and a pick in the same millisecond is 0, which is real')
+})
+
+// The guard the four rest on: one helper writes the counters, so the total and the
+// map by reason cannot disagree, and no call site can add a refusal to one without
+// the other.
+test('#417 every refusal the leg counts is counted once, through one helper', () => {
+  assert.equal((SOURCE.match(/metrics\.pickerRefusals\+\+/g) ?? []).length, 1,
+    'only the helper counts a refusal')
+  assert.equal((SOURCE.match(/metrics\.pickerRefusalsByReason/g) ?? []).length, 1,
+    'and only the helper writes the map by reason')
+
+  const start = SOURCE.indexOf('function bumpPickerRefusal')
+  assert.ok(start > 0, 'the helper exists')
+  const helper = SOURCE.slice(start, start + 500)
+  assert.match(helper, /bumpReason\(/, 'the helper is what bumps the map')
+
+  // Seven refusal sites: the two dialogs the leg could not write, the click it could
+  // not read, the two frames naming a server it does not offer, the two the core
+  // answers. The key each one passes is asserted too, because a site swapped to the
+  // wrong word still counts and still lies about why.
+  const sites = [...SOURCE.matchAll(/bumpPickerRefusal\(([^)]*)\)/g)].map(match => match[1]).sort()
+  assert.deepEqual(sites, [
+    "'picker_unavailable'",
+    "'picker_unavailable'",
+    "'unknown_server'",
+    "'unknown_server'",
+    'action.reason',
+    'outcome.reason',
+    'outcome.reason'
+  ].sort(), 'every refusal site counts, and each passes the reason its own record carries')
+})

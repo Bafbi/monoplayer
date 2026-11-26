@@ -30,7 +30,7 @@ function frontFixture () {
         role: 'driver',
         name: 'Bafbi',
         at: 1000,
-        delivered: { frames: 9, play: 8, configuration: 1, last: { state: 'play', name: 'map_chunk' }, replays: 1 },
+        delivered: { frames: 9, play: 8, configuration: 1, bytes: 91_004, last: { state: 'play', name: 'map_chunk' }, replays: 1 },
         settings: { viewDistance: 8 },
         settingsAt: 2000
       },
@@ -40,7 +40,7 @@ function frontFixture () {
         role: 'spectator',
         name: 'Watcher',
         at: 1500,
-        delivered: { frames: 4, play: 4, configuration: 0, last: { state: 'play', name: 'map_chunk' }, replays: 1 },
+        delivered: { frames: 4, play: 4, configuration: 0, bytes: 51_493, last: { state: 'play', name: 'map_chunk' }, replays: 1 },
         settings: null,
         settingsAt: null
       }
@@ -103,10 +103,12 @@ test('#415 a channel row carries its age, what it was sent, and its body\'s spec
   assert.equal(driver.play, 8)
   assert.equal(driver.configuration, 1)
   assert.equal(driver.replays, 1)
+  assert.equal(driver.bytes, 91_004, 'the bytes written to this channel, and no other\'s (#417)')
   assert.equal(driver.spectators, 1, 'one channel of this body watches it')
 
   assert.equal(spectator.role, 'spectator')
   assert.equal(spectator.ageMs, 2500)
+  assert.equal(spectator.bytes, 51_493, 'the late arrival counts what it was sent, not what the driver saw')
   assert.equal(spectator.spectators, 1, 'the spectator counts itself: it is watching too')
 })
 
@@ -116,6 +118,18 @@ test("#415 the driver's row carries the claim's own age, and a spectator's row d
 
   assert.equal(channels[0].claimMs, 3100, 'the claim was recorded 3100 ms before this instant')
   assert.equal(channels[1].claimMs, undefined, 'a spectator holds no claim, so it has no claim age')
+})
+
+// #417: a channel row a leg wrote before the byte count existed holds no number.
+// A count of nothing is 0, which is what the row already says for its frames.
+test('#417 a channel the leg counted no bytes for reports none rather than failing', () => {
+  const { core } = makeCore()
+  const front = {
+    channels: [{ id: 'channel-9', body: null, role: 'driver', name: 'Bafbi', at: 1000, delivered: { frames: 1 } }],
+    claims: []
+  }
+  const { channels } = sampleHeartbeatGroups({ core, front, now: 2000 })
+  assert.equal(channels[0].bytes, 0)
 })
 
 test('#415 a leg that keeps no channel registry reports no channels rather than failing', () => {

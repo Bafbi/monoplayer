@@ -10,8 +10,9 @@
 // A channel is that per-connection record (GLOSSARY.md):
 //   - its role, driver or spectator, which the claim decides and this registry
 //     records;
-//   - what it has been sent, as a count per protocol state and the last frame, so
-//     a late arrival and a driver are never confused for one;
+//   - what it has been sent, as a count per protocol state, the bytes those frames
+//     took, and the last frame, so a late arrival and a driver are never confused
+//     for one, and a cap has a size to be decided from (#417);
 //   - its own client information, so one client's settings cannot overwrite
 //     another's.
 //
@@ -156,7 +157,7 @@ export function createChannels () {
       role,
       name,
       at,
-      delivered: { frames: 0, play: 0, configuration: 0, last: null, replays: 0 },
+      delivered: { frames: 0, play: 0, configuration: 0, bytes: 0, last: null, replays: 0 },
       settings: null,
       settingsAt: null
     }
@@ -195,14 +196,25 @@ export function createChannels () {
   // One frame reached this channel. The count is per channel, which is what keeps
   // a spectator that arrived mid-stream apart from the driver that has been
   // following the body since it landed.
-  function noteDelivery ({ id, state = 'play', name = null } = {}) {
+  //
+  // #417: `bytes` is the frame's length, passed by the caller that holds the buffer.
+  // A caller that holds a packet object rather than a buffer has no length to pass,
+  // and passes none: the count then holds what was measured, rather than inventing a
+  // size for a frame whose length nobody has. A length that is not a byte count is a
+  // caller's mistake and is refused, because a negative or fractional one makes the
+  // sum lie quietly.
+  function noteDelivery ({ id, state = 'play', name = null, bytes = null } = {}) {
     if (!STATES.has(state)) {
       throw new TypeError('state must be one of ' + [...STATES].join(', ') + ', got ' + JSON.stringify(state))
+    }
+    if (bytes !== null && bytes !== undefined && !(Number.isInteger(bytes) && bytes >= 0)) {
+      throw new TypeError('bytes must be a non-negative integer when given, got ' + JSON.stringify(bytes))
     }
     const record = byId.get(id)
     if (record === undefined) return null
     record.delivered.frames++
     record.delivered[state]++
+    record.delivered.bytes += bytes ?? 0
     record.delivered.last = { state, name: typeof name === 'string' ? name : null }
     return channelView(record)
   }

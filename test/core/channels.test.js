@@ -41,6 +41,7 @@ test('#269 a body serves a driver and a spectator, each with its own delivery st
     frames: 2,
     play: 2,
     configuration: 0,
+    bytes: 0,
     last: { state: 'play', name: 'entity_velocity' },
     replays: 0
   })
@@ -48,6 +49,7 @@ test('#269 a body serves a driver and a spectator, each with its own delivery st
     frames: 1,
     play: 1,
     configuration: 0,
+    bytes: 0,
     last: { state: 'play', name: 'map_chunk' },
     replays: 1
   })
@@ -139,6 +141,41 @@ test('#269 a channel is opened with a connection id and a role', () => {
   const again = channels.open({ id: 'c1', body: BODY, role: CHANNEL_ROLES.SPECTATOR })
   assert.equal(again.ok, false)
   assert.equal(again.reason, 'in_use', 'one connection, one channel')
+})
+
+// #417: the bytes a channel was delivered, counted where the frame is written.
+// A frame's length is the one number that says what a cap would be capping, and
+// the caller that holds the buffer is the only one that knows it.
+test('#417 a channel counts the bytes it was delivered', () => {
+  const channels = createChannels()
+  channels.open({ id: 'c1', body: BODY, role: CHANNEL_ROLES.DRIVER })
+  channels.open({ id: 'c2', body: BODY, role: CHANNEL_ROLES.SPECTATOR })
+
+  channels.noteDelivery({ id: 'c1', state: 'play', name: 'map_chunk', bytes: 51493 })
+  channels.noteDelivery({ id: 'c1', state: 'configuration', name: 'registry_data', bytes: 4000 })
+  // A caller that holds no buffer measures nothing, and the count holds what it
+  // measured rather than inventing a length for the frame it could not see.
+  channels.noteDelivery({ id: 'c1', state: 'play', name: 'player_info' })
+  channels.noteDelivery({ id: 'c2', state: 'play', name: 'map_chunk', bytes: 51493 })
+
+  assert.deepEqual(channels.of('c1').delivered, {
+    frames: 3,
+    play: 2,
+    configuration: 1,
+    bytes: 55493,
+    last: { state: 'play', name: 'player_info' },
+    replays: 0
+  })
+  assert.equal(channels.of('c2').delivered.bytes, 51493,
+    'a late spectator counts its own bytes, not the driver\'s')
+
+  // A length that is not a byte count is a caller's mistake, not a measurement
+  // of zero: a negative or fractional value would make the sum lie quietly.
+  assert.throws(() => channels.noteDelivery({ id: 'c1', bytes: -1 }), TypeError)
+  assert.throws(() => channels.noteDelivery({ id: 'c1', bytes: 1.5 }), TypeError)
+  assert.throws(() => channels.noteDelivery({ id: 'c1', bytes: '12' }), TypeError)
+  assert.equal(channels.noteDelivery({ id: 'unknown', bytes: 5 }), null,
+    'a frame for a channel the registry does not hold counts nothing')
 })
 
 // #416: the identity a record carries: the account that serves the lane, the body
