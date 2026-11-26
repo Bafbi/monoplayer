@@ -150,10 +150,15 @@ document.addEventListener('submit', async (event) => {
       armed = null
       paintArmed()
     } else {
-      armed = { key, name: form.dataset.name ?? 'this entry', until: Date.now() + ARM_MS }
+      // The arm this timer is for, held by identity. A row can be armed again inside an
+      // earlier arm's ten seconds — arm, confirm, arm again — and a timer that matched on
+      // the key alone would disarm the later arm at a moment the operator never chose
+      // (#353).
+      const arm = { key, name: form.dataset.name ?? 'this entry', until: Date.now() + ARM_MS }
+      armed = arm
       paintArmed()
       setTimeout(() => {
-        if (armed === null || armed.key !== key) return
+        if (armed !== arm) return
         armed = null
         paintArmed()
       }, ARM_MS)

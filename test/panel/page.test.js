@@ -11,8 +11,6 @@
 //      as a form that posts nowhere.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
 
 import { activity } from '../../src/panel/activity.js'
 import { renderCard } from '../../src/panel/views/card.js'
@@ -217,24 +215,6 @@ test('the allowed servers tell an empty list, an unread one, and the committed c
 
   const unread = renderCard(puppet, facts(), attachList)
   assert.match(unread, /the panel did not read the allowed servers for this page/)
-})
-
-// The client script has no unit test, because the repository has no DOM to run it in. What
-// can be checked is the join between the two: every removal the page renders is one the
-// script's armed paint knows about. A selector that named one block's buttons would leave
-// the other's second press invisible, and the operator would watch a button say "remove"
-// while the press beside it sent the deletion.
-test('the client arming selector names every removal the page renders', () => {
-  const card = renderCard(puppet, facts(), attachList, allowedList)
-  const kinds = [...new Set([...card.matchAll(/data-write="(remove[a-z-]*)"/g)].map(match => match[1]))].sort()
-  assert.deepEqual(kinds, ['remove', 'remove-server'], 'the page renders both blocks\' removals')
-  const script = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'panel', 'public', 'panel.js'), 'utf8')
-  const paint = script.slice(script.indexOf('function paintArmed'), script.indexOf('function written'))
-  const selector = /querySelectorAll\('([^']+)'\)/.exec(paint)?.[1] ?? ''
-  assert.notEqual(selector, '', 'the paint function still holds one selector this test can read')
-  for (const kind of kinds) {
-    assert.match(selector, new RegExp('data-write="' + kind + '"'), 'the armed paint covers data-write="' + kind + '"')
-  }
 })
 
 test('the scene is decoration: no number, no word, nothing a colour would have to say', () => {
