@@ -6,13 +6,11 @@
 // a landing leaves open, because the leg's own state has not caught up until the client
 // answers.
 //
-// The front leg documents one funnel for a clientbound raw frame — writeRawTo in
-// src/legs/live-front.js, which carries the clientbound policy backstop, the
-// reconfiguration hold, the state check and the wire check. A landing replays a
-// body's configuration into a client that is mid-configuration, and the snapshot it
-// replays is a leg dependency: nothing upstream can promise the set is one the
-// policy would let across. So the check that refuses a frame has to sit on the
-// write, not only on the snapshot's reader.
+// The front leg documents one funnel for a clientbound raw frame: writeRawTo in
+// src/legs/live-front.js. A landing replays a body's configuration into a client that is
+// mid-configuration, and the snapshot it replays is a leg dependency, so nothing upstream
+// can promise the set is one the policy would let across. The check that refuses a frame
+// therefore has to sit on the write, not only on the snapshot's reader.
 //
 // Seam: an offline front leg and the leg's own `spectate` call, which lands a client
 // through the same `sendBodyConfiguration` a granted claim uses (#598's file lands

@@ -1239,11 +1239,11 @@ first dial and its target warms in five seconds.
   the policy replays reaches the client, and the frame it refuses does not (#602).
 
   The front leg documents one funnel for a clientbound raw frame: `writeRawTo` in
-  `src/legs/live-front.js`. It carries the clientbound policy backstop, the reconfiguration
-  hold, the state check and the wire check. #602 found three writers beside it, and a landing
-  was one of them, so a body's configuration reached a client mid-phase with no policy check
-  at all. The replay reader was the other half. It asked `decision !== 'block'`, and that
-  admits the frames a connection owns and the dialog the human answers.
+  `src/legs/live-front.js`, which carries the per-socket checks and names them. #602 found
+  three writers beside it, and a landing was one of them, so a body's configuration reached a
+  client mid-phase with no policy check at all. The replay reader was the other half. It asked
+  `decision !== 'block'`, and that admits the frames a connection owns and the dialog the
+  human answers.
 
   The rig is this check's own because the body it lands is a hand-picked configuration rather
   than a cache, which is the point: the snapshot is one the leg cannot trust. A picker client
@@ -1251,12 +1251,14 @@ first dial and its target warms in five seconds.
   ordinary frame the landing wrote is there, and neither the control dialog nor the blocked
   connection control is, in the whole connection and not only after the landing.
 
+  The two refused frames are real frames of this version, so a client that received one would
+  decode it rather than fail on it, and the row reads the frame and not a parse error.
+
   The funnel's own refusal of a blocked frame is not this row's to read, and it cannot be: the
   reader strips such a frame before the funnel sees it. That gate is
-  `test/legs/config-landing-policy.test.js`, at the write a landing makes.
-  Both refused frames are real frames of this version, built with the same serializer the
-  leg's own writer uses, so a client that received one would decode it rather than fail on
-  it, and the assertion reads the frame and not a parse error.
+  `test/legs/config-landing-policy.test.js`, at the leg's raw entry, which is the write a landing
+  makes. That the landing takes that write is what the call-site count below pins, and the two
+  together are what #602's second criterion asks for.
 
   What it cannot prove: that no other writer in the leg has a way past the funnel. That is
   `test/legs/raw-funnel.test.js`, which counts the call sites.

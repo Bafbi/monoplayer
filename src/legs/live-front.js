@@ -205,7 +205,9 @@ export function createConfigPathInterceptor ({
         // The recording carries the server's finish. The picker never sends one.
         if (frame.name === finishName) continue
         // #602: `writeRaw` is the leg's funnel now, and it answers false for a frame it
-        // refuses. A frame that did not go is not a frame this counted.
+        // refuses. The hold's answer is the other true, and it cannot reach this loop: a
+        // frame is held only for a client in play with a reconfiguration pending, and this
+        // replay runs in the client's configuration phase.
         if (writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) {
           stats.baselineFrames++
         }
@@ -262,11 +264,14 @@ export function createConfigPathInterceptor ({
     // one the client reads in play (#541). `finishSent` was set only where this leg's
     // own resolve wrote the finish, so those two clients were the gap.
     //
-    // Set after the write and from its answer: a finish that threw is a phase still open,
-    // and that is what lets the refusal's own `disconnect` through the guard above.
+    // Set after the write, because a throw is the only failure this library reports: its
+    // `write` answers undefined whether or not the serializer could write. A finish that
+    // threw is a phase still open, which is what lets the refusal's own `disconnect`
+    // through the guard above. A serializer that could not write delivers that disconnect
+    // no better than it delivered the finish, so the flag is right for that case too.
     if (name === finishName) {
       const sent = originalWrite(name, params)
-      finishSent = sent !== false
+      finishSent = true
       return sent
     }
     return originalWrite(name, params)
@@ -1212,11 +1217,10 @@ function createFrontLeg ({
       baselineConfigFrames: picker ?? [],
       onBaselineFrames: picker === null ? null : () => sendPickerDialog(client),
       write: client.write.bind(client),
-      // Every clientbound raw byte we push to the attaching client, in order. Through
-      // the funnel (#602): the picker's baseline frames and this connection's cached
-      // replay are configuration frames written to a client mid-phase, which is exactly
-      // what the policy backstop, the reconfiguration hold, the state check and the wire
-      // check are for.
+      // Every clientbound raw byte we push to the attaching client, in order. Through the
+      // funnel (#602): the picker's baseline frames and this connection's cached replay
+      // are configuration frames written to a client mid-phase, and writeRawTo is where
+      // the per-socket checks for that live.
       writeRaw: (buffer, meta) => writeRawTo(client, buffer, meta),
       isConfigurationState: () => client.state === 'configuration',
       cachedConfigFrames,
@@ -1417,6 +1421,12 @@ function createFrontLeg ({
   // The client picked a server. The pick is reported to the caller, and the same
   // client gets that server's own dialog. A pick is the first half of a choice, not
   // the end of the connection (#266).
+  //
+  // The one clientbound configuration frame the leg still writes as a packet object, and
+  // this names what it does not take: no policy backstop, no state check, no wire check.
+  // The library serializes it against whatever state the client holds, which is the gap
+  // #600 is about, and the raw funnel cannot carry it until that ledger exists. The bytes
+  // are the dialog's own params, so there is nothing a wire check could compare them to.
   function sendServerDialog (client, server) {
     let written = false
     try {
@@ -1655,7 +1665,11 @@ function createFrontLeg ({
     // leave a record of what the client was sent (#269).
     const channel = openChannel(client, { role: CHANNEL_ROLES.DRIVER, body: claim.body })
     const sent = sendBodyConfiguration(client)
-    if (sent.frames === 0) {
+    // #602: `written`, not `frames`. The funnel can refuse every frame a body offers, and a
+    // client landed with no registry set is the outcome the empty cache was already refused
+    // for. docs/telemetry.md says the reason is "the body's configuration replay wrote no
+    // frame", which is this number.
+    if (sent.written === 0) {
       // A body the core reports warm with nothing cached is a body no client can
       // be put into, and it is answered like an unreachable one.
       if (channel !== null) closeChannel(client)
@@ -1734,7 +1748,8 @@ function createFrontLeg ({
     })
     if (channel === null) return refused('channel_refused')
     const sent = sendBodyConfiguration(client)
-    if (sent.frames === 0) {
+    // As in landClaimedClient: the answer is what the funnel wrote, not what the body offered.
+    if (sent.written === 0) {
       closeChannel(client)
       return refused('no_cached_configuration')
     }
@@ -1877,6 +1892,11 @@ function createFrontLeg ({
   // this state (its override covers login and play only), so the frame is
   // written here and the socket is ended after it. A client that is told why it
   // is leaving is the whole difference between a refusal and a hang.
+  //
+  // This write cannot go through writeRawTo, and the checks it does not take are the
+  // reason: the policy blocks a configuration `disconnect` and a `transfer` because they
+  // are the puppet's connection control, and this one is the lane saying why it is ending
+  // the client. A funnel that refused it would leave the client with nothing.
   function endConfiguration (client, reason, text) {
     try {
       client.write('disconnect', { reason: { type: 'string', value: text } })
@@ -2259,11 +2279,10 @@ function createFrontLeg ({
     return true
   }
 
-  // One frame, to one client. Everything on this path is per socket — the
-  // clientbound policy backstop, the reconfiguration hold, the state check, the rule
-  // against a frame after its phase's finish, the wire check — so a body with two
-  // channels does the work twice, and neither client can be handed a frame in a state
-  // it cannot parse.
+  // One frame, to one client. Everything on this path is per socket: the clientbound
+  // policy backstop, the reconfiguration hold, the state check, the rule against a frame
+  // after its phase's finish, and the wire check. A body with two channels does the work
+  // twice, so neither client can be handed a frame in a state it cannot parse.
   //
   // #602: this is the leg's only raw writer. The config interceptor's replay, a claim
   // landing, a spectator landing and the reconfiguration flush all come here, so a

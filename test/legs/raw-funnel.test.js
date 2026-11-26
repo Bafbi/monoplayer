@@ -23,9 +23,9 @@ test('#602 the leg has one raw funnel, and no second writer beside it', () => {
   assert.equal(count(source, 'function writeRawTo ('), 1,
     'the funnel is still one function in src/legs/live-front.js')
 
-  // Every checked raw write is the funnel's own. A path that calls this directly has
-  // taken the wire check without the policy backstop, the reconfiguration hold and
-  // the state check that sit beside it in writeRawTo (#602 named three).
+  // Every checked raw write is the funnel's own. A path that calls this directly takes
+  // the wire check and none of the other per-socket checks writeRawTo makes (#602 named
+  // three paths that did exactly that).
   assert.equal(count(source, 'emitCheckedRaw('), 1,
     'emitCheckedRaw is called once, inside writeRawTo: every other writer goes through the funnel')
 
