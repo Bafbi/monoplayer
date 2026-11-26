@@ -12,9 +12,21 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools', 'nath.sh')
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const TOOL = path.join(ROOT, 'tools', 'nath.sh')
 const SIGNATURE = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef_1700000000_1000000000'
-const SCREENSHOT_PATH = '/home/bafbi/.local/share/PrismLauncher/instances/gate-b-player-fabric/minecraft/screenshots/driver-1.png'
+
+// The instance a driver run launches, from the one place src/driver/run.js writes
+// it. The fixtures below put a client of that instance on the host, and the last
+// cases in this file hold tools/nath.sh's default to the same name (#190).
+function driverInstance () {
+  const match = readFileSync(path.join(ROOT, 'src', 'driver', 'run.js'), 'utf8')
+    .match(/^const DEFAULT_INSTANCE = '([^']+)'$/m)
+  assert.ok(match, 'src/driver/run.js names the instance a run launches once, in DEFAULT_INSTANCE')
+  return match[1]
+}
+const LAUNCHED_INSTANCE = driverInstance()
+const SCREENSHOT_PATH = '/home/bafbi/.local/share/PrismLauncher/instances/' + LAUNCHED_INSTANCE + '/minecraft/screenshots/driver-1.png'
 
 // One canned client window for the keeper process, on the given workspace.
 const clientOn = (workspace, pid) => JSON.stringify([{ class: 'Minecraft 26.1.2', address: '0xdef', pid, mapped: true, workspace: { id: Number(workspace), name: String(workspace) }, at: [2, 28], size: [1052, 1050] }])
@@ -210,7 +222,11 @@ function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
     // A real process whose command line carries the instance library path, so
     // the wrapper's pid check has something to match. t.after stops it; unref
     // keeps the test process from waiting on it.
-    const keeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)', 'nath-test', 'instances/gate-b-player-fabric/natives'], { stdio: 'ignore' })
+    // One process stands in for every client on the host: the one a run launches,
+    // and the 26.1.2 record a case that names an instance drives. Its command line
+    // carries each instance's library path, which is how the wrapper decides whose
+    // window and whose port a pid is.
+    const keeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)', 'nath-test', ...[...new Set([LAUNCHED_INSTANCE, 'gate-b-player-fabric'])].map(name => 'instances/' + name + '/natives')], { stdio: 'ignore' })
     keeper.unref()
     stop = () => keeper.kill()
     pid = keeper.pid
@@ -401,11 +417,11 @@ test('kill quits through the driver and reports no process left', (t) => {
   // The port owner is asked first, then the quit goes over the forward, then
   // the anchor sweep finds nothing left.
   const [owner, quit, cleanup] = h.calls()
-  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric 25599')
+  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- ' + LAUNCHED_INSTANCE + ' 25599')
   assert.ok(owner.stdin.includes('ss -ltnpH "sport = :$port"'), 'the check asks for the driver port')
   assert.deepEqual(quit.argv, ['-W', '127.0.0.1:25599'])
   assert.match(quit.stdin, /"op":"quit"/)
-  assert.equal(cleanup.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric')
+  assert.equal(cleanup.argv.join(' ').trim(), 'bash -s -- ' + LAUNCHED_INSTANCE)
 })
 
 test('kill never asks the driver for another instance', (t) => {
@@ -455,7 +471,7 @@ test('kill says so when there is nothing to stop', () => {
   const run = h.run(['kill'])
   assert.equal(run.status, 0)
   assert.match(run.stdout, /^STOPPED=$/m)
-  assert.match(run.stderr, /nothing to stop on gate-b-player-fabric/)
+  assert.match(run.stderr, new RegExp('nothing to stop on ' + LAUNCHED_INSTANCE))
 })
 
 test('kill refuses an instance name that is not a bare name', () => {
@@ -485,7 +501,7 @@ test('shot asks the driver, copies the PNG back, and checks it is a PNG', (t) =>
 
   // The port owner is asked first, then the capture, then the copy.
   const [owner, request, copy] = h.calls()
-  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- gate-b-player-fabric 25599')
+  assert.equal(owner.argv.join(' ').trim(), 'bash -s -- ' + LAUNCHED_INSTANCE + ' 25599')
   assert.deepEqual(request.argv, ['-W', '127.0.0.1:25599'])
   assert.match(request.stdin, /"op":"screenshot"/)
   assert.deepEqual(copy.argv, ['bafbi@nath.tail41e568.ts.net:' + SCREENSHOT_PATH, target + '.part'])
@@ -525,11 +541,11 @@ test('shot captures with the compositor when no driver serves the instance', (t)
   assert.equal(run.status, 0, run.stderr)
   assert.match(run.stdout, /^SOURCE=compositor$/m)
   assert.match(run.stdout, /^BYTES=12$/m)
-  assert.match(run.stdout, new RegExp('^REMOTE_PATH=.*instances/gate-b-player-fabric/minecraft/screenshots/nath-[0-9]+\\.png$', 'm'))
+  assert.match(run.stdout, new RegExp('^REMOTE_PATH=.*instances/' + LAUNCHED_INSTANCE + '/minecraft/screenshots/nath-[0-9]+\\.png$', 'm'))
 
   // The warning goes out, the view moves to the client, then it comes back.
   const log = readFileSync(path.join(h.dir, 'eval.log'), 'utf8')
-  assert.match(log, /NOTIFY\tnotify -1 2000 rgb\(3b82f6\) nath\.sh: capturing gate-b-player-fabric, the view moves to its workspace now/)
+  assert.match(log, new RegExp('NOTIFY\\tnotify -1 2000 rgb\\(3b82f6\\) nath\\.sh: capturing ' + LAUNCHED_INSTANCE + ', the view moves to its workspace now'))
   assert.match(log, /hl\.dsp\.focus\(\{ window = "address:0xabc" \}\)/)
   assert.match(log, /hl\.dsp\.focus\(\{ window = "address:0xfeed" \}\)/)
   assert.equal(readFileSync(target, 'latin1').startsWith('\x89PNG'), true)
@@ -568,7 +584,7 @@ test('shot says so when the instance has no window to capture', (t) => {
   t.after(h.stop)
   const run = h.run(['shot', path.join(h.dir, 'client.png')])
   assert.equal(run.status, 1)
-  assert.match(run.stderr, /gate-b-player-fabric has no mapped window, so there is nothing to capture/)
+  assert.match(run.stderr, new RegExp(LAUNCHED_INSTANCE + ' has no mapped window, so there is nothing to capture'))
 })
 
 test('shot refuses a capture warning that is not a whole number of seconds', (t) => {
@@ -770,4 +786,81 @@ test('a command substitution in an argument stays text', (t) => {
   // so the host shell receives one literal argument instead of a substitution.
   assert.ok(lua.includes('\\\\$\\\\(id\\\\)'), lua)
   assert.doesNotMatch(run.stdout, /uid=/)
+})
+
+
+// ---------------------------------------------------------------------------
+// The default instance (#190)
+// ---------------------------------------------------------------------------
+
+// The three pages a driver operator starts a client from: the lane's runbook, the
+// cluster page, and the page that installs the driver. A page that names another
+// instance sends its reader to a client the run does not drive.
+const DRIVER_PAGES = ['docs/driver-lane.md', 'deploy/driver/README.md', 'tools/driver/README.md']
+
+test('a command that names no instance acts on the one a driver run launches', (t) => {
+  // launch refuses to guess, so kill is the cheapest command that reads the
+  // default: the instance the host is asked about is the one the caller left out.
+  // A bare kill aimed at another client leaves the run's client holding the driver
+  // port, and the next rung then talks to a session joined somewhere else.
+  const h = harness({ sshBody: EXEC_SSH })
+  t.after(h.stop)
+  const run = h.run(['kill'])
+  assert.equal(run.status, 0, run.stderr)
+  const [owner] = h.calls()
+  const asked = owner.argv.join(' ').trim()
+  assert.equal(asked, 'bash -s -- ' + LAUNCHED_INSTANCE + ' 25599',
+    'a bare kill asks the host about the client in ' + asked + ', and a driver run launches ' +
+    LAUNCHED_INSTANCE + '. Name one instance in both, or pass the instance to every command')
+})
+
+test('tools/nath.sh writes the default instance once', () => {
+  // The value lived in the variable and again in the header comment, and the
+  // comment is the --help text, so the two drifted out of sight. usage() prints
+  // the value the variable resolves to instead of repeating it.
+  const source = readFileSync(TOOL, 'utf8')
+  const written = source.split(LAUNCHED_INSTANCE).length - 1
+  assert.equal(written, 1,
+    'tools/nath.sh writes ' + LAUNCHED_INSTANCE + ' ' + written + ' times. The default is the ' +
+    'variable, and usage() prints what it resolves to, so the file holds one copy')
+})
+
+test('the three driver pages name the instance a run launches', () => {
+  for (const page of DRIVER_PAGES) {
+    const text = readFileSync(path.join(ROOT, page), 'utf8')
+    assert.ok(text.includes(LAUNCHED_INSTANCE),
+      page + ' never names ' + LAUNCHED_INSTANCE + ', the instance src/driver/run.js launches. ' +
+      'A page that tells a reader which client to start has to name the one the run drives')
+  }
+})
+
+// The version the gate Paper serves, from the manifest that renders the lane.
+function gatePaperVersion () {
+  const match = readFileSync(path.join(ROOT, 'deploy', 'driver', 'paper.yaml'), 'utf8')
+    .match(/- name: VERSION\n\s+value: "?([^"\n]+)"?/)
+  assert.ok(match, 'deploy/driver/paper.yaml names the version the gate Paper serves')
+  return match[1]
+}
+
+test('the instance a run launches is a client for the gate Paper\'s version', () => {
+  // The display host writes a version into an instance id without its dot: 26.2 is
+  // "262". The gate Paper moves on its own schedule, so this is what says the client
+  // and the server still serve one version (#190). It is the reason for the name,
+  // not a rule about how a name is spelled: a rename that keeps the marker passes.
+  const marker = gatePaperVersion().replaceAll('.', '')
+  assert.ok(LAUNCHED_INSTANCE.includes(marker),
+    'a driver run launches ' + LAUNCHED_INSTANCE + ', and the gate Paper serves ' +
+    gatePaperVersion() + ' (deploy/driver/paper.yaml). The client a run starts belongs to the ' +
+    'version that server speaks: rename the instance, or record why the two differ')
+})
+
+test('the install command builds the instance a run launches', () => {
+  // The installer takes the pair with no default, so the page that shows the
+  // command is where the pair is named. A base that is not the vanilla sibling of
+  // the launched instance installs a client against the wrong version.
+  const base = /^BASE=(\S+)/m.exec(readFileSync(path.join(ROOT, 'tools', 'driver', 'README.md'), 'utf8'))?.[1]
+  assert.ok(base, 'tools/driver/README.md shows the install command, starting at BASE=')
+  assert.equal(base, LAUNCHED_INSTANCE.replace(/-fabric$/, ''),
+    'tools/driver/README.md installs from ' + base + ' into ' + LAUNCHED_INSTANCE +
+    '. The base is the vanilla sibling of the client a run launches')
 })

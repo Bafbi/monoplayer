@@ -2,17 +2,23 @@
 # Install the client driver into a Prism Launcher root on the display host.
 #
 # Usage:
-#   ./install.sh /path/to/monoplayer-driver-0.1.0.jar
+#   BASE=<base instance> INSTANCE=<new instance id> \
+#     ./install.sh /path/to/monoplayer-driver-0.1.0.jar
 #
 # Environment:
 #   PRISM_ROOT  Prism data root (default: ~/.local/share/PrismLauncher)
-#   BASE        Base instance to clone (default: gate-b-player)
-#   INSTANCE    New Fabric instance ID (default: gate-b-player-fabric)
+#   BASE        Base instance to clone (required)
+#   INSTANCE    New Fabric instance ID (required)
 #   LOADER      Fabric Loader version (default: 0.20.1)
 #
 # The Minecraft version is not a value here. It comes from the base instance's
 # mmc-pack.json, so the driver instance cannot drift from the client the
 # operator already has, and the pin lives in one place: tools/driver/build.gradle.
+#
+# The pair is not a value here either. A jar loads one Minecraft version, so a
+# default pair goes stale when the jar moves. The guess that shipped cloned the
+# 26.1.2 record for a 26.2 jar (#123). The caller names both, and
+# tools/driver/README.md shows the pair the 26.2 jar loads (#190).
 set -euo pipefail
 
 # The lane this checkout derives, from the one owner of that name (#327). The
@@ -26,14 +32,24 @@ lane=$(bash "$root/scripts/gate-lane.sh" name 2>/dev/null) || lane=''
 
 jar=${1:-}
 if [ -z "$jar" ] || [ ! -f "$jar" ]; then
-  echo "usage: $0 /path/to/monoplayer-driver-0.1.0.jar" >&2
+  echo "usage: BASE=<base instance> INSTANCE=<new instance id> $0 /path/to/monoplayer-driver-0.1.0.jar" >&2
+  exit 2
+fi
+prism_root=${PRISM_ROOT:-"$HOME/.local/share/PrismLauncher"}
+base=${BASE:-}
+instance=${INSTANCE:-}
+loader=${LOADER:-0.20.1}
+
+# An empty BASE resolves base_dir to the instances root, which exists, so it is
+# refused here rather than by the mmc-pack.json check below. An empty INSTANCE
+# resolves instance_dir to the same root, which then reads as an instance that
+# already exists.
+if [ -z "$base" ] || [ -z "$instance" ]; then
+  echo "BASE and INSTANCE name the instances to clone and to create; neither has a" >&2
+  echo "default. tools/driver/README.md shows the pair the current jar loads." >&2
   exit 2
 fi
 
-prism_root=${PRISM_ROOT:-"$HOME/.local/share/PrismLauncher"}
-base=${BASE:-gate-b-player}
-instance=${INSTANCE:-gate-b-player-fabric}
-loader=${LOADER:-0.20.1}
 base_dir="$prism_root/instances/$base"
 instance_dir="$prism_root/instances/$instance"
 

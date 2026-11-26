@@ -152,8 +152,9 @@ test('testbed:run names the restore it performs and the recovery it leaves to an
 // did not save it. gate-b-player-262-fabric already exists on the display host,
 // install.sh exits 1 when the instance exists, and that host has no checkout for
 // mise to run in, so no form of the task worked where the Prism root lives.
-// Nothing referenced it, so it is gone. A task that installs the driver again
-// has to name the 26.2 pair, because install.sh defaults to the record pair.
+// Nothing referenced it, so it is gone. install.sh takes the pair from BASE and
+// INSTANCE with no default (#190), so a task that installs the driver again
+// names the 26.2 pair itself.
 test('the driver install path is a script, not a mise task', () => {
   assert.equal(
     tasks.has('driver:install'),
