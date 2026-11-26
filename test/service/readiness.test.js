@@ -6,9 +6,10 @@ import assert from 'node:assert/strict'
 
 import { shouldForceWarm, waitForReady } from '../../src/service/readiness.js'
 
-const stats = ({ warm = false, chunkFrames = 0, config = 2, prefix = 40 } = {}) => ({
+const stats = ({ warm = false, chunkFrames = 0, deliverableChunks = 0, config = 2, prefix = 40 } = {}) => ({
   warm,
   chunkFrames,
+  deliverableChunks,
   sizes: { config, prefix, chunks: 0 },
   metrics: { framesCached: 42, framesDropped: 0 }
 })
@@ -20,12 +21,23 @@ const ready = (body) => ({
   configFrames: 2,
   prefixFrames: 40,
   chunkFrames: 0,
+  deliverableChunks: 0,
   ...body
 })
 
-test('the warm fallback is refused for a target that has sent no chunk frame', () => {
-  assert.equal(shouldForceWarm(ready({ chunkFrames: 0 })), false, 'no terrain, no release')
-  assert.equal(shouldForceWarm(ready({ chunkFrames: 1 })), true)
+test('the warm fallback is refused for a body with no terrain left', () => {
+  assert.equal(shouldForceWarm(ready({ deliverableChunks: 0 })), false, 'no terrain, no release')
+  assert.equal(shouldForceWarm(ready({ deliverableChunks: 1 })), true)
+})
+
+// #399: a body that cached a chunk and then unloaded it passes the arrival count
+// and has nothing to release a client onto. The predicate reads the terrain, not
+// the arrivals, so the two readings disagree here and the terrain wins.
+test('the warm fallback is refused for a body whose only chunk was unloaded', () => {
+  const unloaded = ready({ chunkFrames: 1, deliverableChunks: 0 })
+  assert.equal(shouldForceWarm(unloaded), false, 'terrain that is gone is not terrain')
+  const kept = ready({ chunkFrames: 2, deliverableChunks: 1 })
+  assert.equal(shouldForceWarm(kept), true, 'one chunk still there is enough to land on')
 })
 
 test('the warm fallback refuses a cache that is not ready at all', () => {
@@ -40,7 +52,7 @@ test('an already warm cache needs no fallback', () => {
 })
 
 test('a start-up call may force warm without chunk data, because it releases nobody', () => {
-  assert.equal(shouldForceWarm(ready({ chunkFrames: 0 }), { requireChunks: false }), true)
+  assert.equal(shouldForceWarm(ready({ deliverableChunks: 0 }), { requireChunks: false }), true)
 })
 
 test('waitForReady reports the chunk data the cache holds', async () => {
@@ -50,11 +62,12 @@ test('waitForReady reports the chunk data the cache holds', async () => {
   assert.equal(outcome.chunkFrames, 0, 'a warm backend can still have sent no chunk yet')
   assert.equal(shouldForceWarm(outcome), false)
 
-  const withChunks = { cache: { stats: () => stats({ warm: false, chunkFrames: 3 }) } }
+  const withChunks = { cache: { stats: () => stats({ warm: false, chunkFrames: 3, deliverableChunks: 2 }) } }
   // #110: a cold cache with a zero warm budget is settled at once, so this read
   // costs no poll. The re-poll has its own case below.
   const second = await waitForReady({ core: withChunks, log: () => {}, maxWarmMs: 0 })
-  assert.equal(second.chunkFrames, 3)
+  assert.equal(second.chunkFrames, 3, 'whatever arrived')
+  assert.equal(second.deliverableChunks, 2, 'what is still there')
   assert.equal(shouldForceWarm(second), true)
 })
 
@@ -63,7 +76,7 @@ test('the poll loop re-reads the cache until the cache turns warm', async () => 
   // cold cache without sleeping. The wait is injected, so the loop takes its
   // second pass with no timer.
   let polls = 0
-  const core = { cache: { stats: () => stats({ warm: polls++ > 0, chunkFrames: 4 }) } }
+  const core = { cache: { stats: () => stats({ warm: polls++ > 0, chunkFrames: 4, deliverableChunks: 4 }) } }
   const events = []
   const sleeps = []
   const outcome = await waitForReady({

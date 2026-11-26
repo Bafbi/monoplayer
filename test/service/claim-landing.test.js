@@ -20,12 +20,22 @@ const CLAIMED_SERVER = pickSlug(CLAIMED_BODY.target.host + ':' + CLAIMED_BODY.ta
 // A body the core can release a client on: its configuration is cached, its play
 // login has landed, and its warm marker has been seen. That is the same pair of
 // conditions an ordinary warm attach reads.
-function warmABody (backendLeg, { config = ['registry_data'], play = ['login'], marker = true } = {}) {
+function warmABody (
+  backendLeg,
+  { config = ['registry_data'], play = ['login'], marker = true, chunks = [] } = {}
+) {
   for (const name of config) {
     backendLeg.deliver({ state: 'configuration', name, buffer: Buffer.from('config:' + name) })
   }
   for (const name of play) {
     backendLeg.deliver({ state: 'play', name, buffer: Buffer.from('play:' + name), data: { entityId: 42 } })
+  }
+  // A chunk entry is one set, or a set and the unload that cancels it. The unload
+  // carries chunkX/chunkZ, which is how the wire decodes it.
+  for (const { x, z, unload = false } of chunks) {
+    const name = unload ? 'unload_chunk' : 'map_chunk'
+    const data = unload ? { chunkX: x, chunkZ: z } : { x, z }
+    backendLeg.deliver({ state: 'play', name, buffer: Buffer.from(name + ':' + x + ',' + z), data })
   }
   if (marker) {
     backendLeg.deliver({ state: 'play', name: 'chunk_batch_finished', buffer: Buffer.from('marker'), data: {} })
@@ -264,6 +274,39 @@ test('a claim lands on a body whose backend never sends the batch marker', async
   assert.equal(core.claimedBody, CLAIMED_BODY.body)
   assert.equal(core.metrics.claimBodies, 1)
   assert.equal(core.metrics.claimDialsFailed, 0)
+})
+
+// #399: the counter a claim used to read counts every chunk that ever arrived, so
+// a body that cached a chunk and then unloaded it looked like terrain. It is not:
+// the replay hands the client the chunk and then takes it away, and the client
+// lands in an empty world, which is the failure the chunk gate exists to prevent
+// (#87).
+test('#399 a claim refuses a body whose only chunk was unloaded, and lands on one that kept it', async () => {
+  const unloaded = makeCore({ config: { picker: true } })
+  const dial = unloaded.core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  warmABody(unloaded.backendLeg, { marker: false, chunks: [{ x: 0, z: 0 }, { x: 0, z: 0, unload: true }] })
+  assert.equal(unloaded.core.cache.stats().chunkFrames, 1, 'one chunk frame did arrive')
+  unloaded.clock.tick(CLAIM_WARM_TIMEOUT_MS)
+  const refused = await dial
+  assert.equal(refused.connected, false, 'terrain that is gone cannot back a client')
+  assert.equal(refused.reason, 'body_not_warm')
+  assert.equal(unloaded.core.cache.warm, false, 'and nothing pinned the prefix on it')
+
+  // The same body, still holding one of its two chunks: that is terrain, so the
+  // fallback lands the client exactly as it does on a body that never unloaded.
+  const kept = makeCore({ config: { picker: true } })
+  const landing = kept.core.connectClaimedBody(CLAIMED_BODY)
+  await Promise.resolve()
+  warmABody(kept.backendLeg, {
+    marker: false,
+    chunks: [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 0, z: 0, unload: true }]
+  })
+  kept.clock.tick(CLAIM_WARM_GRACE_MS)
+  const landed = await landing
+  assert.equal(landed.connected, true, 'one chunk still there is enough to land on')
+  assert.equal(kept.core.cache.warm, true)
+  assert.equal(kept.core.claimedBody, CLAIMED_BODY.body)
 })
 
 test('a claim still refuses a body that cached no chunk at all', async () => {

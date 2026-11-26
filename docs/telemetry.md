@@ -409,7 +409,7 @@ The service writes `startLive`, `liveReady`, `startLiveFailed`, `shutdown`, and 
 
 A picker lane dials no body before the front listens, because a claim is what dials a body. Its JSONL log carries `{"event":"backendBootSkipped","reason":"picker"}`, and its `liveReady` says `"boot":"skipped"`. That `liveReady` also reads `"backendConnected":null`, and `null` for `warm`, `configFrames` and `prefixFrames`: no body was dialled, so there is no cache to describe. A lane that dialled says `"boot":"dialled"` and the numbers of the body it dialled.
 
-When a claim dials a body whose backend never sends the batch marker, the log carries `{"event":"warmFallback","stage":"claim"}` with `forced`, `chunkFrames` and `afterMs`. The landing record `claimBodyWarm` then says `"forced":true`.
+When a claim dials a body whose backend never sends the batch marker, the log carries `{"event":"warmFallback","stage":"claim"}` with `forced`, `chunkFrames`, `deliverableChunks` and `afterMs`. The landing record `claimBodyWarm` then says `"forced":true`.
 
 ### The name policy
 

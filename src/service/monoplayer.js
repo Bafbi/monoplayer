@@ -2151,11 +2151,14 @@ export function createMonoplayer ({
         marker: stats.warm === true,
         configFrames: stats.sizes.config,
         prefixFrames: stats.sizes.prefix,
-        // The counter the startup and transfer paths read for the same question
-        // (`waitForReady` and `shouldForceWarm`). A chunk in the pre-warm prefix
+        // The readings the startup, reconnect and transfer stages take for the same
+        // question (`waitForReady` and `shouldForceWarm`). A chunk in the pre-warm prefix
         // is in the prefix, not in the chunk map, so `sizes.chunks` is 0 until a
-        // body is warm and cannot answer "did terrain arrive".
-        chunkFrames: stats.chunkFrames
+        // body is warm and cannot answer "is there terrain". `chunkFrames` counts
+        // whatever arrived; `deliverableChunks` is what the replay still delivers,
+        // and it is the one the fallback below decides on (#399).
+        chunkFrames: stats.chunkFrames,
+        deliverableChunks: stats.deliverableChunks
       }
       if (session.isAttachReady() && stats.sizes.config > 0 && stats.sizes.prefix > 0) {
         return { attachReady: true, reason: null, forced: false, ...state }
@@ -2169,7 +2172,7 @@ export function createMonoplayer ({
         hasConfig: stats.sizes.config > 0,
         hasPrefix: stats.sizes.prefix > 0,
         warm: stats.warm === true,
-        chunkFrames: stats.chunkFrames
+        deliverableChunks: stats.deliverableChunks
       }, { requireChunks: true })
       if (forced && clockNow() - startedAt >= graceMs) {
         const pinned = forceWarm({ cache, session })
@@ -2181,6 +2184,7 @@ export function createMonoplayer ({
           configFrames: stats.sizes.config,
           prefixFrames: stats.sizes.prefix,
           chunkFrames: stats.chunkFrames,
+          deliverableChunks: stats.deliverableChunks,
           afterMs: clockNow() - startedAt
         })
         return {

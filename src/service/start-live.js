@@ -957,8 +957,12 @@ export async function startLive ({ argv = [], io = process } = {}) {
       if (!shouldForceWarm(readiness, { requireChunks: stage === 'transfer' })) {
         log('warmFallbackRefused', {
           stage,
-          reason: 'no_chunks',
+          // #399: the refusal is terrain that is gone, not chunks that never came.
+          // The arrival count travels beside it, so "sent and unloaded" reads apart
+          // from "never sent".
+          reason: 'no_terrain',
           chunkFrames: readiness.chunkFrames,
+          deliverableChunks: readiness.deliverableChunks,
           prefixFrames: readiness.prefixFrames,
           configFrames: readiness.configFrames
         })
@@ -970,7 +974,8 @@ export async function startLive ({ argv = [], io = process } = {}) {
         forced: forced.forced,
         prefixFrames: readiness.prefixFrames,
         configFrames: readiness.configFrames,
-        chunkFrames: readiness.chunkFrames
+        chunkFrames: readiness.chunkFrames,
+        deliverableChunks: readiness.deliverableChunks
       })
     }
     log('readiness', { stage, ...readiness })

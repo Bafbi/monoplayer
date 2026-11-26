@@ -429,6 +429,47 @@ test('the cache counts the chunk frames it holds, in the prefix and in the chunk
   assert.equal(cache.stats().chunkFrames, 2)
 })
 
+// #399: the arrival count answers "did the target ever send terrain", and that is
+// the wrong question for a caller about to release a client. This is the other
+// one: the chunk keys a replay would still hand over, folded from what the replay
+// emits rather than counted as it arrives.
+test('the cache reports the terrain a replay still delivers, not whatever arrived', () => {
+  const cache = createStateCache()
+  assert.equal(cache.stats().deliverableChunks, 0, 'an empty cache holds no terrain')
+
+  // The join prefix replays verbatim in capture order, so the newest frame about a
+  // chunk key is the one the client ends up with: a set and a later unload of the
+  // same key cancel out, and the client is handed terrain it is then told to drop.
+  cache.push('play', 'map_chunk', buf('c0'), { x: 0, z: 0 })
+  assert.equal(cache.stats().deliverableChunks, 1, 'a chunk in the pre-warm prefix is terrain')
+  cache.push('play', 'map_chunk', buf('c0-v2'), { x: 0, z: 0 })
+  assert.equal(cache.stats().deliverableChunks, 1, 'two frames about one key are one chunk')
+  cache.push('play', 'unload_chunk', buf('u0'), { chunkX: 0, chunkZ: 0 })
+  assert.equal(cache.stats().deliverableChunks, 0, 'the unload took the terrain back')
+  assert.equal(cache.stats().chunkFrames, 2, 'the arrival count cannot take a frame back')
+
+  // A set again after the unload: the last word about the key decides.
+  cache.push('play', 'map_chunk', buf('c0-again'), { x: 0, z: 0 })
+  assert.equal(cache.stats().deliverableChunks, 1)
+
+  // After warm the ring holds sets only, and it replays after the prefix, so its
+  // keys are terrain whatever the prefix said.
+  cache.push('play', 'chunk_batch_finished', buf('marker'), {})
+  cache.push('play', 'map_chunk', buf('c1'), { x: 1, z: 0 })
+  assert.equal(cache.stats().deliverableChunks, 2, 'one key from the prefix, one from the ring')
+  cache.push('play', 'unload_chunk', buf('u1'), { chunkX: 1, chunkZ: 0 })
+  assert.equal(cache.stats().deliverableChunks, 1, 'the ring dropped the key it held')
+  assert.equal(cache.stats().chunkFrames, 4, 'and the arrivals still count every set')
+
+  // A chunk the prefix holds survives an unload that arrives after warm: the
+  // unload can only delete a ring key, and the prefix replays the set anyway. The
+  // reading follows the replay, so it reports the chunk the client is really
+  // handed, not the one the backend meant to drop. That stale replay is #463's,
+  // and when it is fixed this body reads 0.
+  cache.push('play', 'unload_chunk', buf('u0-again'), { chunkX: 0, chunkZ: 0 })
+  assert.equal(cache.stats().deliverableChunks, 1, 'the prefix still replays it')
+})
+
 test('restore puts a snapshot back exactly, warm and sequence numbers included', () => {
   const cache = createStateCache()
   cache.push('play', 'login', buf('login'), { entityId: 42 })
