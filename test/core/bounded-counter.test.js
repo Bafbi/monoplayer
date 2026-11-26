@@ -1,7 +1,8 @@
 // #438: one bounded map of counts, keyed by a string that is not a closed set, and
 // now one rule for both callers of it. #437 asked for this test: the cap, the
-// overflow bucket, and what an empty key counts as. It is written here so nobody
-// writes it twice.
+// overflow bucket, and what an empty key counts as. The front leg's own cap keeps
+// its test in test/legs/picker-numbers.test.js, because that file is where the leg's
+// cap is rung; the rule itself is tested here.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 

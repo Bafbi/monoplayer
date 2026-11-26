@@ -16,8 +16,11 @@
 // operator needs, which is that something was counted under a word nobody had. Both
 // maps answer `unknown`, so the two charts read alike.
 //
-// It never throws. This runs in a live session's relay path, so a caller that
-// passes a cap bounding nothing must not take a session down with it.
+// It adds no throw of its own. This runs in a live session's relay path, so a cap
+// that bounds nothing, or one that is not a number at all, must leave a session
+// alone rather than end it: the count lands in the map it was handed, and nothing is
+// said. The map itself is the caller's, and handing it none is a bug a stack trace
+// names better than a counter could.
 //
 // Past the cap, a name the map has never held lands in OVERFLOW_KEY: the map stops
 // growing and a reader still sees that something was counted. A name already in the
