@@ -1136,10 +1136,12 @@ first dial and its target warms in five seconds.
   names and not these packets. The driver's client registers one as well, and the
   assertion reads what it never receives.
 
-  The spawn carries the puppet's UUID, the player entity type (156 on 26.2, resolved from
-  the data by `test/core/virtual-players.test.js` rather than typed here), and an entity
-  id of the proxy's own from `FIRST_VIRTUAL_ENTITY_ID` upward — never the body's `login`
-  id, which every client of the body already holds as itself. Then the body moves once and
+  The spawn carries the puppet's UUID, the player entity type this rung's own protocol
+  version states — the assertion reads it from the protocol data rather than from the
+  module that wrote the frame, because a comparison against the writer's own constant
+  cannot catch a wrong constant — and an entity id of the proxy's own from
+  `FIRST_VIRTUAL_ENTITY_ID` upward, never the body's `login` id, which every client of the
+  body already holds as itself. Then the body moves once and
   the spectator receives a teleport for that same id. The destroy count is zero, because
   nothing in this run replaces the world.
 

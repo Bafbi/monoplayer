@@ -23,14 +23,19 @@ import fs from 'node:fs'
 import {
   FIRST_VIRTUAL_ENTITY_ID,
   MOVE_INTERVAL_MS,
-  PLAYER_ENTITY_TYPE,
-  createVirtualPlayers
+  PLAYER_ENTITY_TYPES,
+  createVirtualPlayers,
+  playerEntityTypeFor
 } from '../../src/core/virtual-players.js'
 import { applyFrames, createClientState, stateSnapshot } from '../../src/ladder/client-state.js'
 
 const PUPPET = 'ea45ba2e-f47d-43ee-9604-b20af90be1f1'
 const WATCHER = '11111111-2222-3333-4444-555555555555'
 const pose = (x = 0, yaw = 0) => ({ x, y: 64, z: 0, yaw, pitch: 0 })
+
+// 26.2's row, which is the version the vendored tree carries. 26.1's row is held to the
+// data by O69, on the wire and on the version that rung speaks.
+const PLAYER_TYPE = playerEntityTypeFor('26.2')
 
 const worldOf = (...players) => ({ players: () => players })
 const roster = (...channels) => () => channels
@@ -55,14 +60,14 @@ function entityAfter (frames, entityId) {
 }
 
 test('#635 a channel is told the players that are not its own, and never its own', () => {
-  const virtual = createVirtualPlayers({ world: puppetAt(pose()), channels: roster(watcherChannel, pilotChannel) })
-  const updates = virtual.sweep({ at: 0 })
+  const virtual = createVirtualPlayers({ world: puppetAt(pose()), channels: roster(watcherChannel, pilotChannel), entityType: PLAYER_TYPE })
+  const updates = virtual.owed({ at: 0 })
 
   const told = framesOn(updates, watcherChannel.id)
   assert.deepEqual(told.map(frame => frame.name), ['spawn_entity'])
   const spawn = told[0].packet
   assert.equal(spawn.objectUUID, PUPPET, 'the entity names the puppet')
-  assert.equal(spawn.type, PLAYER_ENTITY_TYPE, 'as a player, or the client draws the wrong thing')
+  assert.equal(spawn.type, PLAYER_TYPE, 'as a player, or the client draws the wrong thing')
   assert.ok(spawn.entityId >= FIRST_VIRTUAL_ENTITY_ID, 'from the range a backend cannot hand out')
   assert.deepEqual([spawn.x, spawn.y, spawn.z], [0, 64, 0], 'at the pose the body is at')
   assert.deepEqual(spawn.velocity, { x: 0, y: 0, z: 0 })
@@ -78,9 +83,10 @@ test('#635 a channel is told the players that are not its own, and never its own
 test('#635 the spawn’s own angles are the pose’s, read back by the client-state model', () => {
   const virtual = createVirtualPlayers({
     world: puppetAt({ x: 1, y: 2, z: 3, yaw: 90, pitch: -45 }),
-    channels: roster(watcherChannel)
+    channels: roster(watcherChannel),
+    entityType: PLAYER_TYPE
   })
-  const [spawn] = framesOn(virtual.sweep({ at: 0 }), watcherChannel.id)
+  const [spawn] = framesOn(virtual.owed({ at: 0 }), watcherChannel.id)
   const entity = entityAfter([{ name: spawn.name, data: spawn.packet }], spawn.packet.entityId)
   assert.ok(entity !== null, 'the client-state model places the entity')
   assert.equal(entity.removed, false)
@@ -94,14 +100,14 @@ test('#635 the spawn’s own angles are the pose’s, read back by the client-st
 test('#635 a move follows the spawn, and never arrives before it', () => {
   let at = pose(0)
   const world = { players: () => [{ uuid: PUPPET, name: 'GlowSquidye', pose: at }] }
-  const virtual = createVirtualPlayers({ world, channels: roster(watcherChannel) })
-  const first = virtual.sweep({ at: 0 })
+  const virtual = createVirtualPlayers({ world, channels: roster(watcherChannel), entityType: PLAYER_TYPE })
+  const first = virtual.owed({ at: 0 })
   assert.deepEqual(namesOn(first, watcherChannel.id), ['spawn_entity'])
   const id = framesOn(first, watcherChannel.id)[0].packet.entityId
 
   // The puppet moved, one window later.
   at = pose(0.4)
-  const moved = virtual.sweep({ at: MOVE_INTERVAL_MS })
+  const moved = virtual.owed({ at: MOVE_INTERVAL_MS })
   // The puppet really moved: one absolute frame, for the id the spawn gave it.
   const teleport = framesOn(moved, watcherChannel.id).find(frame => frame.name === 'entity_teleport')
   assert.ok(teleport !== undefined, 'the move is one frame, and it is a teleport')
@@ -115,52 +121,52 @@ test('#635 a move follows the spawn, and never arrives before it', () => {
 test('#635 movement inside one window is coalesced, and a still puppet is sent nothing', () => {
   let at = pose(0)
   const world = { players: () => [{ uuid: PUPPET, name: 'GlowSquidye', pose: at }] }
-  const virtual = createVirtualPlayers({ world, channels: roster(watcherChannel) })
-  virtual.sweep({ at: 0 })
+  const virtual = createVirtualPlayers({ world, channels: roster(watcherChannel), entityType: PLAYER_TYPE })
+  virtual.owed({ at: 0 })
 
   // Ten pose changes inside the window, which is what a walking puppet sends.
   for (let ms = 5; ms < MOVE_INTERVAL_MS; ms += 5) {
     at = pose(ms / 100)
-    assert.deepEqual(namesOn(virtual.sweep({ at: ms }), watcherChannel.id), [],
+    assert.deepEqual(namesOn(virtual.owed({ at: ms }), watcherChannel.id), [],
       'no frame inside the window, at ' + ms + ' ms')
   }
   at = pose(0.5)
-  assert.deepEqual(namesOn(virtual.sweep({ at: MOVE_INTERVAL_MS }), watcherChannel.id), ['entity_teleport'],
+  assert.deepEqual(namesOn(virtual.owed({ at: MOVE_INTERVAL_MS }), watcherChannel.id), ['entity_teleport'],
     'one frame for the burst, carrying the newest pose')
 
   // The puppet stands still: the window passes and there is nothing to say.
-  assert.deepEqual(namesOn(virtual.sweep({ at: MOVE_INTERVAL_MS * 4 }), watcherChannel.id), [])
+  assert.deepEqual(namesOn(virtual.owed({ at: MOVE_INTERVAL_MS * 4 }), watcherChannel.id), [])
 })
 
 test('#635 a world change destroys the id it gave, then spawns it again', () => {
-  const virtual = createVirtualPlayers({ world: puppetAt(pose()), channels: roster(watcherChannel) })
-  const [spawn] = framesOn(virtual.sweep({ at: 0 }), watcherChannel.id)
+  const virtual = createVirtualPlayers({ world: puppetAt(pose()), channels: roster(watcherChannel), entityType: PLAYER_TYPE })
+  const [spawn] = framesOn(virtual.owed({ at: 0 }), watcherChannel.id)
   const id = spawn.packet.entityId
 
   // The client's entity map is voided by a play login or a respawn, so it holds no
   // entity for an id it was given before.
-  virtual.void({ reason: 'respawn' })
-  assert.deepEqual(namesOn(virtual.sweep({ at: 10 }), watcherChannel.id), ['entity_destroy', 'spawn_entity'],
+  virtual.forget({ reason: 'respawn' })
+  assert.deepEqual(namesOn(virtual.owed({ at: 10 }), watcherChannel.id), ['entity_destroy', 'spawn_entity'],
     'the destroy comes first, and the spawn follows it')
-  const frames = framesOn(virtual.sweep({ at: 20 }), watcherChannel.id)
+  const frames = framesOn(virtual.owed({ at: 20 }), watcherChannel.id)
   assert.deepEqual(frames, [], 'and the second sweep has nothing left to say')
 })
 
 test('#635 a player that leaves the world is destroyed once, and the channel keeps its bookkeeping', () => {
   let players = [{ uuid: PUPPET, name: 'GlowSquidye', pose: pose() }]
   const world = { players: () => players }
-  const virtual = createVirtualPlayers({ world, channels: roster(watcherChannel) })
-  const [spawn] = framesOn(virtual.sweep({ at: 0 }), watcherChannel.id)
+  const virtual = createVirtualPlayers({ world, channels: roster(watcherChannel), entityType: PLAYER_TYPE })
+  const [spawn] = framesOn(virtual.owed({ at: 0 }), watcherChannel.id)
 
   players = []
-  const leaving = framesOn(virtual.sweep({ at: 10 }), watcherChannel.id)
+  const leaving = framesOn(virtual.owed({ at: 10 }), watcherChannel.id)
   assert.deepEqual(leaving.map(frame => frame.name), ['entity_destroy'])
   assert.deepEqual(leaving[0].packet.entityIds, [spawn.packet.entityId])
-  assert.deepEqual(framesOn(virtual.sweep({ at: 20 }), watcherChannel.id), [], 'one despawn, not one per sweep')
+  assert.deepEqual(framesOn(virtual.owed({ at: 20 }), watcherChannel.id), [], 'one despawn, not one per sweep')
 
   // The same player comes back: a fresh spawn, and no second destroy.
   players = [{ uuid: PUPPET, name: 'GlowSquidye', pose: pose(2) }]
-  assert.deepEqual(namesOn(virtual.sweep({ at: 30 }), watcherChannel.id), ['spawn_entity'])
+  assert.deepEqual(namesOn(virtual.owed({ at: 30 }), watcherChannel.id), ['spawn_entity'])
 })
 
 test('#635 a channel that ended is owed nothing, and a player with no uuid is nobody', () => {
@@ -169,32 +175,39 @@ test('#635 a channel that ended is owed nothing, and a player with no uuid is no
   // could disagree.
   let open = [watcherChannel]
   const channels = () => open
-  const virtual = createVirtualPlayers({ world: puppetAt(pose()), channels })
-  assert.deepEqual(namesOn(virtual.sweep({ at: 0 }), watcherChannel.id), ['spawn_entity'])
+  const virtual = createVirtualPlayers({ world: puppetAt(pose()), channels, entityType: PLAYER_TYPE })
+  assert.deepEqual(namesOn(virtual.owed({ at: 0 }), watcherChannel.id), ['spawn_entity'])
 
   open = []
-  assert.deepEqual(virtual.sweep({ at: 10 }), [], 'a channel that ended is never written to')
+  assert.deepEqual(virtual.owed({ at: 10 }), [], 'a channel that ended is never written to')
 
-  // And its bookkeeping went with it, so the same connection coming back is a fresh
-  // spawn rather than a life the module thought was still live.
+  // And what it was shown went with it, so the same connection coming back is a fresh
+  // spawn rather than an entity the module thought was still on that client.
   open = [watcherChannel]
-  assert.deepEqual(namesOn(virtual.sweep({ at: 20 }), watcherChannel.id), ['spawn_entity'])
+  assert.deepEqual(namesOn(virtual.owed({ at: 20 }), watcherChannel.id), ['spawn_entity'])
 
-  const unnamed = createVirtualPlayers({ world: worldOf({ uuid: null, pose: pose() }), channels: roster(watcherChannel) })
-  assert.deepEqual(unnamed.sweep({ at: 0 }), [], 'a player the proxy cannot name is not spawned')
+  const unnamed = createVirtualPlayers({ world: worldOf({ uuid: null, pose: pose() }), channels: roster(watcherChannel), entityType: PLAYER_TYPE })
+  assert.deepEqual(unnamed.owed({ at: 0 }), [], 'a player the proxy cannot name is not spawned')
 })
 
-test('#635 the player entity type is the pinned protocol data’s, not a literal', () => {
+test('#635 the player entity type is the pinned protocol data’s, and a lane must name its version', () => {
   // The vendored tree is what the installed package carries (scripts/patch-minecraft-data-
   // 26.2.mjs copies it), so this reads the file that owns the number rather than a second
-  // copy of it. The id is 155 in 26.1, which is why it is pinned with this test rather
-  // than typed into the module alone.
+  // copy of it. 26.1's row is held to the data by O69, on the version that rung speaks.
   const entities = JSON.parse(fs.readFileSync(
     new URL('../../vendor/minecraft-data-26.2/data/pc/26.2/entities.json', import.meta.url)
   ))
   const player = entities.find(entry => entry.name === 'player')
   assert.ok(player !== undefined, 'the data names a player entity')
-  assert.equal(PLAYER_ENTITY_TYPE, player.id, 'a wrong type id draws the wrong body')
+  assert.equal(PLAYER_ENTITY_TYPES['26.2'], player.id, 'a wrong type id draws the wrong body')
+  // The two versions this tree speaks disagree, which is why the number is not one
+  // constant: a lane pinned to 26.1 that drew 26.2's id would draw a body nobody asked for.
+  assert.notEqual(PLAYER_ENTITY_TYPES['26.1'], PLAYER_ENTITY_TYPES['26.2'])
+  assert.equal(playerEntityTypeFor('26.2'), player.id)
+  // A version nobody pinned is a lane that cannot be drawn, and it fails where it is named
+  // rather than drawing the wrong body quietly.
+  assert.throws(() => playerEntityTypeFor('27.0'), /no player entity type/)
+  assert.throws(() => createVirtualPlayers({ world: worldOf(), channels: roster() }), /entityType/)
 })
 
 test('#635 the id range is a varint a backend cannot reach', () => {
@@ -204,9 +217,10 @@ test('#635 the id range is a varint a backend cannot reach', () => {
   assert.ok(FIRST_VIRTUAL_ENTITY_ID > 0 && FIRST_VIRTUAL_ENTITY_ID < 2 ** 31 - 1)
   const virtual = createVirtualPlayers({
     world: worldOf({ uuid: PUPPET, pose: pose() }, { uuid: WATCHER, pose: pose() }),
-    channels: roster({ id: 'a', uuid: null })
+    channels: roster({ id: 'a', uuid: null }),
+    entityType: PLAYER_TYPE
   })
-  const ids = virtual.sweep({ at: 0 })
+  const ids = virtual.owed({ at: 0 })
     .flatMap(update => update.frames.filter(frame => frame.name === 'spawn_entity'))
     .map(frame => frame.packet.entityId)
   assert.equal(new Set(ids).size, 2, 'two players, two ids')

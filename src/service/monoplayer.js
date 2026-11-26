@@ -87,7 +87,7 @@ import { synthAttach } from '../core/join-synth.js'
 import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { SKIN_FRAME, carriesTextures, skinEntryOf, skinPlayerInfoPacket } from '../core/skin.js'
-import { createVirtualPlayers } from '../core/virtual-players.js'
+import { createVirtualPlayers, playerEntityTypeFor } from '../core/virtual-players.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
@@ -545,7 +545,7 @@ export function createMonoplayer ({
     virtualPlayersSpawned: 0,
     virtualPlayersMoved: 0,
     virtualPlayersDespawned: 0,
-    virtualPlayerFramesRefused: 0,
+    virtualPlayersRefused: 0,
     // #22: same-connection reconfiguration.
     transfersSeamless: 0,
     reconfigurationsStarted: 0,
@@ -2176,14 +2176,25 @@ export function createMonoplayer ({
         return [{ uuid, name: cfg.puppet.username ?? null, pose: session.currentPose }]
       }
     },
-    channels: () => [...spectators].map(([channel, spectator]) => ({ id: channel, uuid: spectator.uuid ?? null }))
+    channels: () => [...spectators].map(([channel, spectator]) => ({ id: channel, uuid: spectator.uuid ?? null })),
+    // A player entity type belongs to a protocol version, and a lane pinned to one must not
+    // draw the other's body. The config's version is the pin every leg reads.
+    entityType: playerEntityTypeFor(cfg.version)
+  })
+
+  // The counter each kind of virtual-player frame is counted in. One table, so a frame kind
+  // the module adds is a row here rather than a fourth branch in the loop below.
+  const VIRTUAL_PLAYER_COUNTERS = Object.freeze({
+    spawn: 'virtualPlayersSpawned',
+    move: 'virtualPlayersMoved',
+    despawn: 'virtualPlayersDespawned'
   })
 
   // What the spectators are owed now, written where it goes. One sweep per moment the
   // world changes: a spectator landing, a pose the puppet's own client sent, a backend
   // teleport, and a world change.
-  function writeVirtualPlayers ({ reason = 'sweep' } = {}) {
-    const updates = virtualPlayers.sweep({ at: clockNow() })
+  function writeVirtualPlayers ({ reason = 'movement' } = {}) {
+    const updates = virtualPlayers.owed({ at: clockNow() })
     let written = 0
     for (const update of updates) {
       for (const frame of update.frames) {
@@ -2191,32 +2202,27 @@ export function createMonoplayer ({
         try {
           delivered = frontLeg.write(frame.name, frame.packet, { channel: update.channel })
         } catch (error) {
-          metrics.virtualPlayerFramesRefused++
+          metrics.virtualPlayersRefused++
           log('virtualPlayerRefused', {
             reason,
             channel: update.channel,
             frame: frame.name,
             error: String(error?.message ?? error).slice(0, 200)
           })
-          // The channel still has a client, so what it was owed is owed again: the next
-          // sweep destroys the id it never received a body for and spawns it again.
-          virtualPlayers.void({ channel: update.channel })
+          // The channel still has a client, so what it was owed is owed again: the next pass
+          // destroys the id it never received a body for, and spawns it again.
+          virtualPlayers.forget({ channel: update.channel })
           continue
         }
         // The leg answers false when no socket holds that channel any more. A frame that
         // reached nobody is not counted as told.
         if (delivered === false) continue
         written++
-        if (frame.name === 'entity_teleport') {
-          metrics.virtualPlayersMoved++
-          continue
-        }
-        if (frame.name === 'spawn_entity') metrics.virtualPlayersSpawned++
-        else metrics.virtualPlayersDespawned++
-        // One line per spawn and per despawn: a move is the one frame here that arrives
-        // at the body's own rate, and a record per move is a record per frame.
+        metrics[VIRTUAL_PLAYER_COUNTERS[frame.kind]]++
+        // One line per spawn and per despawn: a move is the one frame here that arrives at
+        // the body's own rate, and a record per move is a record per frame.
+        if (frame.kind === 'move') continue
         log('virtualPlayerWritten', { reason, channel: update.channel, frame: frame.name })
-        emit('virtual_player', { reason, channel: update.channel, frame: frame.name })
       }
     }
     return written
@@ -2232,9 +2238,6 @@ export function createMonoplayer ({
     // #134: Excalia moves the puppet mid-session, so a client that re-entered
     // play arrives here owed the frame again.
     forgetPuppetSkin()
-    // #635: and a new play state holds no entity either, for the same reason the entry
-    // went with it. The next sweep destroys the id it gave and spawns it again.
-    virtualPlayers.void({ reason })
     const source = snapshot ?? cache.snapshot()
     const synthesized = synthAttach({
       snapshot: source,
@@ -2781,7 +2784,7 @@ export function createMonoplayer ({
     // names the puppet, and a spawn is what gives a client a body for it. Written after
     // the replay and outside it, so the parity rung's expectation still sees a join
     // stream this proxy added no body to.
-    virtualPlayers.void({ channel })
+    virtualPlayers.forget({ channel })
     const virtualFrames = writeVirtualPlayers({ reason: 'spectate' })
     // #614: and the packs the body holds. A spectator lands in play, so a pack the
     // backend sent during its own configuration was withheld from it. The held copy is
@@ -3605,7 +3608,7 @@ export function createMonoplayer ({
     // the fresh spawn are owed *after* the frame that voided them, or the respawn would
     // take the puppet away again.
     if (name === 'respawn') {
-      virtualPlayers.void({ reason: 'respawn' })
+      virtualPlayers.forget()
       if (spectators.size > 0) writeVirtualPlayers({ reason: 'respawn' })
     }
   }

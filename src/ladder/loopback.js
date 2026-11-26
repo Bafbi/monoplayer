@@ -45,7 +45,8 @@ import { baselineRegistryIds, readConfigurationBaseline } from '../legs/configur
 import { chooseDialogAction } from '../core/dialog-codec.js'
 import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
 import { createPickerServerReader } from '../service/start-live.js'
-import { FIRST_VIRTUAL_ENTITY_ID, MOVE_INTERVAL_MS, PLAYER_ENTITY_TYPE } from '../core/virtual-players.js'
+import { FIRST_VIRTUAL_ENTITY_ID, MOVE_INTERVAL_MS } from '../core/virtual-players.js'
+import minecraftData from 'minecraft-data'
 
 const VERSION = '26.1'
 // #635: the wait O69 takes before it moves the body. A virtual player's move is coalesced
@@ -4725,6 +4726,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const move = told.teleports[0]
     evidence.virtualPlayers = {
       landing: toldLanding,
+      version: pickerVersion,
       spawn: { uuid: spawn.objectUUID, type: spawn.type, entityId: spawn.entityId, x: spawn.x, y: spawn.y, z: spawn.z },
       entriesBeforeSpawn,
       move: { entityId: move.entityId, x: move.x, y: move.y, z: move.z },
@@ -4753,7 +4755,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         told.spawns.length === 1 &&
         typeof spawn.objectUUID === 'string' &&
         spawn.objectUUID.replace(/-/g, '').toLowerCase() === String(puppetUuid).replace(/-/g, '').toLowerCase() &&
-        spawn.type === PLAYER_ENTITY_TYPE &&
+        // The type is read from the protocol data this rig's own version states, not from
+        // the module that wrote the frame: an assertion comparing the wire to the constant
+        // the writer used cannot catch a wrong constant. The rig runs 26.2, and the two
+        // versions disagree about this number.
+        spawn.type === minecraftData(pickerVersion).entitiesByName.player.id &&
         spawn.entityId >= FIRST_VIRTUAL_ENTITY_ID &&
         spawn.entityId !== (pickerBot5.received.login?.entityId ?? null) &&
         told.teleports.length >= 1 &&

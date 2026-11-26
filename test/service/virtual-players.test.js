@@ -23,7 +23,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { pickSlug } from '../../src/core/picker.js'
-import { PLAYER_ENTITY_TYPE } from '../../src/core/virtual-players.js'
+import { playerEntityTypeFor } from '../../src/core/virtual-players.js'
 import { makeCore } from '../support/harness.js'
 
 // The body a claim dials, and the body a spectator watches it through. The driver's UUID is
@@ -90,7 +90,9 @@ test('#635 a spectator is told the puppet\'s body, after the entry that names it
   assert.equal(spawns.length, 1, 'one body for the one player this lane serves')
   const spawn = spawns[0]
   assert.equal(spawn.packet.objectUUID, PUPPET, 'for the UUID the entry names')
-  assert.equal(spawn.packet.type, PLAYER_ENTITY_TYPE, 'as a player, or a client draws a boat')
+  // The type the module was built with: this rig's config names no version, so it runs the
+  // default pin, and the table's own rows are held to the data by the core test and by O69.
+  assert.equal(spawn.packet.type, playerEntityTypeFor('26.1'), 'as a player, or a client draws a boat')
   assert.deepEqual([spawn.packet.x, spawn.packet.y, spawn.packet.z], [1, 2, 3], 'where the body is')
 
   // The order on that socket: the entry, then the body, and the mode frames stay last.
@@ -153,7 +155,7 @@ test('#635 a spawn the leg refused is owed again, and is not counted as told', a
 
   rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
   assert.equal(rig.core.metrics.virtualPlayersSpawned, 0, 'a frame nobody received is not counted as told')
-  assert.equal(rig.core.metrics.virtualPlayerFramesRefused, 1)
+  assert.equal(rig.core.metrics.virtualPlayersRefused, 1)
   const refused = logLines.filter(line => line.event === 'virtualPlayerRefused')
   assert.equal(refused.length, 1)
   assert.equal(refused[0].frame, 'spawn_entity')
