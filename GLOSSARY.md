@@ -243,7 +243,7 @@ The bounded store of clientbound frames from one body, split by the kind of stat
 _Avoid_: frame cache, buffer, ring
 
 **Entity slot**:
-One addressable piece of one entity's cached state: a metadata index, one effect, the removal, or one other entity frame that carries a whole value. A slot holds the newest raw frame for its key, so an attach replays each piece once, at its last value, and an entity always replays beside the spawn that gave it a model.
+One addressable piece of one entity's cached state: a metadata index, one effect, the removal, or one other entity frame that carries a whole value. A slot holds the newest raw frame for its key, so an attach replays each piece once, at its last value, and an entity always replays beside the spawn that gave it a model. An effect's slot takes the newest frame about that effect, so it holds either the add or a removal (#222).
 _Avoid_: entry, cell, field
 
 **Join prefix**:

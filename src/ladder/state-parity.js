@@ -33,6 +33,11 @@ export const PARITY_FRAME_NAMES = Object.freeze(new Set([
   'block_update',
   'multi_block_change',
   'entity_metadata',
+  'entity_effect',
+  'remove_entity_effect',
+  'entity_update_attributes',
+  'entity_equipment',
+  'set_passengers',
   'entity_teleport',
   'entity_position',
   'sync_entity_position',
@@ -67,7 +72,7 @@ export const DOMAIN_PARITY = Object.freeze({
 export const UNPARITY = Object.freeze({
   prefix: 'The join prefix is replayed verbatim. Its state frames are compared through chunks, blocks, entities, inventory, and heldItemSlot, but the prefix has no state of its own to compare.',
   config: 'The configuration phase replay carries no play state. The client-state model ignores configuration frame names, so the domain has nothing to compare.',
-  generic: 'The generic ring holds unclassified frames. rel_entity_move, entity_move_look, and entity_look are captured here, decoded, and compared through entities: a replay that reordered them would land the client at a different position, and the entity comparison shows it. update_health decodes into latest, which is not compared.',
+  generic: 'The generic ring holds unclassified frames. Every frame there that carries a body\'s state is captured here, decoded, and compared through entities: the ones join-synth merges into the entity section (ENTITY_GENERIC_FRAMES), which are the relative-move frames plus a body\'s attributes, equipment and passengers. A replay that reordered one of them would land the client at a different position or holding a value the backend took away, and the entity comparison shows it. remove_entity_effect is entity-domain state beside entity_effect and compares there. update_health decodes into latest, which is not compared.',
   latest: 'Only held_item_slot is compared. health, food, experience, abilities, game_state_change, entity_event, and advancements are decoded but not compared by this issue.'
 })
 

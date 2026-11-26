@@ -16,6 +16,11 @@
 //   block_change  location, type
 //   multi_block_change  chunkCoordinates { x, y, z }, records [packed varint]
 //   entity_metadata     entityId, metadata [{ key, type, value }]
+//   entity_effect       entityId, effectId, amplifier, duration, flags
+//   remove_entity_effect entityId, effectId
+//   entity_update_attributes entityId, properties [{ key, value, modifiers }]
+//   entity_equipment    entityId, equipments [{ slot, item }]
+//   set_passengers      entityId, passengers [entityId]
 //   entity_teleport     entityId, x, y, z, yaw, pitch
 //   spawn_entity  entityId, x, y, z, yaw, pitch (i8 angles)
 //   rel_entity_move     entityId, dX, dY, dZ (i16, 1/4096 block)
@@ -124,6 +129,21 @@ export function applyFrame (state, frame) {
       return state
     case 'entity_metadata':
       applyEntityMetadata(state, data)
+      return state
+    case 'entity_effect':
+      applyEntityEffect(state, data)
+      return state
+    case 'remove_entity_effect':
+      applyRemoveEntityEffect(state, data)
+      return state
+    case 'entity_update_attributes':
+      applyEntityAttributes(state, data)
+      return state
+    case 'entity_equipment':
+      applyEntityEquipment(state, data)
+      return state
+    case 'set_passengers':
+      applyEntityPassengers(state, data)
       return state
     case 'remove_entities':
     case 'entity_destroy':
@@ -267,6 +287,66 @@ function applyEntityMetadata (state, data) {
     if (!entry || entry.key === undefined) continue
     entity.fields.set(entry.key, entry.value)
   }
+}
+
+// entity_effect adds one effect to the body and remove_entity_effect deletes the
+// same key. The slot name is the cache's (`effect:<id>`), so one vocabulary
+// names the effect on both sides of a comparison. Issue #222 is this pair: the
+// add is entity-domain state and the removal is generic, so the replay order
+// decides what the client ends with.
+function effectKey (data) {
+  return `effect:${data.effectId ?? data.effect ?? 'unknown'}`
+}
+
+function applyEntityEffect (state, data) {
+  const entity = entityFor(state, data.entityId)
+  entity.fields.set(effectKey(data), {
+    amplifier: data.amplifier ?? 0,
+    duration: data.duration ?? 0,
+    flags: data.flags ?? 0
+  })
+}
+
+// A removal for a body the model never saw is a no-op: the vanilla client
+// removes an effect from a body it holds, and clears nothing else.
+function applyRemoveEntityEffect (state, data) {
+  const entity = state.entities.get(data.entityId)
+  if (!entity) return
+  entity.fields.delete(effectKey(data))
+}
+
+// entity_update_attributes replaces each named attribute's base value and its
+// whole modifier list, which is what the client's AttributeInstance does. A key
+// the frame omits keeps what it had.
+function applyEntityAttributes (state, data) {
+  const entity = entityFor(state, data.entityId)
+  const properties = Array.isArray(data.properties) ? data.properties : []
+  for (const property of properties) {
+    if (!property || property.key === undefined) continue
+    entity.fields.set(`attribute:${property.key}`, {
+      base: property.value ?? null,
+      modifiers: property.modifiers ?? []
+    })
+  }
+}
+
+// entity_equipment sets the item in each slot the frame carries. 26.1 sends a
+// list (`equipments`); the single-slot shape the older fakes use names one.
+function applyEntityEquipment (state, data) {
+  const entity = entityFor(state, data.entityId)
+  const equipments = Array.isArray(data.equipments)
+    ? data.equipments
+    : data.slot === undefined ? [] : [{ slot: data.slot, item: data.item }]
+  for (const entry of equipments) {
+    if (!entry || entry.slot === undefined) continue
+    entity.fields.set(`equipment:${entry.slot}`, entry.item ?? { itemCount: 0 })
+  }
+}
+
+// set_passengers replaces the vehicle's passenger list.
+function applyEntityPassengers (state, data) {
+  const entity = entityFor(state, data.entityId)
+  entity.fields.set('passengers', [...(data.passengers ?? [])])
 }
 
 // remove_entities deletes the entity's state; the tombstone keeps the removal

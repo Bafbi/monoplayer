@@ -708,6 +708,54 @@ test('attachParity compares where a moved entity ends, not just its last absolut
   assert.equal(evidence.domains.entities.ok, false)
 })
 
+test('attachParity sees an effect the old section order would have kept', () => {
+  // #222, at the attach seam. The add is captured before its removal, so the
+  // newest frame about effect 1 is the removal and the replay sends it alone.
+  // The parity cut counts the effect frames now, so a client that was served the
+  // add as well parts from the expectation at that frame.
+  const cut = attachCut(joinedStream(
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_effect', data: { entityId: 9, effectId: 1, amplifier: 0, duration: 200, flags: 0 } },
+    { name: 'remove_entity_effect', data: { entityId: 9, effectId: 1 } }
+  ))
+
+  const evidence = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: cut.clientFrames,
+    settled: true
+  })
+  assert.equal(evidence.ok, true, JSON.stringify(evidence.domains))
+  assert.deepEqual(
+    evidence.names.expected.filter(name => name.endsWith('effect') || name === 'remove_entity_effect'),
+    ['remove_entity_effect'],
+    'the pair collapses to the frame that ended the effect'
+  )
+
+  const entity = evidence.domains.entities.expected.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.equal(fields['effect:1'], undefined)
+
+  // A section-ordered replay sends the add too: the client's frame stream then
+  // carries a frame the expectation does not, and the cut names where they part.
+  const staleOrder = [...cut.clientFrames]
+  const at = staleOrder.findIndex(frame => frame.name === 'spawn_entity')
+  staleOrder.splice(at + 1, 0, {
+    name: 'entity_effect',
+    data: { entityId: 9, effectId: 1, amplifier: 0, duration: 200, flags: 0 }
+  })
+  const stale = attachParity({
+    attachSnapshot: cut.attachSnapshot,
+    replayFrames: cut.replayFrames,
+    clientFrames: staleOrder,
+    settled: true
+  })
+  assert.equal(stale.ok, false)
+  assert.equal(stale.names.ok, false)
+  const parted = stale.names.expected.findIndex((name, index) => name !== stale.names.actual[index])
+  assert.equal(parted, evidence.expectedFrames - 1, 'the two streams part at the frame the stale order kept')
+})
+
 test('N13 fails the run on a parity mismatch and passes only on a settled ok', () => {
   assert.ok(ONLINE_ASSERTION_IDS.includes('N13'))
 

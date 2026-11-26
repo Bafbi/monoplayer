@@ -133,15 +133,21 @@ delivers a body to a client is #269.
    tail — with a fresh, proxy-owned teleportId (IDs are consumed only when a
    position is actually sent)
 4. warm domains in snapshot order (chunks → blocks → entities → inventories →
-   latest → generic), except that the relative-move frames replay with
-   `entities` in capture order. The entity domain is keyed by entity, so its
-   section is rebuilt in capture order before it leaves the cache
+   latest → generic), except that a generic frame carrying a body's state
+   replays with `entities` in capture order (`ENTITY_GENERIC_FRAMES`). The
+   entity domain is keyed by entity, so its section is rebuilt in capture order
+   before it leaves the cache
 
 The merge is the one exception to the fixed order. The cache routes an entity's
 absolute position frames to `entity` and its relative-move deltas to `generic`,
-and a delta only means something after the frame that preceded it, so those
+and a delta only means something after the frame that preceded it. It routes a
+body's attributes, equipment, and passengers to `generic` as well, and those are
+state the body's own frames must neither outlive nor be outlived by. So those
 frames replay as one stream ordered by the capture sequence every entry carries
-(`join-synth.replayFrames`). The rest of `generic` keeps its place, so a
+(`join-synth.replayFrames`). An effect is the other way round: its add and its
+removal share one slot in the entity domain, because that slot outlives the
+bounded generic ring, and splitting the pair would let the bound replay an effect
+the backend removed (#222). The rest of `generic` keeps its place, so a
 `close_window` still replays after the `window_items` it closes.
 `state-parity.snapshotFrames` calls the same function, so the expectation cannot
 drift from the replay.
@@ -996,8 +1002,9 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   own ticket. Until it lands, `sizes` rides the warm and login log lines;
   `entitySlots`, `entityRemovals`, and the three overflow counters are on
   `stats()`, and the attach record #218 adds is where they reach an operator.
-- Only the relative-move frames leave `generic`'s place in the replay. Chunks
-  and blocks still replay before it, and `latest` and `inventories` keep their
+- Only the frames `join-synth.ENTITY_GENERIC_FRAMES` lists leave `generic`'s
+  place in the replay. Every other generic frame keeps it. Chunks and
+  blocks still replay before it, and `latest` and `inventories` keep their
   latest-wins and base-then-slots rules, so their `seq` is a recency stamp rather
   than a place in the stream. Merging those by sequence would put a chunk after
   the `block_change` frames that need it.

@@ -8,8 +8,9 @@
 //      chunk-batch start (spike semantics); a fresh teleportId is issued
 //      per attach and is owned by the proxy, never replayed from the prefix
 //   4. warm-state domains in snapshot order (chunks, blocks, entities,
-//      inventories, latest, generic), except that the relative-move frames
-//      replay with the entity state in capture order (`replayFrames`)
+//      inventories, latest, generic), except that a generic frame carrying a
+//      body's state replays with the entity state in capture order
+//      (`ENTITY_GENERIC_FRAMES`, `replayFrames`)
 //
 // Never replayed, by cache and (defensively) here: frames the clientbound
 // policy marks not replayable — per-leg mechanics, live-only chat, and blocked
@@ -38,24 +39,53 @@ const REPLAY_SECTIONS = Object.freeze([
   'config', 'prefix', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic'
 ])
 
-// The `generic` frames that belong with entity state: a relative move only means
-// something after the absolute it followed, so it replays in the entity state's
-// stream instead of at the end of the replay (issue #35). Every other generic
-// frame keeps its place, because moving them would reorder state that does not
-// interact with entity positions, such as a `close_window` after its
-// `window_items`.
-const ENTITY_MOVE_FRAMES = new Set(['rel_entity_move', 'entity_move_look', 'entity_look'])
+// The `generic` frames that replay with entity state, because their value belongs
+// to a body the client already holds. A fixed section order sends every one of
+// them after every entity-domain frame, whatever order they were captured in, and
+// that is wrong in two ways. A relative move only means something after the
+// absolute it followed, so a delta has to replay in the entity state's stream
+// instead of at the end of the replay (#35). A body's attributes, equipment, and
+// passengers are state the client keeps, so they have to replay inside the
+// body's lifetime: an id that died and was reused must not inherit the dead
+// body's value (#222).
+//
+// A frame joins this set only when `client-state.js` decodes it, so the
+// equivalence harness and the parity guard can see the order it landed in, and
+// only when its value is state rather than a one-shot: `animation`,
+// `hurt_animation`, `entity_status`, `damage_event`, and `face_player` keep
+// their place because the client plays them and stores nothing. So do
+// `move_minecart` and `vehicle_move`, ride interpolation for the vehicle the
+// client sits in that no body map holds (the staleness is recorded in
+// docs/adr/keep-relative-moves-out-of-the-entity-ring.md), and
+// `open_horse_window`, which opens a window and so must replay after the
+// `inventories` base it fills.
+//
+// Everything else keeps its place, because moving it would reorder state that
+// does not interact with a body, such as a `close_window` after its
+// `window_items`. `remove_entity_effect` is not here: it shares the effect's
+// slot with `entity_effect` in the entity domain, so the newest frame about one
+// effect is the only one replayed (#222).
+export const ENTITY_GENERIC_FRAMES = new Set([
+  'rel_entity_move',
+  'entity_move_look',
+  'entity_look',
+  'entity_update_attributes',
+  'entity_equipment',
+  'set_passengers'
+])
 
 // Cache entries in replay order.
 //
-// Every section replays where the header documents it, except that the relative
-// move frames replay merged with `entities` by capture sequence. The cache
-// routes an entity's absolute position frames to one domain and its deltas to
-// another, so a section-ordered replay applies the deltas after the correction
-// that ended them and lands the entity somewhere the backend never put it.
-// Entries carry the sequence, so the merge needs no new field. The cache rebuilds
-// its keyed entity domain in capture order before it reaches this function, so
-// the two lists are both in `seq` order and the merge compares like with like.
+// Every section replays where the header documents it, except that the frames in
+// `ENTITY_GENERIC_FRAMES` replay merged with `entities` by capture sequence. The
+// cache routes an entity's absolute position frames to one domain and its deltas
+// to another, so a section-ordered replay applies the deltas after the correction
+// that ended them and lands the entity somewhere the backend never put it; the
+// same split sends a body's attributes, equipment, and passengers past the
+// removal that ended the body. Entries carry the sequence, so the merge needs no
+// new field. The cache rebuilds its keyed entity domain in capture order before
+// it reaches this function, so the two lists are both in `seq` order and the
+// merge compares like with like.
 //
 // One function for the replay and for the parity expectation: two orders would
 // drift, and the parity check would then compare against a replay nobody sends.
@@ -65,8 +95,8 @@ export function replayFrames (snapshot, { includeConfig = true } = {}) {
 
   const entityFrames = snapshot.entities ?? []
   const generic = snapshot.generic ?? []
-  const entityMoves = generic.filter(frame => ENTITY_MOVE_FRAMES.has(frame?.name))
-  const restOfGeneric = generic.filter(frame => !ENTITY_MOVE_FRAMES.has(frame?.name))
+  const entityState = generic.filter(frame => ENTITY_GENERIC_FRAMES.has(frame?.name))
+  const restOfGeneric = generic.filter(frame => !ENTITY_GENERIC_FRAMES.has(frame?.name))
 
   const frames = []
   for (const section of REPLAY_SECTIONS) {
@@ -75,7 +105,7 @@ export function replayFrames (snapshot, { includeConfig = true } = {}) {
       continue
     }
     if (section === 'entities') {
-      frames.push(...mergeByCapture(entityFrames, entityMoves))
+      frames.push(...mergeByCapture(entityFrames, entityState))
       continue
     }
     if (section === 'generic') {
@@ -90,19 +120,19 @@ export function replayFrames (snapshot, { includeConfig = true } = {}) {
 // Two lists, each already in capture order, merged into one. A frame without a
 // sequence sorts last, so a hand-built snapshot stays deterministic and keeps
 // its documented order.
-function mergeByCapture (entityFrames, entityMoves) {
+function mergeByCapture (entityFrames, entityState) {
   const merged = []
   let e = 0
-  let m = 0
-  while (e < entityFrames.length || m < entityMoves.length) {
+  let g = 0
+  while (e < entityFrames.length || g < entityState.length) {
     const nextEntity = entityFrames[e]
-    const nextMove = entityMoves[m]
-    if (nextMove === undefined || (nextEntity !== undefined && captureSeq(nextEntity) <= captureSeq(nextMove))) {
+    const nextState = entityState[g]
+    if (nextState === undefined || (nextEntity !== undefined && captureSeq(nextEntity) <= captureSeq(nextState))) {
       merged.push(nextEntity)
       e++
     } else {
-      merged.push(nextMove)
-      m++
+      merged.push(nextState)
+      g++
     }
   }
   return merged

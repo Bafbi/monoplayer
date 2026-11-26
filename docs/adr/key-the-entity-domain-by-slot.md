@@ -11,7 +11,9 @@ The cache keys every entity frame by `entityId` and by the slot of state it
 carries, and keeps the newest raw frame for each slot. A slot is:
 
 - one metadata index, `metadata:<key>`, because the client merges each pair;
-- one effect, `effect:<id>`, because the frame adds an effect and removes none;
+- one effect, `effect:<id>`, because the newest frame about that effect is its
+  state: the add and the removal share the slot, so neither the replay order nor
+  the generic ring's bound can separate them (#222);
 - one `destroy`, because a removal means the same for the whole body;
 - any other entity frame under its own name, because it carries a whole value:
   a spawn, a teleport, a velocity.

@@ -49,15 +49,25 @@ const BLOCK_FRAMES = new Set([
 // consulted. `entity_position` is the pre-rename spelling the older fakes
 // still send.
 //
-// The relative-move frames (`rel_entity_move`, `entity_move_look`,
-// `entity_look`) are deliberately absent. They are per-tick deltas, and a slot
-// holds the newest frame for its key, so routing one here would replay the last
-// delta and none of the ones it built on. They stay in `generic`, and
-// join-synth replays the two domains merged in capture order, so a delta still
-// follows the frame it adjusts (issue #35).
+// The frames join-synth merges out of `generic` are deliberately absent, and
+// join-synth's `ENTITY_GENERIC_FRAMES` is the one list of them. They stay in
+// `generic`, and join-synth replays the two domains merged in capture order, so
+// a frame still lands where it was captured. Two groups need that. A per-tick
+// position delta is additive, and a slot holds the newest frame for its key, so
+// routing one here would replay the last delta and none of the ones it built on
+// (issue #35). A body's attributes, equipment, and passengers replace a value
+// the client keeps, so a fixed section order applies the newer frame before the
+// older one it superseded (issue #222).
+//
+// `remove_entity_effect` is the exception: it belongs here, under the effect's
+// own slot, because it is the newest word about an effect rather than a step in
+// a stream. Splitting the pair would put the add in a slot that outlives the
+// generic ring and the removal in the ring itself, and the bound would then
+// replay an effect the backend removed (issue #222).
 const ENTITY_FRAMES = new Set([
   'sync_entity_position',
   'entity_destroy',
+  'remove_entity_effect',
   'entity_teleport',
   'entity_metadata',
   'spawn_entity',
@@ -155,8 +165,10 @@ export function createStateCache (overrides = {}) {
   // this domain locates an index, it never rebuilds a frame. Where a slot is:
   //
   //   entity_metadata          one slot per metadata index (`metadata:<key>`)
-  //   entity_effect            one slot per effect id (`effect:<id>`): the
-  //                            frame adds one effect and removes none
+  //   entity_effect,           one slot per effect id (`effect:<id>`), holding
+  //   remove_entity_effect     the newest frame about that effect: the add and
+  //                            the removal are one slot, so no bound can replay
+  //                            them in the wrong order or keep only one (#222)
   //   entity_destroy,          `destroy`: the frame stays beside the body it
   //   remove_entities          ends, so a replay applies the removal after it
   //   any other entity frame   the frame name, because it carries the whole
@@ -239,7 +251,9 @@ export function createStateCache (overrides = {}) {
       // the newest frame of that shape instead of dropping it.
       return indexes.length === 0 ? ['metadata'] : indexes.map(key => `metadata:${key}`)
     }
-    if (name === 'entity_effect') return [`effect:${data.effectId ?? data.effect ?? 'unknown'}`]
+    if (name === 'entity_effect' || name === 'remove_entity_effect') {
+      return [`effect:${data.effectId ?? data.effect ?? 'unknown'}`]
+    }
     if (name === 'entity_destroy' || name === 'remove_entities') return ['destroy']
     return [name]
   }
