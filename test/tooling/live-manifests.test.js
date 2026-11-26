@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { rules, section, withoutComments } from './manifest-reader.js'
 import { parseAllowedServers } from '../../src/service/control.js'
 import { DEFAULT_CONFIG } from '../../src/service/monoplayer.js'
 
@@ -204,3 +205,165 @@ test('the live lane declares no Paper for a backend whitelist to write', () => {
     'its whitelist. A Paper in this lane would make that page wrong, and rcon-cli reachable in ' +
     'monoplayer, which is not a lane an rcon write should find')
 })
+
+// --- the account lease's grant (#302) ---
+
+// The online rung writes a Kubernetes Lease in this lane, and it is the one object here a
+// permission outside the pod grants: the throwaway pod the same script applies and deletes
+// needs `pods` verbs no manifest in this tree names yet. The Lease keeps one run at a time
+// on the account's refresh chain (#280). Its three calls are `get lease`,
+// `create -f` and `replace -f` (scripts/online-cluster.sh), made with whatever credential
+// `kubectl` finds on the operator's machine. So the permission is the API server's answer,
+// and no offline rung can run as a narrower credential to find out whether the grant is
+// there. That is why the grant is pinned here instead: take a verb off the Role, or the
+// subject off its binding, and this file is the red gate rather than a run that works for a
+// cluster admin alone.
+//
+// The lines are read by `manifest-reader.js`, the one reader the panel's guard uses too, so
+// the two cannot disagree about what a rule says.
+
+const LEASE_ROLE = 'account-lease-role.yaml'
+const LEASE_BINDING = 'account-lease-rolebinding.yaml'
+const ONLINE_CLUSTER = 'scripts/online-cluster.sh'
+
+// A default the rung falls back to, read from the script that ships it, so a rename in
+// either place fails here rather than in a run that cannot take the account. A run that
+// overrides MONOPLAYER_LEASE_NAME or MONOPLAYER_CLUSTER_NAMESPACE names a lease or a
+// namespace this Role does not cover, which its header says and no guard can see.
+function rungDefault (name) {
+  const script = fs.readFileSync(path.join(ROOT, ONLINE_CLUSTER), 'utf8')
+  const found = new RegExp('^' + name + '=\\$\\{[A-Z_]+:-(\\S+)\\}$', 'm').exec(script)
+  assert.ok(found, ONLINE_CLUSTER + ' names its ' + name + ' default, and this test reads it')
+  return found[1]
+}
+
+// Every way the grant can stop being what the rung needs, one message each. A rule line the
+// reader cannot place throws before this runs, which is the other half of the guard.
+function auditLease ({ role, binding, lease, namespace }) {
+  const problems = []
+  const report = message => problems.push(message)
+  const flat = withoutComments
+
+  if (!/^kind: Role$/m.test(flat(role))) report(LEASE_ROLE + ' does not declare a Role')
+  if (!new RegExp('^ {2}namespace: ' + namespace + '$', 'm').test(flat(role))) {
+    report(LEASE_ROLE + ' is not a Role in ' + namespace)
+  }
+  const roleName = (/^ {2}name: (\S+)$/m.exec(flat(role)) ?? [])[1]
+  if (roleName === undefined) report(LEASE_ROLE + ' names no Role')
+
+  const granted = rules(role)
+  // `get` and `update` are requests for one object, so their rule can say which one.
+  // Nothing else may ride along: a rule is granted as one set.
+  const named = granted.filter(rule => (rule.resourceNames ?? []).length > 0)
+  const unnamed = granted.filter(rule => (rule.resourceNames ?? []).length === 0)
+  const sorted = list => [...(list ?? [])].sort()
+
+  for (const rule of granted) {
+    if (sorted(rule.apiGroups).join() !== 'coordination.k8s.io') {
+      report('the Role grants ' + (rule.apiGroups ?? []).join(', ') + ', and the lease is coordination.k8s.io')
+    }
+    if (sorted(rule.resources).join() !== 'leases') {
+      report('the Role grants ' + (rule.resources ?? []).join(', ') + ', and a run writes leases')
+    }
+  }
+
+  if (named.length !== 1) report('the Role has ' + named.length + ' named rules, and one carries get and update')
+  else {
+    if ((named[0].resourceNames ?? []).join() !== lease) {
+      report('the named rule scopes ' + (named[0].resourceNames ?? []).join(', ') + ', and the rung writes ' + lease)
+    }
+    if (sorted(named[0].verbs).join() !== ['get', 'update'].sort().join()) {
+      report('the named rule grants ' + (named[0].verbs ?? []).join(', ') + ', and the rung gets and updates one lease')
+    }
+  }
+
+  // `create` cannot be scoped by name, so it stands alone and unscoped. That is the honest
+  // form: one rule that reads narrow, and one that does not pretend to.
+  if (unnamed.length !== 1) report('the Role has ' + unnamed.length + ' unscoped rules, and one carries create')
+  else if (sorted(unnamed[0].verbs).join() !== 'create') {
+    report('the unscoped rule grants ' + (unnamed[0].verbs ?? []).join(', ') + ', and create is the only verb RBAC cannot name')
+  }
+
+  // The binding, or the Role is a grant nobody holds.
+  const bound = flat(binding)
+  if (!/^kind: RoleBinding$/m.test(bound)) report(LEASE_BINDING + ' does not declare a RoleBinding')
+  if (!new RegExp('^ {2}namespace: ' + namespace + '$', 'm').test(bound)) {
+    report(LEASE_BINDING + ' is not in ' + namespace)
+  }
+  const ref = section(bound, 0, 'roleRef')
+  if (!/^ {2}kind: Role$/m.test(ref)) {
+    report('the binding refers to ' + (ref.match(/^ {2}kind: (\S+)/m) ?? [])[1] + ', and this grant is a Role')
+  }
+  if (!ref.includes('  name: ' + roleName)) report('the binding refers to a Role other than ' + roleName)
+
+  // The subject as one string of its kind and its name: each half matters, because a
+  // ServiceAccount is a pod's identity and no pod here writes the lease.
+  const subjects = [...section(bound, 0, 'subjects').matchAll(/^ {2}- kind: (\S+)\n {4}name: (\S+)$/gm)]
+    .map(([, kind, name]) => kind + ' ' + name)
+  if (subjects.length !== 1) report('the binding has ' + subjects.length + ' subjects, and the grant is one group\'s')
+  else if (subjects[0] !== 'Group monoplayer-operators') {
+    report('the binding hands the grant to ' + subjects[0] + ', and no workload in this tree takes a lease')
+  }
+
+  return problems
+}
+
+const leaseFiles = () => ({
+  role: fs.readFileSync(path.join(MANIFESTS, LEASE_ROLE), 'utf8'),
+  binding: fs.readFileSync(path.join(MANIFESTS, LEASE_BINDING), 'utf8'),
+  lease: rungDefault('LEASE_NAME'),
+  namespace: rungDefault('NAMESPACE')
+})
+
+test('the lane grants the account lease its three verbs, and one group holds them', () => {
+  assert.deepEqual(auditLease(leaseFiles()), [])
+})
+
+test('the guard refuses a grant that stops being the three verbs on the one lease', () => {
+  const tree = leaseFiles()
+  const audit = change => auditLease({ ...tree, role: change(tree.role) })
+
+  assert.deepEqual(audit(role => role.replace('verbs: ["create"]', 'verbs: ["create", "delete"]')), [
+    'the unscoped rule grants create, delete, and create is the only verb RBAC cannot name'
+  ], 'delete is a verb no run needs: a release writes an empty holder, and an unreleased lease expires')
+  // `replace` is a kubectl subcommand and not an RBAC verb: a replace is a PUT, which the
+  // authorizer scores as update. A rule carrying the word grants nothing the rung needs.
+  assert.deepEqual(audit(role => role.replace('verbs: ["get", "update"]', 'verbs: ["get", "replace"]')), [
+    'the named rule grants get, replace, and the rung gets and updates one lease'
+  ], 'a rule that grants replace grants nothing: the authorizer scores a PUT as update')
+  assert.deepEqual(audit(role => role.replace('verbs: ["get", "update"]', 'verbs: ["get", "update", "list"]')), [
+    'the named rule grants get, update, list, and the rung gets and updates one lease'
+  ], 'list reads every lease in the namespace, which the rung never does')
+  assert.deepEqual(audit(role => role.replace('resourceNames: ["monoplayer-online-account"]', '')), [
+    'the Role has 0 named rules, and one carries get and update',
+    'the Role has 2 unscoped rules, and one carries create'
+  ], 'a rule with no names reads and updates any lease in the namespace')
+})
+
+test('the guard refuses a binding that hands the grant to nobody, or to a workload', () => {
+  const tree = leaseFiles()
+  const audit = binding => auditLease({ ...tree, binding })
+
+  assert.deepEqual(audit(tree.binding.replace('  - kind: Group\n    name: monoplayer-operators\n', '')), [
+    'the binding has 0 subjects, and the grant is one group\'s'
+  ], 'a Role with no subject is a grant nobody holds: it reads as wired and is not')
+  assert.deepEqual(
+    audit(tree.binding.replace('  - kind: Group\n    name: monoplayer-operators\n',
+      '  - kind: ServiceAccount\n    name: monoplayer\n')),
+    ['the binding hands the grant to ServiceAccount monoplayer, and no workload in this tree takes a lease'],
+    'a ServiceAccount is a pod\'s identity, and no pod here writes the lease')
+})
+
+test('the bootstrap step names the group the binding hands the grant to', () => {
+  // The subject is a group no manifest can create, so the one instruction that makes the
+  // grant live is prose: issue a credential carrying that group, or map it from an identity
+  // provider. A page naming another group is an operator adding the wrong one and reading a
+  // 403 it was told to expect.
+  const binding = fs.readFileSync(path.join(MANIFESTS, LEASE_BINDING), 'utf8')
+  const group = [...binding.matchAll(/^ {2}- kind: Group\n {4}name: (\S+)$/gm)].map(match => match[1])
+  assert.equal(group.length, 1, 'the binding names one group')
+  const page = fs.readFileSync(path.join(ROOT, 'docs', 'deployment.md'), 'utf8')
+  assert.ok(page.includes(group[0]),
+    'docs/deployment.md no longer names ' + group[0] + ', so the bootstrap step that makes the grant live is missing')
+})
+

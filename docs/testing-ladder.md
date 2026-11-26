@@ -254,12 +254,20 @@ Two ways a run can end without releasing the lease, and what happens:
   disagree about a live lease. The renewal interval is a third of the duration for
   that reason.
 
-The lease needs `get`, `create` and `replace` on `coordination.k8s.io/leases` in the
-namespace. That is the same cluster and the same credential the rung already holds:
-it creates a pod, reads the Deployment and the custody, so it is not a narrower
-permission. A role that grants only `pods` and `deployments` would need those three
-verbs added before `mise run online` works, and the script says so, naming the verbs,
-instead of starting without a lease.
+The lease needs `get`, `create` and `update` on `coordination.k8s.io/leases` in the
+namespace. `update`, not `replace`: `replace` is a `kubectl` subcommand and not an RBAC
+verb, and a `kubectl replace` is an HTTP PUT, which the API server scores as `update`. The
+refusal the script prints says `replace`, which is the bug filed as #493: the verb to grant
+is `update`.
+
+`deploy/manifests/account-lease-role.yaml` grants them, and its header says why that takes
+two rules. Its RoleBinding hands them to a group, and an operator whose credential is a
+cluster admin needs none of it: `system:masters` is answered before RBAC is consulted.
+[deployment.md](deployment.md#the-operator-credential) is how any other credential gets the
+group.
+
+`test/tooling/live-manifests.test.js` fails when a verb, the lease name, the namespace or
+the subject moves, because no offline rung can run as a narrower credential to find out.
 
 Three things the lease does not cover. The deployment's own proxy keeps refreshing
 the puppet while it serves, which is what one-account-one-writer-one-replica is

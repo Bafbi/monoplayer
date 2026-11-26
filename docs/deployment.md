@@ -33,7 +33,7 @@ within minutes of the next sync. Those lanes keep their own runbooks.
 | Path | Contents |
 |---|---|
 | `deploy/kustomization.yaml` | The Application's source: `manifests` and `panel`, one deploy |
-| `deploy/manifests/` | Kustomization: namespace, attach whitelist ConfigMap, custody PVC, Deployment, Tailscale Service, playit tunnel agent |
+| `deploy/manifests/` | Kustomization: namespace, attach whitelist ConfigMap, custody PVC, Deployment, Tailscale Service, playit tunnel agent, and the account lease's Role and RoleBinding (#302) |
 | `deploy/panel/` | Kustomization: the ops panel, its registry, its scoped Role and RoleBinding |
 | `deploy/manifests/playit-agent.yaml` | The public route (#202): one playit.gg agent. Runbook: [public-access.md](public-access.md), decision: [the ADR](adr/public-access-goes-through-a-tcp-tunnel.md) |
 | `deploy/argocd/project.yaml` | AppProject `monoplayer`: one source repo, the two destination namespaces, and the kinds it may create |
@@ -41,7 +41,7 @@ within minutes of the next sync. Those lanes keep their own runbooks.
 | `.github/workflows/image.yaml` | Build, push to GHCR, commit the digest |
 | `.github/workflows/image-retention.yaml` | Delete the image tags no lane can name |
 | `deploy/pins.txt` | Image pins no manifest carries, kept by the retention job |
-| `Lease monoplayer-online-account` | Not in git. The account lease the online rung holds (#280): one object in `monoplayer`, naming the run's lane, its branch and its pid, and empty between runs. No manifest declares it, so a sync neither creates nor prunes it; [testing-ladder.md](testing-ladder.md#the-account-lease) is the runbook |
+| `Lease monoplayer-online-account` | Not in git. The account lease the online rung holds (#280): one object in `monoplayer`, naming the run's lane, its branch and its pid, and empty between runs. No manifest declares it, so a sync neither creates nor prunes it. The Role that grants a run the three verbs is `account-lease-role.yaml` in the same tree; [testing-ladder.md](testing-ladder.md#the-account-lease) is the runbook |
 | `Dockerfile` | The runtime image: Node, the proxy, the 26.2 data patch |
 
 ## One-time cluster bootstrap
@@ -87,6 +87,33 @@ These objects are not in Git. Create them once, in this order.
    is the front's in-namespace DNS name. Both are operator steps, and the order
    matters: link the agent, then take its secret. See
    [public-access.md](public-access.md).
+
+## The operator credential
+
+The online rung takes the account lease before it starts, so the credential it runs
+with needs the three verbs `deploy/manifests/account-lease-role.yaml` grants on
+`coordination.k8s.io/leases` (#302). That is the lease's share of what a run needs: the
+same credential also applies, execs into and deletes a throwaway pod in that namespace, and
+reads the Deployment, and no manifest in this repository grants those yet. The Role is in
+Git. Who is in the group is not: membership is asserted by whatever authenticated the
+request, so no manifest creates it.
+
+The group is `monoplayer-operators`. Issue the credential with that group in its
+certificate's organization, or map it from your identity provider. Nothing in the
+cluster has to change with it. Ask the cluster instead of this page:
+
+    kubectl auth whoami
+    kubectl auth can-i get lease/monoplayer-online-account -n monoplayer
+
+`test/tooling/live-manifests.test.js` fails when this page stops naming the group the
+RoleBinding in `deploy/manifests/` binds.
+
+A cluster-admin credential needs none of this, because `system:masters` is answered before
+RBAC is consulted. The other way to hold
+the lease would be a ServiceAccount for the rung, and this repository does not take it:
+the lease is written by `kubectl` on the operator's machine, before and after the pod
+that same script creates, and a pod token would mean the rung's credential changed shape
+rather than narrowed.
 
 ## Custody seed
 
