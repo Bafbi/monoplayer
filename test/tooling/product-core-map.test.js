@@ -1,4 +1,4 @@
-// #340, #371: two cells of docs/product-core.md, each pinned to the module that owns
+// #340, #371, #606: cells of docs/product-core.md, each pinned to the module that owns
 // the fact the cell states.
 //
 // The page is a map of where a decision lives. A cell that names half a list sends a
@@ -18,6 +18,17 @@
 //         names a switch is not a read: the header of src/service/start-live.js is
 //         itself a list of the switches.
 //
+//   #606  the page is also a way in to the leg interfaces, and #592 moved the call-ins
+//         out of src/service/monoplayer.js into one table per interface in
+//         src/service/wire-leg-to-core.js. The map kept calling the composition root
+//         the home of "leg wiring", so nothing routed a reader to the new module. The
+//         interface section kept a second copy of both lists: eight of the front
+//         table's sixteen rows, each with a payload shape the table also states, and
+//         two of the seven the leg cannot serve a client without. #605 and #607 changed
+//         that list twice in one night, which is how a copy rots. So the section names
+//         the rows and states no shape, the map has a row for the module, and every
+//         module in src/service/ has a row: the wiring module landed with none.
+//
 // What is compared is names. No sentence is parsed, because a guard that read English
 // would be a guard that lies about what it checked. Two things are left to review, and
 // no test decides them: what "the copy Git commits answers" covers, and that a lane
@@ -35,13 +46,19 @@ import { fileURLToPath } from 'node:url'
 
 import { loadConfig } from '../../src/service/monoplayer.js'
 import { envOverlay } from '../../src/service/start-live.js'
+import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 
 const PAGE = read('docs/product-core.md')
 
-const MODULE = 'src/service/cli.js'
+// The rows whose cell lists the module's exports, so the cell is read rather than
+// trusted. #340 pinned src/service/cli.js; #606 adds the wiring module, whose row names
+// the two tables and the function a lane applies to a leg.
+const EXPORT_ROWS = ['src/service/cli.js', 'src/service/wire-leg-to-core.js']
+
+const MODULE = EXPORT_ROWS[0]
 
 // The two config keys that hold the one list the picker offers. A key's name is the
 // page's name for it, so the guard resolves the switch from the key rather than keeping
@@ -112,21 +129,23 @@ function pickerBullet () {
   return found[0]
 }
 
-test('the module-map row for src/service/cli.js names every helper that module exports', async () => {
-  const names = Object.keys(await import('../../' + MODULE))
-  assert.ok(names.length > 0, MODULE + ' exports its helpers, and that list is what the row carries')
-  const listed = cellNames(row(MODULE)[2])
-  const missing = names.filter(name => !listed.includes(name))
-  const unknown = listed.filter(name => !names.includes(name))
-  assert.deepEqual(missing, [],
-    MODULE + ' exports ' + missing.join(', ') + ' and the module-map row does not name ' +
-    (missing.length === 1 ? 'it' : 'them') + '. The row is the map a reader uses to find a helper, and a ' +
-    'helper missing from it sends that reader to another file. Add ' + (missing.length === 1 ? 'it' : 'them') +
-    ' beside its neighbours.')
-  assert.deepEqual(unknown, [],
-    'the module-map row names ' + unknown.join(', ') + ', which ' + MODULE + ' does not export. A name ' +
-    'the module does not hold is a helper a reader looks for and cannot find there.')
-})
+for (const module of EXPORT_ROWS) {
+  test('the module-map row for ' + module + ' names every name that module exports', async () => {
+    const names = Object.keys(await import('../../' + module))
+    assert.ok(names.length > 0, module + ' exports its names, and that list is what the row carries')
+    const listed = cellNames(row(module)[2])
+    const missing = names.filter(name => !listed.includes(name))
+    const unknown = listed.filter(name => !names.includes(name))
+    assert.deepEqual(missing, [],
+      module + ' exports ' + missing.join(', ') + ' and the module-map row does not name ' +
+      (missing.length === 1 ? 'it' : 'them') + '. The row is the map a reader uses to find a name, and one ' +
+      'missing from it sends that reader to another file. Add ' + (missing.length === 1 ? 'it' : 'them') +
+      ' beside its neighbours.')
+    assert.deepEqual(unknown, [],
+      'the module-map row names ' + unknown.join(', ') + ', which ' + module + ' does not export. A name ' +
+      'the module does not hold is one a reader looks for and cannot find there.')
+  })
+}
 
 test('the picker bullet is the whole list of what an operator can name', () => {
   for (const { key, name } of SERVER_LIST) {
@@ -152,4 +171,172 @@ test('the picker bullet does not say a lane with no allowed-server key offers no
     'the picker bullet still says a lane with no such key offers nothing. #356 rebuilt the precedence in ' +
     '`allowedServerSources` in src/service/control.js: the live file answers, else the copy Git commits, else ' +
     'nothing. Only a lane that names neither switch offers nothing.')
+})
+
+// --- the leg interfaces (#606) ---
+
+// Every fenced block of the page, each with the paragraph above it. The paragraph is
+// what tells one block from another: the page points at a table in prose and lists the
+// rows under it.
+function fencedBlocks () {
+  return [...PAGE.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map(match => ({
+    body: match[1],
+    // The blank line before a fence leaves an empty tail, so split and drop the empties
+    // rather than trusting the last element to be the paragraph.
+    above: PAGE.slice(0, match.index).split(/\n\s*\n/).filter(Boolean).pop()
+  }))
+}
+
+// The block the page puts under its pointer to a table. The marker is the table's name,
+// so a block that follows a sentence about something else is not this list.
+function blockUnder (marker) {
+  const found = fencedBlocks().filter(block => block.above.includes('`' + marker + '`'))
+  assert.equal(found.length, 1,
+    'docs/product-core.md has one fenced block under the paragraph that names `' + marker +
+    '`, which is where a reader finds its rows. Found ' + found.length + '.')
+  return found[0].body.split('\n').map(line => line.trim()).filter(Boolean)
+}
+
+// The interface block itself, found by the name of the variable it assigns and cut at
+// that assignment's own closing brace. It holds the rest of the interface: the members
+// no table names, because the core calls them on the leg directly. Both legs share one
+// fenced block, so the cut is what keeps one leg's members out of the other's case.
+function interfaceBlock (leg) {
+  const found = fencedBlocks().filter(block => block.body.includes(leg + ' = {'))
+  assert.equal(found.length, 1,
+    'docs/product-core.md has one block that assigns `' + leg + '`, which is where a reader looks for the ' +
+    'rest of that interface. Found ' + found.length + '.')
+  const body = found[0].body
+  const start = body.indexOf(leg + ' = {')
+  const end = body.indexOf('\n}', start)
+  assert.ok(end > start,
+    'the `' + leg + '` assignment in docs/product-core.md ends on its own line, so this case can read the ' +
+    'members of one leg and no other')
+  return body.slice(start, end)
+}
+
+// The two tables the page points at, the leg each one wires, and the block that assigns
+// that leg. The rows are the module's, never a list kept here: a call-in the table adds
+// or drops has to reach the page, and a list in this file would be the second copy the
+// guard exists to stop.
+const INTERFACES = [
+  { table: 'FRONT_LEG_CALL_INS', leg: 'frontLeg', rows: FRONT_LEG_CALL_INS },
+  { table: 'BACKEND_LEG_CALL_INS', leg: 'backendLeg', rows: BACKEND_LEG_CALL_INS }
+]
+
+// The section the two blocks sit in, found by its heading. It names the module, and
+// that pointer is the claim the blocks cannot make: a list under a section that points
+// nowhere is still a second home.
+function interfaceSection () {
+  const found = PAGE.match(/^## Interface for the live legs[\s\S]*?(?=^## )/m)
+  assert.ok(found, 'docs/product-core.md has the section that holds the leg interfaces, which is where a ' +
+    'reader writing a leg looks. Its heading is "## Interface for the live legs".')
+  return found[0]
+}
+
+test('the interface section points at the module that declares the call-in tables', () => {
+  const section = interfaceSection()
+  assert.ok(section.includes('`src/service/wire-leg-to-core.js`'),
+    'the interface section does not name src/service/wire-leg-to-core.js. That module declares the call-ins ' +
+    'each leg carries, and a section that names neither the module nor the tables is a section whose rows ' +
+    'live nowhere (#606, #592).')
+  for (const { table } of INTERFACES) {
+    assert.ok(section.includes('`' + table + '`'),
+      'the interface section does not name `' + table + '`, the table that declares its rows. A reader ' +
+      'cannot check a list against a table the page never names.')
+  }
+})
+
+// A call-in named outside the two lists is still a call-in the page says a leg carries.
+// The scan is bounded to the section and to the setter convention, because a `call` row
+// (chat, preAuthStats) is named with an ordinary word that a sentence may use for its
+// own purpose.
+test('the interface section names no call-in the two tables do not declare', () => {
+  const declared = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS].map(row => row.name)
+  const named = [...new Set([...interfaceSection().matchAll(/\bset[A-Z][A-Za-z0-9]*\b/g)]
+    .map(match => match[0]))]
+  const unknown = named.filter(name => !declared.includes(name))
+  assert.deepEqual(unknown, [],
+    'the interface section names ' + unknown.join(', ') + ', and neither table in ' +
+    'src/service/wire-leg-to-core.js declares ' + (unknown.length === 1 ? 'it' : 'them') + '. A call-in ' +
+    'the module does not carry is one a reader looks for in the table and cannot find (#606). Name the row ' +
+    'that exists, or add the row first.')
+})
+
+for (const { table, leg, rows } of INTERFACES) {
+  const names = rows.map(row => row.name)
+
+  test('the page names every ' + table + ' row, and no call-in the table does not declare', () => {
+    const listed = blockUnder(table)
+    const missing = names.filter(name => !listed.includes(name))
+    const unknown = listed.filter(name => !names.includes(name))
+    assert.deepEqual(missing, [],
+      table + ' in src/service/wire-leg-to-core.js declares ' + missing.join(', ') + ', and the page does not ' +
+      'name ' + (missing.length === 1 ? 'it' : 'them') + '. A reader who counts the call-ins off this page ' +
+      'wires a leg that is missing one, and nothing else on the page says so.')
+    assert.deepEqual(unknown, [],
+      'the page names ' + unknown.join(', ') + ' as a ' + table + ' call-in, and the table does not declare ' +
+      (unknown.length === 1 ? 'it' : 'them') + '. A call-in the module does not carry is one a reader looks ' +
+      'for and cannot find there.')
+  })
+
+  test('the page states no payload shape for a ' + table + ' row', () => {
+    const shaped = blockUnder(table).filter(line => !/^[A-Za-z][A-Za-z0-9_]*$/.test(line))
+    assert.deepEqual(shaped, [],
+      'the page states a shape for ' + shaped.join(' | ') + '. The payload shape of each ' + table + ' row, and ' +
+      'the method of the core it reaches, are declared in src/service/wire-leg-to-core.js. A second copy of a ' +
+      'shape is what #606 found, and that list changed twice in one night (#605, #607). Name the call-in ' +
+      'and stop there.')
+  })
+
+  test('the ' + leg + ' block does not restate a ' + table + ' call-in', () => {
+    const restated = interfaceBlock(leg).split('\n')
+      .map(line => /^\s*([A-Za-z][A-Za-z0-9_]*)/.exec(line))
+      .filter(Boolean)
+      .map(match => match[1])
+      .filter(name => names.includes(name))
+    assert.deepEqual(restated, [],
+      'the ' + leg + ' block still writes ' + restated.join(', ') + ', which ' + table + ' declares. That block ' +
+      'is for the rest of the interface, the members no table names; a call-in written there as well is the ' +
+      'second copy this page stopped keeping (#606).')
+  })
+}
+
+// The module map's section, read to its next heading so a `src/...js` row in another
+// table of the page cannot answer for a module the map never names. It is the bound
+// test/ladder/loopback-contract.test.js makes of its own claim, for the same reason.
+function moduleMap () {
+  const found = PAGE.match(/^## Module map[\s\S]*?(?=^## )/m)
+  assert.ok(found, 'docs/product-core.md has a module map, which is where a reader looks for what a module holds')
+  return found[0]
+}
+
+// Every module a map row names, in the order the rows appear.
+function moduleRows () {
+  return moduleMap().split('\n')
+    .map(line => /^\| `(src\/[^`]*\.js)` \|/.exec(line))
+    .filter(Boolean)
+    .map(match => match[1])
+}
+
+test('the module map has a row for every module in src/service', () => {
+  // src/service/ alone, and not the map's other three directories: the composition root
+  // holds one module per job, and a reader arrives at this page looking for a step, so a
+  // step with no row is a dead end. The other directories hold the modules a reader
+  // reaches from a row, and the map names a selection of them on purpose.
+  const modules = fs.readdirSync(path.join(ROOT, 'src/service'))
+    .filter(name => name.endsWith('.js'))
+    .map(name => 'src/service/' + name)
+    .sort()
+  const rows = moduleRows()
+  const unrowed = modules.filter(module => !rows.includes(module))
+  assert.deepEqual(unrowed, [],
+    unrowed.join(', ') + ' has no module-map row in docs/product-core.md. ' +
+    'src/service/wire-leg-to-core.js landed with none (#592), so a reader looking for where a leg is wired ' +
+    'landed on the composition root, which stopped doing it. Add the row.')
+  const gone = rows.filter(row => !fs.existsSync(path.join(ROOT, row)))
+  assert.deepEqual(gone, [],
+    'the module map names ' + gone.join(', ') + ', which ' +
+    (gone.length === 1 ? 'is not a file' : 'are not files') + '. A row is a promise that a reader can open ' +
+    'the module it names.')
 })
