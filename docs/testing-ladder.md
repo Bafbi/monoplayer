@@ -155,12 +155,14 @@ there would scale five rows to 0 and delete the lane's generated Secrets, which 
 names its Papers read. An `up` would apply the gate tree over it.
 
 **The loopback assertion numbers are one sequence.** An id is an entry in
-`LOOPBACK_ASSERTION_IDS` in `src/ladder/loopback.js`, one `check(…)` call that
-names it, and a bullet in
+`LOOPBACK_ASSERTION_IDS` in `src/ladder/loopback.js`, the `check(…)` call that
+names it at that position in the run, and a bullet in
 [the assertion contract](#loopback-assertion-contract).
 `test/ladder/loopback-contract.test.js` requires the declaration and the bullets to
-agree in both directions, and a finished run fails on a declared id that no check
-ran. The guard reads the declaration rather than the call, so a `check` call
+agree in both directions. The run requires the order: the nth check must name the
+nth id, so a finished run fails when a position disagrees (#623). It fails too when
+the list declares an id no check made, or a check names an id the list does not
+declare. That guard reads the declaration rather than the call, so a `check` call
 outside this file is not drift (#593). Two rows that each add an assertion take
 the same next number, the one above the highest the file already declares, and
 edit the same bullet list. No lane helps here: the sequence belongs to the
@@ -352,7 +354,8 @@ node src/ladder/loopback.js --report /tmp/opencode/loopback-report.json
 node src/ladder/loopback.js --verbose
 ```
 
-Exit codes: `0` all assertions pass, `1` an assertion or timeout failed, `2`
+Exit codes: `0` all assertions pass, `1` an assertion or timeout failed, or the
+checks are not the order the list declares, `2`
 the setup before the run failed (fake backend, config, or leg construction). The runner writes `.reports/loopback-report.json`
 (gitignored) in `finally`, including on failure. The report holds assertion
 results and metadata only. It never holds frame bytes, `.secrets` paths, or
