@@ -6,6 +6,19 @@ The socket-free unit suite is `mise run test`, and `mise run check` adds the off
 loopback; each reports its own count, so this page repeats none of them. The protocol
 spike (`src/spike/proxy.js`) is frozen and untouched.
 
+**The model is one account and many bodies**
+([one account, many bodies](adr/one-account-many-bodies.md)). An account's session on
+one server is a *body*. The client that claims a body is its *driver* and drives it.
+A client watching that body without control is a *spectator*, and nothing it sends
+reaches a server. On a lane that serves the picker, a client with no body lands in
+it, and the dialog offers the allowed servers. Two sections below carry the shipped
+form: [One driver, and the lanes that can refuse a second
+client](#one-driver-and-the-lanes-that-can-refuse-a-second-client-269-312) for who may
+drive a body, and [The configuration baseline and the
+picker](#the-configuration-baseline-and-the-picker-257) for the picker and the claim.
+Delivery belongs to a channel (#269, #259). The transparency the proxy claims is the
+driver's, on the body they claim ([transparency.md](transparency.md)).
+
 Live note: the first live attach failed with `add_entity ... 114 bytes
 extra` because backend login-phase frames (`encryption_begin`, `compress`,
 `success`) entered the play join prefix. The core now ignores every frame
