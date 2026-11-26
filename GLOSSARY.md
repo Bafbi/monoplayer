@@ -305,7 +305,7 @@ _Avoid_: validator, frame linter
 ## The panel
 
 **Panel**:
-The page an operator reads on the tailnet, one card per puppet, served from its own Deployment and its own namespace. A card says what that puppet is doing now, read from the records the puppet already writes. What the panel may write for it is its control ConfigMap. Each card's live region is `GET /api/puppets/<name>/stream`, which rewrites it without a reload. The card's own facts are also `GET /api/puppets/<name>`, and `GET /api/puppets` is the registry. It holds no session, and `docs/panel.md` holds the route table.
+The page an operator reads on the tailnet, one card per puppet, served as a second entrypoint of the proxy's image in `monoplayer`. A card says what that puppet is doing now, read from the records the puppet already writes. What the panel may write for it is its control ConfigMap. Each card's live region is `GET /api/puppets/<name>/stream`, which rewrites it without a reload. The card's own facts are also `GET /api/puppets/<name>`, and `GET /api/puppets` is the registry. It holds no session, and `docs/panel.md` holds the route table.
 _Avoid_: dashboard, admin, control plane
 
 **Registry**:

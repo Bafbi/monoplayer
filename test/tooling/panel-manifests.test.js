@@ -213,6 +213,12 @@ function audit ({ files, documents, registry }) {
       report(document.file + ' holds a ' + document.kind + ', and the panel is scoped by namespace')
     }
   }
+  // The namespace the panel runs in: its Deployment's, which every other object in
+  // the tree has to agree with. Read here because the binding check below needs it,
+  // and check 6 reads the Deployment itself.
+  const deployment = documents.find(document => document.kind === 'Deployment')
+  const panelNamespace = deployment ? deployment.namespace : null
+
   for (const binding of bindings) {
     const ref = section(binding.text, 0, 'roleRef')
     const kind = (ref.match(/^ {2}kind:\s*(\S+)\s*$/m) ?? [])[1] ?? null
@@ -227,6 +233,23 @@ function audit ({ files, documents, registry }) {
       .map(match => match[1])
     if (subjects.length !== 1 || subjects[0] !== 'panel') {
       report('RoleBinding ' + binding.name + ' binds ' + subjects.join(', ') + ', not the panel ServiceAccount')
+    }
+    // And the subject is in the namespace the panel runs in. A binding that names
+    // another one binds a ServiceAccount nobody creates: it reads as authority, and
+    // it authorizes nothing, which is the half-move #609 is careful about.
+    const named = [...section(binding.text, 0, 'subjects').matchAll(/^ {4}namespace:\s*(\S+)\s*$/gm)]
+      .map(match => match[1])
+    for (const namespace of named) {
+      if (namespace !== panelNamespace) {
+        report('RoleBinding ' + binding.name + ' binds a ServiceAccount in ' + namespace +
+          ', and the panel runs in ' + (panelNamespace ?? 'no namespace'))
+      }
+    }
+    // A binding outside the panel's namespace has to say where its subject is: with
+    // no namespace line it binds whatever ServiceAccount shares its own, and the
+    // panel's is not there.
+    if (binding.namespace !== panelNamespace && named.length === 0) {
+      report('RoleBinding ' + binding.name + ' is in ' + binding.namespace + ' and names no subject namespace')
     }
   }
 
@@ -497,6 +520,30 @@ test('the guard refuses a role or a binding that leaves the namespaces it names'
   )
   assert.ok(audit({ files, documents: other, registry }).includes(
     'RoleBinding panel-control binds monoplayer, not the panel ServiceAccount'))
+
+  // The subject names the namespace the panel runs in, and the panel runs where its
+  // Deployment does. A binding whose subject names another namespace binds a
+  // ServiceAccount nobody creates: the grant reads as authority and authorizes
+  // nothing, which is the half-move #609 removed.
+  const elsewhere = structuredClone(documents)
+  const otherSubject = elsewhere.find(document => document.kind === 'RoleBinding')
+  otherSubject.text = otherSubject.text.replace(
+    '    namespace: monoplayer\n',
+    '    namespace: monoplayer-dev\n')
+  assert.ok(audit({ files, documents: elsewhere, registry }).includes(
+    'RoleBinding panel-control binds a ServiceAccount in monoplayer-dev, and the panel runs in monoplayer'),
+  'a subject left in another namespace is refused by name')
+
+  // A binding outside the panel's namespace with no subject namespace binds whatever
+  // ServiceAccount shares its own, which is not the panel's. Kubernetes defaults the
+  // omission to the binding's namespace, so the silence is the bug.
+  const bare = structuredClone(documents)
+  const bareBinding = bare.find(document => document.kind === 'RoleBinding')
+  bareBinding.namespace = 'monoplayer-dev'
+  bareBinding.text = bareBinding.text.replace('    namespace: monoplayer\n', '')
+  assert.ok(audit({ files, documents: bare, registry }).includes(
+    'RoleBinding panel-control is in monoplayer-dev and names no subject namespace'),
+  'a binding that leaves its subject to the default is refused')
 })
 
 test('the guard refuses an unreadable rule line instead of skipping it', () => {
@@ -508,15 +555,41 @@ test('the guard refuses an unreadable rule line instead of skipping it', () => {
     'a block-style list is a manifest this guard cannot judge, so it fails rather than passing silently')
 })
 
-// --- one Application, one project, two namespaces ---
+// --- one Application, one project, one namespace ---
 
 // The panel does not get an Application of its own: one deploy means one
 // Application over deploy/kustomization.yaml. These assertions are what keep it
 // that way. A second Application, a source that stops being the root
 // kustomization, a tree the root does not include, or a project that forgets the
-// panel's namespace is a red gate, not a review comment.
+// namespace the tree creates objects in is a red gate, not a review comment.
+//
+// The panel had a namespace of its own until #609, and the assertions below said
+// "two namespaces". That namespace bought a name, not a boundary. The Role and the
+// RoleBinding were always in the puppet's namespace, and the binding's subject
+// lived in the other one, so the panel's ServiceAccount wrote the proxy's control
+// ConfigMap from outside either way. All the second namespace added was a second
+// copy of the `ghcr-pull` Secret. So the rule inverted, and this guard pins the
+// inverse: the panel's objects in the namespace the puppet is managed in, and a
+// manifest that drifts out of it is red here rather than broken on the cluster.
 
-test('one Application syncs the root tree, and its project allows both namespaces', () => {
+// The name the panel carried while it had a namespace of its own. A half-move
+// leaves the panel in one namespace and a subject, or a runbook step, pointing at
+// the other, which fails at run time rather than in the gate.
+const RETIRED_NAMESPACE = 'monoplayer-panel'
+
+// The files this change owns whose text is a claim about where the panel runs,
+// relative to the repository root. Two more state a namespace and are not here:
+// deploy/argocd/project.yaml still lists the old one as a destination, and its
+// header and application.yaml's finalizer comment still count two. Those need a
+// `kubectl apply` this change does not make (#612).
+const movedFiles = [
+  ...files.map(name => 'deploy/panel/' + name),
+  'deploy/kustomization.yaml',
+  'docs/panel.md',
+  'docs/deployment.md'
+]
+
+test('one Application syncs the root tree, and its project allows the namespaces it creates objects in', () => {
   const argoFiles = fs.readdirSync(ARGOCD).filter(name => name.endsWith('.yaml')).sort()
   const applications = argoFiles
     .map(name => ({ name, text: read(ARGOCD, name) }))
@@ -555,20 +628,32 @@ test('one Application syncs the root tree, and its project allows both namespace
   assert.match(sync, /^ {6}prune: true$/m)
   assert.match(sync, /^ {6}selfHeal: true$/m)
 
-  // RBAC is namespaced, so the panel's Role lands in the puppet's namespace and
-  // its Deployment in its own. Both have to be allowed, and nothing else.
+  // RBAC is namespaced, so the Role that grants the panel its write is in the
+  // puppet's namespace. Since #609 the panel is in that namespace too. Every
+  // namespace the tree names is therefore either where its Deployment runs or one a
+  // registry row manages. A third one is a manifest nobody reads, and a second
+  // puppet, managed in its own namespace, is the one addition this admits.
   const destinations = [...section(project, 2, 'destinations').matchAll(/^ {6}namespace: (\S+)$/gm)]
     .map(match => match[1])
   const declared = new Set(documents.map(document => document.namespace).filter(Boolean))
-  assert.deepEqual([...declared].sort(), ['monoplayer', 'monoplayer-panel'],
-    'the panel tree names the two namespaces the project has to allow')
+  const runsIn = (documents.find(document => document.kind === 'Deployment') ?? {}).namespace
+  const managed = new Set([runsIn, ...registry.puppets.map(puppet => puppet.namespace)])
+  assert.deepEqual([...declared].sort(), [...managed].sort(),
+    'the panel tree names ' + [...declared].sort().join(', ') +
+    ', and the namespaces it may create objects in are ' + [...managed].sort().join(', ') + ' (#609)')
+  assert.deepEqual(documents.filter(document => document.kind === 'Namespace'), [],
+    'deploy/panel creates a namespace of its own, which #609 deleted: the puppet has one')
+  for (const file of movedFiles) {
+    assert.ok(!read(ROOT, file).includes(RETIRED_NAMESPACE),
+      file + ' still names ' + RETIRED_NAMESPACE + ', and the panel has one namespace now (#609)')
+  }
   for (const namespace of declared) {
     assert.ok(destinations.includes(namespace),
       'the project allows ' + namespace + ', which the panel tree creates an object in')
   }
   assert.equal(new Set(destinations).size, destinations.length, 'the project names a destination twice')
 
-  // Nothing cluster-scoped beyond the Namespace each tree owns.
+  // Nothing cluster-scoped beyond the one Namespace the tree owns.
   const cluster = [...section(project, 2, 'clusterResourceWhitelist').matchAll(/^ {6}kind: (\S+)$/gm)]
     .map(match => match[1])
   assert.deepEqual(cluster, ['Namespace'],
@@ -606,9 +691,11 @@ test('one Application syncs the root tree, and its project allows both namespace
   }
 
   // The ServiceAccount token is the one privilege boundary, so the namespace that
-  // hands it out is restricted, like the puppet's.
-  const namespace = documents.find(document => document.kind === 'Namespace')
-  assert.equal(namespace.name, 'monoplayer-panel')
+  // hands the panel's token out enforces restricted, as the panel's own namespace
+  // did. The move costs the pod no hardening.
+  const namespace = [...manifestsDocuments, ...documents]
+    .find(document => document.kind === 'Namespace' && document.name === runsIn)
+  assert.ok(namespace, 'the tree creates the namespace the panel runs in: ' + runsIn)
   assert.match(namespace.text, /pod-security\.kubernetes\.io\/enforce: restricted/)
 })
 

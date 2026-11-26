@@ -1,9 +1,16 @@
 # The panel's whole GitOps state.
 #
 # The Application in deploy/argocd syncs deploy/kustomization.yaml, which includes
-# this directory beside the proxy: one deploy, both namespaces. role.yaml and
-# rolebinding.yaml land in the puppet's namespace instead: RBAC is namespaced, and
-# a Role can only grant on the namespace it lives in.
+# this directory beside the proxy: one deploy, one namespace. Every object here
+# lands in `monoplayer`, and this tree creates no Namespace.
+#
+# It created one until #609, and that namespace bought a name and nothing else. The
+# Role was always the proxy's. The binding's subject in a second namespace was the
+# only thing the split added, and it cost a duplicate `ghcr-pull` Secret.
+#
+# role.yaml and rolebinding.yaml are in `monoplayer` because RBAC says so: a Role
+# grants only on the namespace it lives in. The panel is in that namespace too, so
+# the subject and the Role are one namespace's objects.
 #
 # The image is named with the moving `main` tag, and
 # .github/workflows/image.yaml appends a digest pin here on the `deploy` branch, in
@@ -14,7 +21,6 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - namespace.yaml
   - registry.yaml
   - serviceaccount.yaml
   - deployment.yaml

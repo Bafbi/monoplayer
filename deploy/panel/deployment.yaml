@@ -15,7 +15,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: panel
-  namespace: monoplayer-panel
+  namespace: monoplayer
   labels:
     app.kubernetes.io/name: panel
     app.kubernetes.io/part-of: monoplayer
@@ -36,9 +36,9 @@ spec:
       serviceAccountName: panel
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 15
-      # The GHCR package is private, and the pull secret the proxy uses lives in
-      # the proxy's namespace: a Secret is namespaced, so this namespace needs its
-      # own copy. docs/panel.md carries the command.
+      # The GHCR package is private, and this is the proxy's own `ghcr-pull`: the
+      # panel runs in the proxy's namespace since #609, so one Secret serves both.
+      # docs/deployment.md creates it, once.
       imagePullSecrets:
         - name: ghcr-pull
       securityContext:
