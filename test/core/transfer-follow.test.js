@@ -14,7 +14,7 @@ test('a target from the due event is remembered across retries', () => {
 
 test('the base target stays null when no transfer is pending', () => {
   const c = createTransferFollowController()
-  assert.deepEqual(c.onDue({ target: null }), { target: null, kind: null, failures: 0 })
+  assert.deepEqual(c.onDue({ target: null }), { target: null, failures: 0 })
   assert.equal(c.target, null)
 })
 
@@ -28,7 +28,12 @@ test(`after ${DEFAULT_MAX_TARGET_FAILURES} failures the controller reverts to th
   assert.deepEqual(last.abandoned, target)
   assert.equal(c.target, null)
   assert.equal(c.reverts, 1)
-  assert.deepEqual(c.onDue({ target: null }), { target: null, kind: null, failures: 0 })
+  assert.deepEqual(c.onDue({ target: null }), { target: null, failures: 0 })
+})
+
+test('a failure with no target to abandon reverts nothing and abandons nothing', () => {
+  const c = createTransferFollowController()
+  assert.deepEqual(c.onFailure(), { target: null, failures: 0, reverted: false, abandoned: null })
 })
 
 test('a successful connect clears the target', () => {
@@ -36,18 +41,16 @@ test('a successful connect clears the target', () => {
   c.onDue({ target })
   assert.deepEqual(c.onSuccess(), { followed: true })
   assert.equal(c.target, null)
-  assert.equal(c.kind, null, 'the dialect goes with the target it described')
-  assert.deepEqual(c.onDue({}), { target: null, kind: null, failures: 0 })
+  assert.deepEqual(c.onDue({}), { target: null, failures: 0 })
 })
 
-test('#264 every followed hop dials as a transfer, whatever kind the event names', () => {
+test('#264 a followed hop reports its target, whatever the event names beside it', () => {
   const c = createTransferFollowController()
-  assert.deepEqual(c.onDue({ target, kind: 'operator' }), { target, kind: 'transfer', failures: 0 },
-    'the operator move is gone, so no event ranks the dialect')
-  assert.equal(c.kind, 'transfer')
-  assert.deepEqual(c.onDue({ target: null, kind: 'nonsense' }), { target, kind: 'transfer', failures: 0 },
-    'a retry carries no target, so it keeps the hop it remembered, and that hop was a transfer')
-  assert.equal(c.kind, 'transfer')
+  assert.deepEqual(c.onDue({ target, kind: 'operator' }), { target, failures: 0 },
+    'the operator move is gone, so no event ranks a hop, and none is reported')
+  assert.equal('kind' in c, false, 'the controller reports what the dial needs, not a label for the log')
+  assert.deepEqual(c.onDue({ target: null, kind: 'nonsense' }), { target, failures: 0 },
+    'a retry carries no target, so it keeps the hop it remembered')
 })
 
 test('invalid targets are ignored', () => {
