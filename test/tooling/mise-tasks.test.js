@@ -52,31 +52,29 @@ test('the lint rung syntax-checks the tools as well as src and test', () => {
 })
 
 // #215. The gate used to be a bare `depends`, and mise sends SIGTERM to every
-// still-running sibling the moment one rung fails (its own scheduler says so).
-// A cancelled rung's output cannot be told from a failure of its own doing: a
-// unit file killed mid-run reported "Promise resolution is still pending" for a
-// test file that holds no promise, and four sweeps read that as their own
-// defect. So the gate has no dependency edge at all. It runs the graph through
-// `mise run --continue-on-error`, which lets every rung finish and then names
-// each one that failed.
+// still-running sibling the moment one rung fails. A killed rung then printed the
+// reason it was killed as if it were its own failure, which is how a unit file
+// that holds no promise came to report one. So the gate owns no dependency edge:
+// it runs the list below through `mise run --continue-on-error`, and mise names
+// each rung that failed.
 test('the gate runs every rung to its end and names the ones that failed', () => {
   const check = tasks.get('check')
-  const graph = tasks.get('check:graph')
+  const rungs = tasks.get('check:rungs')
 
   assert.ok(check, 'mise.toml defines check')
   // A dependency edge is the thing mise cancels. The gate must own the run.
   assert.deepEqual(check.depends, [], 'check has no sibling for a failure to cancel (#215)')
   assert.match(
     check.run,
-    /exec mise run --continue-on-error --skip-tools check:graph/,
+    /exec mise run --continue-on-error --skip-tools check:rungs/,
     'check runs its rungs with --continue-on-error, so no rung is killed'
   )
   assert.match(check.run, /\[ "\$#" -eq 0 \]/, 'check refuses an argument it cannot forward')
 
-  assert.ok(graph, 'mise.toml defines the graph check runs')
-  assert.equal(graph.hide, true, 'the graph is hidden: run directly, one rung cancels the others')
-  assert.deepEqual(graph.depends, ['lint', 'test', 'loopback'], 'the gate runs the three cheap rungs and nothing else')
-  assert.doesNotMatch(graph.body, /^\s*run\s*=/m, 'the graph composes rungs instead of running a command')
+  assert.ok(rungs, 'mise.toml defines the list of rungs check runs')
+  assert.deepEqual(rungs.depends, ['lint', 'test', 'loopback'], 'the gate runs the three cheap rungs and nothing else')
+  assert.doesNotMatch(rungs.body, /^\s*run\s*=/m, 'the list composes rungs instead of running a command')
+  assert.match(rungs.description, /mise run check/, 'the list says the gate is how to run it')
 })
 
 // The gate stays one command, because that is what AGENTS.md tells an agent to
@@ -88,7 +86,7 @@ test('AGENTS.md names the gate as one command, and says what a red one reports',
 
   assert.ok(bullet, 'AGENTS.md carries the gate bullet')
   assert.match(bullet, /`mise run check`/, 'the done criterion is one command')
-  assert.match(bullet, /names the rung/, 'and a red gate names the rung that failed')
+  assert.match(bullet, /names the rungs that failed/, 'and a red gate names the rungs that failed')
 })
 
 test('every verify:<area> task composes tasks instead of copying a command', () => {

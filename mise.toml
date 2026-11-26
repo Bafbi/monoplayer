@@ -95,12 +95,12 @@ run = "node src/panel/start.js --registry deploy/panel/registry.yaml --host 127.
 description = "Serve the panel on this machine from the recorded document at test/panel/fixtures/panel.json instead of a cluster, so a page can be reviewed before it is merged. For another document, run node src/panel/start.js --fixture <file> directly."
 run = "node src/panel/start.js --fixture test/panel/fixtures/panel.json --host 127.0.0.1"
 
-# The gate. mise cancels a still-running sibling when one fails, and a cancelled
-# rung's output cannot be told from a failure of its own: a unit file killed
-# mid-run reported "Promise resolution is still pending" for a test file that
-# holds no promise (#215). So the gate does not depend on its rungs. It runs them
-# through a task that mise runs with --continue-on-error, which lets every rung
-# finish and then names each one that failed.
+# The gate. mise sends SIGTERM to every still-running sibling when one task fails,
+# and a killed rung prints the reason it was killed as if it were its own failure
+# (#215, "A failed rung names the next one" in docs/testing-ladder.md). So the gate
+# owns no dependency edge. It runs the list below through a task that mise runs
+# with --continue-on-error, which lets every rung finish and then names each one
+# that failed.
 [tasks.check]
 description = "Default gate: lint, unit tests, offline loopback. Every rung finishes even when one fails, and a red gate names the rungs that failed (#215)."
 run = '''
@@ -110,14 +110,14 @@ run = '''
 [ "$#" -eq 0 ] || { echo "check takes no arguments: it runs the gate" >&2; exit 2; }
 # --skip-tools: no rung here uses java, gradle or buildkit, and the tools this
 # gate does need are installed by the invocation that reached this script.
-exec mise run --continue-on-error --skip-tools check:graph
+exec mise run --continue-on-error --skip-tools check:rungs
 '''
 
-# The rungs, as siblings. A direct run lets one failure cancel the others, which
-# is the defect #215 names, so it is hidden and the gate is the way in.
-[tasks."check:graph"]
-description = "The gate's three cheap rungs as siblings. Run through the check task, never directly (#215)."
-hide = true
+# The rungs, as siblings. A direct run lets one failure cancel the others, so the
+# gate is the way in. mise has no flag that refuses a task, so this one says it in
+# its description instead.
+[tasks."check:rungs"]
+description = "The gate's three cheap rungs, as the siblings check runs. Run mise run check, not this: a dependency edge is what mise cancels when a rung fails (#215)."
 depends = ["lint", "test", "loopback"]
 
 # The check that covers each area, on top of the gate. Each one composes the

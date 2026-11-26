@@ -288,8 +288,7 @@ every worktree on the cluster. And the writer lock inside the custody is a
 different thing, per account directory, which is why `mise run online` still holds
 it too.
 
-`mise run check` stays the offline gate, unchanged: it runs rungs 0, 1, and 2,
-and CI runs it.
+`mise run check` is the offline gate: it runs rungs 0, 1, and 2, and CI runs it.
 
 ## A failed rung names the next one
 
@@ -309,13 +308,14 @@ editing the table edits the failure output. `test/tooling/mise-tasks.test.js` fa
 a rung task stops printing the hint.
 
 The gate is the one place where the hint alone was not enough. mise sends
-SIGTERM to every still-running sibling when a rung fails, and a cancelled rung
+SIGTERM to every still-running sibling when a rung fails, and a killed rung
 prints the reason it was killed as if it were the reason it failed: a unit file
 terminated mid-run reported `Promise resolution is still pending` for a test
-file that holds no promise. So `mise run check` has no dependency edge. It runs
-a hidden graph task through `mise run --continue-on-error`, which lets every
-rung finish and then names each one that failed (`ERROR 1 task(s) failed: [lint]
-exited with status 1`). `test/tooling/mise-tasks.test.js` holds that shape.
+file that holds no promise. So `mise run check` has no dependency edge. Its rungs
+are the `depends` of `check:rungs`, which it runs through
+`mise run --continue-on-error`: every rung finishes, and mise names each one that
+failed (`ERROR 1 task(s) failed: [lint] exited with status 1`).
+`test/tooling/mise-tasks.test.js` holds that shape.
 
 A rung that exits 2 (its setup failed before the run) or that is interrupted
 prints no hint. A rung above cannot catch a missing prerequisite.
