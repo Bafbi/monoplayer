@@ -278,9 +278,9 @@ It proves nothing about:
   longer than the tailnet's by a continent. Measure a client's route before
   blaming the proxy.
 - **The backend.** The puppet's session on `play2.excalia.fr` is the same one
-  either way. A tunnel that works and a puppet that is not attached are
-  compatible states, and the front refuses the attach with `backend_not_ready`
-  rather than showing a stranger a broken session.
+  either way. A tunnel that works and a puppet with no session are compatible
+  states, and a join in that state meets the picker rather than a broken session.
+  The attach whitelist is what stops a stranger before either.
 - **Availability.** The public route belongs to playit. Their edge, their
   address, and their account state are all outside this repository. The tailnet
   route is the one this repo controls.

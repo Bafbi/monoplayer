@@ -393,8 +393,8 @@ in that server's own console:
    a copy here would read as authority while the real gate drifted.
 3. Read the result there, with `whitelist list`: pass = it names the puppet and
    no other account. From here the puppet's session is the only evidence, and
-   while the puppet has no session the front refuses an attach with
-   `backend_not_ready` ([docs/deployment.md](deployment.md)).
+   while the puppet has no session a join meets the picker instead of a body
+   ([docs/product-core.md](product-core.md#the-configuration-baseline-and-the-picker-257)).
 
 If the backend enforces no whitelist, there is nothing to add. The puppet's join
 is still the check.

@@ -277,14 +277,15 @@ kubectl -n "$(scripts/gate-lane.sh name)" logs deploy/paper-conduct --tail=100
 
 #325 asks for a row in which two real clients reach one body. One claims it, the other
 watches it in spectator mode, and the watching client's report records what that client
-read. Since #392 there is a lane that serves a body. What it cannot do yet is admit the
-second client.
+read. Both deployed lanes serve a picker since #579, so a body is claimable on either.
+What neither can do yet is admit the second client.
 
-The dev lane is that lane. It runs its front with `MONOPLAYER_PICKER=1`, seeds the one
-row a client is offered from `allowed-servers.json`
-(`paper.monoplayer-dev.svc.cluster.local:25565`), publishes the front on the tailnet as
-`monoplayer-dev`, and runs its Paper offline so the backend stops refusing a login
-Mojang never verified ([the dev runbook](../dev/README.md)).
+The dev lane is the one a claim reaches without the live servers. It runs its front with
+`MONOPLAYER_PICKER=1`, seeds the one row a client is offered from
+`allowed-servers.json` (`paper.monoplayer-dev.svc.cluster.local:25565`), publishes the
+front on the tailnet as `monoplayer-dev`, and runs its Paper offline so the backend
+stops refusing a login Mojang never verified ([the dev runbook](../dev/README.md)). The
+live lane serves the same picker, and its rows are the live servers.
 
 A spectator is the product's, not a server's. The Spectate verb is the picker's
 (`src/core/picker.js:37,39`), and the claim is the front's own registry

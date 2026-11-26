@@ -941,13 +941,14 @@ first dial and its target warms in five seconds.
 
   What neither assertion can prove: that a vanilla client draws a body it does not
   drive. Both clients here are protocol bots, so no real client has made a claim for
-  another to watch (#325). Since #392 the dev lane is the one deployed lane that serves
-  a picker: `monoplayer-dev` publishes its front on the tailnet under that name, seeds
-  one row for its own Paper, and runs that Paper offline, so a claim is reachable from
-  another machine. What it cannot do yet is take two bots: the service builds live legs
-  only, so a joining client is verified against Mojang before it sees the picker, and one
-  process admits one account (#391). A row that witnesses the vanilla half needs that
-  ticket, and
+  another to watch (#325). Both deployed lanes serve a picker since #579: the live
+  lane, whose rows are the control document's allowed-server list, and the dev lane,
+  whose `monoplayer-dev` front publishes on the tailnet under that name, seeds one row
+  for its own Paper, and runs that Paper offline, so a claim is reachable from another
+  machine without the live servers. Neither lane takes two bots yet: the service builds
+  live legs only, so a joining client is verified against Mojang before it sees the
+  picker, and one process admits one account (#391). A row that witnesses the vanilla
+  half needs that ticket, and
   [the driver runbook](../deploy/driver/README.md#no-spectator-row-no-client-can-draw-a-body-yet)
   says what else it would have to hold;
   [the dev runbook](../deploy/dev/README.md#offline-and-why-that-is-allowed-here) says

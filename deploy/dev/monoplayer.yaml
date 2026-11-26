@@ -117,9 +117,9 @@ spec:
               value: devpuppet
             - name: MONOPLAYER_ATTACH_WHITELIST
               value: /config/attach-whitelist.json
-            # The one deployed lane that serves a picker (#392). A joining client
-            # lands in the picker instead of attaching as the body's driver, and
-            # can claim a row or watch one.
+            # This lane serves a picker (#392), and since #579 the live lane does
+            # too. A joining client lands in the picker instead of attaching as the
+            # body's driver, and can claim a row or watch one.
             # Off by default (src/service/monoplayer.js), so this line is the
             # whole difference between a lane a client can claim on and one it
             # cannot.
