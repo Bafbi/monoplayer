@@ -47,8 +47,8 @@
 //      the caller for the body the frame named, and only after the click. A body
 //      that answers continues the client's open configuration phase with its own
 //      frames and ends it with one finish frame. The picker's phase carried no
-//      registry data (#598), so the body's registry set is the one the client
-//      loads at that finish. The client then reaches
+//      registry data (#598), so the set the body it lands the client in sends is
+//      the one the client loads at that finish. The client then reaches
 //      playerJoin, where the core replays that body's play state on the socket the
 //      client already holds. A body that refuses the dial offers the list again,
 //      instead of leaving the client in a dialog nobody will read.
@@ -144,9 +144,9 @@ export function createConfigPathInterceptor ({
   // deliberately left open: `onBaselineFrames` runs once the frames are on the
   // wire, and the caller sends the dialog there. No finish frame goes out,
   // because the dialog is the phase. Its frames carry no registry data either
-  // (#598): `baselineFramesFor` withholds that set, so the body a claim lands is
-  // the one the client loads. A registry frame here would be a second copy of a
-  // registry id in one phase, which a client answers by disconnecting.
+  // (#598): `baselineFramesFor` withholds that set, so the body a claim lands the
+  // client in is the one the client loads. A registry frame here would be a second
+  // copy of one id in one phase, which a client answers by disconnecting.
   baselineConfigFrames = [],
   onBaselineFrames = null,
   // The library's generated registry_data is a fallback for fakes and the

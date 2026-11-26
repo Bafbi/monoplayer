@@ -33,7 +33,7 @@ import { createControlDocument } from '../service/control.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
-import { baselineRegistryNames, readConfigurationBaseline } from '../legs/configuration-baseline.js'
+import { baselineRegistryIds, readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { chooseDialogAction } from '../core/dialog-codec.js'
 import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
 import { createPickerServerReader } from '../service/start-live.js'
@@ -2813,7 +2813,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       baseline: {
         frames: pickerBaseline.frames.length,
         replay: pickerBaseline.replayFrames.length,
-        registries: baselineRegistryNames(pickerBaseline).length,
+        registries: baselineRegistryIds(pickerBaseline).length,
         capturedAt: pickerBaseline.capturedFrom.at ?? null,
         lane: pickerBaseline.capturedFrom.lane ?? null,
         paperBuild: pickerBaseline.capturedFrom.paperBuild ?? null
@@ -2963,9 +2963,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O55',
       'a join with no backend receives the recorded configuration baseline without its registry set, and the picker, and its pick is recorded',
       // #598: the recording carries 29 registries and a picker join reads none of
-      // them. A client loads registries once, at the frame that ends the phase, and
-      // the body a claim lands continues this same phase, so the recording's set
-      // would be the first of two.
+      // them. A client loads a Minecraft registry once, at the frame that ends the
+      // phase, and the body a claim lands the client in continues this same phase,
+      // so the recording's set would be the first of two.
       pickerRead.registries === 0 &&
         evidence.picker.baseline.registries > 0 &&
         pickerRead.tags === true &&

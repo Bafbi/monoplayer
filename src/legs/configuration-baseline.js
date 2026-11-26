@@ -147,13 +147,13 @@ export function defaultBaselinePath () {
   return new URL('./configuration-baseline/26.2.json', import.meta.url)
 }
 
-// #598: the set a picker phase never carries. A client loads registries once, at
-// the frame that ends the phase, and a second copy of a registry id is not a
+// #598: the set a picker phase never carries. A client loads a Minecraft registry
+// once, at the frame that ends the phase, and a second copy of one id is not a
 // merge: it is a disconnect ("Adding duplicate key 'ResourceKey[minecraft:
 // worldgen/biome / minecraft:badlands]' to registry", at
 // `ClientboundFinishConfigurationPacket`). The picker's phase is the recording's,
-// and the body a claim lands continues that same open phase with its own frames,
-// so the recording's registry set would be the first of two.
+// and the body a claim lands the client in continues that same open phase with
+// its own frames, so the recording's set would be the first of two.
 const PICKER_WITHHELD_FRAMES = new Set(['registry_data'])
 
 // The frames a picker join is served. Null when the baseline was recorded at
@@ -163,9 +163,10 @@ const PICKER_WITHHELD_FRAMES = new Set(['registry_data'])
 // it is the line between evidence and a guess. The recording is evidence for the
 // version it was taken at, and a lane that speaks another version has none.
 //
-// The registry set is withheld here, and no other reader serves a join, so the
-// frame is never handed to a writer that could send it. The dialog needs a phase
-// the client parses; a registry set is the one thing only the body supplies.
+// The registry set is withheld here, and this is the reader a picker join is
+// served through, so the frames the front leg receives never include it. The
+// dialog needs a phase the client parses; the body's set is the only one such a
+// phase carries.
 export function baselineFramesFor (baseline, { version } = {}) {
   if (!baseline) return null
   if (typeof version !== 'string' || version.length === 0) return null
@@ -173,17 +174,17 @@ export function baselineFramesFor (baseline, { version } = {}) {
   return baseline.replayFrames.filter(frame => !PICKER_WITHHELD_FRAMES.has(frame.name))
 }
 
-// The registries a baseline carries, in frame order. Pure, and the one place a
+// The registry ids a baseline carries, in frame order. Pure, and the one place a
 // reader can ask what the recording covers without decoding a frame.
-export function baselineRegistryNames (baseline) {
+export function baselineRegistryIds (baseline) {
   if (!baseline) return []
-  const names = []
+  const ids = []
   for (const frame of baseline.frames) {
     if (frame.name !== 'registry_data') continue
-    const name = registryIdOf(frame.buffer)
-    if (name !== null) names.push(name)
+    const id = registryIdOf(frame.buffer)
+    if (id !== null) ids.push(id)
   }
-  return names
+  return ids
 }
 
 // The `id` of a registry_data frame: a VarInt length then the identifier. Two
@@ -192,7 +193,9 @@ export function baselineRegistryNames (baseline) {
 //
 // Exported because a client loads registries once, at the frame that ends the
 // phase, and the assertion that no id arrives twice (#598) reads the id off the
-// bytes a client was sent, not off the recording they came from.
+// bytes a client was sent, not off the recording they came from. An id is the
+// frame's own identifier: the `minecraft:worldgen/biome` a registry entry is
+// filed under, not a name this repo gives it.
 export function registryIdOf (buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 3) return null
   // The frame's own id byte comes first, then a VarInt length and the

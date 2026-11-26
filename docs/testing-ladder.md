@@ -664,11 +664,11 @@ first dial and its target warms in five seconds.
   dialled while the picker is read, so the front's cached replay path finds
   nothing: the frames the client reads are
   `src/legs/configuration-baseline/26.2.json`, the committed recording of the gate
-  lane's Paper 26.2 build 135, served byte for byte, less the 29 `registry_data`
-  frames a picker phase never carries (#598). A client loads registries once, at
-  the frame that ends the phase, and the body a claim lands continues that phase
-  with its own set, so the recording's would be the first of two. The client reads
-  `custom_payload`, `feature_flags`, `select_known_packs` and `tags` with no
+  lane's Paper 26.2 build 135, in its recorded order, less the 29 `registry_data`
+  frames a picker phase never carries (#598). A client loads a Minecraft registry
+  once, at the frame that ends the phase, and the body a claim lands the client in
+  continues that phase with its own set, so the recording's would be the first of
+  two. The client reads `feature_flags`, `select_known_packs` and `tags` with no
   leftover bytes and no wire rejection, and no `finish_configuration`. The phase
   stays open, which is the point of the picker.
   The dialog that lands on it is authored by `src/core/picker.js` and carries one
@@ -687,11 +687,12 @@ first dial and its target warms in five seconds.
   it is a dial the kernel refuses. The second names a real 26.2 fake body, which is
   the one O58 lands a client in.
 
-  What it cannot prove: that a vanilla 26.2 client accepts the registry set. The
-  protocol bot is not a vanilla oracle, and rung 4 is the only place one runs. What
-  it does establish is that the bytes are a real server's, that they parse in the
-  configuration state under the strict wire checker, and that no frame the front
-  invented is in the phase.
+  What it cannot prove: that a vanilla 26.2 client accepts known packs and tags
+  with no registry set behind them, which is the phase a picker now serves (#603).
+  The protocol bot is not a vanilla oracle, and rung 4 is the only place one runs.
+  What it does establish is that the bytes are a real server's, that they parse in
+  the configuration state under the strict wire checker, and that the front
+  invented no frame in the phase.
 - `O55b` a second client reads the picker at the same time, because a picker
   join holds no channel and enters no body (#257). Two 26.2 bots hold the picker at once, each with a
   dialog and no leftover bytes, and the front counts two picker joins and no

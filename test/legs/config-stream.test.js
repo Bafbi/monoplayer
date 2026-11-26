@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { createConfigPathInterceptor } from '../../src/legs/live-front.js'
 import {
   baselineFramesFor,
-  baselineRegistryNames,
+  baselineRegistryIds,
   readConfigurationBaseline,
   registryIdOf
 } from '../../src/legs/configuration-baseline.js'
@@ -136,9 +136,16 @@ test('#257 a baseline for another protocol version is not a baseline', () => {
 //
 // These two tests are that collision without a client. The first is the
 // reproduction and the rule: a picker phase carries no registry data, because only
-// the body a claim lands supplies a registry set. The second is the gate the
-// ticket names: for one landed claim, every registry id across the whole phase
-// appears exactly once.
+// the body a claim lands the client in supplies a registry set. The second is the
+// gate the ticket names: for one landed claim, every registry id across the whole
+// phase appears exactly once.
+//
+// What this file composes by hand, the leg does for real. The interceptor writes the
+// picker's frames through its own `writeRaw`, and a landing writes the body's
+// through a different call (`sendBodyConfiguration`'s `emitCheckedRaw`), so the
+// order below is the client's order and not one sink's. `picker-registry-set.test.js`
+// is the same gate at the leg, on a real client, which is what catches a wiring
+// mistake here.
 
 // Every registry id the client was sent, in the order it arrived.
 function registryIdsOnTheWire (frames) {
@@ -158,10 +165,9 @@ function idsThatRepeat (ids) {
 }
 
 // One landing, as the client receives it: the picker's frames out of the
-// interceptor, then the body's own frames, then the finish the landing writes.
-// `sendBodyConfiguration` writes a body's frames through the same `writeRaw` sink
-// the interceptor holds (live-front.js), so the phase is the sink's contents in
-// one order.
+// interceptor, then the body's own frames. The finish a landing writes is not here:
+// a landing writes it through the library's own writer, which no sink in this file
+// sees.
 function landedPhase (baseline, body) {
   const r = pickerRig({ baseline: baselineFramesFor(baseline, { version: baseline.version }) })
   // The library's own configuration writes, which is what opens the phase: its
@@ -182,8 +188,8 @@ test('#598 a picker phase carries no registry data', () => {
   const ids = registryIdsOnTheWire(landed.picker)
 
   assert.deepEqual(ids, [],
-    'the recording carries ' + baselineRegistryNames(baseline).length +
-    ' registries and a picker serves none of them: the body a claim lands is the phase\'s one registry set')
+    'the recording carries ' + baselineRegistryIds(baseline).length +
+    ' registries and a picker serves none of them: the body a claim lands the client in is the phase\'s one registry set')
   // The rest of the recording still goes out, in recorded order: the phase is what
   // the client parses a dialog in, and it is still the recording's own frames.
   assert.deepEqual(landed.picker.map(frame => frame.name), [
@@ -197,14 +203,15 @@ test('#598 a picker phase carries no registry data', () => {
 
 test('#598 one landed claim carries every registry id exactly once', () => {
   const baseline = readConfigurationBaseline()
-  // The body a claim lands is another 26.2 Paper configuration, so its registry ids
-  // are the recording's own: that equality is what made the live client die, and it
-  // is the worst case rather than a contrived one.
+  // The body here is the recording's own replay, so its registry ids are the
+  // baseline's: that equality is what made the live client die, and it is the worst
+  // case rather than a contrived one. It follows that this test cannot tell whose
+  // set arrived, only how many ids did; the socket gate reads the leg for that.
   const body = baseline.replayFrames
   const ids = registryIdsOnTheWire(landedPhase(baseline, body).phase)
 
   assert.deepEqual(idsThatRepeat(ids), [], 'no registry id reaches the client twice in one phase')
-  assert.equal(ids.length, baselineRegistryNames(baseline).length,
+  assert.equal(ids.length, baselineRegistryIds(baseline).length,
     'the phase carries the body\'s set, once: one id per registry the body sends')
-  assert.ok(ids.includes('minecraft:dimension_type'), 'the body\'s own registries are the ones the client loads')
+  assert.ok(ids.includes('minecraft:dimension_type'), 'the ids are a real Paper 26.2 registry set, not one this test made up')
 })

@@ -362,8 +362,9 @@ unclaimed, which is a body a client may watch.
   holder it cannot resolve. `src/legs/configuration-baseline/26.2.json` is the
   gate lane's Paper 26.2 build 135 configuration phase, recorded byte for byte by
   `src/ladder/capture-config.js`. Two captures of the same server are identical.
-  `src/legs/configuration-baseline.js` validates it and hands the frames to the
-  front leg, which serves them in recorded order and never edits one.
+  `src/legs/configuration-baseline.js` validates it and hands the front leg the
+  frames a picker join is served: the recording's own order, one kind of frame left
+  out, which is the next bullet.
 - **The phase stays open.** The recording carries a `finish_configuration` and the
   front does not send it: the picker dialog is the phase. A client that answered
   with `finish_configuration` would enter a world that does not exist.
@@ -371,12 +372,12 @@ unclaimed, which is a body a client may watch.
   once, at the frame that ends the configuration phase, and a second copy of a
   registry id does not merge into the first: the client reports a duplicate key and
   drops the connection at `ClientboundFinishConfigurationPacket`. The recording's
-  29 `registry_data` frames are therefore not served. The one reader a join is
-  served through withholds them (`baselineFramesFor`), so no writer is handed a
-  frame it has to remember not to send. The rest of the recording goes out in
+  29 `registry_data` frames are therefore not served. The reader a picker join is
+  served through withholds them (`baselineFramesFor`), so the front leg is never
+  handed a frame it has to remember not to send. The rest of the recording goes out in
   recorded order: `custom_payload`, `feature_flags`, `select_known_packs` and
   `tags`. The dialog needs a phase the client parses; the registry set belongs to
-  the body a claim lands.
+  the body a claim lands the client in.
 - **The pick rides in the action id.** `src/core/picker.js` builds a
   `minecraft:multi_action` dialog with one `minecraft:dynamic/custom` action per
   server, and reads the answer out of the frame's first field. The vanilla answer
