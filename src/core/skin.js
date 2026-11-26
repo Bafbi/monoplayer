@@ -133,12 +133,11 @@ export function skinPlayerInfoPacket ({ uuid, name, property } = {}) {
 // different account, so the entry is a function of the channel it goes to, and a
 // spectator's names the spectator.
 //
-// The caller says which channels the frame is owed to, and this answers one row per
-// channel in the same order, so a caller can mark what it wrote. `packet` is the
-// entry for that channel, and null where the channel names no player, which the
-// caller records rather than writes. `id` is echoed as given, null included: the
-// driver's entry is the frame #99 proved, which names no channel, and a spectator's
-// names its own channel (src/core/channels.js).
+// The caller says which channels the frame is owed to, and this answers one entry for
+// each of them. `packet` is that channel's entry, and null where the channel names no
+// player, which the caller records rather than writes. `id` is echoed as given, null
+// included: the driver's entry is the frame #99 proved, which names no channel, and a
+// spectator's names its own channel (src/core/channels.js).
 export function skinEntriesFor ({ property = null, channels = [] } = {}) {
   if (!Array.isArray(channels)) throw new TypeError('skinEntriesFor needs the channels it writes to')
   return channels.map(channel => {

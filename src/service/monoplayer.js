@@ -1962,10 +1962,13 @@ export function createMonoplayer ({
     if (spectator !== undefined) spectator.skinSent = true
   }
 
-  // Five states where the frame would be ignored or would claim a skin the backend
-  // never sent: the switch is off, the backend has sent no property, no channel is
-  // owed one, the front named no player for a channel, and the write itself failed.
-  // Each writes its own line, which is how a client left without an entry is read.
+  // Refused in six states where the frame would be ignored or would claim a skin the
+  // backend never sent. Three are ordinary and quiet, because nothing is owed and
+  // nothing is missing: the switch is off, the backend has sent no property, and no
+  // channel is owed an entry. The other three write a line, because a player is left
+  // without an entry and no later frame repairs it: a channel the front named no
+  // player for (`puppetSkinWithheld`), a packet that could not be built, and a write
+  // the leg could not deliver (both `puppetSkinRefused`).
   function sendPuppetSkin ({ reason = 'attach' } = {}) {
     if (!cfg.skin.showPuppetSkin) return
     if (puppetSkinProperty === null) return
