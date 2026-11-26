@@ -31,7 +31,7 @@ import { createBodyCaches } from '../core/body-caches.js'
 import { replayFrames } from '../core/join-synth.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { createRig } from './rig.js'
-import { createLoopbackLane } from './loopback-lane.js'
+import { createLoopbackLane, droppedReconnect } from './loopback-lane.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { sameUuid } from '../custody/util.js'
 import { createWireChecker } from '../core/wire-check.js'
@@ -2571,7 +2571,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // createLoopbackLane is that owner, and this check is its receipt: every part it
     // was handed did something observable, and one close left nothing behind. The
     // timers are the half an eye misses, because ending the backend leg is a backend
-    // fault and a fault schedules a retry (src/core/session.js:232).
+    // fault and a fault schedules a reconnect (src/core/session.js:232).
+    //
+    // Two timers can be in the ledger when the close begins, and only one of them is
+    // this check's evidence (#663). droppedReconnect in src/ladder/loopback-lane.js
+    // states which timer that is and why the other one proves nothing; this check
+    // asks for it by the delay the lane's document gives, and the evidence prints
+    // that delay beside the record's own list of ids and delays.
     //
     // The second close returns the same record and does nothing, because the rung's
     // finally block calls it unconditionally. The journal is this check's own, never
@@ -2611,6 +2617,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const laneWire = { ...lane.front.wireStats }
     const laneClosure = await lane.close()
     const laneAgain = await lane.close()
+    // #663: the delay this check asks for, from the document the lane ran rather than
+    // from a number here, so a lane whose reconnect base moved fails instead of
+    // passing on whatever this file remembered.
+    const laneReconnectMs = lane.core.config.reconnect.delayMs
     // The seal is the writer's, as O52's is: a shard is only readable once it is
     // written, and the lane never closes a journal it was handed.
     laneJournal.close()
@@ -2629,12 +2639,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       wire: laneWire,
       journal: { dir: laneJournalDir, names: laneNames },
       closure: laneClosure,
+      reconnectMs: laneReconnectMs,
       sameOnSecondClose: laneAgain === laneClosure,
       botEnded: laneBot.received.ended !== null
     }
     check(
       'O68',
-      'a lane built by createLoopbackLane serves a client with the parts it was handed, then ends its client, its sockets and its armed timers on one close',
+      'a lane built by createLoopbackLane serves a client with the parts it was handed, then on one close ends its client, its sockets and the reconnect it armed, and leaves no timer armed',
       laneReady === true &&
         laneAttached === true &&
         laneBot.received.ended !== null &&
@@ -2647,7 +2658,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         laneClosure.bots[0].ended === true &&
         laneClosure.sockets.length === 2 &&
         laneClosure.sockets.every(entry => entry.code === 'ECONNREFUSED') &&
-        laneClosure.timersDropped.length >= 1 &&
+        droppedReconnect(laneClosure, { ms: laneReconnectMs }) &&
         laneClosure.timersLeft.length === 0 &&
         laneAgain === laneClosure,
       evidence.lane
