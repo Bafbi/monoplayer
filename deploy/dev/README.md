@@ -305,12 +305,12 @@ bug this section exists to catch.
 
 ### Stage the lane
 
-Run these three in order, and read `deploy/dev/README.md` above for what each one does.
+Run these three in order. The sections above say what each one does.
 
 ```bash
 mise run dev:up                          # the Paper, and a proxy that waits for the dev account
 mise run dev:image sha-<commit7>         # the branch under test, from its GHCR build
-mise run dev:status                      # both pods up, and the whitelist it will admit
+mise run dev:status                      # both pods up, and whether the whitelist is empty
 ```
 
 `mise run dev:image` needs the branch workflow's image: `mise run image:build` publishes to
