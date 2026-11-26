@@ -91,6 +91,7 @@ import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
+import { bumpBounded } from '../core/bounded-counter.js'
 import { CLAIM_REFUSAL, claimRefusalText, createClaims } from '../core/claims.js'
 import { CHANNEL_ROLES, channelIdentity, createChannels, stampIdentity } from '../core/channels.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
@@ -371,21 +372,15 @@ export function reportsClientInformation ({ role = null, state = null } = {}) {
 // are exported because the leg itself is reached through a listening socket, and a
 // number that only a listening socket can be asked about is a number no test reads.
 
-// A bounded map of counts keyed by an open-ended string: the shape `bumpName` uses
-// in src/service/monoplayer.js. A key already in the map counts up, a new one is
-// added while there is room, and every name past the cap lands in `other`, so a
-// lane cannot grow a map nobody asked for. A key that is not a name counts as
-// `unknown`, which is the word that map already uses.
+// #438: the rule is src/core/bounded-counter.js, the same one the composition root
+// counts its packet names with, so the two sides cannot drift apart again. The cap
+// below is this leg's own fact.
 // #435: the cap is headroom over the closed set, never the set's size. A named
 // reason that reaches the cap is a reason an operator's chart shows as `other`,
 // which reads as a reason nobody named.
 export const MAX_REFUSAL_REASONS = 20
 export function bumpReason (map, reason) {
-  const key = typeof reason === 'string' && reason.length > 0 ? reason : 'unknown'
-  if (map[key] !== undefined) { map[key]++; return map }
-  if (Object.keys(map).length >= MAX_REFUSAL_REASONS) { map.other = (map.other ?? 0) + 1; return map }
-  map[key] = 1
-  return map
+  return bumpBounded(map, reason, MAX_REFUSAL_REASONS)
 }
 
 // How long ago a moment the leg stamped was, or null when it stamped none. A clock

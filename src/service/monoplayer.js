@@ -58,6 +58,7 @@
 // a spectator is handed its body's replay. The last two call-ins are the spectator's
 // and a leg without them refuses that verb in words.
 
+import { bumpBounded } from '../core/bounded-counter.js'
 import { WARM_MARKER } from '../core/state-cache.js'
 import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
@@ -558,12 +559,11 @@ export function createMonoplayer ({
 
   // Bounded per-name counters. Packet names are a fixed protocol vocabulary,
   // so the cap only guards against a client sending nonsense names.
+  // #438: the rule is src/core/bounded-counter.js, the same one the front leg counts
+  // its picker refusal reasons with. The cap below is this service's own fact.
   const MAX_NAMES = 128
   function bumpName (map, name) {
-    const key = name ?? 'unknown'
-    if (map[key] !== undefined) { map[key]++; return }
-    if (Object.keys(map).length >= MAX_NAMES) { map.other = (map.other ?? 0) + 1; return }
-    map[key] = 1
+    bumpBounded(map, name, MAX_NAMES)
   }
   // Interactions are rare and are the ones that fail silently on a real
   // backend, so each one gets its own log line (name only, no payload).
