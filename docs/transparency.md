@@ -6,7 +6,21 @@ rests on, and where the limits are.
 
 Every claim here is the **driver**'s, on the body their claim holds. A
 **spectator** receives the body's world and the body itself, and nothing it sends
-reaches the server, so a spectator carries no claim on this page. The **picker**'s
+reaches the server, so a spectator carries no claim on this page.
+
+One thing a spectator sends is read now, and it changes nothing on this page. Its
+client says where it is, and the proxy draws it for the body's other channels: the
+driver sees who is watching, and two spectators see each other
+([#636](https://github.com/Bafbi/monoplayer/issues/636)). The front reads the pose
+and drops the frame as it always dropped it (#269), the frame never enters the
+relay's serverbound pipeline, and no frame on the puppet's connection names that
+player. A server that sees a spectator's coordinates would be a server that knows
+the player exists, which is the difference this page is about. `O71` reads the
+fake backend's own counters across a spectator's landing and its movement to prove
+the stream is untouched, and it reads the frames the draw is made of on the
+driver's socket.
+
+The **picker**'s
 frames are a known difference, not a claim about a direct connection: the table
 below marks the row, and [one account, many bodies](adr/one-account-many-bodies.md)
 is why. The vocabulary is [the glossary](../GLOSSARY.md)'s: body, claim, channel,

@@ -11,9 +11,21 @@
 //                            tab list line and nobody standing in it.
 //
 // The owner reported it twice from the live lane: the frames arrive (skinFramesWritten 6,
-// 5058 frames replayed) and the world is empty. This module is the missing half. The entry
-// is not built here: it has one home, a second `add_player` for one UUID is a frame #614
-// already writes, and the caller writes it first.
+// 5058 frames replayed) and the world is empty. This module is the missing half.
+//
+// #636: the entry is not built here, and the caller says which players it owes. Two
+// players reach this module, and only one of them has an entry elsewhere: #614's frame
+// names the puppet and carries the property the backend sent, and a channel's own player
+// has none at all — the proxy holds no skin for a spectator and invents none. So the
+// caller hands over `entryFor`, which answers the frame for a player it does not announce
+// itself and null for the one it does, and this module puts it first when it spawns.
+//
+// Why the pair cannot be split: a client refuses a player-typed `spawn_entity` whose UUID
+// it holds no `player_info` entry for. It logs "Server attempted to add player prior to
+// adding player info" and adds no entity, so an entry is the condition of drawing a body
+// and not decoration on it (26.x `ClientPacketListener.handleAddEntity`). That is why the
+// order the caller used to own is the module's now: a spawn without its entry in front is
+// a body the client throws away, and nothing in a frame count can see it.
 //
 // Where the pose comes from: the puppet's own client and the backend's corrections, read
 // once by `capturePose` (src/core/relay.js) into `session.currentPose`. It is not in the
@@ -190,8 +202,9 @@ function despawnFrame (entityId) {
 //
 //   world       `players()` -> [{ uuid, name, pose }]. The players that exist in the world
 //               this body serves, and where each is now. Read at every call, so nothing
-//               here is a copy that can go stale. `name` is carried for a caller's log and
-//               is not written: the name a client draws comes from the entry (#614).
+//               here is a copy that can go stale. `name` is not written by this module:
+//               the name a client draws comes from the entry, which is `entryFor`'s frame or
+//               #614's. It is here because the caller builds that frame from this row (#636).
 //   channels    `() -> [{ id, uuid }]`: one entry per connection a player may be written
 //               to, with the player that connection speaks for, or null when it speaks for
 //               nobody. A channel is never told about its own player, which is the rule
@@ -199,7 +212,16 @@ function despawnFrame (entityId) {
 //               controls.
 //   entityType  the player entity type for the lane's protocol version, from
 //               `playerEntityTypeFor`.
-export function createVirtualPlayers ({ world, channels, entityType } = {}) {
+//   entryFor    `(player) -> { name, packet } | null`, where `player` is the caller's own
+//               row from `world.players()`: the `player_info` frame a player is announced
+//               in, for a player whose entry this module must write.
+//               Null for a player the caller announces itself (#614's skin path). Owed
+//               again with every fresh spawn, because a world change voids the client's
+//               entities and a client that kept no entry needs one before the body
+//               returns. A player this module stops spawning keeps its entry: a client
+//               holds an entry until the server removes it, and an entry with no body is
+//               a player who walked away.
+export function createVirtualPlayers ({ world, channels, entityType, entryFor = null } = {}) {
   if (world === null || typeof world !== 'object' || typeof world.players !== 'function') {
     throw new TypeError('createVirtualPlayers needs a world whose players() answers the players it holds')
   }
@@ -209,6 +231,10 @@ export function createVirtualPlayers ({ world, channels, entityType } = {}) {
   if (!Number.isInteger(entityType)) {
     throw new TypeError('createVirtualPlayers needs entityType, the player entity type of the lane\'s version')
   }
+  if (entryFor !== null && typeof entryFor !== 'function') {
+    throw new TypeError('createVirtualPlayers needs entryFor to be a function, or absent when every player is announced by the caller')
+  }
+  const announce = entryFor ?? (() => null)
 
   // channel id -> Map<uuid key, what that channel has been shown of that player>: the entity
   // id it was given, whether a spawn of it is live, whether the client's map has since been
@@ -284,6 +310,14 @@ export function createVirtualPlayers ({ world, channels, entityType } = {}) {
 
         if (!record.spawned || record.stale) {
           if (record.spawned) frames.push(despawnFrame(record.entityId))
+          // The announcement, then the body. The row is the caller's own, passed through, so
+          // a caller that marks its own players reads its own mark back instead of this
+          // module copying one field at a time. A player the caller announces itself answers
+          // null, and nothing is written for it here.
+          const entry = announce({ ...player, uuid: record.uuid })
+          if (entry !== null && entry !== undefined) {
+            frames.push({ name: entry.name, kind: 'entry', packet: entry.packet })
+          }
           frames.push(spawnFrame(record, pose, entityType))
           record.spawned = true
           record.stale = false

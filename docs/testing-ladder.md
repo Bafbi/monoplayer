@@ -830,15 +830,19 @@ first dial and its target warms in five seconds.
   driver comes first. Both are on the claimed body's slug, both have been handed
   their body's replay once, and they are two records and not one: the chat above is
   what separates them, because `#259` gives a spectator's record two frames of its
-  own. Their `last` frame is the `system_chat` each was sent.
+  own. Which frame is `last` is not pinned to a name, because `#636` gives the driver
+  the body's other channels as players and a spectator's own position as a move, so the
+  last frame is whichever of those two sources arrived later.
 
   Each client's own client information stays on its own channel. Both are sent in
   play, which is the state where the front's settings hook reports nothing and the
   driver's change travels the serverbound rewrite. The driver's reaches the puppet
   as one Client Information frame with the driver's locale. The spectator's reaches
   the fake as nothing, and the front counts it as a spectator's. A position the
-  spectator sends moves nothing: the front drops it before the core's pipeline, the
-  core forwards nothing, and the session pose is byte for byte the one it had.
+  spectator sends moves nothing on the server's side: the front drops it before the
+  core's pipeline, the core forwards nothing, and the session pose is byte for byte the
+  one it had. `#636` reads that dropped frame for where that client is, which is a fact
+  about the body's other channels and not about the body. `O71` is the row that reads it.
 
   The surface is not decided here: an eighth bot reaches the driven body's own
   dialog and reads its `Spectate` button, and this assertion stops there. `O62`
@@ -1152,8 +1156,8 @@ first dial and its target warms in five seconds.
   the wire check.
 
 - `O69` a spectator is told the puppet as a body: an entity for its UUID with an id of the
-  proxy's own, then a move that follows it, and the driver's own world is never handed a
-  second copy of itself (#635).
+  proxy's own, then a move that follows it, and no frame on the driver's socket names the
+  puppet — the body that socket's client already controls (#635, and #636 for the name).
 
   The owner's report, twice from the live lane: the entry arrives and the world is empty.
   A client draws another player from a `player_info` entry *and* an entity for that UUID,
@@ -1166,7 +1170,8 @@ first dial and its target warms in five seconds.
   which is the call the Spectate verb makes. It registers its own listeners for
   `spawn_entity`, `entity_teleport` and `entity_destroy`, because the bot records frame
   names and not these packets. The driver's client registers one as well, and the
-  assertion reads what it never receives.
+  assertion reads what it never receives about the puppet. #636 gives that socket the other
+  channels' players, so the claim is the name and not the count: `O71` reads the rest.
 
   The spawn carries the puppet's UUID, the player entity type this rung's own protocol
   version states — the assertion reads it from the protocol data rather than from the
@@ -1190,6 +1195,45 @@ first dial and its target warms in five seconds.
   backend never lists the puppet, so the proxy holds no skin and writes no entry, and the
   count is recorded in the evidence rather than asserted. That order is read in
   `test/service/virtual-players.test.js`, where the backend states a skin.
+
+- `O71` the driver sees who is watching: an entry naming the spectator, then a body for it,
+  then a move to where that client sent it, and the puppet's own connection is told nothing
+  about it (#636).
+
+  The owner's ask: *"making the claim client be able to see the spectator in a transparent
+  way would be nice and also spectator between themself"*. `O70` read one socket's mode
+  frames; this reads the driver's own socket for a player it never had a body for, and the
+  body's other spectator is who the ask names.
+
+  A client refuses a player-typed `spawn_entity` whose UUID it holds no `player_info` entry
+  for — it logs "Server attempted to add player prior to adding player info" and adds no
+  entity — so the entry is the condition of the body and not decoration on it. The
+  assertion reads the pair's **order** on that socket: every clientbound frame is recorded
+  in the order it arrived, the entry for the spectator's UUID is found in that list, and the
+  frame after it is the spawn for the same UUID. A spawn with no entry, or an entry for one
+  player beside a body for another, is an empty world with the right frames in it, which no
+  count can see.
+
+  The owner's second half — *spectator between themself* — is read on the other socket. The
+  client that lands is drawn the watcher already on the body, entry and body both, and
+  nothing on its own socket names the player it is itself.
+
+  Then the second position source. The spectator's own client sends a position, the front
+  drops the frame (#269) and hands the core the pose out of it, and the driver's copy of that
+  player arrives at the coordinates that client sent. The move is read from the frames that
+  arrive **after** the send: a client sends its own position unbidden, on the body's
+  synchronize frame, so a move for that entity may already exist and the first one is not the
+  one this row asked for.
+
+  The backend half is the thing this ticket can break, and it is read at the fake rather than
+  in the front's own counter, exactly as `O62` reads it: every counter the fake keeps —
+  logins, positions, chats, commands, digs, places, settings — is unchanged across the
+  spectator's landing and its movement, nothing was forwarded to the puppet's connection, and
+  the client that watched keeps its own connection.
+
+  What it cannot prove: that a client draws the other spectator. That is the dev lane's
+  checklist, with two real clients (#634). This rig proves the frames, their order and their
+  addressing, and a bot records no pixels.
 
 ## The client parity rung
 

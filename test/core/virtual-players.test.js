@@ -28,6 +28,7 @@ import {
   playerEntityTypeFor
 } from '../../src/core/virtual-players.js'
 import { applyFrames, createClientState, stateSnapshot } from '../../src/ladder/client-state.js'
+import { playerInfoEntry } from '../../src/core/skin.js'
 
 const PUPPET = 'ea45ba2e-f47d-43ee-9604-b20af90be1f1'
 const WATCHER = '11111111-2222-3333-4444-555555555555'
@@ -226,3 +227,141 @@ test('#635 the id range is a varint a backend cannot reach', () => {
   assert.equal(new Set(ids).size, 2, 'two players, two ids')
   assert.ok(ids.every(id => id >= FIRST_VIRTUAL_ENTITY_ID && id < 2 ** 31 - 1))
 })
+
+// #636: the announcement a client needs before it will place a body.
+//
+// A client refuses a player-typed `spawn_entity` whose UUID it holds no `player_info`
+// entry for: it logs "Server attempted to add player prior to adding player info" and
+// adds no entity ("Players require PlayerInfo to be present first", 26.x
+// `ClientPacketListener.handleAddEntity`). So an entry is not a face for a body, it is
+// the condition of having one, and the order this module owns now spans both frames.
+//
+// The frame is the caller's: `entryFor` answers it or answers null. #614's skin entry is
+// the puppet's, written by src/core/skin.js with the property the backend sent, and the
+// service answers null there so one player is never announced twice.
+// The frame is built by the module that owns its shape, not by a fixture here: a fixture
+// that writes its own `properties: []` asserts what the fixture said, and a change to the
+// real builder would pass it.
+const ANNOUNCEMENT = ({ uuid, name }) => ({ name: 'player_info', packet: playerInfoEntry({ uuid, name }) })
+
+const namedPuppetAt = at => worldOf({ uuid: PUPPET, name: 'GlowSquidye', pose: at })
+
+test('#636 a virtual player is announced before its body, and only a new body is announced again', () => {
+  let at = pose(0)
+  const world = { players: () => [{ uuid: PUPPET, name: 'GlowSquidye', pose: at }] }
+  const virtual = createVirtualPlayers({
+    world,
+    channels: roster(watcherChannel),
+    entityType: PLAYER_TYPE,
+    entryFor: ANNOUNCEMENT
+  })
+
+  const first = framesOn(virtual.owed({ at: 0 }), watcherChannel.id)
+  assert.deepEqual(first.map(frame => frame.name), ['player_info', 'spawn_entity'],
+    'the entry comes first: a spawn without one is a body the client throws away')
+  const entry = first[0].packet
+  assert.equal(entry.data[0].uuid, PUPPET, 'the entry names the player the spawn names')
+  assert.deepEqual(entry.data[0].player.properties, [],
+    'the entry src/core/skin.js builds for a player the proxy holds no skin for, unchanged: nothing is invented')
+  assert.equal(first[1].packet.objectUUID, PUPPET)
+
+  // A move is not a reason to announce the player again: an entry the client holds
+  // wins over a later add_player, so a second frame is a write nobody sees.
+  at = pose(1)
+  assert.deepEqual(namesOn(virtual.owed({ at: MOVE_INTERVAL_MS }), watcherChannel.id), ['entity_teleport'])
+
+  // A world change voids the client's entity map, so the pair is owed again.
+  virtual.forget()
+  assert.deepEqual(namesOn(virtual.owed({ at: MOVE_INTERVAL_MS * 2 }), watcherChannel.id),
+    ['entity_destroy', 'player_info', 'spawn_entity'])
+})
+
+test('#636 a player the caller announces itself is spawned with no entry from here', () => {
+  // #614's entry names the puppet and carries the backend's textures property, and
+  // src/core/skin.js writes it. Two writers of one player_info for one UUID is the
+  // collision the client resolves by keeping the first, so the service answers null
+  // for the puppet rather than racing its own skin path.
+  const virtual = createVirtualPlayers({
+    world: namedPuppetAt(pose()),
+    channels: roster(watcherChannel),
+    entityType: PLAYER_TYPE,
+    entryFor: ({ uuid }) => (uuid === PUPPET ? null : ANNOUNCEMENT({ uuid, name: 'x' }))
+  })
+  assert.deepEqual(namesOn(virtual.owed({ at: 0 }), watcherChannel.id), ['spawn_entity'],
+    'no entry is written for a player whose entry the caller writes')
+})
+
+test('#636 with two spectators present, no channel is told about its own player', () => {
+  // The ticket's second rule, and the one a single spectator cannot show: two people
+  // watching a body see each other, and neither is handed itself. A client told about
+  // its own player draws a second copy of the body it controls, standing where it stands.
+  const WATCHER_B = '99999999-8888-7777-6666-555555555555'
+  const a = { id: 'a-channel', uuid: WATCHER }
+  const b = { id: 'b-channel', uuid: WATCHER_B }
+  const pilot = { id: 'pilot-channel', uuid: PUPPET }
+  const world = worldOf(
+    { uuid: PUPPET, name: 'GlowSquidye', pose: pose(0) },
+    { uuid: WATCHER, name: 'Watcher', pose: pose(4) },
+    { uuid: WATCHER_B, name: 'Second', pose: pose(8) }
+  )
+  const virtual = createVirtualPlayers({ world, channels: roster(a, b, pilot), entityType: PLAYER_TYPE, entryFor: ANNOUNCEMENT })
+  const updates = virtual.owed({ at: 0 })
+
+  const named = (id) => framesOn(updates, id)
+    .filter(frame => frame.name === 'player_info')
+    .map(frame => frame.packet.data[0].uuid)
+  const spawned = (id) => framesOn(updates, id)
+    .filter(frame => frame.name === 'spawn_entity')
+    .map(frame => frame.packet.objectUUID)
+
+  assert.deepEqual(named(a.id), [PUPPET, WATCHER_B], 'a spectator is told the body and the other spectator')
+  assert.deepEqual(spawned(a.id), [PUPPET, WATCHER_B], 'and gets a body for each')
+  assert.deepEqual(named(b.id), [PUPPET, WATCHER])
+  assert.deepEqual(spawned(b.id), [PUPPET, WATCHER])
+  assert.deepEqual(named(pilot.id), [WATCHER, WATCHER_B], 'the driver sees who is watching, and no copy of itself')
+  assert.deepEqual(spawned(pilot.id), [WATCHER, WATCHER_B])
+  for (const id of [a.id, b.id, pilot.id]) {
+    assert.ok(!named(id).includes({ 'a-channel': WATCHER, 'b-channel': WATCHER_B, 'pilot-channel': PUPPET }[id]),
+      'no channel is told about its own player: ' + id)
+  }
+  // Each announcement is immediately followed by the body it is for, whichever channel
+  // it is on: the pair is never interleaved with another player's.
+  for (const id of [a.id, b.id, pilot.id]) {
+    const names = namesOn(updates, id)
+    for (let i = 0; i < names.length; i += 1) {
+      assert.equal(names[i], i % 2 === 0 ? 'player_info' : 'spawn_entity', 'pairs on ' + id + ': ' + names.join(','))
+    }
+  }
+})
+
+test('#636 a spectator that leaves ends its body on every other channel, and is owed nothing itself', () => {
+  // A spectator leaving closes its channel and leaves the world: the service drops it from
+  // the one record that is both the roster and the players, so the two cannot disagree.
+  // Every channel still open was shown its body, so each is owed one destroy; the channel
+  // that ended is owed no frame at all, because a write would reach no client and counting
+  // it would say a client was told.
+  const leaving = { id: 'leaving-channel', uuid: WATCHER }
+  const staying = { id: 'staying-channel', uuid: '99999999-8888-7777-6666-555555555555' }
+  let watching = [leaving, staying]
+  const world = {
+    players: () => [
+      { uuid: PUPPET, name: 'GlowSquidye', pose: pose(0) },
+      ...watching.map((channel, index) => ({ uuid: channel.uuid, name: channel.id, pose: pose(4 + index) }))
+    ]
+  }
+  const virtual = createVirtualPlayers({ world, channels: () => watching, entityType: PLAYER_TYPE, entryFor: ANNOUNCEMENT })
+  const first = virtual.owed({ at: 0 })
+  const leavingBody = framesOn(first, staying.id).filter(frame => frame.name === 'spawn_entity')
+    .find(frame => frame.packet.objectUUID === WATCHER)
+  assert.ok(leavingBody !== undefined, 'the other spectator is drawn on this one')
+
+  watching = [staying]
+  const after = virtual.owed({ at: 10 })
+  assert.deepEqual(after.map(update => update.channel), [staying.id], 'the closed channel is owed nothing')
+  const destroyed = framesOn(after, staying.id).filter(frame => frame.name === 'entity_destroy')
+  assert.deepEqual(destroyed.flatMap(frame => frame.packet.entityIds), [leavingBody.packet.entityId],
+    'one destroy, for the id that channel was given')
+  assert.deepEqual(framesOn(after, staying.id).filter(frame => frame.kind === 'entry'), [],
+    'and no announcement: the player is gone, not newly drawn')
+})
+

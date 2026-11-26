@@ -166,6 +166,16 @@ const numeric = v => typeof v === 'number' && Number.isFinite(v)
 // but attaching-client movement must update it too, so a reattach lands
 // where the player actually left the puppet (spike invariant).
 
+// The frames that carry where a client is, in either direction: the body's own client
+// sends them, and so does a spectator's (#636). One list, so a caller that has to tell a
+// movement frame from the rest asks the module that reads it instead of keeping a second
+// copy that can drift from `capturePose`'s branches.
+export const POSE_FRAME_NAMES = Object.freeze(['position', 'position_look', 'look'])
+
+export function isPoseFrame (name) {
+  return POSE_FRAME_NAMES.includes(name)
+}
+
 // Pure pose update. backend = true for a backend position frame (authoritative
 // teleport); false for a serverbound client movement frame.
 export function capturePose (pose, name, data, { backend = false } = {}) {
@@ -183,13 +193,18 @@ export function capturePose (pose, name, data, { backend = false } = {}) {
       pitch: numeric(data.pitch) ? data.pitch : pose.pitch
     }
   }
-  // Clientbound movement: position/position_look/look.
+  // A client's movement: the list is the gate, and which fields it carries is the one
+  // difference between its three names. `look` is the angles alone, `position` the place
+  // alone, and `position_look` both — and a frame that carries a place it cannot place
+  // changes nothing, not even the angles, because a head turned at a position nobody knows
+  // is a body nobody can draw anyway.
+  if (!isPoseFrame(name)) return pose
   let next = pose
-  if (name === 'position' || name === 'position_look') {
+  if (name !== 'look') {
     if (!numeric(data.x) || !numeric(data.y) || !numeric(data.z)) return pose
     next = { ...next, x: data.x, y: data.y, z: data.z }
   }
-  if (name === 'look' || name === 'position_look') {
+  if (name !== 'position') {
     next = {
       ...next,
       yaw: numeric(data.yaw) ? data.yaw : next.yaw,
