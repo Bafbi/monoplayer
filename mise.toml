@@ -1,3 +1,8 @@
+# The deps surface below is experimental and arrives with mise 2026.10.11, the
+# version this repository is developed against. An older mise refuses to start
+# with this message instead of failing on a dependency it never installed.
+min_version = "2026.10.11"
+
 [tools]
 node = "26.7.0"
 pnpm = "11.25.0"
@@ -5,9 +10,43 @@ java = "25.0.2"
 gradle = "9.8.2"
 "github:moby/buildkit" = "0.33.1"
 
+# deps is an experimental mise feature: with it off, `mise deps install` exits
+# 1 with "deps is experimental. Enable it with `mise settings experimental=true`".
+# This repository's [tasks.install] is that command, so the switch is committed
+# here: a machine with no config of its own, CI included, still has it. The
+# station that measured #639 had it on globally, which is how the dependency on
+# it went unseen. An environment that sets MISE_EXPERIMENTAL=false still wins.
+# CI installs the latest mise, which is at or above the floor above.
+[settings]
+experimental = true
+
+# The dependencies are a declared provider, not a command the task re-spells.
+# mise's own detection finds nothing here: with no [deps.pnpm] table,
+# `mise deps install` in a fresh worktree answers "All dependencies are up to
+# date" in 14 ms and leaves node_modules absent (#639, measured 2026-11-26 in a
+# worktree with no node_modules). Declared, it installs, and an unchanged
+# lockfile makes the next call a no-op.
+#
+# auto = true: any mise run in a cold checkout installs the workspace first, so
+# the first command in a new worktree works whatever it is. That includes a task
+# that only reads a cluster: measured the same day, `mise run dev:status` in a
+# cold worktree paid the install before its own work, and the next run paid
+# nothing (3.0 s, then 0.5 s; node_modules went from absent to 10 entries).
+# auto = false instead needs every rung to depend on install and every human to
+# remember it, and one mechanism that always works beats two that need
+# explaining. A run that must not touch the store passes --no-deps.
+[deps.pnpm]
+auto = true
+# mise's pnpm defaults hash pnpm-lock.yaml and package.json, and not the
+# workspace file, which carries the build-script policy: change allowBuilds there
+# and the install is stale while mise still calls it fresh. Named here, so the
+# hash covers the third input too.
+sources = ["pnpm-lock.yaml", "package.json", "pnpm-workspace.yaml"]
+run = "pnpm install --frozen-lockfile --prefer-offline"
+
 [tasks.install]
 description = "Install the workspace dependencies."
-run = "pnpm install --frozen-lockfile"
+run = "mise deps install"
 
 # Every rung below is a shell script, not an inline command, because mise hands a
 # task its arguments differently in each form. An inline command gets them
