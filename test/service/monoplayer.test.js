@@ -569,9 +569,10 @@ test('redaction sentinel: secret-shaped log content never survives', () => {
   assert.equal(lines.includes('eyAbcDefG1234567890'), false, 'the bearer value is the secret, not the word Bearer')
   assert.ok(lines.includes('refresh_token='), 'shape stays greppable')
 
-  // P2: a JSON-quoted secret field keeps its field-name label too.
+  // P2: a JSON-quoted secret field keeps its field-name label too, and #553 made
+  // the line a document the panel can still parse: the label is the key.
   const quoted = redact(JSON.stringify({ access_token: 'SUPERSECRET_QUOTED' }))
-  assert.ok(quoted.includes('access_token='), 'quoted field name keeps the label')
+  assert.equal(JSON.parse(quoted).access_token, SENTINEL, 'quoted field name keeps the label')
   assert.equal(quoted.includes('SUPERSECRET_QUOTED'), false)
 })
 

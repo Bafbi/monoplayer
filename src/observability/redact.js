@@ -3,8 +3,16 @@
 // No token, refresh token, device code, RCON password, or other secret-shaped
 // string may survive into logs, reports, or artifacts. `redact()` rewrites
 // common secret shapes to the sentinel; every log line the core stores goes
-// through it. Shapes are labelled ("field=<sentinel>") so redacted evidence
-// stays greppable for the *shape* of the leak.
+// through it. A redacted span keeps its label, a field's name or the key of a JSON
+// member, so redacted evidence stays greppable for the *shape* of the leak.
+//
+// A JSON document is read as a document, not as text (#553). A regex over the line
+// cannot tell an object key from a field, so a counter map keyed by an open string
+// (#438) rewrote its own key and the line stopped being JSON. A document that
+// carries a secret is rebuilt from its parts, so the document it rewrites parses, and
+// a document it has nothing to do in is returned untouched. It costs a count under a
+// key that is a secret name, which comes back as the sentinel, and a compact line for
+// a document that was pretty-printed.
 //
 // This module is also where the redaction vocabulary is spelled. `SECRET_FIELDS`
 // is the one list of names whose value is a secret: `src/observability/secrets.js`
@@ -57,6 +65,18 @@ const VALUE_CHARS = String.raw`[^"'}\];&| ]+`
 // redacted line stays byte-identical when it is passed through twice.
 const SENTINEL_GUARD = String.raw`(?!(?:"|')?\[REDACTED\])`
 
+// The names above as a whole object key. A key that IS the name is a field, and its
+// value goes. A key that only carries the name is a name about something else: a
+// counter called `token_count` counts tokens and is not one. Reading the key by its
+// shape is what stops a map key from being rewritten as a field (#553). The key's
+// own text still faces the text rules below, because a secret used AS a key is a
+// secret, and a JWT is one whatever position it sits in.
+const SECRET_KEY = new RegExp('^(?:' + SECRET_FIELDS.join('|') + ')$', 'i')
+
+// A document starts with an object or an array. Anything else goes to the text
+// rules, including a bare JSON string or number, which is a value and not a line.
+const DOCUMENT = /^\s*[{[]/
+
 const rules = [
   // JSON / URL / forms: "access_token":"abc", refresh_token=abc, ?password=abc.
   // Also an Authorization header, whose value sits behind a scheme word:
@@ -76,6 +96,58 @@ const rules = [
 
 export function redact (text) {
   if (text == null) return text
+  const source = String(text)
+  if (DOCUMENT.test(source)) {
+    try {
+      return redactDocument(source)
+    } catch {
+      // Not a document after all, or one too deep to walk: a log line, a chat
+      // string, a form. The text rules own it, and they cannot throw.
+    }
+  }
+  return redactText(source)
+}
+
+// A document with nothing to redact is returned byte-identical, so a line keeps the
+// spelling it was written with. Rebuilding it anyway would reprint a number and
+// reorder an integer-like key, and a log line is evidence. A document that does
+// carry a secret is rebuilt from its own parts, because there is no way to splice a
+// sentinel into one by hand and still have it parse. Every sink this tree has writes
+// `JSON.stringify` output, where that round trip is the identity. Two secret-shaped
+// keys in one object rebuild as one sentinel key, so the later member keeps the
+// place: both keys were secrets, and neither may be printed.
+function redactDocument (source) {
+  let changed = false
+  const redactNode = item => {
+    if (Array.isArray(item)) return item.map(redactNode)
+    if (item !== null && typeof item === 'object') {
+      // Object.fromEntries defines an own property, so a key named __proto__ is
+      // rebuilt as a member. Assigning it would set the prototype instead, and the
+      // member would leave the document.
+      return Object.fromEntries(Object.entries(item).map(([key, child]) => {
+        // The key keeps its label, and the sentinel takes the place of the value
+        // under it. The key's own text faces the text rules, for a secret used as a
+        // key.
+        const label = redactText(key)
+        if (label !== key) changed = true
+        if (SECRET_KEY.test(key)) {
+          changed = true
+          return [label, SENTINEL]
+        }
+        return [label, redactNode(child)]
+      }))
+    }
+    if (typeof item !== 'string') return item
+    const redacted = redactText(item)
+    if (redacted === item) return item
+    changed = true
+    return redacted
+  }
+  const out = redactNode(JSON.parse(source))
+  return changed ? JSON.stringify(out) : source
+}
+
+function redactText (text) {
   let out = String(text)
   for (const re of rules) out = out.replace(re, keepLabel)
   return out
@@ -83,13 +155,13 @@ export function redact (text) {
 
 // Each replacement keeps the recognisable label (a quoted or bare field name
 // followed by ':' or '=', or the scheme word) so a redacted line still shows WHICH
-// secret shape was there.
+// secret shape was there. This is the text rule: a JSON document has already been
+// read by `redactDocument` above, so a quoted label here sits inside a string value.
 const SCHEME_LABEL = new RegExp('^(' + KNOWN_SCHEMES + ')\\s+', 'i')
 
 function keepLabel (match) {
-  // JSON-quoted field names keep the label too: "access_token":"x" becomes
-  // access_token=[REDACTED] (bare-field match falls back to the old form). The
-  // closing quote may follow the name, because JSON puts one there.
+  // The closing quote may follow the name, because a value inside a JSON string can
+  // carry one: the document was already walked, so what reaches here is text.
   // The bare name stops at = as well as at :, because a value that ends in base64
   // padding would otherwise be read back as part of the label.
   const head = match.match(/^(?:"([^"]*)"|([^:="\s'\x60]+))"?\s*[:=]/)

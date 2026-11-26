@@ -35,7 +35,7 @@ test('a caller cannot choose the sentinel, and nothing survives the fixed one', 
   assert.equal(redact('password=hunter2', { sentinel: '[GONE]' }), 'password=' + SENTINEL)
   // The quoted field name survives as a bare label, so a redacted line still
   // says which shape leaked.
-  assert.equal(redact('{"access_token":"abc123"}'), '{access_token=' + SENTINEL + '}')
+  assert.equal(redact('{"access_token":"abc123"}'), '{"access_token":"' + SENTINEL + '"}')
   assert.equal(redact('nothing secret here'), 'nothing secret here')
   assert.equal(redact(null), null)
 })
@@ -60,6 +60,7 @@ test('an Authorization header redacts the bearer value, not the word Bearer', ()
 // a value to redact again (#92).
 test('redact() leaves a line it already redacted alone', () => {
   const once = redact('{"access_token":"abc123"}')
+  assert.equal(JSON.parse(once).access_token, SENTINEL, 'the quoted label and a JSON string are what a document keeps')
   assert.equal(redact(once), once)
   assert.equal(redact('{access_token=' + SENTINEL + '}'), '{access_token=' + SENTINEL + '}')
   assert.equal(redact('Authorization=' + SENTINEL), 'Authorization=' + SENTINEL)
@@ -71,7 +72,8 @@ test('redact() leaves a line it already redacted alone', () => {
 test('a bare token, secret or bearer key is redacted on the log path (#183)', () => {
   const value = 'abcdef123456789'
   for (const key of ['token', 'secret', 'bearer']) {
-    assert.equal(redact(JSON.stringify({ [key]: value })), `{${key}=${SENTINEL}}`, `JSON form, ${key}`)
+    // #553: a JSON line is rewritten as a document, so the member keeps its quotes.
+    assert.equal(redact(JSON.stringify({ [key]: value })), `{"${key}":"${SENTINEL}"}`, `JSON form, ${key}`)
     assert.equal(redact(`${key}=${value}`), `${key}=${SENTINEL}`, `form, ${key}`)
   }
 })
@@ -118,6 +120,106 @@ test('a value that ends in = padding does not leak into the label', () => {
 // guarded key must not eat the brace after it, and a form value that holds a
 // comma must not lose its tail to it.
 test('a bare value stops at the brace, and a comma does not stop it', () => {
-  assert.equal(redact('{"password":123456789012}'), '{password=' + SENTINEL + '}')
+  // #553: a JSON document is read as a document now, so the brace stays where it
+  // belongs and the sentinel is a JSON string.
+  assert.equal(redact('{"password":123456789012}'), '{"password":"' + SENTINEL + '"}')
   assert.equal(redact('password=abc,def,ghi,jkl'), 'password=' + SENTINEL)
+})
+
+// #553: #438 made a map keyed by an open string the norm, and the heartbeat writes
+// those maps into one JSON line. The field rule matched a key that names a secret
+// field over the whole line and rewrote it as a field, so the line stopped being
+// JSON. That is the one line an operator reads to find those counts. A redacted line
+// is a JSON document, and a secret in the same line is still redacted: a fix that
+// stops redacting to keep the line parseable is worse than the bug.
+test('a map key that names a secret field leaves the line parseable (#553)', () => {
+  const secret = 'hunter2hunter2'
+  const token = 'abc123def456ghi789'
+  const line = JSON.stringify({
+    event: 'heartbeat',
+    metrics: { serverboundByName: { token: 5, cookie_request: 2, secret: 1, chat: 9 } },
+    password: secret,
+    access_token: token
+  })
+
+  const out = redact(line)
+  const parsed = JSON.parse(out) // the claim: redaction never breaks the line
+
+  assert.equal(out.includes(secret), false, 'a real secret value is gone')
+  assert.equal(out.includes(token), false, 'so is the other one')
+  assert.equal(parsed.password, SENTINEL)
+  assert.equal(parsed.access_token, SENTINEL)
+  assert.equal(parsed.metrics.serverboundByName.cookie_request, 2, 'a count with an ordinary name survives')
+  assert.equal(parsed.metrics.serverboundByName.chat, 9)
+  // The cost of reading a key by its shape: a count under a secret-shaped name
+  // cannot be told from a secret, so it goes too. The safe direction is the one
+  // that loses a number rather than a token.
+  assert.equal(parsed.metrics.serverboundByName.token, SENTINEL)
+  assert.equal(parsed.metrics.serverboundByName.secret, SENTINEL)
+})
+
+// The line parses because the redaction happens inside the document, so a secret
+// pasted into a string value is redacted there and the quotes around it survive.
+test('a secret-shaped string value is redacted without breaking the line (#553)', () => {
+  const bearer = 'eyAbcDefG1234567890'
+  const line = JSON.stringify({
+    event: 'backendError',
+    error: 'Authorization: Bearer ' + bearer,
+    detail: 'refresh_token=' + bearer
+  })
+
+  const out = redact(line)
+  assert.equal(out.includes(bearer), false, 'the bearer value is the secret')
+  const parsed = JSON.parse(out)
+  // The label survives inside the string, exactly as the text rule prints it: an
+  // Authorization field takes its scheme word with the value it scopes.
+  assert.equal(parsed.error, 'Authorization=' + SENTINEL)
+  assert.equal(parsed.detail, 'refresh_token=' + SENTINEL)
+})
+
+// A key that merely carries a secret name is a name about tokens, not a token.
+// Reading the key by its shape is what tells the two apart; the text rule cannot.
+test('a key that only contains a secret name is not a secret field (#553)', () => {
+  const line = JSON.stringify({ metrics: { tokensByName: { token_count: 5 } } })
+  assert.equal(redact(line), line)
+})
+
+// A line with nothing to redact is evidence, and the redactor has no business
+// reprinting it: a rebuild would reprint 1.0 as 1 and hoist an integer-like key.
+test('a document with nothing to redact is returned byte-identical (#553)', () => {
+  const line = '{"n":1.0,"m":1e3,"big":12345678901234567890,"5":"x","b":1,"note":"the token cache is warm"}'
+  assert.equal(redact(line), line)
+})
+
+// A document is rebuilt from its own members, so a key no one writes by hand is
+// still one: __proto__ is a member of the parsed document, not the prototype of the
+// object the rebuild builds. The line carries a secret, so the rebuild happens.
+test('a key named __proto__ survives the rebuild as a member (#553)', () => {
+  const line = '{"event":"x","__proto__":{"x":1},"password":"abcdefghijkl"}'
+  const parsed = JSON.parse(redact(line))
+  assert.equal(Object.hasOwn(parsed, '__proto__'), true, 'the member is rebuilt, not swallowed by the prototype')
+  assert.equal(parsed.password, SENTINEL)
+})
+
+// The key faces the text rules too. The old rule redacted a secret used as a key
+// because it matched over the whole line; a walk has to ask, and the promise in the
+// module header is that no secret-shaped string survives in any position.
+test('a secret used as a key is redacted (#553)', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghij'
+  const out = redact(JSON.stringify({ [jwt]: 1 }))
+  assert.equal(out.includes(jwt), false)
+  assert.doesNotThrow(() => JSON.parse(out))
+})
+
+// The second pass is the test that the walk does not eat its own output: a
+// redacted value is a sentinel string inside a document, never a thing to redact.
+test('a redacted JSON line is byte-identical when it is redacted again (#553)', () => {
+  const line = JSON.stringify({
+    event: 'heartbeat',
+    metrics: { serverboundByName: { token: 5 } },
+    password: 'abcdefghijkl'
+  })
+  const once = redact(line)
+  assert.doesNotThrow(() => JSON.parse(once))
+  assert.equal(redact(once), once)
 })
