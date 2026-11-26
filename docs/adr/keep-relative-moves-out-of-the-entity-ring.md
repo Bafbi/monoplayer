@@ -49,12 +49,23 @@ ignores them on both sides and cannot see the position a moved entity ends at.
 - `join-synth.replayFrames` owns the order, and `state-parity.snapshotFrames`
   calls it. A second copy of the order would let the parity expectation pass
   against a replay nobody sends.
-- `client-state` decodes the three delta frames and `PARITY_FRAME_NAMES` captures
-  them, so N13 compares where a moved entity ends. Without the decode the check
-  was blind to the defect both sides agreed on.
-- `ENTITY_FRAMES` is the one place that tracks protocol renames for entity
-  routing. A name missing from it routes to `generic`, where it keeps that
-  section's place, so a rename now costs a stale position, not a wrong one.
+- `client-state` decodes the frames the merge covers and `PARITY_FRAME_NAMES`
+  captures them, so N13 compares where a moved entity ends and what state a body
+  holds. Without the decode the check was blind to the defect both sides agreed
+  on.
+- `ENTITY_FRAMES` in the cache is where a protocol rename for entity routing
+  is tracked, and `ENTITY_GENERIC_FRAMES` in join-synth is where a frame that
+  carries a body's state but lives in `generic` is tracked. A name missing from
+  both routes to `generic` and keeps that section's place, so a rename costs a
+  stale value, not a crash. `test/core/entity-body-frames.test.js` derives the
+  body frames from the vendored protocol and fails until a new one is placed in
+  one of the three lists.
 - `vehicle_move` is absolute and stays in `generic`'s place, undecoded by the
   parity model. A replayed vehicle can sit one frame stale, and the error does
-  not accumulate.
+  not accumulate. `move_minecart` stays with it, for the same reason.
+- The rule is not "relative moves only". It is "a generic frame whose value the
+  client keeps for a body", so `entity_update_attributes`, `entity_equipment`,
+  and `set_passengers` replay by the same merge (#222). The effect pair is the
+  exception that proves the direction: its add and its removal must share the
+  entity domain's slot, because a slot outlives the 512-frame generic ring and
+  the ring would keep the add after evicting the removal.

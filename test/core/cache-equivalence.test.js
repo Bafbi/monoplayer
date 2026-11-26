@@ -268,6 +268,128 @@ test('replay equals the stream: entity_destroy lands in the entity domain', () =
   assert.equal(entity.removed, true)
 })
 
+const effectField = (state, entityId, key) => {
+  const entity = stateSnapshot(state).entities.find(entry => entry.entityId === entityId)
+  return Object.fromEntries(entity.fields.map(field => [field.key, field.value]))[key]
+}
+
+test('replay equals the stream: an effect removed before it was added again ends present', () => {
+  // #222 shape 1. A removal captured before the add must not be applied after it:
+  // the stream ends with effect 1 on the body. The pair shares one slot, so the
+  // add is the only frame replayed and the removal is superseded there.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'remove_entity_effect', data: { entityId: 9, effectId: 1 } },
+    { name: 'entity_effect', data: { entityId: 9, effectId: 1, amplifier: 0, duration: 200, flags: 0 } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(snapshot.entities.map(frame => frame.name), ['spawn_entity', 'entity_effect'])
+  assert.deepEqual(
+    replayFrames(snapshot).map(frame => frame.name),
+    [
+      'login', 'game_state_change', 'chunk_batch_start', 'map_chunk', 'chunk_batch_finished',
+      'spawn_entity', 'entity_effect'
+    ]
+  )
+  assert.deepEqual(effectField(replayed, 9, 'effect:1'), { amplifier: 0, duration: 200, flags: 0 })
+})
+
+test('replay equals the stream: an effect added and then removed ends absent', () => {
+  // The other direction of the same slot: the removal is the newest word about
+  // effect 1, so it is the frame that replays.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_effect', data: { entityId: 9, effectId: 1, amplifier: 0, duration: 200, flags: 0 } },
+    { name: 'remove_entity_effect', data: { entityId: 9, effectId: 1 } }
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(snapshot.entities.map(frame => frame.name), ['spawn_entity', 'remove_entity_effect'])
+  assert.equal(effectField(replayed, 9, 'effect:1'), undefined)
+})
+
+test('replay equals the stream: 512 generic frames cannot resurrect a removed effect', () => {
+  // #222, why the pair shares one home. The add sits in the body's effect slot,
+  // which outlives the generic ring; a removal kept in the 512-frame ring would
+  // age out of it while the add survived, and the replay would hand the client
+  // an effect the stream removed. The ring is churned to its bound here, so the
+  // removal is exactly the frame a ring evicts first.
+  const churn = Array.from({ length: 512 }, (_, index) => ({
+    name: 'sound_effect',
+    data: { soundId: index, soundCategory: 0, x: 0, y: 64, z: 0, volume: 1, pitch: 1 }
+  }))
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_effect', data: { entityId: 9, effectId: 1, amplifier: 0, duration: 200, flags: 0 } },
+    { name: 'remove_entity_effect', data: { entityId: 9, effectId: 1 } },
+    ...churn
+  ]
+
+  const { snapshot, replayed } = assertEquivalent(stream)
+
+  assert.equal(snapshot.generic.length, 512, 'the ring is full, so it holds none of the effect pair')
+  assert.deepEqual(snapshot.generic.filter(frame => frame.name === 'remove_entity_effect'), [])
+  assert.equal(effectField(replayed, 9, 'effect:1'), undefined, 'the effect the stream removed is gone')
+})
+
+test('replay equals the stream: attributes do not survive an id that died and was reused', () => {
+  // #222 shape 2. `entity_update_attributes` is generic and `spawn_entity` is
+  // entity-domain state, so a section-ordered replay hands the dead body's
+  // attributes to the body that reused its id.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'entity_update_attributes', data: { entityId: 9, properties: [{ key: 'generic.max_health', value: 40, modifiers: [] }] } },
+    { name: 'entity_destroy', data: { entityIds: [9] } },
+    { name: 'spawn_entity', data: { entityId: 9, x: 1, y: 64, z: 1, yaw: 0, pitch: 0 } }
+  ]
+
+  const { replayed } = assertEquivalent(stream)
+
+  assert.deepEqual(
+    replayFrames(buildCache(stream).snapshot()).map(frame => frame.name),
+    [
+      'login', 'game_state_change', 'chunk_batch_start', 'map_chunk', 'chunk_batch_finished',
+      'entity_update_attributes', 'entity_destroy', 'spawn_entity'
+    ]
+  )
+
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  const fields = Object.fromEntries(entity.fields.map(field => [field.key, field.value]))
+  assert.deepEqual(
+    Object.keys(fields).filter(key => key.startsWith('attribute:')),
+    [],
+    'the fresh body inherited no attribute from the body whose id it reused'
+  )
+  assert.equal(fields.x, 1, 'the fresh body kept its own spawn pose')
+})
+
+test('replay equals the stream: equipment, passengers, and an effect do not outlive the body', () => {
+  // #222, the class the two shapes stand for: every frame that carries per-entity
+  // state and lands in `generic` replays in capture order, not after the body it
+  // was about. Equipment and passengers are the shapes a fix that special-cased
+  // `remove_entity_effect` would leave behind.
+  const stream = [
+    ...joinPrefix(),
+    { name: 'spawn_entity', data: { entityId: 9, x: 0, y: 64, z: 0, yaw: 0, pitch: 0 } },
+    { name: 'entity_equipment', data: { entityId: 9, equipments: [{ slot: 5, item: item(1) }] } },
+    { name: 'set_passengers', data: { entityId: 9, passengers: [10, 11] } },
+    { name: 'entity_effect', data: { entityId: 9, effectId: 1, amplifier: 1, duration: 100, flags: 0 } },
+    { name: 'entity_destroy', data: { entityIds: [9] } }
+  ]
+
+  const { replayed } = assertEquivalent(stream)
+
+  const entity = stateSnapshot(replayed).entities.find(entry => entry.entityId === 9)
+  assert.equal(entity.removed, true)
+  assert.deepEqual(entity.fields, [], 'nothing the destroyed body held replays after its removal')
+})
+
 test('replay equals the stream: deltas captured before the last absolute keep their order', () => {
   // GitHub issue #35. A relative move only means something after the frame it
   // follows, and the cache splits absolutes (`entity`) from deltas (`generic`).
