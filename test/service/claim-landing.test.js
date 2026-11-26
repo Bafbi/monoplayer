@@ -322,3 +322,33 @@ test('a claim still refuses a body that cached no chunk at all', async () => {
   assert.equal(outcome.reason, 'body_not_warm')
   assert.equal(core.metrics.claimBodies, 0)
 })
+
+// #597: one snapshot, read where the offline loopback used to assemble it. The
+// claim's own record is read off the leg's board (`claimOn`), the stage is the
+// session's, the warm flag is the cache's, and the count is the channels the core
+// was told about. Nothing here is cached: the row is read from the bags at the
+// call, so a snapshot taken after a claim reads the claim.
+test('#597 a claim on a served body reads as one snapshot', async () => {
+  const { core, backendLeg, frontLeg, clock } = makeCore({ config: { picker: true } })
+  // The body's canonical name is the address a row dials (#265), which is also the
+  // name the front records a claim against.
+  const body = CLAIMED_SERVER
+  const dial = core.connectClaimedBody({ body, target: CLAIMED_BODY.target })
+  await Promise.resolve()
+  warmABody(backendLeg)
+  clock.tick(50)
+  assert.equal((await dial).connected, true)
+  // The claim, recorded where a player answers the body's own dialog.
+  frontLeg.claim(body, { name: 'Pilot', holder: 'holder-4' })
+
+  const { bodies } = core.laneState()
+  assert.equal(bodies.length, 1, 'one session serves one body (#261)')
+  assert.deepEqual(bodies[0], {
+    body,
+    server: CLAIMED_BODY.target,
+    state: 'warm',
+    claim: { body, server: body, holder: 'holder-4', name: 'Pilot', at: 0 },
+    spectators: 0,
+    warm: true
+  })
+})

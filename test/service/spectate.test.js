@@ -83,6 +83,14 @@ test('#259 a lane without the picker has no spectator at all', () => {
     reason: 'picker_off',
     body: CLAIMED.body
   })
+  // #597: an idle lane still has a row, because the body it is configured with is the
+  // body it will dial. Nothing claims it, nothing watches it, and its join is not warm.
+  const [idle] = core.laneState().bodies
+  assert.equal(idle.body, pickSlug(core.config.backend.host + ':' + core.config.backend.port))
+  assert.equal(idle.state, 'boot')
+  assert.equal(idle.claim, null)
+  assert.equal(idle.spectators, 0)
+  assert.equal(idle.warm, false)
 })
 
 test('#259 a lane that serves no body refuses a spectator, and dials nothing for one', async () => {
@@ -127,8 +135,12 @@ test('#259 a body nobody drives is still watchable, and watching attaches nobody
   // The driver leaves. The claim goes with its connection; the body does not.
   rig.frontLeg.clientDisconnect({ reason: 'player_quit' })
   assert.equal(rig.core.attached, false)
-  assert.equal(rig.core.session.state, 'detached')
-  assert.equal(rig.core.claimedBody, CLAIMED.body, 'the body outlives the claim it was dialled for')
+  // #597: one snapshot, where this file read the stage off the session and the body
+  // off the claim. The claim went with its connection; the body it dialled did not.
+  const [row] = rig.core.laneState().bodies
+  assert.equal(row.state, 'detached')
+  assert.equal(row.claim, null, 'the claim went with the connection that held it')
+  assert.equal(row.body, CLAIMED.body, 'the body outlives the claim it was dialled for')
   const answer = rig.core.spectateBody({ body: CLAIMED.body, server: CLAIMED.body, name: 'Watcher' })
   assert.equal(answer.watching, true)
   assert.equal(answer.reason, null)
@@ -170,13 +182,18 @@ test('#259 a spectator that never landed takes no watcher away from one that did
   rig.core.attachPlayer({ name: 'Pilot', uuid: null })
   rig.frontLeg.clientDisconnect({ reason: 'player_quit' })
   rig.core.spectateView({ name: 'Watcher', channel: 'spectator-one' })
+  // #597: who watches the body is the snapshot's own field, so the count below is
+  // read from the lane rather than from what a call happened to answer.
+  assert.equal(rig.core.laneState().bodies[0].spectators, 1, 'one channel watches the body')
   // A client that left between its landing and the body's play state closes as a
   // spectator's channel too, and it was never handed the body. The relay is still
   // somebody's: a count would take the one that stayed away for it.
   assert.equal(rig.core.spectatorLeft({ channel: 'spectator-two' }).watching, 1,
     'the spectator that stayed is still watching')
+  assert.equal(rig.core.laneState().bodies[0].spectators, 1, 'and the lane still counts one')
   assert.equal(rig.core.spectatorLeft({ channel: 'spectator-one' }).watching, 0,
     'and the last one leaving ends it')
+  assert.equal(rig.core.laneState().bodies[0].spectators, 0, 'the body has no watcher left')
 })
 
 test('#259 a spectator is told it is spectating, on its own channel and after the replay', async () => {
