@@ -17,13 +17,13 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js'
-import { createMonoplayer, loadConfig } from '../service/monoplayer.js'
+import { loadConfig } from '../service/monoplayer.js'
 import { detail, flag, waitFor, withTimeout } from '../service/cli.js'
 import { createOfflineBackendLeg } from '../legs/live-backend.js'
 import { createBodyCaches } from '../core/body-caches.js'
 import { replayFrames } from '../core/join-synth.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
-import { waitForReady } from '../service/readiness.js'
+import { createRig } from './rig.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createJournal, readJournal, readManifests } from '../observability/journal.js'
@@ -116,7 +116,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let deadlineStranger = null
   // #218: the attach-record rig. It is the smallest rig that attaches twice, so
   // "no metadata frame without a spawn" is a claim about a stream this run can
-  // reconstruct. Its core logs as `attachCore`, which is what `coreLogEvents`
+  // reconstruct. Its core logs as `attachCore`, which is what `attach.events`
   // reads to reach the `attach` record.
   let attachBase = null
   let attachFront = null
@@ -226,18 +226,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (verbose) process.stderr.write(`[log] ${event} ${detail(fields)}\n`)
   }
 
-  // The core's lifecycle records arrive as one JSON line inside a
-  // `seamlessCore` entry, because the rig hands it a logStream. This reads
-  // them back so a check can assert on what the core decided. `stream` is the
-  // event name that rig's logStream writes, so a check that builds its own core
-  // can read its lines instead of the seamless rig's.
-  const coreLogEvents = (from = 0, stream = 'seamlessCore') => logs.slice(from)
-    .filter(entry => entry.event === stream)
-    .map(entry => {
-      try { return JSON.parse(entry.fields?.line ?? '') } catch { return null }
-    })
-    .filter(entry => entry !== null)
-
+  // A rig's core lifecycle records arrive as one JSON line inside an entry
+  // tagged with that rig's name. `rig.events(from)` reads them back, from the
+  // stream of the rig it belongs to (#223): two rigs may share a tag, and none
+  // reads another's lines.
   function check (id, name, ok, info = null) {
     const record = { id, name, ok: ok === true, detail: info }
     assertions.push(record)
@@ -247,15 +239,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   }
 
   try {
-    // --- setup: fake backend, config, real legs, core ---
-    // A cap the protocol library never sends by default (10), so O26 proves the
-    // puppet replaced its own value instead of matching it by accident.
-    // #21: this backend also has the code of conduct enabled, so the puppet's
-    // first configuration phase carries a gate that the protocol library
-    // answers itself. Nothing is attached yet, so this is the no-client
-    // fallback: the leg accepts it and says so (O32).
-    fake = await createFakeBackend({ port: 0, logStream: null, viewDistance: 6, codeOfConduct: true })
-    evidence.backendPort = fake.port
+    // --- setup: the rig factory builds the fake, the legs, and the core ---
     // A second backend is the target of the followed transfers (O21-O24, the
     // detach path with the key off, and O33-O35, the kept connection).
     fake2 = await createFakeBackend({ port: 0, logStream: null })
@@ -265,7 +249,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // the loopback cannot catch the sky-2 "not by this method" failure.
     handshakeProxy = await createHandshakeProxy({ targetPort: fake2.port, log })
     evidence.handshakeProxyPort = handshakeProxy.port
-    const baseTarget = { host: '127.0.0.1', port: fake.port }
 
     // #312: a third admitted name, so the rival of a driven body is refused by the
     // lane's shape rather than by the whitelist.
@@ -274,49 +257,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (offlineWhitelist.includes(puppetUuid)) {
       throw new Error('the puppet offline UUID must not be whitelisted')
     }
-
-    const config = loadConfig({
-      version: VERSION,
-      attachWhitelist: offlineWhitelist,
-      front: { host: '127.0.0.1', port: 0 },
-      backend: { host: '127.0.0.1', port: fake.port },
-      puppet: { username: 'GlowSquidye', uuid: puppetUuid },
-      // O29 needs the speaking path. The default is read-only, and this rung is
-      // the only place a real client-side frame meets the relay.
-      chat: 'full',
-      // The default is the kept connection (#22). O21-O24 pin the detach path,
-      // which is still reachable and is what a kept connection restores to, so
-      // this rung states it rather than inheriting it.
-      transfer: { keepConnection: false }
-    })
-
-    backend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      port: fake.port,
-      version: VERSION,
-      username: 'GlowSquidye',
-      // The deployed lanes set this, and O30 proves it never reaches a play
-      // dialog: the dialog waits for the human instead of being clicked (#20).
-      dialogAction: 'last',
-      // #21: a gate is the human's while they are attached, and the puppet's
-      // own accept is reported to the core so nothing waits for a client.
-      isHumanAttached: () => core.attached === true,
-      onDialogAnswered: ({ state }) => core.notePuppetDialogAnswer({ state }),
-      log
-    })
-    const wire = createWireChecker({ version: VERSION })
-
-    front = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: VERSION,
-      offlineWhitelist,
-      getSnapshotConfig: () => core.cache.snapshot().config,
-      wireCheck: payload => wire.check(payload),
-      wireMode: 'throw',
-      chat: 'full',
-      log
-    })
 
     // #217: a real writer, into a temporary directory. This rig is the only
     // place an offline run produces the stream a diagnosis reads, so O52 reads
@@ -334,87 +274,116 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       throw new Error('the loopback journal did not open: ' + journal.stats().disabledReason)
     }
 
-    core = createMonoplayer({
-      config,
-      backendLeg: backend,
-      frontLeg: front,
-      clock: {
-        now: Date.now,
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout
-      },
-      logStream: { write: line => log('core', { line }) },
-      journal
-    })
-    front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
-    front.setConfiguringHandler(({ name }) => core.configuringReady({ name }))
-    front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
     // Every successful attach records the cache as it stood when its replay was
     // built, so O27 below can check the N13 frame cut against the real client's
     // decode.
     const attachCuts = []
-    front.setCoreAttach(({ name, uuid }) => {
-      const attachSnapshot = core.cache.snapshot()
-      const attachPose = core.session.currentPose
-      const outcome = core.attachPlayer({ name, uuid, includeConfig: false })
-      if (outcome.attached) {
-        attachCuts.push({ snapshot: { ...attachSnapshot, pose: attachPose }, replayFrames: outcome.frames ?? [] })
-      }
-      return outcome
-    })
-    core.start()
-
+    // #21: the gate is answered before the dial resolves, because the fake
+    // backend withholds finish_configuration until the accept arrives. It is read
+    // at the step between the dial and the warm wait, which is where O32 wants it.
+    let gateAtConnect = null
     // One backend.connect() per reconnect_due. The guard makes a loop
     // impossible even if two dues were ever emitted close together.
     let reconnecting = false
-    core.on('reconnect_due', async ({ delayMs, target } = {}) => {
-      if (stopping || reconnecting) return
-      reconnecting = true
-      core.session.backendConnecting({ initial: false })
-      try {
-        backend.setTarget(target ?? baseTarget, {
-          keepCookies: target !== undefined && target !== null,
-          transfer: target !== undefined && target !== null
-        })
-        await backend.connect()
-        log('backendReconnect', {
-          delayMs,
-          target: target ? `${target.host}:${target.port}` : null,
-          backendLogins: core.session.backendLogins
-        })
-      } catch (error) {
-        core.session.fail()
-        log('backendReconnectFailed', { delayMs, error: String(error?.message ?? error).slice(0, 300) })
-      } finally {
-        reconnecting = false
+    const wire = createWireChecker({ version: VERSION })
+    const main = await createRig({
+      name: 'core',
+      log,
+      logs,
+      // A cap the protocol library never sends by default (10), so O26 proves the
+      // puppet replaced its own value instead of matching it by accident. And the
+      // code of conduct on, so the puppet's first configuration phase carries a
+      // gate that the protocol library answers itself, with nothing attached yet:
+      // the no-client fallback (O32).
+      fake: { viewDistance: 6, codeOfConduct: true },
+      config: ({ base }) => loadConfig({
+        version: VERSION,
+        attachWhitelist: offlineWhitelist,
+        front: { host: '127.0.0.1', port: 0 },
+        backend: { host: '127.0.0.1', port: base.port },
+        puppet: { username: 'GlowSquidye', uuid: puppetUuid },
+        // O29 needs the speaking path. The default is read-only, and this rung is
+        // the only place a real client-side frame meets the relay.
+        chat: 'full',
+        // The default is the kept connection (#22). O21-O24 pin the detach path,
+        // which is still reachable and is what a kept connection restores to, so
+        // this rung states it rather than inheriting it.
+        transfer: { keepConnection: false }
+      }),
+      whitelist: offlineWhitelist,
+      wire,
+      front: { chat: 'full' },
+      // The deployed lanes set this, and O30 proves it never reaches a play
+      // dialog: the dialog waits for the human instead of being clicked (#20).
+      backend: { dialogAction: 'last' },
+      core: { journal },
+      attach: ({ rig, player }) => {
+        const attachSnapshot = rig.core.cache.snapshot()
+        const attachPose = rig.core.session.currentPose
+        const outcome = rig.core.attachPlayer({ ...player, includeConfig: false })
+        if (outcome.attached) {
+          attachCuts.push({ snapshot: { ...attachSnapshot, pose: attachPose }, replayFrames: outcome.frames ?? [] })
+        }
+        return outcome
+      },
+      reconnect: async ({ rig, delayMs, target } = {}) => {
+        if (stopping || reconnecting) return
+        reconnecting = true
+        rig.core.session.backendConnecting({ initial: false })
+        try {
+          rig.backend.setTarget(target ?? { host: '127.0.0.1', port: rig.base.port }, {
+            keepCookies: target !== undefined && target !== null,
+            transfer: target !== undefined && target !== null
+          })
+          await rig.backend.connect()
+          log('backendReconnect', {
+            delayMs,
+            target: target ? `${target.host}:${target.port}` : null,
+            backendLogins: rig.core.session.backendLogins
+          })
+        } catch (error) {
+          rig.core.session.fail()
+          log('backendReconnectFailed', { delayMs, error: String(error?.message ?? error).slice(0, 300) })
+        } finally {
+          reconnecting = false
+        }
+      },
+      onStep: ({ step, rig }) => {
+        // The run phase starts at the dial, as it did when the dial was this
+        // function's own line: a setup failure above it is exit 2, and anything
+        // from here on is exit 1.
+        if (step === 'connect') {
+          phase = 'run'
+          return
+        }
+        if (step !== 'ready') return
+        gateAtConnect = {
+          sends: rig.base.received.codeOfConductSends,
+          accepts: rig.base.received.codeOfConductAccepts,
+          logged: logs.some(entry => entry.event === 'codeOfConductAccepted'),
+          heldLogged: logs.some(entry => entry.event === 'codeOfConductHeld'),
+          queued: rig.core.pendingDialog.held,
+          answeredByPuppet: rig.core.metrics.controlDialogsPuppetAnswered
+        }
+        evidence.gate = gateAtConnect
       }
     })
-
-    // --- run: connect, readiness, listen ---
-    phase = 'run'
-    await backend.connect()
-    // #21: the gate is answered before this promise resolves, because the fake
-    // backend withholds finish_configuration until the accept arrives.
-    const gateAtConnect = {
-      sends: fake.received.codeOfConductSends,
-      accepts: fake.received.codeOfConductAccepts,
-      logged: logs.some(entry => entry.event === 'codeOfConductAccepted'),
-      heldLogged: logs.some(entry => entry.event === 'codeOfConductHeld'),
-      queued: core.pendingDialog.held,
-      answeredByPuppet: core.metrics.controlDialogsPuppetAnswered
-    }
-    evidence.gate = gateAtConnect
-    const readiness = await waitForReady({ core, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
-    check('R0', 'readiness warm from chunk_batch_finished', readiness.warm === true, {
-      warm: readiness.warm,
-      configFrames: readiness.configFrames,
-      prefixFrames: readiness.prefixFrames,
-      elapsedMs: readiness.elapsedMs
+    fake = main.base
+    front = main.front
+    backend = main.backend
+    core = main.core
+    // The resolved document, read back from the core that runs it: every later
+    // rig spreads this one and changes a key or two.
+    const config = core.config
+    evidence.backendPort = fake.port
+    evidence.frontPort = main.port
+    check('R0', 'readiness warm from chunk_batch_finished', main.readiness.warm === true, {
+      warm: main.readiness.warm,
+      configFrames: main.readiness.configFrames,
+      prefixFrames: main.readiness.prefixFrames,
+      elapsedMs: main.readiness.elapsedMs
     })
-    if (!readiness.warm) throw new Error('readiness did not reach the warm marker')
-
-    const bound = await front.listen()
-    evidence.frontPort = bound.port ?? front.port
+    if (!main.readiness.warm) throw new Error('readiness did not reach the warm marker')
 
     // --- late-attach churn: mutate cached state before the first attach ---
     // Production attaches minutes after the puppet joined, so the replay must
@@ -864,75 +833,48 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // backend as `chat_command`, not `chat_command_signed`. The signed name is
     // pinned by test/core/relay.test.js and test/service/chat-send.test.js; what
     // this check proves is the mode decision on a protocol bot's frame.
-    commandsBase = await createFakeBackend({ port: 0, logStream: null })
-    commandsFront = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: VERSION,
-      offlineWhitelist,
-      getSnapshotConfig: () => commandsCore?.cache.snapshot().config ?? [],
-      wireCheck: payload => wire.check(payload),
-      wireMode: 'throw',
-      // No `chat` here: `createOfflineFrontLeg` does not forward it (#100), so
-      // passing it would claim the front leg backstop runs this mode. It does
-      // not, and `commands` relays clientbound as `read-only` does anyway.
-      log
-    })
-    commandsBackend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      port: commandsBase.port,
-      version: VERSION,
-      username: 'GlowSquidye',
-      dialogAction: 'last',
-      isHumanAttached: () => commandsCore?.attached === true,
-      onDialogAnswered: ({ state }) => commandsCore?.notePuppetDialogAnswer({ state }),
-      log
-    })
-    commandsCore = createMonoplayer({
-      config: loadConfig({ ...config, chat: 'commands' }),
-      backendLeg: commandsBackend,
-      frontLeg: commandsFront,
-      clock: {
-        now: Date.now,
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout
-      },
-      logStream: { write: line => log('commandsCore', { line }) }
-    })
-    commandsFront.setCoreAttachConfiguring(({ name, uuid }) => commandsCore.attachConfiguringPlayer({ name, uuid }))
-    commandsFront.setConfiguringHandler(({ name }) => commandsCore.configuringReady({ name }))
-    commandsFront.setClientSettingsHandler(settings => commandsCore.noteClientSettings(settings))
-    commandsFront.setCoreAttach(({ name, uuid }) =>
-      commandsCore.attachPlayer({ name, uuid, includeConfig: false })
-    )
-    commandsCore.start()
+    // No `chat` option on this rig's front: `createOfflineFrontLeg` does not
+    // forward it (#100), so passing it would claim the front leg backstop runs
+    // this mode. It does not, and `commands` relays clientbound as `read-only`
+    // does anyway.
+    //
     // One backend.connect() per reconnect_due, as the main rig does it, so a
     // backend that ends fails as a dial rather than as a bot wait that blames
     // the command.
     let commandsReconnecting = false
-    commandsCore.on('reconnect_due', async ({ delayMs } = {}) => {
-      if (stopping || commandsReconnecting) return
-      commandsReconnecting = true
-      commandsCore.session.backendConnecting({ initial: false })
-      try {
-        await commandsBackend.connect()
-        log('commandsBackendReconnect', { delayMs, backendLogins: commandsCore.session.backendLogins })
-      } catch (error) {
-        commandsCore.session.fail()
-        log('commandsBackendReconnectFailed', {
-          delayMs,
-          error: String(error?.message ?? error).slice(0, 300)
-        })
-      } finally {
-        commandsReconnecting = false
+    const commands = await createRig({
+      name: 'commandsCore',
+      log,
+      logs,
+      config: loadConfig({ ...config, chat: 'commands' }),
+      whitelist: offlineWhitelist,
+      wire,
+      backend: { dialogAction: 'last' },
+      reconnect: async ({ rig, delayMs } = {}) => {
+        if (stopping || commandsReconnecting) return
+        commandsReconnecting = true
+        rig.core.session.backendConnecting({ initial: false })
+        try {
+          await rig.backend.connect()
+          log('commandsBackendReconnect', { delayMs, backendLogins: rig.core.session.backendLogins })
+        } catch (error) {
+          rig.core.session.fail()
+          log('commandsBackendReconnectFailed', {
+            delayMs,
+            error: String(error?.message ?? error).slice(0, 300)
+          })
+        } finally {
+          commandsReconnecting = false
+        }
       }
     })
-    await commandsBackend.connect()
-    const commandsReadiness = await waitForReady({ core: commandsCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
-    if (!commandsReadiness.warm) throw new Error('the commands-mode rig did not warm')
-    const commandsBound = await commandsFront.listen()
+    commandsBase = commands.base
+    commandsFront = commands.front
+    commandsBackend = commands.backend
+    commandsCore = commands.core
+    if (!commands.readiness.warm) throw new Error('the commands-mode rig did not warm')
     bot9 = createBot({
-      port: commandsBound.port ?? commandsFront.port,
+      port: commands.port,
       username: 'Second'
     })
     await bot9.ready()
@@ -1596,95 +1538,65 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // `transfer.keepConnection` ---
     // A second, independent puppet and front against the same fake backends,
     // with the key on. The client follows the move on its own connection.
-    seamlessFront = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: VERSION,
-      offlineWhitelist,
-      getSnapshotConfig: () => seamlessCore?.cache.snapshot().config ?? [],
-      wireCheck: payload => wire.check(payload),
-      wireMode: 'throw',
-      chat: 'full',
-      log
-    })
-    seamlessBase = await createFakeBackend({ port: 0, logStream: null })
-    seamlessBackend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      port: seamlessBase.port,
-      version: VERSION,
-      username: 'GlowSquidye',
-      dialogAction: 'last',
-      isHumanAttached: () => seamlessCore?.attached === true,
-      onDialogAnswered: ({ state }) => seamlessCore?.notePuppetDialogAnswer({ state }),
-      log
-    })
-    seamlessCore = createMonoplayer({
+    let seamlessReconnecting = false
+    const seamless = await createRig({
+      name: 'seamlessCore',
+      log,
+      logs,
       config: loadConfig({
         ...config,
         transfer: { ...config.transfer, keepConnection: true }
       }),
-      backendLeg: seamlessBackend,
-      frontLeg: seamlessFront,
-      clock: {
-        now: Date.now,
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout
-      },
-      logStream: { write: line => log('seamlessCore', { line }) }
-    })
-    seamlessFront.setCoreAttachConfiguring(({ name, uuid }) => seamlessCore.attachConfiguringPlayer({ name, uuid }))
-    seamlessFront.setConfiguringHandler(({ name }) => seamlessCore.configuringReady({ name }))
-    seamlessFront.setClientSettingsHandler(settings => seamlessCore.noteClientSettings(settings))
-    seamlessFront.setCoreAttach(({ name, uuid }) =>
-      seamlessCore.attachPlayer({ name, uuid, includeConfig: false })
-    )
-    seamlessCore.start()
-    let seamlessReconnecting = false
-    seamlessCore.on('reconnect_due', async ({ delayMs, target: dueTarget } = {}) => {
-      if (stopping || seamlessReconnecting) return
-      seamlessReconnecting = true
-      seamlessCore.session.backendConnecting({ initial: false })
-      try {
-        seamlessBackend.setTarget(dueTarget ?? { host: '127.0.0.1', port: seamlessBase.port }, {
-          keepCookies: dueTarget !== undefined && dueTarget !== null,
-          transfer: dueTarget !== undefined && dueTarget !== null
-        })
-        await seamlessBackend.connect()
-      } catch (error) {
-        log('seamlessBackendReconnectFailed', {
-          error: String(error?.message ?? error).slice(0, 300),
-          state: seamlessCore.session.state
-        })
-        // #87: a dial the target refused is not the target dying. The move is
-        // still in flight; the rung records that, then decides whether to
-        // retry (the rig has one dial per reconnect) or to spend the follow
-        // budget on it, which is what start-live does after its failures.
-        dialFailureState = {
-          moveKind: seamlessCore.moveKind,
-          state: seamlessCore.session.state,
-          clientReconfiguring: seamlessCore.clientReconfiguring,
-          restored: seamlessCore.metrics.reconfigurationsRestored
+      whitelist: offlineWhitelist,
+      wire,
+      front: { chat: 'full' },
+      backend: { dialogAction: 'last' },
+      reconnect: async ({ rig, delayMs, target: dueTarget } = {}) => {
+        if (stopping || seamlessReconnecting) return
+        seamlessReconnecting = true
+        rig.core.session.backendConnecting({ initial: false })
+        try {
+          rig.backend.setTarget(dueTarget ?? { host: '127.0.0.1', port: rig.base.port }, {
+            keepCookies: dueTarget !== undefined && dueTarget !== null,
+            transfer: dueTarget !== undefined && dueTarget !== null
+          })
+          await rig.backend.connect()
+        } catch (error) {
+          log('seamlessBackendReconnectFailed', {
+            error: String(error?.message ?? error).slice(0, 300),
+            state: rig.core.session.state
+          })
+          // #87: a dial the target refused is not the target dying. The move is
+          // still in flight; the rung records that, then decides whether to
+          // retry (the rig has one dial per reconnect) or to spend the follow
+          // budget on it, which is what start-live does after its failures.
+          dialFailureState = {
+            moveKind: rig.core.moveKind,
+            state: rig.core.session.state,
+            clientReconfiguring: rig.core.clientReconfiguring,
+            restored: rig.core.metrics.reconfigurationsRestored
+          }
+          if (giveUpOnFailedDial) {
+            giveUpOnFailedDial = false
+            rig.core.abortTransfer('target_unreachable')
+            rig.backend.setTarget({ host: '127.0.0.1', port: rig.base.port }, { keepCookies: false })
+            return
+          }
+          rig.core.session.fail()
+        } finally {
+          seamlessReconnecting = false
         }
-        if (giveUpOnFailedDial) {
-          giveUpOnFailedDial = false
-          seamlessCore.abortTransfer('target_unreachable')
-          seamlessBackend.setTarget({ host: '127.0.0.1', port: seamlessBase.port }, { keepCookies: false })
-          return
-        }
-        seamlessCore.session.fail()
-      } finally {
-        seamlessReconnecting = false
       }
     })
-
-    await seamlessBackend.connect()
-    const seamlessReadiness = await waitForReady({ core: seamlessCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
-    if (!seamlessReadiness.warm) throw new Error('the kept-connection rig did not warm')
-    const seamlessBound = await seamlessFront.listen()
+    seamlessBase = seamless.base
+    seamlessFront = seamless.front
+    seamlessBackend = seamless.backend
+    seamlessCore = seamless.core
+    if (!seamless.readiness.warm) throw new Error('the kept-connection rig did not warm')
     // #73: the library accepts the code of conduct on its own; O43 needs a
     // client that leaves the gate to the puppet, so this one does not answer.
     bot5 = createBot({
-      port: seamlessBound.port ?? seamlessFront.port,
+      port: seamless.port,
       username: 'Attach',
       answerCodeOfConduct: false
     })
@@ -1738,9 +1650,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the cold target configuration and its play login',
       25_000
     )
-    const coldCoreEvents = coreLogEvents(coldLogMark)
+    const coldCoreEvents = seamless.events(coldLogMark)
     await settleUntil(
-      () => coreLogEvents(coldLogMark).some(entry => entry.event === 'reconfigurationWaitingWorld'),
+      () => seamless.events(coldLogMark).some(entry => entry.event === 'reconfigurationWaitingWorld'),
       5_000
     )
     const coldFrames = b5.names.slice(coldMark).map(frame => ({ state: frame.state, name: frame.name }))
@@ -1998,7 +1910,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     gatedFake = await createFakeBackend({ port: 0, logStream: null, codeOfConduct: true })
     gatedProxy = await createHandshakeProxy({ targetPort: gatedFake.port, log })
     bot6 = createBot({
-      port: seamlessBound.port ?? seamlessFront.port,
+      port: seamless.port,
       username: 'Second',
       answerCodeOfConduct: false
     })
@@ -2063,7 +1975,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // --- O44: a play dialog the last client left stays held (#20) ---
-    bot7 = createBot({ port: seamlessBound.port ?? seamlessFront.port, username: 'Attach' })
+    bot7 = createBot({ port: seamless.port, username: 'Attach' })
     await bot7.ready()
     const b7 = bot7.received
     const PLAY_ID = 'monoplayer:left_behind'
@@ -2076,7 +1988,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const clicksBefore = gatedFake.received.customClickActions.length
     const answersBefore = seamlessCore.metrics.controlDialogsAnsweredOnDetach
     const resentBefore = seamlessCore.metrics.controlDialogsResent
-    bot8 = createBot({ port: seamlessBound.port ?? seamlessFront.port, username: 'Second' })
+    bot8 = createBot({ port: seamless.port, username: 'Second' })
     await bot8.ready()
     const b8 = bot8.received
     await bot8.waitFor(() => b8.dialogs.length === 1, 'the held play dialog re-sent to the reattaching client')
@@ -2303,48 +2215,24 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The defect's shape comes from sending metadata for an id the backend never
     // spawned. The cache cannot tell that apart from a window that evicted the
     // spawn, because both leave a metadata entry with no spawn beside it.
-    attachBase = await createFakeBackend({ port: 0, logStream: null })
-    attachFront = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: VERSION,
-      offlineWhitelist,
-      getSnapshotConfig: () => attachCore?.cache.snapshot().config ?? [],
-      wireCheck: payload => wire.check(payload),
-      wireMode: 'throw',
-      log
+    const attach = await createRig({
+      name: 'attachCore',
+      log,
+      logs,
+      config: ({ base }) => loadConfig({
+        ...config,
+        backend: { ...config.backend, port: base.port }
+      }),
+      whitelist: offlineWhitelist,
+      wire,
+      backend: { dialogAction: 'last' }
     })
-    attachBackend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      port: attachBase.port,
-      version: VERSION,
-      username: 'GlowSquidye',
-      dialogAction: 'last',
-      isHumanAttached: () => attachCore?.attached === true,
-      onDialogAnswered: ({ state }) => attachCore?.notePuppetDialogAnswer({ state }),
-      log
-    })
-    attachCore = createMonoplayer({
-      config: loadConfig({ ...config, backend: { ...config.backend, port: attachBase.port } }),
-      backendLeg: attachBackend,
-      frontLeg: attachFront,
-      clock: {
-        now: Date.now,
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout
-      },
-      logStream: { write: line => log('attachCore', { line }) }
-    })
-    attachFront.setCoreAttachConfiguring(({ name, uuid }) => attachCore.attachConfiguringPlayer({ name, uuid }))
-    attachFront.setConfiguringHandler(({ name }) => attachCore.configuringReady({ name }))
-    attachFront.setClientSettingsHandler(settings => attachCore.noteClientSettings(settings))
-    attachFront.setCoreAttach(({ name, uuid }) => attachCore.attachPlayer({ name, uuid, includeConfig: false }))
-    attachCore.start()
-    await attachBackend.connect()
-    const attachReadiness = await waitForReady({ core: attachCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
-    if (!attachReadiness.warm) throw new Error('the attach-record rig did not warm')
-    const attachBound = await attachFront.listen()
-    const attachPort = attachBound.port ?? attachFront.port
+    attachBase = attach.base
+    attachFront = attach.front
+    attachBackend = attach.backend
+    attachCore = attach.core
+    if (!attach.readiness.warm) throw new Error('the attach-record rig did not warm')
+    const attachPort = attach.port
 
     // One body, and no metadata for it, so the ordinary attach's stream is a
     // spawn and nothing else. That is the shape a healthy attach has.
@@ -2355,7 +2243,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The attach records the core wrote, oldest first. Reading the core's own
     // log line is the point: the record under test is the one the product
     // emitted, not a value this rig rebuilt from the same snapshot.
-    const attachRecords = from => coreLogEvents(from, 'attachCore').filter(entry => entry.event === 'attach')
+    const attachRecords = from => attach.events(from).filter(entry => entry.event === 'attach')
 
     const ordinaryMark = logs.length
     attachBot1 = createBot({ port: attachPort, username: 'Attach' })
@@ -2429,65 +2317,43 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // sending 2049 of them. Four entities here, and the churn is five frames, so an
     // arrival-ordered ring of four loses the first entity's spawn while this one
     // keeps every entity. Nothing above this line changes.
+    let entityRig = null
     let entityFake = null
     let entityBackend = null
     let entityFront = null
     let entityCore = null
     let entityBot = null
     try {
-      entityFake = await createFakeBackend({ port: 0, logStream: null })
       const entityWhitelist = [offlineUuid('Attach')]
-      const entityConfig = loadConfig({
-        version: VERSION,
-        attachWhitelist: entityWhitelist,
-        front: { host: '127.0.0.1', port: 0 },
-        backend: { host: '127.0.0.1', port: entityFake.port },
-        puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') },
-        bounds: { maxEntities: 4 }
-      })
-      entityBackend = createOfflineBackendLeg({
-        host: '127.0.0.1',
-        port: entityFake.port,
-        version: VERSION,
-        username: 'GlowSquidye',
-        log
-      })
-      const entityWire = createWireChecker({ version: VERSION })
-      entityFront = createOfflineFrontLeg({
-        host: '127.0.0.1',
-        port: 0,
-        version: VERSION,
-        offlineWhitelist: entityWhitelist,
-        getSnapshotConfig: () => entityCore.cache.snapshot().config,
-        wireCheck: payload => entityWire.check(payload),
-        wireMode: 'throw',
-        log
-      })
-      entityCore = createMonoplayer({
-        config: entityConfig,
-        backendLeg: entityBackend,
-        frontLeg: entityFront,
-        clock: {
-          now: Date.now,
-          setTimeout: (fn, ms) => setTimeout(fn, ms),
-          clearTimeout
-        },
-        logStream: { write: line => log('core', { line }) }
-      })
       const entityAttaches = []
-      entityFront.setCoreAttachConfiguring(({ name, uuid }) => entityCore.attachConfiguringPlayer({ name, uuid }))
-      entityFront.setConfiguringHandler(({ name }) => entityCore.configuringReady({ name }))
-      entityFront.setClientSettingsHandler(settings => entityCore.noteClientSettings(settings))
-      entityFront.setCoreAttach(({ name, uuid }) => {
-        const outcome = entityCore.attachPlayer({ name, uuid, includeConfig: false })
-        if (outcome.attached) entityAttaches.push(outcome.frames ?? [])
-        return outcome
+      entityRig = await createRig({
+        name: 'core',
+        log,
+        logs,
+          config: ({ base }) => loadConfig({
+          version: VERSION,
+          attachWhitelist: entityWhitelist,
+          front: { host: '127.0.0.1', port: 0 },
+          backend: { host: '127.0.0.1', port: base.port },
+          puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') },
+          bounds: { maxEntities: 4 }
+        }),
+        whitelist: entityWhitelist,
+        wire: createWireChecker({ version: VERSION }),
+        attach: ({ rig, player }) => {
+          const outcome = rig.core.attachPlayer({ ...player, includeConfig: false })
+          if (outcome.attached) entityAttaches.push(outcome.frames ?? [])
+          return outcome
+        },
+        // This rig listened before it dialled, and still does: the port is what
+        // its one client needs, and no assertion here reads the warm marker.
+        order: ['listen', 'connect', 'ready']
       })
-      entityCore.start()
-      const entityBound = await entityFront.listen()
-      const entityPort = entityBound.port ?? entityFront.port
-      await entityBackend.connect()
-      await waitForReady({ core: entityCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
+      entityFake = entityRig.base
+      entityFront = entityRig.front
+      entityBackend = entityRig.backend
+      entityCore = entityRig.core
+      const entityPort = entityRig.port
 
       // Entity 9's body, then its correction, then three more entities: four
       // entities and five frames. Under the old ring these five frames were a FIFO
@@ -2544,9 +2410,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       )
     } finally {
       try { await entityBot?.close?.() } catch { /* best effort */ }
-      try { await entityFront?.close?.() } catch { /* best effort */ }
-      try { await entityBackend?.close?.() } catch { /* best effort */ }
-      try { await entityFake?.close?.() } catch { /* best effort */ }
+      // The rig closes what the factory opened, in the factory's order.
+      try { await entityRig?.close?.() } catch { /* best effort */ }
     }
 
     // --- O52: the journal still records the frames a diagnosis reads (#217) ---
@@ -2699,60 +2564,39 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       whitelistFile: controlWhitelistFile,
       log
     })
-    controlBase = await createFakeBackend({ port: 0, logStream: null })
-    controlBackend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      port: controlBase.port,
-      version: VERSION,
-      username: 'GlowSquidye',
-      log
-    })
-    const controlWire = createWireChecker({ version: VERSION })
-    controlFront = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: VERSION,
-      whitelistStore: controlDocument.whitelistStore,
-      getSnapshotConfig: () => controlCore.cache.snapshot().config,
-      wireCheck: payload => controlWire.check(payload),
-      wireMode: 'throw',
-      log
-    })
-    controlCore = createMonoplayer({
-      config: loadConfig({
+    const control = await createRig({
+      name: 'controlCore',
+      log,
+      logs,
+      // A fresh document, not a spread of `config`: this rig's whitelist is the
+      // file the operator edits, so the array the main rig runs on is not its
+      // starting point.
+      config: ({ base }) => loadConfig({
         version: VERSION,
         attachWhitelist: [],
         front: { host: '127.0.0.1', port: 0 },
-        backend: { host: '127.0.0.1', port: controlBase.port },
+        backend: { host: '127.0.0.1', port: base.port },
         puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') }
       }),
-      backendLeg: controlBackend,
-      frontLeg: controlFront,
-      clock: {
-        now: Date.now,
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout
-      },
-      logStream: { write: line => log('controlCore', { line }) },
-      whitelistSource: controlDocument.attachWhitelist
+      // The store, not an array: the file is what reloads at each login, and that
+      // reload is what O53 proves.
+      front: { whitelistStore: controlDocument.whitelistStore },
+      wire: createWireChecker({ version: VERSION }),
+      core: { whitelistSource: controlDocument.attachWhitelist }
     })
-    controlFront.setCoreAttachConfiguring(({ name, uuid }) => controlCore.attachConfiguringPlayer({ name, uuid }))
-    controlFront.setConfiguringHandler(({ name }) => controlCore.configuringReady({ name }))
-    controlFront.setClientSettingsHandler(settings => controlCore.noteClientSettings(settings))
-    controlFront.setCoreAttach(({ name, uuid }) => controlCore.attachPlayer({ name, uuid, includeConfig: false }))
-    controlCore.start()
-    await controlBackend.connect()
-    const controlReadiness = await waitForReady({ core: controlCore, log, maxWarmMs: 5000, maxTotalMs: 15_000 })
-    if (!controlReadiness.warm) throw new Error('the control-document rig did not warm')
-    const controlBound = await controlFront.listen()
-    const controlPort = controlBound.port ?? controlFront.port
+    controlBase = control.base
+    controlFront = control.front
+    controlBackend = control.backend
+    controlCore = control.core
+    if (!control.readiness.warm) throw new Error('the control-document rig did not warm')
+    const controlPort = control.port
 
     // The login the whitelist refuses. A real socket: it reaches both gates, and
     // neither holds this UUID because it is not in the file.
     const deniedMark = logs.length
     controlBot1 = createBot({ port: controlPort, username: 'Second' })
     await withTimeout(controlBot1.ended, 10_000, 'the refused login ended')
-    const deniedEvents = coreLogEvents(deniedMark, 'controlCore')
+    const deniedEvents = control.events(deniedMark)
       .filter(entry => entry.event === 'attachDenied')
     const loginsBefore = controlCore.session.backendLogins
 
@@ -2771,7 +2615,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the second login'
     ).catch(() => false)
     const attachedAfterEdit = await settleUntil(() => controlCore.attached === true, 10_000)
-    const secondDenials = coreLogEvents(deniedMark, 'controlCore')
+    const secondDenials = control.events(deniedMark)
       .filter(entry => entry.event === 'attachDenied')
       .map(entry => entry.reason)
 
@@ -2895,38 +2739,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       allowedServersSeedFile: pickerSeedFile,
       log
     })
-    pickerBackend = createOfflineBackendLeg({
-      host: '127.0.0.1',
-      // The lane's configured backend, which nothing listens on: with no claim, the
-      // service never dials, and this rig's whole property is a picker with no
-      // session behind it (Q6). #258: the one dial this rig makes is the claim's,
-      // and it goes to the row the frame named, never to this address.
-      port: Number(pickerServerName.slice(pickerServerName.lastIndexOf(':') + 1)),
-      version: pickerVersion,
-      username: 'GlowSquidye',
-      log
-    })
-    pickerFront = createOfflineFrontLeg({
-      host: '127.0.0.1',
-      port: 0,
-      version: pickerVersion,
-      offlineWhitelist: pickerWhitelist,
-      // No cached backend configuration exists, and none is invented: the front's
-      // cached replay path must find nothing here.
-      getSnapshotConfig: () => pickerCore?.cache.snapshot().config ?? [],
-      configurationBaseline: pickerBaseline,
-      pickerServers: createPickerServerReader({ control: pickerControl, log }),
-      onPickerPick: pick => pickerPicks.push(pick),
-      onPickerVerb: verb => pickerVerbs.push(verb),
-      wireCheck: payload => {
-        const outcome = pickerWire.check(payload)
-        pickerWireChecks.push({ state: payload.state, name: payload.name, ok: outcome.ok === true })
-        return outcome
-      },
-      wireMode: 'throw',
-      log
-    })
-    pickerCore = createMonoplayer({
+    // The lane's configured backend, which nothing listens on: with no claim, the
+    // service never dials, and this rig's whole property is a picker with no
+    // session behind it (Q6). #258: the one dial this rig makes is the claim's,
+    // and it goes to the row the frame named, never to this address.
+    const pickerBackendPort = Number(pickerServerName.slice(pickerServerName.lastIndexOf(':') + 1))
+    const picker = await createRig({
+      name: 'pickerCore',
+      log,
+      logs,
+      // No fake server, because this rig's property is a lane with no body behind
+      // the dialog. The one dial it makes is the claim's, and it goes to the row
+      // the frame named.
+      fake: null,
       config: loadConfig({
         version: pickerVersion,
         // The one switch that lets a login with no backend through, and the reason
@@ -2934,22 +2759,42 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         picker: true,
         attachWhitelist: pickerWhitelist,
         front: { host: '127.0.0.1', port: 0 },
-        backend: { host: '127.0.0.1', port: pickerBackend.port ?? 1 },
+        // The lane's own body, which is a dead address like the leg's: this rig
+        // has always named port 1 here (the leg exposes no `port`, so the old
+        // `pickerBackend.port ?? 1` fell back every time), and O59 counts the
+        // three bodies that leaves the registry holding (#260).
+        backend: { host: '127.0.0.1', port: 1 },
         puppet: { username: 'GlowSquidye', uuid: puppetUuid }
       }),
-      backendLeg: pickerBackend,
-      frontLeg: pickerFront,
-      clock: { now: Date.now, setTimeout, clearTimeout },
-      logStream: { write: line => log('pickerCore', { line }) }
+      whitelist: pickerWhitelist,
+      backend: { port: pickerBackendPort },
+      // The two steps this rig does not take are the assertion: it never dials and
+      // never warms, which is O55's no-body-behind-the-dialog.
+      order: ['listen'],
+      // The front's login decision is wired to the core, which is what makes it
+      // hear `picker: true`. The configuration-phase registrations are not: a
+      // client of this lane is offered a server, and attaches at play.
+      configuring: false,
+      front: {
+        // No cached backend configuration exists, and none is invented: the front's
+        // cached replay path must find nothing here.
+        configurationBaseline: pickerBaseline,
+        pickerServers: createPickerServerReader({ control: pickerControl, log }),
+        onPickerPick: pick => pickerPicks.push(pick),
+        onPickerVerb: verb => pickerVerbs.push(verb),
+        // Every check is recorded, not only the one that throws: O57 reads what
+        // the lane last accepted.
+        wireCheck: payload => {
+          const outcome = pickerWire.check(payload)
+          pickerWireChecks.push({ state: payload.state, name: payload.name, ok: outcome.ok === true })
+          return outcome
+        },
+        wireMode: 'throw'
+      }
     })
-    // Wires the front's login decision to the core. Without it the front would run
-    // only its own whitelist check and never hear `picker: true`.
-    pickerCore.start()
-    // #258: the rig stands in for start-live, which is what wires the play-ready
-    // call-in. Without it a landed client reaches playerJoin with no one to take
-    // it, and the leg ends it with `no_core_attached` rather than pretending.
-    pickerFront.setCoreAttach(({ name, uuid }) => pickerCore.attachPlayer({ name, uuid, includeConfig: false }))
-    const pickerBound = await pickerFront.listen()
+    pickerBackend = picker.backend
+    pickerFront = picker.front
+    pickerCore = picker.core
     // #258: the no-dial rule, read at the only moment it is about: a picker that
     // exists and nothing claimed. The backend leg has no connection and never
     // opened one, so the lane is not warming a body behind the dialog (Q6). O55
@@ -2973,15 +2818,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         lane: pickerBaseline.capturedFrom.lane ?? null,
         paperBuild: pickerBaseline.capturedFrom.paperBuild ?? null
       },
-      frontPort: pickerBound.port,
+      frontPort: picker.port,
       server: pickerServerName
     }
 
-    pickerBot = createBot({ port: pickerBound.port, username: 'Attach', version: pickerVersion })
+    pickerBot = createBot({ port: picker.port, username: 'Attach', version: pickerVersion })
     await pickerBot.waitFor(() => pickerBot.received.dialogs.length === 1, 'the picker dialog at the client', 15_000)
     // A second client reads the picker at the same time: the picker is not an
     // attach, so it takes no slot and the first client does not hold one.
-    pickerBot2 = createBot({ port: pickerBound.port, username: 'Second', version: pickerVersion })
+    pickerBot2 = createBot({ port: picker.port, username: 'Second', version: pickerVersion })
     await pickerBot2.waitFor(() => pickerBot2.received.dialogs.length === 1, 'the picker dialog at the second client', 15_000)
 
     // What the client actually read, out of the frame it received: the id the
@@ -3215,7 +3060,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // sentence naming the driver, and the client is disconnected with it rather than
     // left in a dialog nobody will read. O64 is the half where a body is unclaimed and
     // does end.
-    pickerBot3 = createBot({ port: pickerBound.port, username: 'Third', version: pickerVersion })
+    pickerBot3 = createBot({ port: picker.port, username: 'Third', version: pickerVersion })
     await pickerBot3.waitFor(() => pickerBot3.received.dialogs.length === 1, 'the picker at the third client', 15_000)
     const thirdPick = chooseDialogAction(pickerBot3.received.dialogs[0], 'first')
     if (thirdPick !== null) pickerBot3.answerDialog(thirdPick.id, null, 'configuration')
@@ -3299,7 +3144,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // the row whose port answers nothing, so the claimant is back at the picker
     // holding a body that never came up, and the rival is refused by the claim and
     // not by a session. The landing is O58's.
-    pickerBot4 = createBot({ port: pickerBound.port, username: 'Fourth', version: pickerVersion })
+    pickerBot4 = createBot({ port: picker.port, username: 'Fourth', version: pickerVersion })
     await pickerBot4.waitFor(
       () => pickerBot4.received.dialogs.length === 1,
       'the picker at a fourth client while a claim stands',
@@ -3412,7 +3257,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // implementation, so this body sends a chunk batch with nothing in it. The
     // landing's terrain and the client's acceptance are rung 4's and #268's.
     const pickerBodyLoginsBeforeLanding = pickerBodyFake.received.logins
-    pickerBot5 = createBot({ port: pickerBound.port, username: 'Pilot', version: pickerVersion })
+    pickerBot5 = createBot({ port: picker.port, username: 'Pilot', version: pickerVersion })
     await pickerBot5.waitFor(
       () => pickerBot5.received.dialogs.length === 1,
       'the picker at the client that will claim a body it can reach',
@@ -3750,7 +3595,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // the serverbound rewrite, and the spectator's reaches nothing. What a spectator
     // is shown, who may spectate, and what the picker offers stay #259's: the verb is
     // still refused in words, and this assertion reads that refusal too.
-    pickerBot6 = createBot({ port: pickerBound.port, username: 'Watcher', version: pickerVersion })
+    pickerBot6 = createBot({ port: picker.port, username: 'Watcher', version: pickerVersion })
     await pickerBot6.waitFor(
       () => pickerBot6.received.dialogs.length === 1,
       'the picker at the client that will watch the body',
@@ -3855,7 +3700,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // driven body's own dialog and reads its Spectate button, and this assertion
     // stops there. O62 clicks it and proves what the click does, so the seam above
     // and the verb below stay two facts with two numbers.
-    pickerBot8 = createBot({ port: pickerBound.port, username: 'Looker', version: pickerVersion })
+    pickerBot8 = createBot({ port: picker.port, username: 'Looker', version: pickerVersion })
     await pickerBot8.waitFor(
       () => pickerBot8.received.dialogs.length === 1,
       'the picker at the client that will ask to spectate',
@@ -4018,7 +3863,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // lane that serves a body still serves the picker, because the second client's
     // answer is a claim on that body and the claim is what refuses it. No attach slot
     // denies it first, and it never reaches the core's attach.
-    pickerBot7 = createBot({ port: pickerBound.port, username: 'Rival', version: pickerVersion })
+    pickerBot7 = createBot({ port: picker.port, username: 'Rival', version: pickerVersion })
     await pickerBot7.waitFor(
       () => pickerBot7.received.dialogs.length === 1,
       'the picker at the rival, while the body is driven',
@@ -4121,7 +3966,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The client is offered the seed's list: not an empty dialog, and not the backend
     // this lane is configured with.
     fs.writeFileSync(pickerLiveFile, '{"version":1,"servers":[{"host":\n')
-    pickerBot9 = createBot({ port: pickerBound.port, username: 'Seeded', version: pickerVersion })
+    pickerBot9 = createBot({ port: picker.port, username: 'Seeded', version: pickerVersion })
     await pickerBot9.waitFor(
       () => pickerBot9.received.dialogs.length === 1,
       'the picker at a client while the live list cannot be parsed',
@@ -4132,7 +3977,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The edit the panel makes: the row of a server a body is running on is removed.
     // It stops being offered, and the body is not touched.
     writeAllowedServers(pickerLiveFile, [pickerServerName])
-    pickerBot10 = createBot({ port: pickerBound.port, username: 'Late', version: pickerVersion })
+    pickerBot10 = createBot({ port: picker.port, username: 'Late', version: pickerVersion })
     await pickerBot10.waitFor(
       () => pickerBot10.received.dialogs.length === 1,
       'the picker at a client after a server was removed from the list',
@@ -4319,7 +4164,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const backendReceivedAfter = backendReceived()
     // The row a player reads before choosing. A fresh client reads the list while the
     // body is driven and watched, so the label carries both facts.
-    pickerBot11 = createBot({ port: pickerBound.port, username: 'Reader', version: pickerVersion })
+    pickerBot11 = createBot({ port: picker.port, username: 'Reader', version: pickerVersion })
     await pickerBot11.waitFor(
       () => pickerBot11.received.dialogs.length === 1,
       'the picker at the client that reads the watched row',
@@ -4517,7 +4362,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const loginsAfterDriverLeft = pickerBodyFake.received.logins
     const attachesBeforeJoin = pickerFront.metrics.attaches
     const coreAttachesBeforeJoin = pickerCore.metrics.attaches
-    pickerBot12 = createBot({ port: pickerBound.port, username: 'LateWatch', version: pickerVersion })
+    pickerBot12 = createBot({ port: picker.port, username: 'LateWatch', version: pickerVersion })
     await pickerBot12.waitFor(
       () => pickerBot12.received.dialogs.length === 1,
       'the picker at the client that joins a body nobody drives',
@@ -4647,7 +4492,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // Nothing here dials. The body's session outlived its driver, so claiming it again
     // is a landing on the cache it already has, and the fake counts the one login it
     // has had since O58.
-    pickerBot13 = createBot({ port: pickerBound.port, username: 'Owner', version: pickerVersion })
+    pickerBot13 = createBot({ port: picker.port, username: 'Owner', version: pickerVersion })
     await pickerBot13.waitFor(
       () => pickerBot13.received.dialogs.length === 1,
       'the picker at the client that claims the standing body',
@@ -4704,7 +4549,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       20_000
     )
 
-    pickerBot15 = createBot({ port: pickerBound.port, username: 'Dropper', version: pickerVersion })
+    pickerBot15 = createBot({ port: picker.port, username: 'Dropper', version: pickerVersion })
     await pickerBot15.waitFor(
       () => pickerBot15.received.dialogs.length === 1,
       'the picker at the client that ends the body',
@@ -4732,9 +4577,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const afterEndList = readServerDialog(pickerBot15.received.dialogs[dropperDialogsBefore])
     // The core's own record of the end: it arrives as one JSON line inside a
     // `pickerCore` entry, because the rig hands it a logStream.
-    const endLines = coreLogEvents(endMark, 'pickerCore')
+    const endLines = picker.events(endMark)
       .filter(entry => entry.event === 'bodyDisconnected')
-    const endRefusals = coreLogEvents(endMark, 'pickerCore')
+    const endRefusals = picker.events(endMark)
       .filter(entry => entry.event === 'bodyDisconnectRefused')
     // A retry arming for a body nobody claims would show up as a second login at the
     // body's server. The run waits past the session's own one-second delay to look for
@@ -4749,7 +4594,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the channels the ended body took with it',
       15_000
     )
-    pickerBot16 = createBot({ port: pickerBound.port, username: 'After', version: pickerVersion })
+    pickerBot16 = createBot({ port: picker.port, username: 'After', version: pickerVersion })
     await pickerBot16.waitFor(
       () => pickerBot16.received.dialogs.length === 1,
       'the picker at a client that joins after the body ended',
@@ -4771,7 +4616,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // player ended ever returns. This is the assertion's one dial, and it is the
     // guard's proof rather than a retry's: the login moves because a client asked,
     // not because a timer fired.
-    pickerBot17 = createBot({ port: pickerBound.port, username: 'Back', version: pickerVersion })
+    pickerBot17 = createBot({ port: picker.port, username: 'Back', version: pickerVersion })
     await pickerBot17.waitFor(
       () => pickerBot17.received.dialogs.length === 1,
       'the picker at the client that claims the ended body',
@@ -4928,7 +4773,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the body standing with nobody driving it, before the fault',
       20_000
     )
-    pickerBot18 = createBot({ port: pickerBound.port, username: 'Fault', version: pickerVersion })
+    pickerBot18 = createBot({ port: picker.port, username: 'Fault', version: pickerVersion })
     await pickerBot18.waitFor(
       () => pickerBot18.received.dialogs.length === 1,
       'the picker at the client that watches the unclaimed body fault',
@@ -4960,7 +4805,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       claimed: pickerCore.claimedBody,
       attached: pickerCore.attached,
       logins: pickerBodyFake.received.logins,
-      events: coreLogEvents(faultMark, 'pickerCore').filter(entry => entry.event === 'backendDown')
+      events: picker.events(faultMark).filter(entry => entry.event === 'backendDown')
     }
     // A retry for a body nobody claims would show up as a login here. The run waits
     // past the session's own one-second delay, so this is a look for a dial rather
@@ -5046,7 +4891,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     fs.writeFileSync(pickerLiveFile, '{"version":1,"servers":[' + '\n')
     fs.writeFileSync(pickerSeedFile, 'not json' + '\n')
     const emptyMark = logs.length
-    pickerBot19 = createBot({ port: pickerBound.port, username: 'Empty', version: pickerVersion })
+    pickerBot19 = createBot({ port: picker.port, username: 'Empty', version: pickerVersion })
     await pickerBot19.waitFor(
       () => pickerBot19.received.names.some(frame => frame.state === 'configuration' && frame.name === 'disconnect'),
       'the refusal a lane that offers nothing gives a joining client',
