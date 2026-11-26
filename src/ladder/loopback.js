@@ -30,7 +30,6 @@ import { createJournal, readJournal, readManifests } from '../observability/jour
 import { REPLAY_DOMAINS } from '../core/replay-summary.js'
 import { createBot } from './bot.js'
 import { createControlDocument } from '../service/control.js'
-import { createTransferFollowController } from '../core/transfer-follow.js'
 import { createHandshakeProxy } from './handshake-proxy.js'
 import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
