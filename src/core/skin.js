@@ -1,18 +1,22 @@
-// The puppet's skin on the human's own player (#99).
+// The puppet's skin, on the players a body's clients draw (#99, #614).
 //
-// The front leg authenticates the human's client as the human, so the body that
-// client draws is the human's own. The world inside it is the puppet's, and the
-// backend's own `player_info` lists the puppet, never the human, so nothing in
-// the relay gives the human's UUID a skin. A client resolves every player's skin
-// from that player's `player_info` entry and falls back to a vanilla default
-// (steve, alex, or one of the 26.x defaults) when it holds no entry, so the
-// human's own body renders a default skin today.
+// The front leg authenticates a client as that player, so the body the client draws is
+// its own, and a client resolves every player's skin from that player's `player_info`
+// entry, falling back to a vanilla default (steve, alex, or one of the 26.x defaults)
+// when it holds no entry. The backend's own `player_info` lists the puppet, never the
+// client, so nothing in the relay gives a client's own UUID a skin: before #99 the
+// driver's own body rendered a default skin.
 //
-// A server-side skin change is one `player_info` `add_player` entry for the
-// player's own UUID carrying the skin's `textures` property. This module builds
-// exactly that frame from a property the backend already sent: the proxy holds no
-// skin of its own and invents none, so a property that no relayed frame carried
-// is a property the proxy does not have.
+// A server-side skin change is one `player_info` `add_player` entry for a player's UUID
+// carrying the skin's `textures` property. This module builds exactly that frame from a
+// property the backend already sent: the proxy holds no skin of its own and invents
+// none, so a property that no relayed frame carried is a property the proxy does not
+// have.
+//
+// #614: which player the entry names is the caller's decision, and the module reads the
+// profile out of the frame for it. The body's entry names the puppet, because that is
+// the player the body is, and the driver's entry names the profile the front verified,
+// because a client draws the body it controls from the entry naming that player.
 //
 // Two client facts shape the frame (`ClientPacketListener.handlePlayerInfoUpdate`,
 // 26.2):
@@ -74,7 +78,9 @@ function uuidKey (value) {
   return typeof value === 'string' ? value.replace(/-/g, '').toLowerCase() : null
 }
 
-// The textures property a relayed `player_info` frame states for one UUID.
+// The skin entry a relayed frame states for one UUID: the uuid it names, the name the
+// backend gives that player, and the textures property it carries. Null when the frame
+// states no skin for that uuid.
 //
 // The entry is chosen by UUID, never by position. A busy backend sends the whole
 // tab list through this frame, so the first entry with a property is usually
@@ -82,15 +88,22 @@ function uuidKey (value) {
 // human's body, and it made the known-property comparison change on every frame
 // that carried one. The measurement is in testdata/skin-verdict.md.
 //
+// #614: the name comes from the same entry as the property, for the same reason. A
+// frame the proxy writes names one player, and a name taken from another entry would
+// write one player's body under another player's name.
+//
 // No UUID is no answer. A caller that cannot name the player's UUID takes no
-// property, rather than whichever one arrived first.
-export function texturesPropertyOf (packet, { uuid = null } = {}) {
+// entry, rather than whichever one arrived first.
+export function skinEntryOf (packet, { uuid = null } = {}) {
   const wanted = uuidKey(uuid)
   if (wanted === null || wanted === '') return null
   for (const entry of entriesOf(packet)) {
     if (uuidKey(entry?.uuid) !== wanted) continue
-    const picked = pickTextures(entry?.player?.properties)
-    if (picked !== null) return picked
+    const property = pickTextures(entry?.player?.properties)
+    if (property === null) continue
+    const name = entry?.player?.name
+    if (typeof name !== 'string' || name === '') continue
+    return { uuid: entry.uuid, name, property }
   }
   return null
 }
@@ -121,34 +134,6 @@ export function skinPlayerInfoPacket ({ uuid, name, property } = {}) {
     action: { ...ADD_PLAYER_ONLY },
     data: [{ uuid, player: { name, properties: [textures] } }]
   }
-}
-
-// One entry per channel, naming that channel's own player (#516).
-//
-// #99 wrote one entry, for the driver's UUID, and a write with no channel reaches
-// every channel on the body (src/legs/live-front.js). So a spectator's client held
-// an entry naming the driver and none naming itself. The body that client draws is
-// its own, because the front authenticated it as itself and handed it the puppet's
-// world, so its own body fell back to a vanilla default. Every client on a body is a
-// different account, so the entry is a function of the channel it goes to, and a
-// spectator's names the spectator.
-//
-// The caller says which channels the frame is owed to, and this answers one entry for
-// each of them. `packet` is that channel's entry, and null where the channel names no
-// player, which the caller records rather than writes. `id` is echoed as given, null
-// included: the driver's entry is the frame #99 proved, which names no channel, and a
-// spectator's names its own channel (src/core/channels.js).
-export function skinEntriesFor ({ property = null, channels = [] } = {}) {
-  if (!Array.isArray(channels)) throw new TypeError('skinEntriesFor needs the channels it writes to')
-  return channels.map(channel => {
-    const id = channel?.id ?? null
-    const name = typeof channel?.name === 'string' && channel.name !== '' ? channel.name : null
-    const uuid = typeof channel?.uuid === 'string' && channel.uuid !== '' ? channel.uuid : null
-    // A channel that names no profile cannot be given an entry. It is reported, not
-    // dropped: no later frame repairs a client left without one (#134).
-    if (uuid === null || name === null) return { id, name, packet: null }
-    return { id, name, packet: skinPlayerInfoPacket({ uuid, name, property }) }
-  })
 }
 
 // The same property with its signature removed. Nothing in the product sends

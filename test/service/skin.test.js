@@ -1,12 +1,19 @@
-// #99: the human's own player wears the puppet's skin, behind a switch.
+// #99/#614: the puppet's skin, on the players a body's clients draw.
+//
+// #614 gives every pass two entries, and they answer different questions: the body's
+// entry names the puppet, and every channel of the body receives it, because a client
+// draws a player only from that player's entry. The driver's own entry is #99's frame,
+// naming the profile the front verified, because a client draws the body it controls
+// from the entry naming that player. A spectator is owed the first and never the second.
 //
 // Five properties of the change are asserted here, at the composition root:
 //
 //   off is today     with the switch off nothing is written, so the human sees
 //                    what they see now
-//   one frame        one `player_info` add_player entry for the human's UUID,
-//                    carrying the property the backend sent for the puppet, and
-//                    no update_listed action (the tab list does not grow)
+//   two frames       the body's entry names the puppet, the driver's names the human
+//                    whose body the client controls, both carry the property the
+//                    backend sent for the puppet, and neither carries update_listed
+//                    (the tab list does not grow)
 //   from the server  a proxy that saw no property sends nothing, and the frame
 //                    names the UUID the front verified
 //   with the replay  the frame goes out with every replay of play state, because
@@ -73,6 +80,12 @@ function skinFrames (frontLeg) {
   return frontLeg.frames().filter(frame => frame.name === 'player_info' && frame.kind === 'synth')
 }
 
+// The player one entry names. A pass writes the body's entry first and the driver's own
+// second, and a test that cares about one of them asks for it by the uuid it carries.
+const namedIn = frame => frame.packet.data[0].uuid
+const bodySkinFrames = frontLeg => skinFrames(frontLeg).filter(frame => namedIn(frame) === PUPPET)
+const ownSkinFrames = frontLeg => skinFrames(frontLeg).filter(frame => namedIn(frame) === PLAYER)
+
 function transfer (host = 'sky-2.excalia.fr', port = 25565) {
   return { name: 'transfer', buffer: BUFFER('transfer'), data: { host, port } }
 }
@@ -114,16 +127,18 @@ test('with the switch on, one frame gives the human UUID the puppet property', (
   attach(rig)
 
   const frames = skinFrames(rig.frontLeg)
-  assert.equal(frames.length, 1, 'exactly one entry per replay')
-  const packet = frames[0].packet
-  assert.equal(frames[0].kind, 'synth', 'the frame is the proxy\'s own, not a relay')
+  assert.equal(frames.length, 2, 'two entries per replay: the body\'s, then the driver\'s own')
+  assert.deepEqual(frames.map(namedIn), [PUPPET, PLAYER], 'the body names the puppet, and the driver names the human')
+  const packet = frames[1].packet
+  assert.equal(frames[1].kind, 'synth', 'the frame is the proxy\'s own, not a relay')
   assert.equal(packet.action.add_player, true)
   assert.equal(packet.action.update_listed, undefined, 'the tab list gains no entry for the human')
   assert.equal(packet.data.length, 1)
   assert.equal(packet.data[0].uuid, PLAYER, 'the entry is the human\'s UUID')
   assert.equal(packet.data[0].player.name, 'Bafbi')
   assert.deepEqual(packet.data[0].player.properties, [TEXTURES], 'the property is the backend\'s own, signature and all')
-  assert.equal(rig.core.metrics.skinFramesWritten, 1)
+  assert.deepEqual(frames[0].packet.data[0].player.properties, [TEXTURES], 'and the body\'s entry carries it too')
+  assert.equal(rig.core.metrics.skinFramesWritten, 2)
 })
 
 test('a proxy that saw no player_info sends no skin frame', () => {
@@ -146,9 +161,9 @@ test('a property that arrives after the attach still reaches the client in play'
   deliverPlayerInfo(rig)
 
   const frames = skinFrames(rig.frontLeg)
-  assert.equal(frames.length, 1, 'the attach that is already playing gets the frame')
-  assert.equal(frames[0].packet.data[0].uuid, PLAYER)
-  assert.equal(rig.core.metrics.skinFramesWritten, 1)
+  assert.equal(frames.length, 2, 'the attach that is already playing gets both entries')
+  assert.deepEqual(frames.map(namedIn), [PUPPET, PLAYER])
+  assert.equal(rig.core.metrics.skinFramesWritten, 2)
 })
 
 test('a second player_info frame does not write a second entry for the same play state', () => {
@@ -158,7 +173,7 @@ test('a second player_info frame does not write a second entry for the same play
   deliverPlayerInfo(rig)
   deliverPlayerInfo(rig)
 
-  assert.equal(skinFrames(rig.frontLeg).length, 1,
+  assert.equal(skinFrames(rig.frontLeg).length, 2,
     'the client keeps the entry it holds, so a second add_player for the same UUID is a write nobody sees')
 })
 
@@ -169,8 +184,9 @@ test('a later attach gets its own frame, because a fresh client holds no entry',
   rig.core.detachPlayer({ reason: 'test' })
   attach(rig)
 
-  assert.equal(skinFrames(rig.frontLeg).length, 2)
-  assert.equal(rig.core.metrics.skinFramesWritten, 2)
+  assert.equal(skinFrames(rig.frontLeg).length, 4, 'two entries per attach, and the second attach is a new client')
+  assert.equal(ownSkinFrames(rig.frontLeg).length, 2)
+  assert.equal(rig.core.metrics.skinFramesWritten, 4)
 })
 
 // #134: Excalia moved the puppet 37 s after the human attached. The client
@@ -182,30 +198,31 @@ test('a reconfiguration re-sends the frame, because the round built a new player
   const rig = makeCore({ skin: { showPuppetSkin: true } })
   warmBackend(rig)
   attach(rig)
-  assert.equal(skinFrames(rig.frontLeg).length, 1)
+  assert.equal(skinFrames(rig.frontLeg).length, 2)
 
   rig.backendLeg.deliver({ state: 'play', ...transfer() })
   rig.clock.tick(1000)
   landOnTarget(rig)
 
-  const frames = skinFrames(rig.frontLeg)
-  assert.equal(frames.length, 2, 'the client that came back to play holds no entry for its own UUID')
-  assert.equal(frames[1].packet.data[0].uuid, PLAYER)
-  assert.deepEqual(frames[1].packet.data[0].player.properties, [TEXTURES])
-  assert.equal(rig.core.metrics.skinFramesWritten, 2)
+  const own = ownSkinFrames(rig.frontLeg)
+  assert.equal(own.length, 2, 'the client that came back to play holds no entry for its own UUID')
+  assert.equal(own[1].packet.data[0].uuid, PLAYER)
+  assert.deepEqual(own[1].packet.data[0].player.properties, [TEXTURES])
+  assert.equal(skinFrames(rig.frontLeg).length, 4, "and the body's entry went out with the same replay")
+  assert.equal(rig.core.metrics.skinFramesWritten, 4)
 })
 
 test('a backend that restarts its configuration round gets the frame again too', () => {
   const rig = makeCore({ skin: { showPuppetSkin: true } })
   warmBackend(rig)
   attach(rig)
-  assert.equal(skinFrames(rig.frontLeg).length, 1)
+  assert.equal(skinFrames(rig.frontLeg).length, 2)
 
   rig.backendLeg.deliver({ state: 'play', name: 'start_configuration', buffer: BUFFER('start_configuration'), data: {} })
   rig.clock.tick(1000)
   landOnTarget(rig)
 
-  assert.equal(skinFrames(rig.frontLeg).length, 2, 'the same client-side rule, whatever moved the puppet')
+  assert.equal(ownSkinFrames(rig.frontLeg).length, 2, 'the same client-side rule, whatever moved the puppet')
 })
 
 test('a property that arrives after the attach is not reported as a withheld skin', () => {
@@ -219,7 +236,7 @@ test('a property that arrives after the attach is not reported as a withheld ski
     'no property yet is the ordinary order, and property_arrived writes the frame')
 
   deliverPlayerInfo(rig)
-  assert.equal(skinFrames(rig.frontLeg).length, 1)
+  assert.equal(skinFrames(rig.frontLeg).length, 2)
   assert.equal(eventsNamed(logLines, 'puppetSkinWithheld').length, 0)
 })
 
@@ -233,10 +250,14 @@ test('a replay that cannot write the frame at all says why, because no later fra
   const result = rig.core.attachPlayer({ name: 'Bafbi' })
   assert.equal(result.attached, true)
 
-  assert.equal(skinFrames(rig.frontLeg).length, 0)
+  // #614: the body's entry needs no driver, because it names the puppet. Only the
+  // driver's own entry has no profile to name here, and that is the line.
+  assert.equal(skinFrames(rig.frontLeg).length, 1)
+  assert.deepEqual(skinFrames(rig.frontLeg).map(namedIn), [PUPPET])
   const withheld = eventsNamed(logLines, 'puppetSkinWithheld')
   assert.equal(withheld.length, 1)
   assert.equal(withheld[0].reason, 'no_identity')
+  assert.equal(withheld[0].puppet, false, 'the entry that could not be written is the driver\'s own')
 })
 
 test('a front with no UUID is named in the ordinary order too, where the property lands later', () => {
@@ -249,9 +270,9 @@ test('a front with no UUID is named in the ordinary order too, where the propert
 
   deliverPlayerInfo(rig)
   const withheld = eventsNamed(logLines, 'puppetSkinWithheld')
-  assert.equal(withheld.length, 1, 'the frame that arrives cannot be written either')
+  assert.equal(withheld.length, 1, 'the entry that names the front\'s player cannot be written either')
   assert.equal(withheld[0].reason, 'no_identity')
-  assert.equal(skinFrames(rig.frontLeg).length, 0)
+  assert.deepEqual(skinFrames(rig.frontLeg).map(namedIn), [PUPPET], 'and the body\'s entry is written regardless')
 })
 
 // #134: the live tab list arrived through the same frame, and the first entry
@@ -271,9 +292,10 @@ test('another player\'s skin is never the frame, and the known log fires once pe
   assert.equal(eventsNamed(logLines, 'puppetSkinKnown').length, 0)
 
   deliverPlayerInfo(rig)
-  const frames = skinFrames(rig.frontLeg)
+  const frames = bodySkinFrames(rig.frontLeg)
   assert.equal(frames.length, 1)
   assert.deepEqual(frames[0].packet.data[0].player.properties, [TEXTURES])
+  assert.equal(skinFrames(rig.frontLeg).length, 2, "and the driver's own entry went out beside it")
   const known = eventsNamed(logLines, 'puppetSkinKnown')
   assert.equal(known.length, 1)
   assert.equal(known[0].uuid, PUPPET, 'the property is the puppet\'s own entry')
@@ -288,7 +310,7 @@ test('another player\'s skin is never the frame, and the known log fires once pe
   }
   assert.equal(eventsNamed(logLines, 'puppetSkinKnown').length, 1,
     'once per distinct property, not once per player_info frame')
-  assert.equal(skinFrames(rig.frontLeg).length, 1)
+  assert.equal(skinFrames(rig.frontLeg).length, 2, 'nothing new is written: the driver holds its entry, and so does the body')
 
   // A property re-signed with a new value, then the first value again. The
   // comparison is by value, so each change logs, and the later frame carries a
@@ -296,6 +318,10 @@ test('another player\'s skin is never the frame, and the known log fires once pe
   const reSigned = { name: 'textures', value: 'cmVzaWduZWQ=', signature: 'c2lnbmF0dXJl' }
   deliverPlayerInfo(rig, [{ uuid: PUPPET, player: { name: 'Wiriaw', properties: [reSigned] } }])
   deliverPlayerInfo(rig)
+  // #614: a new value rewrites the body's entry and not the driver's, because the
+  // client keeps the entry it holds (#134), so one frame follows each change.
+  assert.equal(skinFrames(rig.frontLeg).length, 4, 'two passes of change, one entry each')
+  assert.equal(ownSkinFrames(rig.frontLeg).length, 1, "the driver's own entry is written once per play state")
   const changes = eventsNamed(logLines, 'puppetSkinKnown')
   assert.equal(changes.length, 3, 'a change logs each time, including back to a value it held before')
   assert.equal(changes[1].was, TEXTURES.value, 'the value it replaced')
@@ -324,8 +350,10 @@ test('an unsigned property is carried as it arrived, with no invented signature'
   attach(rig)
 
   const frames = skinFrames(rig.frontLeg)
-  assert.equal(frames.length, 1)
-  assert.deepEqual(frames[0].packet.data[0].player.properties, [{ name: 'textures', value: 'dGV4dHVyZXM=' }])
+  assert.equal(frames.length, 2)
+  for (const frame of frames) {
+    assert.deepEqual(frame.packet.data[0].player.properties, [{ name: 'textures', value: 'dGV4dHVyZXM=' }])
+  }
 })
 
 function backendLegDeliverUnsigned ({ backendLeg }) {

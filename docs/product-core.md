@@ -490,6 +490,17 @@ unclaimed, which is a body a client may watch.
   need a default for the driver who never answers. A body with no driver is the
   ordinary case rather than an error: a claim is released when its connection ends,
   and the body keeps its backend session. So the ordinary case is watchable.
+- **A spectator is told who the body is, and offered its pack (#614).** Two things a
+  replay cannot carry reach that channel after it. The skin entry names the puppet and
+  is written to every channel of the body, because a client draws a player from that
+  player's entry and the relayed one left the cache's ring long ago. No entry names the
+  spectator, whose own player stays the skin its client resolves. And the packs the
+  body holds are offered in the state the spectator is in: a pack the backend sent
+  during its own configuration phase is re-encoded into play, which 26.1 and 26.2 both
+  define (`add_resource_pack` is `0x51` in play and `0x09` in configuration over one
+  field layout), and a pack the relay withheld because no driver could answer it is
+  offered the same way. The answer stays the account's: a spectator's frames are dropped
+  at the front, so nothing it says can deny the body its pack.
 - **A spectator's client is told what it is (#259).** The replay carries the body's own
   game mode and abilities, because those are `latest` frames in the body's cache. So
   two frames go to that channel after the replay: `game_state_change` with reason 3
@@ -958,7 +969,8 @@ frontLeg = {                      // a body's channels: its driver and its spect
                                               //    fn({ name, uuid, channel }) ->
                                               //    createMonoplayer().spectateView, the
                                               //    body's play state on that one channel,
-                                              //    and the entry that names it (#516)
+                                              //    the entry that names the body, and the
+                                              //    packs the body holds (#614)
   setDisconnectBody(fn)                       // optional (#261): registers
                                               //    fn({ body, server, name }) ->
                                               //    createMonoplayer().disconnectBody, which
@@ -1034,7 +1046,11 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   cache, so a play-state pack is not evicted from the generic ring before a
   client attaches. With no client attached, the puppet accepts and loads; with
   one attached, it says nothing and the human's status is the answer. An absent
-  UUID on `remove_resource_pack` withdraws every pack.
+  UUID on `remove_resource_pack` withdraws every pack. A body's spectators are
+  offered the held copy in the state they are in (#614): the pack is written as
+  the bytes the backend sent when it was a play-state frame, and re-encoded into
+  play when it arrived in configuration, which is the state a spectator is never
+  in.
 
 ## Limits / open questions
 

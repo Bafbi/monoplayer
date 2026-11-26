@@ -1,16 +1,19 @@
-// #99: the puppet's skin on the human's own player.
+// #99/#614: the puppet's skin, and the profile a frame names.
 //
 // The frame this module builds is the whole product change: one `player_info`
-// `add_player` entry for the human's UUID carrying the textures property the
-// backend sent for the puppet. These assertions are on the packet object and on
-// the bytes it serializes to, so a frame the client would reject cannot ship.
+// `add_player` entry carrying the textures property the backend sent for the puppet,
+// for the player the caller names. A client draws a player's body from that player's
+// entry, so the module answers the profile too: #614 writes the body's entry by naming
+// the puppet, and #99 writes the driver's own entry by naming the driver. These
+// assertions are on the packet object and on the bytes it serializes to, so a frame the
+// client would reject cannot ship.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import mc from 'minecraft-protocol'
 
 import {
   ADD_PLAYER_ONLY, TEXTURES_PROPERTY,
-  carriesTextures, pickTextures, skinEntriesFor, skinPlayerInfoPacket, texturesPropertyOf, withoutSignature
+  carriesTextures, pickTextures, skinEntryOf, skinPlayerInfoPacket, withoutSignature
 } from '../../src/core/skin.js'
 
 const HUMAN = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
@@ -25,21 +28,21 @@ const relayed = (properties, uuid = PUPPET) => ({
 })
 
 test('the textures property comes out of a relayed player_info frame as it stated itself', () => {
-  const picked = texturesPropertyOf(relayed([PROPERTY]), { uuid: PUPPET })
-  assert.deepEqual(picked, { value: PROPERTY.value, signature: PROPERTY.signature })
+  const picked = skinEntryOf(relayed([PROPERTY]), { uuid: PUPPET })
+  assert.deepEqual(picked.property, { value: PROPERTY.value, signature: PROPERTY.signature })
 })
 
 test('a property without a signature is picked up without one', () => {
   assert.deepEqual(
-    texturesPropertyOf(relayed([{ name: TEXTURES_PROPERTY, value: 'v' }]), { uuid: PUPPET }),
+    skinEntryOf(relayed([{ name: TEXTURES_PROPERTY, value: 'v' }]), { uuid: PUPPET }).property,
     { value: 'v' })
 })
 
 test('a frame with no textures property yields nothing to inject', () => {
-  assert.equal(texturesPropertyOf(relayed([]), { uuid: PUPPET }), null)
-  assert.equal(texturesPropertyOf(relayed([{ name: 'other', value: 'v' }]), { uuid: PUPPET }), null)
-  assert.equal(texturesPropertyOf({}, { uuid: PUPPET }), null)
-  assert.equal(texturesPropertyOf(null, { uuid: PUPPET }), null)
+  assert.equal(skinEntryOf(relayed([]), { uuid: PUPPET }), null)
+  assert.equal(skinEntryOf(relayed([{ name: 'other', value: 'v' }]), { uuid: PUPPET }), null)
+  assert.equal(skinEntryOf({}, { uuid: PUPPET }), null)
+  assert.equal(skinEntryOf(null, { uuid: PUPPET }), null)
 })
 
 // #134: the live lane's tab list arrived through this frame, and the first entry
@@ -53,8 +56,8 @@ test('the property is the one the named UUID carries, not the first one in the f
       { uuid: PUPPET, player: { name: 'Wiriaw', properties: [PROPERTY] } }
     ]
   }
-  assert.deepEqual(texturesPropertyOf(frame, { uuid: PUPPET }), { value: PROPERTY.value, signature: PROPERTY.signature })
-  assert.equal(texturesPropertyOf(frame, { uuid: HUMAN }), null, 'a UUID the frame does not list has no property')
+  assert.deepEqual(skinEntryOf(frame, { uuid: PUPPET }).property, { value: PROPERTY.value, signature: PROPERTY.signature })
+  assert.equal(skinEntryOf(frame, { uuid: HUMAN }), null, 'a UUID the frame does not list has no entry')
 })
 
 test('a frame that lists the UUID twice takes the property it carries', () => {
@@ -65,11 +68,11 @@ test('a frame that lists the UUID twice takes the property it carries', () => {
       { uuid: PUPPET, player: { name: 'Wiriaw', properties: [PROPERTY] } }
     ]
   }
-  assert.deepEqual(texturesPropertyOf(frame, { uuid: PUPPET }), { value: PROPERTY.value, signature: PROPERTY.signature })
+  assert.deepEqual(skinEntryOf(frame, { uuid: PUPPET }).property, { value: PROPERTY.value, signature: PROPERTY.signature })
 })
 
 test('a UUID is compared without its hyphens or case', () => {
-  assert.deepEqual(texturesPropertyOf(relayed([PROPERTY]), { uuid: PUPPET.replace(/-/g, '').toUpperCase() }),
+  assert.deepEqual(skinEntryOf(relayed([PROPERTY]), { uuid: PUPPET.replace(/-/g, '').toUpperCase() }).property,
     { value: PROPERTY.value, signature: PROPERTY.signature })
 })
 
@@ -82,9 +85,9 @@ test('a frame says whether it carried a skin at all, for any player', () => {
 })
 
 test('no UUID is no property: the frame never stands in for one', () => {
-  assert.equal(texturesPropertyOf(relayed([PROPERTY])), null, 'an unnamed player takes no skin')
-  assert.equal(texturesPropertyOf(relayed([PROPERTY]), { uuid: null }), null)
-  assert.equal(texturesPropertyOf(relayed([PROPERTY]), { uuid: '' }), null)
+  assert.equal(skinEntryOf(relayed([PROPERTY])), null, 'an unnamed player takes no skin')
+  assert.equal(skinEntryOf(relayed([PROPERTY]), { uuid: null }), null)
+  assert.equal(skinEntryOf(relayed([PROPERTY]), { uuid: '' }), null)
 })
 
 test('an empty value is not a skin: it is reported as no property at all', () => {
@@ -156,52 +159,45 @@ test('an unsigned frame round-trips too, so the measured case is the shipped fra
   })
   assert.ok(buffer.length < signedBuffer.length, 'the unsigned frame is smaller by the signature')
 })
-// #516: the frame is a function of the channel it goes to. The entry names one
-// player, and a body's two clients are two accounts: the driver's own body and a
-// spectator's own body are both drawn from that client's entry, and one entry cannot
-// name both. The builder answers one row per channel, in the caller's order, so the
-// caller can mark what it wrote and the driver's row keeps the frame #99 proved.
-test('the frame is one entry per channel, naming that channel\'s own player', () => {
-  const entries = skinEntriesFor({
-    property: PROPERTY,
-    channels: [
-      { id: null, uuid: HUMAN, name: 'Bafbi' },
-      { id: 'spectator-1', uuid: WATCHER, name: 'Watcher' }
+// #614: the puppet's own entry, as the backend stated it. The player is read from the
+// entry the UUID selected and never from another one, because a busy backend lists the
+// whole tab list through one frame and a name taken from the first entry would rename
+// the puppet.
+test('the puppet\'s entry carries its uuid, its name and its skin together', () => {
+  const frame = {
+    action: { _value: 1, add_player: true },
+    data: [
+      { uuid: 'e9baf8e7-4a9a-27e4-ae35-2a9566110634', player: { name: 'Tutoriel', properties: [PROPERTY] } },
+      { uuid: PUPPET, player: { name: 'Wiriaw', properties: [PROPERTY] } }
     ]
-  })
-
-  assert.equal(entries.length, 2, 'one row per channel, in the order the caller gave them')
-  assert.deepEqual(entries.map(entry => entry.id), [null, 'spectator-1'],
-    'the driver keeps the frame with no channel, and a spectator\'s names its own')
-  assert.deepEqual(entries.map(entry => entry.packet.data[0].uuid), [HUMAN, WATCHER],
-    'each entry names the player of the channel it goes to')
-  assert.deepEqual(entries.map(entry => entry.packet.data[0].player.name), ['Bafbi', 'Watcher'])
-  for (const entry of entries) {
-    assert.deepEqual(entry.packet.data[0].player.properties, [PROPERTY],
-      'the property is the backend\'s own, signature and all, for either client')
-    assert.equal(entry.packet.action.add_player, true)
-    assert.equal(entry.packet.action.update_listed, undefined,
-      'the tab list gains no line beside the puppet\'s, for either client')
   }
+  assert.deepEqual(skinEntryOf(frame, { uuid: PUPPET }), {
+    uuid: PUPPET,
+    name: 'Wiriaw',
+    property: { value: PROPERTY.value, signature: PROPERTY.signature }
+  }, 'the name beside the property, and the entry the UUID named')
+  assert.equal(skinEntryOf(frame, { uuid: HUMAN }), null, 'a UUID the frame does not list is no entry')
 })
 
-test('a channel that names no player gets no entry, and is reported', () => {
-  const entries = skinEntriesFor({
-    property: PROPERTY,
-    channels: [
-      { id: null, uuid: null, name: 'Bafbi' },
-      { id: 'spectator-1', uuid: WATCHER, name: null },
-      { id: 'spectator-2', uuid: WATCHER, name: 'Watcher' }
-    ]
-  })
-
-  assert.deepEqual(entries.map(entry => entry.packet === null), [true, true, false],
-    'a profile the front did not name is a client left on a vanilla default, not a frame')
-  assert.deepEqual(entries.slice(0, 2).map(entry => entry.name), ['Bafbi', null],
-    'the report carries the name it had, so the line can say who it was')
-  assert.equal(entries[2].packet.data[0].uuid, WATCHER)
-  assert.deepEqual(skinEntriesFor({ property: PROPERTY }), [], 'no channel is nobody owed a frame')
-  assert.throws(() => skinEntriesFor({ property: PROPERTY, channels: 'holder-1' }), TypeError,
-    'a caller that hands a string instead of a list hears about it')
+test('an entry with no skin is no entry, and a nameless one is no entry either', () => {
+  assert.equal(skinEntryOf(relayed([]), { uuid: PUPPET }), null)
+  assert.equal(skinEntryOf({ data: [{ uuid: PUPPET, player: { properties: [PROPERTY] } }] }, { uuid: PUPPET }), null,
+    'a frame the proxy cannot name the player in is not a frame it writes')
+  assert.equal(skinEntryOf({ data: [{ uuid: PUPPET, player: { name: '', properties: [PROPERTY] } }] }, { uuid: PUPPET }), null)
+  assert.equal(skinEntryOf(relayed([PROPERTY])), null, 'no UUID is no answer, never the first entry')
 })
 
+// The player the frame names is the caller's, whoever that is: #99 names the driver's
+// own and #614 names the puppet, and this module invents neither. It also names one
+// player, because a client's entry map is keyed by UUID and one frame cannot dress two
+// bodies.
+test('the frame names the player it is given, and one player only', () => {
+  const forPuppet = skinPlayerInfoPacket({ uuid: PUPPET, name: 'Wiriaw', property: PROPERTY })
+  const forHuman = skinPlayerInfoPacket({ uuid: HUMAN, name: 'Bafbi', property: PROPERTY })
+  assert.equal(forPuppet.data.length, 1)
+  assert.equal(forPuppet.data[0].uuid, PUPPET)
+  assert.equal(forPuppet.data[0].player.name, 'Wiriaw')
+  assert.equal(forHuman.data[0].uuid, HUMAN)
+  assert.deepEqual(forPuppet.data[0].player.properties, forHuman.data[0].player.properties,
+    'the same property, because the proxy holds one skin: the puppet\'s')
+})

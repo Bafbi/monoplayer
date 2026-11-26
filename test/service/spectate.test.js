@@ -237,122 +237,221 @@ test('#259 a spectator of a body nobody drives is handed that body as it stands'
   assert.equal(names.at(-1), 'abilities', 'and it is still told it is spectating')
 })
 
-// #516: #99 gave the driver's own player the puppet's skin, and a spectator's own
-// player draws the same body: the front authenticated it as itself and handed it the
-// puppet's world, so with no entry for its own UUID it renders a vanilla default.
-// The entry names one player, so a body's second client needs its own, on its own
-// channel. The driver's frame is the one #99 wrote and stays that frame.
-test('#516 a spectator is handed the skin entry that names it, on its own channel', async () => {
+// #614: one rule for who sees the puppet. The entry that names the puppet goes to
+// every channel of the body, and no entry names a spectator's own player.
+//
+// #516 wrote one entry per channel, naming that channel's own player. A client draws a
+// player's body from the entry that names that player, so a spectator's own player wore
+// the puppet's skin and no entry named the puppet at all. Both halves of the owner's
+// report follow from that one choice, and the fix is the rule: the body's entry names
+// the puppet, every channel of the body receives it, and a spectator is never named.
+//
+// The driver keeps a second entry, and it is #99's frame: the measured client resolved
+// the puppet's skin for the body it controls from the entry naming that player
+// (testdata/skin-verdict.md). A spectator's client draws its own player, which is not
+// that body, so it is owed no entry of its own.
+test('#614 a spectator is handed the entry that names the puppet, and none that names itself', async () => {
   const rig = makeCore({ config: skinConfig() })
   await landABody(rig)
   deliverPlayerInfo(rig)
   rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
 
-  const driverFrames = skinFrames(rig.frontLeg)
-  assert.equal(driverFrames.length, 1, 'the driver is owed its frame, as #99 proved it')
-  assert.equal(driverFrames[0].channel, null, 'the driver\'s entry is unchanged: the frame #99 wrote')
-  assert.equal(driverFrames[0].packet.data[0].uuid, PLAYER, 'and it names the driver')
+  const driverPass = skinFrames(rig.frontLeg)
+  assert.deepEqual(driverPass.map(frame => frame.packet.data[0].uuid), [PUPPET, PLAYER],
+    "the body's entry, then #99's frame naming the driver's own player")
+  for (const frame of driverPass) {
+    assert.equal(frame.channel, null, 'neither entry is addressed to one channel')
+    assert.equal(frame.packet.action.update_listed, undefined, 'the tab list gains no line beside the puppet')
+  }
+  assert.deepEqual(driverPass[0].packet.data[0].player.properties, [TEXTURES],
+    "the property is the backend's own, signature and all")
+  assert.equal(driverPass[0].packet.data[0].player.name, 'Wiriaw', "and the name is the backend's own too")
 
   const before = skinFrames(rig.frontLeg).length
   const view = rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
   assert.equal(view.watching, true)
 
-  const spectatorFrames = skinFrames(rig.frontLeg).slice(before)
-  assert.equal(spectatorFrames.length, 1, 'one entry for the spectator, and the driver is handed no second one')
-  assert.equal(spectatorFrames[0].channel, 'spectator-channel', 'a per-channel packet, which is what a channel is for')
-  assert.equal(spectatorFrames[0].packet.data[0].uuid, WATCHER, 'the entry names the spectator, not the driver')
-  assert.equal(spectatorFrames[0].packet.data[0].player.name, 'Watcher')
-  assert.deepEqual(spectatorFrames[0].packet.data[0].player.properties, [TEXTURES],
-    'the property is the backend\'s own, signature and all')
-  assert.equal(spectatorFrames[0].packet.action.update_listed, undefined,
-    'the tab list gains no line for a spectator either')
-  assert.equal(rig.core.metrics.skinFramesWritten, 2)
+  const spectatorPass = skinFrames(rig.frontLeg).slice(before)
+  assert.equal(spectatorPass.length, 1, 'one entry for the channel that just landed')
+  assert.equal(spectatorPass[0].channel, null, 'written to every channel of the body, which is what the rule says')
+  assert.equal(spectatorPass[0].packet.data[0].uuid, PUPPET, 'and it names the puppet')
+  assert.equal(spectatorPass[0].packet.data[0].player.name, 'Wiriaw')
+  assert.deepEqual(spectatorPass[0].packet.data[0].player.properties, [TEXTURES])
+  assert.equal(skinFrames(rig.frontLeg).some(frame => frame.packet.data[0].uuid === WATCHER), false,
+    "no frame names the spectator, so its own player keeps the skin its account's client draws")
+  assert.equal(rig.core.metrics.skinFramesWritten, 3)
   // The spectator's mode frames are still the last word on that socket (#259).
   assert.equal(rig.frontLeg.frames().at(-1).name, 'abilities')
 })
 
-// The ordinary order on Paper: the backend lists the puppet a moment after the
-// join, so a spectator is usually already in play when the skin arrives. Only the
-// property's own pass can reach it, and it has to reach every channel that is owed
-// one rather than the driver alone (#134 fixed the same hole for the driver).
-test('#516 a spectator that landed before the property is told when it arrives', async () => {
+// #218's shape, on a spectator's socket. The relayed `player_info` is ordinary state in
+// the cache's generic ring, and a live session evicts that ring in about ninety seconds,
+// so a spectator that lands afterwards replays no entry naming the puppet. That is the
+// reported "cannot see the puppet in the world": the proxy's own entry is what puts it
+// back, because it is written on the landing rather than replayed from the cache.
+test('#614 a spectator that lands after the cache forgot the puppet is still told who it is', async () => {
   const rig = makeCore({ config: skinConfig() })
   await landABody(rig)
-  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
-  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
-  assert.equal(skinFrames(rig.frontLeg).length, 0, 'a proxy that holds no property writes nothing to either client')
-
   deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  for (let i = 0; i < 600; i++) {
+    rig.backendLeg.deliver({ state: 'play', name: 'sound_effect', data: { soundId: 'minecraft:block.note_block.harp', x: i } })
+  }
 
-  const frames = skinFrames(rig.frontLeg)
-  assert.equal(frames.length, 2, 'the driver and the spectator are each owed their own entry')
-  const named = new Map(frames.map(frame => [frame.channel, frame.packet.data[0].uuid]))
-  assert.equal(named.get(null), PLAYER, 'the driver names the driver')
-  assert.equal(named.get('spectator-channel'), WATCHER, 'and the spectator is reached when the property arrives')
+  const mark = rig.frontLeg.frames().length
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
+  const landed = rig.frontLeg.frames().slice(mark)
+  assert.equal(landed.some(frame => frame.name === 'player_info' && frame.kind === 'raw'), false,
+    'the replay carries no relayed entry: the generic ring evicted it an hour of frames ago')
+  const entries = landed.filter(frame => frame.name === 'player_info')
+  assert.equal(entries.length, 1, 'and the proxy writes the entry the replay lost')
+  assert.equal(entries[0].packet.data[0].uuid, PUPPET)
 })
 
-// A client's entry map wins over a later add_player for the same UUID, so a second
-// frame for one play state is a write nobody sees. The fact is per channel: a
-// spectator that watched the property arrive holds its entry, and a spectator that
-// left and came back holds none.
-test('#516 a spectator is sent one entry per play state, not one per property frame', async () => {
+// A client's entry map wins over a later `add_player` for the same UUID, so a second
+// frame for one play state is a write nobody sees. The body's entry is a fact about the
+// connection a client holds, so a landing is what a channel is owed it on, and a skin
+// change is what every channel is owed again.
+test('#614 no entry names a spectator, however often the skin changes', async () => {
   const rig = makeCore({ config: skinConfig() })
   await landABody(rig)
   deliverPlayerInfo(rig)
   rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
   rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
   const after = skinFrames(rig.frontLeg).length
-  assert.equal(after, 2)
+  assert.equal(after, 3)
 
   deliverPlayerInfo(rig)
   deliverPlayerInfo(rig)
   assert.equal(skinFrames(rig.frontLeg).length, after, 'the same property is not a second entry')
 
-  // The channel ended, so the play state it held went with it: a spectator that
-  // lands again on a new connection is owed the entry again.
+  // A change the client has not been told about reaches every channel: the body's entry
+  // is rewritten, and #99's frame is not, because the driver's client keeps the entry it
+  // holds (#134).
+  deliverPlayerInfo(rig, [{ name: 'textures', value: 'cmVzaWduZWQ=', signature: 'c2lnbmF0dXJl' }])
+  const changed = skinFrames(rig.frontLeg).slice(after)
+  assert.deepEqual(changed.map(frame => frame.packet.data[0].uuid), [PUPPET],
+    "the body's entry carries the new property, and no driver entry follows it")
+
+  // The channel ended, so the play state it held went with it: a spectator that lands
+  // again on a new connection is owed the body's entry again.
   rig.core.spectatorLeft({ channel: 'spectator-channel' })
+  const before = skinFrames(rig.frontLeg).length
   rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-again' })
-  const reLanded = skinFrames(rig.frontLeg).slice(after)
+  const reLanded = skinFrames(rig.frontLeg).slice(before)
   assert.equal(reLanded.length, 1)
-  assert.equal(reLanded[0].channel, 'spectator-again')
-  assert.equal(reLanded[0].packet.data[0].uuid, WATCHER)
+  assert.equal(reLanded[0].packet.data[0].uuid, PUPPET)
+  assert.equal(skinFrames(rig.frontLeg).some(frame => frame.packet.data[0].uuid === WATCHER), false)
 })
 
-// A frame the leg finds no socket for is not a frame. The entry is not marked sent,
-// so a channel that comes back is still owed one, and the line says the write failed
-// rather than counting a frame nobody received (#134, #516). The leg answers `false`
-// when a channel resolves to no client (src/legs/live-front.js): a socket that closed
-// between the landing and the write.
-test('#516 a write that reaches nobody is refused, and a later pass repairs it', async () => {
+// #134's repair story, in the rule's own shape: a write that reaches no channel of the
+// body is not a frame anyone received, so it is not marked sent, and the next pass writes
+// it. The pass is a landing or a new property value, which is what the proxy has when a
+// socket comes back.
+test('#614 an entry that reached nobody is refused, and the next pass writes it', async () => {
   const logLines = []
   const rig = makeCore({ config: skinConfig(), logLines })
   await landABody(rig)
   deliverPlayerInfo(rig)
   rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  const written = rig.core.metrics.skinFramesWritten
   const write = rig.frontLeg.write.bind(rig.frontLeg)
   rig.frontLeg.write = (name, packet, options = {}) =>
-    name === 'player_info' && options.channel === 'spectator-channel'
-      ? false
-      : write(name, packet, options)
+    name === 'player_info' ? false : write(name, packet, options)
 
+  const before = skinFrames(rig.frontLeg).length
   rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
 
   const refused = logLines.filter(line => line.event === 'puppetSkinRefused')
-  assert.equal(refused.length, 1, 'one line, because one channel received nothing')
+  assert.equal(refused.length, 1, 'one line, because the body received nothing')
   assert.equal(refused[0].reason, 'write_failed')
-  assert.equal(refused[0].channel, 'spectator-channel')
+  assert.equal(refused[0].puppet, true, "the entry refused is the body's")
   assert.equal('error' in refused[0], false, 'nothing threw, so there is no error to report')
-  assert.equal(skinFrames(rig.frontLeg).filter(frame => frame.channel === 'spectator-channel').length, 0)
-  assert.equal(rig.core.metrics.skinFramesWritten, 1, 'only the driver\'s entry was written')
+  assert.equal(skinFrames(rig.frontLeg).length, before, 'and no frame was written')
+  assert.equal(rig.core.metrics.skinFramesWritten, written, 'a frame nobody received is not counted as sent')
 
-  // The socket is back, and a property the proxy has not held is what runs the pass
-  // that owes the channel its entry again.
+  // The socket is back, and a property the proxy has not held is the pass that writes the
+  // entry the body was still owed.
   rig.frontLeg.write = write
   deliverPlayerInfo(rig, [{ name: 'textures', value: 'cmVzaWduZWQ=', signature: 'c2lnbmF0dXJl' }])
 
-  const repaired = skinFrames(rig.frontLeg).filter(frame => frame.channel === 'spectator-channel')
-  assert.equal(repaired.length, 1, 'the channel is owed the entry it never received')
-  assert.equal(repaired[0].packet.data[0].uuid, WATCHER)
-  assert.equal(repaired[0].packet.data[0].player.name, 'Watcher')
-  assert.equal(rig.core.metrics.skinFramesWritten, 2)
+  const repaired = skinFrames(rig.frontLeg).slice(before)
+  assert.equal(repaired.length, 1, 'the body is owed the entry it never received')
+  assert.equal(repaired[0].packet.data[0].uuid, PUPPET)
+  assert.equal(rig.core.metrics.skinFramesWritten, written + 1)
+})
+
+// #614: the pack. The backend sends it once, during its own configuration phase, and a
+// spectator is in play, so `canReceiveControl('configuration')` withholds it. The held
+// copy is what a client that lands later is offered, and a play-state
+// `add_resource_pack` is a frame both 26.1 and 26.2 define
+// (`node tools/protocol.mjs frame 26.1 play toClient add_resource_pack`), so the pack is
+// re-encoded into the state the spectator is in rather than written as the frame it
+// arrived as, whose packet id is the configuration state's.
+const PACK_UUID = '22222222-3333-4444-8555-666666666666'
+const packFrame = ({ state = 'configuration', uuid = PACK_UUID } = {}) => ({
+  state,
+  name: 'add_resource_pack',
+  buffer: Buffer.from(state + ':add_resource_pack'),
+  data: { uuid, url: 'https://example.invalid/pack.zip', hash: '', forced: false, promptMessage: null }
+})
+
+test('#614 a spectator that lands after a pack was held is offered that pack', async () => {
+  const rig = makeCore({ config: { picker: true } })
+  await landABody(rig)
+  rig.backendLeg.deliver(packFrame())
+  assert.equal(rig.core.pendingPacks.held, true, 'held for a client that can answer it')
+  assert.equal(rig.core.metrics.resourcePacksRelayed, 0, 'nobody was in a state that could take it')
+
+  const mark = rig.frontLeg.frames().length
+  const view = rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
+  assert.equal(view.watching, true)
+  assert.equal(view.packsOffered, 1, 'the landing says how many packs it offered')
+  const offered = rig.frontLeg.frames().slice(mark).filter(frame => frame.name === 'add_resource_pack')
+  assert.equal(offered.length, 1, 'the pack the body holds is offered to the client that landed')
+  assert.equal(offered[0].kind, 'packet', 'in the state the client is in, not as the configuration frame it arrived as')
+  assert.equal(offered[0].channel, 'spectator-channel', 'on the channel that landed')
+  assert.equal(offered[0].packet.uuid, PACK_UUID)
+  assert.equal(offered[0].packet.url, 'https://example.invalid/pack.zip', 'the same pack content the driver is offered')
+
+  // Offering it is not answering it. The puppet answered for the account when no client
+  // could, and a spectator's own decline never reaches the core (src/legs/live-front.js
+  // drops a spectator's frames), so nothing a spectator says can deny the body its pack.
+  assert.equal(rig.core.metrics.resourcePacksAnswered, 0, "the proxy answered nothing on the spectator's behalf")
+  assert.equal(rig.core.pendingPacks.held, true, 'the held copy stays, for the body and for the next client')
+})
+
+test('#614 a pack held on a body reaches the spectator watching it, in the state it is in', async () => {
+  const rig = makeCore({ config: { picker: true } })
+  await landABody(rig)
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
+
+  // A configuration-state pack: the relay asks for a client in configuration, and a
+  // spectator is in play, so the held copy is offered where it can be read.
+  const mark = rig.frontLeg.frames().length
+  rig.backendLeg.deliver(packFrame())
+  const offered = rig.frontLeg.frames().slice(mark).filter(frame => frame.name === 'add_resource_pack')
+  assert.equal(offered.length, 1, 'a pack held on a body with a spectator watching is offered to it at once')
+  assert.equal(offered[0].channel, 'spectator-channel')
+  assert.equal(offered[0].kind, 'packet', 're-encoded into play, because the frame arrived in configuration')
+
+  // A play-state pack with no driver is withheld for the puppet's answer, and the
+  // spectator is offered that one too: the relay needed a driver in play, not a reader.
+  const withheldMark = rig.frontLeg.frames().length
+  const PLAY_PACK = '33333333-4444-4555-8666-777777777777'
+  rig.backendLeg.deliver(packFrame({ state: 'play', uuid: PLAY_PACK }))
+  const withheld = rig.frontLeg.frames().slice(withheldMark).filter(frame => frame.name === 'add_resource_pack')
+  assert.equal(withheld.length, 1)
+  assert.equal(withheld[0].kind, 'raw', 'a play-state pack is the bytes the backend sent')
+  assert.equal(withheld[0].channel, 'spectator-channel')
+
+  // With a driver on the body the relay carries a play-state pack to every channel
+  // itself, so it is written once and not offered a second time.
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  const relayMark = rig.frontLeg.frames().length
+  rig.backendLeg.deliver(packFrame({ state: 'play', uuid: '44444444-5555-4666-8777-888888888888' }))
+  const relayed = rig.frontLeg.frames().slice(relayMark).filter(frame => frame.name === 'add_resource_pack')
+  assert.equal(relayed.length, 1, 'one write, which is the live relay')
+  assert.equal(relayed[0].kind, 'raw')
+  assert.equal(relayed[0].channel, null, 'and it goes to the body, the spectator included')
 })
