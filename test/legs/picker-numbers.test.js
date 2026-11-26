@@ -138,18 +138,27 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   const helper = SOURCE.slice(start, start + 500)
   assert.match(helper, /bumpReason\(/, 'the helper is what bumps the map')
 
-  // Seven refusal sites: the two dialogs the leg could not write, the click it could
-  // not read, the two frames naming a server it does not offer, the claim the core
-  // answers, and the Spectate landing's own refusals. The key each one passes is
-  // asserted too, because a site swapped to the wrong word still counts and still
-  // lies about why.
+  // Seven refusal sites: the two dialogs the leg could not write, the three a click's
+  // own answer refuses (a frame that did not read, and a server the offer does not
+  // carry at either level), the claim the core answers, and the Spectate landing's own
+  // refusals. The key each one passes is asserted too, because a site swapped to the
+  // wrong word still counts and still lies about why.
+  //
+  // #595 moved the choice of reason into src/core/picker.js (`click`), so three of
+  // these pass the reason the board decided instead of one read from the frame. Two
+  // sites became three, and the two literal `'unknown_server'` words became the
+  // answer's own reason, because the level a click came from is now one of the
+  // board's answers rather than a branch in the leg.
+  //
+  // A refused disconnect counts in `pickerDisconnectsRefused` and not here (#261), and
+  // that was true before #595 and is true after it: a refactor moves no number.
   const sites = [...SOURCE.matchAll(/bumpPickerRefusal\(([^)]*)\)/g)].map(match => match[1]).sort()
   assert.deepEqual(sites, [
     "'picker_unavailable'",
     "'picker_unavailable'",
-    "'unknown_server'",
-    "'unknown_server'",
-    'action.reason',
+    'answer.reason',
+    'answer.reason',
+    'answer.reason',
     'outcome.reason',
     'reason'
   ].sort(), 'every refusal site counts, and each passes the reason its own record carries')

@@ -94,7 +94,7 @@ import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { bumpBounded } from '../core/bounded-counter.js'
-import { CLAIM_REFUSAL, claimRefusalText, createClaims } from '../core/claims.js'
+import { CLAIM_REFUSAL, createClaims } from '../core/claims.js'
 import { CHANNEL_ROLES, channelIdentity, createChannels, stampIdentity } from '../core/channels.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
@@ -102,21 +102,11 @@ import {
   PICK_VERBS,
   claimFailureText,
   claimRestoreTitle,
-  disconnectRefusalText,
-  pickEmptyText,
-  pickRefusalText,
-  pickUnknownText,
-  pickerDialogParams,
-  pickerRowForBody,
-  pickerRows,
-  readPickAction,
+  createPickerBoard,
   pickTarget,
-  readServerAction,
-  serverActionProblemText,
+  pickerDialogParams,
   serverDialogParams,
-  spectateRefusalText,
-  verbIdFor,
-  verbRefusalText
+  verbIdFor
 } from '../core/picker.js'
 import { baselineFramesFor } from './configuration-baseline.js'
 
@@ -686,6 +676,9 @@ function createFrontLeg ({
   // holder is an id this leg gives a connection, so the board holds no socket and
   // two connections from one account are two holders.
   const claims = createClaims()
+  // #595: what a row reads as, what a click means and which sentence a refusal gets
+  // are src/core/picker.js's, and every frame, record and count stays here.
+  const pickerBoard = createPickerBoard({ claims, channels })
   const holderIds = new WeakMap()
   let holderSeq = 0
   function holderFor (client) {
@@ -1248,31 +1241,18 @@ function createFrontLeg ({
       offered = {
         source: typeof read?.source === 'string' ? read.source : 'none',
         reason: typeof read?.reason === 'string' ? read.reason : null,
-        rows: pickerRows(read?.rows ?? [])
+        rows: read?.rows ?? []
       }
     } catch (error) {
       log('pickerServersError', { error: String(error?.message ?? error).slice(0, 200) })
       return offered
     }
-    // #259: what each body on a row is doing, read where the rows are handed out,
+    // #316: what each body on a row is doing, decided where the rows are handed out,
     // so every dialog a client reads is as old as the click that asked for it. The
-    // claim names the driver, the channels name the spectators, and whether the body
-    // is up at all is the core's answer, because the session owns the body. What the
-    // three facts make of a row is the picker's own vocabulary
-    // (src/core/picker.js, `pickerRowForBody`).
-    //
-    // A body this lane serves and has up with nobody holding it is `unclaimed`,
-    // and that is a body a client may watch. Everything else is `down`, including
-    // a body whose claim is still held: a row is what this lane can offer, not what
-    // it has dialled.
+    // claim names the driver, the channels name the watchers, and whether the body is
+    // up is the session's answer (src/core/picker.js, `offer`).
     const served = bodyServedHandler === null ? null : bodyServedHandler()
-    return { ...offered, rows: offered.rows.map(row => {
-      const claim = claims.claimOn(row.slug)
-      const spectators = channels.on(row.slug)
-        .filter(channel => channel.role === CHANNEL_ROLES.SPECTATOR).length
-      const up = served !== null && served.body === row.slug && served.up === true
-      return pickerRowForBody(row, { up, driver: claim === null ? null : claim.name, spectators })
-    }) }
+    return { ...offered, rows: pickerBoard.offer({ rows: offered.rows, served }) }
   }
 
   // #257: a join with no backend, on a leg that holds a baseline. The client is
@@ -1309,7 +1289,7 @@ function createFrontLeg ({
       // server, so a sentence about one names a choice nobody made. The reason is the
       // offer's own, repeated here because the offer's line is written once per
       // distinct answer and the second join on an empty list reads none (#315).
-      const text = pickEmptyText()
+      const text = pickerBoard.refuse({ reason: 'empty_offer' })
       log('pickerEmpty', { username: client.username ?? null, reason: offer.reason, text })
       endConfiguration(client, 'picker_empty', text)
       return
@@ -1358,7 +1338,7 @@ function createFrontLeg ({
       // A dialog that could not be written is a refusal like any other: the client
       // is ended with the same sentence, so the counters say so too.
       bumpPickerRefusal('picker_unavailable')
-      endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: null }))
+      endConfiguration(client, 'picker_unavailable', pickerBoard.refuse({ reason: 'picker_unavailable' }))
     }
   }
 
@@ -1368,35 +1348,33 @@ function createFrontLeg ({
   // Nothing has to be kept in step, which is what lets two clients hold the picker
   // at once (O55b).
   function handlePickerClick (client, buffer) {
-    const pick = readPickAction(buffer)
-    if (pick !== null) {
-      handlePickerPick(client, pick)
-      return
-    }
-    const action = readServerAction(buffer)
-    if (action.ok === true) {
-      handlePickerVerb(client, action)
-      return
-    }
-    if (action.reason === 'not_a_click') {
-      // Not a click this leg can read at all: another packet's bytes, or a frame
-      // that is not a configuration click. The dialog stays on screen, so the
-      // client can still choose (#257).
+    // #595: which dialog this answers, and what the answer means, is
+    // src/core/picker.js's. The leg routes on the level the click came from.
+    const answer = pickerBoard.click({ buffer, rows: pickerOffer().rows })
+    if (answer.kind === 'ignore') {
       log('pickerPickIgnored', { username: client.username ?? null, reason: 'not_a_pick' })
+      return
+    }
+    if (answer.level === 'pick') {
+      handlePickerPick(client, answer)
+      return
+    }
+    if (answer.level === 'verb') {
+      handlePickerVerb(client, answer)
       return
     }
     // Ours to read and it did not read. The click is refused with the sentence
     // that says what was wrong, and the client is answered. A client left in a
     // dialog nobody will read is worse off than one that is told why.
-    bumpPickerRefusal(action.reason)
-    const text = serverActionProblemText(action)
+    bumpPickerRefusal(answer.reason)
+    const text = pickerBoard.refuse({ reason: answer.reason, verb: answer.verb, id: answer.id })
     log('pickerVerbRefused', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
-      id: action.id,
-      verb: action.verb,
-      slug: action.slug,
-      reason: action.reason,
+      id: answer.id,
+      verb: answer.verb,
+      slug: answer.slug,
+      reason: answer.reason,
       text
     })
     endConfiguration(client, 'picker_refused', text)
@@ -1423,27 +1401,30 @@ function createFrontLeg ({
     })
     if (!written) {
       bumpPickerRefusal('picker_unavailable')
-      endConfiguration(client, 'picker_unavailable', pickRefusalText({ server: server.name }))
+      endConfiguration(client, 'picker_unavailable', pickerBoard.refuse({ reason: 'picker_unavailable', server: server.name }))
     }
   }
 
   // #266: the answer to a server's own dialog. The verb and the server both ride in
   // the frame. This is therefore the server the client clicked, not one the leg
   // remembered.
-  function handlePickerVerb (client, action) {
-    const server = pickerOffer().rows.find(row => row.slug === action.slug) ?? null
+  function handlePickerVerb (client, answer) {
+    const server = answer.row
     const fields = {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
-      id: action.id,
-      verb: action.verb,
-      slug: action.slug,
+      id: answer.id,
+      verb: answer.verb,
+      slug: answer.slug,
       server: server === null ? null : server.name
     }
-    if (server === null) {
-      bumpPickerRefusal('unknown_server')
-      const text = pickUnknownText({ id: action.id })
-      log('pickerVerbRefused', { ...fields, reason: 'unknown_server', text })
+    if (answer.kind === 'refuse') {
+      // A verb answer this lane cannot act on: the frame named a server the offer
+      // does not carry. The sentence is the board's (#595) and the count is the one
+      // helper every refusal goes through.
+      bumpPickerRefusal(answer.reason)
+      const text = pickerBoard.refuse({ reason: answer.reason, verb: answer.verb, id: answer.id })
+      log('pickerVerbRefused', { ...fields, reason: answer.reason, text })
       endConfiguration(client, 'verb_refused', text)
       return
     }
@@ -1452,12 +1433,12 @@ function createFrontLeg ({
     // #267: the claim is recorded here, where the client answers a body's own
     // dialog, and not at login. The frame names the body, so the contention is over
     // that body and not over who logged in first.
-    const claimed = action.verb === 'claim' ? recordClaim(client, server) : null
+    const claimed = answer.verb === 'claim' ? recordClaim(client, server) : null
     try {
       onPickerVerb?.({
-        id: action.id,
-        verb: action.verb,
-        slug: action.slug,
+        id: answer.id,
+        verb: answer.verb,
+        slug: answer.slug,
         server: { ...server },
         uuid: client.uuid ?? null,
         name: client.username ?? null,
@@ -1466,18 +1447,29 @@ function createFrontLeg ({
     } catch (error) {
       log('pickerVerbHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
     }
-    if (action.verb === 'disconnect') {
+    if (answer.verb === 'disconnect') {
       // #261: this verb names a body, not a seat. A claim is what keeps a body
-      // alive, so a claimed body is refused here, where the claim is recorded, in a
-      // sentence naming the player who holds it. An unclaimed body ends: the session
-      // goes down and arms no retry (src/core/session.js), and a claim is what dials
-      // it back. The client leaves in both cases, and the frame that ends its
-      // configuration says which server it left.
-      const held = claims.claimOn(server.slug)
-      if (held !== null) {
+      // alive, so a claimed body is refused in a sentence naming the player who
+      // holds it. An unclaimed body ends: the session goes down and arms no retry
+      // (src/core/session.js), and a claim is what dials it back. The client leaves
+      // in both cases, and the frame that ends its configuration says which server
+      // it left.
+      //
+      // #595: the board read the claim and put it on the answer, so the rule that
+      // refuses this click is beside the rule that composes the row that showed it.
+      // It is answered here, after the verb is recorded, because a refused
+      // disconnect is still a verb the lane was asked for.
+      if (answer.held !== null) {
+        // Counted here and nowhere else: a refused disconnect is its own number
+        // (#261), and the refusal map is the click's own refusals, not this one's.
         metrics.pickerDisconnectsRefused++
-        const text = disconnectRefusalText({ server: server.name, driver: held.name })
-        log('pickerDisconnectRefused', { ...fields, driver: held.name, holder: held.holder, text })
+        const text = pickerBoard.refuse({
+          verb: 'disconnect',
+          reason: 'disconnect_claimed',
+          server: server.name,
+          driver: answer.held.name
+        })
+        log('pickerDisconnectRefused', { ...fields, driver: answer.held.name, holder: answer.held.holder, text })
         endConfiguration(client, 'disconnect_refused', text)
         return
       }
@@ -1517,7 +1509,7 @@ function createFrontLeg ({
       endConfiguration(client, 'claim_refused', claimed.text)
       return
     }
-    if (action.verb === 'spectate') {
+    if (answer.verb === 'spectate') {
       // #259: the click is the landing. A spectator enters the body the way a driver
       // does: that body's configuration continues this client's phase, and then its
       // own play state arrives on the connection it already holds. A refusal is
@@ -1528,8 +1520,9 @@ function createFrontLeg ({
       endConfiguration(client, 'spectate_refused', landing.text)
       return
     }
-    // Any other verb is one no lane offers yet.
-    endConfiguration(client, 'verb_' + action.verb + '_unbuilt', verbRefusalText({ verb: action.verb, server: server.name }))
+    // Any other verb is one no lane offers yet. The board refuses a verb it does
+    // not carry, so this is a guard rather than a path.
+    endConfiguration(client, 'verb_' + answer.verb + '_unbuilt', pickerBoard.refuse({ verb: answer.verb, server: server.name }))
   }
 
 // --- #258: the claim lands the client ---
@@ -1689,7 +1682,7 @@ function createFrontLeg ({
     // The record goes through `record`, which stamps the channel a refusing client
     // still holds when the phase-end write is the thing that failed.
     const refused = reason => {
-      const text = spectateRefusalText({ server: named, reason })
+      const text = pickerBoard.refuse({ verb: 'spectate', reason, server: named })
       bumpPickerRefusal(reason)
       record(client, 'spectateRefused', {
         username: client.username ?? null,
@@ -1798,7 +1791,8 @@ function createFrontLeg ({
       return { ...outcome, text: null }
     }
     bumpPickerRefusal(outcome.reason)
-    const text = claimRefusalText({
+    const text = pickerBoard.refuse({
+      verb: 'claim',
       reason: outcome.reason,
       server: server.name,
       holder: outcome.claim?.name ?? null,
@@ -1808,9 +1802,10 @@ function createFrontLeg ({
     return { ...outcome, text }
   }
 
-  function handlePickerPick (client, action) {
-    const rows = pickerOffer().rows
-    const picked = rows.find(row => row.slug === action.slug) ?? null
+  function handlePickerPick (client, answer) {
+    // #595: the board found the row, or found none. What is left here is the
+    // report a pick owes the caller and the count a pick owes the map.
+    const picked = answer.row
     metrics.pickerPicks++
     // #417: the pick is one connection's, timed from that connection's own login.
     // Both moments are this leg's, so nothing joins two picker connections of one
@@ -1821,16 +1816,16 @@ function createFrontLeg ({
     log('pickerPick', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
-      id: action.id,
-      slug: action.slug,
+      id: answer.id,
+      slug: answer.slug,
       server: picked === null ? null : picked.name,
       known: picked !== null,
       ...(loginToPickMs === null ? {} : { loginToPickMs })
     })
     try {
       onPickerPick?.({
-        id: action.id,
-        slug: action.slug,
+        id: answer.id,
+        slug: answer.slug,
         server: picked === null ? null : { ...picked },
         uuid: client.uuid ?? null,
         name: client.username ?? null
@@ -1842,9 +1837,9 @@ function createFrontLeg ({
       // The dialog on screen is older than the list it came from, which is the same
       // refusal a verb on an unknown server gets: the frame named a server this lane
       // does not offer.
-      bumpPickerRefusal('unknown_server')
-      const text = pickUnknownText({ id: action.id })
-      log('pickerPickRefused', { username: client.username ?? null, id: action.id, slug: action.slug, reason: 'unknown_server', text })
+      bumpPickerRefusal(answer.reason)
+      const text = pickerBoard.refuse({ reason: answer.reason, id: answer.id })
+      log('pickerPickRefused', { username: client.username ?? null, id: answer.id, slug: answer.slug, reason: answer.reason, text })
       endConfiguration(client, 'pick_refused', text)
       return
     }
@@ -2345,7 +2340,7 @@ function createFrontLeg ({
         return {
           watching: false,
           reason: 'no_client',
-          text: spectateRefusalText({ server: server ?? body })
+          text: pickerBoard.refuse({ verb: 'spectate', reason: 'no_client', server: server ?? body })
         }
       }
       return landSpectator(client, { body, server })

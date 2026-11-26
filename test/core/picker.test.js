@@ -6,6 +6,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { createChannels, CHANNEL_ROLES } from '../../src/core/channels.js'
+import { createClaims } from '../../src/core/claims.js'
 import {
   PICK_ACTION_TYPE,
   PICK_DIALOG_TYPE,
@@ -14,6 +16,7 @@ import {
   buildPickAnswer,
   claimFailureText,
   claimRestoreTitle,
+  createPickerBoard,
   disconnectRefusalText,
   pickEmptyText,
   pickIdFor,
@@ -431,4 +434,185 @@ test('#265 the picker offers the allowed-server list, and says which file answer
   // nothing to offer, and no throw reaches the join.
   assert.deepEqual(pickerOfferedRows(() => ({ servers: null, source: 'none', reason: 'unreadable' })),
     { source: 'none', reason: 'unreadable', rows: [] })
+})
+
+// ---- #595: the picker's decisions leave the socket adapter ----
+//
+// Seam: `offer`. The decision it owns is whether a row reads as the body this lane
+// is serving, and a shipped bug got it wrong (#316: a row read `down` while a body
+// on it was driven). Until now it was reachable only over a socket. O55 to O65 could
+// not have caught it without a driver, a claim and a body at once, and a unit test
+// could not reach it at all.
+test('#595 an offer reads each row as the body this lane is serving (#316)', () => {
+  const claims = createClaims()
+  const channels = createChannels()
+  claims.claim({ body: 'sky_25565', server: 'sky:25565', holder: 'conn-1', name: 'Bafbi', at: 1 })
+  channels.open({ id: 'watch-1', body: 'sky_25565', role: CHANNEL_ROLES.SPECTATOR, at: 2 })
+  channels.open({ id: 'watch-2', body: 'sky_25565', role: CHANNEL_ROLES.SPECTATOR, at: 3 })
+  channels.open({ id: 'drive-1', body: 'nether_25565', role: CHANNEL_ROLES.DRIVER, at: 4 })
+
+  const rows = createPickerBoard({ claims, channels }).offer({
+    rows: [{ name: 'sky:25565' }, { name: 'nether:25565' }],
+    served: { body: 'sky_25565', up: true }
+  })
+
+  assert.deepEqual(rows.map(({ name, state, driver, spectators }) => [name, state, driver, spectators]), [
+    ['sky:25565', 'claimed', 'Bafbi', 2],
+    ['nether:25565', 'down', null, 0]
+  ])
+  // The name is normalised here, where every row a lane offers is read, so the slug
+  // and the id a click carries come from the address the claim dials (#265).
+  assert.equal(rows[0].slug, 'sky_25565')
+  assert.equal(rows[0].id, PICK_NAMESPACE + '/sky_25565')
+})
+
+test('#595 an offer names nobody on a body that is not up, and counts only watchers (#295, #259)', () => {
+  const claims = createClaims()
+  const channels = createChannels()
+  claims.claim({ body: 'sky_25565', server: 'sky:25565', holder: 'conn-1', name: 'Bafbi', at: 1 })
+  channels.open({ id: 'watch-1', body: 'sky_25565', role: CHANNEL_ROLES.SPECTATOR, at: 2 })
+  channels.open({ id: 'drive-1', body: 'sky_25565', role: CHANNEL_ROLES.DRIVER, at: 3 })
+
+  const [down] = createPickerBoard({ claims, channels }).offer({
+    rows: [{ name: 'sky:25565' }],
+    served: { body: 'sky_25565', up: false }
+  })
+  // A claim outlives a dial that failed, and a row is what a client can enter.
+  assert.equal(down.state, 'down')
+  assert.equal(down.driver, null, 'a claim on a down body names nobody')
+  assert.equal(down.spectators, 1, 'a driver channel on the body is not a watcher')
+
+  const [up] = createPickerBoard().offer({
+    rows: [{ name: 'sky:25565' }],
+    served: { body: 'sky_25565', up: true }
+  })
+  assert.equal(up.state, 'unclaimed')
+
+  // A lane whose session serves nothing has every row down, and an offer of no rows
+  // is no rows rather than a row invented to fill the dialog.
+  const [nothing] = createPickerBoard().offer({ rows: [{ name: 'sky:25565' }] })
+  assert.equal(nothing.state, 'down')
+  assert.deepEqual(createPickerBoard().offer({ rows: [] }), [])
+})
+
+test('#595 a click reads as what it means, or as why it cannot be acted on (#266)', () => {
+  const board = createPickerBoard()
+  const rows = board.offer({ rows: [{ name: 'sky:25565' }], served: { body: 'sky_25565', up: true } })
+
+  // The pick is read before the verb, because the two namespaces are told apart by
+  // the id and a pick read as a verb is an unknown verb.
+  const pick = board.click({ buffer: buildPickAnswer({ name: 'sky:25565' }), rows })
+  assert.equal(pick.kind, 'pick')
+  assert.equal(pick.slug, 'sky_25565')
+  assert.equal(pick.row.name, 'sky:25565')
+
+  const verb = board.click({ buffer: clickFor(verbIdFor('spectate', 'sky:25565')), rows })
+  assert.equal(verb.kind, 'verb')
+  assert.equal(verb.verb, 'spectate')
+  assert.equal(verb.slug, 'sky_25565')
+
+  // A dialog older than the list it came from names a server this lane does not
+  // offer, at either level.
+  const stalePick = board.click({ buffer: buildPickAnswer({ name: 'nether:25565' }), rows })
+  assert.equal(stalePick.kind, 'refuse')
+  assert.equal(stalePick.reason, 'unknown_server')
+  assert.equal(stalePick.row, null)
+  const staleVerb = board.click({ buffer: clickFor(verbIdFor('claim', 'nether:25565')), rows })
+  assert.equal(staleVerb.reason, 'unknown_server')
+  // The sentence is the stale server's, whatever verb the frame named: the dialog is
+  // older than the list, so no claim or disconnect on that body happened. A verb
+  // left in the answer must not pull the sentence into the verb's family.
+  for (const verb of ['claim', 'spectate', 'disconnect']) {
+    assert.equal(
+      board.refuse({ reason: 'unknown_server', verb, id: 'monoplayer:' + verb + '/nether_25565' }),
+      'Monoplayer: "monoplayer:' + verb + '/nether_25565" names no server this lane offers.',
+      verb
+    )
+  }
+
+  // Not a click this lane can read at all is not a refusal: the dialog stays up.
+  assert.equal(board.click({ buffer: Buffer.alloc(0), rows }).kind, 'ignore')
+  assert.equal(board.click({ buffer: null, rows }).kind, 'ignore')
+
+  // A verb id that does not read is refused with the reason its sentence names.
+  assert.equal(board.click({ buffer: clickFor('monoplayer:claim'), rows }).reason, 'malformed')
+  assert.equal(board.click({ buffer: clickFor('monoplayer:teleport/sky_25565'), rows }).reason, 'unknown_verb')
+  assert.equal(board.click({ buffer: clickFor('other:dialog/exit'), rows }).reason, 'unknown_id')
+})
+
+test('#595 a disconnect on a held body is refused where the order is decided (#261)', () => {
+  const claims = createClaims()
+  claims.claim({ body: 'sky_25565', server: 'sky:25565', holder: 'conn-1', name: 'Bafbi', at: 1 })
+  const board = createPickerBoard({ claims })
+  const rows = board.offer({ rows: [{ name: 'sky:25565' }], served: { body: 'sky_25565', up: true } })
+
+  const held = board.click({ buffer: clickFor(verbIdFor('disconnect', 'sky:25565')), rows })
+  // The click stays a verb the lane was asked for, and the claim that refuses it
+  // rides with the answer: the leg records the verb before it answers it (#261).
+  assert.equal(held.kind, 'verb')
+  assert.equal(held.verb, 'disconnect')
+  assert.equal(held.held.name, 'Bafbi', 'the answer names the player who holds the body')
+  assert.equal(held.held.holder, 'conn-1')
+  assert.equal(
+    board.refuse({ verb: 'disconnect', reason: 'disconnect_claimed', server: held.row.name, driver: held.held.name }),
+    'Monoplayer: sky:25565 is claimed by Bafbi, so it cannot be disconnected. ' +
+      'A body can only be disconnected while nobody claims it.'
+  )
+
+  // The same click on a body nobody holds is the act, and a claim is recorded by
+  // the leg: the board decides, and it does not write.
+  const free = createPickerBoard().click({ buffer: clickFor(verbIdFor('disconnect', 'sky:25565')), rows })
+  assert.equal(free.kind, 'verb')
+  assert.equal(free.verb, 'disconnect')
+  assert.equal(free.row.slug, 'sky_25565')
+  assert.equal(free.held, null, 'a body nobody holds carries no claim to refuse it')
+})
+
+test('#595 every refusal reason reaches one sentence, chosen in one place (#542)', () => {
+  const board = createPickerBoard()
+
+  // A click this lane cannot read names the id and the part that did not read.
+  assert.match(board.refuse({ reason: 'unknown_verb', id: 'monoplayer:teleport/sky_25565', verb: 'teleport' }), /teleport/)
+  assert.match(board.refuse({ reason: 'unknown_verb', id: 'monoplayer:teleport/sky_25565', verb: 'teleport' }),
+    /claim, spectate and disconnect/)
+  assert.match(board.refuse({ reason: 'malformed', id: 'monoplayer:claim' }), /names no server/)
+  assert.match(board.refuse({ reason: 'unknown_id', id: 'other:dialog/exit' }), /other:dialog\/exit/)
+
+  // The lane's own two sentences: it has no list, and it could not show the one it
+  // has. A client clicked nothing in the first case, so the sentence is about the
+  // lane (#315).
+  assert.equal(board.refuse({ reason: 'empty_offer' }), pickEmptyText())
+  assert.equal(board.refuse({ reason: 'picker_unavailable' }), pickRefusalText({ server: null }))
+  assert.equal(board.refuse({ reason: 'picker_unavailable', server: 'sky' }), pickRefusalText({ server: 'sky' }))
+  assert.equal(board.refuse({ reason: 'unknown_server', id: 'monoplayer:pick/sky_25565' }),
+    'Monoplayer: "monoplayer:pick/sky_25565" names no server this lane offers.')
+
+  // Each verb's refusals are the verb's family, and the reason picks the sentence
+  // inside it. A claim names the holder, a disconnect names the driver, a Spectate
+  // names what to do about the body.
+  assert.match(board.refuse({ verb: 'claim', reason: 'body_claimed', server: 'sky', holder: 'Bafbi' }),
+    /sky is already claimed by Bafbi/)
+  assert.match(board.refuse({ verb: 'claim', reason: 'claim_held', server: 'sky', claimed: 'nether' }),
+    /already hold a claim on nether/)
+  assert.match(board.refuse({ verb: 'disconnect', reason: 'disconnect_claimed', server: 'sky', driver: 'Bafbi' }),
+    /sky is claimed by Bafbi, so it cannot be disconnected/)
+  assert.match(board.refuse({ verb: 'spectate', reason: 'no_body', server: 'sky' }), /nobody is on sky/)
+  assert.match(board.refuse({ verb: 'spectate', reason: 'body_down', server: 'sky' }), /Claim it to bring it back/)
+
+  // #435: the three reasons a Spectate is refused with after the body's answer
+  // allowed it are refused in the Spectate family, one sentence each, and none of
+  // them falls into another family's words.
+  // #542 is open: none of the three has a sentence of its own yet, so each gets the
+  // family's default today. The words are pinned here, so the ticket that gives them
+  // their own sentences changes this assertion and nothing else.
+  for (const reason of ['channel_refused', 'no_cached_configuration', 'finish_failed']) {
+    const text = board.refuse({ verb: 'spectate', reason, server: 'sky' })
+    assert.equal(text, 'Monoplayer: sky cannot be watched right now.', reason)
+    assert.doesNotMatch(text, /claim|disconnect/, reason)
+  }
+
+  // A verb no lane carries is refused in words that name the verb, whatever the
+  // reason the caller had.
+  assert.match(board.refuse({ verb: 'teleport', server: 'sky' }), /asked for teleport/)
+  assert.match(board.refuse({ verb: 'teleport', server: 'sky' }), /cannot carry a teleport yet/)
 })
