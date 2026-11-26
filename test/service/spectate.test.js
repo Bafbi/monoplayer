@@ -48,14 +48,14 @@ const skinConfig = () => ({
 
 // The backend's own frame for the puppet, as Paper sends it: the only skin the
 // proxy will ever send, and the moment it has one.
-function deliverPlayerInfo ({ backendLeg }) {
+function deliverPlayerInfo ({ backendLeg }, properties = [TEXTURES]) {
   backendLeg.deliver({
     state: 'play',
     name: 'player_info',
-    buffer: Buffer.from('play:player_info'),
+    buffer: Buffer.from('play:player_info:' + properties[0]?.value),
     data: {
       action: { _value: 14, add_player: true, update_listed: true },
-      data: [{ uuid: PUPPET, player: { name: 'Wiriaw', properties: [TEXTURES] } }]
+      data: [{ uuid: PUPPET, player: { name: 'Wiriaw', properties } }]
     }
   })
 }
@@ -316,4 +316,43 @@ test('#516 a spectator is sent one entry per play state, not one per property fr
   assert.equal(reLanded.length, 1)
   assert.equal(reLanded[0].channel, 'spectator-again')
   assert.equal(reLanded[0].packet.data[0].uuid, WATCHER)
+})
+
+// A frame the leg finds no socket for is not a frame. The entry is not marked sent,
+// so a channel that comes back is still owed one, and the line says the write failed
+// rather than counting a frame nobody received (#134, #516). The leg answers `false`
+// when a channel resolves to no client (src/legs/live-front.js): a socket that closed
+// between the landing and the write.
+test('#516 a write that reaches nobody is refused, and a later pass repairs it', async () => {
+  const logLines = []
+  const rig = makeCore({ config: skinConfig(), logLines })
+  await landABody(rig)
+  deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  const write = rig.frontLeg.write.bind(rig.frontLeg)
+  rig.frontLeg.write = (name, packet, options = {}) =>
+    name === 'player_info' && options.channel === 'spectator-channel'
+      ? false
+      : write(name, packet, options)
+
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
+
+  const refused = logLines.filter(line => line.event === 'puppetSkinRefused')
+  assert.equal(refused.length, 1, 'one line, because one channel received nothing')
+  assert.equal(refused[0].reason, 'write_failed')
+  assert.equal(refused[0].channel, 'spectator-channel')
+  assert.equal('error' in refused[0], false, 'nothing threw, so there is no error to report')
+  assert.equal(skinFrames(rig.frontLeg).filter(frame => frame.channel === 'spectator-channel').length, 0)
+  assert.equal(rig.core.metrics.skinFramesWritten, 1, 'only the driver\'s entry was written')
+
+  // The socket is back, and a property the proxy has not held is what runs the pass
+  // that owes the channel its entry again.
+  rig.frontLeg.write = write
+  deliverPlayerInfo(rig, [{ name: 'textures', value: 'cmVzaWduZWQ=', signature: 'c2lnbmF0dXJl' }])
+
+  const repaired = skinFrames(rig.frontLeg).filter(frame => frame.channel === 'spectator-channel')
+  assert.equal(repaired.length, 1, 'the channel is owed the entry it never received')
+  assert.equal(repaired[0].packet.data[0].uuid, WATCHER)
+  assert.equal(repaired[0].packet.data[0].player.name, 'Watcher')
+  assert.equal(rig.core.metrics.skinFramesWritten, 2)
 })
