@@ -188,12 +188,10 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.spectatorPose(payload)
   },
 
-  // The call the core makes on this leg to read a board only the leg holds, in the
-  // backend table's form. #627: the pre-auth window is created inside the leg
-  // (src/legs/live-front.js) and the core never sees it, so `laneState` asks the leg
-  // for the window's own numbers instead of keeping a copy of a count that moves
-  // with every socket. The row is what holds the real legs to declaring it: a leg
-  // without one is named in `missing`, and its lane reports `preAuth` as null.
+  // #627: a read the core makes on this leg, in the backend table's form. The
+  // pre-auth window is created inside the leg, so `laneState` asks for its numbers
+  // rather than a copy. A leg without this row is named in `missing`, and its
+  // snapshot reports `preAuth` as null.
   {
     kind: 'call',
     name: 'preAuthStats',

@@ -1,8 +1,10 @@
 // #597, #627: the snapshot's pre-auth group.
 //
-// Seam: the fake-integration rig's core built on a front leg the test holds
-// (test/support/harness.js), because the question is what the core asks its leg and
-// when. The window's own numbers are test/core/preauth-window.test.js's subject.
+// Seam: a core built on a front leg the test holds, because the question is what the
+// core asks its leg and when, and the read has to be planted on the leg before
+// start(). test/support/harness.js's makeCore takes no leg, so this file builds the
+// core on the same three pieces the rig uses. The window's own numbers are
+// test/core/preauth-window.test.js's subject.
 //
 // The rule this file pins: `laneState()` carries the pre-auth window as the leg
 // answers it, read at the call, and the group is null — not zero, not an empty
@@ -60,9 +62,10 @@ test('#627 the group is read at the call, so a later snapshot carries later numb
 })
 
 test('#627 the counters come from the window, not from the leg\'s metrics bag', () => {
-  // The counter path this group exists to end: the leg folds two of the window's
-  // numbers into `metrics`, and a snapshot that read those would be a second home
-  // for a count that moves. Here the two disagree, and the window wins.
+  // A regression guard on the counter path this group exists to end: the leg folds
+  // two of the window's numbers into `metrics`, and a snapshot that read the bag
+  // would be a second home for a count that moves. The two disagree here, so a later
+  // change that reads the bag fails this line rather than agreeing with itself.
   const leg = Object.assign(createFakeFrontLeg(), {
     preAuthStats: () => ({ ...WINDOW }),
     metrics: { preAuthInWindow: 99, preAuthExpired: 99, allowed: 0 }

@@ -412,10 +412,10 @@ test('every front leg a lane builds carries the call-ins the core declares', () 
   }
 })
 
-// #627: the one leg in the tree that holds a pre-auth window answers it in the
-// policy's own names, from the window it built. The row in FRONT_LEG_CALL_INS says a
-// leg declares the read; this says what the reading is, which a row cannot: it carries
-// a name and no return shape.
+// #627: the leg a live lane builds answers its own pre-auth window, in the policy's
+// names. The offline front shares createFrontLeg, so one case covers the factory. The
+// row in FRONT_LEG_CALL_INS says a leg declares the read; this says what the reading
+// is, which a row cannot: a row carries a name and no return shape.
 test('#627 the live front leg answers its own pre-auth window, in the window\'s names', () => {
   const leg = createLiveFrontLeg({
     host: '127.0.0.1',

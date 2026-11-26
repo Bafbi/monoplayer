@@ -36,10 +36,6 @@
 //     write(name, packet, { synth, channel })     // clientbound, packet level
 //     writeRaw(buffer, meta, { channel })         // clientbound, frame level
 //     end(reason)                                 // kick/deny every channel
-//     preAuthStats(): { inWindow, maxConnections, // optional (#627): the pre-auth
-//       deadlineMs, refused, expired }           // window's own numbers, read at
-//                                                // the snapshot's call, so the core
-//                                                // keeps no copy of a count
 //     startReconfiguration({ reason }): { started, reason }  // optional (#22)
 //                                                 // the sampling client re-enters
 //                                                 // configuration on its own
@@ -51,6 +47,13 @@
 //
 // A hand-built harness may omit the last two; the core degrades to a state
 // replay at the target's login and logs reconfigurationRestoreNoFinish.
+//
+// The one call the core makes on this leg that way is a row of
+// FRONT_LEG_CALL_INS: `preAuthStats` (#627), the pre-auth window's own numbers. The
+// window is created in the leg, so the lane snapshot reads it there instead of
+// keeping a copy of a count that moves with every socket. A leg without the row
+// answers the snapshot's `preAuth` as null, which is a fact about the lane: no
+// window is not a window of zeroes.
 //
 // A front leg delivers through channels, not through one attachment: its driver
 // and its spectators each hold one, with their own delivery record and client
@@ -2773,11 +2776,9 @@ export function createMonoplayer ({
   // `restoreReplayPending` are separate variables, and restating them here would be
   // a fifth answer to their question rather than a read of one of them.
   //
-  // #627: the pre-auth window is the front leg's, and this reads it. The window is
-  // created inside the leg (createPreAuthWindow, src/legs/live-front.js) and the core
-  // never holds it, so the group is the leg's own `stats()` in the policy's names.
-  // A leg that carries no such read answers null, and that is a fact about the lane:
-  // a lane with no window is not a lane whose window is empty.
+  // #627: the pre-auth window is the front leg's, and the snapshot reads it there.
+  // The leg answers its policy's own `stats()`, in the policy's names, and the core
+  // holds no copy. A leg that carries no such read answers null.
   function laneState () {
     const body = claimBodyId()
     return {
@@ -2798,10 +2799,11 @@ export function createMonoplayer ({
         // `warmReady`, which is a separate gate the session keeps.
         warm: cache.warm
       }],
-      // #627: the window's own five numbers, or null. Read from the leg at this call
-      // rather than from the wiring report, which start() took once: the report says
-      // the leg declares the read, and this wants what the read says now. One window
-      // serves the lane, because one leg accepts its sockets (#261 moves it per body).
+      // #627: the window's own five numbers, or null. The leg is asked at each
+      // snapshot, not read from the wiring report: that report is null until start()
+      // and fixed afterwards, so a group taken from it would answer "no window" for a
+      // lane whose leg has one. One window serves the lane, because one leg accepts
+      // its sockets; #261 gives each body its leg, and the group moves onto the row.
       preAuth: typeof frontLeg?.preAuthStats === 'function' ? frontLeg.preAuthStats() : null
     }
   }

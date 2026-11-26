@@ -2458,9 +2458,8 @@ function createFrontLeg ({
     // would arm a retry, so a body nobody holds stays down and a body somebody holds
     // is kept, and neither answer is a copy of the board that could drift.
     claimOn (body) { return claims.claimOn(body) },
-    // #627: the pre-auth window's own numbers, which the lane snapshot carries. The
-    // policy holds the counts and this leg holds the policy, so the core reads them
-    // through this and keeps no copy of a number that moves with every socket.
+    // #627: the window's own numbers, which the lane snapshot carries. The leg holds
+    // the policy, so the core reads them here instead of keeping a copy.
     preAuthStats () { return preAuthWindow.stats() },
     // The window's own numbers are read live, so the leg keeps no copy of a count
     // the policy already holds.
