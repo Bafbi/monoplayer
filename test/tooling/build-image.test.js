@@ -9,9 +9,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = path.join(ROOT, 'scripts', 'build-image.sh')
@@ -24,7 +24,7 @@ const FAKE_KUBECTL = "#!/bin/sh\nexec sleep 30\n"
 const FAKE_BUILDCTL = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BUILDCTL_ARGS\"\ncase \"$*\" in\n\t*\"debug workers\"*) exit 0 ;;\nesac\nwhile [ $# -gt 0 ]; do\n\tcase \"$1\" in\n\t\t--metadata-file) META=$2; shift 2 ;;\n\t\t*) shift ;;\n\tesac\ndone\nprintf '{\"containerimage.digest\":\"%s\"}\\n' \"$BUILDCTL_DIGEST\" > \"$META\"\n"
 
 function fixture () {
-  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-build-image-'))
+  const root = tempRoot('monoplayer-build-image-')
   const bin = path.join(root, 'bin')
   const argsFile = path.join(root, 'buildctl-args')
   fs.mkdirSync(bin)

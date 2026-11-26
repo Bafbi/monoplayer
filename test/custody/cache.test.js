@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import {
   ensureCacheDir, dirMode, cacheFilePath, legacyCacheFilePath, cacheIdHash,
@@ -16,7 +16,7 @@ import {
 } from '../../src/custody/cache.js'
 
 function tmpDir (label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `auth-${label}-`))
+  return tempRoot(`auth-${label}-`)
 }
 
 const UUID = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'

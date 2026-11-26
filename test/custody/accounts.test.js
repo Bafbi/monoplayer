@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import {
   DEFAULT_ACCOUNTS_DIR,
@@ -26,7 +26,7 @@ const B = '11111111-2222-4333-8444-555555555555'
 const C = '99999999-8888-4777-8666-555555555555'
 
 function root (label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `auth-accounts-${label}-`))
+  return tempRoot(`auth-accounts-${label}-`)
 }
 
 function makeAccount (accountsDir, dirName, { uuid = dirName, name = 'Player', alias = null } = {}) {

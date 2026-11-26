@@ -5,9 +5,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 import { createJournal } from '../../src/observability/journal.js'
 
@@ -15,8 +15,7 @@ const TOOL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 const NOW = 1_700_000_000_000
 
 function harness (t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-journal-cli-'))
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const dir = tempRoot('monoplayer-journal-cli-')
   return {
     dir,
     run: (...args) => spawnSync(process.execPath, [TOOL, ...args], {

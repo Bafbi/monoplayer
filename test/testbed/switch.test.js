@@ -15,9 +15,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SCRIPT = path.join(ROOT, 'src', 'testbed', 'switch.js')
@@ -101,7 +101,7 @@ const NODE_SHIM = [
 ].join('\n')
 
 function workspace () {
-  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-switch-'))
+  const root = tempRoot('monoplayer-switch-')
   const bin = path.join(root, 'bin')
   const state = path.join(root, 'kubectl-state')
   fs.mkdirSync(bin, { recursive: true })

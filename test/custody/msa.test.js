@@ -5,8 +5,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import {
   createMsaAuth, classifyAuthFailure, summarizeEntitlements, summarizePlayerAttributes,
@@ -23,7 +23,7 @@ const SENTINEL_TOKEN = 'SYNTHETIC_FAKE_ACCESS_TOKEN_aaaa1111bbbb'
 const SENTINEL_JWT = 'eyJhbGciOiJSUzI1NiJ9.p0FaKePayloAd.sigPart0000111'
 
 function scratch () {
-  const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'auth-msa-')), 'puppet')
+  const root = path.join(tempRoot('auth-msa-'), 'puppet')
   fs.mkdirSync(root, { mode: 0o700 })
   return root
 }

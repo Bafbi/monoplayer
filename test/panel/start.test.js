@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import { main, startPanel } from '../../src/panel/start.js'
 
@@ -22,14 +23,14 @@ const puppet = (overrides = {}) => ({
 })
 
 function registryFile (puppets) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-registry-'))
+  const dir = tempRoot('panel-registry-')
   const file = path.join(dir, 'puppets.json')
   fs.writeFileSync(file, JSON.stringify({ version: 1, puppets }))
   return file
 }
 
 test('a registry the panel cannot parse stops it before it listens', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-registry-'))
+  const dir = tempRoot('panel-registry-')
   const file = path.join(dir, 'puppets.json')
   fs.writeFileSync(file, JSON.stringify({ version: 1, puppets: [puppet({ backend: 'play2' })] }))
 
@@ -113,7 +114,7 @@ test('an unknown flag is refused instead of ignored', async () => {
 })
 
 test('main reports a broken registry on stderr and exits 2', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-registry-'))
+  const dir = tempRoot('panel-registry-')
   const file = path.join(dir, 'puppets.json')
   // Broken JSON, not a broken shape: the two get different messages, and this
   // case is the one an operator sees when a ConfigMap edit loses a brace.

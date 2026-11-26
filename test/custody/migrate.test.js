@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import { planMigration, applyMigration } from '../../src/custody/migrate.js'
 import { cacheIdHash, PROFILE_FILE, LEGACY_PROFILE_FILE } from '../../src/custody/cache.js'
@@ -17,7 +17,7 @@ const ALIAS = 'puppet'
 const SENTINEL = 'SENTINEL_REFRESH_TOKEN_0123456789abcdef_DO_NOT_PRINT'
 
 function buildLegacyTree (label) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), `auth-migrate-${label}-`))
+  const base = tempRoot(`auth-migrate-${label}-`)
   const secretsDir = path.join(base, '.secrets')
   const accountsDir = path.join(secretsDir, 'accounts')
   const retiredDir = path.join(secretsDir, 'retired')

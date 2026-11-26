@@ -6,9 +6,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 const SCRIPT = path.join(
   path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'link-secrets.sh'
@@ -20,7 +20,7 @@ const SCRIPT = path.join(
 const SENTINEL = 'PROFILE-CONTENT-MUST-NOT-LEAK'
 
 function fixture () {
-  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-secrets-'))
+  const root = tempRoot('monoplayer-secrets-')
   const secrets = path.join(root, 'main', '.secrets')
   fs.mkdirSync(path.join(secrets, 'accounts', 'bafbi'), { recursive: true })
   fs.writeFileSync(path.join(secrets, 'accounts', 'bafbi', 'profile.json'), '{"' + SENTINEL + '":true}')
@@ -115,22 +115,22 @@ test('the ignore rules cover the directory and the symlink the task creates', ()
   const ignored = (tree, candidate) =>
     spawnSync('git', ['-C', tree, 'check-ignore', '--no-index', '-q', candidate]).status === 0
 
-  const directory = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-ignore-dir-'))
+  const directory = tempRoot('monoplayer-ignore-dir-')
   spawnSync('git', ['init', '--quiet', directory])
   fs.writeFileSync(path.join(directory, '.gitignore'), rules)
   fs.mkdirSync(path.join(directory, '.secrets', 'accounts'), { recursive: true })
   assert.equal(ignored(directory, '.secrets'), true, 'the directory is ignored')
   assert.equal(ignored(directory, '.secrets/accounts'), true, 'its contents are ignored')
 
-  const symlinked = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-ignore-link-'))
+  const symlinked = tempRoot('monoplayer-ignore-link-')
   spawnSync('git', ['init', '--quiet', symlinked])
   fs.writeFileSync(path.join(symlinked, '.gitignore'), rules)
-  fs.symlinkSync(fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-elsewhere-')), path.join(symlinked, '.secrets'))
+  fs.symlinkSync(tempRoot('monoplayer-elsewhere-'), path.join(symlinked, '.secrets'))
   assert.equal(ignored(symlinked, '.secrets'), true, 'the symlink is ignored')
 })
 
 test('outside a git work tree it fails instead of guessing a path', () => {
-  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-nogit-'))
+  const root = tempRoot('monoplayer-nogit-')
   const result = run(root, { MONOPLAYER_SECRETS_SOURCE: '' })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /not inside a git work tree/)

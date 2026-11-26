@@ -7,9 +7,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 import { LANE } from '../support/lane.js'
 
 const SCRIPT = path.join(
@@ -78,7 +78,7 @@ const SHIM = [
 ].join('\n')
 
 function workspace () {
-  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-observer-'))
+  const root = tempRoot('monoplayer-observer-')
   const bin = path.join(root, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
@@ -349,7 +349,7 @@ test("a run that names no lane measures this worktree's", () => {
 
 test('a lane that cannot be derived refuses, and keeps the sentence that says how', () => {
   const space = workspace()
-  const notGit = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-not-git-'))
+  const notGit = tempRoot('monoplayer-not-git-')
   const { status, output, calls } = run(space, { MONOPLAYER_GATE_WORKTREE: notGit })
   assert.equal(status, 2, output)
   assert.match(output, /cannot derive this worktree's lane/)

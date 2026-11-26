@@ -6,8 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 import {
   LaneError, laneOfAddress, laneTargets, paperAddress, resolveGateLane, tailnetHost
 } from '../../src/driver/lane.js'
@@ -34,7 +34,7 @@ test('a lane named by hand is the lane, because one name is the point', () => {
 })
 
 test("a lane that cannot be derived is a refusal, with the sentence that says how", () => {
-  const notGit = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-not-git-'))
+  const notGit = tempRoot('monoplayer-not-git-')
   assert.throws(
     () => resolveGateLane({ env: cleanEnv({ MONOPLAYER_GATE_WORKTREE: notGit }) }),
     error => error instanceof LaneError &&

@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import { announceBrand, phaseOf, runBaseline } from '../../src/ladder/observer-baseline.js'
 import { BRAND_CHANNEL, decodeBrand, FABRIC_BRAND } from '../../src/core/client-settings.js'
@@ -13,7 +13,7 @@ import { BRAND_CHANNEL, decodeBrand, FABRIC_BRAND } from '../../src/core/client-
 const UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 
 function accountsDir (profile = { uuid: UUID, name: 'GlowSquidye', alias: 'glowsquidye' }) {
-  const dir = fs.mkdtempSync(path.join(tmpdir(), 'observer-baseline-'))
+  const dir = tempRoot('observer-baseline-')
   if (profile) {
     const account = path.join(dir, profile.uuid)
     fs.mkdirSync(account, { recursive: true })

@@ -15,9 +15,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 import { writeProfile } from '../../src/custody/cache.js'
 
@@ -51,9 +51,8 @@ const REFRESH_TOKEN = 'refresh-value-that-must-not-be-printed'
 const ACCESS_TOKEN = 'access-value-that-must-not-be-printed'
 const OBTAINED_ON = 1_700_000_000_000
 
-function harness (t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-custody-cli-'))
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+function harness () {
+  const root = tempRoot('monoplayer-custody-cli-')
   const secretsDir = path.join(root, '.secrets')
   const accountsDir = path.join(secretsDir, 'accounts')
   fs.mkdirSync(path.join(root, 'home'), { recursive: true })
@@ -134,8 +133,8 @@ const parse = text => JSON.parse(text)
 // accounts
 // ---------------------------------------------------------------------------
 
-test('accounts --json reports the usable, broken, pending, and legacy entries of the tree it was given', (t) => {
-  const h = harness(t)
+test('accounts --json reports the usable, broken, pending, and legacy entries of the tree it was given', () => {
+  const h = harness()
   // The account tree is not the one the custody root implies, so the report has
   // to take the legacy target from the flag and not from the root.
   const accountsDir = path.join(h.root, 'trees', 'accounts')
@@ -168,8 +167,8 @@ test('accounts --json reports the usable, broken, pending, and legacy entries of
   assert.ok(!result.stdout.includes(path.join(ROOT, '.secrets')), result.stdout)
 })
 
-test('--secrets-dir alone decides the account tree and the whitelist file', (t) => {
-  const h = harness(t)
+test('--secrets-dir alone decides the account tree and the whitelist file', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const listing = parse(h.run('accounts', '--secrets-dir', h.secretsDir, '--json').stdout)
@@ -183,8 +182,8 @@ test('--secrets-dir alone decides the account tree and the whitelist file', (t) 
   assert.deepEqual(parse(fs.readFileSync(file, 'utf8')).players.map(entry => entry.uuid), [PLAYER])
 })
 
-test('accounts reads a directory that does not exist and creates nothing', (t) => {
-  const h = harness(t)
+test('accounts reads a directory that does not exist and creates nothing', () => {
+  const h = harness()
   const missing = path.join(h.root, 'no-such-tree')
 
   const result = h.run('accounts', '--accounts-dir', missing, '--secrets-dir', h.secretsDir)
@@ -194,8 +193,8 @@ test('accounts reads a directory that does not exist and creates nothing', (t) =
   assert.equal(fs.existsSync(missing), false)
 })
 
-test('accounts names a broken account in the text listing', (t) => {
-  const h = harness(t)
+test('accounts names a broken account in the text listing', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('accounts')
@@ -210,8 +209,8 @@ test('accounts names a broken account in the text listing', (t) => {
 // status
 // ---------------------------------------------------------------------------
 
-test('status --json resolves every selector form to one account and its own directory', (t) => {
-  const h = harness(t)
+test('status --json resolves every selector form to one account and its own directory', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
   const listing = parse(h.runIn('accounts', '--json').stdout)
   const dirOf = uuid => listing.accounts.find(account => account.uuid === uuid).dir
@@ -244,8 +243,8 @@ test('status --json resolves every selector form to one account and its own dire
   assert.equal(shadowed.account.uuid, A)
 })
 
-test('status --json reports presence of tokens and never their values', (t) => {
-  const h = harness(t)
+test('status --json reports presence of tokens and never their values', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('status', '--account', 'main', '--json')
@@ -268,8 +267,8 @@ test('status --json reports presence of tokens and never their values', (t) => {
 // A profile field is operator text, so it can carry a secret shape. The report
 // is redacted before it reaches stdout, and the warning counts what the report
 // carried: a sentinel is what redaction leaves behind, not a finding (#92).
-test('a secret-shaped profile field is tagged in the report and counted in the warning', (t) => {
-  const h = harness(t)
+test('a secret-shaped profile field is tagged in the report and counted in the warning', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
   const deviceCode = 'ABCD-1234-EFGH'
   writeProfile(path.join(h.accountsDir, A), { uuid: A, deviceType: `device_code=${deviceCode}` })
@@ -282,8 +281,8 @@ test('a secret-shaped profile field is tagged in the report and counted in the w
   assert.doesNotThrow(() => JSON.parse(result.stdout), 'a redacted report must still parse')
 })
 
-test('status prints a one-line-per-fact summary without --json', (t) => {
-  const h = harness(t)
+test('status prints a one-line-per-fact summary without --json', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('status', '--account', 'alt')
@@ -298,8 +297,8 @@ test('status prints a one-line-per-fact summary without --json', (t) => {
 // refusals: exit 2, a message that names the problem
 // ---------------------------------------------------------------------------
 
-test('an ambiguous selector refuses and names exactly the accounts that matched', (t) => {
-  const h = harness(t)
+test('an ambiguous selector refuses and names exactly the accounts that matched', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('status', '--account', 'twin')
@@ -314,8 +313,8 @@ test('an ambiguous selector refuses and names exactly the accounts that matched'
   assert.match(result.stderr, /hint: list accounts: node src\/custody\/cli\.js accounts/)
 })
 
-test('an unknown selector refuses and points at the account listing', (t) => {
-  const h = harness(t)
+test('an unknown selector refuses and points at the account listing', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('status', '--account', 'glowsquidy')
@@ -325,8 +324,8 @@ test('an unknown selector refuses and points at the account listing', (t) => {
   assert.match(result.stderr, /hint: list accounts:/)
 })
 
-test('more than one account and no selector refuses instead of picking one', (t) => {
-  const h = harness(t)
+test('more than one account and no selector refuses instead of picking one', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('status')
@@ -334,8 +333,8 @@ test('more than one account and no selector refuses instead of picking one', (t)
   assert.match(result.stderr, /cannot resolve a puppet account: account_required/)
 })
 
-test('--dir and --account together refuse, and --dir needs a profile', (t) => {
-  const h = harness(t)
+test('--dir and --account together refuse, and --dir needs a profile', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
   const plain = path.join(h.root, 'plain')
   fs.mkdirSync(plain, { recursive: true })
@@ -349,8 +348,8 @@ test('--dir and --account together refuse, and --dir needs a profile', (t) => {
   assert.match(noProfile.stderr, /it is not an account directory/)
 })
 
-test('usage errors exit 2 with the usage text', (t) => {
-  const h = harness(t)
+test('usage errors exit 2 with the usage text', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const badFlag = h.run('accounts', '--accounts-dir', h.accountsDir, '--nope')
@@ -377,8 +376,8 @@ test('usage errors exit 2 with the usage text', (t) => {
 // whitelists. parseArgs takes every option for every command, so a command has to
 // say which ones it reads and refuse the rest, or the operator reads a success and
 // believes the flag did something (#377).
-test('every command refuses the options it does not read', (t) => {
-  const h = harness(t)
+test('every command refuses the options it does not read', () => {
+  const h = harness()
   // The command with an option it never reads, its refusal, and the command that
   // does read that option.
   const cases = [
@@ -461,8 +460,8 @@ test('the usage text lists exactly the options each command reads', () => {
   }
 })
 
-test('device-code refuses a text selector it does not know, before any request', (t) => {
-  const h = harness(t)
+test('device-code refuses a text selector it does not know, before any request', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const typo = h.runIn('device-code', '--account', 'glowsquidy')
@@ -478,8 +477,8 @@ test('device-code refuses a text selector it does not know, before any request',
 // whitelist attach
 // ---------------------------------------------------------------------------
 
-test('whitelist attach adds and removes one player by uuid, in the file it was given', (t) => {
-  const h = harness(t)
+test('whitelist attach adds and removes one player by uuid, in the file it was given', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
   const file = path.join(h.root, 'attach-whitelist.json')
 
@@ -506,8 +505,8 @@ test('whitelist attach adds and removes one player by uuid, in the file it was g
 // --deployment for every command, attach among them, so before #377 this exited 0,
 // wrote the file, and said nothing about the namespace it was handed. The operator
 // read a success and believed a Paper had moved (#377).
-test('whitelist attach refuses the Paper address it cannot honour, and writes no file', (t) => {
-  const h = harness(t)
+test('whitelist attach refuses the Paper address it cannot honour, and writes no file', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
   const file = path.join(h.root, 'attach-whitelist.json')
 
@@ -548,8 +547,8 @@ const SECRETS_DIR_FLAG = '--secrets-dir'
 
 // What separates this case: a missing flag must refuse, not pick a lane, and a
 // refusal must reach no cluster at all.
-test('whitelist backend without --namespace refuses before it reaches any cluster', (t) => {
-  const h = harness(t)
+test('whitelist backend without --namespace refuses before it reaches any cluster', () => {
+  const h = harness()
   const result = h.run('whitelist', 'backend', 'add', 'GlowSquidye', SECRETS_DIR_FLAG, h.secretsDir)
 
   assert.equal(result.status, 2, result.stderr)
@@ -574,8 +573,8 @@ test('whitelist backend without --namespace refuses before it reaches any cluste
 
 // The write gets its own case: one namespace, one Deployment, and the line that
 // says which comes before either call.
-test('whitelist backend reaches exactly the namespace it was given, and prints the Paper first', (t) => {
-  const h = harness(t)
+test('whitelist backend reaches exactly the namespace it was given, and prints the Paper first', () => {
+  const h = harness()
   const result = h.run('whitelist', 'backend', 'add', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', SECRETS_DIR_FLAG, h.secretsDir)
 
   assert.equal(result.status, 0, result.stderr)
@@ -586,8 +585,8 @@ test('whitelist backend reaches exactly the namespace it was given, and prints t
 
 // What separates this case: a stale GATEB_RCON_* in an operator's shell can neither
 // stand in for the flag nor move the deployment.
-test('a driver environment cannot fill in or redirect the Paper', (t) => {
-  const h = harness(t)
+test('a driver environment cannot fill in or redirect the Paper', () => {
+  const h = harness()
   const env = { GATEB_RCON_NAMESPACE: 'monoplayer-gate-sideways', GATEB_RCON_DEPLOYMENT: 'paper-sideways' }
 
   const missing = h.runWith(env, 'whitelist', 'backend', 'add', 'GlowSquidye', SECRETS_DIR_FLAG, h.secretsDir)
@@ -605,8 +604,8 @@ test('a driver environment cannot fill in or redirect the Paper', (t) => {
 // What separates this case: the mirror of #377. --file names a local file, and a
 // backend write goes to the whitelist the Paper holds, so the clause it was handed
 // could not apply. Accepted and dropped, it reads as a success.
-test('whitelist backend refuses --file, which names no Paper', (t) => {
-  const h = harness(t)
+test('whitelist backend refuses --file, which names no Paper', () => {
+  const h = harness()
   const result = h.run('whitelist', 'backend', 'add', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', '--file', path.join(h.root, 'attach-whitelist.json'), SECRETS_DIR_FLAG, h.secretsDir)
 
   assert.equal(result.status, 2, result.stderr)
@@ -615,8 +614,8 @@ test('whitelist backend refuses --file, which names no Paper', (t) => {
   assert.deepEqual(h.calls(), [], 'a refusal runs no kubectl')
 })
 
-test('--deployment names the Paper Deployment, and the printed Paper says which', (t) => {
-  const h = harness(t)
+test('--deployment names the Paper Deployment, and the printed Paper says which', () => {
+  const h = harness()
   const result = h.run('whitelist', 'backend', 'remove', 'GlowSquidye', '--namespace', 'monoplayer-gate-x', '--deployment', 'paper-conduct', SECRETS_DIR_FLAG, h.secretsDir)
 
   assert.equal(result.status, 0, result.stderr)
@@ -628,8 +627,8 @@ test('--deployment names the Paper Deployment, and the printed Paper says which'
 // migrate
 // ---------------------------------------------------------------------------
 
-test('migrate --dry-run plans the legacy move inside the tree it was given and touches nothing', (t) => {
-  const h = harness(t)
+test('migrate --dry-run plans the legacy move inside the tree it was given and touches nothing', () => {
+  const h = harness()
   const legacyDir = seedLegacy(h.secretsDir)
   const before = fs.readdirSync(legacyDir).sort()
   // A quarantined old-layout directory moves into this root's retired/.
@@ -650,8 +649,8 @@ test('migrate --dry-run plans the legacy move inside the tree it was given and t
   assert.equal(fs.existsSync(path.join(h.secretsDir, 'retired')), false)
 })
 
-test('migrate --dry-run on a tree with no legacy directory says so and still exits 0', (t) => {
-  const h = harness(t)
+test('migrate --dry-run on a tree with no legacy directory says so and still exits 0', () => {
+  const h = harness()
   seedAccounts(h.accountsDir)
 
   const result = h.runIn('migrate', '--dry-run')
