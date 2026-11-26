@@ -68,7 +68,7 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'O17', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'O24', 'O24b', 'O25',
   'O26', 'O38', 'O41', 'O41b', 'O39', 'O40', 'O33', 'O34', 'O42', 'O35',
   'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O69', 'O52', 'O53', 'O55', 'O55b',
-  'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62',
+  'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62', 'O70',
   'O63', 'O64', 'O65', 'O66'
 ])
 
@@ -244,6 +244,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot19 = null
   // #635: the client that lands on the driven body to look at the puppet.
   let pickerBot20 = null
+  let pickerBot21 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -2875,7 +2876,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // before the picker, so this client has to be known to reach the refusal.
       offlineUuid('Empty'),
       // #635: the client that lands to look at the puppet's body.
-      offlineUuid('Sightline')
+      offlineUuid('Sightline'),
+      // #633: the client that lands beside a driver to read the mode frames both of
+      // their sockets are told, and the one they are not.
+      offlineUuid('Onlooker')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -4517,6 +4521,84 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.watch
     )
 
+    // --- O70: the mode frames go to the spectator's channel, never to the driver (#633) ---
+    // O62 reads what a spectator's socket is told. This is the other side of that one write:
+    // a lane that wrote the pair on every channel would put the driver's own client in
+    // spectator mode, and a driver is a player in the world. The front withholds a body's
+    // own mode frames from a spectator (`bodyFrameWithheld`), so a broadcast pair reaches
+    // the driver alone: the positive and the negative are two halves of one claim, and
+    // neither assertion can stand for the other.
+    //
+    // The driver is O62's, still in play on the body. A fresh client lands beside it through
+    // the front's own spectate seam, which is the call the Spectate verb makes, and both
+    // sockets register their own listeners before that landing, because the bot records
+    // frame names and not these packets.
+    const driverMode = { gameModes: [], abilities: [] }
+    pickerBot5.client.on('game_state_change', packet => driverMode.gameModes.push(packet))
+    pickerBot5.client.on('abilities', packet => driverMode.abilities.push(packet))
+    pickerBot21 = createBot({ port: picker.port, username: 'Onlooker', version: pickerVersion })
+    await pickerBot21.waitFor(
+      () => pickerBot21.received.dialogs.length === 1,
+      'the picker at the client that reads the mode frames',
+      15_000
+    )
+    const onlookerMode = { gameModes: [], abilities: [] }
+    pickerBot21.client.on('game_state_change', packet => onlookerMode.gameModes.push(packet))
+    pickerBot21.client.on('abilities', packet => onlookerMode.abilities.push(packet))
+    const onlookerLanding = pickerFront.spectate({
+      username: 'Onlooker',
+      body: pickSlug(pickerBodyName),
+      server: pickerBodyName
+    })
+    await pickerBot21.waitFor(
+      () => onlookerMode.gameModes.some(packet => packet.gameMode === 3) && onlookerMode.abilities.length >= 1,
+      'the two frames that make a client a spectator, at the client that just became one',
+      30_000
+    )
+    const onlookerEnded = pickerBot21.received.ended
+    await pickerBot21.close()
+    // The barrier, rather than a sleep: the landing's writes are all out by the time its
+    // channel is gone, so a broadcast pair would have reached the driver by now.
+    await waitFor(
+      () => (pickerFront.channels ?? []).length === 2,
+      "the driver and O62's other spectator, once the client that read the mode frames has gone",
+      15_000
+    )
+    const onlookerModeFrames = onlookerMode.gameModes.filter(packet => packet.gameMode === 3)
+    const driverToldSpectator = driverMode.gameModes.filter(packet => packet.gameMode === 3)
+    evidence.spectatorMode = {
+      landing: onlookerLanding,
+      spectator: {
+        gameModes: onlookerMode.gameModes.map(packet => ({ reason: packet.reason, gameMode: packet.gameMode })),
+        abilities: onlookerMode.abilities.map(packet => ({ flags: packet.flags, flyingSpeed: packet.flyingSpeed, walkingSpeed: packet.walkingSpeed }))
+      },
+      driver: {
+        gameModes: driverMode.gameModes.map(packet => ({ reason: packet.reason, gameMode: packet.gameMode })),
+        abilities: driverMode.abilities.map(packet => ({ flags: packet.flags, flyingSpeed: packet.flyingSpeed, walkingSpeed: packet.walkingSpeed }))
+      },
+      driverEnded: pickerBot5.received.ended === null ? null : String(pickerBot5.received.ended).slice(0, 120),
+      onlookerEnded: onlookerEnded === null ? null : String(onlookerEnded).slice(0, 120)
+    }
+    check(
+      'O70',
+      "a spectator is put in spectator game mode on its own channel: the mode change and the abilities reach its client, and the driver's socket carries neither",
+      onlookerLanding.watching === true &&
+        // One mode change, and it is this client's: the body's own copy arrives from the
+        // replay carrying the body's mode. O62 holds the values these two frames carry;
+        // what this assertion reads is which socket they went to.
+        onlookerModeFrames.length === 1 &&
+        onlookerMode.abilities.length >= 1 &&
+        // The driver's own client is a player in the world: nothing on its socket says it
+        // is a spectator in this window, and the landing that told the spectator reached it
+        // not at all.
+        driverToldSpectator.length === 0 &&
+        driverMode.abilities.length === 0 &&
+        // Both clients kept their connections: the pair is a state change, not an end.
+        onlookerEnded === null &&
+        pickerBot5.received.ended === null,
+      evidence.spectatorMode
+    )
+
     // --- O63: a body nobody drives stays up, and is still watchable (#259) ---
     // The claim is held by the connection that made it, so the driver leaving releases
     // the body and nothing else. Its backend session, its warm state and its spectator
@@ -5251,7 +5333,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     for (const lane of lanes) {
       try { await lane.close() } catch { /* best effort */ }
     }
-    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20]) {
+    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20, pickerBot21]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }

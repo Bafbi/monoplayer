@@ -88,6 +88,7 @@ import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { SKIN_FRAME, carriesTextures, skinEntryOf, skinPlayerInfoPacket } from '../core/skin.js'
 import { createVirtualPlayers, playerEntityTypeFor } from '../core/virtual-players.js'
+import { spectatorModeFrames } from '../core/spectator-mode.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
@@ -383,20 +384,6 @@ export const CLAIM_WARM_TIMEOUT_MS = 30_000
 
 export const ALREADY_DRIVEN_TEXT =
   'Monoplayer: another player is already driving this server. Try again when they leave.'
-
-// #259: what a spectator's client is told about itself. Minecraft carries a player's
-// game mode in two frames, and both are needed: `game_state_change` is the change
-// (reason 3 is `change_game_mode`, and the mode is a float, 3 for spectator), and
-// `abilities` is the flags the client keeps its own copy of. The flags are the ones
-// vanilla sends a spectator: invulnerable (0x01), flying (0x02), flying allowed
-// (0x04). The speeds are the protocol's own defaults. Proof of the field names:
-// `node tools/protocol.mjs frame 26.1 play toClient game_state_change` and `... abilities`;
-// 26.2 declares the same two frames unchanged.
-const GAME_MODE_CHANGE_REASON = 3
-const GAME_MODE_SPECTATOR = 3
-const SPECTATOR_ABILITY_FLAGS = 0x07
-const SPECTATOR_FLYING_SPEED = 0.05
-const SPECTATOR_WALKING_SPEED = 0.1
 
 export function createMonoplayer ({
   config = loadConfig(),
@@ -2831,19 +2818,14 @@ export function createMonoplayer ({
   // carries verbatim from the body, and this later change. Abilities are a
   // separate frame the client keeps its own copy of. A spectator in survival's
   // abilities can fall, take damage, and open a crafting grid on a body it may
-  // not touch. The values are the constants at the top of this file.
+  // not touch. The frames are src/core/spectator-mode.js's (#633), and they are
+  // written on this one channel: a driver is a player in the world.
   function writeSpectatorMode ({ channel }) {
     let written = 0
     try {
-      if (frontLeg.write('game_state_change', {
-        reason: GAME_MODE_CHANGE_REASON,
-        gameMode: GAME_MODE_SPECTATOR
-      }, { channel })) written++
-      if (frontLeg.write('abilities', {
-        flags: SPECTATOR_ABILITY_FLAGS,
-        flyingSpeed: SPECTATOR_FLYING_SPEED,
-        walkingSpeed: SPECTATOR_WALKING_SPEED
-      }, { channel })) written++
+      for (const frame of spectatorModeFrames()) {
+        if (frontLeg.write(frame.name, frame.packet, { channel })) written++
+      }
     } catch (error) {
       log('spectateModeRefused', { channel, error: String(error?.message ?? error).slice(0, 200) })
     }
@@ -3608,6 +3590,12 @@ export function createMonoplayer ({
     // the fresh spawn are owed *after* the frame that voided them, or the respawn would
     // take the puppet away again.
     if (name === 'respawn') {
+      // #633: the frame states the body's game mode, and a client adopts it, so a
+      // dimension change would put a spectator back in the body with its own body drawn
+      // and no flight. Each spectator is told what it is again, right after the frame that
+      // overwrote it, and the driver is not told anything: it is the body. The pair goes
+      // before the entity frames below, so the world they carry lands on a camera.
+      for (const channel of spectators.keys()) writeSpectatorMode({ channel })
       virtualPlayers.forget()
       if (spectators.size > 0) writeVirtualPlayers({ reason: 'respawn' })
     }
