@@ -390,8 +390,12 @@ test('#312 a second client on a lane with no picker is refused at its login, bef
   assert.equal(second.reason, 'already_driven')
   // The words the front writes into the kick, so the player reads a sentence
   // rather than a slug.
-  assert.equal(second.text, 'Monoplayer: another player is already driving this server. Try again when they leave.')
-  assert.deepEqual(rig.frontLeg.endReasons(), [{ reason: 'denied:already_driven' }])
+  const drivenText = 'Monoplayer: another player is already driving this server. Try again when they leave.'
+  assert.equal(second.text, drivenText)
+  // #365: off the fake leg's own record, with no socket and no rung. The real leg
+  // hands the core's text to `client.end()`, which writes it into the login-state
+  // disconnect; the fake keeps the slug the harness matches beside those words.
+  assert.deepEqual(rig.frontLeg.endReasons(), [{ reason: 'denied:already_driven', text: drivenText }])
   assert.equal(rig.core.metrics.denials, denialsBefore + 1)
   assert.equal(rig.frontLeg.frames().length, framesBefore, 'no configuration frame was written for the refused client')
   assert.equal(rig.core.session.attachCount, 1, 'the session was never asked')
