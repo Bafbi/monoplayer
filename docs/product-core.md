@@ -362,11 +362,22 @@ unclaimed, which is a body a client may watch.
   holder it cannot resolve. `src/legs/configuration-baseline/26.2.json` is the
   gate lane's Paper 26.2 build 135 configuration phase, recorded byte for byte by
   `src/ladder/capture-config.js`. Two captures of the same server are identical.
-  `src/legs/configuration-baseline.js` validates it and hands the frames to the
-  front leg, which serves them in recorded order and never edits one.
+  `src/legs/configuration-baseline.js` validates it and hands the front leg the
+  frames a picker join is served: the recording's own order, one kind of frame left
+  out, which is the next bullet.
 - **The phase stays open.** The recording carries a `finish_configuration` and the
   front does not send it: the picker dialog is the phase. A client that answered
   with `finish_configuration` would enter a world that does not exist.
+- **The picker's phase carries no registry data (#598).** A client loads registries
+  once, at the frame that ends the configuration phase, and a second copy of a
+  registry id does not merge into the first: the client reports a duplicate key and
+  drops the connection at `ClientboundFinishConfigurationPacket`. The recording's
+  29 `registry_data` frames are therefore not served. The reader a picker join is
+  served through withholds them (`baselineFramesFor`), so the front leg is never
+  handed a frame it has to remember not to send. The rest of the recording goes out in
+  recorded order: `custom_payload`, `feature_flags`, `select_known_packs` and
+  `tags`. The dialog needs a phase the client parses; the registry set belongs to
+  the body a claim lands the client in.
 - **The pick rides in the action id.** `src/core/picker.js` builds a
   `minecraft:multi_action` dialog with one `minecraft:dynamic/custom` action per
   server, and reads the answer out of the frame's first field. The vanilla answer
@@ -409,8 +420,10 @@ unclaimed, which is a body a client may watch.
   configuration and join prefix are cached. Nothing is dialled before a claim, which
   is why a lane nobody claims never opens a backend connection. The client's own
   configuration phase is still open from the baseline, so it continues with that
-  body's configuration frames and ends with one `finish_configuration`. The core
-  then replays the body's play state on the connection the client already held.
+  body's configuration frames and ends with one `finish_configuration`. The phase
+  carried no registry set before it, so the body's is the one set the client loads.
+  The core then replays the body's play state on the connection the client
+  already held.
   Each body owns its state cache (#260), so the frames the dial brings land in that
   body's cache and no other's. One body is still served at a time, because the
   session holds one backend connection: a claim on a different body is refused
@@ -425,14 +438,18 @@ unclaimed, which is a body a client may watch.
   yet warm waits on that body again. It does not dial a second body, and it does not
   refuse a client the picker just invited. A body that accepted every frame and then
   refused the finish is the one case the client is ended in words instead.
-- **What the landing does not prove (#258, #268).** The client receives a second
-  registry round inside one configuration phase: the baseline's set, then the
-  body's. Whether a vanilla client accepts that is unmeasured here, because the only
-  client on the offline rung is a protocol bot, and the body it lands on is a
-  `minecraft-protocol` fake without terrain (`prismarine-chunk` has no 26.2
-  implementation). #268 owns the measurement, and the fallback it holds: finish the
-  client into an empty world and hand it over through the same-connection
-  reconfiguration machine.
+- **What the landing does not prove (#268).** One phase carries one registry set,
+  and it is the body's (#598). The phase still carries the recording's `tags`,
+  `feature_flags`, `select_known_packs` and `custom_payload` before the body's own
+  copies of those four frames, and no rung measures whether a vanilla client accepts
+  that. The disconnect a real client reported was a duplicate registry key, and
+  nothing here measured what it does with a repeated tag, feature flag, known pack
+  or custom payload. #603 is where that is measured. The only client on the offline
+  rung is a protocol bot, and the body it lands on is a `minecraft-protocol` fake without
+  terrain (`prismarine-chunk` has no 26.2 implementation). Rung 4 is where a real
+  client answers. If a client refuses the remaining doubled frames, the fallback is
+  to finish the client into an empty world and hand it over through the
+  same-connection reconfiguration machine.
 - **The second level is the server's own dialog (#266).** A pick sends a second
   `show_dialog` in the same open phase. The title is the server's name and state.
   The buttons are claim, spectate and disconnect, three `minecraft:dynamic/custom`
