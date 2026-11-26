@@ -74,11 +74,13 @@ and stays in online mode. The gate lane's M4 Paper is offline for its own reason
 a Velocity that authenticates in front of it and a forwarding secret Paper checks.
 
 What the lane still cannot do is admit two bots. The front verifies a joining client
-against Mojang before it shows a picker, so one front admits one account at a time,
-and the offline legs the loopback rungs use refuse any host but loopback. #391 builds
-them into the composition root. Until it lands this lane serves its picker to an
-authenticated client: a real client, or a bot that holds an account. That client can
-make a claim. What no run does yet is put a second client on the body to watch it.
+against Mojang before it shows a picker, so a client that reaches this picker has
+authenticated as its own account, and the offline legs the loopback rungs use refuse
+any host but loopback. #391 builds them into the composition root. Until it lands this
+lane serves its picker to an authenticated client: a real client, or a bot that holds an
+account. One client can claim. A second client on the same body needs the run that
+[The two-client proof](#the-two-client-proof) describes, which wants two accounts and a
+person at both.
 
 ## The first run
 
@@ -253,8 +255,9 @@ Delete the line once the lane moves back to `:main`.
 
 ## Join it
 
-The dev proxy's own account joins the dev Paper when the proxy starts, so the
-join is a fact about the lane rather than a second process.
+This reports the account on the Paper only while somebody holds a claim, because a claim is
+what dials a body (#258). Before that it says the login did not land, and the lane is still
+serving: it has a picker to offer and no body to serve.
 
 ```bash
 mise run dev:join
@@ -266,6 +269,179 @@ the dev Paper's player list over RCON. It writes `.reports/dev-join.json`.
 An earlier version ran a throwaway pod that copied the live account. That pod was
 safe, because it could not refresh, but it made the live token part of a dev run.
 The dev account exists to stop that.
+
+## The two-client proof
+
+A protocol bot does not render and it does not check a registry. #598 was a duplicate key in
+one that every bot passed and a real client died on, so the claim that a client *sees* another
+player is only proved by two clients and a person looking at them (#634).
+
+This section stages that run and then reads what the lane recorded. The reading is the half a
+machine can hold: it says which frames reached which socket. It cannot say what a client drew
+with them, and no number here may be reported as if it could.
+
+### What the two clients must be
+
+Two accounts, both in the attach whitelist, and a person at two clients. The front verifies
+every login against Mojang before it shows a picker, so a client joins as itself: an entry
+whose UUID is not a real account's can never authenticate.
+
+The list that admits them is the lane's own document. Read it:
+
+```bash
+kubectl -n monoplayer-dev get cm monoplayer-dev-config \
+  -o jsonpath='{.data.attach-whitelist\.json}'
+```
+
+Then add the second account, in the whole array: `{"version":1,"players":[{"uuid","name"}]}`,
+where `name` and `addedAt` are optional and the list is exactly the accounts it names.
+
+```bash
+kubectl -n monoplayer-dev edit cm monoplayer-dev-config
+```
+
+An account that is not in it is refused at login with `not_whitelisted`, before any picker, so
+the client sees a disconnect and not a dialog. `mise run dev:up` keeps the list it read before
+its own apply, so an edited entry survives one, and `mise run dev:down` deletes the ConfigMap
+and the list with it.
+
+Use two accounts, not one twice. The lane does not refuse a second client of one account, and
+what breaks then is quieter: a channel is never told about the player it speaks for, so two
+clients of one account are never drawn for each other. That empty world looks exactly like the
+bug this section exists to catch.
+
+### Stage the lane
+
+Run these three in order. The sections above say what each one does.
+
+```bash
+mise run dev:up                          # the Paper, and a proxy that waits for the dev account
+mise run dev:image sha-<commit7>         # the branch under test, from its GHCR build
+mise run dev:status                      # both pods up, and whether the whitelist is empty
+```
+
+`mise run dev:image` needs the branch workflow's image: `mise run image:build` publishes to
+Zot, which this namespace cannot resolve.
+
+Nothing is on the Paper yet, and that is the lane working. A picker lane dials no backend at
+boot: the proxy logs `backendBootSkipped` with reason `picker`, and the first claim is what
+dials a body (#258). `mise run dev:join` says the login did not land until somebody claims,
+and passes afterwards.
+
+### Drive it
+
+Join with a 26.2 client: the lane serves that version and refuses another.
+
+1. Join `monoplayer-dev.tail41e568.ts.net:25565` as the first account. Pick the lane's one row
+   and click **Claim**. Your client now drives the puppet: you are the body's driver.
+2. Join the same address as the second account. The row now carries the claim and a watcher
+   count of one. Pick that row and click **Spectate**.
+3. As the first client, walk a few blocks, then break a block.
+4. As the second client, look at where the first client stands. Then press F5 twice, and try
+   to break a block.
+
+### What you should see
+
+One line per claim. Read the right column only when the middle one is not what you see.
+
+| Look at | You should see | If you do not |
+|---|---|---|
+| the watching client, the world | a player standing where the driving client stands, wearing the puppet's skin | a player with a default skin: the entry arrived without its texture. No player at all: no `spawn_entity` reached that socket |
+| the watching client, while the driver walks | that player walks after it, a fraction of a step behind | it stands still: `virtualPlayersMoved` stayed 0, so no move frame reached a spectator |
+| the watching client, movement | flight, no damage, no block break, no block place: a spectator is a camera | survival behaviour: `spectateView.modeFrames` was not 2 |
+| the watching client, F5 | no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: that is #647. **Expected to fail until #647 lands**, because the client is not told its own player-list entry and so does not treat itself as a spectator |
+| the driving client, the world beside it | the spectator, standing in the world, in the tab list, **wearing a default skin**: this proxy holds no skin for a spectator and invents none | nothing beside it: no `player_info` and no `spawn_entity` reached the driver's channel |
+| the driving client, the player you control | one body, yours. No second copy of yourself anywhere | a duplicate of yourself: the driver's channel was told about its own player |
+
+A bot can assert the frames behind the last two rows, and `O71` does. What no bot can do is see
+them drawn, which is why this table is a person's.
+
+`#645` is the other open half and it is invisible here: a spectator's replay carries the body's
+own game mode frames, and the spectator's own pair is written last, so the client ends correct.
+It is a frame on the wrong socket, not a screen you can catch.
+
+Two clients cannot show a *third* one: that a spectator is drawn for another spectator is
+`O71`'s, and it needs a third account in the same list, on the same body. Two clients cover
+every row above.
+
+### Read what the lane recorded
+
+The proxy writes one JSONL record per event to its stdout. One command reads the run and
+answers each claim above that a log can answer:
+
+```bash
+kubectl -n monoplayer-dev logs deploy/monoplayer | node src/driver/dev-proof.js
+```
+
+It exits 0 when every frame-level claim holds, 1 when one does not and names it, and 2 when no
+spectator landed at all. Its rows end with the summary, and the witnessed steps are printed
+between them, unanswered. Keep the output: `--path` reads a saved stream, so
+
+```bash
+kubectl -n monoplayer-dev logs deploy/monoplayer > .reports/dev-log.jsonl
+node src/driver/dev-proof.js --path .reports/dev-log.jsonl --json > .reports/dev-proof.json
+```
+
+The records behind it, and what each one rules out. `RECORDS` in `src/driver/dev-proof.js` is the
+list these come from, and a guard holds this table to it:
+
+| Record | What it says |
+|---|---|
+| `pickerServed` | a client reached the picker. A run with none never joined the lane |
+| `claimDial` | a client claimed a body, so a body was dialled. This is where the puppet reaches the Paper |
+| `spectateView` | a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet's body, and `modeFrames` is the spectator game mode pair |
+| `spectateRefused` | the Spectate click was refused, with the core's own reason |
+| `spectateViewRefused` | the landing itself was refused, with the reason |
+| `spectateModeRefused` | the spectator game mode pair could not be written to that socket |
+| `puppetSkinSent` | #614's `player_info` naming the puppet went out, with the reason it was written. It is one frame for the whole body with no channel, so this record is the entry for every socket at once. A skin that is not the puppet's starts here |
+| `puppetSkinKnown` | the backend's own `player_info` carried a textures property for the puppet. Without it there is no entry to write, and a client drops the spawn that follows |
+| `puppetSkinWithheld` | an entry the proxy would not write, because the profile it names has no UUID or no name |
+| `puppetSkinRefused` | the entry could not be built, or the leg could not deliver it |
+| `virtualPlayerWritten` | one per entry, spawn and despawn, naming the socket and the frame. This is the only record that says which channel a frame reached, because no counter names a channel |
+| `virtualPlayerRefused` | the leg threw on a write, with the frame, the socket and the error |
+| `virtualPlayerAnnounceRefused` | a player the proxy could not name, so no socket was told about it |
+| `attachDenied` | a login was refused before the picker, with the reason. `not_whitelisted` is the account not being in the lane's list |
+| `pickerEmpty` | the picker offered no row, so there was nothing to claim |
+| `heartbeat` | the counters, every 30 seconds: `metrics.virtualPlayers*`, `metrics.skinFramesWritten`, and one row per socket with its role |
+
+The counters are in the `heartbeat` record, which the proxy writes every 30 seconds. The
+reader prints the ones a run needs: `spectatorViews`, `skinFramesWritten`,
+`virtualPlayersAnnounced`, `virtualPlayersSpawned`, `virtualPlayersMoved`,
+`virtualPlayersDespawned` and `virtualPlayersRefused`. The frame counters count a frame the
+leg answered for, so they say a socket took it. `spectatorViews` counts landings, and
+`virtualPlayersRefused` counts writes that reached no socket at all. `virtualPlayersMoved`
+is the process's, not a socket's: it also counts the spectator moving on the driver's own
+socket, so a non-zero does not say whose move it was, and the walking row above is the
+operator's to judge. None of them counts a pixel a client drew.
+
+### Record what you saw
+
+Saying "the puppet renders" is a witness, and only you can give it. The reader writes the
+document that holds it, alongside the frames it read:
+
+```bash
+node src/driver/dev-proof.js --path .reports/dev-log.jsonl
+```
+
+That writes `.reports/dev-two-client-witness.json`. Its six steps are the table above, each
+`pending`. For each one, write what you saw and set the state to `seen` or `not-seen`. Then
+mark it complete and read it back:
+
+```bash
+node src/driver/dev-proof.js --verify
+```
+
+It exits 1 and names the step that stops it: a step still `pending`, a step with no evidence,
+or a step you recorded as `not-seen`. Copy the completed document to
+`testdata/dev-two-client-witness.json` and the proof has a record in the repo, the way
+`testdata/driver-unmodded-witness.json` does for the driver lane.
+
+**Today one step is expected to be `not-seen`**: the spectator has no body of its own until
+#647 and #645 land. Record that, and the verification names it: a proof with a known gap is
+worth more than a proof nobody took.
+
+A green reader is not that report. It is the frame-level half, and the ticket that started
+this one was filed because somebody read a counter as a proof.
 
 ## Proving the live account is untouched
 
@@ -318,8 +494,9 @@ offers nothing says so in its own log.
 
 Does not prove: anything about Excalia. The dev Paper has none of its plugins,
 its menus, or its network path. The live servers remain the final oracle. It does
-not prove the two-client row either: that needs two clients on one body, and the
-front admits one account at a time until #391 lands.
+not prove the two-client row either: [The two-client proof](#the-two-client-proof) is
+that run, it needs two real accounts, and the half that says a client *drew* the puppet
+is a person's, never this lane's log.
 
 ## It is not in Argo CD
 
