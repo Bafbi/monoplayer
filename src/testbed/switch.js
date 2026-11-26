@@ -20,6 +20,13 @@
 // monoplayer namespace on the custody PVC and exposes
 // monoplayer-testbed.tail41e568.ts.net:25565.
 //
+// A cluster that never ran this tree has no Secret in that namespace, and both
+// Papers then never start. `up` applies the namespace, makes the Secret the tree
+// mounts with a random value, then applies the tree. It never overwrites a Secret
+// an operator made, and no command here deletes one, so a second `up` is the same
+// as the first. An interrupted run still needs `down`: `up` is what takes the live
+// front offline, and it does not put it back.
+//
 // The published front is the testbed's front Service, not its deployment: a
 // deployment scaled to zero leaves that Service published with no endpoints and
 // its tailnet device registered. So `down` deletes it, and `up` recreates it
@@ -27,6 +34,7 @@
 // name back. `up` also records the digest it ran, because the manifest pulls the
 // moving :main tag: without it two runs cannot be compared.
 import { execFileSync, spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -37,6 +45,17 @@ const TEST_DEPLOY = 'monoplayer-testbed'
 const PAPER_NS = 'monoplayer-gate-b'
 const PAPER_HUB = 'paper-hub'
 const PAPER_SKY = 'paper-sky'
+// The Secret the two Papers mount, and the key in it, as deploy/testbed reads it.
+// A Pod whose Secret is absent starts in CreateContainerConfigError, which reads
+// like a slow boot, and no manifest may carry the value, so `up` makes it (#362).
+// It is random, and it reaches kubectl on stdin: no argv, no printed line, no file
+// in this repo ever holds it.
+const PAPER_SECRETS = [{ name: 'gate-b-rcon', key: 'password' }]
+// The label a generated Secret carries, so an operator can tell one this script
+// made from one they made. Nothing deletes either: `down` belongs to the live
+// lane, and the Secret this run made is what the next `up` reuses. The value names
+// the owner that can actually write here, which no worktree lane is.
+const GENERATED_LABEL = { key: 'app.kubernetes.io/managed-by', value: 'testbed' }
 const ARGO_APP = 'monoplayer'
 const ARGO_NS = 'argocd'
 const FRONT_HOST = 'monoplayer-testbed.tail41e568.ts.net'
@@ -65,9 +84,12 @@ const REGISTRY_SETTLE_MS = Number.isFinite(SETTLE_MS) && SETTLE_MS >= 0 ? SETTLE
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-function kubectl (args, { allowFail = false } = {}) {
+// `input` is how a generated value reaches the cluster without passing through
+// argv or a file, so no other process on this machine can read it.
+function kubectl (args, { allowFail = false, input = undefined } = {}) {
   try {
-    return execFileSync('kubectl', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+    const stdio = [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']
+    return execFileSync('kubectl', args, { encoding: 'utf8', input, stdio }).trim()
   } catch (error) {
     if (allowFail) return null
     const stderr = error.stderr?.toString().trim() ?? ''
@@ -99,6 +121,80 @@ async function waitFor (label, fn, { timeoutMs = 180_000, intervalMs = 2000 } = 
 function scale (namespace, deploy, replicas) {
   kubectl(['-n', namespace, 'scale', `deploy/${deploy}`, `--replicas=${replicas}`])
   log(`scale ${namespace}/${deploy} -> ${replicas}`)
+}
+
+// Whether the namespace already holds that Secret. `--ignore-not-found` answers
+// an absent object with nothing and status 0. A read that fails for any other
+// reason throws: a Forbidden is not an absence, and reading one as an absence
+// would let the create below overwrite a Secret an operator made.
+function secretExists (name) {
+  try {
+    return kubectl(['-n', PAPER_NS, 'get', 'secret', name, '--ignore-not-found', '-o', 'name']) !== ''
+  } catch (error) {
+    throw new Error(`cannot read the Secret ${name} in ${PAPER_NS}, and this run will not guess whether it exists: ${error.message}`)
+  }
+}
+
+// `create`, not `apply`: apply overwrites, so a Secret an operator made between the
+// read above and this write would be clobbered. `create` answers AlreadyExists
+// instead, and the run stops rather than replacing a value it did not make.
+function createSecret (name, key) {
+  const value = randomBytes(16).toString('hex')
+  kubectl(['create', '-f', '-'], {
+    input: [
+      'apiVersion: v1',
+      'kind: Secret',
+      'metadata:',
+      `  name: ${name}`,
+      `  namespace: ${PAPER_NS}`,
+      '  labels:',
+      `    ${GENERATED_LABEL.key}: ${GENERATED_LABEL.value}`,
+      'type: Opaque',
+      'stringData:',
+      `  ${key}: ${value}`,
+      ''
+    ].join('\n')
+  })
+  log(`created the random Secret ${name} (${key})`)
+}
+
+// A Secret that is there without the key the Papers read is not one they can start
+// with: `secretKeyRef` fails the same way an absent Secret does, so "used as it
+// is" would leave both Papers waiting on an object that looks present.
+function secretKeyPresent (name, key) {
+  return kubectl(['-n', PAPER_NS, 'get', 'secret', name, '-o', `jsonpath={.data.${key}}`]) !== ''
+}
+
+// The Secrets the tree's Papers mount. A cluster that never ran the testbed has
+// none; a Secret that is already there is used as it is, whatever made it. One
+// line names what this run found rather than what it made, so a fresh cluster and
+// a warm one read as the one decision they are.
+function ensureSecrets () {
+  const found = []
+  for (const { name, key } of PAPER_SECRETS) {
+    if (!secretExists(name)) {
+      createSecret(name, key)
+    } else if (!secretKeyPresent(name, key)) {
+      throw new Error(`the Secret ${name} in ${PAPER_NS} has no ${key} key, and both Papers read it: delete it and run this again, or add the key`)
+    } else {
+      found.push(name)
+    }
+  }
+  if (found.length > 0) {
+    log(`using the Secret(s) the testbed already has: ${found.join(' ')}. This run never overwrites one`)
+  }
+}
+
+// `status` reads what `up` would find, so an operator can see whether a Secret came
+// from this script or from them. An empty answer is absence, which
+// `--ignore-not-found` gives, and a read that failed is unreadable: the two must
+// not look alike.
+function secretFields (name) {
+  const raw = kubectl(['-n', PAPER_NS, 'get', 'secret', name, '--ignore-not-found', '-o', 'json'], { allowFail: true })
+  if (raw === null) return { unreadable: true }
+  if (raw === '') return { missing: true }
+  const labels = JSON.parse(raw).metadata?.labels ?? {}
+  return { generated: labels[GENERATED_LABEL.key] === GENERATED_LABEL.value }
 }
 
 function readJSON (args) {
@@ -299,6 +395,18 @@ async function registry () {
 }
 
 async function up () {
+  // The bootstrap comes first, and before anything touches the live lane: the
+  // namespace, then the Secret its Papers mount. A failure there leaves the live
+  // deployment serving, which a failure after the scale cannot.
+  //
+  // The namespace comes from the one file that names it, and not from the apply
+  // below, because a Secret cannot be made in a namespace that is not there yet.
+  // The Secret comes before that apply because the tree ships both Papers at
+  // `replicas: 1`: the apply is what starts them, and one that starts without the
+  // Secret it reads sits in CreateContainerConfigError (#362).
+  kubectl(['apply', '-f', 'deploy/testbed/namespace.yaml'])
+  ensureSecrets()
+
   log(`live front ${FRONT_HOST}`, { liveReplicas: liveScale() })
   // Disable Argo self-heal before scaling the live deployment; otherwise it
   // scales back to one and fights the testbed for the RWO custody PVC.
@@ -426,6 +534,7 @@ async function status () {
     log(`${ns}/${deploy}`, d ? { replicas: d.spec?.replicas ?? null, ready: d.status?.readyReplicas ?? 0 } : { missing: true })
   }
   log('argo automated', { automated: appAutomated() })
+  for (const { name } of PAPER_SECRETS) log(`secret ${PAPER_NS}/${name}`, secretFields(name))
   log(`front ${TEST_NS}/${TEST_DEPLOY}`, frontFields(frontService()))
   const proxies = proxyPods()
   log('tailnet devices', proxies === null

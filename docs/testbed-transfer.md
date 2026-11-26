@@ -43,6 +43,58 @@ token has one writer. The orchestrator therefore:
 If a run is interrupted, run `mise run testbed:down` or restore the policy by
 hand. The live front is offline while the testbed is up.
 
+## Bootstrapping a cluster that never ran it
+
+`up` makes the Secret the tree mounts before it applies the tree, so a fresh
+cluster needs no hand-made Secret:
+
+1. it applies `deploy/testbed/namespace.yaml`, because a Secret cannot be made in
+   a namespace that is not there yet;
+2. it ensures `gate-b-rcon` exists in `monoplayer-gate-b` with a random value when
+   it is absent. Both Papers read `RCON_PASSWORD` from its `password` key;
+3. it applies `deploy/testbed`, which starts the Papers against a Secret that is
+   already there.
+
+The tree mounts one Secret, and that is what `up` makes: a Secret nothing mounts is
+a value nobody reads. `gate-b-velocity`, which the old driver tree ran against in
+this namespace, is read by nothing here since #277 moved that tree to a lane of its
+own.
+
+The value is generated on this side of the wire and reaches `kubectl create -f -` on
+stdin: it is in no argument, no printed line, and no file in this repo. That is the
+custody rule the account chain already follows ([docs/custody.md](custody.md)):
+no credential this service holds is committed. `create`, not `apply`, so a Secret
+an operator writes while the run is going is never replaced.
+
+A Secret that is already there is used as it is, whatever made it, and its
+`password` key is checked: a Secret without that key is named and the run stops,
+rather than leaving both Papers to wait on an object that looks present. `up`
+never overwrites a Secret and no command deletes one, so a second `up` is the same
+as the first. An interrupted run still needs `mise run testbed:down`: `up` is what
+takes the live front offline, and it does not put it back.
+
+To rotate the password, stop the testbed, delete the Secret, then bring it up
+again. A running Paper keeps the value it started with, so deleting the Secret
+under a live testbed rotates nothing:
+
+```bash
+mise run testbed:down
+kubectl -n monoplayer-gate-b delete secret gate-b-rcon
+mise run testbed:up
+```
+
+`node src/testbed/switch.js status` prints one `secret monoplayer-gate-b/gate-b-rcon`
+line: `{"generated":true}` for a Secret `up` made, `{"generated":false}` for one an
+operator made, `{"missing":true}` when it is not there, and `{"unreadable":true}`
+when kubectl could not answer. The label `app.kubernetes.io/managed-by: testbed` is
+what that line reads, and `status` is its only reader: nothing in this repo deletes
+a Secret by it.
+
+The testbed still mounts objects the live lane owns: the `monoplayer-custody` PVC,
+the `monoplayer-config` ConfigMap, and the `ghcr-pull` pull secret. This tree reads
+them; it does not create them, and a cluster without them is a cluster without the
+live lane ([docs/deployment.md](deployment.md)).
+
 ## Commands
 
 ```bash
@@ -79,14 +131,15 @@ These are the steps, and what each one prints.
 
    ```
    [testbed] argo automated {"automated":null}
+   [testbed] secret monoplayer-gate-b/gate-b-rcon {"generated":true}
    [testbed] front monoplayer/monoplayer-testbed {"hostname":"monoplayer-testbed.tail41e568.ts.net"}
    [testbed] tailnet devices {"count":1,"names":["ts-monoplayer-testbed-hqb5v-0"]}
    [testbed] restore record {"automated":"{\"prune\":true,\"selfHeal\":true}","disabledByUs":true,"imageID":"ghcr.io/bafbi/monoplayer@sha256:…","digest":"sha256:…"}
    ```
 
    The four deployment rows come around those and are left out. `argo automated`
-   reads null because `up` removed it, and `restore record` carries the digest
-   this run recorded.
+   reads null because `up` removed it, `secret` says whether `up` made the Secret
+   or an operator did, and `restore record` carries the digest this run recorded.
 
 3. `mise run testbed:down`. It restores the live deployment and the Argo policy
    first, then deletes the front Service:
@@ -102,12 +155,14 @@ These are the steps, and what each one prints.
    ```
    [testbed] monoplayer/monoplayer {"replicas":1,"ready":1}
    [testbed] argo automated {"automated":"{\"prune\":true,\"selfHeal\":true}"}
+   [testbed] secret monoplayer-gate-b/gate-b-rcon {"generated":true}
    [testbed] front monoplayer/monoplayer-testbed {"missing":true}
    [testbed] tailnet devices {"count":0,"names":[]}
    [testbed] restore record {"missing":true}
    ```
 
    The testbed and Paper deployment lines come between these and are left out.
+   The Secret stays: `down` deletes none, so the next `up` finds this one.
 
    The Tailscale operator removes the proxy pod on its own clock. Rerun `status`
    until the device count is 0: the delete waits for the Service, not for the

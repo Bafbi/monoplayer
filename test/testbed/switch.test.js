@@ -61,6 +61,23 @@ const SHIM = [
   '  *" exec "*) printf \'There are 1 of a max of 8 players online: GlowSquidye\\n\'; exit 0 ;;',
   '  *" logs "*) printf \'%s\\n\' \'{"event":"startLive","front":"monoplayer-testbed.example.invalid"}\' \'{"event":"liveReady","backend":"paper-hub"}\'; exit 0 ;;',
   '  *" get svc -l "*) if [ "$KUBECTL_SVC_STATUS" != "0" ]; then echo "forbidden" >&2; exit "$KUBECTL_SVC_STATUS"; fi; echo "$KUBECTL_FRONT_SERVICE_LIST"; exit 0 ;;',
+  // A Secret read. `--ignore-not-found` answers an absent Secret with nothing and
+  // status 0, so presence is a file a case writes and the create below adds, the
+  // way the cluster does. A read that fails for another reason is not an absence
+  // (#362), so a case can make it answer a Forbidden the way kubectl would.
+  '  *" get secret "*) if [ "$KUBECTL_SECRET_READ_STATUS" != "0" ]; then printf \'Error from server (Forbidden): secrets is forbidden\\n\' >&2; exit "$KUBECTL_SECRET_READ_STATUS"; fi',
+  '    name=""; prev=""; for a in "$@"; do [ "$prev" = "secret" ] && name="$a"; prev="$a"; done',
+  '    present="$state/secret-$name"',
+  '    case " $* " in',
+  '      *" -o json "*) if [ -f "$present" ]; then printf \'{"metadata":{"labels":%s}}\\n\' "$KUBECTL_SECRET_LABELS"; fi; exit 0 ;;',
+  '      *" -o jsonpath="*) if [ -f "$present" ] && [ "$KUBECTL_SECRET_HAS_KEY" = "1" ]; then printf cGFzc3dvcmQ=; fi; exit 0 ;;',
+  '    esac',
+  '    [ -f "$present" ] && printf \'secret/%s\\n\' "$name"; exit 0 ;;',
+  // The generated Secret reaches kubectl on stdin, so a case reads exactly what
+  // `up` wrote without `up` ever printing a value.
+  // `printf "%s\\n" ---`, not `printf ---`: bash reads a format that starts with a
+  // dash as an option and prints nothing, so the marker would vanish.
+  '  *" create -f -"*) if [ "$KUBECTL_SECRET_CREATE_STATUS" != "0" ]; then printf \'%s\\n\' "$KUBECTL_SECRET_CREATE_ERROR" >&2; exit "$KUBECTL_SECRET_CREATE_STATUS"; fi; { printf "%s\\n" ---; cat; } >> "$state/secrets.yaml"; touch "$state/secret-gate-b-rcon"; printf \'secret/gate-b-rcon configured\\n\'; exit 0 ;;',
   '  *" get deploy "*) printf \'{"spec":{"replicas":1},"status":{"readyReplicas":1}}\\n\'; exit 0 ;;',
   '  *) printf \'ok\\n\'; exit 0 ;;',
   'esac',
@@ -140,6 +157,13 @@ function run (space, args, env = {}) {
       // kubectl quotes the object name: service "monoplayer-testbed" deleted.
       KUBECTL_DELETE_MESSAGE: 'service "monoplayer-testbed" deleted',
       KUBECTL_DELETE_STATUS: '0',
+      // A cluster that has never run the testbed has no Secret, so the default
+      // answer is absence: a case that wants an operator's Secret writes the file.
+      KUBECTL_SECRET_READ_STATUS: '0',
+      KUBECTL_SECRET_CREATE_STATUS: '0',
+      KUBECTL_SECRET_CREATE_ERROR: 'Error from server (Forbidden): secrets is forbidden',
+      KUBECTL_SECRET_LABELS: JSON.stringify({ 'app.kubernetes.io/managed-by': 'testbed' }),
+      KUBECTL_SECRET_HAS_KEY: '1',
       ...env
     }
   })
@@ -348,4 +372,177 @@ test('status reports the front, the tailnet proxy, and the recorded run', () => 
   const unreadable = run(space, ['status'], { KUBECTL_SVC_STATUS: '1' })
   assert.equal(unreadable.status, 0, unreadable.output)
   assert.ok(unreadable.output.includes('front monoplayer/monoplayer-testbed {"unreadable":true}'), unreadable.output)
+})
+
+// #362: a cluster that never ran the testbed has no Secret, and both Papers then
+// sit in CreateContainerConfigError, which reads like a slow boot. `up` makes what
+// the tree mounts, and never overwrites one an operator made. The value is random
+// and reaches kubectl on stdin: it is in no argv and on no printed line.
+function secrets (space) {
+  const file = path.join(space.state, 'secrets.yaml')
+  if (!fs.existsSync(file)) return []
+  return fs.readFileSync(file, 'utf8').split('---').map(part => part.trim()).filter(Boolean)
+}
+
+// The pairs `deploy/testbed` mounts, read from the tree rather than from the
+// script, so the guard below compares two homes of the same fact.
+function mounted () {
+  const dir = path.join(ROOT, 'deploy', 'testbed')
+  const pairs = fs.readdirSync(dir).filter(name => name.endsWith('.yaml')).flatMap(name =>
+    [...fs.readFileSync(path.join(dir, name), 'utf8').matchAll(/secretKeyRef:\s*\n\s+name: (\S+)\s*\n\s+key: (\S+)/g)]
+      .map(match => match[1] + ' ' + match[2]))
+  return [...new Set(pairs)].sort()
+}
+
+test('the tree commits no Secret: the value is made on the cluster', () => {
+  // `test/tooling/dev-lane.test.js` holds `deploy/dev` to the same rule. A Secret
+  // in git is a credential in git, and the generator is what makes a cluster that
+  // never ran the testbed work without one.
+  const dir = path.join(ROOT, 'deploy', 'testbed')
+  for (const name of fs.readdirSync(dir).filter(file => file.endsWith('.yaml'))) {
+    const text = fs.readFileSync(path.join(dir, name), 'utf8')
+    assert.doesNotMatch(text, /^kind: Secret$/m, name + ' commits no Secret')
+    assert.doesNotMatch(text, /^stringData:/m, name + ' commits no stringData')
+    assert.doesNotMatch(text, /password:\s*[^\s]/m, name + ' commits no value')
+  }
+})
+
+test('a cluster with no Secret gets one before the Papers are applied', () => {
+  const space = workspace()
+
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+
+  const namespaceAt = calls.indexOf('apply -f deploy/testbed/namespace.yaml')
+  const readAt = calls.findIndex(line => line.startsWith('-n monoplayer-gate-b get secret gate-b-rcon '))
+  const createAt = calls.findIndex(line => line.startsWith('create -f -'))
+  const treeAt = calls.indexOf('apply -k deploy/testbed')
+  assert.ok(namespaceAt >= 0, 'the namespace comes from the one file that names it: ' + calls.join(' | '))
+  assert.ok(readAt > namespaceAt, 'the Secret is read once the namespace exists, so the read is a question kubectl can answer')
+  assert.ok(createAt > readAt, 'an absent Secret is made: ' + calls.join(' | '))
+  assert.ok(treeAt > createAt, 'the Papers are applied after it exists, so no pod starts in CreateContainerConfigError')
+
+  // One Secret, for the one the tree mounts: a Secret nothing mounts is a value
+  // nobody reads.
+  const manifests = secrets(space)
+  assert.equal(manifests.length, 1, 'exactly one Secret is generated: ' + JSON.stringify(manifests))
+  const [secret] = manifests
+  assert.match(secret, /namespace: monoplayer-gate-b/, secret)
+  assert.match(secret, /^  name: gate-b-rcon$/m, secret)
+  assert.match(secret, /app\.kubernetes\.io\/managed-by: testbed/, 'the label says what made it, and what made it is the testbed: ' + secret)
+  const value = /^  password: ([0-9a-f]{32})$/m.exec(secret)?.[1]
+  assert.ok(value, 'the key the Papers read carries a random value: ' + secret)
+  assert.equal(output.includes(value), false, 'the value is on no printed line')
+  assert.equal(calls.some(line => line.includes('--from-literal')), false, 'the value is in no argv')
+  assert.match(output, /created the random Secret gate-b-rcon/, 'the run says what it made: ' + output)
+})
+
+test("an operator's Secret is used as it is, and the run creates nothing", () => {
+  const space = workspace()
+  fs.writeFileSync(path.join(space.state, 'secret-gate-b-rcon'), '')
+
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.equal(calls.some(line => line.startsWith('create -f -')), false,
+    'nothing overwrites a Secret this run did not make: ' + calls.join(' | '))
+  assert.match(output, /using the Secret\(s\) the testbed already has: gate-b-rcon/, output)
+  assert.match(output, /never overwrites one/, 'the rule is stated where a reader of the log meets it')
+})
+
+test('two ups in a row make one Secret, so twice is the same as once', () => {
+  const space = workspace()
+
+  const first = run(space, ['up'])
+  assert.equal(first.status, 0, first.output + '\ncalls: ' + first.calls.join(' | '))
+  const second = run(space, ['up'])
+  assert.equal(second.status, 0, second.output + '\ncalls: ' + second.calls.join(' | '))
+
+  assert.equal(secrets(space).length, 1, 'one Secret, made once: ' + JSON.stringify(secrets(space)))
+  assert.equal(second.calls.some(line => line.startsWith('create -f -')), false,
+    'the second up used the Secret the first one made: ' + second.calls.join(' | '))
+  assert.match(second.output, /using the Secret\(s\) the testbed already has/, second.output)
+})
+
+test('the Secrets up makes are exactly the ones the tree mounts', () => {
+  const space = workspace()
+
+  const { status, output } = run(space, ['up'])
+  assert.equal(status, 0, output)
+  const generated = secrets(space).map(secret =>
+    /^  name: (\S+)$/m.exec(secret)[1] + ' ' + /^stringData:\n  (\S+):/m.exec(secret)[1]).sort()
+  assert.ok(mounted().length > 0, 'the tree mounts at least one Secret, so an empty answer here is a finding')
+  assert.ok(generated.length > 0, 'the run generated what it mounted')
+  assert.deepEqual(generated, mounted(), 'the generated pair is exactly the mounted pair')
+})
+
+test('a Secret read that fails is not read as an absence', () => {
+  // A Forbidden or a timeout is not "there is none": guessing that would let the
+  // create overwrite a Secret an operator made.
+  const space = workspace()
+
+  const { status, output, calls } = run(space, ['up'], { KUBECTL_SECRET_READ_STATUS: '1' })
+  assert.notEqual(status, 0, 'the run stops: ' + output)
+  assert.match(output, /will not guess whether it exists/, output)
+  assert.equal(calls.some(line => line.startsWith('create -f -')), false,
+    'a failed read never becomes a create: ' + calls.join(' | '))
+})
+
+test('a bootstrap that fails leaves the live lane serving', () => {
+  // The bootstrap runs before Argo is touched and before the live deployment is
+  // scaled: a Secret that cannot be made must not cost the live front.
+  const space = workspace()
+
+  const { status, output, calls } = run(space, ['up'], { KUBECTL_SECRET_CREATE_STATUS: '1' })
+  assert.notEqual(status, 0, 'the run fails: ' + output)
+  assert.match(output, /Forbidden/, 'the cluster error stays visible: ' + output)
+  assert.equal(calls.some(line => line.includes('patch app')), false,
+    'Argo auto-sync is untouched: ' + calls.join(' | '))
+  assert.equal(calls.includes('-n monoplayer scale deploy/monoplayer --replicas=0'), false,
+    'the live deployment never went down: ' + calls.join(' | '))
+})
+
+test('down touches no Secret, so the next up finds the one that was made', () => {
+  const space = workspace()
+  fs.writeFileSync(path.join(space.state, 'secret-gate-b-rcon'), '')
+
+  const { status, output, calls } = run(space, ['down'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.equal(calls.some(line => line.includes('secret')), false,
+    'down neither reads nor deletes a Secret: ' + calls.join(' | '))
+})
+
+test("an operator's Secret without the key the Papers read is named, not waited on", () => {
+  // `secretKeyRef` fails on a missing key the way it fails on a missing object, so
+  // "used as it is" would leave both Papers in CreateContainerConfigError for a
+  // reason the run never says.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.state, 'secret-gate-b-rcon'), '')
+
+  const { status, output, calls } = run(space, ['up'], { KUBECTL_SECRET_HAS_KEY: '0' })
+  assert.notEqual(status, 0, 'the run stops: ' + output)
+  assert.match(output, /gate-b-rcon in monoplayer-gate-b has no password key/, output)
+  assert.equal(calls.some(line => line.startsWith('create -f -')), false,
+    'an operator\'s Secret is never replaced: ' + calls.join(' | '))
+  assert.equal(calls.includes('-n monoplayer scale deploy/monoplayer --replicas=0'), false,
+    'the live lane is untouched: ' + calls.join(' | '))
+})
+
+test('status says whether each Secret is generated or an operator\'s', () => {
+  const space = workspace()
+
+  const missing = run(space, ['status'])
+  assert.equal(missing.status, 0, missing.output)
+  assert.ok(missing.output.includes('secret monoplayer-gate-b/gate-b-rcon {"missing":true}'), missing.output)
+
+  fs.writeFileSync(path.join(space.state, 'secret-gate-b-rcon'), '')
+  const generated = run(space, ['status'])
+  assert.ok(generated.output.includes('secret monoplayer-gate-b/gate-b-rcon {"generated":true}'), generated.output)
+
+  const operator = run(space, ['status'], { KUBECTL_SECRET_LABELS: '{}' })
+  assert.ok(operator.output.includes('secret monoplayer-gate-b/gate-b-rcon {"generated":false}'),
+    'an unlabelled Secret is an operator\'s, and status says so: ' + operator.output)
+
+  const unreadable = run(space, ['status'], { KUBECTL_SECRET_READ_STATUS: '1' })
+  assert.ok(unreadable.output.includes('secret monoplayer-gate-b/gate-b-rcon {"unreadable":true}'),
+    'a read that failed is not an absence: ' + unreadable.output)
 })
