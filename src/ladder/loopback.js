@@ -4681,7 +4681,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const backendAfterNeighbour = backendReceived()
     evidence.driverView = {
       landing: nearbyLanding,
-      entryAt,
       spawn: nearbySpawn === null
         ? null
         : { uuid: nearbySpawn.objectUUID, entityId: nearbySpawn.entityId, x: nearbySpawn.x, y: nearbySpawn.y, z: nearbySpawn.z },

@@ -23,7 +23,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { pickSlug } from '../../src/core/picker.js'
-import { playerEntityTypeFor } from '../../src/core/virtual-players.js'
+import { FIRST_VIRTUAL_ENTITY_ID, playerEntityTypeFor } from '../../src/core/virtual-players.js'
 import { makeCore } from '../support/harness.js'
 
 // The body a claim dials, and the body a spectator watches it through. The driver's UUID is
@@ -209,7 +209,6 @@ const WATCHER_B = '99999999-8888-7777-6666-555555555555'
 const CHANNEL_B = 'spectator-channel-b'
 
 const framesOn = (frontLeg, channel) => frontLeg.frames().filter(frame => frame.channel === channel)
-const namesOn = (frontLeg, channel) => framesOn(frontLeg, channel).map(frame => frame.name)
 
 // One body, a driver, and the driver's channel in the front's registry, which is where a
 // channel id exists.
@@ -231,7 +230,7 @@ test('#636 the driver sees who is watching: an entry, then a body, at the positi
   assert.ok(body !== -1, 'and is given a body for that UUID')
   assert.ok(entry < body, 'the entry comes first: a spawn before it is a body the client throws away')
   const spawn = told[body].packet
-  assert.ok(spawn.entityId >= 1_000_000_000, 'the id is the proxy\'s own, not one a backend hands out')
+  assert.ok(spawn.entityId >= FIRST_VIRTUAL_ENTITY_ID, 'the id is the proxy\'s own, not one a backend hands out')
 
   // The driver's own world keeps exactly itself: the puppet\'s body is the body it controls.
   assert.equal(told.filter(frame => frame.name === 'spawn_entity' && frame.packet.objectUUID === PUPPET).length, 0,

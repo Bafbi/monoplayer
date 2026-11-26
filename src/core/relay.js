@@ -193,13 +193,18 @@ export function capturePose (pose, name, data, { backend = false } = {}) {
       pitch: numeric(data.pitch) ? data.pitch : pose.pitch
     }
   }
-  // Clientbound movement: position/position_look/look.
+  // A client's movement: the list is the gate, and which fields it carries is the one
+  // difference between its three names. `look` is the angles alone, `position` the place
+  // alone, and `position_look` both — and a frame that carries a place it cannot place
+  // changes nothing, not even the angles, because a head turned at a position nobody knows
+  // is a body nobody can draw anyway.
+  if (!isPoseFrame(name)) return pose
   let next = pose
-  if (name === 'position' || name === 'position_look') {
+  if (name !== 'look') {
     if (!numeric(data.x) || !numeric(data.y) || !numeric(data.z)) return pose
     next = { ...next, x: data.x, y: data.y, z: data.z }
   }
-  if (name === 'look' || name === 'position_look') {
+  if (name !== 'position') {
     next = {
       ...next,
       yaw: numeric(data.yaw) ? data.yaw : next.yaw,
