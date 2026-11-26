@@ -1119,6 +1119,46 @@ first dial and its target warms in five seconds.
   after the ticket that proposed it: `fake` for the fake backend's options and `wire` for
   the wire check.
 
+- `O69` a spectator is told the puppet as a body: an entity for its UUID with an id of the
+  proxy's own, then a move that follows it, and the driver's own world is never handed a
+  second copy of itself (#635).
+
+  The owner's report, twice from the live lane: the entry arrives and the world is empty.
+  A client draws another player from a `player_info` entry *and* an entity for that UUID,
+  and a Minecraft server never sends a client its own player entity, so the body's own
+  stream holds no spawn for the puppet and nothing invented one. #614 gave every channel
+  the entry; `src/core/virtual-players.js` gives every channel but the player's own the
+  entity that goes with it.
+
+  A fresh 26.2 client lands on the driven body through the front's own `spectate` seam,
+  which is the call the Spectate verb makes. It registers its own listeners for
+  `spawn_entity`, `entity_teleport` and `entity_destroy`, because the bot records frame
+  names and not these packets. The driver's client registers one as well, and the
+  assertion reads what it never receives.
+
+  The spawn carries the puppet's UUID, the player entity type this rung's own protocol
+  version states — the assertion reads it from the protocol data rather than from the
+  module that wrote the frame, because a comparison against the writer's own constant
+  cannot catch a wrong constant — and an entity id of the proxy's own from
+  `FIRST_VIRTUAL_ENTITY_ID` upward, never the body's `login` id, which every client of the
+  body already holds as itself. Then the body moves once and
+  the spectator receives a teleport for that same id. The destroy count is zero, because
+  nothing in this run replaces the world.
+
+  The wait before the move is one coalescing window plus a margin, because a virtual
+  player's move is coalesced to one frame per `MOVE_INTERVAL_MS` on the core's clock, and
+  a rig binds that clock to the wall clock (`src/ladder/rig.js`).
+
+  What it cannot prove: that a client draws the puppet. The bot speaks the wire and
+  records no pixels, and a body's equipment, head rotation and metadata are not synthesized
+  here at all — a spectator gets position and identity, not a held item. That half is the
+  dev lane's checklist (`deploy/dev/README.md`, #634), with two real clients.
+
+  It also cannot read the entry that names the puppet before the spawn: this rig's fake
+  backend never lists the puppet, so the proxy holds no skin and writes no entry, and the
+  count is recorded in the evidence rather than asserted. That order is read in
+  `test/service/virtual-players.test.js`, where the backend states a skin.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a

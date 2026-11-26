@@ -45,8 +45,15 @@ import { baselineRegistryIds, readConfigurationBaseline } from '../legs/configur
 import { chooseDialogAction } from '../core/dialog-codec.js'
 import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
 import { createPickerServerReader } from '../service/start-live.js'
+import { FIRST_VIRTUAL_ENTITY_ID, MOVE_INTERVAL_MS } from '../core/virtual-players.js'
+import minecraftData from 'minecraft-data'
 
 const VERSION = '26.1'
+// #635: the wait O69 takes before it moves the body. A virtual player's move is coalesced
+// into one frame per MOVE_INTERVAL_MS on the core's own clock, which a rig binds to the wall
+// clock, so the assertion waits one window plus a margin rather than racing a bound it cannot
+// see. The margin is for the platform's timer, not for the product.
+const MOVE_WINDOW_WAIT_MS = MOVE_INTERVAL_MS + 40
 const DEFAULT_REPORT = '.reports/loopback-report.json'
 
 // Every assertion this rung makes. This list is the declaration
@@ -60,7 +67,7 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'O13', 'O14', 'O67', 'O37', 'O30', 'O31', 'O47', 'O32', 'O15', 'O16',
   'O17', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'O24', 'O24b', 'O25',
   'O26', 'O38', 'O41', 'O41b', 'O39', 'O40', 'O33', 'O34', 'O42', 'O35',
-  'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O52', 'O53', 'O55', 'O55b',
+  'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O69', 'O52', 'O53', 'O55', 'O55b',
   'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62',
   'O63', 'O64', 'O65', 'O66'
 ])
@@ -235,6 +242,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot18 = null
   // #315: the client that joins a lane whose allowed-server list is empty.
   let pickerBot19 = null
+  // #635: the client that lands on the driven body to look at the puppet.
+  let pickerBot20 = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -2864,7 +2873,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Fault'),
       // #315: the client that joins a lane offering nothing. The whitelist is checked
       // before the picker, so this client has to be known to reach the refusal.
-      offlineUuid('Empty')
+      offlineUuid('Empty'),
+      // #635: the client that lands to look at the puppet's body.
+      offlineUuid('Sightline')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -4645,6 +4656,123 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.undriven
     )
 
+    // --- O69: a spectator is told the puppet as a body, over the socket (#635) ---
+    // The owner's report, twice from the live lane: the entry arrives, the world is empty.
+    // A client draws another player from a `player_info` entry *and an entity for that
+    // UUID*, and a server never sends a client its own player entity, so the body's own
+    // stream holds no spawn for the puppet and nothing invented one. #614 gave every
+    // channel the entry (O62's click is the path that writes it); this is the body that
+    // goes with it.
+    //
+    // What no frame count can see, and this reads over a socket: the *order*. An entry
+    // before the spawn, a move only after it, and the driver's own world never handed a
+    // second copy of itself. A move for an entity a client cannot place is dropped by the
+    // client, so a stream of the right frames in the wrong order is the same empty world.
+    //
+    // The client that looks is a fresh one, because a spawn is written when a channel
+    // lands and the spectators this rig already holds were landed before this row. It
+    // lands on the body O63 left undriven, so this is also the answer to "does a body
+    // nobody drives have a puppet in it": the world is the body's, whether or not a client
+    // is playing it.
+    //
+    // The window between the landing and the move is real time: the module coalesces a
+    // move into one frame per MOVE_INTERVAL_MS, and a rig's clock is the wall clock
+    // (src/ladder/rig.js). So this waits one window before it moves the body, rather than
+    // racing a bound it cannot see.
+    pickerBot20 = createBot({ port: picker.port, username: 'Sightline', version: pickerVersion })
+    await pickerBot20.waitFor(
+      () => pickerBot20.received.dialogs.length === 1,
+      'the picker at the client that will look at the puppet',
+      15_000
+    )
+    const told = { spawns: [], teleports: [], destroys: [] }
+    pickerBot20.client.on('spawn_entity', packet => told.spawns.push(packet))
+    pickerBot20.client.on('entity_teleport', packet => told.teleports.push(packet))
+    pickerBot20.client.on('entity_destroy', packet => told.destroys.push(packet))
+    // The driver's own channel speaks for the puppet: a spawn there is a second copy of
+    // the body the client already controls.
+    const driverSpawns = []
+    pickerBot5.client.on('spawn_entity', packet => driverSpawns.push(packet))
+    const virtualBefore = {
+      spawned: pickerCore.metrics.virtualPlayersSpawned,
+      moved: pickerCore.metrics.virtualPlayersMoved,
+      despawned: pickerCore.metrics.virtualPlayersDespawned
+    }
+    const toldLanding = pickerFront.spectate({
+      username: 'Sightline',
+      body: pickSlug(pickerBodyName),
+      server: pickerBodyName
+    })
+    await pickerBot20.waitFor(
+      () => told.spawns.length === 1 && pickerBot20.received.positions.length > 0,
+      "the puppet's body at the client that landed to look at it",
+      30_000
+    )
+    // Recorded, not asserted: the entry that names the puppet is #614's, and this rig's
+    // fake backend never lists the puppet, so there is no skin for the proxy to write one
+    // from. test/service/virtual-players.test.js is where the entry-then-spawn order is
+    // read, with a skin the backend states.
+    const entriesBeforeSpawn = pickerBot20.received.names
+      .filter(frame => frame.state === 'play' && frame.name === 'player_info').length
+    const spawn = told.spawns[0]
+    await new Promise(resolve => setTimeout(resolve, MOVE_WINDOW_WAIT_MS))
+    const poseBefore = { ...pickerCore.session.currentPose }
+    pickerBodyFake.sendPosition({ x: poseBefore.x + 4, y: poseBefore.y, z: poseBefore.z + 4 })
+    await pickerBot20.waitFor(
+      () => told.teleports.length >= 1,
+      'the body the client watches, moving after it appeared',
+      15_000
+    )
+    const move = told.teleports[0]
+    evidence.virtualPlayers = {
+      landing: toldLanding,
+      version: pickerVersion,
+      spawn: { uuid: spawn.objectUUID, type: spawn.type, entityId: spawn.entityId, x: spawn.x, y: spawn.y, z: spawn.z },
+      entriesBeforeSpawn,
+      move: { entityId: move.entityId, x: move.x, y: move.y, z: move.z },
+      destroys: told.destroys.length,
+      driverSpawns: driverSpawns.length,
+      bodyEntityId: pickerBot5.received.login?.entityId ?? null,
+      poseBefore,
+      counters: {
+        spawned: pickerCore.metrics.virtualPlayersSpawned - virtualBefore.spawned,
+        moved: pickerCore.metrics.virtualPlayersMoved - virtualBefore.moved,
+        despawned: pickerCore.metrics.virtualPlayersDespawned - virtualBefore.despawned
+      }
+    }
+    // The client that looked goes, and the rig is left as O63 left it: the two spectators
+    // it landed, which is the count O64's own row reads.
+    await pickerBot20.close()
+    await waitFor(
+      () => (pickerFront.channels ?? []).length === 2,
+      'the two spectators O63 left, once the client that looked has gone',
+      15_000
+    )
+    check(
+      'O69',
+      "a spectator is told the puppet as a body: an entity for its UUID with an id of the proxy's own, then a move that follows it, and the driver's own world is never handed a second copy of itself",
+      toldLanding.watching === true &&
+        told.spawns.length === 1 &&
+        typeof spawn.objectUUID === 'string' &&
+        spawn.objectUUID.replace(/-/g, '').toLowerCase() === String(puppetUuid).replace(/-/g, '').toLowerCase() &&
+        // The type is read from the protocol data this rig's own version states, not from
+        // the module that wrote the frame: an assertion comparing the wire to the constant
+        // the writer used cannot catch a wrong constant. The rig runs 26.2, and the two
+        // versions disagree about this number.
+        spawn.type === minecraftData(pickerVersion).entitiesByName.player.id &&
+        spawn.entityId >= FIRST_VIRTUAL_ENTITY_ID &&
+        spawn.entityId !== (pickerBot5.received.login?.entityId ?? null) &&
+        told.teleports.length >= 1 &&
+        move.entityId === spawn.entityId &&
+        (move.x !== spawn.x || move.z !== spawn.z) &&
+        told.destroys.length === 0 &&
+        driverSpawns.length === 0 &&
+        pickerCore.metrics.virtualPlayersSpawned - virtualBefore.spawned >= 1 &&
+        pickerCore.metrics.virtualPlayersMoved - virtualBefore.moved >= 1 &&
+        pickerCore.metrics.virtualPlayersDespawned - virtualBefore.despawned === 0,
+      evidence.virtualPlayers
+    )
+
     // --- O64: a claim keeps a body alive, and a disconnect ends an unclaimed body (#261) ---
     // O63 left the body standing with nobody driving it and two spectators on it. #261
     // is the other half of what a claim means: a claim is the reason a body is kept
@@ -5123,7 +5251,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     for (const lane of lanes) {
       try { await lane.close() } catch { /* best effort */ }
     }
-    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19]) {
+    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
