@@ -48,16 +48,13 @@
 import { createNameLookup, WHITELIST_VERSION } from '../../custody/store.js'
 import { normalizeUuid } from '../../custody/util.js'
 import { containerEnv } from '../kube.js'
-import { readBody } from './body.js'
+import { BODY_TOO_LARGE, readBody } from './body.js'
 
 export const WHITELIST_KEY = 'attach-whitelist.json'
 // The variable the puppet's Deployment sets to its own account's uuid. It is the
 // rule's source, not a second copy of the constant: the value lives in
 // `deploy/manifests/deployment.yaml` and nowhere in this module.
 export const PUPPET_UUID_VARIABLE = 'MONOPLAYER_PUPPET_UUID'
-// A request body is one uuid or one name. Four kilobytes is generous and still
-// refuses a body that is not this request at all.
-export const MAX_BODY_BYTES = 4096
 // One write that lost a race is retried. Three patches in a row is contention the
 // caller should see rather than have the panel keep spinning against.
 export const MAX_ATTEMPTS = 3
@@ -316,13 +313,13 @@ export function createWhitelistRoute ({
 
     let body
     try {
-      body = await readBody(req, MAX_BODY_BYTES)
+      body = await readBody(req)
     } catch (error) {
       log('panelWhitelistBodyFailed', { puppet: puppet.name, error: reason(error) })
       return send(res, 400, TEXT, 'the request body could not be read\n')
     }
     if (body.tooLarge === true) {
-      return send(res, 413, TEXT, 'the request body must be at most ' + MAX_BODY_BYTES + ' bytes\n')
+      return send(res, 413, TEXT, BODY_TOO_LARGE)
     }
 
     let wanted
