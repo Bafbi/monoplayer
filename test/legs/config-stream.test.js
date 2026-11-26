@@ -125,9 +125,8 @@ test('#257 the baseline replays the recording and keeps the phase open', () => {
 test('#541 a configuration frame written after the phase finish never reaches the client', () => {
   const r = rig()
   r.interceptor.finishFromCore()
-  r.interceptor.write('keep_alive', { keepAliveId: 7n })
+  assert.equal(r.interceptor.write('keep_alive', { keepAliveId: 7n }), false, 'and the caller is told nothing was written')
   assert.deepEqual(r.writes, [], 'the keep-alive does not follow the phase finish')
-  assert.equal(r.interceptor.stats.suppressedAfterFinish, 1)
   assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
 })
 
@@ -143,7 +142,7 @@ test('#541 the next round opens the phase again, so its keep-alives are sent', (
   r.startConfiguration()
   r.interceptor.write('keep_alive', { keepAliveId: 8n })
   assert.deepEqual(r.writes.map(write => write.name), ['start_configuration', 'keep_alive'])
-  assert.equal(r.interceptor.stats.suppressedAfterFinish, 0)
+  assert.deepEqual(r.suppressed, [])
 })
 
 test('#541 a later round in cached mode closes the phase as well', () => {
@@ -160,7 +159,7 @@ test('#541 a later round in cached mode closes the phase as well', () => {
   assert.equal(r.interceptor.finishFromCore(), false, 'the login replay already resolved the interceptor')
   r.interceptor.write('keep_alive', { keepAliveId: 9n })
   assert.deepEqual(r.writes.map(write => write.name), ['finish_configuration', 'start_configuration'])
-  assert.equal(r.interceptor.stats.suppressedAfterFinish, 1)
+  assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }])
 })
 
 test('#257 a baseline for another protocol version is not a baseline', () => {

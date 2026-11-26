@@ -1888,6 +1888,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'the client on the kept connection is in the target state without rejoining',
       b5.login?.entityId === 42 &&
         seamlessCore.metrics.attaches === 1 &&
+        // Every round this connection went through counts, not only this hop: a
+        // client whose decoder is one frame out of step stays out of step, so a
+        // leftover anywhere on the connection is a frame it could not parse.
+        // #541: `leftoversBeforeHop` below says which round it came from.
         b5.leftovers.length === 0 &&
         b5.errors.length === 0,
       {

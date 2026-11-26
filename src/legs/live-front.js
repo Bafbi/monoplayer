@@ -180,17 +180,11 @@ export function createConfigPathInterceptor ({
   // The client answers it and is in play from that moment; this leg learns the
   // answer only when the client's finish arrives, so a frame written in between
   // carries a configuration packet id into a connection reading the play table.
-  // The library's own keep-alive does exactly that on its four-second interval.
+  // The library's own keep-alive does exactly that, on the interval the vendored
+  // copy of it runs.
   // A round opens the phase again through reopenConfiguration.
   let finishSent = false
-  const stats = {
-    suppressedRegistryData: 0,
-    replayedConfigFrames: 0,
-    baselineFrames: 0,
-    unavailable: 0,
-    finishedByCore: 0,
-    suppressedAfterFinish: 0
-  }
+  const stats = { suppressedRegistryData: 0, replayedConfigFrames: 0, baselineFrames: 0, unavailable: 0, finishedByCore: 0 }
 
   // #16: the client is in its configuration phase now. One notification per
   // connection, whichever path resolves first.
@@ -248,10 +242,10 @@ export function createConfigPathInterceptor ({
     }
     if (finishSent) {
       // #541: past this phase's finish, a configuration frame is one the client
-      // reads in play.
-      stats.suppressedAfterFinish++
+      // reads in play. Nothing is written, and the caller is told so it does not
+      // count the frame as delivered.
       onSuppressed?.({ name })
-      return
+      return false
     }
     if (name === 'registry_data' && !resolved) {
       stashed.push({ name, params })
@@ -662,7 +656,7 @@ function createFrontLeg ({
   // #417: `pickerRefusals` is the total and `pickerRefusalsByReason` the split. Both
   // are written by bumpPickerRefusal and by nothing else, so the total and the map
   // cannot disagree about how many refusals there were.
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, suppressedAfterFinish: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -1215,8 +1209,9 @@ function createFrontLeg ({
       },
       // #541: one line per dropped frame, and the leg's own counter. The client it
       // was aimed at has left the phase, so this never reaches the wire.
+      // #541: one line per dropped frame, with its name. The client it was
+      // aimed at has left the phase, so this never reaches the wire.
       onSuppressed: ({ name: dropped = null } = {}) => {
-        metrics.suppressedAfterFinish++
         record(client, 'configFrameAfterFinish', { name: dropped })
       }
     })
@@ -2190,6 +2185,15 @@ function createFrontLeg ({
       if (sent) noteDelivered(client, frame.meta, { bytes: frame.buffer.length })
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
+    // #541: a finish that arrived before this acknowledgement was held here and
+    // is on the wire above, so it never reached the writeRawTo branch that
+    // closes the phase. Closing it here is the same fact, marked where the frame
+    // it belongs to is written.
+    const heldFinish = pending.frames.some(frame =>
+      frame.meta?.state === 'configuration' && frame.meta?.name === 'finish_configuration')
+    if (heldFinish && ctx.interceptor?.finishFromCore()) {
+      record(client, 'configFinishedByCore', { username: client.username ?? null })
+    }
     record(client, 'frontReconfigurationAcknowledged', {
       username: client.username ?? null,
       flushedFrames: pending.frames.length,
@@ -2205,7 +2209,9 @@ function createFrontLeg ({
   // cannot carry trailing bytes.
   function writePacketTo (client, name, packet) {
     if (!client || typeof client.write !== 'function') return false
-    client.write(name, packet)
+    // #541: the interceptor answers false for a frame it dropped, and a frame
+    // that never reached the wire is not a frame the channel was delivered.
+    if (client.write(name, packet) === false) return false
     // #417: no length, because this path holds a packet object and the library
     // serializes it. The frames it carries are the synthesized position, the skin
     // and a notice: a fixed handful per connection, and the one gap in a channel's
