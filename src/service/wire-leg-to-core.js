@@ -186,6 +186,16 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     // spectator sends can reach the backend. The core draws it for the body's other
     // channels, which is the only thing it is for.
     handler: core => payload => core.spectatorPose(payload)
+  },
+
+  // #627: a read the core makes on this leg, in the backend table's form. The
+  // pre-auth window is created inside the leg, so `laneState` asks for its numbers
+  // rather than a copy. A leg without this row is named in `missing`, and its
+  // snapshot reports `preAuth` as null.
+  {
+    kind: 'call',
+    name: 'preAuthStats',
+    required: false
   }
 ].map(Object.freeze))
 

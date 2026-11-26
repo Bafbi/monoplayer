@@ -412,6 +412,29 @@ test('every front leg a lane builds carries the call-ins the core declares', () 
   }
 })
 
+// #627: the leg a live lane builds answers its own pre-auth window, in the policy's
+// names. The offline front shares createFrontLeg, so one case covers the factory. The
+// row in FRONT_LEG_CALL_INS says a leg declares the read; this says what the reading
+// is, which a row cannot: a row carries a name and no return shape.
+test('#627 the live front leg answers its own pre-auth window, in the window\'s names', () => {
+  const leg = createLiveFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    attachWhitelistFile: path.join(os.tmpdir(), 'monoplayer-preauth-read-whitelist.json'),
+    getSnapshotConfig: () => [],
+    wireMode: 'off',
+    preAuth: { maxConnections: 5, deadlineMs: 4000 }
+  })
+  const core = startedOn(leg)
+
+  assert.deepEqual(leg.preAuthStats(),
+    { inWindow: 0, maxConnections: 5, deadlineMs: 4000, refused: 0, expired: 0 },
+    'the five names src/core/preauth-window.js answers with, from the window this leg was built with, before a socket arrives')
+  assert.deepEqual(core.laneState().preAuth, leg.preAuthStats(),
+    'and the lane snapshot is that reading, passed on rather than summarised')
+})
+
 // #605: the backend leg's contract is measured the same way. The offline leg is
 // the real one with auth 'offline', the factory every gate lane builds.
 test('#605 every backend leg a lane builds carries the call-ins the core declares', () => {
