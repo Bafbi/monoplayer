@@ -175,10 +175,15 @@ metadata:
   labels:
     app.kubernetes.io/part-of: monoplayer
 data:
-  # Who may control the dev proxy. `--start` refuses an empty list, so a lane with
-  # no controller can never serve: `mise run dev:up` fills it from the live
-  # ConfigMap, which names the human who attaches. It is not a secret, and an
-  # operator's edit is never overwritten.
+  # Who may control the dev proxy. An empty list denies every login: `--start` logs
+  # `whitelistEmpty` and serves nobody until a controller is added
+  # (src/service/start-live.js).
+  #
+  # `mise run dev:up` is the only command in the tree that writes this key, and the
+  # order it decides the list in is deploy/dev/README.md, "The attach whitelist".
+  # Every apply writes this document, so an edit here reaches the lane on the next
+  # `mise run dev:up`. It is not a secret. `mise run dev:down` deletes this ConfigMap,
+  # and the list with it.
   attach-whitelist.json: |
     {
       "version": 1,

@@ -281,11 +281,26 @@ diagnosable rather than mysterious.
 
 ## The attach whitelist
 
-`--start` refuses an empty attach whitelist, so a lane with no controller can
-never serve. `dev:up` fills the empty dev ConfigMap from the live one, which names
-the human who attaches. The whitelist says who may control the proxy, not a token,
-and the dev lane serves the same human. An operator's entries are never
-overwritten.
+An empty whitelist denies every login. It does not stop the lane: `--start` logs
+`whitelistEmpty` and serves nobody until a controller is added.
+
+The whitelist says who may control the proxy, not a token, and the dev lane
+serves the same human.
+
+`dev:up` builds the list in one order. The document in this manifest is the
+default: an edit here reaches the lane on the next `up`, and it stands while it
+names anyone. When the document names nobody, `up` writes back the controllers
+the lane already had, because its own apply just reset the key. When there were
+none either, `up` fills the list from the live ConfigMap, which names the human
+who attaches.
+
+The applied document is empty until that decision writes the key back, and a
+mounted ConfigMap reaches a running pod on kubelet's schedule. A login that
+arrives in that gap is refused.
+
+`dev:down` deletes the ConfigMap, and the list with it. The next `up` applies the
+lane again and decides from an empty list. An entry that is in neither this
+manifest nor the live list is gone after a stop.
 
 ## What it proves and what it does not
 

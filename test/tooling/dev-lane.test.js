@@ -97,6 +97,9 @@ test('mise offers one command up and one down', () => {
 const EMPTY_WHITELIST = '{\n  "version": 1,\n  "players": []\n}'
 // The live ConfigMap: the human who may control the proxy.
 const LIVE_WHITELIST = '{"version":1,"players":[{"uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi"}]}'
+// A controller an operator added on the dev lane themselves. No live list names
+// them, so no seed can bring the entry back: only carrying it across can (#393).
+const OPERATOR_WHITELIST = '{"version":1,"players":[{"uuid":"0b7f5a4c-9d21-4c6e-8c2e-3f1d2b9a7e55","name":"OperatorController"}]}'
 // The pull Secret the private GHCR package needs, as the live namespace stores it.
 const LIVE_SECRET = '{"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"e30="}}'
 const PLAYER_LIST = 'There are 1 of a max of 8 players online: DevPuppet'
@@ -113,25 +116,55 @@ const SHIM = [
   '  *" get secret "*) exit 1 ;;',
   '  *" create namespace "*) printf \'{"kind":"Namespace"}\\n\'; exit 0 ;;',
   '  *" create secret "*) printf \'{"kind":"Secret"}\\n\'; exit 0 ;;',
-  '  *" apply -k "*) touch "$KUBECTL_MARKER"; cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
+  // An apply sets a key the manifest declares to the manifest's value, and leaves
+  // a key it does not declare alone. That is the whole reset `up` has to survive,
+  // so this arm writes the applied tree's document over the fixture, and writes
+  // nothing when the tree declares no such key.
+  '  *" apply -k "*) touch "$KUBECTL_MARKER"; cat > /dev/null; if [ -n "$KUBECTL_APPLIED_WHITELIST" ]; then printf "%s\\n" "$KUBECTL_APPLIED_WHITELIST" > "$fixtures/dev-whitelist.json"; fi; printf \'applied\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
   '  *" rollout status "*) exit 0 ;;',
   '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
   // The fixture is the cluster state: a read of an object no fixture holds answers
   // nothing and exits non-zero, the way kubectl fails a missing object. None of
   // the three arms overrides cat's status.
-  '  *" -n monoplayer-dev get configmap "*) cat "$fixtures/dev-whitelist.json" ;;',
+  //
+  // `dev-whitelist-error` is the other failure a read can have: the object is there
+  // and the answer did not arrive. A script cannot tell it from an empty list by
+  // looking at stdout alone, and that is what the case is about.
+  '  *" -n monoplayer-dev get configmap "*) if [ -f "$fixtures/dev-whitelist-error" ]; then printf "Error from server (InternalError): the dev ConfigMap did not answer\\n" >&2; exit 1; fi; if [ ! -f "$fixtures/dev-whitelist.json" ]; then printf "Error from server (NotFound): configmaps \\"monoplayer-dev-config\\" not found\\n" >&2; exit 1; fi; cat "$fixtures/dev-whitelist.json" ;;',
   '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json" ;;',
   '  *" get configmap "*) cat "$fixtures/dev-whitelist.json" ;;',
   // The dev proxy's account, read from its volume, and the dev Paper's player
   // list, read over RCON.
   '  *" exec "*"node -e"*) printf \'%s\' "$KUBECTL_ACCOUNT_NAME"; exit 0 ;;',
   '  *" rcon-cli list"*) printf \'%s\\n\' "$KUBECTL_RCON"; exit 0 ;;',
+  // A patch writes the one key it carries, so the fixture stays the cluster state.
+  '  *" patch configmap "*) cat > /dev/null; node "$KUBECTL_PATCH" "$@" > "$fixtures/dev-whitelist.json"; exit 0 ;;',
   '  *" get deploy "*) if [ -f "$KUBECTL_MARKER" ]; then printf \'%s\\n\' "$KUBECTL_REPLICAS_AFTER"; else printf \'%s\\n\' "$KUBECTL_REPLICAS_BEFORE"; fi; exit 0 ;;',
   '  *) exit 0 ;;',
   'esac',
   ''
 ].join('\n')
+
+// The merge patch `dev-lane.sh` sends: one key, one value. The shim applies it to
+// the fixture, so the fixture keeps being the cluster's copy of the ConfigMap.
+const PATCH = [
+  'const args = process.argv.slice(2)',
+  'const at = args.indexOf("-p")',
+  'if (at < 0) { process.exit(1) }',
+  'const body = JSON.parse(args[at + 1])',
+  'process.stdout.write(String(body.data["attach-whitelist.json"]) + "\\n")',
+  ''
+].join('\n')
+
+// What `apply -k deploy/dev` leaves in the whitelist key. Read from the manifest
+// rather than restated here: the cases are about what the tree does to the key, and
+// a hand-written copy would keep passing after the manifest changed.
+function appliedWhitelist () {
+  const text = fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8')
+  const declared = text.match(/^ {2}attach-whitelist\.json: \|\n((?: {4}.*\n?)+)/m)
+  return declared ? declared[1].replace(/^ {4}/gm, '').trimEnd() : ''
+}
 
 function workspace () {
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-dev-lane-'))
@@ -140,10 +173,18 @@ function workspace () {
   fs.mkdirSync(bin, { recursive: true })
   fs.mkdirSync(fixtures, { recursive: true })
   fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
+  fs.writeFileSync(path.join(dir, 'kubectl-patch.cjs'), PATCH)
   fs.writeFileSync(path.join(fixtures, 'live-secret.json'), LIVE_SECRET + '\n')
   fs.writeFileSync(path.join(fixtures, 'dev-whitelist.json'), EMPTY_WHITELIST + '\n')
   fs.writeFileSync(path.join(fixtures, 'live-whitelist.json'), EMPTY_WHITELIST + '\n')
-  return { dir, bin, fixtures, log: path.join(dir, 'kubectl.log'), marker: path.join(dir, 'applied') }
+  return {
+    dir,
+    bin,
+    fixtures,
+    patch: path.join(dir, 'kubectl-patch.cjs'),
+    log: path.join(dir, 'kubectl.log'),
+    marker: path.join(dir, 'applied')
+  }
 }
 
 // The state after `down --purge` for the whitelist: no ConfigMap to read.
@@ -165,6 +206,8 @@ function run (space, args, env = {}) {
       KUBECTL_REPLICAS_BEFORE: '1',
       KUBECTL_REPLICAS_AFTER: '1',
       KUBECTL_FIXTURES: space.fixtures,
+      KUBECTL_PATCH: space.patch,
+      KUBECTL_APPLIED_WHITELIST: appliedWhitelist(),
       KUBECTL_ACCOUNT_NAME: 'DevPuppet',
       KUBECTL_RCON: PLAYER_LIST,
       MONOPLAYER_DEV_JOIN_REPORT: path.join(space.dir, 'dev-join.json'),
@@ -256,6 +299,8 @@ test('down stops the workload and keeps the dev account', () => {
   assert.equal(deletions.some(line => /\bpvc\b|persistentvolumeclaim/.test(line)), false, 'the claim stays: ' + deletions.join(' / '))
   assert.equal(deletions.some(line => /\bns\b|\bnamespace\b/.test(line)), false, 'the namespace stays: ' + deletions.join(' / '))
   assert.match(output, /the dev account stay/)
+  // The whitelist does not stay, and a stop is where an entry is lost without a word.
+  assert.match(output, /the dev attach whitelist went with its ConfigMap/)
 })
 
 test('down --purge removes the account as well', () => {
@@ -312,8 +357,8 @@ test('up copies the pull Secret the private package needs, before it applies', (
 })
 
 test('up fills the empty dev attach whitelist from the live one', () => {
-  // --start refuses an empty whitelist, so the shipped empty ConfigMap can never
-  // serve: the lane needs a controller before a bot joins on it (#43 AC3).
+  // An empty whitelist denies every login, so the shipped empty ConfigMap leaves the
+  // lane with nothing to attach: the seed is what gives it a controller (#43 AC3).
   const space = workspace()
   fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
   const { status, output, calls } = run(space, ['up'])
@@ -345,13 +390,80 @@ test('the attach whitelist seed rewrites one key and leaves its neighbours', () 
     'no step recreates the ConfigMap from one key: an apply of it would clear allowed-servers.json')
 })
 
-test('up leaves an operator whitelist alone', () => {
+test('up carries an operator controller across the apply that resets it', () => {
+  // The applied ConfigMap ships the empty document, so every apply sets the key to
+  // it (#393). An entry the operator added is in no live list, so no seed can bring
+  // it back: up reads the list before the apply and writes it back after.
   const space = workspace()
-  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), LIVE_WHITELIST + '\n')
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), OPERATOR_WHITELIST + '\n')
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
   const { status, output, calls } = run(space, ['up'])
   assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
-  assert.equal(calls.some(line => line.includes('patch configmap')), false, 'no overwrite')
-  assert.match(output, /the dev attach whitelist has entries/)
+  assert.match(appliedWhitelist(), /"players": \[\]/,
+    'the applied tree ships the empty list, which is the reset this case is about')
+  const after = JSON.parse(fs.readFileSync(path.join(space.fixtures, 'dev-whitelist.json'), 'utf8'))
+  assert.deepEqual(after.players.map(player => player.name), ['OperatorController'],
+    'the entry the lane held before up is the one it holds after: ' + output)
+  assert.match(output, /the entries it held were written back/, 'the run says the list crossed the apply')
+  assert.equal(calls.some(line => line.includes('Bafbi')), false,
+    'the live list did not replace the operator: ' + calls.join(' | '))
+})
+
+test('up keeps the list the manifest applies instead of the live one', () => {
+  // The document in Git is the list the lane offers, the rule the picker row already
+  // follows (#392): an edit there reaches the lane on the next up. The live list is
+  // the answer for a document that names nobody, not an override of one that does.
+  const space = workspace()
+  // The lane holds an operator's controller, and the document the apply writes names
+  // someone else. Nothing merges the two, so the run has to say what it dropped.
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), OPERATOR_WHITELIST + '\n')
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
+  const applied = '{"version":1,"players":[{"uuid":"7f1c2d3e-4b5a-4c6d-8e9f-0a1b2c3d4e5f","name":"FromManifest"}]}'
+  const { status, output, calls } = run(space, ['up'], { KUBECTL_APPLIED_WHITELIST: applied })
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const after = JSON.parse(fs.readFileSync(path.join(space.fixtures, 'dev-whitelist.json'), 'utf8'))
+  assert.deepEqual(after.players.map(player => player.name), ['FromManifest'],
+    'the applied document is the list the lane holds: ' + output)
+  assert.equal(calls.some(line => line.includes('Bafbi')), false,
+    'the live list did not replace a document that names someone: ' + calls.join(' | '))
+  assert.match(output, /the applied attach whitelist names controllers/)
+  assert.match(output, /the list it replaced is gone: OperatorController/,
+    'the entry that did not cross is named, with the reason the applied list wins: ' + output)
+})
+
+test('up refuses to seed when it cannot read the dev whitelist', () => {
+  // Answering "empty" to a failed read is the other way the entries go: the seed
+  // would then let the live list replace a list nobody saw. An empty list and an
+  // answer that did not arrive are two different states, and only one of them means
+  // the lane has no controller to keep.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), OPERATOR_WHITELIST + '\n')
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist-error'), '')
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 1, output + '\ncalls: ' + calls.join(' | '))
+  assert.match(output, /cannot read the attach whitelist from monoplayer-dev\/monoplayer-dev-config/)
+  assert.equal(calls.some(line => line.includes('apply -k')), false, 'it stopped before the lane was applied')
+  assert.equal(calls.some(line => line.includes('patch configmap')), false, 'it wrote nothing')
+})
+
+test('the dev whitelist comment states what up and down do to it', () => {
+  // The comment and the runbook said an empty list makes `--start` refuse to run,
+  // and that an operator's edit is never overwritten. Neither was true: the service
+  // starts and logs `whitelistEmpty` (src/service/start-live.js), and the apply that
+  // runs before the seed resets the key. Prose is pinned here because the two claims
+  // are read by an operator deciding whether to add a controller.
+  const docs = [
+    ['deploy/dev/monoplayer.yaml', fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8')],
+    ['deploy/dev/README.md', fs.readFileSync(path.join(DEV, 'README.md'), 'utf8')]
+  ]
+  for (const [name, text] of docs) {
+    assert.doesNotMatch(text, /refuses an empty (attach )?whitelist|refuses an empty list/,
+      name + ' claims a refusal that does not happen: an empty whitelist is a warning and the service starts')
+    assert.match(text, /whitelistEmpty/, name + ' names the line an empty list produces, so the claim is checkable')
+    // Both commands, so a reader learns what a stop takes as well as what up does.
+    assert.match(text, /dev:up/, name + ' names the command that writes the list')
+    assert.match(text, /dev:down/, name + ' names the command that deletes it')
+  }
 })
 
 test('set-image puts the branch image on the dev proxy only', () => {

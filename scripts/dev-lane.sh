@@ -122,33 +122,104 @@ process.stdin.on("end", () => {
   die "no ghcr-pull Secret in $DEV_NAMESPACE and none to copy from $LIVE_NAMESPACE; create one with a read:packages token (docs/deployment.md step 3)"
 }
 
-# `--start` refuses to run with an empty attach whitelist, so a lane that ships the
-# empty ConfigMap can never serve. The whitelist says who may control the proxy, is
-# not a secret, and the dev lane serves the same human as the live one, so fill it
-# from the live ConfigMap. An operator's entries are never overwritten.
-seed_attach_whitelist() {
-  local current live
-  # Whitespace stripped first: the ConfigMap in the manifest is pretty-printed,
-  # and `"players": []` is not `"players":[]`.
-  current=$(kubectl -n "$DEV_NAMESPACE" get configmap monoplayer-dev-config \
-    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n' || true)
-  case "$current" in
-    *'"players":[]'*|'') : ;;
-    *) say 'the dev attach whitelist has entries'; return 0 ;;
+# An empty attach whitelist denies every login. `--start` still starts on one: it
+# logs `whitelistEmpty` and carries on, because a control lane may come up empty and
+# be filled afterwards (src/service/start-live.js). This lane has no panel, so
+# `dev:up` is the only command in the tree that writes the key.
+#
+# `kubectl apply -k` writes the empty document below, so the apply resets this key on
+# every run. `up` reads the list before that, and `converge_attach_whitelist` puts
+# back what the lane held (#393).
+#
+# $3 says what an absent ConfigMap means: `ok` is a lane nothing has created yet,
+# `fault` a read that was supposed to answer. Every other failure is a fault either
+# way: answering "empty" to it is how the entries this lane keeps would be lost.
+read_attach_whitelist() {
+  local namespace=$1 name=$2 absent=$3 answer reason
+  # stderr stays out of the value: kubectl warns on stderr for reads that succeed,
+  # and a warning written into the document is a whitelist no login can parse.
+  if ! answer=$(kubectl -n "$namespace" get configmap "$name" \
+      -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null); then
+    # The reason is read on its own, and only now, so it is the object's answer and
+    # not part of the document.
+    reason=$(kubectl -n "$namespace" get configmap "$name" 2>&1 >/dev/null) || true
+    case "$reason" in
+      *NotFound*) [ "$absent" = fault ] || return 0 ;;
+    esac
+    printf 'dev-lane: cannot read the attach whitelist from %s/%s: %s\n' \
+      "$namespace" "$name" "${reason:-the read returned nothing}" >&2
+    return 1
+  fi
+  printf '%s' "$answer"
+}
+
+# The document without the whitespace between its keys, for comparing shapes only.
+# A ConfigMap in a manifest is pretty-printed, and `"players": []` is not
+# `"players":[]`. Nothing is ever written back compacted, so entries keep their shape.
+compact_whitelist() { printf '%s' "$1" | tr -d ' \n'; }
+
+# `"players": []` and no document at all are the two shapes of an empty list.
+whitelist_is_empty() {
+  case "$(compact_whitelist "$1")" in
+    *'"players":[]'*|'') return 0 ;;
   esac
-  live=$(kubectl -n "$LIVE_NAMESPACE" get configmap monoplayer-config \
-    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n' || true)
-  case "$live" in
-    *'"players":[]'*|'')
-      say 'the dev attach whitelist is empty and the live one names nobody: add a controller before a client can attach'
-      return 0 ;;
-  esac
-  # A merge patch of the one key, never an apply of a whole ConfigMap. A
-  # client-side apply deletes every data key the previous one wrote and this one
-  # omits, which would strip allowed-servers.json and leave the picker offering
-  # nothing (#392). The patch sets this key and leaves its neighbours alone.
+  return 1
+}
+
+# The names a whitelist document carries, for a message. A document that cannot be
+# read names nobody: this reports, and no decision below reads it.
+whitelist_names() {
+  WHITELIST="$1" node -e '
+let names = []
+try {
+  names = JSON.parse(process.env.WHITELIST ?? "").players.map(player => player.name ?? player.uuid ?? "unnamed")
+} catch {
+  names = []
+}
+process.stdout.write(names.join(", "))
+'
+}
+
+# A merge patch of the one key, never an apply of a whole ConfigMap. A client-side
+# apply deletes every data key the previous one wrote and this one omits, which
+# would strip allowed-servers.json and leave the picker offering nothing (#392).
+# The patch sets this key and leaves its neighbours alone.
+patch_attach_whitelist() {
   kubectl -n "$DEV_NAMESPACE" patch configmap monoplayer-dev-config --type merge \
-    -p "$(WHITELIST="$live" node -e 'process.stdout.write(JSON.stringify({ data: { "attach-whitelist.json": process.env.WHITELIST } }))')" >/dev/null
+    -p "$(WHITELIST="$1" node -e 'process.stdout.write(JSON.stringify({ data: { "attach-whitelist.json": process.env.WHITELIST } }))')" >/dev/null
+}
+
+# The list the lane ends up with, decided in one order. The document the apply just
+# wrote wins while it names anyone: that is the copy Git commits, and an edit there
+# is meant to reach the lane, as the picker row's is (#392). Otherwise the entries the
+# lane held before the apply are the operator's, and the apply reset them. Otherwise
+# the live ConfigMap fills the list, because it names the human who attaches.
+converge_attach_whitelist() {
+  local kept=$1 applied=$2 live
+  if ! whitelist_is_empty "$applied"; then
+    local dropped
+    dropped=$(whitelist_names "$kept")
+    if [ -z "$dropped" ]; then
+      say 'the applied attach whitelist names controllers, so the lane keeps it'
+      return 0
+    fi
+    say "the applied attach whitelist names controllers, so the lane keeps it and the list it replaced is gone: $dropped"
+    return 0
+  fi
+  if ! whitelist_is_empty "$kept"; then
+    patch_attach_whitelist "$kept"
+    say 'the apply reset the dev attach whitelist, so the entries it held were written back'
+    return 0
+  fi
+  if ! live=$(read_attach_whitelist "$LIVE_NAMESPACE" monoplayer-config fault); then
+    say 'the dev attach whitelist is empty and the live one could not be read: add a controller before a client can attach'
+    return 0
+  fi
+  if whitelist_is_empty "$live"; then
+    say 'the dev attach whitelist is empty and the live one names nobody: add a controller before a client can attach'
+    return 0
+  fi
+  patch_attach_whitelist "$live"
   say "filled the dev attach whitelist from $LIVE_NAMESPACE"
 }
 
@@ -156,13 +227,26 @@ up() {
   guard
   ensure_rcon_secret
   ensure_pull_secret
+  local kept applied before
+  # Read before the apply. The applied ConfigMap ships the empty document, so after
+  # the apply the lane's own list is gone, and this value is the only copy of it. The
+  # reader has already said what failed, and a run that cannot read this stops before
+  # it writes anything.
+  if ! kept=$(read_attach_whitelist "$DEV_NAMESPACE" monoplayer-dev-config ok); then
+    exit 1
+  fi
   # The lane exists so the live deployment keeps serving. Reading its replica
   # count before and after is what makes that a measurement, not a claim.
-  local before
   before=$(live_replicas)
   kubectl apply -k "$ROOT/deploy/dev" >/dev/null
   say "applied deploy/dev to $DEV_NAMESPACE"
-  seed_attach_whitelist
+  # What the apply itself wrote: the document the manifest declares. A read that fails
+  # here is a lane whose ConfigMap the apply did not create, and guessing "empty"
+  # would seed over a document nobody read.
+  if ! applied=$(read_attach_whitelist "$DEV_NAMESPACE" monoplayer-dev-config ok); then
+    exit 1
+  fi
+  converge_attach_whitelist "$kept" "$applied"
   kubectl -n "$DEV_NAMESPACE" rollout status deploy/paper --timeout="$READY_TIMEOUT" >/dev/null \
     || die "Paper did not become ready; kubectl -n $DEV_NAMESPACE logs deploy/paper" 1
   say 'Paper is ready'
@@ -201,6 +285,9 @@ down() {
     say "deleted $DEV_NAMESPACE, and with it the dev custody volume and the dev account"
   else
     say "stopped $DEV_NAMESPACE; its custody volume and the dev account stay (--purge removes them)"
+    # The whitelist is not one of the things that stay, and a stop is where an
+    # operator loses an entry without being told.
+    say "the dev attach whitelist went with its ConfigMap: the next up applies the lane's document, and fills it from $LIVE_NAMESPACE when that names nobody"
   fi
   status
 }
@@ -220,10 +307,11 @@ status() {
   say "live $LIVE_NAMESPACE/$LIVE_DEPLOYMENT available replicas: ${replicas:-unknown}"
   local players
   # The namespace is gone after `down`, and this read must not fail the report.
-  players=$(kubectl -n "$DEV_NAMESPACE" get configmap monoplayer-dev-config \
-    -o jsonpath='{.data.attach-whitelist\.json}' 2>/dev/null | tr -d ' \n') || true
-  case "$players" in
-    *\"players\":\[\]*) say 'attach whitelist is empty: nobody can attach yet' ;;
+  players=$(read_attach_whitelist "$DEV_NAMESPACE" monoplayer-dev-config ok 2>/dev/null) || players=''
+  # Three answers, not two: a read that yielded nothing is not a report about the
+  # whitelist, which is why this case does not use the seed's `whitelist_is_empty`.
+  case "$(compact_whitelist "$players")" in
+    *'"players":[]'*) say 'attach whitelist is empty: nobody can attach yet' ;;
     "") : ;;
     *) say 'attach whitelist has entries' ;;
   esac
