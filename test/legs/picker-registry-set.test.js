@@ -93,9 +93,10 @@ async function withPickerClient (run) {
     bot.on('state', next => states.push(next))
     // The leg admits a login inside its own synchronous window, before it writes the
     // login success that moves the client into configuration. The baseline's frames
-    // are written when the library's own finish arrives, so `tags` last is the whole
-    // phase on the wire. The dialog that follows is written outside this check on
-    // purpose (`sendPickerDialog`, which writes raw), so it is not in `written`.
+    // are written when the library's own finish arrives, so `tags` is the signal that
+    // the whole recording is on the wire. The dialog follows it through the same raw
+    // funnel (#602), so it is in `written` too, and the phase under test is the
+    // recording's: the test slices at `tags`.
     await settleUntil(
       () => leg.metrics.allowed === 1 && states.includes('configuration') &&
         written.some(frame => frame.name === 'tags'),
@@ -110,6 +111,9 @@ async function withPickerClient (run) {
 
 test('#598 a picker client is served no registry set, and a landed body one', async () => {
   await withPickerClient(async ({ leg, written, baseline }) => {
+    // The recording's frames, in recorded order, and then the dialog this leg authored
+    // for this client: it is a configuration frame written raw, so it is written and
+    // checked on the same path (#602).
     const pickerPhase = written.slice()
     assert.deepEqual(registryIds(pickerPhase), [],
       'the picker\'s phase carries none of the recording\'s ' +
@@ -118,7 +122,8 @@ test('#598 a picker client is served no registry set, and a landed body one', as
       'custom_payload',
       'feature_flags',
       'select_known_packs',
-      'tags'
+      'tags',
+      'show_dialog'
     ], 'the recording\'s other frames go out in recorded order, and the dialog is written over them')
     assert.equal(pickerPhase.some(frame => frame.name === 'finish_configuration'), false,
       'and the phase is still open, which is what the dialog needs')

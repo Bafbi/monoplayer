@@ -1235,6 +1235,35 @@ first dial and its target warms in five seconds.
   checklist, with two real clients (#634). This rig proves the frames, their order and their
   addressing, and a bot records no pixels.
 
+- `O72` a landing writes a body's configuration through the one clientbound funnel: the frame
+  the policy replays reaches the client, and the frame it refuses does not (#602).
+
+  The front leg documents one funnel for a clientbound raw frame: `writeRawTo` in
+  `src/legs/live-front.js`, which carries the per-socket checks and names them. #602 found
+  three writers beside it, and a landing was one of them, so a body's configuration reached a
+  client mid-phase with no policy check at all. The replay reader was the other half. It asked
+  `decision !== 'block'`, and that admits the frames a connection owns and the dialog the
+  human answers.
+
+  The rig is this check's own because the body it lands is a hand-picked configuration rather
+  than a cache, which is the point: the snapshot is one the leg cannot trust. A picker client
+  joins, the leg lands it in that body, and the client's own frame list is the evidence: the
+  ordinary frame the landing wrote is there, and neither the control dialog nor the blocked
+  connection control is, in the whole connection and not only after the landing.
+
+  The two refused frames are real frames of this version, so a client that received one would
+  decode it rather than fail on it, and the row reads the frame and not a parse error.
+
+  The funnel's own refusal of a blocked frame is not this row's to read, and it cannot be: the
+  reader strips such a frame before the funnel sees it. That gate is
+  `test/legs/config-landing-policy.test.js`, at the leg's raw entry, which is the write a landing
+  makes. That the landing takes that write is the other half, and it is
+  `test/legs/raw-funnel.test.js`: the guard reads `sendBodyConfiguration` on its own and finds the
+  funnel there and nothing else. Those two together are #602's second criterion.
+
+  What it cannot prove: that no other writer in the leg has a way past the funnel. That is
+  `test/legs/raw-funnel.test.js`, which counts the call sites.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a

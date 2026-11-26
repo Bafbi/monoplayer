@@ -258,6 +258,68 @@ test('#598 a picker phase carries no registry data', () => {
   assert.equal(landed.interceptor.replayMode, 'baseline', 'and it is still the baseline path, not the library fallback')
 })
 
+// #602: a finish the writer refused is not a finish on the wire, so the phase is still
+// open. That is what lets the refusal's own `disconnect` past the interceptor's
+// after-the-finish guard, and a client that is never told why is worse off than one that is.
+test('#602 a finish that threw leaves the phase open, so the refusal still goes out', () => {
+  const writes = []
+  let reachable = false
+  const interceptor = createConfigPathInterceptor({
+    write: (name, params) => {
+      if (!reachable) throw new Error('the socket is gone')
+      writes.push(name)
+    },
+    writeRaw: () => true,
+    isConfigurationState: () => true,
+    // The picker's shape: the recording resolves the path and writes no finish of its own,
+    // and the landing sends that one frame through this writer later.
+    baselineConfigFrames: [{ name: 'tags', buffer: Buffer.from('t') }],
+    cachedConfigFrames: [],
+    live: false,
+    allowLibraryFallback: false,
+    onUnavailable: () => { throw new Error('this rig has baseline frames') }
+  })
+  interceptor.write('registry_data', { codec: {} })
+  interceptor.write('finish_configuration', {})
+  assert.equal(interceptor.resolved, true, 'the recording resolved the phase')
+  assert.equal(interceptor.finishSent, false, 'and left its finish to the landing')
+
+  assert.throws(() => interceptor.write('finish_configuration', {}), /the socket is gone/)
+  assert.equal(interceptor.finishSent, false, 'a finish that threw is not a finish on the wire')
+
+  reachable = true
+  interceptor.write('disconnect', { reason: { type: 'string', value: 'attach denied' } })
+  assert.deepEqual(writes, ['disconnect'], 'so the sentence for the client still reaches it')
+})
+
+// #602: `writeRaw` is the leg's funnel now, and the funnel answers false for a frame it
+// refuses (the policy, the client's state, a phase that already finished). A counter that
+// says a frame was served when the funnel refused it is a number an operator reads wrong,
+// so the replay counts what went and not what was offered.
+test('#602 a replay the funnel refuses is not counted as a frame this leg served', () => {
+  const offered = []
+  const interceptor = createConfigPathInterceptor({
+    write: () => {},
+    writeRaw: (buffer, meta) => {
+      offered.push(meta.name)
+      return false
+    },
+    isConfigurationState: () => true,
+    cachedConfigFrames: [
+      { name: 'registry_data', buffer: Buffer.from('r') },
+      { name: 'tags', buffer: Buffer.from('t') }
+    ],
+    live: false,
+    allowLibraryFallback: false,
+    onUnavailable: () => { throw new Error('this rig has cached frames') }
+  })
+
+  interceptor.write('finish_configuration', {})
+
+  assert.deepEqual(offered, ['registry_data', 'tags'], 'both cached frames were offered to the funnel')
+  assert.equal(interceptor.stats.replayedConfigFrames, 0, 'and the funnel refused both, so neither is counted')
+})
+
 test('#598 one landed claim carries every registry id exactly once', () => {
   const baseline = readConfigurationBaseline()
   // The body here is the recording's own replay, so its registry ids are the

@@ -78,7 +78,9 @@ test('#417 the picker dialog is written and measured from one encode', () => {
   assert.ok(dialog.length > 0, 'the seam this guard reads is still the leg\'s own')
   assert.match(dialog, /encoded = encodeFrame\(/, 'the dialog is encoded once')
   assert.equal((dialog.match(/encodeFrame\(/g) ?? []).length, 1, 'and only once')
-  assert.match(dialog, /client\.writeRaw\(encoded\.buffer\)/, 'the bytes written are the bytes measured')
+  // #602: the write is the funnel's, and it is handed the one encode's own buffer, so
+  // the bytes measured are still the bytes that went to the socket.
+  assert.match(dialog, /writeRawTo\(client, encoded\.buffer,/, 'the bytes written are the bytes measured')
   assert.match(dialog, /log\('pickerDialog', \{/, 'the pickerDialog record is still written')
   assert.match(dialog, /bytes: encoded\.buffer\.length/, 'and it carries the size it wrote')
   assert.match(dialog, /try \{\s*encoded = encodeFrame\(/, 'the params build is inside a guard too')
