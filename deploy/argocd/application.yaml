@@ -25,10 +25,9 @@ metadata:
   name: monoplayer
   namespace: argocd
   finalizers:
-    # Deleting this Application deletes what it owns: both namespaces, the
-    # panel included, except the resources annotated Delete=false, which are the
-    # custody PVC and the live namespace. The control ConfigMap survives because
-    # Argo never created it.
+    # Deleting this Application deletes what it owns, except the objects
+    # annotated Delete=false: the namespace itself and the custody PVC. The
+    # control ConfigMap survives because Argo never created it.
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: monoplayer

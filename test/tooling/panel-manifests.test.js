@@ -577,17 +577,53 @@ test('the guard refuses an unreadable rule line instead of skipping it', () => {
 // the other, which fails at run time rather than in the gate.
 const RETIRED_NAMESPACE = 'monoplayer-panel'
 
-// The files this change owns whose text is a claim about where the panel runs,
-// relative to the repository root. Two more state a namespace and are not here:
-// deploy/argocd/project.yaml still lists the old one as a destination, and its
-// header and application.yaml's finalizer comment still count two. Those need a
-// `kubectl apply` this change does not make (#612).
+// The files whose text is a claim about where the panel runs, relative to the
+// repository root. The two Argo CD files joined at #612. A human applies them
+// instead of Argo syncing them, so nothing else notices their text going stale
+// between one apply and the next.
 const movedFiles = [
   ...files.map(name => 'deploy/panel/' + name),
   'deploy/kustomization.yaml',
+  'deploy/argocd/project.yaml',
+  'deploy/argocd/application.yaml',
   'docs/panel.md',
   'docs/deployment.md'
 ]
+
+// The namespaces a set of documents creates objects in.
+const namespacesNamed = trees => [...new Set(trees.flatMap(tree => tree.map(document => document.namespace)))]
+  .filter(Boolean)
+
+// What the project allows and what the synced tree uses, compared in both
+// directions (#612). A destination the tree does not use grants nothing: #609 left
+// monoplayer-panel and the project kept allowing it. A namespace the tree uses with
+// no destination is a sync Argo refuses, kind whitelisted or not. The comparison
+// answers with its findings instead of throwing, so the fixture below can hand it a
+// project that is wrong on purpose.
+function destinationDrift (project, trees) {
+  // entriesUnder, not a namespace regex: a destination written in a shape this
+  // guard cannot place throws instead of parsing as nothing, which is the policy
+  // manifest-reader.js states for every line these guards read.
+  const destinations = entriesUnder(project, 'destinations')
+    .map(entry => entry.namespace)
+    .filter(Boolean)
+  const named = namespacesNamed(trees)
+  const problems = []
+  for (const namespace of named) {
+    if (!destinations.includes(namespace)) {
+      problems.push('the project allows no destination for ' + namespace +
+        ', and the synced tree creates an object there')
+    }
+  }
+  for (const namespace of destinations) {
+    if (!named.includes(namespace)) {
+      problems.push('the project allows ' + namespace +
+        ', and the synced tree creates no object there')
+    }
+  }
+  if (new Set(destinations).size !== destinations.length) problems.push('the project names a destination twice')
+  return problems
+}
 
 test('one Application syncs the root tree, and its project allows the namespaces it creates objects in', () => {
   const argoFiles = fs.readdirSync(ARGOCD).filter(name => name.endsWith('.yaml')).sort()
@@ -633,9 +669,7 @@ test('one Application syncs the root tree, and its project allows the namespaces
   // namespace the tree names is therefore either where its Deployment runs or one a
   // registry row manages. A third one is a manifest nobody reads, and a second
   // puppet, managed in its own namespace, is the one addition this admits.
-  const destinations = [...section(project, 2, 'destinations').matchAll(/^ {6}namespace: (\S+)$/gm)]
-    .map(match => match[1])
-  const declared = new Set(documents.map(document => document.namespace).filter(Boolean))
+  const declared = namespacesNamed([documents])
   const runsIn = (documents.find(document => document.kind === 'Deployment') ?? {}).namespace
   const managed = new Set([runsIn, ...registry.puppets.map(puppet => puppet.namespace)])
   assert.deepEqual([...declared].sort(), [...managed].sort(),
@@ -647,11 +681,9 @@ test('one Application syncs the root tree, and its project allows the namespaces
     assert.ok(!read(ROOT, file).includes(RETIRED_NAMESPACE),
       file + ' still names ' + RETIRED_NAMESPACE + ', and the panel has one namespace now (#609)')
   }
-  for (const namespace of declared) {
-    assert.ok(destinations.includes(namespace),
-      'the project allows ' + namespace + ', which the panel tree creates an object in')
-  }
-  assert.equal(new Set(destinations).size, destinations.length, 'the project names a destination twice')
+  // Both directions, over both trees: the kind whitelist below already reads the
+  // pair, and a destination is a grant the whole synced tree spends.
+  assert.deepEqual(destinationDrift(project, [documents, manifestsDocuments]), [])
 
   // Nothing cluster-scoped beyond the one Namespace the tree owns.
   const cluster = [...section(project, 2, 'clusterResourceWhitelist').matchAll(/^ {6}kind: (\S+)$/gm)]
@@ -699,6 +731,36 @@ test('one Application syncs the root tree, and its project allows the namespaces
   assert.match(namespace.text, /pod-security\.kubernetes\.io\/enforce: restricted/)
 })
 
+
+test('the guard refuses a destination the synced tree does not use, and a namespace it allows none for', () => {
+  const project = read(ARGOCD, 'project.yaml')
+  const trees = [documents, manifestsDocuments]
+  assert.ok(project.includes('      namespace: monoplayer\n'),
+    'the fixture edits a destination the project holds')
+
+  // The destination #612 deleted: a grant over the namespace the panel left at #609.
+  const stale = project.replace('      namespace: monoplayer\n',
+    '      namespace: monoplayer\n    - server: https://kubernetes.default.svc\n      namespace: monoplayer-panel\n')
+  assert.deepEqual(destinationDrift(stale, trees), [
+    'the project allows monoplayer-panel, and the synced tree creates no object there'
+  ])
+
+  // The other direction: the tree moves and the project is not told, which is a
+  // namespace Argo refuses to create an object in.
+  const moved = trees.map(tree => tree.map(document => document.namespace === 'monoplayer'
+    ? { ...document, namespace: 'monoplayer-elsewhere' }
+    : document))
+  assert.deepEqual(destinationDrift(project, moved), [
+    'the project allows no destination for monoplayer-elsewhere, and the synced tree creates an object there',
+    'the project allows monoplayer, and the synced tree creates no object there'
+  ])
+
+  // Twice is its own finding, not two entries that happen to match: the comparison
+  // above would pass a project that lists one namespace two ways.
+  const twice = project.replace('      namespace: monoplayer\n',
+    '      namespace: monoplayer\n    - server: https://kubernetes.default.svc\n      namespace: monoplayer\n')
+  assert.deepEqual(destinationDrift(twice, trees), ['the project names a destination twice'])
+})
 
 // --- the pin that decides which build runs ---
 

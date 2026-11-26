@@ -2,11 +2,12 @@
 #
 # Applied by the operator, not by the app itself: Argo needs the project before
 # it can accept the Application. It allows exactly one source repository and the
-# two namespaces the tree creates objects in, plus the Namespace objects
-# themselves.
+# namespaces the tree creates objects in, plus the Namespace objects themselves.
+# A destination is a standing grant. It outlives the namespace it names, so a
+# namespace the tree stops using is a line to delete here (#612).
 #
 # The kind lists are explicit, not wildcards. Argo refuses to sync a kind its
-# project does not name, so a wildcard would let any object into these two
+# project does not name, so a wildcard would let any object into those
 # namespaces: the reach the panel's Role exists to bound, granted to the
 # Application instead. Adding a kind means adding a line here, and
 # test/tooling/panel-manifests.test.js reads this file and fails when the tree
@@ -24,8 +25,6 @@ spec:
   destinations:
     - server: https://kubernetes.default.svc
       namespace: monoplayer
-    - server: https://kubernetes.default.svc
-      namespace: monoplayer-panel
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
