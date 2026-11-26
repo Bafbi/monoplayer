@@ -22,6 +22,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { CHANNEL_ROLES } from '../../src/core/channels.js'
 import { pickSlug } from '../../src/core/picker.js'
 import { FIRST_VIRTUAL_ENTITY_ID, playerEntityTypeFor } from '../../src/core/virtual-players.js'
 import { makeCore } from '../support/harness.js'
@@ -213,7 +214,7 @@ const framesOn = (frontLeg, channel) => frontLeg.frames().filter(frame => frame.
 // One body, a driver, and the driver's channel in the front's registry, which is where a
 // channel id exists.
 async function driverOnABody (rig) {
-  rig.frontLeg.channelRecord({ id: DRIVER_CHANNEL, role: 'driver' })
+  rig.frontLeg.channelRecord({ id: DRIVER_CHANNEL, role: CHANNEL_ROLES.DRIVER })
   await landABody(rig)
   rig.core.attachPlayer({ name: 'Pilot', uuid: HUMAN })
   return rig
@@ -257,7 +258,7 @@ test('#636 the driver sees who is watching: an entry, then a body, at the positi
 test('#636 two spectators see each other, and neither is told about itself', async () => {
   const rig = await driverOnABody(makeCore({ config: config() }))
   rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
-  rig.frontLeg.channelRecord({ id: CHANNEL_B, role: 'spectator' })
+  rig.frontLeg.channelRecord({ id: CHANNEL_B, role: CHANNEL_ROLES.SPECTATOR })
   rig.core.spectateView({ name: 'Second', uuid: WATCHER_B, channel: CHANNEL_B })
 
   // Each spectator\'s socket carries the other player\'s entry and body.
@@ -288,7 +289,7 @@ test('#636 two spectators see each other, and neither is told about itself', asy
 
 test('#636 a spectator that leaves is destroyed on the channels that were shown it', async () => {
   const rig = await driverOnABody(makeCore({ config: config() }))
-  rig.frontLeg.channelRecord({ id: CHANNEL_B, role: 'spectator' })
+  rig.frontLeg.channelRecord({ id: CHANNEL_B, role: CHANNEL_ROLES.SPECTATOR })
   rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
   rig.core.spectateView({ name: 'Second', uuid: WATCHER_B, channel: CHANNEL_B })
   const body = framesOn(rig.frontLeg, DRIVER_CHANNEL)

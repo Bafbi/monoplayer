@@ -202,8 +202,9 @@ function despawnFrame (entityId) {
 //
 //   world       `players()` -> [{ uuid, name, pose }]. The players that exist in the world
 //               this body serves, and where each is now. Read at every call, so nothing
-//               here is a copy that can go stale. `name` is carried for a caller's log and
-//               is not written: the name a client draws comes from the entry (#614).
+//               here is a copy that can go stale. `name` is not written by this module:
+//               the name a client draws comes from the entry, which is `entryFor`'s frame or
+//               #614's. It is here because the caller builds that frame from this row (#636).
 //   channels    `() -> [{ id, uuid }]`: one entry per connection a player may be written
 //               to, with the player that connection speaks for, or null when it speaks for
 //               nobody. A channel is never told about its own player, which is the rule

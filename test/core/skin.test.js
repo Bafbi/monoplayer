@@ -13,7 +13,7 @@ import mc from 'minecraft-protocol'
 
 import {
   ADD_PLAYER_ONLY, TEXTURES_PROPERTY,
-  carriesTextures, pickTextures, skinEntryOf, skinPlayerInfoPacket, withoutSignature
+  carriesTextures, pickTextures, playerInfoEntry, skinEntryOf, skinPlayerInfoPacket, withoutSignature
 } from '../../src/core/skin.js'
 
 const HUMAN = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
@@ -25,6 +25,28 @@ const PROPERTY = { name: TEXTURES_PROPERTY, value: 'dGV4dHVyZXM=', signature: 'c
 const relayed = (properties, uuid = PUPPET) => ({
   action: { _value: 14, add_player: true, update_listed: true },
   data: [{ uuid, player: { name: 'Wiriaw', properties } }]
+})
+
+test('#636 an entry with no textures property claims no skin, and still names its player', () => {
+  // #636: a client refuses a player-typed spawn_entity whose UUID it holds no entry for, so
+  // every channel the renderer draws is announced. A spectator has no skin in this tree and
+  // the proxy invents none, so its entry is a name and an empty property list: the client
+  // falls back to its own default. The bytes are checked, not only the object, because an
+  // empty list the writer could not serialize would be a frame the client drops.
+  const packet = playerInfoEntry({ uuid: WATCHER, name: 'Watcher' })
+  assert.deepEqual(packet, {
+    action: { _value: 1, add_player: true },
+    data: [{ uuid: WATCHER, player: { name: 'Watcher', properties: [] } }]
+  })
+  // A property is optional, and one that carries no value is a caller's mistake rather than
+  // a frame that names a player with an empty skin.
+  assert.throws(() => playerInfoEntry({ uuid: WATCHER, name: 'Watcher', property: { value: '' } }),
+    /a textures property with a value, or none/)
+  assert.throws(() => playerInfoEntry({ uuid: '', name: 'Watcher' }), /needs a uuid/)
+  assert.throws(() => playerInfoEntry({ uuid: WATCHER }), /needs a name/)
+  // The same builder is the skin frame's, so the two cannot drift: a property is carried.
+  const withSkin = playerInfoEntry({ uuid: WATCHER, name: 'Watcher', property: { value: 'dGV4dHVyZXM=' } })
+  assert.deepEqual(withSkin.data[0].player.properties, [{ name: TEXTURES_PROPERTY, value: 'dGV4dHVyZXM=' }])
 })
 
 test('the textures property comes out of a relayed player_info frame as it stated itself', () => {

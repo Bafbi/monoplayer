@@ -28,6 +28,7 @@ import {
   playerEntityTypeFor
 } from '../../src/core/virtual-players.js'
 import { applyFrames, createClientState, stateSnapshot } from '../../src/ladder/client-state.js'
+import { playerInfoEntry } from '../../src/core/skin.js'
 
 const PUPPET = 'ea45ba2e-f47d-43ee-9604-b20af90be1f1'
 const WATCHER = '11111111-2222-3333-4444-555555555555'
@@ -238,11 +239,10 @@ test('#635 the id range is a varint a backend cannot reach', () => {
 // The frame is the caller's: `entryFor` answers it or answers null. #614's skin entry is
 // the puppet's, written by src/core/skin.js with the property the backend sent, and the
 // service answers null there so one player is never announced twice.
-const ANNOUNCEMENT = ({ uuid, name }) => ({
-  name: 'player_info',
-  kind: 'entry',
-  packet: { action: { _value: 1, add_player: true }, data: [{ uuid, player: { name, properties: [] } }] }
-})
+// The frame is built by the module that owns its shape, not by a fixture here: a fixture
+// that writes its own `properties: []` asserts what the fixture said, and a change to the
+// real builder would pass it.
+const ANNOUNCEMENT = ({ uuid, name }) => ({ name: 'player_info', packet: playerInfoEntry({ uuid, name }) })
 
 const namedPuppetAt = at => worldOf({ uuid: PUPPET, name: 'GlowSquidye', pose: at })
 
@@ -261,7 +261,8 @@ test('#636 a virtual player is announced before its body, and only a new body is
     'the entry comes first: a spawn without one is a body the client throws away')
   const entry = first[0].packet
   assert.equal(entry.data[0].uuid, PUPPET, 'the entry names the player the spawn names')
-  assert.deepEqual(entry.data[0].player.properties, [], 'a spectator has no skin, so nothing is invented')
+  assert.deepEqual(entry.data[0].player.properties, [],
+    'the entry src/core/skin.js builds for a player the proxy holds no skin for, unchanged: nothing is invented')
   assert.equal(first[1].packet.objectUUID, PUPPET)
 
   // A move is not a reason to announce the player again: an entry the client holds

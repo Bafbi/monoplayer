@@ -42,6 +42,10 @@
 //                                                 //   a spectator's own movement frame,
 //                                                 //   which never reaches the pipeline (#636)
 //     setSpectatorLeft(fn)                        // optional: fn({ channel, name })
+//     channels                                    // the channels this leg holds, as records:
+//                                                 //   { id, body, role, ... }. Read for the
+//                                                 //   driver's channel id, which the core has
+//                                                 //   no other way to name (#636, #525)
 //     write(name, packet, { synth, channel })     // clientbound, packet level
 //     writeRaw(buffer, meta, { channel })         // clientbound, frame level
 //     end(reason)                                 // kick/deny every channel
@@ -87,6 +91,7 @@ import {
   normalizeClientSettings
 } from '../core/client-settings.js'
 import { createFrontIdentity } from '../core/identity.js'
+import { sameUuid } from '../custody/util.js'
 import { synthAttach } from '../core/join-synth.js'
 import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
@@ -2177,15 +2182,16 @@ export function createMonoplayer ({
         const players = []
         const uuid = cfg.puppet.uuid ?? null
         if (typeof uuid === 'string' && uuid !== '') {
-          // `entry: false` is this caller's own mark, read by `playerEntry` below and by
-          // nothing else: #614's skin path announces the puppet, and one entry written twice
-          // for one UUID is a race the client resolves by keeping whichever came first.
-          players.push({ uuid, name: cfg.puppet.username ?? null, pose: session.currentPose, entry: false })
+          players.push({ uuid, name: cfg.puppet.username ?? null, pose: session.currentPose })
         }
         for (const spectator of spectators.values()) {
+          // A player the proxy cannot name cannot be announced, and a client refuses a body it
+          // holds no entry for: a nameless spectator would be a spawn the client throws away,
+          // counted as told. Nothing is drawn for it until the front names it.
           if (typeof spectator.uuid !== 'string' || spectator.uuid === '') continue
+          if (typeof spectator.name !== 'string' || spectator.name === '') continue
           if (spectator.pose === null || spectator.pose === undefined) continue
-          players.push({ uuid: spectator.uuid, name: spectator.name ?? null, pose: spectator.pose })
+          players.push({ uuid: spectator.uuid, name: spectator.name, pose: spectator.pose })
         }
         return players
       }
@@ -2219,6 +2225,9 @@ export function createMonoplayer ({
   function driverChannelId () {
     const held = frontLeg?.channels
     if (!Array.isArray(held)) return null
+    // The first driver, with no body test: a leg serves one body at a time (#259), and the
+    // leg's own delivery fan-out picks its driver the same way (src/legs/live-front.js,
+    // `deliveryTargets`). A leg per body is #261.
     for (const channel of held) {
       if (channel?.role !== CHANNEL_ROLES.DRIVER) continue
       return typeof channel.id === 'string' && channel.id !== '' ? channel.id : null
@@ -2231,7 +2240,9 @@ export function createMonoplayer ({
   // throw here would end the sweep for all of them. Both write one line, because a client that
   // holds no entry drops the body that follows it and no later frame repairs that.
   function playerEntry (player = {}) {
-    if (player.entry === false) return null
+    // #614's skin path announces the puppet, and one entry written twice for one UUID is a
+    // race the client resolves by keeping whichever came first, so this answers null for it.
+    if (sameUuid(player.uuid, cfg.puppet.uuid)) return null
     const uuid = player.uuid
     const name = player.name
     if (typeof uuid !== 'string' || uuid === '' || typeof name !== 'string' || name === '') {

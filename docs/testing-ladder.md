@@ -1208,14 +1208,22 @@ first dial and its target warms in five seconds.
   A client refuses a player-typed `spawn_entity` whose UUID it holds no `player_info` entry
   for — it logs "Server attempted to add player prior to adding player info" and adds no
   entity — so the entry is the condition of the body and not decoration on it. The
-  assertion reads the pair's **order** on that socket: the entry for the spectator's UUID,
-  and the very next frame on that socket is the spawn for it. A spawn with no entry, or an
-  entry for one player beside a body for another, is an empty world with the right frames in
-  it, which no count can see.
+  assertion reads the pair's **order** on that socket: every clientbound frame is recorded
+  in the order it arrived, the entry for the spectator's UUID is found in that list, and the
+  frame after it is the spawn for the same UUID. A spawn with no entry, or an entry for one
+  player beside a body for another, is an empty world with the right frames in it, which no
+  count can see.
+
+  The owner's second half — *spectator between themself* — is read on the other socket. The
+  client that lands is drawn the watcher already on the body, entry and body both, and
+  nothing on its own socket names the player it is itself.
 
   Then the second position source. The spectator's own client sends a position, the front
   drops the frame (#269) and hands the core the pose out of it, and the driver's copy of that
-  player arrives at the coordinates that client sent.
+  player arrives at the coordinates that client sent. The move is read from the frames that
+  arrive **after** the send: a client sends its own position unbidden, on the body's
+  synchronize frame, so a move for that entity may already exist and the first one is not the
+  one this row asked for.
 
   The backend half is the thing this ticket can break, and it is read at the fake rather than
   in the front's own counter, exactly as `O62` reads it: every counter the fake keeps —
