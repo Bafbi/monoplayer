@@ -126,9 +126,18 @@ test("#417 a connection's login-to-pick age is its own, and absent when it never
   assert.equal(elapsedSince(1000, 1000), 0, 'and a pick in the same millisecond is 0, which is real')
 })
 
-// The guard the four rest on: one helper writes the counters, so the total and the
-// map by reason cannot disagree, and no call site can add a refusal to one without
-// the other.
+// The word one counted refusal passes, read out of its own object literal, so the site
+// list below names reasons and not line numbers.
+function refusedReason (body) {
+  const named = body.match(/reason:\s*([^,]+)/)
+  if (named !== null) return named[1].trim()
+  // A site that passes the closure's own argument writes it shorthand.
+  return /\breason\s*,/.test(body) ? 'reason' : 'MISSING'
+}
+// The guard the four rest on: one helper composes a refusal and counts it, so no call
+// site can tell a client why it was refused and leave the map short of it. #435 found
+// the Spectate landing doing that; #616 found the Disconnect verb doing it, so the
+// guard is the shape both defects share rather than the two instances.
 test('#417 every refusal the leg counts is counted once, through one helper', () => {
   assert.equal((SOURCE.match(/metrics\.pickerRefusals\+\+/g) ?? []).length, 1,
     'only the helper counts a refusal')
@@ -140,22 +149,23 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   const helper = SOURCE.slice(start, start + 500)
   assert.match(helper, /bumpReason\(/, 'the helper is what bumps the map')
 
-  // Seven refusal sites: the two dialogs the leg could not write, the three a click's
-  // own answer refuses (a frame that did not read, and a server the offer does not
-  // carry at either level), the claim the core answers, and the Spectate landing's own
-  // refusals. The key each one passes is asserted too, because a site swapped to the
-  // wrong word still counts and still lies about why.
+  // Eight refusal sites, each named by the word its own record carries: the two
+  // dialogs the leg could not write, the three a click's own answer refuses (a frame
+  // that did not read, and a server the offer does not carry at either level), the
+  // claim the core answers, the Spectate landing's own refusals, and the Disconnect
+  // verb (#616) refused because a claim holds the body. The key each one passes is
+  // asserted too, because a site swapped to the wrong word still counts and still
+  // lies about why.
   //
-  // #595 moved the choice of reason into src/core/picker.js (`click`), so three of
-  // these pass the reason the board decided instead of one read from the frame. Two
-  // sites became three, and the two literal `'unknown_server'` words became the
-  // answer's own reason, because the level a click came from is now one of the
-  // board's answers rather than a branch in the leg.
-  //
-  // A refused disconnect counts in `pickerDisconnectsRefused` and not here (#261), and
-  // that was true before #595 and is true after it: a refactor moves no number.
-  const sites = [...SOURCE.matchAll(/bumpPickerRefusal\(([^)]*)\)/g)].map(match => match[1]).sort()
+  // #595 moved the choice of reason into src/core/picker.js (click): the three a
+  // click's answer refuses pass the reason the board decided instead of one read from
+  // the frame, because the level a click came from is now one of the board's answers
+  // rather than a branch in the leg.
+  const sites = [...SOURCE.matchAll(/refuseAndCount\(\{([^}]*)\}\)/g)]
+    .map(match => refusedReason(match[1]))
+    .sort()
   assert.deepEqual(sites, [
+    "'disconnect_claimed'",
     "'picker_unavailable'",
     "'picker_unavailable'",
     'answer.reason',
@@ -165,21 +175,48 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
     'reason'
   ].sort(), 'every refusal site counts, and each passes the reason its own record carries')
 
+  // Three sentences are composed without a count, and each is here with its reason:
+  // a lane that offers no rows tells the client so and refused no request (#315);
+  // the verb guard answers a verb no lane carries, which is unreachable today; and
+  // the leg's own spectate() seam answers no_client for a name no connection holds,
+  // and that sentence reaches no client. A fourth has to pick a side: count it
+  // through the helper, or say here why it counts nothing.
+  assert.equal((SOURCE.match(/pickerBoard\.refuse\(/g) ?? []).length, 4,
+    'the counted refusal the helper composes, and the three sentences that count nothing')
+  assert.match(SOURCE, /pickerBoard\.refuse\(\{ reason: 'empty_offer' \}\)/,
+    'the empty offer speaks and counts nothing')
+  assert.match(SOURCE, /pickerBoard\.refuse\(\{ verb: answer\.verb, server: server\.name \}\)/,
+    'the unbuilt-verb guard speaks and counts nothing')
+  assert.match(SOURCE, /pickerBoard\.refuse\(\{ verb: 'spectate', reason: 'no_client', server: server \?\? body \}\)/,
+    'the seam with no connection speaks to nobody, so it counts nothing')
+
+  // #616: the Disconnect verb's own number (#261) is bumped in the same helper, not at
+  // the branch, so a refusal that is counted once is counted twice in the two places a
+  // reader asks about and never at one of them alone. #435 and #616 each found a branch
+  // that moved one and not the other.
+  assert.equal((SOURCE.match(/metrics\.pickerDisconnectsRefused\+\+/g) ?? []).length, 1,
+    'one place counts the disconnect\'s own number')
+  assert.match(helper, /metrics\.pickerDisconnectsRefused\+\+/, 'and that place is the helper that counts every refusal')
+  assert.equal((SOURCE.slice(SOURCE.indexOf('function bumpPickerRefusal') + 500).match(/metrics\.pickerDisconnectsRefused/g) ?? []).length, 0,
+    'no other function moves it')
+
   // #435: the Spectate landing's four refusals are one site, the closure they all
-  // return through, so a branch added there cannot refuse without counting. The
-  // guard is the closure's own shape: it bumps, and it writes the record whose
-  // reason the map is keyed by, so the count and the line cannot part ways.
+  // return through, so a branch added there cannot refuse without counting. The guard
+  // is the closure's own shape: it composes the sentence through the counted helper,
+  // and it writes the record whose reason the map is keyed by, so the count and the
+  // line cannot part ways.
   const landing = SOURCE.slice(SOURCE.indexOf('function landSpectator'), SOURCE.indexOf('function sendBodyConfiguration'))
   assert.ok(landing.length > 0, 'the seam this guard reads is still the leg\'s own')
   assert.match(landing, /const refused = reason => \{/, 'the refusals return through one closure')
-  assert.match(landing, /bumpPickerRefusal\(reason\)/, 'and it is what counts them')
+  assert.match(landing, /refuseAndCount\(\{ verb: 'spectate', reason, server: named \}\)/,
+    'and it is the counted helper that composes their sentence')
   assert.match(landing, /record\(client, 'spectateRefused', \{/, 'and what records them')
   assert.equal((landing.match(/watching: false/g) ?? []).length, 2,
     'the two shape literals are the answer the leg builds when it has no core, and the closure, and no branch builds a third')
 
   // #435: the landing is counted after the write that ends the client's phase. Before
   // it, a phase the leg could not end read as a landing and a refusal at once, and
-  // `finish_failed` now counts as the refusal it is. No test can make that write
+  // finish_failed now counts as the refusal it is. No test can make that write
   // throw without reaching into the library's socket, so the order is the fact pinned.
   const landingCount = landing.indexOf('metrics.spectateLandings++')
   const landingWrite = landing.indexOf("client.write('finish_configuration'")

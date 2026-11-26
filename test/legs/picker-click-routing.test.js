@@ -27,6 +27,11 @@
 // wires. A leg with no core refuses the landing with `no_lander`, so the dial behind a
 // claim is O56's to prove and not this file's: what is proved here is that the click
 // reaches the landing.
+//
+// #616: one click refuses instead of acting — Disconnect on a body a claim holds — and
+// its sentence, its record and its count are read here, because a refusal that reached
+// the log and not `front.pickerRefusalsByReason` makes a complete count read as a
+// partial one (#435 found the same shape for Spectate).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import mc from 'minecraft-protocol'
@@ -323,6 +328,41 @@ test('#615 an offer that drops a row under an open dialog refuses that row\'s ve
     assert.equal(records(lines, 'configurationEnded')[0].reason, 'verb_refused')
     assert.deepEqual(clientErrors, [])
   }, { rows })
+})
+
+// #616: the refused disconnect is the second instance of #435's defect — a refusal that
+// reached the record and not the map — so the two numbers are read off one run here.
+// The claim is granted and its landing fails, which is the state #267 leaves: the client
+// reads the list again and its claim stands, so the Disconnect it clicks is refused by
+// its own claim and by nothing else.
+test('#616 a disconnect refused by a claim is counted in the refusal map', async () => {
+  await withPickerLane(async ({ leg, lines, disconnects, clientErrors, click }) => {
+    // A body that is not up: the claim is recorded all the same, and the client is
+    // handed the list again titled with the body that did not answer.
+    leg.setConnectClaimedBody(() => ({ connected: false, reason: 'body_unreachable' }))
+    click(verbIdFor('claim', SERVER))
+    await settleUntil(() => records(lines, 'pickerClaimRestored').length === 1, 'the claim to stand at the picker')
+    assert.equal(leg.metrics.pickerRefusals, 0, 'a claim the lane granted is not a refusal')
+
+    click(verbIdFor('disconnect', SERVER))
+    await settleUntil(() => records(lines, 'pickerDisconnectRefused').length === 1, 'the refused disconnect')
+    await settleUntil(() => disconnects.length === 1, 'the sentence at the client')
+
+    // The map #417 and #435 made the complete count, and the disconnect's own number
+    // (#261). Both are read off this run, so neither can be right while the other is
+    // wrong: the refusal is the whole total, because this run made no other.
+    assert.deepEqual(leg.metrics.pickerRefusalsByReason, { disconnect_claimed: 1 })
+    assert.equal(leg.metrics.pickerRefusals, 1)
+    assert.equal(leg.metrics.pickerDisconnectsRefused, 1)
+    assert.equal(leg.metrics.pickerDisconnects, 0, 'nothing ended: the claim still holds the body')
+
+    const [refused] = records(lines, 'pickerDisconnectRefused')
+    assert.equal(refused.reason, 'disconnect_claimed', 'the record carries the word the map is keyed by')
+    assert.equal(refused.driver, NAME, 'and the claim that refused it')
+    assert.equal(refusalText(disconnects), refused.text,
+      'the record and the sentence the client reads are one string')
+    assert.deepEqual(clientErrors, [])
+  })
 })
 
 test('#615 a verb this dialog does not offer is refused in words that name it', async () => {

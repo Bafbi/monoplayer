@@ -682,7 +682,9 @@ function createFrontLeg ({
 
   // #417: `pickerRefusals` is the total and `pickerRefusalsByReason` the split. Both
   // are written by bumpPickerRefusal and by nothing else, so the total and the map
-  // cannot disagree about how many refusals there were.
+  // cannot disagree about how many refusals there were. #616: the disconnect's own
+  // number is written by that same helper, so a refusing branch has one place to
+  // count and not two numbers it must remember.
   const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
@@ -700,6 +702,22 @@ function createFrontLeg ({
   function bumpPickerRefusal (reason) {
     metrics.pickerRefusals++
     bumpReason(metrics.pickerRefusalsByReason, reason)
+    // #261's own number for the one refusal that has one. Counted here, where every
+    // refusal is counted, so no branch moves it beside the map and #616 cannot happen
+    // again: a refusal that reaches the map reaches this.
+    if (reason === 'disconnect_claimed') metrics.pickerDisconnectsRefused++
+  }
+
+  // #616: refuse one picker request and count it: the sentence the client is told and
+  // the count the map keeps, in one call, because they are one fact. The board composes
+  // that sentence, so this is the only place a counted refusal is composed. #435 found
+  // the Spectate landing composing a sentence and leaving the map short; #616 found the
+  // Disconnect verb doing the same. A branch that composes one without this call is that
+  // defect again, and the guard in test/legs/picker-numbers.test.js names every sentence
+  // that is not counted here.
+  function refuseAndCount (request) {
+    bumpPickerRefusal(request.reason)
+    return pickerBoard.refuse(request)
   }
 
   // #267: the claims this leg holds, one per body. A claim is recorded where a
@@ -1374,9 +1392,8 @@ function createFrontLeg ({
     })
     if (!written) {
       // A dialog that could not be written is a refusal like any other: the client
-      // is ended with the same sentence, so the counters say so too.
-      bumpPickerRefusal('picker_unavailable')
-      endConfiguration(client, 'picker_unavailable', pickerBoard.refuse({ reason: 'picker_unavailable' }))
+      // is ended with the same sentence, so the count says so too.
+      endConfiguration(client, 'picker_unavailable', refuseAndCount({ reason: 'picker_unavailable' }))
     }
   }
 
@@ -1404,8 +1421,7 @@ function createFrontLeg ({
     // Ours to read and it did not read. The click is refused with the sentence
     // that says what was wrong, and the client is answered. A client left in a
     // dialog nobody will read is worse off than one that is told why.
-    bumpPickerRefusal(answer.reason)
-    const text = pickerBoard.refuse({ reason: answer.reason, verb: answer.verb, id: answer.id })
+    const text = refuseAndCount({ reason: answer.reason, verb: answer.verb, id: answer.id })
     log('pickerVerbRefused', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
@@ -1443,8 +1459,8 @@ function createFrontLeg ({
       verbs: PICK_VERBS.map(verb => verbIdFor(verb, server.name))
     })
     if (!written) {
-      bumpPickerRefusal('picker_unavailable')
-      endConfiguration(client, 'picker_unavailable', pickerBoard.refuse({ reason: 'picker_unavailable', server: server.name }))
+      endConfiguration(client, 'picker_unavailable',
+        refuseAndCount({ reason: 'picker_unavailable', server: server.name }))
     }
   }
 
@@ -1463,10 +1479,9 @@ function createFrontLeg ({
     }
     if (answer.kind === 'refuse') {
       // A verb answer this lane cannot act on: the frame named a server the offer
-      // does not carry. The sentence is the board's (#595) and the count is the one
-      // helper every refusal goes through.
-      bumpPickerRefusal(answer.reason)
-      const text = pickerBoard.refuse({ reason: answer.reason, verb: answer.verb, id: answer.id })
+      // does not carry. The sentence is the board's (#595) and the count rides it,
+      // because the one helper every counted refusal goes through composes both.
+      const text = refuseAndCount({ reason: answer.reason, verb: answer.verb, id: answer.id })
       log('pickerVerbRefused', { ...fields, reason: answer.reason, text })
       endConfiguration(client, 'verb_refused', text)
       return
@@ -1503,16 +1518,23 @@ function createFrontLeg ({
       // It is answered here, after the verb is recorded, because a refused
       // disconnect is still a verb the lane was asked for.
       if (answer.held !== null) {
-        // Counted here and nowhere else: a refused disconnect is its own number
-        // (#261), and the refusal map is the click's own refusals, not this one's.
-        metrics.pickerDisconnectsRefused++
-        const text = pickerBoard.refuse({
+        // #616: refused by the claim, through the one helper that counts a refusal, so
+        // this click reaches the map #417 and #435 made the complete count. That helper
+        // also moves this refusal's own number (#261), so this branch moves one thing
+        // and not two counters it must remember.
+        const text = refuseAndCount({
           verb: 'disconnect',
           reason: 'disconnect_claimed',
           server: server.name,
           driver: answer.held.name
         })
-        log('pickerDisconnectRefused', { ...fields, driver: answer.held.name, holder: answer.held.holder, text })
+        log('pickerDisconnectRefused', {
+          ...fields,
+          reason: 'disconnect_claimed',
+          driver: answer.held.name,
+          holder: answer.held.holder,
+          text
+        })
         endConfiguration(client, 'disconnect_refused', text)
         return
       }
@@ -1733,8 +1755,9 @@ function createFrontLeg ({
     // The record goes through `record`, which stamps the channel a refusing client
     // still holds when the phase-end write is the thing that failed.
     const refused = reason => {
-      const text = pickerBoard.refuse({ verb: 'spectate', reason, server: named })
-      bumpPickerRefusal(reason)
+      // #616: the sentence and the count are the one helper's, so a branch here cannot
+      // refuse without counting.
+      const text = refuseAndCount({ verb: 'spectate', reason, server: named })
       record(client, 'spectateRefused', {
         username: client.username ?? null,
         body,
@@ -1837,8 +1860,7 @@ function createFrontLeg ({
       log('pickerClaim', fields)
       return { ...outcome, text: null }
     }
-    bumpPickerRefusal(outcome.reason)
-    const text = pickerBoard.refuse({
+    const text = refuseAndCount({
       verb: 'claim',
       reason: outcome.reason,
       server: server.name,
@@ -1884,8 +1906,7 @@ function createFrontLeg ({
       // The dialog on screen is older than the list it came from, which is the same
       // refusal a verb on an unknown server gets: the frame named a server this lane
       // does not offer.
-      bumpPickerRefusal(answer.reason)
-      const text = pickerBoard.refuse({ reason: answer.reason, id: answer.id })
+      const text = refuseAndCount({ reason: answer.reason, id: answer.id })
       log('pickerPickRefused', { username: client.username ?? null, id: answer.id, slug: answer.slug, reason: answer.reason, text })
       endConfiguration(client, 'pick_refused', text)
       return
