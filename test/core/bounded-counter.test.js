@@ -77,6 +77,48 @@ test('#438 a key that is not a name counts as unknown, and the empty string is n
     'an empty key is not a label of its own: it reads as a label with nothing in it, which says less than unknown does')
 })
 
+// #552: the whole point of the helper is that its key is a string nobody closed, so
+// the key is asked about as a key and never as a path into the language. The three
+// below are the names on Object.prototype a protocol would collide with first: a
+// function, the prototype accessor, and the constructor. Each counts on its own key,
+// and none of them reads or writes the map's prototype.
+test('#552 a key naming a member of Object.prototype counts as an ordinary key', () => {
+  const map = {}
+
+  bumpBounded(map, 'toString', 8)
+  bumpBounded(map, 'toString', 8)
+  assert.equal(Object.hasOwn(map, 'toString'), true, 'toString is the map\'s own key, not the inherited function')
+  assert.equal(map.toString, 2, 'and it counts up from one, rather than incrementing the function into NaN')
+
+  bumpBounded(map, '__proto__', 8)
+  bumpBounded(map, '__proto__', 8)
+  assert.equal(Object.hasOwn(map, '__proto__'), true,
+    '__proto__ is a key like any other: the inherited setter does not swallow it and leave the map empty')
+  assert.equal(map['__proto__'], 2, 'and the second count lands on the first')
+  assert.equal(Object.getPrototypeOf(map), Object.prototype, 'while the map\'s own prototype is untouched')
+
+  bumpBounded(map, 'constructor', 8)
+  assert.equal(Object.hasOwn(map, 'constructor'), true, 'constructor is the map\'s own key, not Object\'s')
+  assert.equal(map.constructor, 1, 'and a count of one is one, not NaN')
+
+  assert.deepEqual(Object.keys(map).sort(), ['__proto__', 'constructor', 'toString'],
+    'all three are enumerable keys of the map, so a reader that lists the map sees them')
+  // The expected object spells its key as a computed name, because a literal
+  // `__proto__: 2` in an object literal is the setter this test is about.
+  assert.deepEqual(JSON.parse(JSON.stringify(map)), { ['__proto__']: 2, constructor: 1, toString: 2 },
+    'and they survive the heartbeat line: no NaN for the JSON encoder to write as null')
+})
+
+test('#552 a prototype name still counts up after the map has passed its cap', () => {
+  const map = {}
+  for (let index = 0; index < 2; index++) bumpBounded(map, 'reason-' + index, 2)
+  bumpBounded(map, 'toString', 2)
+  bumpBounded(map, 'toString', 2)
+
+  assert.equal(map[OVERFLOW_KEY], 2, 'a prototype name past the cap is a name the cap turned away, like any other')
+  assert.equal(Object.hasOwn(map, 'toString'), false, 'so it is not in the map')
+})
+
 // The header promises this runs in a live session's relay path and adds no throw of
 // its own. A cap that is not a number is the shape of that promise: no throw, and a
 // count still lands somewhere.

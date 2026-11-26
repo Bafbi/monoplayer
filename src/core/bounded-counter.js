@@ -26,13 +26,25 @@
 // growing and a reader still sees that something was counted. A name already in the
 // map keeps counting on its own key after the cap is reached, because the overflow
 // bucket is for the names the map turned away, not for the ones it promised to keep.
+//
+// #552: the key is a string nobody closed, so it is asked about as a key and never as
+// a path into the language. Membership is Object.hasOwn, not a read compared against
+// undefined: a read walks the prototype chain, so a name that is a member of
+// Object.prototype counts up an inherited value instead of entering the map, and
+// 'toString' lands as NaN. The first count of a name is written with
+// Object.defineProperty, because plain assignment to '__proto__' runs the inherited
+// setter: the map would stay empty, and a reader would see a name that never counted
+// rather than one that did. Neither write touches the map's prototype.
 export const UNKNOWN_KEY = 'unknown'
 export const OVERFLOW_KEY = 'other'
 
 export function bumpBounded (map, key, cap) {
   const name = typeof key === 'string' && key.length > 0 ? key : UNKNOWN_KEY
-  if (map[name] !== undefined) { map[name]++; return map }
+  if (Object.hasOwn(map, name)) { map[name]++; return map }
   if (Object.keys(map).length >= cap) { map[OVERFLOW_KEY] = (map[OVERFLOW_KEY] ?? 0) + 1; return map }
-  map[name] = 1
+  // An own data property, spelled out rather than assigned, so '__proto__' and every
+  // other name take one path. Only a name's first sight reaches this, so the caller's
+  // cap bounds how many times it runs.
+  Object.defineProperty(map, name, { value: 1, writable: true, enumerable: true, configurable: true })
   return map
 }
