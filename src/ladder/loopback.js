@@ -160,6 +160,13 @@ async function freePort () {
   return port
 }
 
+// #601: a leftover count names no frame, so a red that prints one costs a re-run
+// to identify. The five payloads #601 names report the count beside the entries
+// this builds, the way O35 does. The rest still report the count alone.
+function leftoverPayload (received) {
+  return { leftovers: received.leftovers.length, leftoverDetails: received.leftovers.slice() }
+}
+
 export async function runLoopback (argv = process.argv.slice(2)) {
   const verbose = argv.includes('--verbose')
   const reportPath = flag(argv, '--report') ?? DEFAULT_REPORT
@@ -691,7 +698,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O9',
       'first bot saw no leftover bytes and no errors',
       b1.leftovers.length === 0 && b1.errors.length === 0,
-      { leftovers: b1.leftovers.length, errors: b1.errors.length }
+      { ...leftoverPayload(b1), errors: b1.errors.length }
     )
 
     // --- O36: a bundled equipment frame reaches the client with its own bytes ---
@@ -1163,7 +1170,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       'O14',
       'second bot saw no leftover bytes and the wire stayed clean',
       b2.leftovers.length === 0 && front.wireStats.rejected === 0,
-      { leftovers: b2.leftovers.length, rejected: front.wireStats.rejected }
+      { ...leftoverPayload(b2), rejected: front.wireStats.rejected }
     )
 
     // --- O67: a second client on a lane with no picker reads no configuration (#312) ---
@@ -1409,7 +1416,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         prefix: play3.slice(0, 6),
         entityId: b3.login?.entityId ?? null,
         chunks: b3.mapChunks.length,
-        leftovers: b3.leftovers.length,
+        ...leftoverPayload(b3),
         errors: b3.errors.length
       }
     )
@@ -1567,7 +1574,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       {
         entityId: b4.login?.entityId ?? null,
         blocks: b4.blockChanges.map(change => change.location),
-        leftovers: b4.leftovers.length,
+        ...leftoverPayload(b4),
         errors: b4.errors.length
       }
     )
@@ -2030,11 +2037,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         entityId: b5.login?.entityId ?? null,
         attaches: seamlessCore.metrics.attaches,
         blocks: b5.blockChanges.map(change => change.location),
-        leftovers: b5.leftovers.length,
-        // #541: a count alone cannot be read. The frames say what the client
-        // could not parse, and the mark says whether they arrived on this hop or
-        // on an earlier round the same connection went through.
-        leftoverDetails: b5.leftovers.slice(),
+        ...leftoverPayload(b5),
+        // #541: `leftoversBeforeHop` says whether the frames arrived on this hop
+        // or on an earlier round the same connection went through.
         leftoversBeforeHop: seamlessLeftoverMark,
         errors: b5.errors.length
       }
@@ -3170,7 +3175,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
           .filter(frame => frame.state === 'configuration')
           .map(frame => frame.name)
           .slice(0, 3),
-        leftovers: pickerBot2.received.leftovers.length,
+        ...leftoverPayload(pickerBot2.received),
         ended: pickerBot2.received.ended === null ? null : String(pickerBot2.received.ended).slice(0, 120)
       },
       wire: {
