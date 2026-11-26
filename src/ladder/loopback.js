@@ -9,8 +9,14 @@
 // written in finally, even on failure.
 //
 // Assertions are the contract (docs/testing-ladder.md). LOOPBACK_ASSERTION_IDS
-// below declares every id, and docs/testing-ladder.md documents each one. A FAIL
-// is a real finding; do not weaken a check to get a green run.
+// below declares every id, in the order this file runs them, and
+// docs/testing-ladder.md documents each one. A FAIL is a real finding; do not
+// weaken a check to get a green run.
+//
+// A check that needs a lane of its own builds one with createLoopbackLane
+// (loopback-lane.js, #594) and adds it to `lanes`: the lane owns its client, its
+// sockets and its timers, so the check adds no line to the teardown at the end of
+// this file. O68 is the assertion that proves the lane does that.
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -25,6 +31,7 @@ import { createBodyCaches } from '../core/body-caches.js'
 import { replayFrames } from '../core/join-synth.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { createRig } from './rig.js'
+import { createLoopbackLane } from './loopback-lane.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { createJournal, readJournal, readManifests } from '../observability/journal.js'
@@ -53,7 +60,7 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'O13', 'O14', 'O67', 'O37', 'O30', 'O31', 'O47', 'O32', 'O15', 'O16',
   'O17', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'O24', 'O24b', 'O25',
   'O26', 'O38', 'O41', 'O41b', 'O39', 'O40', 'O33', 'O34', 'O42', 'O35',
-  'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O52', 'O53', 'O55', 'O55b',
+  'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O52', 'O53', 'O55', 'O55b',
   'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62',
   'O63', 'O64', 'O65', 'O66'
 ])
@@ -171,6 +178,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #217: the packet journal O52 reads, in its own temporary directory.
   let journalDir = null
   let journal = null
+  // O68's journal, which belongs to that check and not to the run: O52 reads the
+  // stream the main rig writes, and a lane writing into it would be the evidence
+  // testifying for the thing under test.
+  let laneJournalDir = null
   // #229: the control document's rig. Its own directory, its own front,
   // backend and core, because the assertion changes a file mid-run and the
   // main rig's whitelist is a frozen array.
@@ -230,6 +241,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let bodyFakeB = null
   let bodyLegA = null
   let bodyLegB = null
+
+  // Every lane a check builds, closed in the finally block before anything else.
+  // One entry and one line here is what a conversion adds; the object a lane
+  // opened leaves the 34-name list the longer this grows (#594).
+  const lanes = []
 
   const evidence = {
     frontPort: null,
@@ -2460,6 +2476,95 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // The rig closes what the factory opened, in the factory's order.
       try { await entityRig?.close?.() } catch { /* best effort */ }
     }
+
+    // --- O68: a lane closes every socket and timer it opened (#594) ---
+    // The rig factory (#223) ends the three sockets it opened and leaves every
+    // client and every timer to the rung, which is why one rig's teardown is four
+    // lines in the finally block and the file's teardown is one line per object.
+    // createLoopbackLane is that owner, and this check is its receipt: every part it
+    // was handed did something observable, and one close left nothing behind. The
+    // timers are the half an eye misses, because ending the backend leg is a backend
+    // fault and a fault schedules a retry (src/core/session.js:232).
+    //
+    // The second close returns the same record and does nothing, because the rung's
+    // finally block calls it unconditionally. The journal is this check's own, never
+    // the run's: O52 reads the main rig's stream, and a second writer there would be
+    // the evidence testifying for the thing under test.
+    const laneWhitelist = [offlineUuid('Attach'), offlineUuid('Second')]
+    laneJournalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-loopback-lane-'))
+    const laneJournal = createJournal({
+      dir: laneJournalDir,
+      maxBytes: 4 * 1024 * 1024,
+      maxTotalBytes: 8 * 1024 * 1024
+    })
+    if (!laneJournal.enabled) {
+      throw new Error('the lane journal did not open: ' + laneJournal.stats().disabledReason)
+    }
+    const lane = await createLoopbackLane({
+      name: 'laneCore',
+      log,
+      logs,
+      version: VERSION,
+      fake: {},
+      whitelist: laneWhitelist,
+      wire: createWireChecker({ version: VERSION }),
+      journal: laneJournal
+    })
+    lanes.push(lane)
+    const laneBot = lane.bot({ username: 'Attach' })
+    const laneReady = await withTimeout(
+      laneBot.ready().then(() => true, () => false),
+      20_000,
+      'the lane client'
+    ).catch(() => false)
+    const laneAttached = lane.core.attached === true
+    // The leg's counters, not the checker's: a lane built with no gate runs the
+    // front's checks off, so a zero here is the gate missing rather than a run that
+    // happened to inspect nothing.
+    const laneWire = { ...lane.front.wireStats }
+    const laneClosure = await lane.close()
+    const laneAgain = await lane.close()
+    // The seal is the writer's, as O52's is: a shard is only readable once it is
+    // written, and the lane never closes a journal it was handed.
+    laneJournal.close()
+    const laneRecords = []
+    for await (const entry of readJournal(laneJournalDir)) laneRecords.push(entry.record)
+    const laneNames = laneRecords
+      .filter(record => typeof record.name === 'string')
+      .map(record => record.name)
+    evidence.lane = {
+      whitelist: laneWhitelist.length,
+      port: lane.port,
+      bodyPort: lane.base === null || lane.base === undefined ? null : lane.base.port,
+      ready: laneReady,
+      attached: laneAttached,
+      frames: laneBot.playNames().slice(0, 6),
+      wire: laneWire,
+      journal: { dir: laneJournalDir, names: laneNames },
+      closure: laneClosure,
+      sameOnSecondClose: laneAgain === laneClosure,
+      botEnded: laneBot.received.ended !== null
+    }
+    check(
+      'O68',
+      'a lane built by createLoopbackLane serves a client with the parts it was handed, then ends its client, its sockets and its armed timers on one close',
+      laneReady === true &&
+        laneAttached === true &&
+        laneBot.received.ended !== null &&
+        laneWire.checked >= 5 &&
+        laneWire.rejected === 0 &&
+        laneNames.includes('login') &&
+        laneNames.includes('map_chunk') &&
+        laneClosure.bots.length === 1 &&
+        laneClosure.bots[0].username === 'Attach' &&
+        laneClosure.bots[0].ended === true &&
+        laneClosure.sockets.length === 2 &&
+        laneClosure.sockets.every(entry => entry.code === 'ECONNREFUSED') &&
+        laneClosure.timersDropped.length >= 1 &&
+        laneClosure.timersLeft.length === 0 &&
+        laneAgain === laneClosure,
+      evidence.lane
+    )
 
     // --- O52: the journal still records the frames a diagnosis reads (#217) ---
     // #217 drops the entity stream from the journal and makes chunks
@@ -5013,6 +5118,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     process.stderr.write(`loopback: ${phase} failed: ${String(error?.message ?? error)}\n`)
   } finally {
     stopping = true
+    // A lane owns its bots, its sockets and its timers, so it closes before the
+    // list below: the list is what is left of the hand-written teardown (#594).
+    for (const lane of lanes) {
+      try { await lane.close() } catch { /* best effort */ }
+    }
     for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
@@ -5059,6 +5169,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // leaves nothing behind; a failing one keeps them for the report.
       try { if (controlDir) fs.rmSync(controlDir, { recursive: true, force: true }) } catch { /* best effort */ }
       try { if (pickerControlDir) fs.rmSync(pickerControlDir, { recursive: true, force: true }) } catch { /* best effort */ }
+      try { if (laneJournalDir) fs.rmSync(laneJournalDir, { recursive: true, force: true }) } catch { /* best effort */ }
     }
 
     if (failed && exitCode === 0) exitCode = 1

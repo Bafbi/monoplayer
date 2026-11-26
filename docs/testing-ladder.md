@@ -1080,6 +1080,45 @@ first dial and its target warms in five seconds.
   What it cannot prove: the sentence a vanilla client draws. The client here is a
   protocol bot, and the words are read off the `disconnect` frame it decoded.
 
+- `O68` a lane built by `createLoopbackLane` serves a client with the parts it was
+  handed, then ends its client, its sockets and its armed timers on one close (#594).
+  `createRig` (#223) ended the three sockets it opened and left every client and every
+  timer to the assertion, which is why one rig's teardown is four lines in the rung's
+  `finally` block and the file's teardown is one line per object. The factory is that
+  owner, and it registers no call-in by hand, because the core applies its own table in
+  `start()` (#592, `src/service/wire-leg-to-core.js`).
+
+  This is a claim about the rung's own machinery rather than about the product, and it lives
+  here because it needs two real sockets and a real client: `test/tooling/` owns the repo's
+  claims about itself only where no socket is involved.
+
+  This lane is built with a fake backend, a two-name whitelist, a wire check and a journal of
+  its own in a temporary directory. One real protocol client joins it, reads its login, a
+  position and the chunk batch, and the core attaches it. Then `close()` is called twice.
+
+  The claim is read from the outside wherever the outside can answer. The kernel refuses a
+  dial at both ports the lane held, so nothing of it is still listening. The client the lane
+  opened reports its own end, so no teardown line names it. The front's own wire counters
+  saw at least five frames and rejected none, and the journal holds `login` and `map_chunk`,
+  so the wire check and the journal are wired and observed rather than wired and assumed.
+  And the lane's clock holds no armed timer: ending the backend leg is a backend fault, and
+  a fault arms a reconnect backoff (`src/core/session.js:232`), so a lane that closes its
+  legs and stops leaves a 1 s timer and a handle the process keeps until it fires. The lane drops it,
+  and the record says how many it dropped. The second close returns the same record and
+  does nothing, because the rung's `finally` block calls it unconditionally: a throw later
+  in the run must not leave the lane to the hand-written list, and a close that already ran
+  must not throw on the way out.
+
+  The journal is the check's, never the run's. O52 reads the main rig's stream, and a second
+  writer in that stream would be the evidence testifying for the thing under test.
+
+  What it cannot prove: a picker lane, and a whitelist read from a control document. The
+  factory wires both, and no assertion here drives either. It also cannot see a timer a leg
+  arms outside the lane's clock, because that handle is the leg's; the ledger covers what
+  the core arms. The factory names its two colliding parts after the glossary rather than
+  after the ticket that proposed it: `fake` for the fake backend's options and `wire` for
+  the wire check.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a
