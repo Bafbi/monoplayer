@@ -65,7 +65,7 @@ const ASSIGNMENT = new RegExp(
 // value has to look unlike prose. The kind is the scheme, so a report says which
 // shape leaked and <bearer> keeps the meaning #92 gave it (#182).
 const CREDENTIAL_SPAN = new RegExp(
-  "\\b(?:" + AUTH_FIELD + ")\"?\\s*[:=]\\s*\"?(?:(" + CREDENTIAL_SCHEME + ")\\s+)?" +
+  "\\b(?:" + AUTH_FIELD + ")\"?\\s*[:=]\\s*\"?(?!(?:" + CREDENTIAL_SCHEME + ")\\s+\\[REDACTED\\])(?:(" + CREDENTIAL_SCHEME + ")\\s+)?" +
     "(?:\"((?!\\[REDACTED\\])[^\"]+)\"|'((?!\\[REDACTED\\])[^']+)'|((?!\\[REDACTED\\])[^\\s\"',;}\\]]+))" +
     "|\\b(" + KNOWN_SCHEMES + ")\\s+" + CREDENTIAL_SHAPE + "(" + CREDENTIAL + ")",
   'gi'
@@ -106,8 +106,8 @@ export function scanSecrets (text) {
   return findings
 }
 
-// One sentinel, spelled once, in src/observability/redact.js. This name is what the
-// driver lane and custody's CLI already import.
+// One sentinel, spelled once, in src/observability/redact.js. This name is the one
+// test/custody/imports.test.js asserts the scanner exports; nothing imports it.
 export const REDACTION_TAG = SENTINEL
 
 // Replace secret-shaped spans. Findings are grouped by kind, so they must be

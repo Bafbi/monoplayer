@@ -2,9 +2,10 @@
 //
 // Nothing read both paths before this file. `src/observability/redact.js` rewrites
 // a log line and `src/observability/secrets.js` returns findings for a report, and
-// each carried its own key list, so nine names were redacted on one path and not
-// the other (#181, #183). Two lists that disagree is how that happens; one list
-// cannot. This guard drives the one list through both paths, so a name added to it
+// each carried its own key list, and the two disagreed about which names held a
+// secret, in both directions (#181, #183). Two lists that disagree is how that
+// happens; one list cannot. This guard drives the one list through both paths, so a
+// name added to it
 // and wired into one renderer fails here rather than in a journal record.
 //
 // It asserts the property that matters, not an output shape: a value must not
@@ -17,25 +18,29 @@ import assert from 'node:assert/strict'
 import { redact, SENTINEL, SECRET_FIELDS, KNOWN_SCHEMES } from '../../src/observability/redact.js'
 import { redactSecrets } from '../../src/observability/secrets.js'
 
-const VALUE = 'abcdef123456789'
+// Two shapes, because a value with base64 padding is where a greedy label group
+// republishes the tail beside the sentinel. A plain alphanumeric value cannot see
+// that (#182, #183).
+const VALUES = ['abcdef123456789', 'YWJjZA==', 'dXNlcjpwYXNzd29yZA==']
 
 // A name in SECRET_FIELDS may be a small pattern (`api[-_]?key`), so the sample is
 // the shortest concrete spelling that pattern matches.
 const sample = name => name.replace(/\[-_\]\?/g, '')
 
-// Every name in the list, with no filter. A filter here would be a second copy of a
-// production rule, and this guard would then pass while production stopped honouring
-// it. The credential rule owns `authorization` on the report path and covers that name,
-// so the list needs no exception.
-
 test('every name in the one list is redacted by both paths (#181, #183)', () => {
+  // No filter over SECRET_FIELDS: one here would be a second copy of a production rule,
+  // and this guard would then pass while production stopped honouring a name. The
+  // credential rule covers `authorization` on the report path, so the list needs no
+  // exception.
   const survivors = []
   for (const name of SECRET_FIELDS) {
     const key = sample(name)
-    for (const input of [JSON.stringify({ [key]: VALUE }), `${key}=${VALUE}`]) {
-      if (redact(input).includes(VALUE)) survivors.push(`log: ${input}`)
-      const { text } = redactSecrets(input)
-      if (text.includes(VALUE)) survivors.push(`report: ${input}`)
+    for (const value of VALUES) {
+      for (const input of [JSON.stringify({ [key]: value }), `${key}=${value}`]) {
+        if (redact(input).includes(value)) survivors.push(`log: ${input}`)
+        const { text } = redactSecrets(input)
+        if (text.includes(value)) survivors.push(`report: ${input}`)
+      }
     }
   }
   assert.deepEqual(survivors, [], 'a name both paths must read')
@@ -43,18 +48,22 @@ test('every name in the one list is redacted by both paths (#181, #183)', () => 
 
 test('the report path leaves JSON it redacted parseable, for every name', () => {
   for (const name of SECRET_FIELDS) {
-    const input = JSON.stringify({ [sample(name)]: VALUE })
-    const { text } = redactSecrets(input)
-    assert.doesNotThrow(() => JSON.parse(text), `${name} must leave a parsable report`)
+    for (const value of VALUES) {
+      const input = JSON.stringify({ [sample(name)]: value })
+      const { text } = redactSecrets(input)
+      assert.doesNotThrow(() => JSON.parse(text), `${name} must leave a parsable report`)
+    }
   }
 })
 
 test('every name in the one list keeps the log path label that makes it greppable', () => {
   for (const name of SECRET_FIELDS) {
     const key = sample(name)
-    const line = redact(`${key}=${VALUE}`)
-    assert.equal(line.includes(SENTINEL), true, `${key} is redacted`)
-    assert.equal(line.includes(VALUE), false, `${key} keeps no value`)
+    for (const value of VALUES) {
+      const line = redact(`${key}=${value}`)
+      assert.equal(line.includes(SENTINEL), true, `${key} is redacted`)
+      assert.equal(line.includes(value), false, `${key} keeps no value`)
+    }
   }
 })
 

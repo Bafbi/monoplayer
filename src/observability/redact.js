@@ -11,8 +11,8 @@
 // imports it, and the custody report helper no longer writes one of its own. And
 // the credential grammar below (`CREDENTIAL_SCHEME`, `KNOWN_SCHEMES`,
 // `CREDENTIAL`, `CREDENTIAL_SHAPE`) is the one a scheme-shaped secret is read
-// with. Two lists that disagree is how three names came to be redacted on the log
-// path and not the report path (#181, #183).
+// with. Two lists that disagree is how a name came to be redacted on one path and
+// not the other, in both directions (#181, #183).
 
 export const SENTINEL = '[REDACTED]'
 
@@ -90,7 +90,9 @@ function keepLabel (match) {
   // JSON-quoted field names keep the label too: "access_token":"x" becomes
   // access_token=[REDACTED] (bare-field match falls back to the old form). The
   // closing quote may follow the name, because JSON puts one there.
-  const head = match.match(/^(?:"([^"]*)"|([^:"\s'\x60]+))"?\s*[:=]/)
+  // The bare name stops at = as well as at :, because a value that ends in base64
+  // padding would otherwise be read back as part of the label.
+  const head = match.match(/^(?:"([^"]*)"|([^:="\s'\x60]+))"?\s*[:=]/)
   if (head) return `${head[1] ?? head[2]}=${SENTINEL}`
   const scheme = match.match(SCHEME_LABEL)
   if (scheme) return `${scheme[1]} ${SENTINEL}`
