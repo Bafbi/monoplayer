@@ -8,7 +8,7 @@ cheapest rung that can fail for the defect you are chasing.
 
 | Rung | Command | Cost | Prerequisites | Asserts | Cannot catch |
 |---|---|---|---|---|---|
-| 0 static | `mise run lint` | under a second | `pnpm install` | every `src/` and `test/` file parses under `node --check` | runtime behavior, protocol shape |
+| 0 static | `mise run lint` | under a minute | `pnpm install` | every `src/`, `test/` and `tools/` file parses under `node --check` and resolves: a read of a name no scope declares fails `eslint`'s `no-undef` (#540) | runtime behavior, protocol shape |
 | 1 unit | `mise run test` | a few seconds | `pnpm install` | pure core: cache bounds, session state machine, identity gates, relay decisions, join synthesis, wire-check fixtures, offline identity, auth helpers, and the front leg's status answer over a loopback socket (#200); no auth | socket framing beyond the status handshake, leg wiring, real timers, backend behavior |
 | 2 loopback | `mise run loopback` | about 55 seconds | `pnpm install` | real front and backend legs over loopback, the node fake backend, and a real 26.1 protocol bot: attach, cached configuration replay, join order, serverbound relay, detach, reattach, deny, transfer follow (two fake backends, handshake intent 3, cookie round trip), the detach-and-rejoin move with the kept connection off (#22), the kept connection, which is on by default (#22), and a 26.2 rig with no backend at all that reads the recorded configuration baseline, answers the picker, opens the chosen server's own dialog, answers it, and lands a claiming client in the body it named (#257, #266, #258); no auth | vanilla client acceptance, encryption and `hasJoined`, real Paper semantics, real network timing |
 | 2a client parity | `mise run parity:run` | about 5 seconds | `pnpm install` | two protocol bots, one joining the fake backend directly and one through a real Monoplayer, one churn round of block, window, slot, entity, and chat frames, and a report that splits frame and decoded-state differences into same, expected, absent, and unexplained | vanilla client acceptance, a real backend's own frame mix, the Fabric client |
@@ -454,12 +454,13 @@ says why, and it is the reason to add assertions one row at a time.
   answers that refusal with `abortTransfer('target_unreachable')` instead of
   `session.fail()`, and the abort restores the session.
 
-  What it cannot prove: the counted give-up. `DEFAULT_MAX_TARGET_FAILURES` in
-  `src/core/transfer-follow.js` is spent in `src/service/start-live.js`'s
-  `reconnect_due` handler, and no test drives that handler. The controller is
-  proved alone, in `test/core/transfer-follow.test.js`. A regression in the
-  wiring ships green (#548): the count against a real leg, and the revert to the
-  settled server.
+  What it cannot prove: the counted give-up against a real leg.
+  `DEFAULT_MAX_TARGET_FAILURES` in `src/core/transfer-follow.js` is spent in the
+  handler `createReconnectHandler` returns, and `test/service/start-live.test.js`
+  drives it with a fake leg (#540): one hop's revert to a settled server that is
+  not the base, and the target memory across a retry that carries none. The count
+  that ends in `abortTransfer`, and a chain of two followed hops, stay unproved
+  on a leg (#548).
 - `O41` a target that sends no chunk frame never releases the client: the move
   stays open with the client in play (#87).
 - `O41b` the held release is the chunk gate, not a stalled client: the wait is

@@ -18,10 +18,13 @@ run = "pnpm install --frozen-lockfile"
 # https://mise.jdx.dev/tasks/running-tasks.html#pass-arguments
 
 [tasks.lint]
-description = "Syntax-check every source, test, tool, and shell script, and prove the panel's committed stylesheet is what its source compiles to."
+description = "Syntax-check every source, test, tool, and shell script, resolve every identifier they read, and prove the panel's committed stylesheet is what its source compiles to."
 # The stylesheet check compiles Tailwind, which is a dev dependency, so lint needs
 # the install like the test rung does. Without it a fresh checkout would fail the
 # gate on a missing compiler instead of on a stale bundle.
+# The resolve stage is ESLint with one rule, `no-undef` (eslint.config.js, #540). It
+# is a dev dependency for the same reason as the compiler: the gate runs it and the
+# image never does.
 depends = ["install"]
 run = '''
 #!/usr/bin/env bash
@@ -29,7 +32,7 @@ run = '''
 # refuses one instead of dropping it. A run that ignored what it was given would
 # report a check it did not make (#320).
 [ "$#" -eq 0 ] || { echo "lint takes no arguments: it checks every file in src, test and tools" >&2; exit 2; }
-(find src test tools \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check) || node src/ladder/next-rung.js lint $?
+(find src test tools \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check && pnpm exec eslint) || node src/ladder/next-rung.js lint $?
 '''
 
 

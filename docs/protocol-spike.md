@@ -93,7 +93,7 @@ Files:
 ## How to run
 
 ```bash
-mise run check    # install (frozen) + lint (node --check) + node:test suite
+mise run check    # install (frozen) + lint (node --check, eslint) + node:test suite
 mise run spike:report   # full scenario, writes testdata/spike-report.json, PASS/FAIL summary
 ```
 

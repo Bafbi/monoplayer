@@ -709,6 +709,156 @@ export function createJsonlLog ({ sink, account = null }) {
   }
 }
 
+// #540: the reconnect orchestrator, lifted out of `startLive` so a test can run
+// it, because nothing did: #536's `ReferenceError` sat on this handler's success
+// path for a day, and no rung in the gate executes a started process. The state it
+// owns is the three facts a dial needs — the server the session is on, whether that
+// server came from a transfer, and the server a restored client holds — so a driven
+// reconnect reads them without a socket.
+//
+// `settleWarm` is the caller's: warmth is the cache's policy, not this handler's.
+export function createReconnectHandler ({
+  core,
+  backend,
+  follow,
+  settleWarm,
+  baseTarget,
+  log = () => {}
+}) {
+  // The server the puppet is on now. A plain backend fault reconnects here,
+  // not always to the configured base.
+  let currentTarget = { ...baseTarget }
+  // Why it is off the base, when it is: a followed transfer keeps the transfer
+  // handshake on the next fault, and a reconnect to the server the session is
+  // already on does not.
+  let currentIsTransfer = false
+  // The server the session last warmed on, which is the one whose state a
+  // restored client holds. A given-up target reverts here, not to the base: on a
+  // chain A->B->C a failed C restores the client into B's world (#87).
+  let settledTarget = { ...baseTarget }
+  // Whether the settled server got there by a followed transfer. It decides the
+  // dialect of a revert dial, exactly as `currentIsTransfer` decides a reconnect.
+  let settledIsTransfer = false
+  const isBase = target =>
+    target.host === baseTarget.host && target.port === baseTarget.port
+
+  // Point the next dial at the settled server and drop any followed target that
+  // is still in the controller.
+  function revertToSettled (reason) {
+    const abandoned = follow.abort(reason).abandoned ?? null
+    currentTarget = { ...settledTarget }
+    currentIsTransfer = settledIsTransfer
+    try {
+      backend.setTarget(settledTarget, { keepCookies: settledIsTransfer && !isBase(settledTarget) })
+    } catch (error) {
+      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
+    }
+    return { abandoned }
+  }
+
+  // One backend.connect() per reconnect_due: the guard refuses a second
+  // attempt while one is in flight, so the reconnect can never loop.
+  let reconnecting = false
+  async function onReconnectDue ({ delayMs, attempt, target } = {}) {
+    if (reconnecting) return
+    reconnecting = true
+    core.session.backendConnecting({ initial: false })
+
+    // A followed target is handed over once, through the controller, so one budget
+    // owns the retries and the give-up. A target fed again on every retry would
+    // reset that budget, and the controller remembers it across the hops that
+    // carry none.
+    const due = follow.onDue({ target })
+    // Two sources, and #264 removed the other two: a target the controller is
+    // following, or the server the session is already on. There is nothing left to
+    // rank, so the dial is the first that exists.
+    const dialTarget = due.target ?? currentTarget
+    // A transfer dial, and the return to the server a transfer moved the session
+    // to, ask the target for the transfer handshake and keep the cookies: the
+    // behaviour every lane had before this ticket. Anything else is a fresh login
+    // on the server the session is already on.
+    //
+    // Beside `dialTarget`, never inside the `try` below: the block that records a
+    // successful reconnect reads it, and a `const` inside the `try` is scoped to
+    // that block, so the read threw `ReferenceError: transferDial is not defined`
+    // on every reconnect that connected.
+    const transferDial = due.target !== null || currentIsTransfer
+    try {
+      backend.setTarget(dialTarget, dialIntent({ transfer: transferDial, target: dialTarget, base: baseTarget }))
+      if (due.target !== null) {
+        currentTarget = { ...dialTarget }
+        currentIsTransfer = true
+      }
+      if (due.target) {
+        log('transferFollowConnect', {
+          host: due.target.host,
+          port: due.target.port,
+          attempt,
+          failures: due.failures
+        })
+      }
+    } catch (error) {
+      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
+      core.abortTransfer('invalid_target')
+      revertToSettled('invalid_target')
+    }
+
+    try {
+      await backend.connect()
+      const readiness = await settleWarm({
+        stage: due.target ? 'transfer' : 'reconnect',
+        maxWarmMs: 5000
+      })
+      if (!readiness.hasConfig || !readiness.hasPrefix || readiness.warmRefused === true) {
+        throw new Error(readiness.warmRefused === true
+          ? 'backend reconnect produced no chunk frame, so no client can be released on it'
+          : 'backend reconnect did not produce configuration and join frames')
+      }
+      const outcome = follow.onSuccess()
+      settledTarget = { ...dialTarget }
+      settledIsTransfer = transferDial
+      log('backendReconnect', {
+        delayMs,
+        attempt,
+        target: `${dialTarget.host}:${dialTarget.port}`,
+        followed: outcome.followed,
+        warm: readiness.warm,
+        backendLogins: core.session.backendLogins,
+        state: core.session.state
+      })
+    } catch (error) {
+      const failure = follow.onFailure()
+      log('backendReconnectFailed', {
+        delayMs,
+        attempt,
+        target: `${dialTarget.host}:${dialTarget.port}`,
+        error: String(error?.message ?? error).slice(0, 300),
+        failures: failure.failures,
+        state: core.session.state
+      })
+      if (failure.reverted) {
+        // The followed target is unreachable; the next reconnect goes back to
+        // the server the client was restored onto so the puppet is never
+        // stranded and never lands where the client is not.
+        core.abortTransfer('target_unreachable')
+        revertToSettled('target_unreachable')
+        log('transferFollowReverted', {
+          host: failure.abandoned?.host ?? null,
+          port: failure.abandoned?.port ?? null
+        })
+      }
+      const outcome = core.session.fail()
+      log('backendReconnectFailedRetry', {
+        scheduled: outcome?.scheduled === true,
+        nextDelayMs: outcome?.scheduled === true ? outcome.delayMs : null
+      })
+    } finally {
+      reconnecting = false
+    }
+  }
+  return { onReconnectDue, revertToSettled }
+}
+
 export async function startLive ({ argv = [], io = process } = {}) {
   const stdout = io.stdout ?? process.stdout
   const stderr = io.stderr ?? process.stderr
@@ -1018,140 +1168,19 @@ export async function startLive ({ argv = [], io = process } = {}) {
     return readiness
   }
 
-  const baseTarget = { ...configuredTarget }
-  const follow = createTransferFollowController()
-  // The server the puppet is on now. A plain backend fault reconnects here,
-  // not always to the configured base.
-  let currentTarget = { ...baseTarget }
-  // Why it is off the base, when it is: a followed transfer keeps the transfer
-  // handshake on the next fault, and a reconnect to the server the session is
-  // already on does not.
-  let currentIsTransfer = false
-  // The server the session last warmed on, which is the one whose state a
-  // restored client holds. A given-up target reverts here, not to the base: on a
-  // chain A->B->C a failed C restores the client into B's world (#87).
-  let settledTarget = { ...baseTarget }
-  // Whether the settled server got there by a followed transfer. It decides the
-  // dialect of a revert dial, exactly as `currentIsTransfer` decides a reconnect.
-  let settledIsTransfer = false
-  const isBase = target =>
-    target.host === baseTarget.host && target.port === baseTarget.port
-
-  // Point the next dial at the settled server and drop any followed target that
-  // is still in the controller.
-  function revertToSettled (reason) {
-    const abandoned = follow.abort(reason).abandoned ?? null
-    currentTarget = { ...settledTarget }
-    currentIsTransfer = settledIsTransfer
-    try {
-      backend.setTarget(settledTarget, { keepCookies: settledIsTransfer && !isBase(settledTarget) })
-    } catch (error) {
-      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
-    }
-    return { abandoned }
-  }
-
-  // One backend.connect() per reconnect_due: the guard refuses a second
-  // attempt while one is in flight, so the reconnect can never loop.
-  let reconnecting = false
-  core.on('reconnect_due', async ({ delayMs, attempt, target } = {}) => {
-    if (reconnecting) return
-    reconnecting = true
-    core.session.backendConnecting({ initial: false })
-
-    // A followed target is handed over once, through the controller, so one budget
-    // owns the retries and the give-up. A target fed again on every retry would
-    // reset that budget, and the controller remembers it across the hops that
-    // carry none.
-    const due = follow.onDue({ target })
-    // Two sources, and #264 removed the other two: a target the controller is
-    // following, or the server the session is already on. There is nothing left to
-    // rank, so the dial is the first that exists.
-    const dialTarget = due.target ?? currentTarget
-    // A transfer dial, and the return to the server a transfer moved the session
-    // to, ask the target for the transfer handshake and keep the cookies: the
-    // behaviour every lane had before this ticket. Anything else is a fresh login
-    // on the server the session is already on.
-    //
-    // Beside `dialTarget`, never inside the `try` below: the block that records a
-    // successful reconnect reads it, and a `const` inside the `try` is scoped to
-    // that block, so the read threw `ReferenceError: transferDial is not defined`
-    // on every reconnect that connected.
-    const transferDial = due.target !== null || currentIsTransfer
-    try {
-      backend.setTarget(dialTarget, dialIntent({ transfer: transferDial, target: dialTarget, base: baseTarget }))
-      if (due.target !== null) {
-        currentTarget = { ...dialTarget }
-        currentIsTransfer = true
-      }
-      if (due.target) {
-        log('transferFollowConnect', {
-          host: due.target.host,
-          port: due.target.port,
-          attempt,
-          failures: due.failures
-        })
-      }
-    } catch (error) {
-      log('transferFollowTargetRejected', { error: String(error?.message ?? error).slice(0, 200) })
-      core.abortTransfer('invalid_target')
-      revertToSettled('invalid_target')
-    }
-
-    try {
-      await backend.connect()
-      const readiness = await settleWarm({
-        stage: due.target ? 'transfer' : 'reconnect',
-        maxWarmMs: 5000
-      })
-      if (!readiness.hasConfig || !readiness.hasPrefix || readiness.warmRefused === true) {
-        throw new Error(readiness.warmRefused === true
-          ? 'backend reconnect produced no chunk frame, so no client can be released on it'
-          : 'backend reconnect did not produce configuration and join frames')
-      }
-      const outcome = follow.onSuccess()
-      settledTarget = { ...dialTarget }
-      settledIsTransfer = transferDial
-      log('backendReconnect', {
-        delayMs,
-        attempt,
-        target: `${dialTarget.host}:${dialTarget.port}`,
-        followed: outcome.followed,
-        warm: readiness.warm,
-        backendLogins: core.session.backendLogins,
-        state: core.session.state
-      })
-    } catch (error) {
-      const failure = follow.onFailure()
-      log('backendReconnectFailed', {
-        delayMs,
-        attempt,
-        target: `${dialTarget.host}:${dialTarget.port}`,
-        error: String(error?.message ?? error).slice(0, 300),
-        failures: failure.failures,
-        state: core.session.state
-      })
-      if (failure.reverted) {
-        // The followed target is unreachable; the next reconnect goes back to
-        // the server the client was restored onto so the puppet is never
-        // stranded and never lands where the client is not.
-        core.abortTransfer('target_unreachable')
-        revertToSettled('target_unreachable')
-        log('transferFollowReverted', {
-          host: failure.abandoned?.host ?? null,
-          port: failure.abandoned?.port ?? null
-        })
-      }
-      const outcome = core.session.fail()
-      log('backendReconnectFailedRetry', {
-        scheduled: outcome?.scheduled === true,
-        nextDelayMs: outcome?.scheduled === true ? outcome.delayMs : null
-      })
-    } finally {
-      reconnecting = false
-    }
+  // #540: the handler lives in `createReconnectHandler` so a test can drive it.
+  // `settleWarm` stays here, because warming is this lane's cache policy.
+  const reconnect = createReconnectHandler({
+    core,
+    backend,
+    follow: createTransferFollowController(),
+    settleWarm,
+    baseTarget: configuredTarget,
+    log
   })
-
+  // One reconnect_due runs one attempt: the handler's own guard refuses a second
+  // while one is in flight.
+  core.on('reconnect_due', reconnect.onReconnectDue)
   // #87: a restored move sends the puppet back to the server the client was
   // restored onto. Without this the follow controller keeps a target the core
   // has already given up on, and the next dial lands the puppet on the server
@@ -1165,7 +1194,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
       log('transferRestoreKeptTarget', { reason, kind })
       return
     }
-    const { abandoned } = revertToSettled('restored')
+    const { abandoned } = reconnect.revertToSettled('restored')
     log('transferFollowAbandoned', {
       reason,
       host: abandoned?.host ?? null,
