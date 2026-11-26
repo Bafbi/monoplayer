@@ -179,7 +179,6 @@ test('redaction sentinel: a token-string field added by a future code path is ca
   assert.ok(redacted.includes('device_code'), 'the (non-secret) key name stays')
 })
 
-
 // #181: three field names the log path redacted and the report path did not. The
 // report path was two rules — the scanner's key list and custody's own prepass —
 // and neither named these. They are one list now, so a name the log path knows is
@@ -201,7 +200,6 @@ test('redaction sentinel: user_code, device_code_pairing and cookie are tagged (
   assert.equal(form.includes('zyxwvu987654321'), false)
 })
 
-
 // #182: a Basic credential is a base64 pair of a name and a password, and it is the
 // shape an operator pastes into a bug report. Neither rule set knew a scheme but
 // Bearer, so the report printed it whole and the tripwire stayed silent.
@@ -212,6 +210,15 @@ test('redaction sentinel: an Authorization credential is tagged whatever its sch
     assert.ok(scanForLeaks(raw).length >= 1, `the tripwire must see a ${scheme} credential`)
     assert.equal(redactForReport(raw).includes(credential), false, `${scheme} must not survive`)
   }
+  // A header with no scheme word is a credential too. The scheme group is greedy
+  // over a credential's own letters, so a missing space let it take the value and
+  // leave the tail behind.
+  for (const value of ['opaqueTokenValue123', 'dXNlcjpwYXNzd29yZA==']) {
+    const schemeless = `Authorization: ${value}`
+    assert.equal(redactForReport(schemeless).includes(value), false, `no scheme word: ${value}`)
+    assert.equal(redactForReport(schemeless), 'Authorization: [REDACTED]<authorization>')
+  }
+
   // The report path writes JSON, and a redacted report must still parse.
   const json = JSON.stringify({ note: `proxy said: Authorization: Basic ${credential}` })
   const redacted = redactForReport(json)

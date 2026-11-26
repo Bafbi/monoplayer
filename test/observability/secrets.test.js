@@ -108,9 +108,15 @@ test('an Authorization credential is tagged with its scheme (#182)', () => {
   assert.deepEqual(bearer.findings.map(f => f.kind), ['bearer'])
   assert.equal(bearer.text, 'Authorization: Bearer [REDACTED]<bearer>')
 
-  // A header with no scheme word is still a secret, and the tag says so.
-  const bare = redactSecrets('Authorization: opaqueTokenValue123')
-  assert.equal(bare.text.includes('opaqueTokenValue123'), false)
+  // A header with no scheme word is a credential too, and the tag names the
+  // header. The scheme group is greedy over a credential's own letters, so it
+  // needs a space to separate it from the value: without one it ate all but the
+  // last character and called the credential the scheme.
+  for (const value of ['opaqueTokenValue123', 'dXNlcjpwYXNzd29yZA==', 'PMT-1-abcdef123456789']) {
+    const schemeless = redactSecrets(`Authorization: ${value}`)
+    assert.deepEqual(schemeless.findings.map(f => f.kind), ['authorization'], `no scheme word in ${value}`)
+    assert.equal(schemeless.text, 'Authorization: [REDACTED]<authorization>', `the whole value goes: ${value}`)
+  }
 })
 
 // Redaction is a rewrite, not a map over the original: a sentinel already in
@@ -124,9 +130,9 @@ test('an existing sentinel is not treated as a value', () => {
 })
 
 
-// #181: the scanner named sixteen keys the log path already redacted... no — it
-// named a different sixteen. The three names below were in the log path's list and
-// in neither of the report path's two rules.
+// #181: the log path named these three keys and the report path's two rules named
+// none of them, so a device-code pairing value or a stored cookie reached stdout
+// while the tripwire stayed silent.
 test('the scanner knows the names the log path knows (#181)', () => {
   const value = 'abcdef123456789'
   for (const key of ['user_code', 'device_code_pairing', 'cookie']) {

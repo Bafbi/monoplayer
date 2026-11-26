@@ -20,17 +20,17 @@ import { redactSecrets } from '../../src/observability/secrets.js'
 const VALUE = 'abcdef123456789'
 
 // A name in SECRET_FIELDS may be a small pattern (`api[-_]?key`), so the sample is
-// the concrete spelling an operator would paste.
+// the shortest concrete spelling that pattern matches.
 const sample = name => name.replace(/\[-_\]\?/g, '')
 
-// The one name the credential rule owns on the report path instead of the key rule,
-// because a header's value is a scheme word and a credential, and two rules reading
-// it would count one secret twice.
-const KEY_NAMES = SECRET_FIELDS.filter(name => name !== 'authorization')
+// Every name in the list, with no filter. A filter here would be a second copy of a
+// production rule, and this guard would then pass while production stopped honouring
+// it. The credential rule owns `authorization` on the report path and covers that name,
+// so the list needs no exception.
 
 test('every name in the one list is redacted by both paths (#181, #183)', () => {
   const survivors = []
-  for (const name of KEY_NAMES) {
+  for (const name of SECRET_FIELDS) {
     const key = sample(name)
     for (const input of [JSON.stringify({ [key]: VALUE }), `${key}=${VALUE}`]) {
       if (redact(input).includes(VALUE)) survivors.push(`log: ${input}`)
@@ -42,7 +42,7 @@ test('every name in the one list is redacted by both paths (#181, #183)', () => 
 })
 
 test('the report path leaves JSON it redacted parseable, for every name', () => {
-  for (const name of KEY_NAMES) {
+  for (const name of SECRET_FIELDS) {
     const input = JSON.stringify({ [sample(name)]: VALUE })
     const { text } = redactSecrets(input)
     assert.doesNotThrow(() => JSON.parse(text), `${name} must leave a parsable report`)
@@ -50,7 +50,7 @@ test('the report path leaves JSON it redacted parseable, for every name', () => 
 })
 
 test('every name in the one list keeps the log path label that makes it greppable', () => {
-  for (const name of KEY_NAMES) {
+  for (const name of SECRET_FIELDS) {
     const key = sample(name)
     const line = redact(`${key}=${VALUE}`)
     assert.equal(line.includes(SENTINEL), true, `${key} is redacted`)

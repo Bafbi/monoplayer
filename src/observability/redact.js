@@ -37,8 +37,10 @@ export const CREDENTIAL_SCHEME = String.raw`[A-Za-z][A-Za-z0-9!#$%&'*+.^_\x60|~-
 // rewrites "loading something into memory" and "the token cache is warm" (#182).
 export const KNOWN_SCHEMES = String.raw`Bearer|Basic|Digest|Negotiate`
 
-// A credential. The floor is eight characters, the same one the report scanner
-// applies, so a value short enough to be a word is not read as a secret.
+// A credential. The floor is eight characters, matching the floor the report
+// scanner's assignment rule applies, so a value short enough to be a word is not read
+// as a secret. The two rules read different character classes, so the number agrees
+// by convention and not by construction.
 export const CREDENTIAL = String.raw`[A-Za-z0-9._~+/=-]{8,}`
 
 // Prose after a scheme name is letters, as in "Basic authentication is required".
@@ -82,13 +84,15 @@ export function redact (text) {
 // Each replacement keeps the recognisable label (a quoted or bare field name
 // followed by ':' or '=', or the scheme word) so a redacted line still shows WHICH
 // secret shape was there.
+const SCHEME_LABEL = new RegExp('^(' + KNOWN_SCHEMES + ')\\s+', 'i')
+
 function keepLabel (match) {
   // JSON-quoted field names keep the label too: "access_token":"x" becomes
   // access_token=[REDACTED] (bare-field match falls back to the old form). The
   // closing quote may follow the name, because JSON puts one there.
   const head = match.match(/^(?:"([^"]*)"|([^:"\s'\x60]+))"?\s*[:=]/)
   if (head) return `${head[1] ?? head[2]}=${SENTINEL}`
-  const scheme = match.match(new RegExp('^(' + KNOWN_SCHEMES + ')\\s+', 'i'))
+  const scheme = match.match(SCHEME_LABEL)
   if (scheme) return `${scheme[1]} ${SENTINEL}`
   return SENTINEL
 }

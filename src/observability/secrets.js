@@ -34,6 +34,7 @@
 // offline.
 
 import {
+  SENTINEL,
   SECRET_FIELDS,
   CREDENTIAL_SCHEME,
   KNOWN_SCHEMES,
@@ -48,7 +49,8 @@ import {
 // The Authorization field is not a key rule below: a header's value is a scheme
 // word and a credential, and the credential rule owns every one of them. Reading it
 // here as well would give one secret two findings and a warning that counts twice.
-const KEY_FIELDS = SECRET_FIELDS.filter(name => name !== 'authorization')
+const AUTH_FIELD = 'authorization'
+const KEY_FIELDS = SECRET_FIELDS.filter(name => name !== AUTH_FIELD)
 
 // JSON puts a quote between the key and the separator, so the separator may
 // sit behind a closing quote (#92).
@@ -63,7 +65,7 @@ const ASSIGNMENT = new RegExp(
 // value has to look unlike prose. The kind is the scheme, so a report says which
 // shape leaked and <bearer> keeps the meaning #92 gave it (#182).
 const CREDENTIAL_SPAN = new RegExp(
-  "\\b(?:authorization)\"?\\s*[:=]\\s*\"?(" + CREDENTIAL_SCHEME + ")?\\s*" +
+  "\\b(?:" + AUTH_FIELD + ")\"?\\s*[:=]\\s*\"?(?:(" + CREDENTIAL_SCHEME + ")\\s+)?" +
     "(?:\"((?!\\[REDACTED\\])[^\"]+)\"|'((?!\\[REDACTED\\])[^']+)'|((?!\\[REDACTED\\])[^\\s\"',;}\\]]+))" +
     "|\\b(" + KNOWN_SCHEMES + ")\\s+" + CREDENTIAL_SHAPE + "(" + CREDENTIAL + ")",
   'gi'
@@ -90,7 +92,7 @@ export function scanSecrets (text) {
     const scheme = match[1] ?? match[5]
     const value = match[2] ?? match[3] ?? match[4] ?? match[6]
     findings.push({
-      kind: (scheme ?? 'authorization').toLowerCase(),
+      kind: (scheme ?? AUTH_FIELD).toLowerCase(),
       value,
       index: match.index,
     })
@@ -104,7 +106,9 @@ export function scanSecrets (text) {
   return findings
 }
 
-export const REDACTION_TAG = '[REDACTED]'
+// One sentinel, spelled once, in src/observability/redact.js. This name is what the
+// driver lane and custody's CLI already import.
+export const REDACTION_TAG = SENTINEL
 
 // Replace secret-shaped spans. Findings are grouped by kind, so they must be
 // sorted by their actual span before merging; overlapping spans (for example a
@@ -142,11 +146,14 @@ export function redactSecrets (text) {
   return { text: out, findings }
 }
 
-// A tag takes the place of a value. A bare value after a colon sits in a JSON
-// document, where the tag has to be a string: an unquoted tag stops the
-// document parsing, and a report must still parse (#92).
+// A tag takes the place of a value. A bare value inside a JSON document needs the
+// tag to be a string: an unquoted tag stops the document parsing, and a report must
+// still parse (#92). A key ending in a colon is not enough to say so — an
+// Authorization header is `key: value` too — so the key has to be quoted or to
+// close a member, which is what JSON puts before the colon.
 export function tagForValue (source, start, kinds) {
   const tag = `${REDACTION_TAG}<${kinds}>`
   const before = String(source).slice(0, start).trimEnd()
-  return before.endsWith(':') ? `"${tag}"` : tag
+  if (!before.endsWith(':')) return tag
+  return /["'}\]]$/.test(before.slice(0, -1).trimEnd()) ? `"${tag}"` : tag
 }
