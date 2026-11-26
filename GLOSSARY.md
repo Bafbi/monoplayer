@@ -13,8 +13,8 @@ One session of the account on one game server: the connection that server sees, 
 _Avoid_: backend session, puppet session, character, alt
 
 **Claim**:
-One attaching player's exclusive control of a body, held by the connection that made it and released when that connection ends. The player who holds it is the body's driver, and any other player watching the body is a spectator. A body carries one claim, and a second claim on it is refused with the name of the player who holds it. A connection carries one claim, so a client that already holds one cannot claim a second. The picker records the claim where the player answers a body's dialog, so a client that never answers one holds nothing.
-_Avoid_: lease, lock, slot, seat, take
+One attaching player's exclusive control of a body, held by the connection that made it and released when that connection ends. The player who holds it is the body's driver, and any other player watching the body is a spectator. A body carries one claim, and a second claim on it is refused with the name of the player who holds it. A connection carries one claim, so a client that already holds one cannot claim a second. The picker records the claim where the player answers a body's dialog, so a client that never answers one holds nothing. It is not the account lease, which a run holds rather than a player.
+_Avoid_: lock, slot, seat, take
 
 **Driver**:
 The attaching player who holds a body's claim, and so drives it. Their movement moves the body, their commands are spoken as the puppet, and their chat text is dropped.
@@ -61,6 +61,10 @@ _Avoid_: token file, credentials file
 **Writer lock**:
 The lock that lets exactly one process rotate a puppet account's tokens. A second writer invalidates the chain the first one holds.
 _Avoid_: mutex, pid file
+
+**Account lease**:
+The Kubernetes `Lease` named `monoplayer-online-account` in `monoplayer`, the namespace that holds the custody. One identity is one refresh chain with one writer lock, so a run that uses the real account takes it and holds it while it runs. The holder it records is the run's gate lane, its branch, and its pid, so a refusal reads as a person's run. It is no workload, so holding one scales, patches, and restarts nothing. It is not the writer lock, which keeps two processes in one account directory apart. It is not a claim, which is one player's hold on one body. `docs/testing-ladder.md` holds the runbook.
+_Avoid_: account lock, refresh lock, account slot
 
 **Profile**:
 The puppet account's Minecraft identity facts: UUID, name, alias, and which Microsoft title issued its tokens. It never holds a token value.
@@ -301,11 +305,11 @@ _Avoid_: validator, frame linter
 ## The panel
 
 **Panel**:
-The one page and one JSON route that list the puppets Monoplayer may touch, served on the tailnet from its own Deployment and its own namespace. It shows state; it does not hold a session.
+The page an operator reads on the tailnet, one card per puppet, served from its own Deployment and its own namespace. A card says what that puppet is doing now, read from the records the puppet already writes. What the panel may write for it is its control ConfigMap. Each card's live region is `GET /api/puppets/<name>/stream`, which rewrites it without a reload. The card's own facts are also `GET /api/puppets/<name>`, and `GET /api/puppets` is the registry. It holds no session, and `docs/panel.md` holds the route table.
 _Avoid_: dashboard, admin, control plane
 
 **Registry**:
-The list of puppets the panel may act on, one row per puppet, holding the name, namespace, Deployment, control ConfigMap, front hostname, and backend. It is a ConfigMap in Git, and it is the panel's whole permission model: a control ConfigMap it does not name is out of reach.
+The list of puppets the panel may act on, one row per puppet, holding the name, namespace, Deployment, control ConfigMap, the seed ConfigMap it may only read, front hostname, and backend. It is a ConfigMap in Git, and it is the panel's whole permission model: a control ConfigMap it does not name is out of reach.
 _Avoid_: puppet list, inventory, fleet. Not _configuration replay_, which this file records as `registry replay`.
 
 **Control ConfigMap**:
