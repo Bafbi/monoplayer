@@ -9,6 +9,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
 import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
+import { offlineUuid } from '../../src/legs/offline-identity.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
@@ -102,6 +103,19 @@ test('mise offers one command up and one down', () => {
 const EMPTY_WHITELIST = '{\n  "version": 1,\n  "players": []\n}'
 // The live ConfigMap: the human who may control the proxy.
 const LIVE_WHITELIST = '{"version":1,"players":[{"uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi"}]}'
+// #677: the list a hand edit grows when somebody wants "two clients" on this lane. The
+// two names are the loopback rig's bot names, and their uuids are what
+// src/legs/offline-identity.js derives from a name: the dev front verifies every login
+// against Mojang, so neither entry can ever attach. A whitelist that carries them reads
+// as three controllers and admits one.
+const RIG_WHITELIST = JSON.stringify({
+  version: 1,
+  players: [
+    { uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', name: 'Bafbi' },
+    { uuid: offlineUuid('Pilot'), name: 'Pilot' },
+    { uuid: offlineUuid('Watcher'), name: 'Watcher' }
+  ]
+})
 // A controller an operator added on the dev lane themselves. No live list names
 // them, so no seed can bring the entry back: only carrying it across can (#393).
 const OPERATOR_WHITELIST = '{"version":1,"players":[{"uuid":"0b7f5a4c-9d21-4c6e-8c2e-3f1d2b9a7e55","name":"OperatorController"}]}'
@@ -297,10 +311,13 @@ const PATCH = [
 // What `apply -k deploy/dev` leaves in the whitelist key. Read from the manifest
 // rather than restated here: the cases are about what the tree does to the key, and
 // a hand-written copy would keep passing after the manifest changed.
-function appliedWhitelist () {
-  const text = fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8')
+function whitelistText (text) {
   const declared = text.match(/^ {2}attach-whitelist\.json: \|\n((?: {4}.*\n?)+)/m)
   return declared ? declared[1].replace(/^ {4}/gm, '').trimEnd() : ''
+}
+
+function appliedWhitelist () {
+  return whitelistText(fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8'))
 }
 
 function workspace () {
@@ -417,6 +434,102 @@ test('status names an empty whitelist, and claims no state when the read fails',
     'a read that yielded nothing is not a report about the whitelist')
 })
 
+test('status names each attach whitelist entry, and which of them can authenticate', () => {
+  // #677: "attach whitelist has entries" is true and useless. Three entries read as
+  // three controllers, and two of these are the loopback rig's names, which the Mojang
+  // check can never answer for. The line has to name the entries and say which ones a
+  // login can actually use.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), RIG_WHITELIST + '\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.doesNotMatch(output, /attach whitelist has entries/,
+    'a count that names nobody is the defect this case is about: ' + output)
+  assert.match(output, /attach whitelist names 3 entries, 1 of which can authenticate/)
+  assert.match(output, /Bafbi 6eb73524-ff88-4a62-a8d0-c63905e7afba can authenticate/)
+  assert.match(output, /Pilot 62e2a856-7342-3096-b19f-938454443a11 cannot authenticate/)
+  assert.match(output, /Watcher e0314eaa-f0cf-36b0-ad18-d19b22fa52c8 cannot authenticate/)
+  assert.match(output, /md5\("OfflinePlayer:Pilot"\)/,
+    'the line says what makes the entry useless, so the reader knows which edit removes it: ' + output)
+  assert.match(output, /Remove the entry/, 'and says what to do about it')
+})
+
+test('status says every entry can authenticate when every uuid is one Mojang issues', () => {
+  // The other side of the verdict: a lane whose list is all real accounts is not a lane
+  // with a warning on it, and the line has to be able to say so.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), LIVE_WHITELIST + '\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /attach whitelist names 1 entry, and it can authenticate/)
+  assert.doesNotMatch(output, /cannot authenticate/, output)
+})
+
+test('status judges a uuid by its version, whichever spelling it is written in', () => {
+  // The custody store takes a uuid without dashes (src/custody/util.js, normalizeUuid), so
+  // a document can carry one. The version digit then sits at index 12 of the digits rather
+  // than 14 of the string, and a reader that spells it one way reports an undashed rig
+  // uuid as usable. Mojang issues version 4; every other version is a control document's
+  // own invention, and this case holds one of each shape.
+  const space = workspace()
+  const document = JSON.stringify({
+    version: 1,
+    players: [
+      { uuid: offlineUuid('Pilot').replace(/-/g, ''), name: 'Pilot' },
+      { uuid: '06a81639-2178-568a-abb3-3f762836f9a4', name: 'VersionFive' },
+      { uuid: 'not-a-uuid', name: 'Garbage' }
+    ]
+  })
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), document + '\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /attach whitelist names 3 entries, and none of them can authenticate/)
+  assert.match(output, /Pilot [0-9a-f]{32} cannot authenticate: its uuid is md5\("OfflinePlayer:Pilot"\)/,
+    'the undashed spelling is read for the version it carries: ' + output)
+  assert.match(output, /VersionFive .* cannot authenticate: a version-5 uuid is not one Mojang issues/)
+  assert.match(output, /Garbage not-a-uuid cannot authenticate: it is not a uuid, so no login can match it/)
+})
+
+test('status does not report a document it could not read as an empty list', () => {
+  // The read answered, and the answer was not a document. Saying "names 0 entries" here is
+  // the same defect as the count this ticket is about: a lane reported as fine because
+  // nothing looked.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), '{"version":1,"players":[{"uuid":\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /attach whitelist could not be read as a document/)
+  assert.doesNotMatch(output, /attach whitelist is empty/, output)
+  assert.doesNotMatch(output, /attach whitelist names/, output)
+})
+
+test('status does not call an entry dead for carrying no name', () => {
+  // The whitelist is keyed by uuid alone (src/custody/attach.js), so a name is a label and
+  // not a condition: the judgement reads it to name the string it hashed, and an entry
+  // without one still authenticates. The line says which field it is missing.
+  const space = workspace()
+  const nameless = '{"version":1,"players":[{"uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba"}]}'
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), nameless + '\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /\(no name\) 6eb73524-ff88-4a62-a8d0-c63905e7afba can authenticate/)
+  assert.match(output, /attach whitelist names 1 entry, and it can authenticate/)
+})
+
+test('status says so when no entry can authenticate, which is a lane that admits nobody', () => {
+  // A list of rig names is the shape this defect grows into: every entry is there, the
+  // count is not zero, and not one of them can log in.
+  const space = workspace()
+  const rigs = JSON.stringify({
+    version: 1,
+    players: [{ uuid: offlineUuid('Pilot'), name: 'Pilot' }, { uuid: offlineUuid('Watcher'), name: 'Watcher' }]
+  })
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), rigs + '\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /attach whitelist names 2 entries, and none of them can authenticate/)
+})
+
 test('down --purge exits 0 when the dev ConfigMap is missing', () => {
   // Reporting a lane that is already gone is not an error: `mise run dev:down --
   // --purge` must exit 0 when it has nothing left to report on.
@@ -513,6 +626,49 @@ test('up fills the empty dev attach whitelist from the live one', () => {
   assert.match(output, /filled the dev attach whitelist from monoplayer/)
 })
 
+test('up writes back only the attach whitelist entries a login can use', () => {
+  // #677: `up` is what carries a list across its own apply, so it is the step that puts
+  // a rig name into a live control document. An entry no Mojang session can answer for
+  // is not a controller: it is left out of the list the lane ends up with, and named.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), RIG_WHITELIST + '\n')
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), LIVE_WHITELIST + '\n')
+  const { status, output } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + run(space, ['status']).calls.join(' | '))
+  const after = JSON.parse(fs.readFileSync(path.join(space.fixtures, 'dev-whitelist.json'), 'utf8'))
+  assert.deepEqual(after.players.map(player => player.name), ['Bafbi'],
+    'the account that can authenticate is the list that crosses the apply: ' + output)
+  assert.match(output, /dropped Pilot 62e2a856-7342-3096-b19f-938454443a11 from the attach whitelist/)
+  assert.match(output, /dropped Watcher e0314eaa-f0cf-36b0-ad18-d19b22fa52c8 from the attach whitelist/)
+  assert.match(output, /md5\("OfflinePlayer:Pilot"\)/, 'the run says why the entry could never attach')
+})
+
+test('up drops a rig name from the list it copies from the live lane', () => {
+  // A seed is a write, so it is judged like one: the live document is hand-edited too,
+  // and copying it is how the same trap reaches a lane nothing edited.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist.json'), RIG_WHITELIST + '\n')
+  const { status, output } = run(space, ['up'])
+  assert.equal(status, 0, output)
+  const after = JSON.parse(fs.readFileSync(path.join(space.fixtures, 'dev-whitelist.json'), 'utf8'))
+  assert.deepEqual(after.players.map(player => player.name), ['Bafbi'],
+    'the seed writes the entries that can authenticate and no others: ' + output)
+  assert.match(output, /dropped Pilot .* from the attach whitelist/)
+  assert.match(output, /filled the dev attach whitelist from monoplayer/)
+})
+
+test('up leaves a list that is all real accounts exactly as it found it', () => {
+  // The prune is not a rewrite: a document whose entries can authenticate crosses the
+  // apply byte for byte, addedAt stamps and all.
+  const space = workspace()
+  const kept = '{"version":1,"players":[{"uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","name":"Bafbi","addedAt":"2026-11-07T13:04:51.092Z"}]}'
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), kept + '\n')
+  const { status, output } = run(space, ['up'])
+  assert.equal(status, 0, output)
+  assert.doesNotMatch(output, /dropped/, 'nothing was dropped, so nothing is named: ' + output)
+  assert.equal(fs.readFileSync(path.join(space.fixtures, 'dev-whitelist.json'), 'utf8').trim(), kept)
+})
+
 test('the attach whitelist seed rewrites one key and leaves its neighbours', () => {
   // A client-side apply deletes every data key the previous one wrote and this
   // one omits, so seeding through 'create configmap | apply' would strip the
@@ -549,6 +705,27 @@ test('up carries an operator controller across the apply that resets it', () => 
   assert.match(output, /the entries it held were written back/, 'the run says the list crossed the apply')
   assert.equal(calls.some(line => line.includes('Bafbi')), false,
     'the live list did not replace the operator: ' + calls.join(' | '))
+})
+
+test('up does not keep an applied entry a login can never use', () => {
+  // The manifest is another way a rig name reaches the lane, and the committed-document
+  // case is what keeps one from being committed. While one is there, the apply has already
+  // written it, so the drop is a write of the one key and the run names it.
+  const space = workspace()
+  const applied = JSON.stringify({
+    version: 1,
+    players: [
+      { uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', name: 'Bafbi' },
+      { uuid: offlineUuid('Pilot'), name: 'Pilot' }
+    ]
+  })
+  const { status, output, calls } = run(space, ['up'], { KUBECTL_APPLIED_WHITELIST: applied })
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const after = JSON.parse(fs.readFileSync(path.join(space.fixtures, 'dev-whitelist.json'), 'utf8'))
+  assert.deepEqual(after.players.map(player => player.name), ['Bafbi'],
+    'the applied list is written back without the entry it can never verify: ' + output)
+  assert.match(output, /dropped Pilot .* from the attach whitelist/)
+  assert.match(output, /the applied attach whitelist names controllers/)
 })
 
 test('up keeps the list the manifest applies instead of the live one', () => {
@@ -605,6 +782,45 @@ test('the dev whitelist comment states what up and down do to it', () => {
     // Both commands, so a reader learns what a stop takes as well as what up does.
     assert.match(text, /dev:up/, name + ' names the command that writes the list')
     assert.match(text, /dev:down/, name + ' names the command that deletes it')
+  }
+})
+
+test('no committed attach whitelist names a uuid derived from its own name', () => {
+  // #677: the trap is cheap to see and hard to see in a run. Every committed document
+  // is read here, because the dev lane's is the one an edit reaches the lane through and
+  // the live one is what the dev seed copies.
+  //
+  // A version-3 UUID is Java's nameUUIDFromBytes, the value src/legs/offline-identity.js
+  // computes, and Mojang issues version 4: this front verifies each login against Mojang
+  // (src/core/identity.js, verifySession), so a name-derived entry can never attach. The
+  // offline legs are the lane where one belongs (GLOSSARY.md, "test-double lane"), and
+  // no manifest here composes them.
+  //
+  // What this case does not carry: the dev document is empty, so the loop below reads one
+  // entry in the tree today. The teeth are the fixture cases above, which run the script
+  // against a document holding both shapes. This one is the trap that stops a rig name
+  // from being committed in the first place, and it fails the moment one is.
+  const files = ['deploy/dev/monoplayer.yaml', 'deploy/manifests/configmap.yaml']
+  for (const file of files) {
+    const document = JSON.parse(whitelistText(fs.readFileSync(path.join(ROOT, file), 'utf8')))
+    assert.ok(Array.isArray(document.players), file + ' declares the player array')
+    for (const player of document.players) {
+      // The version is the thirteenth hex digit, so the dashes come off first: the custody
+      // store takes either spelling (src/custody/util.js, normalizeUuid), and reading the
+      // dashed index alone lets an entry written without them through.
+      const digits = String(player.uuid ?? '').toLowerCase().replace(/-/g, '')
+      assert.match(digits, /^[0-9a-f]{32}$/, file + ' names ' + player.name + ' with something that is not a uuid')
+      assert.equal(digits.charAt(12), '4',
+        file + ' names ' + player.name + ' with a version-' + digits.charAt(12) + ' uuid, and this lane can only be logged into by a version 4 one: a name-derived one is the loopback rig\'s (#677)')
+      if (typeof player.name === 'string' && player.name !== '') {
+        assert.notEqual(digits, offlineUuid(player.name).toLowerCase().replace(/-/g, ''),
+          file + ' names md5("OfflinePlayer:' + player.name + '"), the entry #677 found')
+      }
+    }
+  }
+  for (const { name, text } of manifests()) {
+    assert.doesNotMatch(text, /MONOPLAYER_OFFLINE_LEGS/,
+      name + ' composes the offline legs, which is the one lane a name-derived uuid belongs to: docs/deployment.md')
   }
 })
 

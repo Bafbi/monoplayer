@@ -166,18 +166,135 @@ whitelist_is_empty() {
   return 1
 }
 
-# The names a whitelist document carries, for a message. A document that cannot be
-# read names nobody: this reports, and no decision below reads it.
-whitelist_names() {
-  WHITELIST="$1" node -e '
-let names = []
-try {
-  names = JSON.parse(process.env.WHITELIST ?? "").players.map(player => player.name ?? player.uuid ?? "unnamed")
-} catch {
-  names = []
+# An entry the lane can never admit: the dev front verifies every login against Mojang
+# (deploy/dev/monoplayer.yaml composes no offline legs), and no Mojang account holds a
+# UUID derived from a name. That is Java's nameUUIDFromBytes: `md5("OfflinePlayer:<name>")`
+# with the version nibble set to 3 (src/legs/offline-identity.js), and Mojang issues
+# version 4, so version is the whole test and the name-derived one is a case of it. The
+# loopback rig builds its own controller list from exactly those UUIDs
+# (`pickerWhitelist`, src/ladder/loopback.js), which is how the shape reaches a lane
+# somebody hand-edited: a rig name in a control document is a controller that admits
+# nobody, and a count of entries cannot see it (#677).
+#
+# What a version-4 UUID is: necessary. A mistyped version-4 UUID is still unusable, and
+# answering that needs Mojang, which this command never asks. So a line here says the
+# shape can be answered for, not that the account behind it exists.
+#
+# One program, because reading this document has one home and three callers. `report`
+# prints a verdict per entry, which is what `status` shows. `prune` writes the document
+# back without the entries that cannot attach, naming each one it dropped on stderr, and
+# hands back the document it was given when nothing had to go, so an entry keeps the
+# shape it was written with. `names` lists who a document carries, for the message that
+# says which list an apply replaced. `up` is the writer, so `up` removes them.
+whitelist_judgement() {
+  cat <<'NODE'
+const { offlineUuid } = await import(process.env.ROOT + '/src/legs/offline-identity.js')
+// `node -e` hands the extra words in argv[1..], with no script path in front of them.
+const [mode, document] = process.argv.slice(1)
+
+const label = player => (typeof player?.name === 'string' && player.name !== '' ? player.name : '(no name)')
+const uuidOf = player => String(player?.uuid ?? '')
+
+// A UUID's version is the thirteenth hex digit, and both spellings the repo's parser
+// accepts have to be read the same way: an entry written without dashes is a login the
+// custody store already takes (src/custody/util.js, normalizeUuid).
+const hex = player => uuidOf(player).toLowerCase().replace(/-/g, '')
+
+// Why no Mojang session can answer for this entry, or null when nothing about its shape
+// stops it. The name is read first, so the line can name the string that was hashed; the
+// version then answers the entry whose name was edited after it was made.
+function refusal (player) {
+  const digits = hex(player)
+  const name = typeof player?.name === 'string' && player.name !== '' ? player.name : null
+  if (!/^[0-9a-f]{32}$/.test(digits)) {
+    return 'it is not a uuid, so no login can match it'
+  }
+  if (name !== null && offlineUuid(name).toLowerCase().replace(/-/g, '') === digits) {
+    return 'its uuid is md5("OfflinePlayer:' + name + '"), so no Mojang session answers for it'
+  }
+  if (digits.charAt(12) !== '4') {
+    return 'a version-' + digits.charAt(12) + ' uuid is not one Mojang issues, so no Mojang session answers for it'
+  }
+  return null
 }
-process.stdout.write(names.join(", "))
-'
+
+// A document this program could not read is said out loud: answering "no entries" to it
+// is how a broken control document reads as a lane with nothing to fix.
+let players = []
+let unreadable = false
+try {
+  const parsed = JSON.parse(document ?? '')
+  if (!Array.isArray(parsed.players)) throw new TypeError('no player array')
+  players = parsed.players
+} catch {
+  unreadable = true
+}
+
+// One judgement per entry, computed once, so a mode cannot answer twice from two reads
+// of the same document.
+const judged = players.map(player => ({ player, why: unreadable ? null : refusal(player) }))
+
+if (mode === 'prune') {
+  const dropped = judged.filter(entry => entry.why !== null)
+  if (dropped.length === 0) {
+    process.stdout.write(document)
+  } else {
+    for (const { player, why } of dropped) {
+      process.stderr.write('dev-lane: dropped ' + label(player) + ' ' + uuidOf(player) +
+        ' from the attach whitelist: ' + why + '\n')
+    }
+    process.stdout.write(JSON.stringify({
+      ...JSON.parse(document),
+      players: judged.filter(entry => entry.why === null).map(entry => entry.player)
+    }))
+  }
+} else if (mode === 'names') {
+  process.stdout.write(players.map(player => player.name ?? player.uuid ?? 'unnamed').join(', '))
+} else if (unreadable) {
+  process.stdout.write('attach whitelist could not be read as a document, so nothing here says who can attach\n')
+} else if (players.length === 0) {
+  process.stdout.write('attach whitelist is empty: nobody can attach yet\n')
+} else {
+  // Every mode the script sends is named above, and the last one is the report: a status
+  // command that reaches this branch has to answer something.
+  const usable = judged.filter(entry => entry.why === null).length
+  const plural = players.length === 1 ? 'entry' : 'entries'
+  const summary = usable === players.length
+    ? 'attach whitelist names ' + players.length + ' ' + plural + (players.length === 1 ? ', and it can authenticate' : ', and every one of them can authenticate')
+    : usable === 0
+      ? 'attach whitelist names ' + players.length + ' ' + plural + ', and none of them can authenticate'
+      : 'attach whitelist names ' + players.length + ' ' + plural + ', ' + usable + ' of which can authenticate'
+  const lines = [summary]
+  for (const { player, why } of judged) {
+    lines.push(why === null
+      ? '  ' + label(player) + ' ' + uuidOf(player) + ' can authenticate'
+      : '  ' + label(player) + ' ' + uuidOf(player) + ' cannot authenticate: ' + why + '. Remove the entry')
+  }
+  process.stdout.write(lines.join('\n') + '\n')
+}
+NODE
+}
+
+# The one call, so the three answers differ only in the word they send.
+whitelist_judge() {
+  ROOT="$ROOT" node --input-type=module -e "$(whitelist_judgement)" "$@"
+}
+
+# The verdicts, in the prefix every other line of the report carries, so the block reads
+# as one report and the caller needs no second quoting layer.
+whitelist_report() {
+  whitelist_judge report "$1" | sed 's/^/dev-lane: /'
+}
+
+# The names a whitelist document carries, for a message. A document that cannot be read
+# names nobody: this reports, and no decision below reads it.
+whitelist_names() {
+  whitelist_judge names "$1"
+}
+
+# The document this lane may keep, or the one it was handed when nothing had to go.
+whitelist_pruned() {
+  ROOT="$ROOT" node --input-type=module -e "$(whitelist_judgement)" prune "$1"
 }
 
 # A merge patch of the one key, never an apply of a whole ConfigMap. A client-side
@@ -195,10 +312,22 @@ patch_attach_whitelist() {
 # lane held before the apply are the operator's, and the apply reset them. Otherwise
 # the live ConfigMap fills the list, because it names the human who attaches.
 converge_attach_whitelist() {
-  local kept=$1 applied=$2 live
-  if ! whitelist_is_empty "$applied"; then
+  local kept=$1 applied=$2 live pruned
+  # The document the apply wrote is judged before it is the answer. That is the one way a
+  # rig name reaches a lane through a manifest rather than through an edit on the lane: the
+  # case that stops it being committed is in test/tooling/dev-lane.test.js, and this is
+  # what happens while it is there (#677).
+  # A judgement that fails writes nothing: an empty answer here would be a lane with no
+  # list, and the apply has already reset the key.
+  pruned=$(whitelist_pruned "$applied") \
+    || die 'cannot judge the applied attach whitelist, so the lane was left as the apply wrote it' 1
+  if ! whitelist_is_empty "$pruned"; then
     local dropped
     dropped=$(whitelist_names "$kept")
+    # The apply left the entries it carried, so a drop is a write of this one key.
+    if [ "$(compact_whitelist "$pruned")" != "$(compact_whitelist "$applied")" ]; then
+      patch_attach_whitelist "$pruned"
+    fi
     if [ -z "$dropped" ]; then
       say 'the applied attach whitelist names controllers, so the lane keeps it'
       return 0
@@ -206,6 +335,10 @@ converge_attach_whitelist() {
     say "the applied attach whitelist names controllers, so the lane keeps it and the list it replaced is gone: $dropped"
     return 0
   fi
+  # What the lane held, minus the entries no login can use. A list that was all rig
+  # names leaves nothing, and the seed below answers instead of writing an empty list.
+  kept=$(whitelist_pruned "$1") \
+    || die 'cannot judge the dev attach whitelist, so the list the lane held was left as it is' 1
   if ! whitelist_is_empty "$kept"; then
     patch_attach_whitelist "$kept"
     say 'the apply reset the dev attach whitelist, so the entries it held were written back'
@@ -217,6 +350,16 @@ converge_attach_whitelist() {
   fi
   if whitelist_is_empty "$live"; then
     say 'the dev attach whitelist is empty and the live one names nobody: add a controller before a client can attach'
+    return 0
+  fi
+  # Nothing is written from this one, so a judgement that fails costs the seed and not the
+  # lane: the message says so rather than patching a list nobody judged.
+  if ! live=$(whitelist_pruned "$live"); then
+    say 'the dev attach whitelist is empty and the live one could not be judged: add a controller before a client can attach'
+    return 0
+  fi
+  if whitelist_is_empty "$live"; then
+    say "the dev attach whitelist is empty and the live one names no entry this lane can verify: add a controller before a client can attach"
     return 0
   fi
   patch_attach_whitelist "$live"
@@ -308,13 +451,12 @@ status() {
   local players
   # The namespace is gone after `down`, and this read must not fail the report.
   players=$(read_attach_whitelist "$DEV_NAMESPACE" monoplayer-dev-config ok 2>/dev/null) || players=''
-  # Three answers, not two: a read that yielded nothing is not a report about the
-  # whitelist, which is why this case does not use the seed's `whitelist_is_empty`.
-  case "$(compact_whitelist "$players")" in
-    *'"players":[]'*) say 'attach whitelist is empty: nobody can attach yet' ;;
-    "") : ;;
-    *) say 'attach whitelist has entries' ;;
-  esac
+  # A read that yielded nothing is not a report about the whitelist, so it says nothing.
+  # Everything else is judged by the one program that reads this document: it also names
+  # an empty list, and a document it could not parse (#677).
+  if [ -n "$players" ]; then
+    whitelist_report "$players"
+  fi
 }
 
 # Point the lane at a branch image (#43). The image is tagged with the commit, so
