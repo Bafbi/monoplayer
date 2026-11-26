@@ -48,7 +48,7 @@
 // This module holds no cluster knowledge. The client arrives injected, the same one
 // `routes/whitelist.js` patches a ConfigMap through and `routes/info.js` reads pods
 // through, so a test hands in a fake and the route cannot tell it from the cluster.
-import { ALLOWED_SERVERS_VERSION, parseAllowedServers } from '../../service/control.js'
+import { ALLOWED_SERVERS_VERSION, addressKey, parseAllowedServers } from '../../service/control.js'
 import { isTargetHost } from '../registry.js'
 import { readBody } from './body.js'
 import { configMapYaml } from './whitelist.js'
@@ -426,8 +426,11 @@ export function createAllowedRoute ({
   // retried request and a double click the same request.
   function mutate (current, { action, target, addedAt }) {
     const servers = Array.isArray(current.document.servers) ? current.document.servers : []
-    const wanted = target.host.toLowerCase() + ':' + target.port
-    const index = servers.findIndex(entry => entry.host.toLowerCase() + ':' + entry.port === wanted)
+    // The lane's own rule for "is this the same address" (#339), not a second copy of
+    // it: a row hand-written with the root dot on its host is the row this add names,
+    // and a second copy of the comparison appended a duplicate the lane then refused.
+    const wanted = addressKey(target.host, target.port)
+    const index = servers.findIndex(entry => addressKey(entry.host, entry.port) === wanted)
     if (action === 'remove') {
       if (index === -1) return { absent: true }
       return { changed: true, servers: servers.filter((_, at) => at !== index), record: servers[index] }

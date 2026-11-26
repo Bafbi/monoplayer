@@ -23,6 +23,9 @@ const CONTROL = 'monoplayer-control'
 const SEED = 'monoplayer-config'
 const PAPER = { host: 'paper.example.net', port: 25565 }
 const SKY = { host: 'sky.example.net', port: 25565 }
+// #339: the same server with the root dot on its host. A row may be written this way by
+// hand; the add form will not produce it, because `isTargetHost` refuses a trailing dot.
+const DOTTED = { host: PAPER.host + '.', port: PAPER.port }
 const NOW = Date.parse('2026-11-23T12:00:00.000Z')
 
 const puppet = (overrides = {}) => ({
@@ -238,6 +241,43 @@ test('a server already in the list is a no-op, not a second row', async () => {
     assert.equal(body.changed, false)
     assert.equal(body.count, 1)
     assert.equal(rig.state.patches.length, 0, 'nothing was written for a document that already says it')
+  } finally {
+    await rig.close()
+  }
+})
+
+// #339: one address, one rule. The panel used to build its own `toLowerCase() + ':' +
+// port` key, so a dotted row and the plain spelling were two servers: an add appended a
+// second row the lane's parser then refused as a duplicate, and the panel could not
+// repair the list it wrote.
+test('#339 an add of the plain spelling finds a row written with the root dot', async () => {
+  const rig = await panel({ cluster: cluster({ live: text(document([DOTTED])) }) })
+  try {
+    const response = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', PAPER)
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.changed, false, 'the server is already offered, in the other spelling')
+    assert.equal(body.count, 1)
+    assert.equal(rig.state.patches.length, 0, 'nothing was written, so the document still parses')
+    const lane = rig.laneReads()
+    assert.equal(lane.reason, null, 'and the lane still reads the list the panel left behind')
+    assert.deepEqual(lane.servers.map(server => server.host), [DOTTED.host])
+  } finally {
+    await rig.close()
+  }
+})
+
+test('#339 a remove of the plain spelling drops the row written with the root dot', async () => {
+  const rig = await panel({ cluster: cluster({ live: text(document([DOTTED, SKY])) }) })
+  try {
+    const response = await fetch(rig.url + '/api/puppets/glowsquidye/allowed-servers/' + PAPER.host + ':' + PAPER.port,
+      { method: 'DELETE' })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.changed, true)
+    assert.deepEqual(body.removed, DOTTED, 'the entry it dropped is the one the document held')
+    const lane = rig.laneReads()
+    assert.deepEqual(lane.servers.map(server => server.host), [SKY.host])
   } finally {
     await rig.close()
   }

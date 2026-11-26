@@ -11,6 +11,7 @@ import path from 'node:path'
 
 import {
   ALLOWED_SERVERS_VERSION,
+  addressKey,
   createControlDocument,
   dialIntent,
   parseAllowedServers,
@@ -129,6 +130,34 @@ test('#229 a dial is a transfer only when the server was reached by one', () => 
   // A base target is never a transfer, whatever reached it.
   assert.deepEqual(dialIntent({ transfer: true, target: base, base }), { keepCookies: false, transfer: false })
   assert.deepEqual(dialIntent({ target: base, base }), { keepCookies: false, transfer: false })
+})
+
+// #339: one address, one rule. A host name is case-insensitive, and a trailing dot is
+// the root label rather than a second name, so a base and a target that spell one host
+// two ways are one server. Read the other way, a followed transfer asks the server the
+// session is already on for the transfer handshake, which is the rejection sky-2
+// answers with.
+//
+// The case is `Paper.Example.NET.`: a capital letter and the root dot together, which
+// is a spelling neither this key nor the panel's own produced before this ticket.
+test('#339 an address is one address however its host is spelled', () => {
+  const base = { host: 'paper.example.net', port: 25565 }
+  const dotted = { host: 'Paper.Example.NET.', port: 25565 }
+
+  assert.equal(addressKey(dotted.host, dotted.port), addressKey(base.host, base.port),
+    'the key strips the root dot and folds the case, and is the one function that decides this')
+  assert.notEqual(addressKey('paper.example.net', 25565), addressKey('paper.example.net', 25566),
+    'the port is part of the address: one host on two ports is two servers, and a key without ' +
+    'the port would merge them')
+
+  assert.deepEqual(dialIntent({ transfer: true, target: dotted, base }), { keepCookies: false, transfer: false },
+    'a base spelled another way is still the base, so the dial is a fresh login')
+  assert.deepEqual(dialIntent({ transfer: true, target: { host: 'PAPER.example.net', port: 25565 }, base }),
+    { keepCookies: false, transfer: false }, 'and case alone is the same address too')
+  // The host half folded is not enough: the port is the other half, so the base host on
+  // another port is another server, and the dial is the transfer it says it is.
+  assert.deepEqual(dialIntent({ transfer: true, target: { host: 'Paper.Example.NET.', port: 25566 }, base }),
+    { keepCookies: true, transfer: true }, 'one host on two ports is two servers')
 })
 
 test('#233 a restored move reverts the dial for every kind that moved the session', () => {

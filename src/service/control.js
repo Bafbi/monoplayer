@@ -37,9 +37,13 @@ export const ALLOWED_SERVERS_VERSION = 1
 // address, so one host on two ports is two servers.
 //
 // This key is for comparison only. What a row keeps is the host the operator wrote,
-// because a host is what the socket dials (#265). The panel's add and remove build
-// their own key, which is #339: when that ticket lands, this is what it calls.
-function addressKey (host, port) {
+// because a host is what the socket dials (#265).
+//
+// Exported as the one rule for "is this the same address as that one", over an allowed
+// server, a picker row, and a dial target. The parser above, the panel's add and remove
+// (#339), and the dial policy below all ask it here. A second spelling of this comparison
+// is how one host became two servers twice.
+export function addressKey (host, port) {
   const name = String(host ?? '').trim().toLowerCase()
   return (name.endsWith('.') ? name.slice(0, -1) : name) + ':' + port
 }
@@ -240,7 +244,10 @@ export function revertAfterRestore ({ kind = null } = {}) {
 // caller knows whether this server was reached by a followed transfer, and the
 // rule only needs that one bit.
 export function dialIntent ({ transfer = false, target, base }) {
-  const onBase = target.host === base.host && target.port === base.port
+  // The base spelled another way is the base. Comparing the two hosts as strings reads
+  // `Paper.Example.NET.` as a different server, so the dial asks the server the session is
+  // already on for the transfer handshake (#339).
+  const onBase = addressKey(target.host, target.port) === addressKey(base.host, base.port)
   const follows = transfer === true && !onBase
   return { keepCookies: follows, transfer: follows }
 }
