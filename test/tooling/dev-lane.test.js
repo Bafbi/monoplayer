@@ -8,12 +8,17 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
+import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
 const SCRIPT = path.join(ROOT, 'scripts', 'dev-lane.sh')
 const LIVE_NAMESPACE = 'monoplayer'
 const DEV_NAMESPACE = 'monoplayer-dev'
+
+// Every rule that fired, in one file for the whole test file: the last case reads it
+// to prove no arm is dead (#152).
+const HITS = path.join(tempRoot('monoplayer-dev-lane-hits-'), 'hits')
 
 const manifests = () => fs.readdirSync(DEV)
   .filter(name => name.endsWith('.yaml') && name !== 'kustomization.yaml')
@@ -105,46 +110,178 @@ const LIVE_SECRET = '{"type":"kubernetes.io/dockerconfigjson","data":{".dockerco
 const PLAYER_LIST = 'There are 1 of a max of 8 players online: DevPuppet'
 
 // The shim answers from fixture files, so a JSON answer never has to survive a
-// shell quoting layer.
-const SHIM = [
-  '#!/usr/bin/env bash',
-  'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
-  'fixtures="$KUBECTL_FIXTURES"',
-  'case " $* " in',
+// shell quoting layer. It answers the calls `dev-lane.sh` makes, and nothing else (#152). A rule is
+// one call: the words the script sends, in the order it sends them, and the count it
+// sends, so a flag it stops passing matches no rule and the run fails. `ns` is part of
+// the rule rather than part of its words, so a read that drops `-n "$LIVE_NAMESPACE"`
+// stops answering as the live lane and starts failing instead of measuring the dev one.
+const SHIM_RULES = [
+  // `ensure_namespace` asks before it creates. A case that wants the create path
+  // writes the marker, which is the first `up` on a cluster with no dev namespace.
+  {
+    cluster: 'a Namespace object is cluster-scoped, so the call carries no -n',
+    match: ['get', 'namespace', DEV_NAMESPACE],
+    body: `if [ -f "$fixtures/namespace-absent" ]; then
+  echo 'Error from server (NotFound): namespaces "monoplayer-dev" not found' >&2
+  exit 1
+fi
+exit 0`
+  },
+  {
+    cluster: 'the Namespace object carries its own name',
+    match: ['create', 'namespace', DEV_NAMESPACE, '--dry-run=client', '-o', 'yaml'],
+    body: `echo '{"kind":"Namespace"}'
+exit 0`
+  },
+  // Every `apply -f -` in this script applies a document that names its own
+  // namespace on stdin, so it passes no -n and needs none.
+  {
+    cluster: 'the document on stdin names its own namespace',
+    match: ['apply', '-f', '-'],
+    body: `cat > /dev/null
+echo applied
+exit 0`
+  },
   // No pull Secret in the dev namespace yet; the live one exists to copy.
-  '  *" get secret "*"-o json"*) cat "$fixtures/live-secret.json"; exit 0 ;;',
-  '  *" get secret "*) exit 1 ;;',
-  '  *" create namespace "*) printf \'{"kind":"Namespace"}\\n\'; exit 0 ;;',
-  '  *" create secret "*) printf \'{"kind":"Secret"}\\n\'; exit 0 ;;',
-  // An apply sets a key the manifest declares to the manifest's value, and leaves
-  // a key it does not declare alone. That is the whole reset `up` has to survive,
-  // so this arm writes the applied tree's document over the fixture, and writes
-  // nothing when the tree declares no such key.
-  '  *" apply -k "*) touch "$KUBECTL_MARKER"; cat > /dev/null; if [ -n "$KUBECTL_APPLIED_WHITELIST" ]; then printf "%s\\n" "$KUBECTL_APPLIED_WHITELIST" > "$fixtures/dev-whitelist.json"; fi; printf \'applied\\n\'; exit 0 ;;',
-  '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
-  '  *" rollout status "*) exit 0 ;;',
-  '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
+  { ns: DEV_NAMESPACE, match: ['get', 'secret', 'dev-rcon'], body: 'exit 1' },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['create', 'secret', 'generic', 'dev-rcon', ANY, '--dry-run=client', '-o', 'yaml'],
+    body: `echo '{"kind":"Secret"}'
+exit 0`
+  },
+  { ns: DEV_NAMESPACE, match: ['get', 'secret', 'ghcr-pull'], body: 'exit 1' },
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'secret', 'ghcr-pull', '-o', 'json'],
+    body: `cat "$fixtures/live-secret.json"
+exit $?`
+  },
+  // An apply sets a key the manifest declares to the manifest's value, and leaves a
+  // key it does not declare alone. That is the whole reset `up` has to survive, so
+  // this arm writes the applied tree's document over the fixture, and writes nothing
+  // when the tree declares no such key.
+  {
+    cluster: 'kustomize applies the namespaces the manifests declare',
+    match: ['apply', '-k', ANY],
+    body: `touch "$KUBECTL_MARKER"
+cat > /dev/null
+if [ -n "$KUBECTL_APPLIED_WHITELIST" ]; then echo "$KUBECTL_APPLIED_WHITELIST" > "$fixtures/dev-whitelist.json"; fi
+echo applied
+exit 0`
+  },
   // The fixture is the cluster state: a read of an object no fixture holds answers
-  // nothing and exits non-zero, the way kubectl fails a missing object. None of
-  // the three arms overrides cat's status.
+  // nothing and exits non-zero, the way kubectl fails a missing object.
   //
   // `dev-whitelist-error` is the other failure a read can have: the object is there
   // and the answer did not arrive. A script cannot tell it from an empty list by
   // looking at stdout alone, and that is what the case is about.
-  '  *" -n monoplayer-dev get configmap "*) if [ -f "$fixtures/dev-whitelist-error" ]; then printf "Error from server (InternalError): the dev ConfigMap did not answer\\n" >&2; exit 1; fi; if [ ! -f "$fixtures/dev-whitelist.json" ]; then printf "Error from server (NotFound): configmaps \\"monoplayer-dev-config\\" not found\\n" >&2; exit 1; fi; cat "$fixtures/dev-whitelist.json" ;;',
-  '  *" -n monoplayer get configmap "*) cat "$fixtures/live-whitelist.json" ;;',
-  '  *" get configmap "*) cat "$fixtures/dev-whitelist.json" ;;',
-  // The dev proxy's account, read from its volume, and the dev Paper's player
-  // list, read over RCON.
-  '  *" exec "*"node -e"*) printf \'%s\' "$KUBECTL_ACCOUNT_NAME"; exit 0 ;;',
-  '  *" rcon-cli list"*) printf \'%s\\n\' "$KUBECTL_RCON"; exit 0 ;;',
+  {
+    ns: DEV_NAMESPACE,
+    match: ['get', 'configmap', 'monoplayer-dev-config', '-o', ANY],
+    body: `if [ -f "$fixtures/dev-whitelist-error" ]; then
+  echo 'Error from server (InternalError): the dev ConfigMap did not answer' >&2
+  exit 1
+fi
+if [ ! -f "$fixtures/dev-whitelist.json" ]; then
+  echo 'Error from server (NotFound): configmaps "monoplayer-dev-config" not found' >&2
+  exit 1
+fi
+cat "$fixtures/dev-whitelist.json"
+exit $?`
+  },
+  // The same read for the reason alone, which the script makes only after the first
+  // one failed: stderr is the object's answer, so it carries no document.
+  {
+    ns: DEV_NAMESPACE,
+    match: ['get', 'configmap', 'monoplayer-dev-config'],
+    body: `if [ -f "$fixtures/dev-whitelist-error" ]; then
+  echo 'Error from server (InternalError): the dev ConfigMap did not answer' >&2
+  exit 1
+fi
+if [ ! -f "$fixtures/dev-whitelist.json" ]; then
+  echo 'Error from server (NotFound): configmaps "monoplayer-dev-config" not found' >&2
+  exit 1
+fi
+exit 0`
+  },
+  // The live list the seed copies from, and the reason read beside it.
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'configmap', 'monoplayer-config', '-o', ANY],
+    body: `if [ -f "$fixtures/live-whitelist-error" ]; then
+  echo 'Error from server (InternalError): the live ConfigMap did not answer' >&2
+  exit 1
+fi
+cat "$fixtures/live-whitelist.json"
+exit $?`
+  },
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'configmap', 'monoplayer-config'],
+    body: `if [ -f "$fixtures/live-whitelist-error" ]; then
+  echo 'Error from server (InternalError): the live ConfigMap did not answer' >&2
+  exit 1
+fi
+exit 0`
+  },
   // A patch writes the one key it carries, so the fixture stays the cluster state.
-  '  *" patch configmap "*) cat > /dev/null; node "$KUBECTL_PATCH" "$@" > "$fixtures/dev-whitelist.json"; exit 0 ;;',
-  '  *" get deploy "*) if [ -f "$KUBECTL_MARKER" ]; then printf \'%s\\n\' "$KUBECTL_REPLICAS_AFTER"; else printf \'%s\\n\' "$KUBECTL_REPLICAS_BEFORE"; fi; exit 0 ;;',
-  '  *) exit 0 ;;',
-  'esac',
-  ''
-].join('\n')
+  {
+    ns: DEV_NAMESPACE,
+    match: ['patch', 'configmap', 'monoplayer-dev-config', '--type', 'merge', '-p', ANY],
+    body: `node "$KUBECTL_PATCH" "$@" > "$fixtures/dev-whitelist.json"
+exit $?`
+  },
+  { ns: DEV_NAMESPACE, match: ['rollout', 'status', 'deploy/paper', ANY], body: 'exit 0' },
+  // The live replica count, which `status` reports and `up` records twice.
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'deploy', 'monoplayer', '-o', ANY],
+    body: `if [ -f "$KUBECTL_MARKER" ]; then echo "$KUBECTL_REPLICAS_AFTER"; else echo "$KUBECTL_REPLICAS_BEFORE"; fi
+exit 0`
+  },
+  // The dev proxy, asked for after the apply so `up` can say it exists.
+  { ns: DEV_NAMESPACE, match: ['get', 'deploy', 'monoplayer'], body: 'exit 0' },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['delete', 'deployment,service,configmap', '-l', 'app.kubernetes.io/part-of=monoplayer', '--ignore-not-found'],
+    body: 'exit 0'
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['delete', 'pod', '-l', 'app.kubernetes.io/name=monoplayer-dev-custody', '--ignore-not-found'],
+    body: 'exit 0'
+  },
+  {
+    cluster: 'the Namespace object carries its own name, so --purge names it directly',
+    match: ['delete', 'namespace', DEV_NAMESPACE, '--ignore-not-found'],
+    body: 'exit 0'
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['get', 'pods', '--no-headers'],
+    body: `echo 'paper-abc 1/1 Running 0 1m'
+exit 0`
+  },
+  { ns: DEV_NAMESPACE, match: ['set', 'image', 'deploy/monoplayer', ANY], body: 'exit 0' },
+  { ns: DEV_NAMESPACE, match: ['rollout', 'status', 'deploy/monoplayer', ANY], body: 'exit 0' },
+  // The dev proxy's account, read from its volume, and the dev Paper's player list,
+  // read over RCON.
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', 'deploy/monoplayer', '-c', 'monoplayer', '--', 'node', '-e', ANY],
+    body: `printf '%s' "$KUBECTL_ACCOUNT_NAME"
+exit 0`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', 'deploy/paper', '-c', 'paper', '--', 'rcon-cli', 'list'],
+    body: `echo "$KUBECTL_RCON"
+exit 0`
+  },
+]
+
+const { script: SHIM, ids: SHIM_IDS } = kubectlShim(SHIM_RULES, { prelude: ['fixtures="$KUBECTL_FIXTURES"'] })
 
 // The merge patch `dev-lane.sh` sends: one key, one value. The shim applies it to
 // the fixture, so the fixture keeps being the cluster's copy of the ConfigMap.
@@ -210,6 +347,7 @@ function run (space, args, env = {}) {
       KUBECTL_APPLIED_WHITELIST: appliedWhitelist(),
       KUBECTL_ACCOUNT_NAME: 'DevPuppet',
       KUBECTL_RCON: PLAYER_LIST,
+      KUBECTL_HITS: HITS,
       MONOPLAYER_DEV_JOIN_REPORT: path.join(space.dir, 'dev-join.json'),
       ...env
     }
@@ -217,6 +355,10 @@ function run (space, args, env = {}) {
   const calls = fs.existsSync(space.log)
     ? fs.readFileSync(space.log, 'utf8').trim().split('\n').filter(Boolean)
     : []
+  // A call the shim does not model fails there and lands here, so a case reports it
+  // even when the script swallowed the status.
+  const refused = unmodelled(space.log)
+  assert.deepEqual(refused, [], 'the shim modelled every call: ' + refused.join(' | '))
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
 }
 
@@ -533,4 +675,36 @@ test('the live namespace is refused as a dev namespace', () => {
     assert.match(output, /live namespace/)
     assert.deepEqual(calls, [], args.join(' ') + ' never called kubectl')
   }
+})
+test('up creates the dev namespace when the cluster has none', () => {
+  // `ensure_namespace` asks before it creates. Every other case answers that the
+  // namespace is there, which is the lane's usual state, and an arm that answered
+  // without being asked would leave the create path untested (#152).
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'namespace-absent'), '')
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  const create = calls.findIndex(line => line === 'create namespace monoplayer-dev --dry-run=client -o yaml')
+  assert.ok(create >= 0, 'the namespace is created: ' + calls.join(' | '))
+  const apply = calls.findIndex((line, at) => at > create && line === 'apply -f -')
+  assert.ok(apply > create, 'the created namespace is applied')
+  assert.ok(calls.some(line => line.startsWith('apply -k ')), 'the lane is applied after its namespace exists')
+})
+
+test('up says so when the dev list is empty and the live list cannot be read', () => {
+  // The other half of the seed rule: an empty lane whose live list did not answer is
+  // not a lane to fill from nothing. The two reads fail together, because a kubectl
+  // that cannot answer the document cannot answer the reason either.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'live-whitelist-error'), '')
+  const { status, output, calls } = run(space, ['up'])
+  assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
+  assert.match(output, /the dev attach whitelist is empty and the live one could not be read/)
+  assert.equal(calls.some(line => line.includes('patch configmap')), false, 'nothing was written from a read that failed')
+})
+
+test('every rule of the shim is reached by a case', () => {
+  // An arm no case reaches is an arm nobody checks: it models a call the script no
+  // longer makes, or a case is missing for a call it does make (#152).
+  assert.deepEqual(deadRules(HITS, SHIM_IDS), [], 'no rule is dead: every one fired in some case')
 })

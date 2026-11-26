@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
+import { ANY, REST, endingWith, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
 import { readMiseTasks } from './mise-toml.js'
 
 const SCRIPT = path.join(
@@ -29,6 +30,10 @@ const WORKTREE = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.met
 const COMMIT = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
 const crc = text => Number(spawnSync('cksum', [], { input: text, encoding: 'utf8' }).stdout.trim().split(/\s+/)[0])
 const LANE = 'monoplayer-gate-' + COMMIT + '-' + (crc(WORKTREE) % 0x1000000).toString(16).padStart(6, '0')
+// Every rule that fired, in one file for the whole test file: the last case reads it
+// to prove no arm is dead (#152).
+const HITS = path.join(tempRoot('monoplayer-online-cluster-hits-'), 'hits')
+
 const BRANCH = (() => {
   const name = spawnSync('git', ['-C', WORKTREE, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
   if (name !== 'HEAD') return name
@@ -39,86 +44,175 @@ const BRANCH = (() => {
 // The shim answers the calls the script makes, records every argv, and lets a
 // case choose the token state and the rung's exit status. The uuids arrive as
 // environment so the shim needs no substitution.
-const SHIM = [
-  '#!/usr/bin/env bash',
-  'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
-  // One line per argv word, so a case can tell one argument that holds a space from
-  // two arguments. `$*` cannot (#384).
-  // A marker at the start of each call, so a case can read one call's words and stop.
-  'printf \'<<call>>\\n\' >> "$KUBECTL_ARGV_LOG"',
-  'printf \'<<%s>>\\n\' "$@" >> "$KUBECTL_ARGV_LOG"',
-  'ATTACH="$KUBECTL_ATTACH"',
-  'PUPPET="$KUBECTL_PUPPET"',
-  'last="${@: -1}"',
-  // Two writes can be in flight at once, and a case that holds one against the other needs
-  // the log to name an order. So one lock covers the log entry and the object, and the log
-  // reads in the order the writes landed.
-  'record() { until mkdir "$KUBECTL_LEASES.lock" 2>/dev/null; do sleep 0.01; done; printf \'%s\\n\' --- >> "$KUBECTL_LEASES"; printf \'%s\\n\' "$1" >> "$KUBECTL_LEASES"; printf \'%s\\n\' "$1" > "$KUBECTL_LEASE"; rmdir "$KUBECTL_LEASES.lock"; }',
-  'case " $* " in',
+// The shim answers the calls `online-cluster.sh` makes, and nothing else (#152). A rule
+// is one call: its words, their order, and their count. The namespace is `ANY` here
+// because this rung runs against the lane a case names, and the lease lives in the live
+// namespace: the flag is still required, so a call that loses `-n` matches nothing.
+const SHIM_RULES = [
   // The account lease (#280): the shim answers from a file, records every object the
   // script writes, and can answer one read as held and the next as absent, which is
   // the whole of "queue behind a holder, then take it".
-  '  *" get lease "*) if [ -n "$KUBECTL_LEASE_READ_ERROR" ]; then printf \'Error from server (Forbidden): leases are forbidden\\n\' >&2; exit 1; fi',
-    '    reads=$(cat "$KUBECTL_LEASE_READS" 2>/dev/null || printf 0); reads=$((reads + 1)); printf %s "$reads" > "$KUBECTL_LEASE_READS"' ,
-  '    if [ -n "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ "$reads" -gt "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ -f "$KUBECTL_LEASE_FOREIGN" ]; then cat "$KUBECTL_LEASE_FOREIGN"; exit 0; fi',
-  '    if [ -f "$KUBECTL_LEASE" ]; then cat "$KUBECTL_LEASE"; if [ "$KUBECTL_LEASE_ONCE" = 1 ]; then rm -f "$KUBECTL_LEASE"; fi; exit 0; fi',
-  '    printf \'Error from server (NotFound): lease not found\\n\' >&2; exit 1 ;;',
+  {
+    ns: ANY,
+    why: 'this rung runs against the lane a case names, and the lease lives in the live namespace',
+    match: ['get', 'lease', 'monoplayer-online-account', '-o', 'json'],
+    body: `if [ -n "$KUBECTL_LEASE_READ_ERROR" ]; then echo 'Error from server (Forbidden): leases are forbidden' >&2; exit 1; fi
+reads=$(cat "$KUBECTL_LEASE_READS" 2>/dev/null || echo 0); reads=$((reads + 1)); printf %s "$reads" > "$KUBECTL_LEASE_READS"
+if [ -n "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ "$reads" -gt "$KUBECTL_LEASE_FOREIGN_AFTER" ] && [ -f "$KUBECTL_LEASE_FOREIGN" ]; then cat "$KUBECTL_LEASE_FOREIGN"; exit 0; fi
+if [ -f "$KUBECTL_LEASE" ]; then cat "$KUBECTL_LEASE"; if [ "$KUBECTL_LEASE_ONCE" = 1 ]; then rm -f "$KUBECTL_LEASE"; fi; exit 0; fi
+echo 'Error from server (NotFound): lease not found' >&2
+exit 1`
+  },
   // A release is the write with an empty holder identity (#355). Read the object here, as
   // kubectl reads it before it calls the API server. A write that is held up then lands
   // with what it was given, not with what is on disk by then.
-  '  *" create -f "*|*" replace -f "*) body=$(cat "${@: -1}")',
-  '    if printf \'%s\' "$body" | grep -q \'"holderIdentity": ""\'; then',
-  '      record "$body"',
-  '      [ -z "$KUBECTL_RENEW_GO" ] || : > "$KUBECTL_RENEW_GO"',
-  '      printf \'lease released\\n\'; exit 0',
-  '    fi',
-  // The one window a kill cannot close: the write is this process, not the loop's, so it
-  // lands after the loop is dead.
-  '    if [ -n "$KUBECTL_RENEW_BLOCK" ] && [ -f "$KUBECTL_LEASE" ]; then',
-  '      : > "$KUBECTL_RENEW_BLOCKED"',
-  '      while [ ! -f "$KUBECTL_RENEW_GO" ]; do sleep 0.02; done',
-  '      record "$body"',
-  '      : > "$KUBECTL_RENEW_SETTLED"',
-  '      printf \'renewal landed\\n\'; exit 0',
-  '    fi',
-  '    record "$body"; printf \'lease configured\\n\'; exit 0 ;;',
-  '  *" get deploy "*) printf \'{"spec":{"template":{"spec":{"containers":[{"image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PUPPET"; exit 0 ;;',
-  '  *" apply "*) cat > "$KUBECTL_MANIFEST"; printf \'pod/check created\\n\'; exit 0 ;;',
-  '  *" wait "*" pod/"*) exit 0 ;;',
-  '  *" cp ./src "*|*" cp ./package.json "*) exit 0 ;;',
+  ...['create', 'replace'].map(verb => ({
+    ns: ANY,
+    why: 'the lease is written where the lane the case names lives',
+    match: [verb, '-f', ANY],
+    body: `body=$(cat "\${@: -1}")
+if printf '%s' "$body" | grep -q '"holderIdentity": ""'; then
+  record "$body"
+  [ -z "$KUBECTL_RENEW_GO" ] || : > "$KUBECTL_RENEW_GO"
+  echo 'lease released'
+  exit 0
+fi
+if [ -n "$KUBECTL_RENEW_BLOCK" ] && [ -f "$KUBECTL_LEASE" ]; then
+  : > "$KUBECTL_RENEW_BLOCKED"
+  while [ ! -f "$KUBECTL_RENEW_GO" ]; do sleep 0.02; done
+  record "$body"
+  : > "$KUBECTL_RENEW_SETTLED"
+  echo 'renewal landed'
+  exit 0
+fi
+record "$body"
+echo 'lease configured'
+exit 0`
+  })),
+  {
+    ns: ANY,
+    why: 'the pod this rung reads runs in the lane a case names',
+    match: ['get', 'deploy', ANY, '-o', 'json'],
+    body: `printf '{"spec":{"template":{"spec":{"containers":[{"image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n' "$PUPPET"
+exit 0`
+  },
+  {
+    ns: ANY,
+    at: 1,
+    why: 'the pod is applied into the lane a case names, and -n sits after the verb',
+    match: ['apply', '-f', '-'],
+    body: `cat > "$KUBECTL_MANIFEST"
+echo 'pod/check created'
+exit 0`
+  },
+  {
+    ns: ANY,
+    why: 'the wait names the pod in the lane a case names',
+    match: ['wait', '--for=condition=Ready', ANY, ANY],
+    body: 'exit 0'
+  },
+  // The branch's code and the package file, copied in. cp names the pod path, not -n.
+  { cluster: 'cp names the destination pod as <namespace>/<pod>:<path>, not with -n', match: ['cp', './src', ANY], body: 'exit 0' },
+  { cluster: 'cp names the destination pod as <namespace>/<pod>:<path>, not with -n', match: ['cp', './package.json', ANY], body: 'exit 0' },
   // The expiry gate reads one account's cached mca token (#389). Two accounts are read
-  // the same way, so the directory in the argv says which answer this is.
+  // the same way, so the directory word says which answer this is.
   // KUBECTL_ATTACH_SILENT models a read that answered nothing at all, which is what a pod
   // that died between the gate and the read looks like. The gate refuses it (#389).
-  '  *" exec "*"mca-cache.json"*) case "$*" in',
-  '    *"/accounts/$ATTACH"*) [ -z "${KUBECTL_ATTACH_SILENT:-}" ] || exit 0',
-  '      printf \'%s\\n\' "${KUBECTL_ATTACH_TOKEN:-ok|600 min left|2099-01-01T00:00:00.000Z}" ;;',
-  '    *) printf \'%s\\n\' "${KUBECTL_TOKEN:-ok|600 min left|2099-01-01T00:00:00.000Z}" ;;',
-  '  esac; exit 0 ;;',
-  '  *" exec "*"online.js"*) [ -z "$KUBECTL_RUN_SLEEP" ] || sleep "$KUBECTL_RUN_SLEEP"; printf \'PASS N1 the Microsoft-authenticated attach succeeds\\n\'; exit "${KUBECTL_RUN_STATUS:-0}" ;;',
-  '  *" exec -i "*) cat > /dev/null; exit 0 ;;',
-  '  *" exec "*) exit 0 ;;',
-  '  *" delete pod "*) exit 0 ;;',
-  '  *" cp "*"online-report.json"*) printf \'{"summary":"ok"}\\n\' > "$last"; exit 0 ;;',
-  // The attach copy-in and the attach copy-back are one shape, so the destination says
-  // which this is: a pod path ends in `:...`, and a copy-back lands on a local directory.
-  // A case can make the copy-back bring nothing back, or fail. Both are what a rotation
-  // that never landed looks like (#370).
-  '  *" cp "*"/accounts/$ATTACH"*) case "$last" in',
-  '    *:*) exit 0 ;;',
-  '    *) if [ "${KUBECTL_ATTACH_BACK_FAIL:-}" = 1 ]; then printf \'Error from server (NotFound): pods "check" not found\\n\' >&2; exit 1; fi',
-  '      [ "${KUBECTL_ATTACH_BACK_EMPTY:-}" != 1 ] || exit 0',
-  // A run that rotated nothing hands back the directory it was given, so the default is a
-  // byte-identical copy of the local one. KUBECTL_ATTACH_ROTATED writes a token cache the
-  // local copy does not have, which is what a rotation inside the pod looks like.
-  '      mkdir -p "$last/$ATTACH"; cp -a "$KUBECTL_ATTACH_SOURCE"/. "$last/$ATTACH"/; rm -f "$last/$ATTACH/writer.lock"',
-  '      [ "${KUBECTL_ATTACH_ROTATED:-}" != 1 ] || printf \'{}\\n\' > "$last/$ATTACH/live-cache.json"; exit 0 ;;',
-  '  esac ;;',
-  '  *" cp "*"/accounts/$PUPPET"*) mkdir -p "$last/$PUPPET"; for f in live-cache.json mca-cache.json xbl-cache.json profile.json; do printf \'{}\' > "$last/$PUPPET/$f"; done; exit 0 ;;',
-  '  *) exit 0 ;;',
-  'esac',
-  ''
-].join('\n')
+  {
+    ns: ANY,
+    why: 'the gate reads the account inside the pod this run made in the lane it names',
+    match: ['exec', ANY, '--', 'node', '-e', ANY, endingWith('/accounts/' + ATTACH)],
+    body: `[ -z "\${KUBECTL_ATTACH_SILENT:-}" ] || exit 0
+echo "\${KUBECTL_ATTACH_TOKEN:-ok|600 min left|2099-01-01T00:00:00.000Z}"
+exit 0`
+  },
+  {
+    ns: ANY,
+    why: 'the gate reads the account inside the pod this run made in the lane it names',
+    match: ['exec', ANY, '--', 'node', '-e', ANY, endingWith('/accounts/' + PUPPET)],
+    body: `echo "\${KUBECTL_TOKEN:-ok|600 min left|2099-01-01T00:00:00.000Z}"
+exit 0`
+  },
+  // The rung itself, which reaches the pod as an env-carrying command.
+  {
+    ns: ANY,
+    why: 'the rung runs in the pod this run made in the lane it names',
+    match: ['exec', ANY, '--', 'env', REST],
+    body: `[ -z "$KUBECTL_RUN_SLEEP" ] || sleep "$KUBECTL_RUN_SLEEP"
+echo 'PASS N1 the Microsoft-authenticated attach succeeds'
+exit "\${KUBECTL_RUN_STATUS:-0}"`
+  },
+  {
+    ns: ANY,
+    why: 'the streamed exec runs in the pod this run made in the lane it names',
+    match: ['exec', '-i', ANY, REST],
+    body: `cat > /dev/null
+exit 0`
+  },
+  // The pod's own setup script.
+  {
+    ns: ANY,
+    why: 'the setup script runs in the pod this run made in the lane it names',
+    match: ['exec', ANY, '--', 'sh', '-c', REST],
+    body: 'exit 0'
+  },
+  {
+    ns: ANY,
+    why: 'the pod this run made is deleted from the lane it names',
+    match: ['delete', 'pod', ANY, '--wait=false'],
+    body: 'exit 0'
+  },
+  {
+    cluster: 'cp names the pod path as <namespace>/<pod>:<path>, not with -n',
+    match: ['cp', endingWith(':/work/online-report.json'), ANY],
+    body: `printf '{"summary":"ok"}\\n' > "$last"
+exit 0`
+  },
+  // The attach copy-in and the attach copy-back are one shape, so the direction says
+  // which this is: a pod path as the destination is a copy in, and a local directory is
+  // a copy back. A case can make the copy-back bring nothing back, or fail. Both are
+  // what a rotation that never landed looks like (#370).
+  {
+    cluster: 'cp names the pod path as <namespace>/<pod>:<path>, not with -n',
+    match: ['cp', ANY, endingWith(':/work/.secrets/accounts/' + ATTACH)],
+    body: 'exit 0'
+  },
+  {
+    cluster: 'the copy-back names the pod as its source and a directory as its destination',
+    match: ['cp', endingWith(':/work/.secrets/accounts/' + ATTACH), ANY],
+    body: `if [ "\${KUBECTL_ATTACH_BACK_FAIL:-}" = 1 ]; then echo 'Error from server (NotFound): pods check not found' >&2; exit 1; fi
+[ "\${KUBECTL_ATTACH_BACK_EMPTY:-}" != 1 ] || exit 0
+mkdir -p "$last/$ATTACH"
+cp -a "$KUBECTL_ATTACH_SOURCE"/. "$last/$ATTACH"/
+rm -f "$last/$ATTACH/writer.lock"
+[ "\${KUBECTL_ATTACH_ROTATED:-}" != 1 ] || printf '{}\\n' > "$last/$ATTACH/live-cache.json"
+exit 0`
+  },
+  {
+    cluster: 'the puppet copy-back names the pod as its source and a directory as its destination',
+    match: ['cp', endingWith(':/work/.secrets/accounts/' + PUPPET), ANY],
+    body: `mkdir -p "$last/$PUPPET"
+for f in live-cache.json mca-cache.json xbl-cache.json profile.json; do printf '{}' > "$last/$PUPPET/$f"; done
+exit 0`
+  },
+]
+
+const { script: SHIM, ids: SHIM_IDS } = kubectlShim(SHIM_RULES, {
+  prelude: [
+    // One line per argv word, so a case can tell one argument that holds a space from
+    // two arguments. `$*` cannot (#384). A marker at the start of each call, so a case
+    // can read one call's words and stop.
+    "printf '<<call>>\\n' >> \"$KUBECTL_ARGV_LOG\"",
+    "printf '<<%s>>\\n' \"$@\" >> \"$KUBECTL_ARGV_LOG\"",
+    'ATTACH="$KUBECTL_ATTACH"',
+    'PUPPET="$KUBECTL_PUPPET"',
+    'last="${@: -1}"',
+    // Two writes can be in flight at once, and a case that holds one against the other
+    // needs the log to name an order. So one lock covers the log entry and the object,
+    // and the log reads in the order the writes landed.
+    'record() { until mkdir "$KUBECTL_LEASES.lock" 2>/dev/null; do sleep 0.01; done; printf \'%s\\n\' --- >> "$KUBECTL_LEASES"; printf \'%s\\n\' "$1" >> "$KUBECTL_LEASES"; printf \'%s\\n\' "$1" > "$KUBECTL_LEASE"; rmdir "$KUBECTL_LEASES.lock"; }'
+  ]
+})
 
 // BSD find, which macOS ships, has no -printf: it writes nothing to stdout, says so on
 // stderr, and exits 1. Under this script's `set -euo pipefail` that exit status is the
@@ -205,6 +299,7 @@ function baseEnv (space, env = {}) {
     KUBECTL_LEASES: space.leases,
     KUBECTL_LEASE_READS: space.reads,
     KUBECTL_LEASE_FOREIGN: space.foreign,
+    KUBECTL_HITS: HITS,
     ...env
   }
 }
@@ -218,6 +313,10 @@ function run (space, env = {}, args = null) {
   const calls = fs.existsSync(space.log)
     ? fs.readFileSync(space.log, 'utf8').trim().split('\n').filter(Boolean)
     : []
+  // A call the shim does not model fails there and lands here, so a case reports it
+  // even when the script swallowed the status.
+  const refused = unmodelled(space.log)
+  assert.deepEqual(refused, [], 'the shim modelled every call: ' + refused.join(' | '))
   const output = (result.stdout ?? '') + (result.stderr ?? '')
   return { status: result.status, output, calls, error: result.error ?? null }
 }
@@ -989,4 +1088,9 @@ test('a run whose lease is taken over stops instead of writing the chain twice',
   assert.notEqual(status, 0, output)
   assert.match(output, /is no longer this run's/)
   assert.match(output, /Stopping, because two runs must not write one refresh chain/)
+})
+test('every rule of the shim is reached by a case', () => {
+  // An arm no case reaches is an arm nobody checks: it models a call the script no
+  // longer makes, or a case is missing for a call it does make (#152).
+  assert.deepEqual(deadRules(HITS, SHIM_IDS), [], 'no rule is dead: every one fired in some case')
 })

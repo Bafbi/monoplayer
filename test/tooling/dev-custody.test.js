@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
+import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
@@ -16,6 +17,10 @@ const SCRIPT = path.join(ROOT, 'scripts', 'dev-custody.sh')
 const LIVE_NAMESPACE = 'monoplayer'
 const DEV_NAMESPACE = 'monoplayer-dev'
 const LIVE_UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
+
+// Every rule that fired, in one file for the whole test file: the last case reads it
+// to prove no arm is dead (#152).
+const HITS = path.join(tempRoot('monoplayer-dev-custody-hits-'), 'hits')
 
 const LIVE_SECRET = '{"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"e30="}}'
 const DEPLOYMENT = JSON.stringify({
@@ -45,45 +50,130 @@ const ACCOUNTS_JSON = JSON.stringify({
   pending: []
 })
 
-const SHIM = [
-  '#!/usr/bin/env bash',
-  'printf \'%s\\n\' "$*" >> "$KUBECTL_LOG"',
-  'fixtures="$KUBECTL_FIXTURES"',
-  'case " $* " in',
-  '  *" get namespace "*) exit 0 ;;',
-  '  *" get secret "*"-o json"*) cat "$fixtures/live-secret.json"; exit 0 ;;',
-  '  *" get secret "*) exit 1 ;;',
+// The shim answers the calls `dev-custody.sh` makes, and the dev-lane `pull-secret`
+// path it calls, and nothing else (#152). A rule is one call: its words, their order,
+// and their count. `ns` is part of the rule, so a read that loses `-n` matches
+// nothing instead of answering for a namespace it was never asked about.
+const SHIM_RULES = [
+  {
+    cluster: 'a Namespace object is cluster-scoped; this is the dev-lane pull-secret path asking',
+    match: ['get', 'namespace', DEV_NAMESPACE],
+    body: 'exit 0'
+  },
+  // Two applies on stdin and one from a file: the document carries the namespace,
+  // and the handle pod's apply puts -n after the verb, which is why the words are
+  // spelled out instead of using `ns`.
+  {
+    cluster: 'the document on stdin names its own namespace',
+    match: ['apply', '-f', '-'],
+    body: `cat > /dev/null
+echo applied
+exit 0`
+  },
+  {
+    cluster: 'custody.yaml names its namespace',
+    match: ['apply', '-f', ANY],
+    body: `cat > /dev/null
+echo applied
+exit 0`
+  },
+  {
+    cluster: 'kubectl takes -n after the verb here, and the pod on stdin names its namespace too',
+    match: ['apply', '-n', DEV_NAMESPACE, '-f', '-'],
+    body: `cat > /dev/null
+echo applied
+exit 0`
+  },
+  // The pull Secret the private package needs: absent in dev, present in live.
+  { ns: DEV_NAMESPACE, match: ['get', 'secret', 'ghcr-pull'], body: 'exit 1' },
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'secret', 'ghcr-pull', '-o', 'json'],
+    body: `cat "$fixtures/live-secret.json"
+exit $?`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['get', 'pods', '-l', 'app.kubernetes.io/name=monoplayer', '-o', ANY],
+    body: `printf '%s' "$KUBECTL_PROXY_POD"
+exit 0`
+  },
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'pods', '-l', ANY, '-o', ANY],
+    body: `printf '%s' "$KUBECTL_LIVE_POD"
+exit 0`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['get', 'pod', 'dev-custody', '-o', ANY],
+    body: `printf '%s' "$KUBECTL_PHASE"
+exit 0`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['wait', '--for=condition=Ready', 'pod/dev-custody', ANY],
+    body: 'exit 0'
+  },
+  // The bootstrap's two shell steps, and the branch code copied onto the pod.
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', ANY, '--', 'sh', '-c', ANY],
+    body: 'exit 0'
+  },
+  { cluster: 'cp names the destination pod with a namespace prefix', match: ['cp', ANY, ANY], body: 'exit 0' },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['delete', 'pod', 'dev-custody', '--ignore-not-found', '--wait=false'],
+    body: 'exit 0'
+  },
+  // The device-code login: the only call that carries -i, because it is a stream.
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', '-i', ANY, '--', 'node', ANY, 'device-code', '--alias', ANY, '--accounts-dir', ANY],
+    body: `printf '%s\\n' "$KUBECTL_DEVICE_CODE"
+exit "$KUBECTL_DEVICE_CODE_EXIT"`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', ANY, '--', 'node', ANY, 'accounts', '--accounts-dir', ANY, '--json'],
+    body: `cat "$fixtures/accounts.json"
+exit $?`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', ANY, '--', 'node', ANY, 'accounts', '--accounts-dir', ANY],
+    body: `echo 'accounts: 1'
+exit 0`
+  },
+  {
+    ns: DEV_NAMESPACE,
+    match: ['exec', ANY, '--', 'node', ANY, 'status', '--account', ANY, '--accounts-dir', ANY],
+    body: `echo 'writer-lock: free'
+exit 0`
+  },
   // The live deployment, read once for its name, selector, and puppet env.
-  '  *" get deploy "*"-o json"*) cat "$fixtures/deployment.json"; exit 0 ;;',
-  '  *" get deploy "*) printf \'1\\n\'; exit 0 ;;',
-  // The dev proxy's pod (empty when it holds nothing), then the live pod by
-  // the deployment's own selector.
-  '  *" -n monoplayer-dev get pods -l "*) printf \'%s\' "$KUBECTL_PROXY_POD"; exit 0 ;;',
-  '  *" get pods -l "*) printf \'%s\' "$KUBECTL_LIVE_POD"; exit 0 ;;',
-  '  *" get pods "*) printf \'paper-abc 1/1 Running 0 1m\\n\'; exit 0 ;;',
-  '  *" get pod dev-custody "*"status.phase"*) printf \'%s\' "$KUBECTL_PHASE"; exit 0 ;;',
-  '  *" get pod "*) exit 0 ;;',
-  '  *" apply "*) cat > /dev/null; printf \'applied\\n\'; exit 0 ;;',
-  '  *" wait --for=condition=Ready "*) exit 0 ;;',
-  '  *" delete pod "*) exit 0 ;;',
-  '  *" cp "*) exit 0 ;;',
-  // exec: the device-code login, the account list, custody status, then the
-  // live digest (a counter, because a proof reads it twice).
-  '  *"device-code"*) printf \'%s\\n\' "$KUBECTL_DEVICE_CODE"; exit "$KUBECTL_DEVICE_CODE_EXIT" ;;',
-  '  *" accounts "*"--json"*) printf \'%s\\n\' "$(cat "$fixtures/accounts.json")"; exit 0 ;;',
-  '  *" accounts "*) printf \'accounts: 1\\n\'; exit 0 ;;',
-  '  *" status "*) printf \'writer-lock: free\\n\'; exit 0 ;;',
-  '  *"node -e"*)',
-  '    count=0',
-  '    [ -f "$KUBECTL_COUNTER" ] && count=$(cat "$KUBECTL_COUNTER")',
-  '    count=$((count + 1))',
-  '    printf \'%s\' "$count" > "$KUBECTL_COUNTER"',
-  '    if [ "$count" -le 1 ]; then printf \'%s\\n\' "$(cat "$fixtures/digest-first.txt")"; else printf \'%s\\n\' "$(cat "$fixtures/digest-second.txt")"; fi',
-  '    exit 0 ;;',
-  '  *) exit 0 ;;',
-  'esac',
-  ''
-].join('\n')
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['get', 'deploy', 'monoplayer', '-o', 'json'],
+    body: `cat "$fixtures/deployment.json"
+exit $?`
+  },
+  // The live digest: a counter, because a proof reads it twice and the difference
+  // between the two reads is what the case is about.
+  {
+    ns: LIVE_NAMESPACE,
+    match: ['exec', 'deploy/monoplayer', '-c', 'monoplayer', '--', 'node', '-e', ANY, ANY],
+    body: `count=0
+[ -f "$KUBECTL_COUNTER" ] && count=$(cat "$KUBECTL_COUNTER")
+count=$((count + 1))
+echo "$count" > "$KUBECTL_COUNTER"
+if [ "$count" -le 1 ]; then cat "$fixtures/digest-first.txt"; else cat "$fixtures/digest-second.txt"; fi
+exit 0`
+  },
+]
+
+const { script: SHIM, ids: SHIM_IDS } = kubectlShim(SHIM_RULES, { prelude: ['fixtures="$KUBECTL_FIXTURES"'] })
 
 function workspace (overrides = {}) {
   const dir = tempRoot('monoplayer-dev-custody-')
@@ -121,6 +211,7 @@ function run (space, args, env = {}) {
       KUBECTL_LIVE_POD: 'monoplayer-55b6bdccf9-gjqvg',
       KUBECTL_DEVICE_CODE: 'open https://www.microsoft.com/link and enter ABCD1234',
       KUBECTL_DEVICE_CODE_EXIT: '0',
+      KUBECTL_HITS: HITS,
       MONOPLAYER_CUSTODY_REPORT: path.join(space.dir, 'dev-custody.json'),
       MONOPLAYER_LIVE_DIGEST_REPORT: path.join(space.dir, 'live-custody-digest.json'),
       ...env
@@ -129,6 +220,10 @@ function run (space, args, env = {}) {
   const calls = fs.existsSync(space.log)
     ? fs.readFileSync(space.log, 'utf8').trim().split('\n').filter(Boolean)
     : []
+  // A call the shim does not model fails there and lands here, so a case reports it
+  // even when the script swallowed the status.
+  const refused = unmodelled(space.log)
+  assert.deepEqual(refused, [], 'the shim modelled every call: ' + refused.join(' | '))
   return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
 }
 
@@ -303,4 +398,18 @@ test('prove-live keeps the wrapped exit status', () => {
   const { status, output } = run(space, ['prove-live', '--', 'sh', '-c', 'exit 3'])
   assert.equal(status, 3, output)
   assert.match(output, /byte-identical/, 'the proof still ran and reported')
+})
+test('down removes the handle pod, and only that', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, ['down'])
+  assert.equal(status, 0, output)
+  assert.deepEqual(calls, ['-n monoplayer-dev delete pod dev-custody --ignore-not-found --wait=false'],
+    'the handle pod goes, and nothing else does')
+  assert.match(output, /deleted the handle pod in monoplayer-dev/)
+})
+
+test('every rule of the shim is reached by a case', () => {
+  // An arm no case reaches is an arm nobody checks: it models a call the script no
+  // longer makes, or a case is missing for a call it does make (#152).
+  assert.deepEqual(deadRules(HITS, SHIM_IDS), [], 'no rule is dead: every one fired in some case')
 })
