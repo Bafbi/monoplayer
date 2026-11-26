@@ -446,10 +446,20 @@ says why, and it is the reason to add assertions one row at a time.
 - `O39` a dial the target refuses before its first frame leaves the move in
   flight: the move is still a transfer, the client is still in its round, and
   nothing was restored (#87).
-- `O40` the follow budget's give-up restores the previous server's state on the
-  connection the client kept: the snapshot's configuration and finish stream
+- `O40` a target the rung gives up on restores the previous server's state on
+  the connection the client kept: the snapshot's configuration and finish stream
   into the open round, the previous play login replays, no kick, and no front
-  client error (#87).
+  client error (#87). The give-up is one refused dial, not a budget: the rung sets
+  `giveUpOnFailedDial` before it sends the transfer, so the reconnect handler
+  answers that refusal with `abortTransfer('target_unreachable')` instead of
+  `session.fail()`, and the abort restores the session.
+
+  What it cannot prove: the counted give-up. `DEFAULT_MAX_TARGET_FAILURES` in
+  `src/core/transfer-follow.js` is spent in `src/service/start-live.js`'s
+  `reconnect_due` handler, and no test drives that handler. The controller is
+  proved alone, in `test/core/transfer-follow.test.js`. A regression in the
+  wiring ships green (#548): the count against a real leg, and the revert to the
+  settled server.
 - `O41` a target that sends no chunk frame never releases the client: the move
   stays open with the client in play (#87).
 - `O41b` the held release is the chunk gate, not a stalled client: the wait is
