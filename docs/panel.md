@@ -3,7 +3,8 @@
 The panel is one page, its own assets, one stream and the JSON routes an agent reads
 on the tailnet, showing what each puppet it may touch is doing, which control
 ConfigMap it may write for it, and which copy Git commits it falls back to. It runs
-beside the proxy, not inside it: same image, second entrypoint, its own namespace.
+beside the proxy: same image, second entrypoint, and since #609 the proxy's
+namespace.
 
 | Route | Answers |
 |---|---|
@@ -513,24 +514,40 @@ deploys, two rollbacks, and two places a tree can drift.
 So the panel arrives on the next sync after the merge, in the same `deploy`
 revision the proxy runs, with `prune` and `selfHeal` on.
 
-Two prerequisites are not in Git, and each is one command:
+Argo applies before it prunes within that sync, so the panel's pod is created while
+the old namespace is still there. It does not wait for the pod to be Ready before
+the old objects go, so watch the sync: `Deployment/panel` Ready in `monoplayer` is
+the thing to confirm, and a pod that would not start is worth seeing before the
+objects it replaced are gone.
 
-1. **The pull secret, in the panel's namespace.** The GHCR package is private and a
-   Secret is namespaced, so the `ghcr-pull` secret the proxy uses does not reach
-   this pod. Create a copy:
+It runs in `monoplayer` (#609), so its pod pulls with the proxy's own `ghcr-pull`
+Secret, which [deployment.md](deployment.md) step 3 creates.
 
-   ```bash
-   kubectl -n monoplayer-panel create secret docker-registry ghcr-pull \
-     --docker-server=ghcr.io \
-     --docker-username=Bafbi \
-     --docker-password="$GHCR_READ_TOKEN"
-   ```
+The panel had a namespace of its own until then, and that namespace bought no
+separation. Its Role and its RoleBinding were always the proxy's, so its
+ServiceAccount reached the control ConfigMap from outside the namespace it lived
+in either way. All the second namespace added was a second copy of that Secret.
 
-   The namespace arrives with the first sync, so create the secret after the merge.
-   Until it exists the pod stays in `ImagePullBackOff`, which is the failure the
-   manifest means to show.
+**The tailnet name survives the move. The device's address does not.** The name is
+what a human types, and it comes from `tailscale.com/hostname: monoplayer`, so it
+is the same name in either namespace. The address Tailscale gives the device is
+new. One thing to check after the merge: if the panel's device is named
+`monoplayer-1`, Tailscale had not released the old one when the new Service
+registered. [testbed-transfer.md](testbed-transfer.md#verifying-a-cycle) records that
+suffix happening to the testbed's front for the same reason. If the page stops
+answering at `http://monoplayer.tail41e568.ts.net`, the panel is up and its device
+is suffixed. The release is on the operator's clock, so wait until `monoplayer` is
+gone from `tailscale status` first: a Service recreated while the old device still
+holds the name takes the suffix again. Then delete it and let `selfHeal` put it
+back, which reclaims the name while it is free:
 
-2. **The control ConfigMap, once per puppet.** Not in Git, and never in Git:
+```bash
+kubectl -n monoplayer delete svc panel
+```
+
+One prerequisite is not in Git, and it is one command:
+
+1. **The control ConfigMap, once per puppet.** Not in Git, and never in Git:
    Argo's `selfHeal` would revert a tracked object to its committed content within
    minutes of the first panel write. Create it yourself, for the single puppet the
    registry names, **before the Deployment that mounts it rolls**:
@@ -588,6 +605,11 @@ namespace, a destination entry for the namespace in `deploy/argocd/project.yaml`
 and, for a manifest tree the root does not include yet, a line in
 `deploy/kustomization.yaml`.
 
+A puppet in a second namespace is the one case where the binding crosses one: its
+Role grants on the namespace it lives in, and its subject stays the panel's
+ServiceAccount in `monoplayer`, wherever the panel runs. The subject names that
+namespace, and `test/tooling/panel-manifests.test.js` fails when it names another.
+
 ## Roll it back
 
 The panel is not an Argo object of its own, so there is nothing to delete with
@@ -600,9 +622,8 @@ resources:
   # - panel
 ```
 
-Merge that, and the next sync prunes the seven panel objects and the
-`monoplayer-panel` namespace. The proxy is untouched: same Application, same
-revision, one directory fewer.
+Merge that, and the next sync prunes the panel's objects. The namespace stays,
+because it is the proxy's: same Application, same revision, one directory fewer.
 
 The control ConfigMap survives. Argo never created it and it carries no tracking
 annotation, so nothing prunes it, and the puppet keeps the document it was reading.

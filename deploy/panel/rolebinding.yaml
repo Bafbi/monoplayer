@@ -1,9 +1,12 @@
 # The binding that gives the panel its Role, and nothing else.
 #
-# The subject is the panel's ServiceAccount in its own namespace: the grant crosses
-# the namespace boundary once, here, where it can be read, rather than by putting
-# the panel in monoplayer. roleRef is a Role and never a ClusterRole: this binding
-# can only ever hand out the authority role.yaml states.
+# Subject and Role are both in `monoplayer`: RBAC grants on the namespace an object
+# lives in, and the panel lives with the puppet it writes (#609). The subject names
+# that namespace even though it is this binding's own, so a reader sees where the
+# ServiceAccount is without working it out from the omission.
+#
+# roleRef is a Role and never a ClusterRole: this binding can only ever hand out the
+# authority role.yaml states.
 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -16,7 +19,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: panel
-    namespace: monoplayer-panel
+    namespace: monoplayer
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

@@ -2,8 +2,8 @@
 # Application, so a merge to main deploys both and nothing else.
 #
 # deploy/manifests and deploy/panel each keep a kustomization of their own,
-# because each owns one namespace. This file says only that both belong to the
-# same deploy.
+# because each owns one half of the deploy: the proxy, and its panel. Both create
+# objects in the one `monoplayer` namespace, and only deploy/manifests creates it.
 #
 # The image workflow appends `images:` to each child kustomization on the
 # bot-owned `deploy` branch (#234). A child's image pin applies to that child's

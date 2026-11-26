@@ -23,7 +23,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: panel
-  namespace: monoplayer-panel
+  namespace: monoplayer
   labels:
     app.kubernetes.io/name: panel
     app.kubernetes.io/part-of: monoplayer
