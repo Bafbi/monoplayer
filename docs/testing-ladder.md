@@ -995,8 +995,11 @@ first dial and its target warms in five seconds.
   for its own Paper, and runs that Paper offline, so a claim is reachable from another
   machine without the live servers. Neither lane takes two bots yet: the service builds
   live legs only, so a joining client is verified against Mojang before it sees the
-  picker, and one process admits one account (#391). A row that witnesses the vanilla
-  half needs that ticket, and
+  picker, and a row on two clients needs two accounts, because a channel is never told
+  about the player it speaks for and two clients of one account are never drawn for each
+  other (#391). The dev lane's
+  [two-client proof](../deploy/dev/README.md#the-two-client-proof) is where two real
+  clients hold that half (#634). A row that witnesses the vanilla half needs that ticket, and
   [the driver runbook](../deploy/driver/README.md#no-spectator-row-no-client-can-draw-a-body-yet)
   says what else it would have to hold;
   [the dev runbook](../deploy/dev/README.md#offline-and-why-that-is-allowed-here) says
@@ -1189,7 +1192,8 @@ first dial and its target warms in five seconds.
   What it cannot prove: that a client draws the puppet. The bot speaks the wire and
   records no pixels, and a body's equipment, head rotation and metadata are not synthesized
   here at all — a spectator gets position and identity, not a held item. That half is the
-  dev lane's checklist (`deploy/dev/README.md`, #634), with two real clients.
+  dev lane's [two-client proof](../deploy/dev/README.md#the-two-client-proof), with two real
+  clients (#634).
 
   It also cannot read the entry that names the puppet before the spawn: this rig's fake
   backend never lists the puppet, so the proxy holds no skin and writes no entry, and the
