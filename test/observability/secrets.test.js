@@ -91,6 +91,28 @@ test('a bearer value that is also a JWT keeps both kinds in one span', () => {
   assert.equal(text.includes(jwt), false)
 })
 
+
+// #182: the report path had a Bearer rule and no other scheme. The kind names the
+// scheme, so a report still says which shape leaked: <bearer> stays what it was,
+// and <basic> is new.
+test('an Authorization credential is tagged with its scheme (#182)', () => {
+  const credential = 'dXNlcjpwYXNzd29yZA=='
+  const { text, findings } = redactSecrets(`Authorization: Basic ${credential}`)
+  assert.deepEqual(findings.map(f => f.kind), ['basic'])
+  assert.equal(findings[0].value, credential)
+  assert.equal(text.includes(credential), false)
+  assert.equal(text, 'Authorization: Basic [REDACTED]<basic>', 'the scheme stays as the label')
+
+  // The pinned Bearer shape does not move.
+  const bearer = redactSecrets('Authorization: Bearer opaqueTokenValue123')
+  assert.deepEqual(bearer.findings.map(f => f.kind), ['bearer'])
+  assert.equal(bearer.text, 'Authorization: Bearer [REDACTED]<bearer>')
+
+  // A header with no scheme word is still a secret, and the tag says so.
+  const bare = redactSecrets('Authorization: opaqueTokenValue123')
+  assert.equal(bare.text.includes('opaqueTokenValue123'), false)
+})
+
 // Redaction is a rewrite, not a map over the original: a sentinel already in
 // the text is the result of redacting, never a value to redact again. Without
 // this, a second pass eats the tag it just wrote and the report loses the kind.
@@ -99,6 +121,23 @@ test('an existing sentinel is not treated as a value', () => {
   const { text, findings } = redactSecrets(already)
   assert.deepEqual(findings, [])
   assert.equal(text, already)
+})
+
+
+// #181: the scanner named sixteen keys the log path already redacted... no — it
+// named a different sixteen. The three names below were in the log path's list and
+// in neither of the report path's two rules.
+test('the scanner knows the names the log path knows (#181)', () => {
+  const value = 'abcdef123456789'
+  for (const key of ['user_code', 'device_code_pairing', 'cookie']) {
+    const input = JSON.stringify({ [key]: value })
+    const findings = scanSecrets(input)
+    assert.equal(findings.length, 1, `one finding for ${key} (saw ${findings.length})`)
+    assert.equal(findings[0].kind, 'assignment')
+    const { text } = redactSecrets(input)
+    assert.equal(text.includes(value), false, `${key} must not survive`)
+    assert.doesNotThrow(() => JSON.parse(text), 'redacted JSON must still parse')
+  }
 })
 
 test('a realistic report blob containing a leaked token gets redacted end to end', () => {
