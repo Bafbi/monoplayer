@@ -123,6 +123,34 @@ export function skinPlayerInfoPacket ({ uuid, name, property } = {}) {
   }
 }
 
+// One entry per channel, naming that channel's own player (#516).
+//
+// #99 wrote one entry, for the driver's UUID, and a write with no channel reaches
+// every channel on the body (src/legs/live-front.js). So a spectator's client held
+// an entry naming the driver and none naming itself. The body that client draws is
+// its own, because the front authenticated it as itself and handed it the puppet's
+// world, so its own body fell back to a vanilla default. Every client on a body is a
+// different account, so the entry is a function of the channel it goes to, and a
+// spectator's names the spectator.
+//
+// The caller says which channels the frame is owed to, and this answers one entry for
+// each of them. `packet` is that channel's entry, and null where the channel names no
+// player, which the caller records rather than writes. `id` is echoed as given, null
+// included: the driver's entry is the frame #99 proved, which names no channel, and a
+// spectator's names its own channel (src/core/channels.js).
+export function skinEntriesFor ({ property = null, channels = [] } = {}) {
+  if (!Array.isArray(channels)) throw new TypeError('skinEntriesFor needs the channels it writes to')
+  return channels.map(channel => {
+    const id = channel?.id ?? null
+    const name = typeof channel?.name === 'string' && channel.name !== '' ? channel.name : null
+    const uuid = typeof channel?.uuid === 'string' && channel.uuid !== '' ? channel.uuid : null
+    // A channel that names no profile cannot be given an entry. It is reported, not
+    // dropped: no later frame repairs a client left without one (#134).
+    if (uuid === null || name === null) return { id, name, packet: null }
+    return { id, name, packet: skinPlayerInfoPacket({ uuid, name, property }) }
+  })
+}
+
 // The same property with its signature removed. Nothing in the product sends
 // this: it exists so the measured run can ask the client whether an unsigned
 // property would work too, which decides whether a future change could drop the

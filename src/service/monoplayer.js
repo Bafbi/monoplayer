@@ -34,7 +34,7 @@
 //     setDetachHandler(({ reason }): void)
 //     setSpectateBody(fn)                         // optional: fn({ body, server, name })
 //                                                 //   -> { watching, reason }
-//     setSpectatorAttach(fn)                      // optional: fn({ name, channel })
+//     setSpectatorAttach(fn)                      // optional: fn({ name, uuid, channel })
 //                                                 //   -> { watching, frames, replayed }
 //     write(name, packet, { synth, channel })     // clientbound, packet level
 //     writeRaw(buffer, meta, { channel })         // clientbound, frame level
@@ -75,7 +75,7 @@ import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
-import { SKIN_FRAME, carriesTextures, skinPlayerInfoPacket, texturesPropertyOf } from '../core/skin.js'
+import { SKIN_FRAME, carriesTextures, skinEntriesFor, texturesPropertyOf } from '../core/skin.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
@@ -612,13 +612,20 @@ export function createMonoplayer ({
   let earlyAttach = null
   let pendingEarlyReplay = null
   let frontPlayReady = false
-  // #259: the spectators whose channel has been handed its body and has not gone.
-  // The front owns the channels, so it is the front that says when one closes. This
-  // holds only what the relay needs to know: is anybody watching a body nobody
-  // drives. It holds channel ids rather than a count, because a channel that closes
-  // before it was handed the body closes as a spectator's too. A count would take
-  // one spectator away for it, and the relay would stop under a spectator that stayed.
-  const spectators = new Set()
+  // #259/#516: the spectators whose channel has been handed its body and has not
+  // gone, keyed by channel id. The front owns the channels, so it is the front that
+  // says when one closes. This holds only what the relay needs to know: is anybody
+  // watching a body nobody drives, and which of them still needs the entry that names
+  // their own player. It holds channel ids rather than a count, because a channel
+  // that closes before it was handed the body closes as a spectator's too. A count
+  // would take one spectator away for it, and the relay would stop under a spectator
+  // that stayed.
+  //
+  // The value is the player that channel is (its name and UUID) and whether it holds
+  // the entry that names it (#516). Both fields are the core's own copy: the leg's
+  // channel record (src/core/channels.js) holds what the leg answers from its socket,
+  // and the core is told a spectator's identity once, when it lands.
+  const spectators = new Map()
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
   // #18: the last human's client information. It survives a detach, like a
@@ -1924,51 +1931,91 @@ export function createMonoplayer ({
   // unsigned copy of it too). Measured on a real 26.2 client through the dev lane:
   // testdata/skin-verdict.md.
   //
-  // Five refusals, each a state where the frame would be ignored or would claim a
-  // skin the backend never sent: the switch is off, no client is in play, the
-  // backend has sent no property, the front gave no identity, or this play state
-  // already received one.
+  // #516: the channels this frame is owed to, each with the player that channel is.
+  // The driver's is owed one while its client is in play, and a spectator's from the
+  // moment its replay is written. The driver's entry is the frame #99 proved: one
+  // packet, written with no channel, because that is the frame a real client was
+  // measured with. A spectator's names its own channel, because the entry names one
+  // player and a body's two clients are two accounts.
+  function owedSkinChannels () {
+    const owed = []
+    if (isAttached() && frontPlayReady && !skinSent) {
+      owed.push({ id: null, uuid: attachedUuid, name: attachedName })
+    }
+    for (const [id, spectator] of spectators) {
+      if (spectator.skinSent) continue
+      owed.push({ id, uuid: spectator.uuid, name: spectator.name })
+    }
+    return owed
+  }
+
+  // A client's entry wins over a later `add_player` for the same UUID, so a second
+  // frame for one play state is a write nobody sees. The fact is kept where the frame
+  // went: the driver's play state, which is the entry that names no channel, and each
+  // spectator's own.
+  function markSkinSent (entry) {
+    if (entry.id === null) {
+      skinSent = true
+      return
+    }
+    const spectator = spectators.get(entry.id)
+    if (spectator !== undefined) spectator.skinSent = true
+  }
+
+  // Refused in six states where the frame would be ignored or would claim a skin the
+  // backend never sent. Three are ordinary and quiet, because nothing is owed and
+  // nothing is missing: the switch is off, the backend has sent no property, and no
+  // channel is owed an entry. The other three write a line, because a player is left
+  // without an entry and no later frame repairs it: a channel the front named no
+  // player for (`puppetSkinWithheld`), a packet that could not be built, and a write
+  // the leg could not deliver (both `puppetSkinRefused`).
   function sendPuppetSkin ({ reason = 'attach' } = {}) {
-    if (!cfg.skin.showPuppetSkin) return { sent: false, reason: 'disabled' }
-    if (!isAttached() || !frontPlayReady) return { sent: false, reason: 'not_attached' }
-    if (puppetSkinProperty === null) return { sent: false, reason: 'no_property' }
-    if (attachedUuid === null || attachedName === null) return { sent: false, reason: 'no_identity' }
-    if (skinSent) return { sent: false, reason: 'already_sent' }
-    let packet
+    if (!cfg.skin.showPuppetSkin) return
+    if (puppetSkinProperty === null) return
+    const owed = owedSkinChannels()
+    if (owed.length === 0) return
+    let entries
     try {
-      packet = skinPlayerInfoPacket({ uuid: attachedUuid, name: attachedName, property: puppetSkinProperty })
+      entries = skinEntriesFor({ property: puppetSkinProperty, channels: owed })
     } catch (error) {
       metrics.skinFramesRefused++
       log('puppetSkinRefused', { reason: 'packet', error: String(error?.message ?? error).slice(0, 200) })
-      return { sent: false, reason: 'packet' }
+      return
     }
-    try {
-      frontLeg.write(SKIN_FRAME, packet, { synth: true })
-    } catch (error) {
-      metrics.skinFramesRefused++
-      log('puppetSkinRefused', { reason: 'write_failed', error: String(error?.message ?? error).slice(0, 200) })
-      return { sent: false, reason: 'write_failed' }
-    }
-    skinSent = true
-    metrics.skinFramesWritten++
-    telemetry.metric('monoplayer.skin.frames', 1, { player: attachedName })
-    log('puppetSkinSent', {
-      name: attachedName,
-      reason,
-      signed: typeof puppetSkinProperty.signature === 'string'
-    })
-    emit('puppet_skin', { name: attachedName, signed: typeof puppetSkinProperty.signature === 'string' })
-    return { sent: true }
-  }
-
-  // #134: one refusal is worth a line. A front that gave no UUID cannot be named
-  // by any later frame, and no other event reports it. A missing property arrives
-  // a moment later on Paper, a packet or write failure logs `puppetSkinRefused`,
-  // and a replay never finds the client out of play because it sets
-  // `frontPlayReady` first.
-  function logWithheldSkin (outcome, name) {
-    if (outcome.sent === false && outcome.reason === 'no_identity') {
-      log('puppetSkinWithheld', { name, reason: outcome.reason })
+    const signed = typeof puppetSkinProperty.signature === 'string'
+    for (const entry of entries) {
+      if (entry.packet === null) {
+        // #134: a channel the front named no UUID for cannot be given an entry, and
+        // no later frame repairs it. One line per channel, because each is a player
+        // who reads their own body as vanilla for the rest of the connection.
+        log('puppetSkinWithheld', { name: entry.name, reason: 'no_identity', channel: entry.id })
+        continue
+      }
+      let delivered
+      try {
+        delivered = frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: entry.id })
+      } catch (error) {
+        metrics.skinFramesRefused++
+        log('puppetSkinRefused', {
+          reason: 'write_failed',
+          error: String(error?.message ?? error).slice(0, 200),
+          channel: entry.id
+        })
+        continue
+      }
+      // #516: the leg answers false when it found no socket for that channel, so the
+      // frame reached nobody. It is not marked sent, because a channel that comes back
+      // is still owed the entry, and a later pass is what gives it one.
+      if (delivered === false) {
+        metrics.skinFramesRefused++
+        log('puppetSkinRefused', { reason: 'write_failed', channel: entry.id })
+        continue
+      }
+      markSkinSent(entry)
+      metrics.skinFramesWritten++
+      telemetry.metric('monoplayer.skin.frames', 1, { player: entry.name })
+      log('puppetSkinSent', { name: entry.name, reason, signed, channel: entry.id })
+      emit('puppet_skin', { name: entry.name, signed, channel: entry.id })
     }
   }
 
@@ -2023,8 +2070,9 @@ export function createMonoplayer ({
     // goes on it. After the replay, because the frame is client state the replay
     // does not carry.
     // #134: the heartbeat counts no refusal for a frame that was never attempted,
-    // which is how a played body lost its skin without a trace.
-    logWithheldSkin(sendPuppetSkin({ reason }), name)
+    // which is how a played body lost its skin without a trace, so the call is
+    // unconditional and the refusal is the line.
+    sendPuppetSkin({ reason })
 
     // #218: what this attach offers, read before the two resends answer it, and
     // what they then write. `answered` and `relayed` would be 0 by construction
@@ -2471,7 +2519,7 @@ export function createMonoplayer ({
   // spectator's frames are the same replay an attach would build, so what it sees
   // is the body as it stands rather than a second login. It needs a body, not a
   // driver, which is why the guard is the body's and not the attach's (#259).
-  function spectateView ({ name = null, channel = null } = {}) {
+  function spectateView ({ name = null, uuid = null, channel = null } = {}) {
     if (typeof channel !== 'string' || channel.length === 0) {
       return { watching: false, reason: 'no_channel' }
     }
@@ -2491,12 +2539,18 @@ export function createMonoplayer ({
     for (const frame of synthesized.frames) {
       if (writeSynthFrame(frame, { channel })) written++
     }
+    // #516: the spectator's own body wears the puppet's skin too, and its entry is
+    // owed on the channel it was just handed the body on. Recorded before the frame
+    // so this pass reaches it, and written before the mode frames below, which are
+    // the last word on this socket (#259).
+    spectators.set(channel, { name, uuid, skinSent: false })
+    sendPuppetSkin({ reason: 'spectate' })
+
     // #259: the client has to be told it is watching, or it fights the world it
     // was put in. The replay carried the body's own game mode and abilities from
     // the cache, both of them `latest` frames, so these go after it. On this socket
     // they are the last word, and they reach no other channel.
     const modeFrames = writeSpectatorMode({ channel })
-    spectators.add(channel)
     metrics.spectatorViews++
     log('spectateView', {
       name,
@@ -3136,8 +3190,10 @@ export function createMonoplayer ({
         }
         // A backend that lists the puppet after its play login is the ordinary
         // case on Paper, so the property often arrives after the attach replay
-        // and this call is what reaches the client that is already in play.
-        if (changed) logWithheldSkin(sendPuppetSkin({ reason: 'property_arrived' }), attachedName)
+        // and this call is what reaches the client that is already in play. It
+        // reaches every channel owed one (#516), because a spectator is usually
+        // watching by then and no later frame repairs its body.
+        if (changed) sendPuppetSkin({ reason: 'property_arrived' })
       }
     }
 
