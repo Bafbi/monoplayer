@@ -657,16 +657,20 @@ first dial and its target warms in five seconds.
   `core.attached` true, a login success frame, and `backendLogins` unchanged
   across the edit, so the reload neither restarted the lane nor re-dialled the
   backend.
-- `O55` a join with no backend receives the recorded configuration baseline and
-  the picker, and its pick is recorded (#257). The rung's only 26.2 rig: its own
-  `createOfflineFrontLeg`, its own `createWireChecker({ version: '26.2' })`, and
-  five 26.2 protocol bots. Nothing is dialled while the picker is read, so
-  the front's cached replay path finds nothing: the frames the client reads are
+- `O55` a join with no backend receives the recorded configuration baseline
+  without its registry set, and the picker, and its pick is recorded (#257, #598).
+  The rung's only 26.2 rig: its own `createOfflineFrontLeg`, its own
+  `createWireChecker({ version: '26.2' })`, and five 26.2 protocol bots. Nothing is
+  dialled while the picker is read, so the front's cached replay path finds
+  nothing: the frames the client reads are
   `src/legs/configuration-baseline/26.2.json`, the committed recording of the gate
-  lane's Paper 26.2 build 135, served byte for byte. The client reads all 29
-  `registry_data` frames plus `select_known_packs`, `feature_flags` and `tags`,
-  with no leftover bytes and no wire rejection, and no
-  `finish_configuration`. The phase stays open, which is the point of the picker.
+  lane's Paper 26.2 build 135, served byte for byte, less the 29 `registry_data`
+  frames a picker phase never carries (#598). A client loads registries once, at
+  the frame that ends the phase, and the body a claim lands continues that phase
+  with its own set, so the recording's would be the first of two. The client reads
+  `custom_payload`, `feature_flags`, `select_known_packs` and `tags` with no
+  leftover bytes and no wire rejection, and no `finish_configuration`. The phase
+  stays open, which is the point of the picker.
   The dialog that lands on it is authored by `src/core/picker.js` and carries one
   action per allowed server. The assertion reads the action id out of the frame the
   client received, has the bot
@@ -761,15 +765,18 @@ first dial and its target warms in five seconds.
   body's spawn at the client, `session.state === 'attached'`, one front attach, and
   the body recorded as claimed.
 
-  What it cannot prove: that a vanilla 26.2 client accepts a second registry round
-  inside one configuration phase. The body is a `minecraft-protocol` fake whose
-  configuration is the library's own, `prismarine-chunk` has no 26.2
-  implementation, and the body therefore sends a chunk batch with nothing in it
-  (`chunks: 'empty'`). This proves the selected body's play join and its spawn,
-  never its terrain, and never a real client's acceptance of two registry sets in
-  one phase. That is rung 4's question, and #268's: if a real client refuses the
-  second round, the fallback is a one-frame limbo through the same-connection
-  reconfiguration machine.
+  What it cannot prove: that a vanilla 26.2 client accepts one phase carrying the
+  recording's `tags`, `feature_flags`, `select_known_packs` and `custom_payload`
+  before the body's own copies of those four frames. The registry set is the one
+  set of the phase since #598, and that is what the client loaded at
+  `finish_configuration`; the other four frames replace one another by key rather
+  than colliding, and nothing here measures whether a client accepts the repeat.
+  The body is a `minecraft-protocol` fake whose configuration is the library's
+  own, `prismarine-chunk` has no 26.2 implementation, and the body therefore sends
+  a chunk batch with nothing in it (`chunks: 'empty'`). This proves the selected
+  body's play join and its spawn, never its terrain. That is rung 4's question, and
+  #268's: if a real client refuses the repeated frames, the fallback is a one-frame
+  limbo through the same-connection reconfiguration machine.
 
   The report says which path ran, out of the client's own frames: this one is
   `same_phase`, with one finish and no `start_configuration`. The fallback would
@@ -952,8 +959,9 @@ first dial and its target warms in five seconds.
   [the driver runbook](../deploy/driver/README.md#no-spectator-row-no-client-can-draw-a-body-yet)
   says what else it would have to hold;
   [the dev runbook](../deploy/dev/README.md#offline-and-why-that-is-allowed-here) says
-  what the lane holds now. The second registry round a real client takes is #268's. The
-  body's own entity stream is what such a row has to witness.
+  what the lane holds now. The registry set a real client loads at the phase's finish
+  is the body's, once (#598); whether it accepts the recording's other repeated frames
+  is #268's. The body's own entity stream is what such a row has to witness.
 - `O64` a claim lands on a body that is already standing, and a disconnect ends an
   unclaimed one (#261).
   O63 left the body standing with nobody driving it and two spectators on it. A

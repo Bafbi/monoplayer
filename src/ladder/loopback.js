@@ -2961,8 +2961,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     }
     check(
       'O55',
-      'a join with no backend receives the recorded configuration baseline and the picker, and its pick is recorded',
-      pickerRead.registries === evidence.picker.baseline.registries &&
+      'a join with no backend receives the recorded configuration baseline without its registry set, and the picker, and its pick is recorded',
+      // #598: the recording carries 29 registries and a picker join reads none of
+      // them. A client loads registries once, at the frame that ends the phase, and
+      // the body a claim lands continues this same phase, so the recording's set
+      // would be the first of two.
+      pickerRead.registries === 0 &&
+        evidence.picker.baseline.registries > 0 &&
         pickerRead.tags === true &&
         pickerRead.knownPacks === true &&
         pickerRead.featureFlags === true &&
@@ -4282,9 +4287,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         lookerPosition.y === pickerBodySpawn.y &&
         lookerPosition.z === pickerBodySpawn.z &&
         lookerConfiguration.filter(name => name === 'finish_configuration').length === 1 &&
-        // The same set a claim receives (O58): one body's own registries, not a
-        // second login's and not the baseline alone.
-        lookerConfiguration.filter(name => name === 'registry_data').length === 57 &&
+        // One body's own registries, and only those (#598). The 29 the recording
+        // carries are not served, so this is the body's set and not the baseline's
+        // plus the body's: 28, because the fake body's configuration is the
+        // library's 26.2 codec, one registry short of a Paper's.
+        lookerConfiguration.filter(name => name === 'registry_data').length === 28 &&
         pickerBot8.received.leftovers.length === 0 &&
         pickerBot8.received.blockChanges.some(change => change.location?.x === clickedBlock.x) &&
         // Told what it is, last. The replay carries the body's own game mode first,

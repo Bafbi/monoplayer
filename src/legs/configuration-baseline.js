@@ -113,7 +113,9 @@ export function parseConfigurationBaseline (document) {
     frames: parsed,
     // What a replay sends, in order: everything the phase carried except the
     // frame that ends it. A frame the policy will not replay is already refused
-    // above, so this filter only removes the finish.
+    // above, so this filter only removes the finish. Evidence, not a client's
+    // phase: `baselineFramesFor` is the reader a join is served through, and it
+    // withholds the registry set (#598).
     replayFrames: parsed
       .filter(frame => frame.name !== BASELINE_FINISH_FRAME)
       .map(frame => ({ name: frame.name, buffer: frame.buffer }))
@@ -139,17 +141,29 @@ export function defaultBaselinePath () {
   return new URL('./configuration-baseline/26.2.json', import.meta.url)
 }
 
-// The frames to serve a client speaking `version`. Null when the baseline was
-// recorded at another protocol version. The configuration state happens to carry
-// the same packet ids in 26.1 and 26.2 (`node tools/protocol.mjs diff 26.1 26.2
+// The frames a picker join is served. Null when the baseline was recorded at
+// another protocol version. The configuration state happens to carry the same
+// packet ids in 26.1 and 26.2 (`node tools/protocol.mjs diff 26.1 26.2
 // configuration toClient` prints no differences), so this guard is not a bug fix:
 // it is the line between evidence and a guess. The recording is evidence for the
 // version it was taken at, and a lane that speaks another version has none.
+//
+// #598: a picker phase carries no registry data, and this reader is where that is
+// decided, so the frame is never handed to a writer that could send it. A client
+// loads registries once, at the frame that ends the phase, and a second copy of a
+// registry id is not a merge: it is a disconnect ("Adding duplicate key
+// 'ResourceKey[minecraft:worldgen/biome / minecraft:badlands]' to registry", at
+// `ClientboundFinishConfigurationPacket`). The picker's phase is the recording's,
+// and the body a claim lands continues that same open phase with its own frames,
+// so the recording's registry set is the first of two. The dialog needs a phase
+// the client parses; a registry set is the one thing only the body supplies.
+const PICKER_WITHHELD_FRAMES = new Set(['registry_data'])
+
 export function baselineFramesFor (baseline, { version } = {}) {
   if (!baseline) return null
   if (typeof version !== 'string' || version.length === 0) return null
   if (baseline.version !== version) return null
-  return baseline.replayFrames
+  return baseline.replayFrames.filter(frame => !PICKER_WITHHELD_FRAMES.has(frame.name))
 }
 
 // The registries a baseline carries, in frame order. Pure, and the one place a
@@ -159,7 +173,7 @@ export function baselineRegistryNames (baseline) {
   const names = []
   for (const frame of baseline.frames) {
     if (frame.name !== 'registry_data') continue
-    const name = registryNameOf(frame.buffer)
+    const name = registryIdOf(frame.buffer)
     if (name !== null) names.push(name)
   }
   return names
@@ -168,7 +182,11 @@ export function baselineRegistryNames (baseline) {
 // The `id` of a registry_data frame: a VarInt length then the identifier. Two
 // bytes of parsing rather than a decoder, because the frame's payload is the
 // server's bytes and nothing here needs to look inside it.
-function registryNameOf (buffer) {
+//
+// Exported because a client loads registries once, at the frame that ends the
+// phase, and the assertion that no id arrives twice (#598) reads the id off the
+// bytes a client was sent, not off the recording they came from.
+export function registryIdOf (buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 3) return null
   // The frame's own id byte comes first, then a VarInt length and the
   // identifier. Decoded with the one VarInt reader in core

@@ -18,6 +18,14 @@ function frame (name, bytes = 'AA==') {
   return { state: 'configuration', name, bytes }
 }
 
+// One registry_data frame carrying `id`: packet id 0x07, a VarInt length and the
+// identifier, then a padding byte. Real framing, because the id is read off the
+// bytes and not kept beside them.
+function registryFrame (id = 'minecraft:test') {
+  const bytes = Buffer.from(id, 'utf8')
+  return Buffer.concat([Buffer.from([0x07, bytes.length]), bytes, Buffer.from([0x00])]).toString('base64')
+}
+
 // The smallest document the parser accepts: the four required frames and one
 // finish, in the order a server sends them.
 function document (overrides = {}) {
@@ -61,12 +69,33 @@ test('#257 the committed recording parses, and carries what the ticket names', (
 test('#257 the recording is served only at the version it was recorded at', () => {
   const baseline = readConfigurationBaseline()
   const served = baselineFramesFor(baseline, { version: '26.2' })
-  assert.equal(served.length, 33)
+  // #598: 33 replayed frames less the 29 registries. A picker phase carries no
+  // registry set, so this number is the recording's frame count and not its size.
+  assert.equal(served.length, 4)
+  assert.ok(served.every(entry => entry.name !== 'registry_data'),
+    'no registry frame is served to a picker: the body a claim lands is the phase\'s one set')
   assert.ok(served.every(entry => entry.name !== BASELINE_FINISH_FRAME), 'the phase stays open')
   assert.ok(served.every(entry => Buffer.isBuffer(entry.buffer) && entry.buffer.length > 0))
   assert.equal(baselineFramesFor(baseline, { version: '26.1' }), null)
   assert.equal(baselineFramesFor(baseline, { version: '' }), null)
   assert.equal(baselineFramesFor(null, { version: '26.2' }), null)
+})
+
+test('#598 the withheld set is withheld from any recording, not only the 26.2 one', () => {
+  // The rule is the reader's, not the fixture's: a document with one registry and
+  // nothing else around it loses that registry and keeps the frames a dialog
+  // needs. A version this file has no fixture for is the same code path.
+  const baseline = parseConfigurationBaseline(document({ frames: [
+    frame('select_known_packs'),
+    frame('feature_flags'),
+    frame('registry_data', registryFrame()),
+    frame('tags'),
+    frame(BASELINE_FINISH_FRAME)
+  ], version: '26.1' }))
+  assert.deepEqual(baselineRegistryNames(baseline), ['minecraft:test'])
+  const served = baselineFramesFor(baseline, { version: '26.1' })
+  assert.deepEqual(served.map(entry => entry.name), ['select_known_packs', 'feature_flags', 'tags'])
+  assert.equal(served.some(entry => entry.name === 'registry_data'), false)
 })
 
 test('#257 a frame the policy cannot place is refused, not replayed', () => {
@@ -117,12 +146,8 @@ test('#257 a missing fixture is null, not a throw', () => {
 })
 
 test('#257 the registry names are read out of the frames, not kept beside them', () => {
-  // One registry_data frame carrying the id "minecraft:test": packet id 0x07, then
-  // a VarInt length of 14 and the identifier.
-  const id = Buffer.from('minecraft:test', 'utf8')
-  const bytes = Buffer.concat([Buffer.from([0x07, id.length]), id, Buffer.from([0x00])]).toString('base64')
   const baseline = parseConfigurationBaseline(document({
-    frames: [frame('select_known_packs'), frame('feature_flags'), frame('registry_data', bytes), frame('tags'), frame(BASELINE_FINISH_FRAME)]
+    frames: [frame('select_known_packs'), frame('feature_flags'), frame('registry_data', registryFrame()), frame('tags'), frame(BASELINE_FINISH_FRAME)]
   }))
   assert.deepEqual(baselineRegistryNames(baseline), ['minecraft:test'])
 })

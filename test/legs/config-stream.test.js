@@ -5,6 +5,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createConfigPathInterceptor } from '../../src/legs/live-front.js'
+import {
+  baselineFramesFor,
+  baselineRegistryNames,
+  readConfigurationBaseline,
+  registryIdOf
+} from '../../src/legs/configuration-baseline.js'
 
 function rig ({ live = true, cached = [] } = {}) {
   const writes = []
@@ -114,4 +120,91 @@ test('#257 a baseline for another protocol version is not a baseline', () => {
   assert.deepEqual(r.raws, [])
   assert.deepEqual(r.events, ['unavailable'], 'no dialog, and no invented frames, without a baseline')
   assert.equal(r.interceptor.stats.baselineFrames, 0)
+})
+
+// #598: one configuration phase, one registry set.
+//
+// The picker opens the client's configuration phase with the recorded baseline,
+// and a granted claim continues that same open phase with the body's own frames
+// and one finish frame. A client loads registries at `finish_configuration` and
+// nothing before it, so a registry id the phase already carried is not a
+// mergeable second copy: a real 26.2 client dropped the connection with
+//
+//   Failed to handle packet ClientboundFinishConfigurationPacket
+//   java.lang.IllegalStateException: Adding duplicate key
+//     'ResourceKey[minecraft:worldgen/biome / minecraft:badlands]' to registry
+//
+// These two tests are that collision without a client. The first is the
+// reproduction and the rule: a picker phase carries no registry data, because only
+// the body a claim lands supplies a registry set. The second is the gate the
+// ticket names: for one landed claim, every registry id across the whole phase
+// appears exactly once.
+
+// Every registry id the client was sent, in the order it arrived.
+function registryIdsOnTheWire (frames) {
+  return frames
+    .filter(frame => frame.name === 'registry_data')
+    .map(frame => registryIdOf(frame.buffer))
+}
+
+function idsThatRepeat (ids) {
+  const seen = new Set()
+  const repeated = new Set()
+  for (const id of ids) {
+    if (seen.has(id)) repeated.add(id)
+    seen.add(id)
+  }
+  return [...repeated]
+}
+
+// One landing, as the client receives it: the picker's frames out of the
+// interceptor, then the body's own frames, then the finish the landing writes.
+// `sendBodyConfiguration` writes a body's frames through the same `writeRaw` sink
+// the interceptor holds (live-front.js), so the phase is the sink's contents in
+// one order.
+function landedPhase (baseline, body) {
+  const r = pickerRig({ baseline: baselineFramesFor(baseline, { version: baseline.version }) })
+  // The library's own configuration writes, which is what opens the phase: its
+  // registry_data is suppressed, and its finish is the moment the baseline goes out.
+  r.interceptor.write('registry_data', { codec: {} })
+  r.interceptor.write('finish_configuration', {})
+  const phase = r.raws.map(frame => ({ name: frame.meta.name, buffer: frame.buffer }))
+  return {
+    phase: [...phase, ...body.map(frame => ({ name: frame.name, buffer: frame.buffer }))],
+    picker: phase,
+    interceptor: r.interceptor
+  }
+}
+
+test('#598 a picker phase carries no registry data', () => {
+  const baseline = readConfigurationBaseline()
+  const landed = landedPhase(baseline, [])
+  const ids = registryIdsOnTheWire(landed.picker)
+
+  assert.deepEqual(ids, [],
+    'the recording carries ' + baselineRegistryNames(baseline).length +
+    ' registries and a picker serves none of them: the body a claim lands is the phase\'s one registry set')
+  // The rest of the recording still goes out, in recorded order: the phase is what
+  // the client parses a dialog in, and it is still the recording's own frames.
+  assert.deepEqual(landed.picker.map(frame => frame.name), [
+    'custom_payload',
+    'feature_flags',
+    'select_known_packs',
+    'tags'
+  ], 'every frame of the recording a dialog needs, and no registry set')
+  assert.equal(landed.interceptor.replayMode, 'baseline', 'and it is still the baseline path, not the library fallback')
+})
+
+test('#598 one landed claim carries every registry id exactly once', () => {
+  const baseline = readConfigurationBaseline()
+  // The body a claim lands is another 26.2 Paper configuration, so its registry ids
+  // are the recording's own: that equality is what made the live client die, and it
+  // is the worst case rather than a contrived one.
+  const body = baseline.replayFrames
+  const ids = registryIdsOnTheWire(landedPhase(baseline, body).phase)
+
+  assert.deepEqual(idsThatRepeat(ids), [], 'no registry id reaches the client twice in one phase')
+  assert.equal(ids.length, baselineRegistryNames(baseline).length,
+    'the phase carries the body\'s set, once: one id per registry the body sends')
+  assert.ok(ids.includes('minecraft:dimension_type'), 'the body\'s own registries are the ones the client loads')
 })
