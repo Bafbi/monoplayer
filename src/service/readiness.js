@@ -16,18 +16,26 @@ export function cacheStatsLine (stats, elapsedMs) {
 // login frame. The caller owns the forceWarm fallback.
 //
 // #87: a followed transfer releases a client on this decision, and a cache with
-// no chunk data cannot back one: the human would land in an empty world and
-// fall. `shouldForceWarm` refuses the fallback on the transfer stage, and the
-// live caller turns a refusal into a failed dial, so the follow budget (retry,
-// then revert to the server the client was restored onto) owns the move.
-// Startup and reconnect pass `requireChunks: false`: neither releases a client
-// mid-move, and refusing them would leave a lane whose backend streams no
-// chunks unattachable.
+// no terrain cannot back one: the human would land in an empty world and fall.
+// `shouldForceWarm` refuses the fallback on the transfer stage, and the live
+// caller turns a refusal into a failed dial, so the follow budget (retry, then
+// revert to the server the client was restored onto) owns the move. Startup and
+// reconnect pass `requireChunks: false`: neither releases a client mid-move, and
+// refusing them would leave a lane whose backend streams no chunks unattachable.
+//
+// #399: the question is whether terrain is still there, not whether any ever
+// arrived. `chunkFrames` counts every set the cache accepted and never goes down,
+// so a body that cached a chunk and then unloaded it would pass on a counter that
+// is telling the truth about a different question. `deliverableChunks` is the
+// cache's reading of what its own replay still hands a client, and it is what
+// this decision reads.
 export function shouldForceWarm (readiness, { requireChunks = true } = {}) {
   if (readiness?.hasConfig !== true || readiness?.hasPrefix !== true) return false
   if (readiness.warm === true) return false
   if (!requireChunks) return true
-  return Number(readiness.chunkFrames) > 0
+  // A caller that supplies no reading is refused, not waved through: refusing a
+  // release is the only direction that cannot land a client on nothing.
+  return Number(readiness.deliverableChunks) > 0
 }
 
 // The fallback itself, once a caller has decided the grace ran out and the body
@@ -73,7 +81,10 @@ export async function waitForReady ({
         elapsedMs: elapsed,
         configFrames: stats.sizes.config,
         prefixFrames: stats.sizes.prefix,
-        chunkFrames: stats.chunkFrames
+        // Both readings travel: chunkFrames is telemetry ("the target sent
+        // terrain at some point"), deliverableChunks is the decision (#399).
+        chunkFrames: stats.chunkFrames,
+        deliverableChunks: stats.deliverableChunks
       }
     }
     await sleep(1000)

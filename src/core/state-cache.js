@@ -210,7 +210,8 @@ export function createStateCache (overrides = {}) {
   // warm the chunk ring, so the ring's size alone says nothing about whether the
   // target ever sent terrain. This is a "did the target send any" count, not a
   // measure of what the cache still holds: an unload or an eviction does not
-  // decrement it, and a caller that needs deliverable state reads sizes.chunks.
+  // decrement it. A caller deciding whether a client can be released reads
+  // deliverableChunks below (#399).
   let chunkFrames = 0
 
   function ringPush (domain, entry) {
@@ -232,6 +233,24 @@ export function createStateCache (overrides = {}) {
     const x = data.x ?? data.chunkX
     const z = data.z ?? data.chunkZ
     return `${x},${z}`
+  }
+
+  // #399: the chunk keys a replay would still leave a client holding, which is the
+  // answer to "is there terrain to release a client on". Derived from the two
+  // structures the replay reads, so no third copy of the rule can drift from them.
+  // The join prefix replays verbatim in capture order, so the newest frame about a
+  // key is the one the client ends up with and an unload after a set cancels it.
+  // The chunk ring replays after the prefix and holds sets only (an unload deletes
+  // its entry), so its keys are live whatever the prefix said. Nothing else can
+  // answer this: chunkFrames counts whatever arrived.
+  function deliverableChunks () {
+    const live = new Set()
+    for (const entry of prefix) {
+      if (entry.name === 'map_chunk') live.add(chunkKey(entry.data))
+      else if (entry.name === 'unload_chunk') live.delete(chunkKey(entry.data))
+    }
+    for (const key of chunks.keys()) live.add(key)
+    return live.size
   }
 
   // The entity ids one entity-domain frame is about. `entity_destroy` names
@@ -603,6 +622,10 @@ export function createStateCache (overrides = {}) {
       // Chunk frames this session's cache accepted, in the prefix or the ring
       // (#87). Zero means the target has sent no terrain at all.
       chunkFrames,
+      // The chunk keys a replay still delivers (#399): the terrain a released
+      // client lands in. chunkFrames says whether the target ever sent any, this
+      // says whether any is still there.
+      deliverableChunks: deliverableChunks(),
       // The slots the entity domain holds. One metadata frame can occupy several,
       // so this is the memory the bound actually spends, not a frame count.
       entitySlots: entitySlotCount,
