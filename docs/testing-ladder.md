@@ -1235,6 +1235,29 @@ first dial and its target warms in five seconds.
   checklist, with two real clients (#634). This rig proves the frames, their order and their
   addressing, and a bot records no pixels.
 
+- `O72` a landing writes a body's configuration through the one clientbound funnel: the frame
+  the policy replays reaches the client, and the frame it refuses does not (#602).
+
+  The front leg documents one funnel for a clientbound raw frame — `writeRawTo` in
+  `src/legs/live-front.js`, which carries the clientbound policy backstop, the
+  reconfiguration hold, the state check and the wire check. #602 found three writers beside
+  it, and a landing was one of them, so a body's configuration went to a client that is
+  mid-phase with no policy check at all. The reader's own filter was the second half: it
+  asked `decision !== 'block'`, which admits the frames a connection owns and the dialog the
+  human answers, so the two classes a replay must never carry were the two it could carry.
+
+  The rig is this check's own because the body it lands is a hand-picked configuration rather
+  than a cache, which is the point: the funnel must refuse a snapshot it cannot trust. A
+  picker client joins, the leg lands it in that body, and the client's own frame list is the
+  evidence: the ordinary frame the landing wrote is there, and neither the control dialog nor
+  the blocked connection control is, in the whole connection and not only after the landing.
+  Both refused frames are real frames of this version, built with the same serializer the
+  leg's own writer uses, so a client that received one would decode it rather than fail on
+  it, and the assertion reads the frame and not a parse error.
+
+  What it cannot prove: that no other writer in the leg has a way past the funnel. That is
+  `test/legs/raw-funnel.test.js`, which counts the call sites.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a

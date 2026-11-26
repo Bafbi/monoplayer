@@ -48,6 +48,7 @@ import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
 import { createPickerServerReader } from '../service/start-live.js'
 import { FIRST_VIRTUAL_ENTITY_ID, MOVE_INTERVAL_MS } from '../core/virtual-players.js'
 import minecraftData from 'minecraft-data'
+import mc from 'minecraft-protocol'
 
 const VERSION = '26.1'
 // #635: the wait O69 takes before it moves the body. A virtual player's move is coalesced
@@ -70,6 +71,8 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'O26', 'O38', 'O41', 'O41b', 'O39', 'O40', 'O33', 'O34', 'O42', 'O35',
   'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O69', 'O52', 'O53', 'O55', 'O55b',
   'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62', 'O70', 'O71',
+  // #602: the landing's funnel, which runs between O71 and O63.
+  'O72',
   'O63', 'O64', 'O65', 'O66'
 ])
 
@@ -249,6 +252,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #636: the client that watches beside the driver, so the driver can be measured for what
   // it is told about it.
   let pickerBot22 = null
+  // #602: the leg and the client O72 builds. They are this check's own because its
+  // body configuration is, and createLoopbackLane takes a rig, whose front leg reads
+  // the core's cache.
+  let funnelFront = null
+  let funnelBot = null
   // #260: two bodies of one account at once, each with its own real backend leg,
   // for the cache-ownership assertion. Nothing is delivered to a client here.
   let bodyFakeA = null
@@ -4745,6 +4753,101 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.driverView
     )
 
+    // --- O72: a landing writes no frame the clientbound policy refuses (#602) ---
+    // The front leg has one funnel for a clientbound raw frame: the policy backstop,
+    // the reconfiguration hold, the state check, the wire check. #602 found three
+    // writers beside it, and a landing was one of them, so a body's configuration went
+    // to a client with no policy check at all. `replayableConfigFrames` filtered with
+    // `decision !== 'block'`, which admits the frames a connection owns and the dialog
+    // the human answers, so the two classes a replay must never carry were the two it
+    // could carry.
+    //
+    // The rig is a leg of this check's own, because the body it lands is a hand-picked
+    // configuration rather than a cache: the point is what the funnel does with a
+    // snapshot it cannot trust. Both refused frames are real frames of this version,
+    // built with the same serializer the leg's own writer uses, so a client that
+    // receives one decodes it instead of failing on it.
+    const funnelName = 'Funnel'
+    const funnelWire = createWireChecker({ version: pickerVersion })
+    const funnelSerializer = mc.createSerializer({ state: 'configuration', isServer: true, version: pickerVersion })
+    const funnelFrame = (name, params) => ({ name, buffer: funnelSerializer.createPacketBuffer({ name, params }) })
+    const funnelBodyName = '127.0.0.1:' + await freePort()
+    const funnelBody = [
+      // CONFIG_ORDINARY: the one frame of the three the landing may write.
+      funnelFrame('reset_chat', {}),
+      // CONTROL: the human answers it, and the holder keeps the one copy.
+      funnelFrame('code_of_conduct', { contents: 'the rules' }),
+      // CONFIG_BLOCK: connection control the puppet took, which never crosses.
+      funnelFrame('transfer', { host: 'example.invalid', port: 25565 })
+    ]
+    funnelFront = createOfflineFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: pickerVersion,
+      offlineWhitelist: [offlineUuid(funnelName)],
+      // The picker's phase is the committed recording, so nothing here invents one.
+      configurationBaseline: pickerBaseline,
+      pickerServers: () => ({ source: 'allowed', reason: null, rows: [{ name: funnelBodyName }] }),
+      getSnapshotConfig: () => funnelBody,
+      // The frames are this version's own, so the check is this version's: a landing
+      // frame that parses with bytes left over is the failure #541 found, and this rig
+      // would rather report it than refuse the client (`warn`, not `throw`).
+      wireCheck: payload => funnelWire.check(payload),
+      wireMode: 'warn',
+      log
+    })
+    funnelFront.setLoginStartHandler(() => ({ allowed: true, picker: true }))
+    funnelFront.setSpectateBody(({ server }) => ({ watching: true, body: server }))
+    const funnelBound = await funnelFront.listen()
+    const funnelPort = funnelBound.port ?? funnelFront.port
+    funnelBot = createBot({ port: funnelPort, username: funnelName, version: pickerVersion })
+    await funnelBot.waitFor(
+      () => funnelBot.received.dialogs.length === 1,
+      'the picker dialog at the client O72 lands',
+      15_000
+    )
+    const funnelLanding = funnelFront.spectate({
+      username: funnelName,
+      body: funnelBodyName,
+      server: funnelBodyName
+    })
+    // The landing wrote its frames synchronously, so the ordinary one arriving is what
+    // says the phase continued; the refused ones are read off the same list.
+    await funnelBot.waitFor(
+      () => funnelBot.received.names.some(frame => frame.name === 'reset_chat'),
+      'the body frame the landing wrote',
+      15_000
+    )
+    const funnelNames = funnelBot.received.names
+    const funnelRefused = funnelNames.filter(frame =>
+      frame.name === 'transfer' || frame.name === 'code_of_conduct')
+    evidence.rawFunnel = {
+      landing: {
+        watching: funnelLanding.watching,
+        reason: funnelLanding.reason,
+        frames: funnelLanding.frames ?? null
+      },
+      configuration: funnelNames
+        .filter(frame => frame.state === 'configuration')
+        .map(frame => frame.name),
+      refused: funnelRefused.map(frame => frame.name),
+      policyRefused: funnelFront.metrics.policyRefused,
+      stateRefused: funnelFront.metrics.stateRefused,
+      errors: [...funnelBot.received.errors],
+      leftovers: funnelBot.received.leftovers.length
+    }
+    check(
+      'O72',
+      'a landing writes a body\'s configuration through the clientbound funnel: the frame the policy replays reaches the client, and the frame it refuses does not',
+      funnelLanding.watching === true &&
+        funnelLanding.frames === 1 &&
+        funnelNames.some(frame => frame.name === 'reset_chat') &&
+        funnelRefused.length === 0 &&
+        funnelBot.received.errors.length === 0 &&
+        funnelBot.received.leftovers.length === 0,
+      evidence.rawFunnel
+    )
+
     // --- O63: a body nobody drives stays up, and is still watchable (#259) ---
     // The claim is held by the connection that made it, so the driver leaving releases
     // the body and nothing else. Its backend session, its warm state and its spectator
@@ -5492,7 +5595,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     for (const lane of lanes) {
       try { await lane.close() } catch { /* best effort */ }
     }
-    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20, pickerBot21, pickerBot22]) {
+    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20, pickerBot21, pickerBot22, funnelBot]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }
@@ -5504,6 +5607,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     try { await controlBackend?.close?.() } catch { /* best effort */ }
     try { await controlBase?.close?.() } catch { /* best effort */ }
     try { await pickerFront?.close?.() } catch { /* best effort */ }
+    try { await funnelFront?.close?.() } catch { /* best effort */ }
     try { await pickerBackend?.close?.() } catch { /* best effort */ }
     try { await pickerBodyFake?.close?.() } catch { /* best effort */ }
     try { bodyLegA?.end?.() } catch { /* best effort */ }

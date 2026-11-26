@@ -252,6 +252,12 @@ export function createConfigPathInterceptor ({
       resolveConfigPath()
       return
     }
+    // #602: the phase's finish closes the phase whichever writer sends it. A landing
+    // writes it through this function on a client whose path is already resolved — the
+    // picker's baseline, and the cached replay — and a configuration frame after it is
+    // one the client reads in play (#541). `finishSent` was set only where this leg's
+    // own resolve wrote the finish, so those two clients were the gap.
+    if (name === finishName) finishSent = true
     return originalWrite(name, params)
   }
 
@@ -282,6 +288,11 @@ export function createConfigPathInterceptor ({
     reopenConfiguration,
     get live () { return live },
     get resolved () { return resolved },
+    // #599: the phase's finish is on the wire, so a configuration frame offered after
+    // it is one the client reads in play. The leg's raw funnel asks this, because the
+    // rule the interceptor keeps for the library's own writer has to hold for every
+    // other writer too.
+    get finishSent () { return finishSent },
     get replayMode () {
       if (live) return 'live_stream'
       if (!resolved) return 'pending'
@@ -1155,15 +1166,22 @@ function createFrontLeg ({
   }
 
   // The body's configuration frames as this leg may send them: the cache's own
-  // configuration snapshot, minus anything the clientbound policy refuses and
-  // minus anything that is not a frame. Both the cached replay at login and the
-  // landing after a claim (#258) read it, so the two phases a client can receive
-  // carry the same set.
+  // configuration snapshot, minus anything that is not a frame and minus anything the
+  // clientbound policy does not replay. Both the cached replay at login and the landing
+  // after a claim (#258) read it, so the two phases a client can receive carry the same
+  // set.
+  //
+  // #602: `replay` is the policy's own answer to this question, and it is the only one
+  // that fits. `decision !== 'block'` is not the same predicate: it admits the frames a
+  // connection owns (`keep_alive`, `ping`) and the dialog the human answers
+  // (`code_of_conduct`), none of which a second client may be handed as part of its
+  // phase, and `state-cache.js` and `configuration-baseline.js` already read this same
+  // field to answer it. One question, one answer, where the table holds it.
   function replayableConfigFrames () {
     return getSnapshotConfig().filter(
       frame => typeof frame?.name === 'string' &&
         Buffer.isBuffer(frame.buffer) &&
-        clientboundPolicy('configuration', frame.name).decision !== 'block'
+        clientboundPolicy('configuration', frame.name).replay
     )
   }
 
@@ -1183,13 +1201,12 @@ function createFrontLeg ({
       baselineConfigFrames: picker ?? [],
       onBaselineFrames: picker === null ? null : () => sendPickerDialog(client),
       write: client.write.bind(client),
-      // Every clientbound raw byte we push to the attaching client, in order.
-      writeRaw: (buffer, meta) => {
-        if (dumpRaw) {
-          dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
-        }
-        return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
-      },
+      // Every clientbound raw byte we push to the attaching client, in order. Through
+      // the funnel (#602): the picker's baseline frames and this connection's cached
+      // replay are configuration frames written to a client mid-phase, which is exactly
+      // what the policy backstop, the reconfiguration hold, the state check and the wire
+      // check are for.
+      writeRaw: (buffer, meta) => writeRawTo(client, buffer, meta),
       isConfigurationState: () => client.state === 'configuration',
       cachedConfigFrames,
       // #16: the client can parse a configuration frame from here on. The core
@@ -1321,9 +1338,11 @@ function createFrontLeg ({
     if (!encoded.ok) {
       log('pickerDialogFailed', { error: encoded.error })
     } else {
+      // #602: the dialog is a configuration frame this leg authored, and the funnel is
+      // where a clientbound raw frame is written. It answers whether the frame went
+      // (the wire check, the state check) instead of throwing at the socket.
       try {
-        client.writeRaw(encoded.buffer)
-        written = true
+        written = writeRawTo(client, encoded.buffer, { state: 'configuration', name: 'show_dialog' })
       } catch (error) {
         log('pickerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
       }
@@ -1739,23 +1758,16 @@ function createFrontLeg ({
   // one function: a client's configuration must not depend on its role. Its play
   // state differs in one way only, and the core writes that: the two frames that
   // tell a spectator what it is (#259).
+  //
+  // #602: every frame goes through the funnel, which is where the policy backstop, the
+  // reconfiguration hold, the state check and the wire check live. A landing is the one
+  // moment a body's configuration is written into a client that is mid-phase, so a
+  // writer that skipped them was a frame the policy refuses reaching a client.
   function sendBodyConfiguration (client) {
     const frames = replayableConfigFrames().filter(frame => frame.name !== 'finish_configuration')
     let written = 0
     for (const frame of frames) {
-      const sent = emitCheckedRaw({
-        client,
-        buffer: frame.buffer,
-        meta: { state: 'configuration', name: frame.name },
-        wireCheck,
-        wireMode,
-        stats: wireStats,
-        log: recordFor(client)
-      })
-      if (sent) {
-        written++
-        noteDelivered(client, { state: 'configuration', name: frame.name }, { bytes: frame.buffer.length })
-      }
+      if (writeRawTo(client, frame.buffer, { state: 'configuration', name: frame.name })) written++
     }
     return { frames: frames.length, written }
   }
@@ -2203,20 +2215,13 @@ function createFrontLeg ({
       return { acknowledged: false }
     }
     ctx.reconfiguring = true
+    // #602: the flush is the same write the hold took, so it is the same funnel. A held
+    // finish closes the phase where it is written, which is #541's fact and not this
+    // function's to restate.
     for (const frame of pending.frames) {
-      const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
-      if (sent) noteDelivered(client, frame.meta, { bytes: frame.buffer.length })
+      writeRawTo(client, frame.buffer, frame.meta)
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
-    // #541: a finish that arrived before this acknowledgement was held here and
-    // is on the wire above, so it never reached the writeRawTo branch that
-    // closes the phase. Closing it here is the same fact, marked where the frame
-    // it belongs to is written.
-    const heldFinish = pending.frames.some(frame =>
-      frame.meta?.state === 'configuration' && frame.meta?.name === 'finish_configuration')
-    if (heldFinish && ctx.interceptor?.finishFromCore()) {
-      record(client, 'configFinishedByCore', { username: client.username ?? null })
-    }
     record(client, 'frontReconfigurationAcknowledged', {
       username: client.username ?? null,
       flushedFrames: pending.frames.length,
@@ -2244,9 +2249,16 @@ function createFrontLeg ({
   }
 
   // One frame, to one client. Everything on this path is per socket — the
-  // clientbound policy backstop, the reconfiguration hold, the state check, the wire
-  // check — so a body with two channels does the work twice, and neither client can
-  // be handed a frame in a state it cannot parse.
+  // clientbound policy backstop, the reconfiguration hold, the state check, the rule
+  // against a frame after its phase's finish, the wire check — so a body with two
+  // channels does the work twice, and neither client can be handed a frame in a state
+  // it cannot parse.
+  //
+  // #602: this is the leg's only raw writer. The config interceptor's replay, a claim
+  // landing, a spectator landing and the reconfiguration flush all come here, so a
+  // check added below is a check every clientbound raw frame takes. A writer that
+  // called emitCheckedRaw directly would have the wire check and none of the rest,
+  // which is the hole #602 found three of.
   function writeRawTo (client, buffer, meta = null) {
     if (!client) return false
     // Last-write check: even if the core router regresses, a frame the
@@ -2295,6 +2307,16 @@ function createFrontLeg ({
         frameState: meta.state,
         clientState: client.state
       })
+      return false
+    }
+    // #599: this phase's finish is on the wire, so the client reads play from here and
+    // a configuration frame arriving now is another packet's id with the rest of its
+    // bytes left over (#541 read 9 bytes as `acknowledge_player_digging`). The leg's own
+    // state has not caught up until the client answers, which is why the state check
+    // above passes in exactly this window. The interceptor refuses the library's writer
+    // this way; this is the same rule for every writer that comes here.
+    if (meta?.state === 'configuration' && clients.get(client)?.interceptor?.finishSent === true) {
+      record(client, 'configFrameAfterFinish', { name: meta.name })
       return false
     }
     if (dumpRaw) {
