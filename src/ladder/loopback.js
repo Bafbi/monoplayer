@@ -1768,6 +1768,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       restored: seamlessCore.metrics.reconfigurationsRestored
     }
     const seamlessMark = b5.names.length
+    const seamlessLeftoverMark = b5.leftovers.length
     const seamlessLogMark = logs.length
     seamlessBase.sendTransfer(target.host, target.port)
     await waitFor(
@@ -1894,14 +1895,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         attaches: seamlessCore.metrics.attaches,
         blocks: b5.blockChanges.map(change => change.location),
         leftovers: b5.leftovers.length,
-        // A count alone cannot be read: the frame that carried the trailing
-        // bytes is what says whether the proxy sent something it should not.
-        leftoverFrames: b5.leftovers.map(entry => ({
-          state: entry.state,
-          name: entry.name,
-          total: entry.total,
-          leftover: entry.leftover
-        })),
+        // #541: a count alone cannot be read. The frames say what the client
+        // could not parse, and the mark says whether they arrived on this hop or
+        // on an earlier round the same connection went through.
+        leftoverDetails: b5.leftovers.slice(),
+        leftoversBeforeHop: seamlessLeftoverMark,
         errors: b5.errors.length
       }
     )

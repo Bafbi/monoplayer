@@ -10,9 +10,11 @@ function rig ({ live = true, cached = [] } = {}) {
   const writes = []
   const raws = []
   const configuring = []
+  const suppressed = []
   let configuration = true
   const interceptor = createConfigPathInterceptor({
     onConfiguring: () => configuring.push('configuring'),
+    onSuppressed: ({ name }) => suppressed.push({ name }),
     write: (name, params) => writes.push({ name, params }),
     writeRaw: (buffer, meta) => raws.push({ buffer, meta }),
     isConfigurationState: () => configuration,
@@ -26,6 +28,7 @@ function rig ({ live = true, cached = [] } = {}) {
     writes,
     raws,
     configuring,
+    suppressed,
     endConfiguration: () => { configuration = false },
     startConfiguration: () => { configuration = true }
   }
@@ -125,15 +128,17 @@ test('#541 a configuration frame written after the phase finish never reaches th
   r.interceptor.write('keep_alive', { keepAliveId: 7n })
   assert.deepEqual(r.writes, [], 'the keep-alive does not follow the phase finish')
   assert.equal(r.interceptor.stats.suppressedAfterFinish, 1)
+  assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
 })
 
 test('#541 the next round opens the phase again, so its keep-alives are sent', () => {
   const r = rig()
   r.interceptor.finishFromCore()
   r.endConfiguration()
-  // The leg opens the next round on the connection it holds by writing the
-  // play-state start_configuration, and flips its own state when the client
-  // answers it.
+  // The leg opens the next round on the connection it holds: it reopens the
+  // phase, writes the play-state start_configuration, and flips its own state
+  // when the client answers it.
+  r.interceptor.reopenConfiguration()
   r.interceptor.write('start_configuration', {})
   r.startConfiguration()
   r.interceptor.write('keep_alive', { keepAliveId: 8n })
@@ -149,6 +154,7 @@ test('#541 a later round in cached mode closes the phase as well', () => {
   r.interceptor.write('finish_configuration', {})
   assert.equal(r.interceptor.replayMode, 'cached_replay')
   r.endConfiguration()
+  r.interceptor.reopenConfiguration()
   r.interceptor.write('start_configuration', {})
   r.startConfiguration()
   assert.equal(r.interceptor.finishFromCore(), false, 'the login replay already resolved the interceptor')

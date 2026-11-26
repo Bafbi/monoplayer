@@ -159,7 +159,10 @@ export function createConfigPathInterceptor ({
   // phase. This is the first moment a configuration frame can reach the client
   // in a state it parses; the attach call-in runs during login, before the
   // library writes Login Success.
-  onConfiguring = null
+  onConfiguring = null,
+  // #541: a configuration frame written after the phase's finish, which is
+  // dropped. The leg counts it and records it; the interceptor owns no log.
+  onSuppressed = null
 }) {
   if (typeof originalWrite !== 'function') throw new TypeError('write is required')
   if (typeof writeRaw !== 'function') throw new TypeError('writeRaw is required')
@@ -174,11 +177,12 @@ export function createConfigPathInterceptor ({
   let notified = false
   const stashed = [] // library-authored registry_data params (fallback only)
   // #541: the phase's finish is the last configuration frame a client can parse.
-  // The client answers it and is in play from that moment; this leg learns that
-  // only when the answer arrives, so a frame written in between still carries a
-  // configuration packet id into a connection reading the play table. The
-  // library's own keep-alive does exactly that on its four-second interval.
-  let finished = false
+  // The client answers it and is in play from that moment; this leg learns the
+  // answer only when the client's finish arrives, so a frame written in between
+  // carries a configuration packet id into a connection reading the play table.
+  // The library's own keep-alive does exactly that on its four-second interval.
+  // A round opens the phase again through reopenConfiguration.
+  let finishSent = false
   const stats = {
     suppressedRegistryData: 0,
     replayedConfigFrames: 0,
@@ -235,25 +239,18 @@ export function createConfigPathInterceptor ({
       return
     }
     originalWrite('finish_configuration', {}) // the library call, now ordered after the replay
-    finished = true
+    finishSent = true
   }
 
   function wrappedWrite (name, params) {
     if (!isConfigurationState()) {
-      // #541: a round starts on the connection the client holds with the
-      // play-state start_configuration, and the play state between rounds is
-      // where the next round's opening frame belongs. Either way the phase is
-      // open again, and the next configuration frame is legitimate.
-      finished = false
       return originalWrite(name, params)
     }
-    if (finished) {
-      // #541: nothing follows the finish in the configuration state. A frame
-      // that did would be read by a client already in play, as a different
-      // packet with the rest of the frame left over (#541, the offline rung's
-      // O35: a 9-byte configuration keep_alive read in play as
-      // acknowledge_player_digging, seven bytes left over).
+    if (finishSent) {
+      // #541: past this phase's finish, a configuration frame is one the client
+      // reads in play.
       stats.suppressedAfterFinish++
+      onSuppressed?.({ name })
       return
     }
     if (name === 'registry_data' && !resolved) {
@@ -275,16 +272,24 @@ export function createConfigPathInterceptor ({
     // #541: every round on the connection closes here, not only the first. A
     // login-phase replay already resolved the interceptor, and a later followed
     // move still ends its phase on the core's finish frame.
-    finished = true
+    finishSent = true
     if (resolved) return false
     resolved = true
     stats.finishedByCore++
     return true
   }
 
+  // #541: a round on the connection the client already holds opens the phase
+  // again. The leg calls this where it decides the round starts, because the
+  // frame that starts it is written in play and is not a configuration write.
+  function reopenConfiguration () {
+    finishSent = false
+  }
+
   return {
     write: wrappedWrite,
     finishFromCore,
+    reopenConfiguration,
     get live () { return live },
     get resolved () { return resolved },
     get replayMode () {
@@ -657,7 +662,7 @@ function createFrontLeg ({
   // #417: `pickerRefusals` is the total and `pickerRefusalsByReason` the split. Both
   // are written by bumpPickerRefusal and by nothing else, so the total and the map
   // cannot disagree about how many refusals there were.
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, suppressedAfterFinish: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -1207,6 +1212,12 @@ function createFrontLeg ({
       onUnavailable: () => {
         record(client, 'configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
         denyConnection(client, 'backend_not_ready')
+      },
+      // #541: one line per dropped frame, and the leg's own counter. The client it
+      // was aimed at has left the phase, so this never reaches the wire.
+      onSuppressed: ({ name: dropped = null } = {}) => {
+        metrics.suppressedAfterFinish++
+        record(client, 'configFrameAfterFinish', { name: dropped })
       }
     })
     client.write = interceptor.write
@@ -2141,6 +2152,10 @@ function createFrontLeg ({
       record(driver, 'frontReconfigureRefused', { reason: 'client_not_in_play', state: driver.state })
       return { started: false, reason: 'client_not_in_play', state: driver.state }
     }
+    // #541: the round opens the phase again, before the frame that starts it.
+    // The start_configuration is written in play, so it is not a configuration
+    // write and the interceptor cannot see the round begin.
+    ctx?.interceptor?.reopenConfiguration?.()
     try {
       driver.write('start_configuration', {})
     } catch (error) {
