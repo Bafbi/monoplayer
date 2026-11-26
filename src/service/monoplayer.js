@@ -57,6 +57,13 @@
 // channel on the body; a write with one reaches that connection alone, which is how
 // a spectator is handed its body's replay. The last two call-ins are the spectator's
 // and a leg without them refuses that verb in words.
+//
+// #592: the call-ins the core registers from a table, and what each one reaches,
+// are declared in src/service/wire-leg-to-core.js. The login review, the
+// serverbound pipeline and the detach are still registered inline in start()
+// (#605). The core applies the table there and reports what the leg carried as
+// `legWiring`, with the names it did not carry on the start record. A lane adds no
+// row to it: it builds a leg and starts a core.
 
 import { bumpBounded } from '../core/bounded-counter.js'
 import { WARM_MARKER } from '../core/state-cache.js'
@@ -64,6 +71,7 @@ import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
 import { accountIdentifier, stampIdentity } from '../core/channels.js'
 import { forceWarm, shouldForceWarm } from './readiness.js'
+import { wireLegToCore } from './wire-leg-to-core.js'
 import {
   FABRIC_BRAND,
   brandFrame,
@@ -600,6 +608,10 @@ export function createMonoplayer ({
   const listeners = new Map() // type -> Set<fn>
   const unclassifiedLogged = new Set()
   let started = false
+  // #592: what the leg carried when the core wired it, or null before start().
+  // It is the report wireLegToCore gives, which the start record carries the
+  // missing names from and which the tests read back off a started core.
+  let legWiring = null
   // #269: a driver is delivered a body. Delivery is the front leg's channels now, so
   // this is only what the session knows: one driver, one body, one attach.
   let attached = false // a driver is delivered the body (configuring or attached)
@@ -3045,53 +3057,22 @@ export function createMonoplayer ({
       detachPlayer({ reason })
     })
 
-    // #16: the client entered its own configuration phase; a gate the backend
-    // asked before the client arrived is delivered there.
-    frontLeg.setConfiguringHandler(({ name } = {}) => {
-      configuringReady({ name })
+    // #592: the call-ins this core needs on the leg it was handed, in one place,
+    // with each one's payload shape. The lanes used to register these by hand, and
+    // a leg that lacked one kept its own default and said nothing. The caller keeps
+    // the leg it built and registers nothing on it. A lane that wants a different
+    // registration wraps one call-in after this runs.
+    legWiring = wireLegToCore({ core: handle, leg: frontLeg })
+
+    // #592: a leg that lacks a call-in is silent otherwise: it answers the attach
+    // from its own fallback, in words the lane never reads. The names it did not
+    // carry ride the start record.
+    log('start', {
+      whitelist: identity.whoAmI().whitelist,
+      puppet: cfg.puppet,
+      started: true,
+      legMissing: legWiring.missing
     })
-
-    // #22: the client answered the reconfiguration's finish frame and is in
-    // play again on its own connection. A leg without the call-in keeps the
-    // play state and gets the target's replay at its login instead.
-    if (typeof frontLeg.setReconfiguredHandler === 'function') {
-      frontLeg.setReconfiguredHandler(({ name = null, uuid = null } = {}) => {
-        frontReconfigured({ name, uuid })
-      })
-    }
-
-    // #258: the landing. A granted claim is what dials a body, so the front asks
-    // the core for one and the core owns the dial and the warm wait. A leg with no
-    // picker wiring keeps refusing the claim it never receives, and a lane with
-    // `picker` off refuses every landing (`picker_off`).
-    if (typeof frontLeg.setConnectClaimedBody === 'function') {
-      frontLeg.setConnectClaimedBody(payload => connectClaimedBody(payload))
-    }
-    // #269: the spectator. A body that is already delivered has nothing to dial, so
-    // the front asks whether it may be watched and hands the client over on its own
-    // channel. A leg without these call-ins refuses the verb in words, exactly as a
-    // leg without the picker refuses a claim.
-    if (typeof frontLeg.setSpectateBody === 'function') {
-      frontLeg.setSpectateBody(payload => spectateBody(payload))
-    }
-    if (typeof frontLeg.setSpectatorAttach === 'function') {
-      frontLeg.setSpectatorAttach(payload => spectateView(payload))
-    }
-    // #259: what a picker row says about a body, so a row can read `unclaimed`
-    // rather than `down` about a body nobody drives and a spectator may join. The
-    // session owns the body, so only the core can answer this, and a leg with no
-    // call-in reads every row the way the list wrote it.
-    if (typeof frontLeg.setDisconnectBody === 'function') {
-      frontLeg.setDisconnectBody(payload => disconnectBody(payload))
-    }
-    if (typeof frontLeg.setBodyServed === 'function') {
-      frontLeg.setBodyServed(() => ({ body: claimedBody, up: servedBody() !== null }))
-    }
-    if (typeof frontLeg.setSpectatorLeft === 'function') {
-      frontLeg.setSpectatorLeft(payload => spectatorLeft(payload))
-    }
-
-    log('start', { whitelist: identity.whoAmI().whitelist, puppet: cfg.puppet, started: true })
     emit('start')
   }
 
@@ -3412,6 +3393,10 @@ export function createMonoplayer ({
     // #258: the landing. The front leg calls this when a claim is granted, and it
     // is the only place a claim dials a body.
     connectClaimedBody,
+    // #259: the body this session serves and whether it is up, which is what a
+    // picker row reads. The leg's setBodyServed call-in reaches this. A lane that
+    // never wires it reads a row the way the list wrote it.
+    bodyServed: () => ({ body: claimedBody, up: servedBody() !== null }),
     // #261: a player asked for this body to end, from the picker's Disconnect verb.
     // It is the reversing act, and its refusals are the session's.
     disconnectBody,
@@ -3429,6 +3414,10 @@ export function createMonoplayer ({
     start,
     stop,
     get started () { return started },
+    // #592: which call-ins the leg carried, and which it did not. An empty `missing`
+    // is a leg that answers every call-in the table declares. The tests read it back
+    // off a started core, and `start` carries the missing names.
+    get legWiring () { return legWiring },
     get attached () { return isAttached() },
     get backendViewDistance () { return backendViewDistance },
     get backendConfiguring () { return backendConfiguring },

@@ -2782,9 +2782,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // never warms, which is O55's no-body-behind-the-dialog.
       order: ['listen'],
       // The front's login decision is wired to the core, which is what makes it
-      // hear `picker: true`. The configuration-phase registrations are not: a
-      // client of this lane is offered a server, and attaches at play.
-      configuring: false,
+      // hear `picker: true`. #592: the core registers the configuration-phase
+      // call-ins on every lane, and the two this rig used to skip cannot fire
+      // here. A picker join leaves beforeLogin at the `decision.picker` branch in
+      // src/legs/live-front.js, before `coreAttachConfiguring` runs, and
+      // `servePicker` opens no channel, so the client-information report drops it
+      // at its `channel === null` guard. The core registered the configuring
+      // handler unconditionally before this change, and that one is untouched.
       front: {
         // No cached backend configuration exists, and none is invented: the front's
         // cached replay path must find nothing here.

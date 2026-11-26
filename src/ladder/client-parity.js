@@ -687,10 +687,8 @@ async function startFakeLane ({ version, username, log = () => {} } = {}) {
       clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout }
     })
 
-    front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
-    front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
-    front.setCoreAttach(({ name, uuid }) => core.attachPlayer({ name, uuid, includeConfig: false }))
-
+    // #592: the core wires its own attach pipeline in start(). This lane registered
+    // three of the four by hand, and the fourth was already the core's.
     core.start()
     await backendLeg.connect()
     const readiness = await waitForReady({ core, log, maxWarmMs: 5000, maxTotalMs: 15_000 })

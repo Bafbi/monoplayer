@@ -16,7 +16,8 @@ import { createBackendFrameForwarder, MAX_BACKEND_FRAME_NAMES } from '../../src/
 import minecraftData from 'minecraft-data'
 
 import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
-import { createConfigPathInterceptor, createLiveFrontLeg } from '../../src/legs/live-front.js'
+import { createConfigPathInterceptor, createLiveFrontLeg, createOfflineFrontLeg } from '../../src/legs/live-front.js'
+import { LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 import { synthAttach, LEG_OWNED } from '../../src/core/join-synth.js'
 import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { createStateCache } from '../../src/core/state-cache.js'
@@ -356,4 +357,62 @@ test('the live front leg accepts every chat mode the config accepts', () => {
     assert.doesNotThrow(() => build(chat), chat)
   }
   assert.throws(() => build('write'), /chat must be one of/)
+})
+
+// #592: the call-ins the core declares are the leg's contract, and every front leg
+// a lane builds is measured against them through a real core's start(). A leg that
+// drops one keeps its own fallback and says nothing: live-front answers every
+// attach from a default that refuses, and reads a missing setBodyServed as a null
+// body. The double in src/legs/fake-legs.js carries setClientSettingsHandler and
+// setConfiguringHandler of the required rows and lacks setCoreAttach and
+// setCoreAttachConfiguring, so its holes are asserted too and a setter added to it
+// is a fact a reader sees.
+function startedOn (frontLeg, version = '26.1') {
+  const core = createMonoplayer({
+    config: { ...DEFAULT_CONFIG, attachWhitelist: [PLAYER] },
+    backendLeg: createFakeBackendLeg(),
+    frontLeg,
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout }
+  })
+  core.start()
+  return core
+}
+
+test('every front leg a lane builds carries the call-ins the core declares', () => {
+  const live = startedOn(createLiveFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    attachWhitelistFile: path.join(os.tmpdir(), 'monoplayer-leg-call-ins-whitelist.json'),
+    getSnapshotConfig: () => [],
+    wireMode: 'off'
+  }))
+  assert.deepEqual(live.legWiring.missing, [],
+    'the live front leg carries every call-in: an absent one is a lane that refuses a client and logs nothing')
+
+  const offline = startedOn(createOfflineFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    offlineWhitelist: [PLAYER],
+    getSnapshotConfig: () => [],
+    wireMode: 'off'
+  }))
+  assert.deepEqual(offline.legWiring.missing, [],
+    'and so does the offline front leg every rig builds')
+
+  // The other half of the contract: a row that names a method the core does not
+  // have would register a handler that throws the first time the leg calls it.
+  for (const { reaches } of LEG_CALL_INS) {
+    assert.equal(typeof offline[reaches], 'function',
+      'the core the table is applied to carries ' + reaches)
+  }
+
+  // The double is not a front leg a client joins: a test attaches through the core
+  // instead, so its holes are the ones the rigs never give it.
+  const fake = startedOn(createFakeFrontLeg())
+  assert.deepEqual(fake.legWiring.requiredMissing.sort(), ['setCoreAttach', 'setCoreAttachConfiguring'],
+    'the fake front leg carries neither attach setter, and a case that relied on one would attach through the core')
+  assert.ok(fake.legWiring.missing.includes('setBodyServed'),
+    'and it carries no setBodyServed, which is the call-in whose absence the real leg reads as a null body')
 })

@@ -1111,20 +1111,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
     whitelistSource
   })
 
-  front.setCoreAttach(({ name, uuid }) =>
-    core.attachPlayer({ name, uuid, includeConfig: false })
-  )
-  // #16: a client may attach while the puppet is still configuring, and a
-  // configuration gate the backend asked before it arrived is delivered when
-  // the client enters its own configuration phase.
-  front.setCoreAttachConfiguring(({ name, uuid }) => core.attachConfiguringPlayer({ name, uuid }))
-  front.setConfiguringHandler(({ name }) => core.configuringReady({ name }))
-  // #22: the reconfiguration call-in is wired by the core's start(), which owns
-  // the front-leg handler set; the front leg reports the client's return to
-  // play there.
-  // #18: the human's client information is the source of the fields the
-  // server sees; the core merges it with the backend's view distance cap.
-  front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
+  // #592: the core wires every call-in it needs on this leg in its own start(),
+  // including the attach pipeline, the configuration phase and the human's client
+  // information. The live lane registers nothing on the leg by hand.
   core.start()
 
   // Readiness after a connect: the backend configuration and join prefix must

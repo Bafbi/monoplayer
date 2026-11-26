@@ -68,7 +68,6 @@ export async function createRig ({
   attach = null,
   reconnect = null,
   order = ['connect', 'ready', 'listen'],
-  configuring = true,
   onStep = null
 } = {}) {
   if (typeof name !== 'string' || name.length === 0) {
@@ -127,21 +126,17 @@ export async function createRig ({
     ...coreOptions
   })
 
-  // The three configuration-phase registrations, then the play-ready one. A
-  // picker-only rig attaches at play and never configures, so it takes the last
-  // one and leaves the front leg's own defaults for the other three.
-  if (configuring) {
-    front.setCoreAttachConfiguring(({ name: player, uuid }) => core.attachConfiguringPlayer({ name: player, uuid }))
-    front.setConfiguringHandler(({ name: player }) => core.configuringReady({ name: player }))
-    front.setClientSettingsHandler(settings => core.noteClientSettings(settings))
-  }
-  front.setCoreAttach(player => attach === null
-    ? core.attachPlayer({ ...player, includeConfig: false })
-    : attach({ rig, player }))
+  // #592: start() wires the attach and configuration call-ins, so a rig registers
+  // nothing by hand except the one thing its call supplies. `attach` wraps the
+  // core's own attach call-in, and it is registered after start() because start()
+  // is what sets the default it wraps. The hook a call supplies carries the record
+  // its assertion reads and returns the attach outcome, so a rig that names no
+  // `attach` gets the plain call-in.
+  core.start()
+  if (attach !== null) front.setCoreAttach(player => attach({ rig, player }))
 
   // Registered after start(), as every rig did before this factory: start() emits
   // only 'start', so a due reconnect comes from a later fault, never from start.
-  core.start()
   if (reconnect !== null) core.on('reconnect_due', event => reconnect({ ...event, rig }))
 
   const events = (from = 0) => logs.slice(from)

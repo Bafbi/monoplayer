@@ -521,6 +521,22 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // this client already received. The snapshot, the pose, and the attach run
     // in one synchronous turn, so they describe exactly the stream replayed.
     let attachCut = null
+    core.start()
+    // #592: start() wires the core's own attach call-in, so this lane wraps it
+    // after start() rather than in place of it. The wrapper carries N13's cut and
+    // returns what the core's attach returned.
+    //
+    // And start() wires the human's client information for every leg. This rung
+    // registered none before. What it measures is N13's frame cut against the
+    // replay the proxy sent this bot, and recording the bot's information would
+    // change what the backend makes of the join that replay describes. So the lane
+    // declines the call-in, and a null handler is the leg's own "none". The
+    // configuring attach it also gains never runs here, because the cache is warm
+    // before the front listens (readiness above, listen below).
+    //
+    // A rung whose bot's information should reach a real Paper is a change to make
+    // on its own proof, not inside a refactor: see #608.
+    front.setClientSettingsHandler(null)
     front.setCoreAttach(({ name, uuid }) => {
       const attachSnapshot = core.cache.snapshot()
       const attachPose = core.session.currentPose
@@ -535,7 +551,6 @@ export async function runOnline (argv = process.argv.slice(2)) {
       }
       return outcome
     })
-    core.start()
 
     // --- run: backend connect, readiness, front listen ---
     // Reconnect is another stream's slice. A backend drop here fails the run;
