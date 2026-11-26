@@ -149,6 +149,9 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
 | `monoplayer.preauth.refused` | sum | `reason` | Increase of `front.preAuthRefused`, sampled at each heartbeat: a front connection refused because the pre-auth window was full (#201). The only reason today is `preauth_connection_cap`, and the front leg's JSONL `preAuthRefused` line is the same refusal with the cap and the count in it. A leg's log does not go through the core, so this sum and that line are the two records of one decision. |
 | `monoplayer.preauth.expired` | sum | `reason` | Increase of `front.preAuthExpired`, sampled at each heartbeat: a front connection the pre-auth deadline destroyed because it had not left the window in time (#205). The only reason today is `preauth_deadline`, and the leg's `preAuthExpired` line is the same close, one line per expiry. It is a separate sum from `preauth.refused` because the two answer different questions: a refusal means the window was full, and an expiry means a socket sat in it and never left. |
+| `monoplayer.picker_picks` | sum | `server` | One pick a picker recorded, written at the click (#257). `server` is the picked row's `host:port`, which the allowed-server list bounds. The service's `pickerPickRecorded` line is the same pick as product state. |
+| `monoplayer.picker_verbs` | sum | `verb`, `server` | One answer to a chosen server's own dialog (#266): `claim`, `spectate` or `disconnect`. `server` is the server the answer named, as `host:port` from the allowed-server list. The front's `pickerVerb` line is the same answer as a frame event. |
+| `monoplayer.picker_claims` | sum | `outcome` | One claim click's outcome (#290), written only for a `claim` verb. `outcome` is `granted`, `repeated` or `refused`: a repeat granted a claim the holder already had, so it is its own word and not a second grant. The player, the holder and a refusal's reason go on the `pickerVerbRecorded` record and never on this series (#415); the refusal reasons are summed under `front.pickerRefusalsByReason` in the heartbeat (#417). A release is not here, because no front-leg callback reports one to the service. |
 | `monoplayer.attached` | gauge | none | `1` while a client is attached. |
 | `monoplayer.warm` | gauge | none | `1` when the state cache is warm. |
 | `monoplayer.backend.logins` | gauge | none | Current backend login count. |
@@ -196,6 +199,7 @@ Every cumulative field counts from the start of the process except the top-level
 | `account.expiresAt` | gauge | Epoch milliseconds when the puppet's Minecraft (`mca`) token expires: the cache's `obtainedOn` plus `expires_in`, the same projection `node src/custody/cli.js status` prints. Read at each heartbeat, so a token refresh moves it. `null` when the custody cache does not say, which is not the same as "no expiry". |
 | `front.denied`, `front.allowed`, `front.attaches` | cumulative | Login-start denials, allows, and attaches. |
 | `front.pickers`, `front.pickerPicks` | cumulative | Joins a picker was served to because the lane had no backend session, and picks the picker recorded (#257). A picker join is not a denial, so `front.denied` does not count it and these two are its only counters. |
+| `front.pickerClaims` | cumulative | Claims the picker granted, one per body taken (#267). The holder clicking again is one claim and not a second, so a repeat does not move this number: `monoplayer.picker_claims` carries that case as `outcome: repeated`. A release is not counted here; it is the `pickerClaimReleased` line below. |
 | `front.pickerRefusals`, `front.pickerRefusalsByReason.*` | cumulative | Picker requests the lane refused: the total, and the same count keyed by the reason that refusal's own record carries (#417). One function writes both, so the total is the sum of the map. The keys are a closed set the leg already writes. From a click it could not read: `unknown_id`, `malformed`, `unknown_verb`. From a click naming a server the lane does not offer: `unknown_server`. From a dialog it could not write: `picker_unavailable`. From the claim (`src/core/claims.js`): `body_claimed`, `claim_held`. From the Spectate verb: `no_spectator_sink`, `unwatchable`, `picker_off`, `no_body`, `body_not_served`, `body_down`, `body_not_warm`. A reason past the cap `MAX_REFUSAL_REASONS` (`src/legs/live-front.js`) lands in `other`, and a refusal that carried no reason counts as `unknown`, which is the shape `bumpName` uses in `src/service/monoplayer.js`. |
 | `front.policyRefused`, `front.stateRefused` | cumulative | Clientbound frames the policy refused to pass to the client, and frames refused because the client's protocol state could not parse them. |
 | `front.reconfigurations`, `front.reconfigured` | cumulative | Reconfiguration attempts and completions. |
@@ -349,6 +353,28 @@ state rather than as a frame. A picker that collapses on the way writes one of
 `pickerEmpty`, `pickerDialogFailed`,
 `pickerUnavailable`, or `pickerPickIgnored` with the reason, and the client is
 ended with a configuration `disconnect` the log names.
+
+A claim is the front leg's record of one click taking one body (#267), and it
+writes three lines. `pickerClaim` and `pickerClaimRefused` carry the
+connection's identity and the body the click named, plus the claim report:
+`granted`, `repeated`, `reason`, and `claimedBy`, the player the claim names: the
+driver who stands in the way on a refusal, and the claimant on a grant. A
+refusal adds the `text` the client is sent,
+and its `reason` is `body_claimed` when another connection holds the body and
+`claim_held` when this connection already holds one.
+`pickerClaimReleased` is written when the connection that held the claim ends,
+and it says who claimed the body and why the connection ended. It carries no
+claim report, because a release grants nothing.
+
+The service writes `pickerVerbRecorded` for each answer that names a server the
+lane offers. An answer naming any other server is ended as `pickerVerbRefused`
+before the service is told, so it has no service record. For a claim the record
+carries a `claim` object beside the verb, the server, the slug, the id and the
+player: the front's own report, `granted`, `repeated`, `reason` and
+`claimedBy`, each written whether or not it has a value, so an absent holder
+reads as `null` and never as a missing key. That object is what
+`monoplayer.picker_claims` counts, and a verb that is not a claim carries no
+`claim` key, because no claim was recorded.
 
 ## Packet journal
 

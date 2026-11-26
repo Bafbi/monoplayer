@@ -496,6 +496,17 @@ const SERVICE_LEG_CONSTRUCTORS = Object.freeze({
   offlineFront: createOfflineFrontLeg
 })
 
+// #290: the three outcomes the front already distinguishes, as the bounded
+// attribute of `monoplayer.picker_claims`. A repeat is its own word: the front
+// counts a claim once per body taken, so a repeat that read as a grant would
+// report a claim nobody made (src/legs/live-front.js, `recordClaim`). A release
+// is not among them, because no front-leg callback reports one to the service
+// (docs/telemetry.md names the `pickerClaimReleased` line it writes instead).
+export function pickerClaimOutcome (claim) {
+  if (claim.granted !== true) return 'refused'
+  return claim.repeated === true ? 'repeated' : 'granted'
+}
+
 export function createServiceLegs ({
   cfg,
   resolved = null,
@@ -538,16 +549,27 @@ export function createServiceLegs ({
     // #266: the answer to a chosen server's own dialog. Recorded, not acted on.
     // The verb names a body this lane does not connect from the configuration
     // phase. #267 is the ticket that changes that.
+    //
+    // #290: a claim click is also the service's product record, so the front's own
+    // report (#267) rides this line unchanged: whether the click took a body, who
+    // held it when it did not, and whether it was the holder clicking again. The
+    // identity stays on the record, because a series per player is the cardinality
+    // bomb #415 refused; the counter carries the outcome alone.
     onPickerVerb: verb => {
+      const claim = verb.claim ?? null
       log('pickerVerbRecorded', {
         verb: verb.verb,
         server: verb.server?.name ?? null,
         slug: verb.slug,
         id: verb.id,
         uuid: verb.uuid,
-        username: verb.name
+        username: verb.name,
+        ...(claim === null ? {} : { claim })
       })
       telemetry.metric('monoplayer.picker_verbs', 1, { verb: verb.verb, server: verb.server?.name ?? null })
+      if (claim !== null) {
+        telemetry.metric('monoplayer.picker_claims', 1, { outcome: pickerClaimOutcome(claim) })
+      }
     }
   }
 

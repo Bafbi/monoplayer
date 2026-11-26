@@ -9,11 +9,13 @@ import { fileURLToPath } from 'node:url'
 
 import { createTelemetry } from '../../src/observability/telemetry.js'
 import { RECORD_IDENTITY_FIELDS } from '../../src/core/channels.js'
+import { pickerClaimOutcome } from '../../src/service/start-live.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DOC = path.join(ROOT, 'docs', 'telemetry.md')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 const START_LIVE = read('src/service/start-live.js')
+const LIVE_FRONT = read('src/legs/live-front.js')
 const TELEMETRY = read('docs/telemetry.md')
 const NOW = 1_700_000_000_000
 
@@ -129,6 +131,46 @@ test('the start record writes every label the telemetry table names', () => {
   assert.ok(documented.length > 0, 'the table documents the startLive record')
   const missing = documented.filter(name => !written.has(name))
   assert.deepEqual(missing, [], 'docs/telemetry.md names a startLive field the record does not write: ' + missing.join(', '))
+})
+
+// #290: the claim report is shaped in one place, and the doc describes it. The
+// keys are read off `claimReport`'s returned literal, so a fifth field, or a
+// rename, fails here instead of leaving a page that describes a record nobody
+// writes. Each field sits at the literal's own depth, so nothing nested leaks in.
+function claimReportKeys (source) {
+  const at = source.indexOf('function claimReport (outcome) {')
+  assert.notEqual(at, -1, 'src/legs/live-front.js shapes the claim report')
+  const body = source.slice(at, source.indexOf('\n  }', at))
+  return [...body.matchAll(/^\s+(\w+):/gm)].map(match => match[1])
+}
+
+test('#290 the doc names the claim report the front shapes, and the lines it writes', () => {
+  const keys = claimReportKeys(LIVE_FRONT)
+  assert.ok(keys.length > 0, 'claimReport returns a literal the guard can read')
+  const missing = keys.filter(key => !TELEMETRY.includes('`' + key + '`'))
+  assert.deepEqual(missing, [], 'docs/telemetry.md does not name: ' + missing.join(', '))
+
+  // The three lines the doc describes are three lines the leg writes.
+  for (const line of ['pickerClaim', 'pickerClaimRefused', 'pickerClaimReleased']) {
+    assert.ok(LIVE_FRONT.includes("'" + line + "'"), 'src/legs/live-front.js writes ' + line)
+    assert.ok(TELEMETRY.includes(line), 'docs/telemetry.md names ' + line)
+  }
+})
+
+test('#290 the doc names the claim counter, its attribute, and every outcome it sends', () => {
+  const row = TELEMETRY.split('\n').find(line => line.startsWith('| `monoplayer.picker_claims`'))
+  assert.ok(row, 'docs/telemetry.md documents monoplayer.picker_claims')
+  assert.match(row, /\|\s*sum\s*\|/, 'the row says the series is a sum')
+  assert.ok(row.includes('`outcome`'), 'the row names the one attribute it carries')
+
+  const sent = [
+    pickerClaimOutcome({ granted: true, repeated: false, reason: null }),
+    pickerClaimOutcome({ granted: true, repeated: true, reason: null }),
+    pickerClaimOutcome({ granted: false, repeated: false, reason: 'body_claimed' })
+  ]
+  for (const outcome of sent) {
+    assert.ok(row.includes('`' + outcome + '`'), 'the row explains outcome ' + outcome)
+  }
 })
 
 test('docs/ quote the value once, so a reader has one place to check it', () => {
