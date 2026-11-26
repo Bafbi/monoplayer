@@ -3414,6 +3414,11 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_PUPPET_CACHE_ACCOUNT                     legacy selector (deprecated; ignored)
   MONOPLAYER_DIALOG_ACTION                            configuration-gate answer: first|last|<label substring>
   MONOPLAYER_ATTACH_WHITELIST                         attach whitelist file path
+  MONOPLAYER_ALLOWED_SERVERS                          path to allowed-servers.json, the servers the picker
+                                                      offers
+  MONOPLAYER_ALLOWED_SERVERS_SEED                     path to the Git-committed allowed-servers.json,
+                                                      which answers when the live file is missing or does
+                                                      not parse
   MONOPLAYER_VERSION                                  protocol pin (default 26.1)
   MONOPLAYER_CHAT                                     read-only (default), commands, full, or off
   MONOPLAYER_OFFLINE_LEGS                             1 composes the offline front and backend legs, so the
@@ -3423,6 +3428,17 @@ Config (JSON via --config, then env, then defaults):
   MONOPLAYER_PICKER                                   1 serves a joining client the recorded configuration
                                                       baseline and the server picker when the lane has no
                                                       backend, and records the pick (default 0)
+  MONOPLAYER_TRANSFER_KEEP_CONNECTION                 1 keeps the client's connection through a
+                                                      followed transfer; 0 detaches it (default 1)
+  MONOPLAYER_SKIN_SHOW_PUPPET                         1 sends the human's own player the puppet's skin
+                                                      entry; 0 sends none (default 1)
+  MONOPLAYER_RECONNECT_ATTEMPTS                       reconnects before giving up; 0 means unlimited
+  MONOPLAYER_RECONNECT_MAX_DELAY_MS                   ceiling on the backoff between attempts
+                                                      (default 60000)
+  MONOPLAYER_PREAUTH_MAX_CONNECTIONS                  concurrent connections in the pre-auth window
+                                                      (default 16)
+  MONOPLAYER_PREAUTH_DEADLINE_MS                      how long one connection may stay in that window
+                                                      (default 30000)
   MONOPLAYER_LOG                                      JSONL log file (default stdout)
   OTEL_EXPORTER_OTLP_ENDPOINT                         OTLP/HTTP collector base URL (telemetry off when unset)
   OTEL_SERVICE_NAME / OTEL_SERVICE_VERSION            telemetry service identity
