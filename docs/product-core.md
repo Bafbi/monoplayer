@@ -495,10 +495,14 @@ listing the lane's allowed servers.
   the lane (#315). It never picked a server, so no sentence names one. The sentence is
   the same in every empty state, because the fix is never the client's.
 
-  Why the list is empty is the offer's to say. `pickerOffered` carries `no_key`,
-  `live_missing`, `empty_list`, `seed_missing` or `unreadable` beside the source and
-  the count, and the refusal's own line repeats it. Each word is a different edit: set
-  the variable, write the file, add a server, fix the mount, or repair the file.
+  Why the list is empty is the offer's to say, and so is where to fix it.
+  `pickerOffered` carries the answer's `reason`, the `file` it came from, and the `at`
+  entry when the refusal names one, beside the source and the count. Each answer is a
+  different edit: `no_key` is a variable to set, `live_missing` a file to write,
+  `empty_list` a server to add, `seed_missing` a mount to fix, and `unreadable` a file
+  to repair. A file that does not parse answers with the code `parseAllowedServers`
+  refused with, so the entry to fix is named rather than nine repairs sharing one word.
+  The refusal's own line repeats the reason.
 
   Each row's name is the canonical `host:port` its claim
   dials. A claim labels a body with the row's slug, while the body's state cache is

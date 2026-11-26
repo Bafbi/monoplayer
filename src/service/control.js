@@ -180,7 +180,8 @@ export function createControlDocument ({
   //
   // #315: `reason` is why there is no list when there is none, and null when one
   // answered. Each value is a different edit, which is the whole use of it: an
-  // operator who reads "the list is empty" already knew that.
+  // operator who reads "the list is empty" already knew that. `file` is the file that
+  // answered, or the one to repair when none did.
   //
   //   no_key        nothing names a list: the lane set neither variable. Set
   //                 MONOPLAYER_ALLOWED_SERVERS, or MONOPLAYER_ALLOWED_SERVERS_SEED.
@@ -188,33 +189,49 @@ export function createControlDocument ({
   //                 the panel write it.
   //   empty_list    the file read and holds no servers. Add one back.
   //   seed_missing  the seed this lane names is not on its mount. Fix the mount.
-  //   unreadable    a file the lane read cannot be read or does not parse. Repair it.
+  //   unreadable    the file is there and the read failed. Read the controlUnreadable
+  //                 line, which carries the errno.
+  //
+  // #372: a document that does not parse keeps the code `parseAllowedServers` gave it
+  // and the entry that code names (`at`), instead of collapsing into one word. That
+  // list of codes lives in that function; this answer repeats none of them.
+  //
   // A file that answered, as the picker's answer. A list a file answers with is the
   // list; a file that answers with no servers is the one empty state a read cannot
   // see, because the file is valid and the list is deliberately empty.
-  function fileAnswer (servers, source) {
-    return { servers, source, reason: servers.length === 0 ? 'empty_list' : null }
+  function fileAnswer (servers, source, file) {
+    return { servers, source, file, reason: servers.length === 0 ? 'empty_list' : null, at: null }
   }
 
   function allowedServers () {
     // The first source that answers is the list. A file nobody wrote and a file that
     // does not parse are two repairs, so each source carries its own word.
-    let noList = null
+    // #372: two answers, and the fault wins. `last` is the last source asked, which is
+    // the operator's edit when neither failure is a fault. `fault` is the first source
+    // whose failure is one, and it is the file whose repair brings the list back: the
+    // live key's absence is the normal state the seed exists for, but a file that does
+    // not parse is a fault wherever it sits.
+    let last = null
+    let fault = null
     for (const { source, file, whenMissing, absenceIsFault } of allowedServerSources) {
       if (!named(file)) continue
       const read = readAllowedServers(file)
-      if (read.reason === null) return fileAnswer(read.servers, source)
+      if (read.reason === null) return fileAnswer(read.servers, source, file)
       // The seed's absence is a mount to fix, so it is named once. The live key's
       // absence is the normal state the seed exists for, so that one is not a line.
       if (absenceIsFault === true && read.reason === 'missing') {
         sayOnce('controlUnreadable', { file, code: 'ENOENT' })
       }
-      // The last source that could have answered is the one an operator fixes, so its
-      // word is the one the picker carries. `no_key` is the answer for a lane that
-      // named neither variable, which is the one case this loop never enters.
-      noList = { servers: [], source: 'none', reason: read.reason === 'missing' ? whenMissing : 'unreadable' }
+      last = {
+        servers: [],
+        source: 'none',
+        file,
+        reason: read.reason === 'missing' ? whenMissing : read.reason,
+        at: read.at ?? null
+      }
+      if (fault === null && (absenceIsFault === true || read.reason !== 'missing')) fault = last
     }
-    return noList ?? { servers: [], source: 'none', reason: 'no_key' }
+    return fault ?? last ?? { servers: [], source: 'none', file: null, reason: 'no_key', at: null }
   }
 
   return { enabled, whitelistStore, attachWhitelist, allowedServers }

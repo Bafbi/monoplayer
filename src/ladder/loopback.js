@@ -5040,8 +5040,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // file cannot be parsed. This is the other answer: both files the lane names are
     // unparseable, so there is nothing to offer. The client that joins gets no dialog
     // and one sentence, and the sentence is about the lane because the client clicked
-    // nothing. The offer's own line names the fact an operator can act on, "unreadable",
-    // which is the word the control module already uses for a file that does not parse.
+    // nothing. The offer's own line names the fact an operator can act on: the code the
+    // parser refused with (#372), and the file to repair first, which is the live file
+    // because its repair is the one that brings the list back.
     fs.writeFileSync(pickerLiveFile, '{"version":1,"servers":[' + '\n')
     fs.writeFileSync(pickerSeedFile, 'not json' + '\n')
     const emptyMark = logs.length
@@ -5084,11 +5085,15 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       emptyOffers.length === 1 &&
         emptyOffers[0].source === 'none' &&
         emptyOffers[0].servers === 0 &&
-        emptyOffers[0].reason === 'unreadable' &&
+        // #372: the parser's own code, not one word for nine repairs, and the file the
+        // operator edits first. Neither file holds an entry to name, so `at` is null.
+        emptyOffers[0].reason === 'not_json' &&
+        emptyOffers[0].file === pickerLiveFile &&
+        emptyOffers[0].at === null &&
         // The refusal names the lane, never a server the client did not pick, and the
         // sentence the client was told is the one the lane said it chose.
         emptyRefusals.length === 1 &&
-        emptyRefusals[0].reason === 'unreadable' &&
+        emptyRefusals[0].reason === 'not_json' &&
         /this lane is not offering any server/.test(String(emptyRefusals[0].text ?? '')) &&
         toldText.length === 1 &&
         toldText[0].includes('this lane is not offering any server') &&
