@@ -50,6 +50,9 @@ const SHIM = [
   // waiting for one.
   '  *"restartCount"*) N=0; [ -f "$KUBECTL_STATE/restarts" ] && N=$(cat "$KUBECTL_STATE/restarts"); printf \'%s\' "$N"; [ "$KUBECTL_STUCK" = 1 ] || echo $((N+1)) > "$KUBECTL_STATE/restarts"; exit 0 ;;',
   '  *" get deploy "*) printf \'{"spec":{"selector":{"matchLabels":{"app.kubernetes.io/name":"%s"}},"template":{"spec":{"containers":[{"name":"paper","image":"ghcr.io/bafbi/monoplayer@sha256:deadbeef","env":[{"name":"MONOPLAYER_PUPPET_UUID","value":"%s"},{"name":"MONOPLAYER_PUPPET_ACCOUNTS_DIR","value":"/data/accounts"}]}]}}}}\\n\' "$PAPER_LABEL" "$PUPPET"; exit 0 ;;',
+  // The expiry gate both joins run before they log in (#389). A cached access token with
+  // time left rotates nothing, so both accounts answer as valid here.
+  '  *" exec "*"mca-cache.json"*) printf \'%s\\n\' "ok|600 min left|2099-01-01T00:00:00.000Z"; exit 0 ;;',
   '  *" logs "*) printf \'[Server] MonoplayerObserver wire listeners registered\\n\'; exit 0 ;;',
   '  *" apply "*) cat > /dev/null; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*) exit 0 ;;',

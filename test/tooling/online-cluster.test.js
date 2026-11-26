@@ -18,6 +18,11 @@ const SCRIPT = path.join(
 const PUPPET = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 
+// What the gate's reader answers, three fields: the verdict, the words, the expiry (#389).
+// A case that wants a refusal or a pass names one of these instead of retyping the shape.
+const VALID = 'ok|600 min left|2099-01-01T00:00:00.000Z'
+const LAPSED = 'expired|expired|2026-01-02T03:04:05.000Z'
+
 // The lane this worktree's rung derives (#279), mirrored the way gate-lane.test.js
 // mirrors it: a script that typed a name instead of deriving one could not match.
 const WORKTREE = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'))
@@ -76,7 +81,15 @@ const SHIM = [
   '  *" apply "*) cat > "$KUBECTL_MANIFEST"; printf \'pod/check created\\n\'; exit 0 ;;',
   '  *" wait "*" pod/"*) exit 0 ;;',
   '  *" cp ./src "*|*" cp ./package.json "*) exit 0 ;;',
-  '  *" exec "*"mca-cache.json"*) printf \'%s\\n\' "${KUBECTL_TOKEN:-600 min left}"; exit 0 ;;',
+  // The expiry gate reads one account's cached mca token (#389). Two accounts are read
+  // the same way, so the directory in the argv says which answer this is.
+  // KUBECTL_ATTACH_SILENT models a read that answered nothing at all, which is what a pod
+  // that died between the gate and the read looks like. The gate refuses it (#389).
+  '  *" exec "*"mca-cache.json"*) case "$*" in',
+  '    *"/accounts/$ATTACH"*) [ -z "${KUBECTL_ATTACH_SILENT:-}" ] || exit 0',
+  '      printf \'%s\\n\' "${KUBECTL_ATTACH_TOKEN:-ok|600 min left|2099-01-01T00:00:00.000Z}" ;;',
+  '    *) printf \'%s\\n\' "${KUBECTL_TOKEN:-ok|600 min left|2099-01-01T00:00:00.000Z}" ;;',
+  '  esac; exit 0 ;;',
   '  *" exec "*"online.js"*) [ -z "$KUBECTL_RUN_SLEEP" ] || sleep "$KUBECTL_RUN_SLEEP"; printf \'PASS N1 the Microsoft-authenticated attach succeeds\\n\'; exit "${KUBECTL_RUN_STATUS:-0}" ;;',
   '  *" exec -i "*) cat > /dev/null; exit 0 ;;',
   '  *" exec "*) exit 0 ;;',
@@ -90,7 +103,11 @@ const SHIM = [
   '    *:*) exit 0 ;;',
   '    *) if [ "${KUBECTL_ATTACH_BACK_FAIL:-}" = 1 ]; then printf \'Error from server (NotFound): pods "check" not found\\n\' >&2; exit 1; fi',
   '      [ "${KUBECTL_ATTACH_BACK_EMPTY:-}" != 1 ] || exit 0',
-  '      mkdir -p "$last/$ATTACH"; printf \'{}\' > "$last/$ATTACH/live-cache.json"; printf \'{"uuid":"%s","name":"Bafbi","alias":"bafbi"}\' "$ATTACH" > "$last/$ATTACH/profile.json"; exit 0 ;;',
+  // A run that rotated nothing hands back the directory it was given, so the default is a
+  // byte-identical copy of the local one. KUBECTL_ATTACH_ROTATED writes a token cache the
+  // local copy does not have, which is what a rotation inside the pod looks like.
+  '      mkdir -p "$last/$ATTACH"; cp -a "$KUBECTL_ATTACH_SOURCE"/. "$last/$ATTACH"/; rm -f "$last/$ATTACH/writer.lock"',
+  '      [ "${KUBECTL_ATTACH_ROTATED:-}" != 1 ] || printf \'{}\\n\' > "$last/$ATTACH/live-cache.json"; exit 0 ;;',
   '  esac ;;',
   '  *" cp "*"/accounts/$PUPPET"*) mkdir -p "$last/$PUPPET"; for f in live-cache.json mca-cache.json xbl-cache.json profile.json; do printf \'{}\' > "$last/$PUPPET/$f"; done; exit 0 ;;',
   '  *) exit 0 ;;',
@@ -172,6 +189,9 @@ function baseEnv (space, env = {}) {
     KUBECTL_MANIFEST: space.manifest,
     KUBECTL_PUPPET: PUPPET,
     KUBECTL_ATTACH: ATTACH,
+    // The local copy the copy-back is compared against, and copied from when a case
+    // wants the pod to hand back what it was given.
+    KUBECTL_ATTACH_SOURCE: path.join(space.root, '.secrets', 'accounts', ATTACH),
     MONOPLAYER_SECRETS_SOURCE: path.join(space.root, '.secrets'),
     KUBECTL_LEASE: space.lease,
     KUBECTL_LEASES: space.leases,
@@ -225,21 +245,177 @@ test('the pod is deleted even when the rung fails, and the exit status survives'
 
 test('an expired puppet token stops the run before it can rotate the chain', () => {
   const space = workspace()
-  const { status, output, calls } = run(space, { KUBECTL_TOKEN: 'expired' })
+  const { status, output, calls } = run(space, { KUBECTL_TOKEN: LAPSED })
 
   assert.equal(status, 2)
   assert.match(output, /with --rotate/)
+  assert.match(output, /it expired at 2026-01-02T03:04:05\.000Z/, 'it names the expiry: ' + output)
   assert.equal(calls.some(line => line.includes('online.js')), false, 'the rung never ran')
   assert.ok(calls.some(line => line.includes('delete pod')), 'the pod is cleaned up')
 })
 
-test('the attach account directory is copied back, so one live copy remains', () => {
-  const space = workspace()
-  const { status, output } = run(space)
-  assert.equal(status, 0, output)
+// --- the attach account gets the puppet's gate (#389) -------------------------
+//
+// A valid cached access token rotates nothing. Once it expires, the login inside the pod
+// refreshes and rotates the chain: the copy that refreshed last is live, and every other
+// copy is dead until a device-code bootstrap (docs/custody.md, "One live copy per
+// account"). The attach account's live copy is this working copy, which the run copies
+// into the pod. So an expired attach token rotated inside the pod kills the local copy,
+// and the copy-back #370 repaired existed only to undo that after the fact.
+//
+// Both accounts now refuse in the same words, because both have a live copy outside the
+// pod: the puppet's is the deployment's custody and the attach account's is this tree.
+// hold mode has no gate and needs none. It runs against the one directory that stays
+// live, so a refresh there rotates in place.
 
-  const written = JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8'))
-  assert.deepEqual(written, {}, 'the rotated copy replaced the local one')
+test('an expired attach token stops the run before it can rotate the chain', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, { KUBECTL_ATTACH_TOKEN: LAPSED })
+
+  assert.equal(status, 2, output)
+  assert.match(output, /attach account bafbi \(6eb73524-ff88-4a62-a8d0-c63905e7afba\)/, 'it names the account: ' + output)
+  assert.match(output, /it expired at 2026-01-02T03:04:05\.000Z/, 'and when it expired: ' + output)
+  assert.match(output, /status --account bafbi --refresh/, 'and the command that refreshes it here: ' + output)
+  assert.match(output, /with --rotate/, 'and the flag that overrides it: ' + output)
+  assert.equal(calls.some(line => line.includes('online.js')), false, 'the rung never ran: ' + calls.join(' | '))
+  assert.ok(calls.some(line => line.includes('delete pod')), 'the pod is cleaned up')
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
+    { old: true },
+    'the local copy is the live one and was not touched'
+  )
+})
+
+test('a run that rotated nothing leaves the local copy byte-identical, and says so', () => {
+  const space = workspace()
+  const before = fs.readFileSync(path.join(space.attach, 'live-cache.json'))
+  const { status, output, calls } = run(space)
+
+  assert.equal(status, 0, output)
+  assert.match(output, /came back unchanged/, 'the run says what it checked: ' + output)
+  assert.deepEqual(
+    fs.readFileSync(path.join(space.attach, 'live-cache.json')),
+    before,
+    'nothing was written over the local copy'
+  )
+  // The fetch is still issued: the run reads the returned directory to compare it (#370).
+  const fetched = calls.filter(line => new RegExp('^cp \\S+:\\S*/accounts/' + ATTACH + ' \\S+$').test(line))
+  assert.equal(fetched.length, 1, 'the run fetched the attach directory out of the pod: ' + calls.join(' | '))
+})
+
+test('a returned attach directory that differs fails the run, and keeps the pod', () => {
+  const space = workspace()
+  const { status, output, calls } = run(space, { KUBECTL_ATTACH_ROTATED: '1' })
+
+  assert.equal(status, 1, 'the rung ran, so this is a failed run and not a refused setup: ' + output)
+  assert.match(output, /came back different/, 'the run says what it found: ' + output)
+  assert.match(output, /live-cache\.json/, 'and which file differs: ' + output)
+  assert.match(output, /with --rotate/, 'and the flag that accepts it: ' + output)
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
+    { old: true },
+    'the local copy is not replaced on the path that was meant to leave it alone'
+  )
+  assert.equal(
+    calls.some(line => line.includes('delete pod')),
+    false,
+    'the pod is kept, because it holds the only live copy: ' + calls.join(' | ')
+  )
+})
+
+// The gate fails closed, so an account whose cache says nothing about its expiry is refused
+// too. The gate this replaced turned that case into a NaN and let the run go on.
+test('a token nothing can read is refused rather than guessed at', () => {
+  const cases = [
+    { KUBECTL_ATTACH_TOKEN: 'unknown|no cached token|' },
+    { KUBECTL_ATTACH_TOKEN: 'unknown|no readable expiry|' },
+    // The read itself failed, so nothing at all came back.
+    { KUBECTL_ATTACH_SILENT: '1' }
+  ]
+  for (const env of cases) {
+    const space = workspace()
+    const { status, output, calls } = run(space, env)
+    assert.equal(status, 2, JSON.stringify(env) + ': ' + output)
+    assert.match(output, /attach account bafbi /, 'it names the account: ' + output)
+    assert.equal(calls.some(line => line.includes('online.js')), false, 'the rung never ran: ' + calls.join(' | '))
+  }
+})
+
+test('--rotate accepts the rotation, so the refreshed directory comes back', () => {
+  const space = workspace()
+  const { status, output } = run(space, { KUBECTL_ATTACH_TOKEN: LAPSED, KUBECTL_ATTACH_ROTATED: '1' },
+    [...podArgs(space), '--rotate'])
+
+  assert.equal(status, 0, output)
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(space.attach, 'live-cache.json'), 'utf8')),
+    {},
+    'the accepted rotation replaced the local copy, so one live copy remains'
+  )
+  assert.match(output, /wrote the attach account directory back to /)
+})
+
+
+// --- the reader both gates decide with (#389) --------------------------------
+//
+// The shim answers the gate's exec, so nothing above ever runs its JavaScript. That is the
+// shape #389 is about: a decision nobody exercises. So read the reader out of the script and
+// run it here, on fixtures, offline. It is where the margin is kept equal to the login's own.
+const TOKEN_JS = (() => {
+  const text = fs.readFileSync(SCRIPT, 'utf8')
+  const block = text.match(/^TOKEN_LEFT_JS=\$\(cat <<'JS'\n([\s\S]*?)\nJS\n\)$/m)
+  assert.ok(block, 'the script keeps its token reader in one heredoc named TOKEN_LEFT_JS')
+  return block[1]
+})()
+
+// One account directory holding one cached token: obtainedOn, then how long it lasts.
+function tokenDir ({ expiresIn = 600, leftMs = null } = {}) {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-token-'))
+  const obtainedOn = leftMs === null ? Date.now() - 60000 : Date.now() - (expiresIn * 1000 - leftMs)
+  fs.writeFileSync(path.join(dir, 'mca-cache.json'), JSON.stringify({ mca: { obtainedOn, expires_in: expiresIn } }))
+  return dir
+}
+
+const readToken = dir => spawnSync('node', ['-e', TOKEN_JS, dir], { encoding: 'utf8' }).stdout.trim()
+
+test('the reader answers a verdict, the words, and the expiry', () => {
+  const [verdict, display, expiry] = readToken(tokenDir({ expiresIn: 3600, leftMs: 3600000 })).split('|')
+  assert.equal(verdict, 'ok')
+  assert.match(display, /^60 min left$/)
+  assert.match(expiry, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/, 'the expiry is a moment a reader can act on: ' + expiry)
+})
+
+test('a token inside the login margin is expired, and one outside it is not', () => {
+  // prismarine-auth reuses only while "remaining > 1000", so half a second left rotates.
+  assert.match(readToken(tokenDir({ expiresIn: 600, leftMs: 500 })), /^expired\|/)
+  assert.match(readToken(tokenDir({ expiresIn: 600, leftMs: 1500 })), /^ok\|1 min left\|/, 'and one second of margin reads as a minute, not as a zero')
+})
+
+test('a cache with no token and a cache with no expiry are both unknown, never ok', () => {
+  const empty = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-token-'))
+  assert.equal(readToken(empty), 'unknown|no cached token|')
+  const partial = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-token-'))
+  fs.writeFileSync(path.join(partial, 'mca-cache.json'), JSON.stringify({ mca: { access_token: 'x' } }))
+  assert.equal(readToken(partial), 'unknown|no readable expiry|')
+})
+
+test('a stale writer.lock in the local copy is not read as a rotation', () => {
+  const space = workspace()
+  fs.writeFileSync(path.join(space.attach, 'writer.lock'), '{"pid":1}')
+  const { status, output } = run(space)
+
+  assert.equal(status, 0, output)
+  assert.ok(fs.existsSync(path.join(space.attach, 'writer.lock')), 'the local lock belongs to this copy, not to the run')
+})
+
+test('hold needs no gate: it runs against the one copy that stays live', () => {
+  const space = workspace()
+  const marker = path.join(space.root, 'held')
+  const { status, output } = run(space, { KUBECTL_ATTACH_TOKEN: LAPSED }, ['hold', 'sh', '-c', 'touch ' + marker])
+
+  assert.equal(status, 0, output)
+  assert.equal(fs.existsSync(marker), true, 'the command ran')
+  assert.doesNotMatch(output, /attach account/, 'the local form asks no expiry question: ' + output)
 })
 
 // --- the attach copy-back is not GNU-only (#370) ---
@@ -258,7 +434,9 @@ test('the attach account directory is copied back, so one live copy remains', ()
 
 test('the attach rotation is copied back, and the copy-back is issued (#370)', () => {
   const space = workspace()
-  const { status, output, calls } = run(space)
+  // #370 is about the accepted rotation, which the run only takes with --rotate now (#389).
+  const { status, output, calls } = run(space, { KUBECTL_ATTACH_ROTATED: '1' },
+    [...podArgs(space), '--rotate'])
 
   assert.equal(status, 0, output)
   const fetched = calls.filter(line => new RegExp('^cp \\S+:\\S*/accounts/' + ATTACH + ' \\S+$').test(line))
@@ -638,6 +816,11 @@ test('mise run online holds the lease, so both forms of the rung exclude each ot
   assert.deepEqual(online.depends, ['install'])
   assert.deepEqual(online.wait_for, ['check'], 'a red gate still stops the expensive rung')
   assert.match(tasks.get('online:cluster').body, /^run = "scripts\/online-cluster\.sh"$/m)
+  // #389: the description is where an operator learns that neither account rotates by
+  // default, and which flag accepts one.
+  const description = tasks.get('online:cluster').description
+  assert.match(description, /refuses .*expired/, 'the description names the refusal: ' + description)
+  assert.match(description, /--rotate/, 'and the flag that accepts the rotation: ' + description)
 })
 
 // A run killed outright runs no EXIT handler. The renewal loop is the only thing left

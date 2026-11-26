@@ -29,15 +29,25 @@
 # second session on one account is fine, and so is a second server: sessions are
 # not exclusive, only a *refresh* from two copies is.
 #
-# What it refuses: a puppet token that has expired. Reusing a valid cached
-# Minecraft access token rotates nothing, which is why the default path cannot
-# disturb the live proxy. Once the token expires, a refresh in the pod would
-# invalidate the deployment's chain, so the script stops instead and says what to
-# do. `--rotate` accepts that trade: it copies the refreshed directory back onto
-# the volume and asks you to restart the deployment, which then reads it.
+# What it refuses: an access token that has expired, for either account. Reusing a
+# valid cached Minecraft access token rotates nothing, which is why the default path
+# cannot disturb a copy of an account that lives outside this pod. Once the token
+# expires, a login in the pod refreshes it and rotates the chain: the copy that
+# refreshed last is live and every other copy is dead (docs/custody.md). That is a
+# decision, not a default, so the script stops and says what to do instead.
 #
-# The attach account (Bafbi) lives in the working copy, so it is copied in for the
-# run and copied back afterwards, keeping one live copy of it.
+# Both accounts are gated, because both have a live copy outside the pod. The puppet's
+# is the deployment's custody, and an expired one would rotate the chain away from the
+# live proxy. The attach account (Bafbi) lives in the working copy: it is copied in for
+# the run, and a rotation inside the pod would leave the local copy dead.
+#
+# `--rotate` accepts that trade for either account: it copies the refreshed directories
+# back, and for the puppet that means writing the volume and restarting the deployment,
+# which then reads them.
+#
+# Without `--rotate` the attach directory the pod hands back has to be the one it was
+# given, byte for byte. A difference fails the run and keeps the pod, which holds the
+# only live copy: copying it back unasked is the silent repair #389 removed.
 #
 # The account lease (#280): one Minecraft identity is one refresh chain with one
 # writer lock, and no namespace gives you a second. So a run that uses the real
@@ -583,6 +593,72 @@ lease_release () {
   esac
 }
 
+# --- the expiry gate, one rule for both accounts (#389) -----------------------
+#
+# A cached Minecraft access token is good for about a day. While it is valid, a login
+# reuses it and rotates nothing, so a run cannot disturb a copy of an account that lives
+# elsewhere. Once it has expired, the login refreshes it: the chain rotates, the copy that
+# refreshed last is live, and every other copy is dead until a device-code bootstrap
+# (docs/custody.md, "One live copy per account").
+#
+# One reader for both accounts, because two accounts with two gates is how they drift into
+# two spellings of one refusal. The arithmetic is the projection src/custody/status.js
+# carries for the heartbeat (#229). Reading it there instead would put a module import and
+# its failure mode in front of the gate; see the backlog rather than a second copy here.
+TOKEN_LEFT_JS=$(cat <<'JS'
+const fs = require('node:fs')
+
+const dir = process.argv[1]
+const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return null } }
+const token = read(dir + '/mca-cache.json')?.mca
+const obtainedOn = typeof token?.obtainedOn === 'number' ? token.obtainedOn : null
+const expiresIn = typeof token?.expires_in === 'number' ? token.expires_in * 1000 : null
+const unknown = obtainedOn === null || expiresIn === null
+const expiry = unknown ? '' : new Date(obtainedOn + expiresIn).toISOString()
+// Three fields: the verdict the gate switches on, the words to show, and the moment the
+// token expires. The verdict is separate so that rewording the display cannot turn a pass
+// into a refusal. A token nothing can read has no verdict of its own: guessing that it is
+// fine is how a rotation happens behind the gate.
+//
+// The second of margin is the margin the login itself applies: prismarine-auth's
+// MinecraftJavaTokenManager reuses a cached token only while "remaining > 1000". A token
+// inside that margin is refreshed, and a refresh is the rotation this gate decides.
+// test/tooling/online-cluster.test.js is where the two margins are kept equal.
+const out = (verdict, display) => console.log([verdict, display, expiry].join('|'))
+if (token === undefined) out('unknown', 'no cached token')
+else if (unknown) out('unknown', 'no readable expiry')
+else if (obtainedOn + expiresIn - Date.now() <= 1000) out('expired', 'expired')
+// Ceil, so a token with a second left reads as one minute rather than as the zero that
+// reads like a refusal.
+else out('ok', Math.ceil((obtainedOn + expiresIn - Date.now()) / 60000) + ' min left')
+JS
+)
+
+# The token as the pod holds it, which is the copy the rung will log in with.
+token_left_in_pod () {
+  kubectl -n "$NAMESPACE" exec "$pod" -- node -e "$TOKEN_LEFT_JS" "$1"
+}
+
+# The gate: refuse an account that would rotate, and say which account, when it expired,
+# and what to do here. $1 names the account, $2 is its directory in the pod, $3 is what to
+# do instead of accepting the rotation.
+gate_token () {
+  local label=$1 dir=$2 instead=$3 verdict display expiry token
+  IFS='|' read -r verdict display expiry <<<"$(token_left_in_pod "$dir")"
+  token=${display:-unreadable}
+  say "$label access token: $token${expiry:+ (expiry $expiry)}"
+  # "ok" is the one verdict that rotates nothing. Everything else, including a read that
+  # answered nothing at all, is a decision the operator has to make.
+  case "$verdict" in
+    ok) return 0 ;;
+  esac
+  if [ "$ROTATE" = 1 ]; then
+    say "$label: --rotate accepts the rotation, so the refreshed directory is copied back"
+    return 0
+  fi
+  die "the $label access token is $token${expiry:+ (it expired at $expiry)}. A login in pod $pod would rotate its chain away from the copy that is live now, so $instead, or re-run with --rotate to accept the rotation." 2
+}
+
 pod_cleanup () {
   [ -n "${pod:-}" ] || return 0
   if [ "$KEEP_POD" = 1 ]; then
@@ -761,19 +837,14 @@ kubectl -n "$NAMESPACE" exec "$pod" -- sh -c "
 " >/dev/null
 kubectl cp "$attach_dir" "$NAMESPACE/$pod:/work/.secrets/accounts/$(basename "$attach_dir")" >/dev/null
 
-# A valid cached access token rotates nothing. An expired one would rotate the
-# chain away from the live proxy, so that is a decision, not a default.
-expired=$(kubectl -n "$NAMESPACE" exec "$pod" -- node -e '
-const fs = require("node:fs")
-const dir = process.argv[1]
-const cache = JSON.parse(fs.readFileSync(dir + "/mca-cache.json", "utf8")).mca
-const left = Number(cache.obtainedOn) + Number(cache.expires_in) * 1000 - Date.now()
-console.log(left <= 0 ? "expired" : Math.round(left / 60000) + " min left")
-' "/work/.secrets/accounts/$puppet_uuid")
-say "puppet access token: $expired"
-if [ "$expired" = expired ] && [ "$ROTATE" != 1 ]; then
-  die 'the puppet access token has expired. A refresh here would invalidate the live proxy chain; re-run with --rotate to accept that, or wait for the deployment to refresh first.' 2
-fi
+# Both accounts, before the rung can log in as either. The puppet's copy is the
+# deployment's, and the attach account's is the one this run copied in from the working
+# copy, so a rotation in the pod would leave the local copy dead.
+gate_token 'puppet' "/work/.secrets/accounts/$puppet_uuid" \
+  'wait for the deployment to refresh it first'
+gate_token "attach account $ATTACH_ALIAS ($(basename "$attach_dir"))" \
+  "/work/.secrets/accounts/$(basename "$attach_dir")" \
+  "refresh this working copy first with node src/custody/cli.js status --account $ATTACH_ALIAS --refresh"
 
 say "running $RUNG: backend $BACKEND_HOST:$BACKEND_PORT"
 set +e
@@ -790,10 +861,12 @@ if [ -n "$rung_args" ]; then
     && say "report written to $REPORT"
 fi
 
-# The attach account was copied in, so its rotation is copied back here: still one copy.
-# A copy-back that brings nothing back is a failed rotation, not a warning. The pod's token
-# caches are the live ones, and the pod is deleted either way, so the rotation would exist
-# nowhere after this run.
+# The attach account was copied in. With --rotate its rotation is copied back here, so one
+# live copy remains. Without --rotate the pod was refused every token that would rotate, so
+# the directory it hands back has to be the one it was given: that is the invariant the
+# copy-back used to repair after the fact, and it is compared rather than written (#389).
+# The fetch below stays fatal either way (#370): a copy-back that brings nothing back is a
+# failed run, and so is a comparison the run cannot make.
 rotated_attach=$(mktemp -d)
 fetch_status=0
 kubectl cp "$NAMESPACE/$pod:/work/.secrets/accounts/$(basename "$attach_dir")" "$rotated_attach" >/dev/null 2>&1 ||
@@ -817,11 +890,38 @@ if [ -z "$from" ]; then
   die "the attach account directory came back from pod $pod with no profile.json in it, so $attach_dir was left as it was. A rotation that does not come back is a failed run" 2
 fi
 rm -f "$from/writer.lock"
-cp -a "$from"/. "$attach_dir"/ ||
-  die "could not write the rotated attach account into $attach_dir, so that directory may hold part of the rotation and part of what was there before. The rung's copy is left in $rotated_attach, and the pod is deleted on the way out" 2
-chmod 600 "$attach_dir"/*.json 2>/dev/null || true
-say "wrote the attach account directory back to $attach_dir"
-rm -rf "$rotated_attach"
+if [ "$ROTATE" = 1 ]; then
+  cp -a "$from"/. "$attach_dir"/ ||
+    die "could not write the rotated attach account into $attach_dir, so that directory may hold part of the rotation and part of what was there before. The rung's copy is left in $rotated_attach, and the pod is deleted on the way out" 2
+  chmod 600 "$attach_dir"/*.json 2>/dev/null || true
+  say "wrote the attach account directory back to $attach_dir"
+  rm -rf "$rotated_attach"
+else
+  # The whole directory, not the four custody files: a rotation this gate did not expect is
+  # exactly the case where the file set itself is worth reading. -q because these files hold
+  # refresh and access tokens, and a content diff would print them. -x because writer.lock
+  # belongs to the local copy, which this run does not own.
+  diff_status=0
+  difference=$(diff -rq -x writer.lock "$attach_dir" "$from" 2>&1) || diff_status=$?
+  rm -rf "$rotated_attach"
+  case "$diff_status" in
+    0) say "the attach account directory came back unchanged from $attach_dir" ;;
+    1)
+      say "the attach account directory came back different from $attach_dir"
+      printf '%s\n' "$difference" >&2
+      # The pod holds the only live copy if the chain rotated, so it outlives the run. The
+      # sentence says what it saw and not why: the comparison covers every file, so a write
+      # that is not a rotation would still leave this run unable to say the directory came
+      # back untouched. It is a failed run and not a refused setup, because the rung ran.
+      #
+      # No margin can promise the token outlives the run: the gate reads it, and a minute
+      # later the login reads it again. A token that lapses in between rotates, and lands
+      # here. That is why this path reports instead of repairing.
+      KEEP_POD=1
+      die "something in pod $pod wrote to the attach account directory, which a valid cached token was meant to leave alone, and $attach_dir was left as it was. A token that lapses between the gate and the login does this too. The pod is kept because a rotation would leave it holding the only live copy: take it with kubectl cp $NAMESPACE/$pod:/work/.secrets/accounts/$(basename "$attach_dir") <dir>, or re-run with --rotate to accept the change and copy it back" 1 ;;
+    *) die "cannot compare the attach account directory that came back from pod $pod with $attach_dir, so nothing says whether the rung rotated its token caches: $difference" 2 ;;
+  esac
+fi
 
 # A rotated puppet chain has to go back, or the deployment dies on its next
 # refresh. That is what --rotate agreed to. The volume is mounted read-only in

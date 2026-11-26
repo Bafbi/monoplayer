@@ -134,6 +134,20 @@ What follows for a live rung:
 - Stopping it *is* needed when the run would use the same account directory (the
   lock is held during its own refresh, and the token chain is shared) or the same
   server as a live session (duplicate login).
+- **Neither account rotates by default.** A run from a throwaway pod reads each
+  account's cached Minecraft access token inside the pod, before it logs in as
+  either, and stops when one has expired. The puppet's copy is the deployment's, so
+  a refresh there would rotate the chain away from the live proxy. The attach
+  account's copy is this working copy, which the run copies in, so a refresh there
+  would rotate the chain away from `./.secrets`. The refusal names the account, when
+  its token expired, and what to do instead: wait for the deployment to refresh the
+  puppet, or run `node src/custody/cli.js status --account <alias> --refresh` here for
+  the attach account. `--rotate` accepts the rotation and copies the refreshed
+  directories back. Without it the attach directory the pod hands back must be the
+  one it was given: a difference fails the run and keeps the pod, which would hold the
+  only live copy if the chain rotated.
+- `mise run online` asks no expiry question and needs none. It runs on this machine
+  against the one directory that stays live, so a refresh there rotates in place.
 
 The session rule was checked, not assumed: two `minecraft-protocol` clients with
 one custody directory, logged into the same server, and the first was kicked with

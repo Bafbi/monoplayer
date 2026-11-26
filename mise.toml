@@ -80,7 +80,7 @@ scripts/online-cluster.sh hold node src/ladder/online.js "$@" || node src/ladder
 '''
 
 [tasks."online:cluster"]
-description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving. It holds the account lease, so a second run waits or is refused (#280)."
+description = "Run the online rung from a throwaway pod against the gate backend, leaving the deployment serving. It holds the account lease, so a second run waits or is refused (#280). It refuses an expired cached token for either account, because a login there would rotate that account's chain away from the copy that stays live. Pass --rotate to accept the rotation and copy it back (#389)."
 run = "scripts/online-cluster.sh"
 
 [tasks."panel:css"]
