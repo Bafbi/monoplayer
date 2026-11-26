@@ -180,4 +180,11 @@ test('#416 a record about a connection goes through the seam that names its chan
   // writes are the only ones, because every other call site names its event.
   const computed = [...source.matchAll(/\blog\((?!')/g)]
   assert.equal(computed.length, 2, 'only record() and recordOfChannel() forward a computed event name')
+
+  // The wire checker writes wireReject itself, so the names above cannot say which
+  // log it was handed. The count can: every raw write the leg makes hands the checker
+  // a log bound to its connection.
+  const checks = [...source.matchAll(/\bemitCheckedRaw\(/g)].length
+  const bound = [...source.matchAll(/log: recordFor\(client\)/g)].length
+  assert.equal(bound, checks, 'every raw write hands the wire checker a log bound to its connection')
 })

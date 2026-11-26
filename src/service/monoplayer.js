@@ -709,15 +709,14 @@ export function createMonoplayer ({
   // here: a channel is the front leg's record (src/core/channels.js).
   const recordAccount = account ?? accountIdentifier({ uuid: cfg.puppet.uuid, name: cfg.puppet.username })
 
-  // The body a record names, or null when the lane holds none. A picker lane dials
-  // nothing until a claim does, so its records before a pick name the account and no
-  // body: the configured address is a body it would serve, not one it holds (#263
-  // D2). The session is what says the lane holds one at all, and `claimedBody`
-  // outlives the connection for the records that name a body after it ended: those
-  // pass their own `body`, so the identity here never has to guess.
+  // The body a record names, or null when the lane holds none. The open session is
+  // what says the lane holds one: a picker lane dials nothing until a claim does, so
+  // its records before a pick name the account and no body (#263 D2). The body is
+  // `activeBody`, which a claim's dial and a followed move both set, so a record
+  // after a move names the body the session is on and not the one it left. The
+  // records that name a body after its session ended pass their own.
   function recordBody () {
-    if (!backendSessionOpen) return null
-    return claimedBody ?? activeBody
+    return backendSessionOpen ? activeBody : null
   }
 
   function log (event, fields = {}) {
