@@ -1,18 +1,18 @@
 // Transfer-follow controller: which backend target the next reconnect dials,
-// how to dial it, and when to give up on a followed target.
+// and when to give up on a followed target.
 //
 // The core emits `reconnect_due` with a `target` only on the hop that follows a
 // transfer. Later retries of the same target arrive with `target: null`, so the
 // controller must remember the target until a connect succeeds or the follow
 // budget runs out.
 //
-// Every followed hop reports `kind: 'transfer'`, and nothing else (#332). It
-// once ranked two dialects, and #264 deleted the other one with the operator
-// move it served. So the controller no longer reads `event.kind`: the dial
-// intent is `target !== null`, decided by the caller.
+// It reports the target it holds, the retries against that target, and whether a
+// connect landed on it. What the dial itself should be — a transfer handshake or
+// a plain login — is the service's decision, and `src/service/start-live.js` is
+// where it is made (#332, #348).
 //
-// Pure: no timers, no sockets. Used by start-live and the offline loopback, and
-// unit-tested on its own.
+// Pure: no timers, no sockets. `src/service/start-live.js` is the only caller;
+// `test/core/transfer-follow.test.js` tests this module on its own.
 
 export const DEFAULT_MAX_TARGET_FAILURES = 3
 
@@ -24,12 +24,6 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
   let target = null // { host, port } or null for the configured base backend
   let failures = 0
   let reverts = 0
-
-  // The dialect of a followed hop. There is one, since #264 deleted the operator
-  // move, and it goes with the target: a state with no target follows nothing.
-  function followedKind () {
-    return target === null ? null : 'transfer'
-  }
 
   function normalize (value) {
     if (!value || typeof value !== 'object') return null
@@ -47,7 +41,7 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
         target = next
         failures = 0
       }
-      return { target, kind: followedKind(), failures }
+      return { target, failures }
     },
 
     // The connect succeeded: the followed target (if any) is now the session.
@@ -61,7 +55,7 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
     // The connect failed. After maxTargetFailures, abandon the target and let
     // the next reconnect use the configured base backend.
     onFailure () {
-      if (!target) return { target: null, kind: null, failures: 0, reverted: false, abandoned: null }
+      if (!target) return { target: null, failures: 0, reverted: false, abandoned: null }
       failures++
       if (failures >= maxTargetFailures) {
         const abandoned = target
@@ -84,7 +78,6 @@ export function createTransferFollowController ({ maxTargetFailures = DEFAULT_MA
 
     // The dial address for the current state; null means the configured base.
     get target () { return target },
-    get kind () { return followedKind() },
     get failures () { return failures },
     get reverts () { return reverts }
   }

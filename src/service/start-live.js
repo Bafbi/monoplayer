@@ -1083,7 +1083,6 @@ export async function startLive ({ argv = [], io = process } = {}) {
         log('transferFollowConnect', {
           host: due.target.host,
           port: due.target.port,
-          kind: due.kind,
           attempt,
           failures: due.failures
         })
@@ -1135,8 +1134,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
         revertToSettled('target_unreachable')
         log('transferFollowReverted', {
           host: failure.abandoned?.host ?? null,
-          port: failure.abandoned?.port ?? null,
-          kind: due.kind
+          port: failure.abandoned?.port ?? null
         })
       }
       const outcome = core.session.fail()
