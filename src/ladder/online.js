@@ -12,7 +12,7 @@
 // assertion/timeout failed, 2 setup failed (accounts, whitelist, legs). The
 // report is written in finally, even on failure.
 //
-// Assertions N1-N13 are the contract (docs/testing-ladder.md). A FAIL is a
+// Assertions N1-N14 are the contract (docs/testing-ladder.md). A FAIL is a
 // real finding; do not weaken a check to get a green run. A check the real
 // backend cannot expose is recorded as not_observed, never as a pass.
 import fs from 'node:fs'
@@ -50,8 +50,36 @@ const LOGIN_STATE_FRAMES = Object.freeze(['encryption_begin', 'compress', 'succe
 const PARITY_REPLAY_TIMEOUT_MS = 30_000
 
 export const ONLINE_ASSERTION_IDS = Object.freeze([
-  'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N13'
+  'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N11', 'N12', 'N13', 'N14'
 ])
+
+// #610: the bot's own Client Information, sent in the configuration phase. The
+// values a real client sends and the protocol library's defaults are not, because
+// otherwise N14 cannot tell "the core carried this client's fields" from "the core
+// sent its defaults", and the frame a declined call-in produces is exactly the
+// second. The view distance is the bot's own render distance, which the product
+// never lets the server see: the proxy asks for the backend's cap instead.
+export const RUNG_CLIENT_SETTINGS = Object.freeze({
+  locale: 'fr_fr',
+  viewDistance: 2,
+  chatFlags: 0,
+  chatColors: true,
+  skinParts: 96,
+  mainHand: 0
+})
+
+// The fields of a settings packet N14 reads, and nothing else. A settings packet
+// carries no account material, and the report's rule holds anyway: metadata,
+// never a whole frame or its bytes.
+function settingsPacket (packet) {
+  if (packet === null || typeof packet !== 'object') return null
+  return {
+    locale: packet.locale ?? null,
+    viewDistance: packet.viewDistance ?? null,
+    skinParts: packet.skinParts ?? null,
+    mainHand: packet.mainHand ?? null
+  }
+}
 
 // The bot's client options, built here so the version is the rung's own. A bot
 // left on bot.js's 26.1 default decodes a 26.2 front's login frames one field
@@ -65,7 +93,12 @@ export function buildOnlineBotOptions ({ frontPort, attach, attachCustody, versi
     version,
     profilesFolder: attachCustody.cacheFactory, // a function, never a path
     authTitle: attach.profile?.authTitle ?? null,
-    deviceType: attach.profile?.deviceType ?? null
+    deviceType: attach.profile?.deviceType ?? null,
+    // #610: a real client's own information, which the front reports to the core
+    // during configuration. The observer's comparison does not read this frame: its
+    // plugin listens on the configuration-phase packet, which this bot sends to the
+    // proxy and the proxy never forwards.
+    clientSettings: RUNG_CLIENT_SETTINGS
   }
 }
 
@@ -164,7 +197,7 @@ export function parityEvidence (domains) {
 }
 
 // Pure assertion evaluator: takes the evidence the run collected and returns
-// the N1-N13 records. Keeping this out of the socket code makes the contract
+// the N1-N14 records. Keeping this out of the socket code makes the contract
 // testable and the report reproducible.
 export function evaluateOnlineAssertions (evidence = {}) {
   const e = evidence ?? {}
@@ -338,6 +371,41 @@ export function evaluateOnlineAssertions (evidence = {}) {
     }
   ))
 
+  // N14 (#610): what the join's client information became on its way to the
+  // backend. The reported side is the core's own record, so a rung that declines
+  // the call-in has nothing to compare and fails; the attach side is the packet
+  // the backend leg was handed, so a merge that ran and was never written fails
+  // too. The view distance is the backend's, never the client's own render
+  // distance: whether a value is a usable cap is the core's rule, not this one's.
+  //
+  // The hop is one short of the server: the leg serializes the packet, and what
+  // Paper then does with it is `mise run observer:run`'s question. N9's record
+  // names its observation the same way, and neither claims the hop it lacks.
+  const information = e.clientInformation ?? {}
+  const reported = information.reported ?? null
+  const attachSettings = information.attachSettings ?? null
+  const cap = Number.isInteger(information.cap) ? information.cap : null
+  const carried = reported !== null && attachSettings !== null &&
+    attachSettings.locale === reported.locale &&
+    attachSettings.skinParts === reported.skinParts &&
+    attachSettings.mainHand === reported.mainHand
+  const atCap = attachSettings !== null && cap !== null && attachSettings.viewDistance === cap
+  results.push(record(
+    'N14',
+    'the client information the bot reported reached the backend leg at the cap',
+    carried && atCap ? 'pass' : 'fail',
+    {
+      reported,
+      attachSettings,
+      loginSettings: information.loginSettings ?? null,
+      cap,
+      writes: Number.isInteger(information.writes) ? information.writes : null,
+      backendObservation: 'backend-leg write',
+      serverObservation: 'not_observed',
+      reason: 'the backend leg is not the server: `mise run observer:run` reads what the server made of the join'
+    }
+  ))
+
   return results
 }
 
@@ -493,6 +561,18 @@ export async function runOnline (argv = process.argv.slice(2)) {
       return originalWriteRaw(buffer, meta)
     }
 
+    // #610: the client information the leg is handed. The core speaks its settings
+    // through write(), not writeRaw(), so this is a second observation and not a
+    // wider one: N9 reads the raw frames the core forwarded, and this reads the
+    // named packet the leg is given, in order. It is the leg's inbox, one hop short
+    // of the server, and N14's record says so.
+    const backendSettings = []
+    const originalWrite = backend.write.bind(backend)
+    backend.write = (name, packet) => {
+      if (name === 'settings') backendSettings.push({ ...packet })
+      return originalWrite(name, packet)
+    }
+
     const wire = createWireChecker({ version: VERSION })
     front = createLiveFrontLeg({
       host: '127.0.0.1',
@@ -505,6 +585,22 @@ export async function runOnline (argv = process.argv.slice(2)) {
       log
     })
 
+    // #610: the core's own record of the client information it took from this
+    // join. Its presence is what a rung with the call-in declined cannot produce,
+    // and N14 compares it with the packet the backend leg was handed.
+    let reportedInformation = null
+    const noteCoreLine = line => {
+      let entry = null
+      try { entry = JSON.parse(line) } catch { return }
+      if (entry?.event !== 'clientInformation') return
+      reportedInformation = {
+        locale: entry.locale ?? null,
+        requestedViewDistance: entry.requestedViewDistance ?? null,
+        skinParts: entry.skinParts ?? null,
+        mainHand: entry.mainHand ?? null
+      }
+    }
+
     core = createMonoplayer({
       config,
       backendLeg: backend,
@@ -514,7 +610,12 @@ export async function runOnline (argv = process.argv.slice(2)) {
         setTimeout: (fn, ms) => setTimeout(fn, ms),
         clearTimeout
       },
-      logStream: { write: line => log('core', { line }) }
+      logStream: {
+        write: line => {
+          noteCoreLine(line)
+          log('core', { line })
+        }
+      }
     })
     // N13 needs the cache as it stood when the replay was built, not the cache
     // later: the rings are bounded FIFOs, and live traffic can evict a frame
@@ -526,17 +627,14 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // after start() rather than in place of it. The wrapper carries N13's cut and
     // returns what the core's attach returned.
     //
-    // And start() wires the human's client information for every leg. This rung
-    // registered none before. What it measures is N13's frame cut against the
-    // replay the proxy sent this bot, and recording the bot's information would
-    // change what the backend makes of the join that replay describes. So the lane
-    // declines the call-in, and a null handler is the leg's own "none". The
-    // configuring attach it also gains never runs here, because the cache is warm
-    // before the front listens (readiness above, listen below).
-    //
-    // A rung whose bot's information should reach a real Paper is a change to make
-    // on its own proof, not inside a refactor: see #608.
-    front.setClientSettingsHandler(null)
+    // #610: start() also wires the human's client-information call-in, and this
+    // rung leaves it wired, as every lane with a core in front of a leg does. The
+    // bot reports its own information in the configuration phase, the core records
+    // it, and the attach replay writes it to the backend under the backend's view
+    // distance. N13 is untouched by that: it compares the clientbound frames the
+    // client decoded with the replay, and a serverbound settings frame is on
+    // neither side of that cut. What the leg is sent for a real backend is N14's
+    // subject, read off the leg's own write above.
     front.setCoreAttach(({ name, uuid }) => {
       const attachSnapshot = core.cache.snapshot()
       const attachPose = core.session.currentPose
@@ -612,6 +710,20 @@ export async function runOnline (argv = process.argv.slice(2)) {
       parityFrames.push({ name: meta.name, data })
     })
     await withTimeout(bot.ready(120_000), 125_000, 'online bot ready')
+
+    // --- N14: the client information the backend was sent for this join ---
+    // Read once, here, because the reattach below sends its own settings for a
+    // second client and both records belong to the first join. This bot reports
+    // its information once, in the configuration phase, so the writes recorded so
+    // far are two and in order: the core answering the backend's play login with
+    // the puppet's own information, then the attach writing this client's over it.
+    evidence.clientInformation = {
+      reported: reportedInformation,
+      loginSettings: settingsPacket(backendSettings[0] ?? null),
+      attachSettings: settingsPacket(backendSettings.at(-1) ?? null),
+      cap: core.backendViewDistance,
+      writes: backendSettings.length
+    }
 
     // --- N13: the attach replay matches the state the client decoded ---
     // Wait, bounded, for the replay's parity frames to land. The bot captures

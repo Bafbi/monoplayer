@@ -147,6 +147,13 @@ test('#592 the ritual has one home: no lane registers the core\'s attach call-in
     }
   }
 
+  // The online rung joined them in #610: it declined the client-information
+  // call-in, and a rung that declines a row is a rung whose backend sees less
+  // than the product's. It keeps one hand registration, the attach wrapper
+  // below, and nothing else.
+  assert.equal(count(read('src/ladder/online.js'), '.setClientSettingsHandler('), 0,
+    'src/ladder/online.js wires no call-in by hand either: its backend sees the same client information every lane sends')
+
   // The one rung that stands outside, and the factory's header is why: the two
   // pre-auth rigs build a front leg and no core, so the setter is all they have
   // to drive. Two calls, both theirs, and neither is the ritual.
@@ -162,11 +169,6 @@ test('#592 the ritual has one home: no lane registers the core\'s attach call-in
     assert.equal(count(CORE, '.' + name + '('), 0,
       'src/service/monoplayer.js registers no call-in by hand: ' + name + ' is a row of the table')
   }
-
-  // One lane still makes a hand registration, and it declines a call-in rather
-  // than wiring one: the online rung keeps the comparison it was built for.
-  assert.equal(count(read('src/ladder/online.js'), '.setClientSettingsHandler(null)'), 1,
-    'src/ladder/online.js declines the client-information call-in in one line: its other hand registration is the attach wrapper below')
 
   // setCoreAttach is the one a lane may wrap, and exactly two do: the rig, to
   // read the attach record, and the online rung, to cut its evidence. Each
