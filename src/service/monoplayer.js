@@ -15,6 +15,8 @@
 //     setErrorHandler(({ error }): void)
 //     write(name, packet)                         // serverbound, packet level
 //     writeRaw(buffer, meta)                      // serverbound, frame level
+//     target                                      // { host, port }: the address
+//                                                 // the leg is dialled at
 //     chat(text): void                            // sign and send as the puppet
 //     answerHeldGate({ state, name, data })        // optional: answer a configuration
 //                                                 // gate its last client left (#73)
@@ -446,9 +448,21 @@ export function createMonoplayer ({
   // exactly as they did before.
   function claimHeldOnServedBody () {
     if (typeof frontLeg?.claimOn !== 'function') return true
-    const body = claimDial?.body ?? claimedBody ?? activeBody
+    const body = claimBodyId()
     if (body === null) return false
     return frontLeg.claimOn(body) !== null
+  }
+
+  // #597: the body this session is on, named the way a claim names it. A claim is
+  // recorded against a body's canonical name (#265) and a record names the body the
+  // session moved to, so this is the one name a claim board and this core agree on.
+  // A lane nothing has claimed answers with its configured body.
+  //
+  // Two readers share it: the reconnect, which asks whether a claim keeps the body
+  // alive, and `laneState`, which puts the name on the row. It is not
+  // `servedBody`, which also asks whether the body is warm and watchable.
+  function claimBodyId () {
+    return claimDial?.body ?? claimedBody ?? activeBody
   }
 
   const session = createSession({
@@ -2350,6 +2364,9 @@ export function createMonoplayer ({
     // body is refused because the session holds one backend connection. The cache
     // can tell two bodies apart, but a leg per body is #261 and a channel to
     // deliver through is #269.
+    // The body this session dialled, without `claimBodyId`'s configured fallback: a
+    // claim on the body the lane was configured with has dialled nothing yet, so it
+    // is no second body to refuse.
     const serving = claimDial?.body ?? claimedBody
     if (serving !== null && body !== serving) {
       log('claimDialRefused', { body, reason: 'one_body', claimed: serving })
@@ -2563,6 +2580,47 @@ export function createMonoplayer ({
     if (claimedBody === null) return null
     if (!session.warmReady) return null
     return WATCHABLE.has(session.state) ? claimedBody : null
+  }
+
+  // #597: what a caller can read about this lane, as one value, in GLOSSARY.md's
+  // words.
+  //
+  // A snapshot is a value, not a feed and not a cache: every field is read from the
+  // bag that owns it, at the call, so a snapshot taken after a claim reads the claim
+  // and one taken after a move reads the body the move landed on.
+  //
+  // One row, because one session holds one backend connection (#261). That ticket
+  // gives each body its leg, and this row gains its siblings there.
+  //
+  // `state` is the session's own word, from `STATES` (src/core/session.js). The
+  // move's own phases stay the move's: `moveKind`, the phase of `move`, and
+  // `restoreReplayPending` are separate variables, and restating them here would be
+  // a fifth answer to their question rather than a read of one of them.
+  //
+  // The pre-auth window is absent on purpose. The front leg creates it
+  // (src/legs/live-front.js) and the core never sees it, so a field for it here would
+  // be a copy of the leg's board and not a read of it.
+  function laneState () {
+    const body = claimBodyId()
+    return {
+      bodies: [{
+        body,
+        // The address the body's leg holds open. A claim's dial sets it, and so
+        // does a followed move, so it follows the body rather than the config. The
+        // leg answers a copy, so this passes it on rather than narrowing it.
+        server: backendLeg?.target ?? null,
+        state: session.state,
+        // The claim's own record, or null: a body nobody holds, and a lane whose
+        // leg carries no claim board.
+        claim: typeof frontLeg?.claimOn === 'function' ? frontLeg.claimOn(body) : null,
+        // The channels the core was told about. One session serves one body, so
+        // every one of them watches this row's body.
+        spectators: spectators.size,
+        // The cache's word for "a complete join is held", not the session's
+        // `warmReady`, which is a separate gate the session keeps.
+        warm: cache.warm
+      }]
+    }
   }
 
   // Why the served body is not watchable yet. A session that failed its retries
@@ -3481,7 +3539,14 @@ export function createMonoplayer ({
     // #259: the body this session serves and whether it is up, which is what a
     // picker row reads. The leg's setBodyServed call-in reaches this. A lane that
     // never wires it reads a row the way the list wrote it.
+    // #597: this answers a picker row's question, which is about the body a claim has
+    // landed on, and it is null while a claim is still dialling. `laneState` answers
+    // a different question: the body the session is on, dialling or landed.
     bodyServed: () => ({ body: claimedBody, up: servedBody() !== null }),
+    // #597: the snapshot, beside the bags rather than in place of them. `metrics`
+    // stays until the last reader of each counter moves, and no counter moves with
+    // this function.
+    laneState,
     // #261: a player asked for this body to end, from the picker's Disconnect verb.
     // It is the reversing act, and its refusals are the session's.
     disconnectBody,
