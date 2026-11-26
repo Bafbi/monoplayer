@@ -165,13 +165,13 @@ test('the frame is one entry per channel, naming that channel\'s own player', ()
   const entries = skinEntriesFor({
     property: PROPERTY,
     channels: [
-      { channel: null, uuid: HUMAN, name: 'Bafbi' },
-      { channel: 'spectator-1', uuid: WATCHER, name: 'Watcher' }
+      { id: null, uuid: HUMAN, name: 'Bafbi' },
+      { id: 'spectator-1', uuid: WATCHER, name: 'Watcher' }
     ]
   })
 
   assert.equal(entries.length, 2, 'one row per channel, in the order the caller gave them')
-  assert.deepEqual(entries.map(entry => entry.channel), [null, 'spectator-1'],
+  assert.deepEqual(entries.map(entry => entry.id), [null, 'spectator-1'],
     'the driver keeps the frame with no channel, and a spectator\'s names its own')
   assert.deepEqual(entries.map(entry => entry.packet.data[0].uuid), [HUMAN, WATCHER],
     'each entry names the player of the channel it goes to')
@@ -189,9 +189,9 @@ test('a channel that names no player gets no entry, and is reported', () => {
   const entries = skinEntriesFor({
     property: PROPERTY,
     channels: [
-      { channel: null, uuid: null, name: 'Bafbi' },
-      { channel: 'spectator-1', uuid: WATCHER, name: null },
-      { channel: 'spectator-2', uuid: WATCHER, name: 'Watcher' }
+      { id: null, uuid: null, name: 'Bafbi' },
+      { id: 'spectator-1', uuid: WATCHER, name: null },
+      { id: 'spectator-2', uuid: WATCHER, name: 'Watcher' }
     ]
   })
 

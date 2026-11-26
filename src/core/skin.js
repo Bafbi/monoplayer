@@ -127,27 +127,28 @@ export function skinPlayerInfoPacket ({ uuid, name, property } = {}) {
 //
 // #99 wrote one entry, for the driver's UUID, and a write with no channel reaches
 // every channel on the body (src/legs/live-front.js). So a spectator's client held
-// an entry naming the driver and none naming itself, and the body it draws — the
-// front authenticated it as itself and handed it the puppet's world — fell back to
-// a vanilla default. Every client on a body is a different account, so the entry is
-// a function of the channel it goes to, and a spectator's names the spectator.
+// an entry naming the driver and none naming itself. The body that client draws is
+// its own, because the front authenticated it as itself and handed it the puppet's
+// world, so its own body fell back to a vanilla default. Every client on a body is a
+// different account, so the entry is a function of the channel it goes to, and a
+// spectator's names the spectator.
 //
 // The caller says which channels the frame is owed to, and this answers one row per
-// channel in the same order, so a caller marks what it wrote: `packet` is the entry
-// for that channel, and null where the channel names no player, which the caller
-// records rather than writes. `channel` is echoed as given, null included: a body's
-// driver keeps the frame #99 proved, which names no channel, and a spectator's names
-// its own.
+// channel in the same order, so a caller can mark what it wrote. `packet` is the
+// entry for that channel, and null where the channel names no player, which the
+// caller records rather than writes. `id` is echoed as given, null included: the
+// driver's entry is the frame #99 proved, which names no channel, and a spectator's
+// names its own channel (src/core/channels.js).
 export function skinEntriesFor ({ property = null, channels = [] } = {}) {
   if (!Array.isArray(channels)) throw new TypeError('skinEntriesFor needs the channels it writes to')
-  return channels.map(addressee => {
-    const channel = addressee?.channel ?? null
-    const name = typeof addressee?.name === 'string' && addressee.name !== '' ? addressee.name : null
-    const uuid = typeof addressee?.uuid === 'string' && addressee.uuid !== '' ? addressee.uuid : null
+  return channels.map(channel => {
+    const id = channel?.id ?? null
+    const name = typeof channel?.name === 'string' && channel.name !== '' ? channel.name : null
+    const uuid = typeof channel?.uuid === 'string' && channel.uuid !== '' ? channel.uuid : null
     // A channel that names no profile cannot be given an entry. It is reported, not
     // dropped: no later frame repairs a client left without one (#134).
-    if (uuid === null || name === null) return { channel, name, packet: null }
-    return { channel, name, packet: skinPlayerInfoPacket({ uuid, name, property }) }
+    if (uuid === null || name === null) return { id, name, packet: null }
+    return { id, name, packet: skinPlayerInfoPacket({ uuid, name, property }) }
   })
 }
 

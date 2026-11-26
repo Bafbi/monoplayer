@@ -1926,94 +1926,82 @@ export function createMonoplayer ({
   // unsigned copy of it too). Measured on a real 26.2 client through the dev lane:
   // testdata/skin-verdict.md.
   //
-  // #516: one entry per channel, so the channels it is owed to. The driver's while
-  // its client is in play, and every spectator's from the moment its replay is
-  // written. The driver's frame keeps the write #99 proved — one frame with no
-  // channel, for the body — because that is the frame a real client was measured
-  // with. A spectator's names its own channel, because the entry names one player
-  // and a body's two clients are two accounts.
+  // #516: the channels this frame is owed to, each with the player that channel is.
+  // The driver's is owed one while its client is in play, and a spectator's from the
+  // moment its replay is written. The driver's entry is the frame #99 proved: one
+  // packet, written with no channel, because that is the frame a real client was
+  // measured with. A spectator's names its own channel, because the entry names one
+  // player and a body's two clients are two accounts.
   function owedSkinChannels () {
     const owed = []
     if (isAttached() && frontPlayReady && !skinSent) {
-      owed.push({ kind: 'driver', channel: null, uuid: attachedUuid, name: attachedName })
+      owed.push({ id: null, uuid: attachedUuid, name: attachedName })
     }
-    for (const [channel, spectator] of spectators) {
+    for (const [id, spectator] of spectators) {
       if (spectator.skinSent) continue
-      owed.push({ kind: 'spectator', channel, uuid: spectator.uuid, name: spectator.name })
+      owed.push({ id, uuid: spectator.uuid, name: spectator.name })
     }
     return owed
   }
 
   // A client's entry wins over a later `add_player` for the same UUID, so a second
-  // frame for one play state is a write nobody sees. The fact is kept where the
-  // frame went: the driver's play state, and each spectator's own channel.
-  function markSkinSent (addressee) {
-    if (addressee.kind === 'driver') {
+  // frame for one play state is a write nobody sees. The fact is kept where the frame
+  // went: the driver's play state, which is the entry that names no channel, and each
+  // spectator's own.
+  function markSkinSent (channel) {
+    if (channel.id === null) {
       skinSent = true
       return
     }
-    const spectator = spectators.get(addressee.channel)
+    const spectator = spectators.get(channel.id)
     if (spectator !== undefined) spectator.skinSent = true
   }
 
-  // Five refusals, each a state where the frame would be ignored or would claim a
-  // skin the backend never sent: the switch is off, no client is in play, the
-  // backend has sent no property, the front named no player for a channel, or every
-  // channel owed one already received it.
+  // Five states where the frame would be ignored or would claim a skin the backend
+  // never sent: the switch is off, the backend has sent no property, no channel is
+  // owed one, the front named no player for a channel, and the write itself failed.
+  // Each writes its own line, which is how a client left without an entry is read.
   function sendPuppetSkin ({ reason = 'attach' } = {}) {
-    if (!cfg.skin.showPuppetSkin) return { sent: false, reason: 'disabled' }
-    if (puppetSkinProperty === null) return { sent: false, reason: 'no_property' }
+    if (!cfg.skin.showPuppetSkin) return
+    if (puppetSkinProperty === null) return
     const owed = owedSkinChannels()
-    if (owed.length === 0) {
-      const alreadySent = skinSent || [...spectators.values()].some(spectator => spectator.skinSent)
-      return { sent: false, reason: alreadySent ? 'already_sent' : 'not_attached' }
-    }
+    if (owed.length === 0) return
     let entries
     try {
       entries = skinEntriesFor({ property: puppetSkinProperty, channels: owed })
     } catch (error) {
       metrics.skinFramesRefused++
       log('puppetSkinRefused', { reason: 'packet', error: String(error?.message ?? error).slice(0, 200) })
-      return { sent: false, reason: 'packet' }
+      return
     }
     const signed = typeof puppetSkinProperty.signature === 'string'
-    let written = 0
-    let refused = false
     for (let index = 0; index < owed.length; index++) {
-      const addressee = owed[index]
+      const channel = owed[index]
       const entry = entries[index]
       if (entry.packet === null) {
         // #134: a channel the front named no UUID for cannot be given an entry, and
         // no later frame repairs it. One line per channel, because each is a client
         // that reads its own body as vanilla for the rest of its connection.
-        log('puppetSkinWithheld', {
-          name: entry.name,
-          reason: 'no_identity',
-          channel: addressee.channel
-        })
+        log('puppetSkinWithheld', { name: entry.name, reason: 'no_identity', channel: channel.id })
         continue
       }
       try {
-        frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: addressee.channel })
+        frontLeg.write(SKIN_FRAME, entry.packet, { synth: true, channel: channel.id })
       } catch (error) {
         metrics.skinFramesRefused++
-        refused = true
         log('puppetSkinRefused', {
           reason: 'write_failed',
           error: String(error?.message ?? error).slice(0, 200),
-          channel: addressee.channel
+          channel: channel.id
         })
         continue
       }
-      markSkinSent(addressee)
-      written++
+      markSkinSent(channel)
       metrics.skinFramesWritten++
       telemetry.metric('monoplayer.skin.frames', 1, { player: entry.name })
-      log('puppetSkinSent', { name: entry.name, reason, signed, channel: addressee.channel })
-      emit('puppet_skin', { name: entry.name, signed })
+      log('puppetSkinSent', { name: entry.name, reason, signed, channel: channel.id })
+      emit('puppet_skin', { name: entry.name, signed, channel: channel.id })
     }
-    if (written > 0) return { sent: true }
-    return { sent: false, reason: refused ? 'write_failed' : 'no_identity' }
   }
 
   // The next play state holds no `player_info` entry, so it is owed the skin
