@@ -350,7 +350,7 @@ One line per claim. Read the right column only when the middle one is not what y
 | the watching client, while the driver walks | that player walks after it, a fraction of a step behind | it stands still: `virtualPlayersMoved` stayed 0, so no move frame reached a spectator |
 | the watching client, movement | flight, no damage, no block break, no block place: a spectator is a camera | survival behaviour: `spectateView.modeFrames` was not 2 |
 | the watching client, F5 | no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: that is #647. **Expected to fail until #647 lands**, because the client is not told its own player-list entry and so does not treat itself as a spectator |
-| the driving client, the world beside it | the spectator, standing in the world, in the tab list, **wearing a default skin**: this proxy holds no skin for a spectator and invents none | nothing beside it: no `player_info` and no `spawn_entity` reached the driver's channel |
+| the driving client, the world beside it | the spectator, standing in the world, in the tab list, **wearing a default skin**: the entry that tells one channel about another client's body carries no texture, so a third party draws a default (#618 is about the spectator's own body, not this one) | nothing beside it: no `player_info` and no `spawn_entity` reached the driver's channel |
 | the driving client, the player you control | one body, yours. No second copy of yourself anywhere | a duplicate of yourself: the driver's channel was told about its own player |
 
 A bot can assert the frames behind the last two rows, and `O71` does. What no bot can do is see

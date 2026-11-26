@@ -4,7 +4,9 @@
 // entry names the puppet, and every channel of the body receives it, because a client
 // draws a player only from that player's entry. The driver's own entry is #99's frame,
 // naming the profile the front verified, because a client draws the body it controls
-// from the entry naming that player. A spectator is owed the first and never the second.
+// from the entry naming that player. A spectator is owed the first and never the second —
+// and, since #618, an entry of its own on its own channel, carrying the skin its account's
+// hasJoined answer carried (test/service/spectate.test.js reads that one).
 //
 // Five properties of the change are asserted here, at the composition root:
 //

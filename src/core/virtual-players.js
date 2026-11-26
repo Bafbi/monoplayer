@@ -14,11 +14,17 @@
 // 5058 frames replayed) and the world is empty. This module is the missing half.
 //
 // #636: the entry is not built here, and the caller says which players it owes. Two
-// players reach this module, and only one of them has an entry elsewhere: #614's frame
-// names the puppet and carries the property the backend sent, and a channel's own player
-// has none at all — the proxy holds no skin for a spectator and invents none. So the
-// caller hands over `entryFor`, which answers the frame for a player it does not announce
-// itself and null for the one it does, and this module puts it first when it spawns.
+// players reach this module, and only one of them has an entry this module can use: #614's frame
+// names the puppet and carries the property the backend sent, and the entry that tells one
+// channel about another client's body carries no property at all. So the caller hands over
+// `entryFor`, which answers the frame for a player it does not announce itself and null for
+// the one it does, and this module puts it first when it spawns.
+//
+// #618: and a spectator's own player now has an entry of its own, carrying its account's
+// skin — written on that spectator's channel alone (src/service/monoplayer.js,
+// `sendSpectatorSkin`). It is deliberately not this module's: no channel is announced to
+// itself, so the skin a player's own body wears and the skin another client draws for that
+// player are two claims, and this module still answers the second with no property.
 //
 // Why the pair cannot be split: a client refuses a player-typed `spawn_entity` whose UUID
 // it holds no `player_info` entry for. It logs "Server attempted to add player prior to

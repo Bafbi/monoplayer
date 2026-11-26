@@ -127,9 +127,13 @@ export function carriesTextures (packet) {
 // a player-typed `spawn_entity` whose UUID it holds no entry for — it logs "Server
 // attempted to add player prior to adding player info" and adds no entity — so the entry
 // is the condition of drawing a body, not decoration on it. The players that ticket makes
-// visible are the body's channels, and the proxy holds no skin for a spectator and invents
-// none (docs/transparency.md): its entry names the player it is about and lists no
-// property, and the client draws a vanilla default.
+// visible are the body's channels, and the frame that tells one channel about another
+// client's body lists no property: a client draws a vanilla default for it.
+//
+// #618: what a spectator's own player wears is a different frame and a different caller,
+// and it does carry a property — the one the spectator's own account sent this lane
+// (`sendSpectatorSkin`, src/service/monoplayer.js). This builder takes either: the
+// caller decides, and the comment above is about the one #636 writes.
 export function playerInfoEntry ({ uuid, name, property = null } = {}) {
   if (typeof uuid !== 'string' || uuid === '') throw new TypeError('playerInfoEntry needs a uuid')
   if (typeof name !== 'string' || name === '') throw new TypeError('playerInfoEntry needs a name')

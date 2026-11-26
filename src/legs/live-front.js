@@ -92,6 +92,7 @@ import mc from 'minecraft-protocol'
 import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
+import { pickTextures } from '../core/skin.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { bumpBounded } from '../core/bounded-counter.js'
 import { CLAIM_REFUSAL, createClaims } from '../core/claims.js'
@@ -589,6 +590,12 @@ function createFrontLeg ({
   version,
   check,
   store,
+  // #618: the properties an account's hasJoined answered with, by name, for a lane
+  // that has no sessionserver. Offline mode invents a player's UUID and name, and a
+  // client's own skin is the one thing it cannot invent: this is what a lane with no
+  // Mojang in front of it supplies instead. A deployed lane reads the same value off
+  // the body the library sets on the connection (profileTextures below).
+  profiles = null,
   getSnapshotConfig,
   // #257: the picker. `configurationBaseline` is a parsed recording of a real
   // server's configuration phase (src/legs/configuration-baseline.js), and
@@ -630,6 +637,18 @@ function createFrontLeg ({
   }
   if (onPickerPick !== null && typeof onPickerPick !== 'function') {
     throw new TypeError('onPickerPick must be null or a function')
+  }
+  if (profiles !== null && (typeof profiles !== 'object' || Array.isArray(profiles))) {
+    throw new TypeError('profiles must be null or an object of name -> properties array')
+  }
+  // #618: matched without case, because a name is not a key: the client sends the
+  // name it logged in with, and the lane's list spells it as its account does.
+  const profilesByName = new Map()
+  for (const [name, properties] of Object.entries(profiles ?? {})) {
+    if (!Array.isArray(properties)) {
+      throw new TypeError('profiles[' + JSON.stringify(name) + '] must be an array of profile properties')
+    }
+    profilesByName.set(name.toLowerCase(), properties)
   }
   // #257: the frames this leg can serve a picker with, resolved once, because the
   // recording and this leg's protocol version are both fixed at construction. A
@@ -939,6 +958,10 @@ function createFrontLeg ({
   function handleBeforeLogin (client) {
     const username = client.username
     const uuid = client.uuid
+    // #618: before anything reads the profile, so a lane with properties supplied
+    // looks to the rest of this leg exactly like a lane whose sessionserver answered.
+    const supplied = profilesByName.get(String(username).toLowerCase())
+    if (supplied !== undefined) client.profile = { id: uuid, name: username, properties: supplied }
     log('frontLoginReview', { username, uuid: uuid ?? null, onlineMode, verifier })
 
     const decision = decideViaCheck({
@@ -963,7 +986,11 @@ function createFrontLeg ({
       username: decision.username ?? username,
       uuid: decision.uuid ?? uuid,
       verifier,
-      whitelist: store?.file ?? null
+      whitelist: store?.file ?? null,
+      // #618: the measurement the ticket asks for, on every join: did the body this
+      // lane verified carry a textures property? A lane with no sessionserver answers
+      // for itself, and the field is the same one either way.
+      textures: profileTextures(client.profile) !== null
     })
 
     // #257: the core's decision said this join has no backend to attach to, and
@@ -1947,12 +1974,17 @@ function createFrontLeg ({
     // the session is not touched: watching is not driving, and a second attach would
     // make it one.
     if (channel !== null && channel.role === CHANNEL_ROLES.SPECTATOR) {
+      // #618: the spectator's own skin, which is the account's and never the body's.
+      // The front verified this client, so the body it holds is the profile the
+      // sessionserver answered, and the textures on it are that account's own.
+      const skin = profileTextures(client.profile)
       const watched = spectatorAttachHandler === null
         ? { watching: false, reason: 'no_spectator_sink' }
         : spectatorAttachHandler({
           name: client.username ?? null,
           uuid: client.uuid ?? null,
-          channel: channel.id
+          channel: channel.id,
+          skin
         })
       if (watched?.watching !== true) {
         record(client, 'spectateFailed', {
@@ -1969,7 +2001,11 @@ function createFrontLeg ({
         username: client.username ?? null,
         uuid: client.uuid ?? null,
         frames: watched.frames ?? null,
-        replayed: watched.replayed ?? null
+        replayed: watched.replayed ?? null,
+        // #618: whether this landing was handed a skin at all, which is the front's fact
+        // and not the core's. `spectateView`'s `ownSkin` is the other one — the entry was
+        // written — and the two differ while the switch is off.
+        skinSupplied: skin !== null
       })
       return
     }
@@ -2524,6 +2560,19 @@ function createFrontLeg ({
   }
 }
 
+// #618: the textures property on the profile an account's hasJoined answered with,
+// as a client's own skin. The front verifies a client against Mojang, and the body
+// Mojang hands back for a verified session is where that account's skin already is:
+// this leg holds no skin of its own and invents none, so a profile with no property
+// is a spectator this lane has no skin for.
+//
+// A lane with no sessionserver supplies the properties itself (the offline leg's
+// `profiles` option), and the read is the same one either way. Measured: whether the
+// body a deployed front is handed carries textures at all is in testdata/skin-verdict.md.
+export function profileTextures (profile) {
+  return pickTextures(profile?.properties)
+}
+
 export function createLiveFrontLeg (options = {}) {
   const {
     host = '127.0.0.1',
@@ -2555,6 +2604,9 @@ export function createLiveFrontLeg (options = {}) {
 
   if (options.offlineWhitelist !== undefined) {
     throw new TypeError('createLiveFrontLeg does not accept offlineWhitelist; use createOfflineFrontLeg')
+  }
+  if (options.profiles !== undefined) {
+    throw new TypeError('createLiveFrontLeg does not accept profiles; its sessionserver answers with the account')
   }
   if (!attachWhitelistFile) throw new TypeError('attachWhitelistFile is required')
   if (whitelistStore !== null && typeof whitelistStore.has !== 'function') {
@@ -2592,6 +2644,10 @@ export function createOfflineFrontLeg (options = {}) {
     port = 0,
     version = '26.1',
     offlineWhitelist = null,
+    // #618: what the sessionserver would have answered this name with, so a lane with
+    // no Mojang in front of it can hand a client its own account's skin. The UUID and
+    // the name stay the offline identity's, because those are what an offline lane has.
+    profiles = null,
     // #229: the same store option the live leg takes. A store wins over the
     // array, because it is the file that reloads at each login.
     whitelistStore = null,
@@ -2655,6 +2711,7 @@ export function createOfflineFrontLeg (options = {}) {
     host,
     port,
     version,
+    profiles,
     check: createOfflineAttachCheck({ whitelist }),
     store: whitelistStore,
     getSnapshotConfig,
