@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createTelemetry } from '../../src/observability/telemetry.js'
+import { RECORD_IDENTITY_FIELDS } from '../../src/core/channels.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DOC = path.join(ROOT, 'docs', 'telemetry.md')
@@ -51,6 +52,17 @@ function docFiles (dir = path.join(ROOT, 'docs'), found = []) {
   }
   return found
 }
+
+// #416: the identity table is read off the module that decides the shape, so a
+// fourth identity key, or a row that names a key the code stopped writing, is a
+// failure here rather than a reader's confusion.
+test('#416 the doc names every identity key a record can carry, and why one is absent', () => {
+  const doc = fs.readFileSync(DOC, 'utf8')
+  const missing = RECORD_IDENTITY_FIELDS.filter(field => !doc.includes('| `' + field + '` |'))
+  assert.deepEqual(missing, [], 'docs/telemetry.md does not name: ' + missing.join(', '))
+  assert.ok(doc.includes('carries `account` and no `body` key'),
+    'the doc says why a record written before a body exists carries none')
+})
 
 test('the doc calls the exporter temporality by its OTLP name', async () => {
   const sent = await sentTemporality()

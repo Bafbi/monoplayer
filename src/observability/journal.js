@@ -54,6 +54,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 
+import { RECORD_IDENTITY_FIELDS, stampIdentity } from '../core/channels.js'
 import { redact } from './redact.js'
 
 // A frame longer than this keeps its header and loses its body.
@@ -236,7 +237,12 @@ export function createJournal ({
   maxTotalBytes = DEFAULT_MAX_TOTAL_BYTES,
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   clock = () => Date.now(),
-  fs = nodeFs
+  fs = nodeFs,
+  // #416: the account the lane speaks for, written on every record here. One
+  // value for the life of the process, so it is stamped where the record is
+  // built rather than at each of the seven call sites. Null is a lane with no
+  // account, which writes none rather than a null (#263 D2).
+  account = null
 } = {}) {
   const configured = typeof dir === 'string' && dir.trim() !== ''
   if (!configured) return disabledJournal({ reason: 'no_dir' })
@@ -535,7 +541,7 @@ export function createJournal ({
   return {
     enabled: true,
 
-    frame ({ dir: direction = 's2c', state = null, name = null, buffer = null } = {}) {
+    frame ({ dir: direction = 's2c', state = null, name = null, buffer = null, body = null } = {}) {
       if (closed) return false
       const label = typeof name === 'string' ? name : String(name ?? 'unknown')
       if (skipName(label)) {
@@ -549,7 +555,12 @@ export function createJournal ({
       }
       const payload = toBuffer(buffer)
       const len = payload ? payload.length : 0
-      const record = { t: clock(), dir: direction, state, name: label, len }
+      // #416: the account, and the body this frame crossed. A frame is one body's
+      // stream, so it names the body and never a channel: the same frame reaches
+      // every channel on that body (src/core/channels.js).
+      const record = stampIdentity(
+        { t: clock(), dir: direction, state, name: label, len },
+        { account, body })
       if (policy === 'length') {
         // The policy never keeps this body, whatever its size.
         record.lengthOnly = true
@@ -566,15 +577,20 @@ export function createJournal ({
 
     event (name, fields = {}) {
       if (closed) return
+      const identity = {}
       const record = { t: clock(), event: String(name ?? 'event') }
       if (fields && typeof fields === 'object') {
         for (const [key, value] of Object.entries(fields)) {
           if (key === 't' || key === 'event') continue
           if (value === undefined || SECRET_KEY.test(key)) continue
-          record[key] = normalize(value)
+          if (RECORD_IDENTITY_FIELDS.includes(key)) identity[key] = normalize(value)
+          else record[key] = normalize(value)
         }
       }
-      if (append('events', record, 'event:' + record.event)) stats.events++
+      // #416: the identity a caller passes is the record's own, and the account is
+      // the lane's. An identity key the event leaves null is absent, not written.
+      const stamped = stampIdentity(record, { ...identity, account })
+      if (append('events', stamped, 'event:' + stamped.event)) stats.events++
     },
 
     close () {

@@ -592,3 +592,42 @@ test('a file that is not a journal name is ignored, however shard-shaped', () =>
     `journal-${HOUR}-frames-1.ndjson`
   ])
 })
+
+// #416: the journal is the one artifact a diagnosis reads, so every record names
+// the account that serves the lane, and a frame names the body it crossed. A key
+// that names nothing is absent, never null (#263 D2).
+test('#416 a journal names the account on every record and the body a frame crossed', async t => {
+  const { dir, journal } = withJournal(t, { account: 'sky' })
+  const x = Buffer.from('x').toString('base64')
+  const y = Buffer.from('y').toString('base64')
+
+  journal.frame({ dir: 's2c', state: 'play', name: 'login', body: 'paper_25565', buffer: Buffer.from('x') })
+  journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('y') })
+  journal.event('liveReady', { warm: true })
+  journal.event('channels', { open: 0, channels: [], body: null })
+  journal.close()
+
+  const records = (await collect(readJournal(dir))).map(entry => entry.record)
+  const framed = records.find(record => record.b64 === x)
+  const bare = records.find(record => record.b64 === y)
+  const ready = records.find(record => record.event === 'liveReady')
+  const channels = records.find(record => record.event === 'channels')
+
+  assert.equal(framed.account, 'sky', 'a frame names the account the lane serves')
+  assert.equal(framed.body, 'paper_25565', 'and the body it crossed')
+  assert.equal(bare.account, 'sky')
+  assert.equal('body' in bare, false, 'a frame that names no body has no body key')
+  assert.equal(ready.account, 'sky', 'an event names the account too')
+  assert.equal('body' in ready, false, 'and no body, because it names none')
+  assert.equal('channel' in ready, false)
+  assert.equal('body' in channels, false, 'a null body on an event is absent, not null')
+})
+
+test('#416 a journal with no account writes no account key', async t => {
+  const { dir, journal } = withJournal(t)
+  journal.event('liveReady', { warm: true })
+  journal.close()
+
+  const records = (await collect(readJournal(dir))).map(entry => entry.record)
+  assert.equal('account' in records[0], false, 'a lane with no account names none')
+})

@@ -7,7 +7,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { CHANNEL_ROLES, createChannels } from '../../src/core/channels.js'
+import {
+  CHANNEL_ROLES,
+  channelIdentity,
+  createChannels,
+  recordIdentity,
+  stampIdentity
+} from '../../src/core/channels.js'
 
 const BODY = 'gate-paper:25565'
 
@@ -133,4 +139,47 @@ test('#269 a channel is opened with a connection id and a role', () => {
   const again = channels.open({ id: 'c1', body: BODY, role: CHANNEL_ROLES.SPECTATOR })
   assert.equal(again.ok, false)
   assert.equal(again.reason, 'in_use', 'one connection, one channel')
+})
+
+// #416: the identity a record carries: the account that serves the lane, the body
+// the record is about, and the channel it was written on. One function decides the
+// shape, so a caller never repeats the three keys, and a key that names nothing is
+// left out rather than written as null (#263 D2).
+test('#416 a record identity names what exists and omits what does not', () => {
+  assert.deepEqual(recordIdentity({ account: 'sky' }), { account: 'sky' })
+  assert.equal('body' in recordIdentity({ account: 'sky' }), false,
+    'a body that does not exist is absent, not null (#263 D2)')
+  assert.equal('channel' in recordIdentity({ account: 'sky', body: '', channel: null }), false,
+    'an empty body and a null channel name nothing')
+  assert.deepEqual(
+    recordIdentity({ account: 'sky', body: 'paper', channel: 'holder-1' }),
+    { account: 'sky', body: 'paper', channel: 'holder-1' },
+    'all three, when all three exist')
+})
+
+test('#416 the identity fills what a record leaves out and a record keeps the body it names', () => {
+  const stamped = stampIdentity(
+    { username: 'Bafbi', body: null },
+    { account: 'sky', body: 'paper', channel: 'holder-1' })
+
+  assert.deepEqual(stamped, { username: 'Bafbi', account: 'sky', body: 'paper', channel: 'holder-1' },
+    'a null body on the record is replaced by the identity, never written')
+  assert.equal(stampIdentity({ body: 'nether' }, { account: 'sky', body: 'paper' }).body, 'nether',
+    'a record that names another body keeps its own')
+  assert.equal('body' in stampIdentity({ body: '' }, { account: 'sky' }), false,
+    'and an empty one names nothing, so it is absent')
+})
+
+test('#416 a channel names its own identity, and a connection holding none names nothing', () => {
+  const channels = createChannels()
+  assert.deepEqual(channelIdentity(channels.of('holder-1')), {},
+    'a connection that holds no channel has no identity to write')
+  assert.deepEqual(channelIdentity(null), {}, 'and the absent channel is not an error')
+
+  channels.open({ id: 'holder-1', body: BODY, role: CHANNEL_ROLES.DRIVER, name: 'Pilot' })
+  assert.deepEqual(channelIdentity(channels.of('holder-1')), { body: BODY, channel: 'holder-1' })
+
+  channels.open({ id: 'holder-2', role: CHANNEL_ROLES.SPECTATOR })
+  assert.deepEqual(channelIdentity(channels.of('holder-2')), { channel: 'holder-2' },
+    'a channel the lane admitted with no claim has no body key')
 })

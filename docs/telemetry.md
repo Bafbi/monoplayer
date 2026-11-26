@@ -69,6 +69,22 @@ One log record per lifecycle call to the core's `log(event, fields)` funnel:
 
 Attribute values are strings, booleans, or integers (`intValue` is a decimal string). Nested objects are JSON-stringified into `stringValue`; non-integer numbers are stringified too. Every string is capped at 1024 characters. `undefined` and `null` fields are dropped.
 
+### The identity on a record
+
+Every log record and every journal record names the account that wrote it, and the records that describe a body or a channel name those too. The three keys are shaped in one place — `recordIdentity` and `stampIdentity` in `src/core/channels.js` — so no call site composes them, and the sinks stamp them rather than each `log` call.
+
+| Key | Where it is written | What it holds |
+| --- | --- | --- |
+| `account` | Every log record the service and both legs write, every OTLP log record, and every journal frame and event. | The lane's account, as one identifier: the alias custody resolved, else its UUID, else the name an offline lane joins as. Absent only on a lane that holds no account at all. |
+| `body` | Every core record, the front leg's records about a connection, every journal frame record, and the heartbeat's `channels` rows. | The body's server slug, `pickSlug(host:port)` (`src/core/picker.js`): the name a claim uses, and the `body` attribute of the `monoplayer.body.*` gauges. |
+| `channel` | The front leg's records about a connection, and the heartbeat's `channels` rows. | The channel's id, which is the holder id the front leg gave that connection (`src/core/channels.js`). |
+
+A key is written where the thing it names exists, and left out where it does not (#263 D2). A record written before a body exists carries `account` and no `body` key: a picker join is served before the client picks a server, so its records name the account and the connection's own facts, and nothing else. Writing `body: null` there would make "every record with a body" a query that also returns the records without one.
+
+The core names the body it serves and never a channel: a channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry, so a record written after a channel closed names no channel either.
+
+`channel` is a journal and log key and never a metric attribute. The allowed-server list bounds how many bodies there are; a channel is one connection, so a channel attribute would be one series per socket (#415, #263 D1). The three `monoplayer.body.*` gauges carry the `body` attribute, and no metric carries a channel.
+
 ### The attach record
 
 One `attach` record per attach, on this path and nowhere else: no extra file, no
@@ -243,8 +259,8 @@ so the top-level `warm` and `attached` describe the served body only.
 
 The channel rows are also written to the packet journal, as one `channels` event per
 heartbeat: `open` is how many channels the record holds, and `channels` is the rows
-above at that instant. A frame record names no channel, so this event is the
-journal's only record of which connection was sent what.
+above at that instant. A frame record names the body it crossed and no channel, so
+this event is the journal's only record of which connection was sent what.
 
 A key is written where the thing it names exists, and left out where it does not:
 `body`, `ageMs` and `claimMs` are the three that can be absent (#263 D2).
@@ -341,13 +357,15 @@ Each line is one JSON record.
 A frame record:
 
 ```json
-{"t":1762560000123,"dir":"s2c","state":"play","name":"player_info","len":412,"b64":"..."}
+{"t":1762560000123,"dir":"s2c","state":"play","name":"player_info","len":412,"account":"glowsquidye","body":"paper_25565","b64":"..."}
 ```
 
 - `t` is epoch milliseconds.
 - `dir` is `s2c` (backend to front) or `c2s` (client to backend).
 - `state` is the protocol state the frame belongs to.
 - `len` is the raw byte length.
+- `account` is the lane's account, the same identifier every log record carries.
+- `body` is the body this frame crossed. A frame record names no channel: one body's stream reaches every channel on it, so the channel would be a fan-out rather than a fact.
 - `b64` is the raw frame bytes, base64-encoded.
 
 Two flags replace `b64`:
@@ -366,8 +384,10 @@ A length-only record:
 A lifecycle event record:
 
 ```json
-{"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","accountUuid":"...","warm":true}
+{"t":1762560000456,"event":"liveReady","front":"0.0.0.0:25565","account":"glowsquidye","accountUuid":"...","warm":true}
 ```
+
+Every event carries `account`. An event about a body carries `body` too, and the heartbeat's `channels` rows carry `body` and `channel`; the identity keys and where each is written are the table under "The identity on a record".
 
 The service writes `startLive`, `liveReady`, `startLiveFailed`, `shutdown`, and the heartbeat's `channels` event from `src/service/start-live.js`. The core writes none.
 
