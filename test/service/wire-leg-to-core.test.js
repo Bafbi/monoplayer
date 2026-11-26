@@ -70,8 +70,13 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
     'a leg that carries every setter is wired whole')
   assert.deepEqual(wiring.requiredMissing, [],
     'and none of the call-ins the core cannot work without is missing')
-  assert.equal(wiring.wired.length, FRONT_LEG_CALL_INS.length,
-    'every declared call-in was registered')
+  // #627: the front table has a `call` row of its own now, the backend table's form:
+  // the pre-auth window's numbers are read off the leg and nothing is registered for
+  // them, so a registered row and a carried one are counted apart.
+  assert.deepEqual(wiring.called, ['preAuthStats'],
+    'the call the core makes on the leg is carried, not registered')
+  assert.equal(wiring.wired.length + wiring.called.length, FRONT_LEG_CALL_INS.length,
+    'and every declared call-in was either registered or carried')
 
   // The payload shapes a caller must not have to know. `attachPlayer` takes
   // includeConfig, and a lane's attach never re-sends the configuration phase:
@@ -342,7 +347,8 @@ const DOUBLE_HOLES = {
       'setSpectatorAttach',
       'setDisconnectBody',
       'setBodyServed',
-      'setSpectatorLeft'
+      'setSpectatorLeft',
+      'preAuthStats'
     ],
     requiredMissing: ['setCoreAttach', 'setCoreAttachConfiguring']
   },

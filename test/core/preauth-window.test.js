@@ -184,3 +184,30 @@ test('#201 the default is conservative, and a window built without a number uses
   assert.ok(DEFAULT_MAX_CONNECTIONS <= 64, 'a cap of hundreds bounds nothing')
   assert.equal(createPreAuthWindow().stats().maxConnections, DEFAULT_MAX_CONNECTIONS)
 })
+
+// #627: `stats()` is what the lane snapshot carries, so the group's names and the
+// fact that each call is a fresh reading are this module's to keep. A caller that
+// re-read it at each snapshot would otherwise hold either a renamed field or a
+// window it could write into, and the snapshot is a value, not a handle on one.
+test('#627 stats names the five numbers a snapshot carries, as a reading taken at the call', () => {
+  const window = createPreAuthWindow({ maxConnections: 2, deadlineMs: 5000 })
+  window.admit()
+  window.admit()
+  window.admit() // refused: the window is full
+  window.expire()
+
+  const stats = window.stats()
+
+  assert.deepEqual(Object.keys(stats).sort(),
+    ['deadlineMs', 'expired', 'inWindow', 'maxConnections', 'refused'],
+    'the five names a lane snapshot carries, and nothing else')
+  assert.deepEqual(stats, { inWindow: 2, maxConnections: 2, deadlineMs: 5000, refused: 1, expired: 1 },
+    'a refusal does not enter the window, and an expiry counts without releasing')
+
+  stats.inWindow = 99
+  assert.equal(window.stats().inWindow, 2,
+    'each call is a fresh reading: a reader cannot write into the window through the numbers it read')
+
+  window.release()
+  assert.equal(window.stats().inWindow, 1, 'and the next reading is the window as it is now')
+})

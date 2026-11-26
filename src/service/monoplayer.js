@@ -36,6 +36,10 @@
 //     write(name, packet, { synth, channel })     // clientbound, packet level
 //     writeRaw(buffer, meta, { channel })         // clientbound, frame level
 //     end(reason)                                 // kick/deny every channel
+//     preAuthStats(): { inWindow, maxConnections, // optional (#627): the pre-auth
+//       deadlineMs, refused, expired }           // window's own numbers, read at
+//                                                // the snapshot's call, so the core
+//                                                // keeps no copy of a count
 //     startReconfiguration({ reason }): { started, reason }  // optional (#22)
 //                                                 // the sampling client re-enters
 //                                                 // configuration on its own
@@ -2769,9 +2773,11 @@ export function createMonoplayer ({
   // `restoreReplayPending` are separate variables, and restating them here would be
   // a fifth answer to their question rather than a read of one of them.
   //
-  // The pre-auth window is absent on purpose. The front leg creates it
-  // (src/legs/live-front.js) and the core never sees it, so a field for it here would
-  // be a copy of the leg's board and not a read of it.
+  // #627: the pre-auth window is the front leg's, and this reads it. The window is
+  // created inside the leg (createPreAuthWindow, src/legs/live-front.js) and the core
+  // never holds it, so the group is the leg's own `stats()` in the policy's names.
+  // A leg that carries no such read answers null, and that is a fact about the lane:
+  // a lane with no window is not a lane whose window is empty.
   function laneState () {
     const body = claimBodyId()
     return {
@@ -2791,7 +2797,12 @@ export function createMonoplayer ({
         // The cache's word for "a complete join is held", not the session's
         // `warmReady`, which is a separate gate the session keeps.
         warm: cache.warm
-      }]
+      }],
+      // #627: the window's own five numbers, or null. Read from the leg at this call
+      // rather than from the wiring report, which start() took once: the report says
+      // the leg declares the read, and this wants what the read says now. One window
+      // serves the lane, because one leg accepts its sockets (#261 moves it per body).
+      preAuth: typeof frontLeg?.preAuthStats === 'function' ? frontLeg.preAuthStats() : null
     }
   }
 
