@@ -139,9 +139,10 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   assert.match(helper, /bumpReason\(/, 'the helper is what bumps the map')
 
   // Seven refusal sites: the two dialogs the leg could not write, the click it could
-  // not read, the two frames naming a server it does not offer, the two the core
-  // answers. The key each one passes is asserted too, because a site swapped to the
-  // wrong word still counts and still lies about why.
+  // not read, the two frames naming a server it does not offer, the claim the core
+  // answers, and the Spectate landing's own refusals. The key each one passes is
+  // asserted too, because a site swapped to the wrong word still counts and still
+  // lies about why.
   const sites = [...SOURCE.matchAll(/bumpPickerRefusal\(([^)]*)\)/g)].map(match => match[1]).sort()
   assert.deepEqual(sites, [
     "'picker_unavailable'",
@@ -150,6 +151,28 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
     "'unknown_server'",
     'action.reason',
     'outcome.reason',
-    'outcome.reason'
+    'reason'
   ].sort(), 'every refusal site counts, and each passes the reason its own record carries')
+
+  // #435: the Spectate landing's four refusals are one site, the closure they all
+  // return through, so a branch added there cannot refuse without counting. The
+  // guard is the closure's own shape: it bumps, and it writes the record whose
+  // reason the map is keyed by, so the count and the line cannot part ways.
+  const landing = SOURCE.slice(SOURCE.indexOf('function landSpectator'), SOURCE.indexOf('function sendBodyConfiguration'))
+  assert.ok(landing.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.match(landing, /const refused = reason => \{/, 'the refusals return through one closure')
+  assert.match(landing, /bumpPickerRefusal\(reason\)/, 'and it is what counts them')
+  assert.match(landing, /record\(client, 'spectateRefused', \{/, 'and what records them')
+  assert.equal((landing.match(/watching: false/g) ?? []).length, 2,
+    'the two shape literals are the answer the leg builds when it has no core, and the closure, and no branch builds a third')
+
+  // #435: the landing is counted after the write that ends the client's phase. Before
+  // it, a phase the leg could not end read as a landing and a refusal at once, and
+  // `finish_failed` now counts as the refusal it is. No test can make that write
+  // throw without reaching into the library's socket, so the order is the fact pinned.
+  const landingCount = landing.indexOf('metrics.spectateLandings++')
+  const landingWrite = landing.indexOf("client.write('finish_configuration'")
+  assert.ok(landingWrite > 0, 'the write that ends the phase is still in this function')
+  assert.ok(landingCount > landingWrite,
+    'the landing is counted after the phase-end write, so a write that threw is not a landing')
 })

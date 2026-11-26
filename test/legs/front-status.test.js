@@ -1,9 +1,12 @@
 // #200: the status ping answers deliberately, not from the library's defaults.
 //
-// This is the one place in the unit rung that opens a socket, and the socket is
-// a loopback port 0 on this machine: the answer is a wire fact, so the test
-// reads it the way the internet would, with a real handshake and no `.secrets`
-// read. The offline front leg and the live one share one body, so the answer
+// One of the two places in the unit rung that speaks the game protocol over a
+// socket, and the socket is a loopback port 0 on this machine: the answer is a wire
+// fact, so the test reads it the way the internet would, with a real handshake and
+// no `.secrets` read. The other is test/legs/spectate-refusal.test.js (#435), which
+// logs a client in because a Spectate refusal after the landing is not reachable
+// without one. The panel and tooling tests listen on loopback too, and none of them
+// speaks this protocol. The offline front leg and the live one share one body, so the answer
 // asserted here is the answer both constructors send.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

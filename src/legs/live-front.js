@@ -376,7 +376,10 @@ export function reportsClientInformation ({ role = null, state = null } = {}) {
 // added while there is room, and every name past the cap lands in `other`, so a
 // lane cannot grow a map nobody asked for. A key that is not a name counts as
 // `unknown`, which is the word that map already uses.
-export const MAX_REFUSAL_REASONS = 16
+// #435: the cap is headroom over the closed set, never the set's size. A named
+// reason that reaches the cap is a reason an operator's chart shows as `other`,
+// which reads as a reason nobody named.
+export const MAX_REFUSAL_REASONS = 20
 export function bumpReason (map, reason) {
   const key = typeof reason === 'string' && reason.length > 0 ? reason : 'unknown'
   if (map[key] !== undefined) { map[key]++; return map }
@@ -1633,23 +1636,27 @@ function createFrontLeg ({
     const answer = spectateBodyHandler === null
       ? { watching: false, reason: 'no_spectator_sink' }
       : spectateBodyHandler({ body, server: named, name: client.username ?? null })
-    const refused = reason => ({
-      watching: false,
-      reason,
-      text: spectateRefusalText({ server: named, reason })
-    })
-    if (answer?.watching !== true) {
-      const outcome = refused(answer?.reason ?? 'unwatchable')
-      bumpPickerRefusal(outcome.reason)
-      log('spectateRefused', {
+    // #435: every branch below refuses through here, so the reason the client is
+    // told is the reason the record carries and the reason the map counts. Before
+    // this, only the core's refusal was counted: a Spectate refused after the
+    // answer said yes — the channel that would not open, the body that replayed no
+    // frame, the phase-end write that threw — reached no record and no count, so
+    // `front.pickerRefusalsByReason` read as a complete count and was not one.
+    // The record goes through `record`, which stamps the channel a refusing client
+    // still holds when the phase-end write is the thing that failed.
+    const refused = reason => {
+      const text = spectateRefusalText({ server: named, reason })
+      bumpPickerRefusal(reason)
+      record(client, 'spectateRefused', {
         username: client.username ?? null,
         body,
         server: named,
-        reason: outcome.reason,
-        text: outcome.text
+        reason,
+        text
       })
-      return outcome
+      return { watching: false, reason, text }
     }
+    if (answer?.watching !== true) return refused(answer?.reason ?? 'unwatchable')
     const channel = openChannel(client, {
       role: CHANNEL_ROLES.SPECTATOR,
       body: typeof answer.body === 'string' ? answer.body : body
@@ -1661,13 +1668,6 @@ function createFrontLeg ({
       return refused('no_cached_configuration')
     }
     leavePicker(client)
-    metrics.spectateLandings++
-    record(client, 'spectateLanded', {
-      username: client.username ?? null,
-      uuid: client.uuid ?? null,
-      server: named,
-      frames: sent.written
-    })
     try {
       client.write('finish_configuration', {})
     } catch (error) {
@@ -1677,6 +1677,16 @@ function createFrontLeg ({
       })
       return refused('finish_failed')
     }
+    // #435: the landing is counted once the client's phase has ended, because a
+    // phase the leg could not end is a client this lane refused. Counted before the
+    // write, one Spectate read as a landing and a refusal at once.
+    metrics.spectateLandings++
+    record(client, 'spectateLanded', {
+      username: client.username ?? null,
+      uuid: client.uuid ?? null,
+      server: named,
+      frames: sent.written
+    })
     return { watching: true, reason: null, text: null, channel: channel.id, body: channel.body, frames: sent.written }
   }
 
