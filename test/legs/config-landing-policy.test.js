@@ -146,8 +146,11 @@ test('#599 a configuration frame offered after the phase finish is dropped, and 
     // about: a configuration frame written in it is read as another packet.
     const mark = written.length
     const markRecords = records.length
+    const markCount = leg.metrics.configFramesAfterFinish
     const sent = leg.writeRaw(Buffer.from([0x06]), { state: 'configuration', name: 'reset_chat' })
     assert.equal(sent, false, 'a configuration frame after the finish never reaches the wire')
+    assert.equal(leg.metrics.configFramesAfterFinish, markCount + 1,
+      'counted on the leg, so a chart of the drops does not depend on reading the log')
     assert.deepEqual(written.slice(mark), [], 'nothing was written')
     const dropped = records.slice(markRecords).filter(entry => entry.event === 'configFrameAfterFinish')
     assert.equal(dropped.length, 1, 'the drop is recorded, so an operator can see what was withheld')

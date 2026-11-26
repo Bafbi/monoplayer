@@ -88,6 +88,9 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62', 'O70', 'O71',
   // #602: the landing's funnel, which runs between O71 and O63.
   'O72',
+  // #599 and #600: the two rules a frame clears before a client reads it, read in the
+  // window the landing above opens.
+  'O74', 'O75',
   // #636: O69 reads the rig O63 leaves, so it runs between O63 and O64. It was
   // declared beside O68, where #635's commit appended it, and nothing noticed
   // until the run started checking the order (#623).
@@ -4876,6 +4879,25 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       body: funnelBodyName,
       server: funnelBodyName
     })
+    // --- O74 and O75: the two rules a frame clears before it reaches a client (#599, #600) ---
+    // The landing wrote the phase's finish synchronously, and this leg's client state has
+    // not caught up with the client's: that gap is the window #541 was about, and the one
+    // moment both rules can be asked of a client that is really there. Both writes run
+    // before the await below, so neither races the client's answer.
+    // Both counters are read before either probe, so neither row depends on the other
+    // probe's refusal landing in a different bucket than it does.
+    const funnelRawDropsBefore = funnelFront.metrics.configFramesAfterFinish
+    const funnelStateRefusedBefore = funnelFront.metrics.stateRefused
+    const funnelRawMark = logs.length
+    const funnelRawSent = funnelFront.writeRaw(
+      funnelFrame('reset_chat', {}).buffer,
+      { state: 'configuration', name: 'reset_chat' }
+    )
+    const funnelPacketMark = logs.length
+    const funnelPacketSent = funnelFront.write('position', {
+      teleportId: 1, x: 0, y: 64, z: 0, yaw: 0, pitch: 0, dx: 0, dy: 0, dz: 0, flags: 0
+    })
+
     // The landing wrote its frames synchronously, so the ordinary one arriving is what
     // says the phase continued; the refused ones are read off the same list.
     await funnelBot.waitFor(
@@ -4918,6 +4940,64 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         funnelBot.received.errors.length === 0 &&
         funnelBot.received.leftovers.length === 0,
       evidence.rawFunnel
+    )
+
+    // --- O74: a configuration frame offered after the phase finish does not reach the client (#599) ---
+    // The raw path and the library's own writer ask one predicate, so the frame is refused
+    // with a reason, counted on the leg and named in its log. The client is the check: the
+    // landing's `reset_chat` is the only one it ever reads, and a second one arriving after
+    // the finish would be read as a play packet with the rest of its bytes left over.
+    const funnelRawDrops = logs.slice(funnelRawMark)
+      .filter(entry => entry.event === 'configFrameAfterFinish').map(entry => entry.fields)
+    evidence.frameGuards = {
+      raw: {
+        sent: funnelRawSent,
+        refused: funnelFront.metrics.configFramesAfterFinish - funnelRawDropsBefore,
+        named: funnelRawDrops.map(fields => fields.name),
+        atClient: funnelBot.received.names.filter(frame => frame.name === 'reset_chat').length
+      },
+      packet: {
+        sent: funnelPacketSent,
+        refused: funnelFront.metrics.stateRefused - funnelStateRefusedBefore,
+        named: logs.slice(funnelPacketMark)
+          .filter(entry => entry.event === 'clientboundStateMismatch')
+          .map(entry => entry.fields.name),
+        phaseFinishLines: logs.slice(funnelPacketMark)
+          .filter(entry => entry.event === 'configFrameAfterFinish').length
+      },
+      leftovers: funnelBot.received.leftovers.length,
+      errors: [...funnelBot.received.errors]
+    }
+    check(
+      'O74',
+      'a configuration frame offered after the phase finish is refused on the raw path, counted on the leg and named, and the client reads the landing\'s one copy and nothing else',
+      funnelLanding.watching === true &&
+        funnelRawSent === false &&
+        funnelFront.metrics.configFramesAfterFinish === funnelRawDropsBefore + 1 &&
+        funnelRawDrops.length === 1 &&
+        funnelRawDrops[0].name === 'reset_chat' &&
+        funnelBot.received.names.filter(frame => frame.name === 'reset_chat').length === 1,
+      evidence.frameGuards.raw
+    )
+
+    // --- O75: a packet object offered in a state the client cannot parse never reaches it (#600) ---
+    // The packet path has no bytes for the wire check, so the rule it takes is the one about
+    // state: the library serializes a packet object with whatever state the client holds, and
+    // the leg's client state is still configuration here. A play frame relayed now would carry
+    // a configuration id the client decodes as another packet.
+    check(
+      'O75',
+      'a packet object offered in a state the client cannot parse is refused by the leg, counted and named, and the phase-finish rule is not what refused it',
+      funnelLanding.watching === true &&
+        funnelPacketSent === false &&
+        funnelFront.metrics.stateRefused === funnelStateRefusedBefore + 1 &&
+        evidence.frameGuards.packet.named.includes('position') &&
+        evidence.frameGuards.packet.phaseFinishLines === 0 &&
+        evidence.frameGuards.leftovers === 0 &&
+        evidence.frameGuards.errors.length === 0,
+      // The whole record, because the conditions read the client's own leftovers and errors
+      // beside the leg's two counts, and a failing row has to show what failed.
+      evidence.frameGuards
     )
 
     // --- O63: a body nobody drives stays up, and is still watchable (#259) ---

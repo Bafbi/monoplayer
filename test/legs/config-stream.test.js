@@ -136,6 +136,26 @@ test('#541 a configuration frame written after the phase finish never reaches th
   assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
 })
 
+// #599/#600: one rule, two write paths. The flag is the interceptor's, so the rule is
+// too: the leg's raw funnel asks this instead of restating the condition, and a writer
+// that came later cannot state it differently.
+test('#599 the rule against a frame after the phase finish is the interceptor\'s, and both write paths ask it', () => {
+  const r = rig()
+  assert.equal(r.interceptor.refusesAfterFinish({ state: 'configuration' }), false,
+    'nothing is refused before this phase\'s finish')
+  r.interceptor.finishFromCore()
+  assert.equal(r.interceptor.refusesAfterFinish({ state: 'configuration' }), true,
+    'a configuration frame after the finish is one the client reads in play')
+  assert.equal(r.interceptor.refusesAfterFinish({ state: 'play' }), false,
+    'a play frame after it is the frame the client now reads, and its own state\'s business')
+  assert.equal(r.interceptor.refusesAfterFinish({}), false,
+    'and a frame with no state is not this rule\'s to refuse')
+  // The interceptor's own writer answers the same way, which is what makes this one
+  // predicate rather than two conditions that agree today.
+  assert.equal(r.interceptor.write('keep_alive', { keepAliveId: 7n }), false)
+  assert.deepEqual(r.suppressed, [{ name: 'keep_alive' }])
+})
+
 test('#541 the next round opens the phase again, so its keep-alives are sent', () => {
   const r = rig()
   r.interceptor.finishFromCore()
@@ -282,10 +302,12 @@ test('#602 a finish that threw leaves the phase open, so the refusal still goes 
   interceptor.write('registry_data', { codec: {} })
   interceptor.write('finish_configuration', {})
   assert.equal(interceptor.resolved, true, 'the recording resolved the phase')
-  assert.equal(interceptor.finishSent, false, 'and left its finish to the landing')
+  assert.equal(interceptor.refusesAfterFinish({ state: 'configuration' }), false,
+    'and left its finish to the landing')
 
   assert.throws(() => interceptor.write('finish_configuration', {}), /the socket is gone/)
-  assert.equal(interceptor.finishSent, false, 'a finish that threw is not a finish on the wire')
+  assert.equal(interceptor.refusesAfterFinish({ state: 'configuration' }), false,
+    'a finish that threw is not a finish on the wire')
 
   reachable = true
   interceptor.write('disconnect', { reason: { type: 'string', value: 'attach denied' } })

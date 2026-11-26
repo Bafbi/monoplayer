@@ -1297,6 +1297,49 @@ first dial and its target warms in five seconds.
   What it cannot prove: that no other writer in the leg has a way past the funnel. That is
   `test/legs/raw-funnel.test.js`, which counts the call sites.
 
+- `O74` a configuration frame offered after the phase finish is refused on the raw path, counted on
+  the leg and named, and the client reads the landing's one copy and nothing else (#599).
+
+  The phase's finish is the last configuration frame a client can parse. The client answers it and is
+  in play from that moment, while this leg learns the answer only when the client's finish arrives, so
+  a configuration frame written in between carries a configuration id into a connection that is
+  reading the play table. #541 is that measurement, and the funnel's own comment names it.
+
+  The rule is the interceptor's (`refusesAfterFinish` in `src/legs/live-front.js`), because the flag
+  that says the phase's finish is on the wire is the interceptor's. The leg's raw funnel asks it
+  instead of restating the condition, which was #599's half once #602 made that funnel the leg's only
+  raw writer. A second statement of a condition is a second answer, and the pair agrees only until
+  somebody edits one of them.
+
+  The rig is O72's, one row on: the same picker client, landed for O72's count, and the frame offered
+  in the window that landing opens, before the client's answer is parsed. The client's own frame list
+  is the evidence on the other side, and the landing's `reset_chat` is the only one it ever reads.
+
+  What it cannot prove: that no writer reaches `client.writeRaw` around the funnel. That is
+  `test/legs/raw-funnel.test.js`, which counts the call sites.
+
+- `O75` a packet object offered in a state the client cannot parse is refused by the leg, counted and
+  named, and the phase-finish rule is not what refused it (#600).
+
+  A packet object has no bytes, so the strict wire check has nothing to compare: it holds a name, a
+  state and a buffer, and this write path has the first two. What it does have is the state. The
+  library serializes the object with whatever state the client holds, so a frame written in a state
+  the client is not in carries an id the client decodes as something else, with the rest of the frame
+  left over. `writePacketTo` used to leave that case to the library's own writer, which refuses it
+  for a different reason, the phase's finish, and only in the window that finish leaves open.
+  `refuseStateMismatch` is the rule both writers ask now, and it counts the refusal and names the
+  frame and the two states.
+
+  The one configuration frame this leg authored as a packet object, the picker's server dialog, is
+  encoded and written as a raw frame, as the picker's own dialog already was, so the wire check sees
+  it. That is #600's other half, and `test/legs/packet-object-path.test.js` reads both halves: the
+  dialog in `byState`, and a packet object refused in a state the client cannot parse.
+
+  What it cannot prove: that no configuration frame comes this way. The state this path declares is
+  the leg's own constant, so no caller can weaken it, but the leg cannot tell a configuration frame
+  whose name it was handed from a play one. That is why the one configuration frame the leg authored
+  here left for the funnel, and why `test/legs/raw-funnel.test.js` counts the writers.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a

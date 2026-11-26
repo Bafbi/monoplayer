@@ -73,17 +73,23 @@ test('#417 a frame the codec cannot build is absent, never a size of zero', () =
 // The dialog is the one frame a picker connection is shown, so its size is the
 // number a reader is looking for when they ask how large the picker is. It is
 // written and measured from one encode: a second one could disagree with it.
+//
+// #600: the encode is one function both of this leg's dialogs call, so the picker's
+// dialog and a server's cannot drift into two codecs or two encodes.
 test('#417 the picker dialog is written and measured from one encode', () => {
+  const encode = SOURCE.slice(SOURCE.indexOf('function encodeDialogFrame'), SOURCE.indexOf('function sendPickerDialog'))
+  assert.ok(encode.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.equal((encode.match(/encodeFrame\(/g) ?? []).length, 1, 'the dialog is encoded once, for both dialogs')
+  assert.match(encode, /try \{\s*return encodeFrame\(/, 'the params build is inside a guard too')
+
   const dialog = SOURCE.slice(SOURCE.indexOf('function sendPickerDialog'), SOURCE.indexOf('function handlePickerClick'))
   assert.ok(dialog.length > 0, 'the seam this guard reads is still the leg\'s own')
-  assert.match(dialog, /encoded = encodeFrame\(/, 'the dialog is encoded once')
-  assert.equal((dialog.match(/encodeFrame\(/g) ?? []).length, 1, 'and only once')
+  assert.equal((dialog.match(/encodeDialogFrame\(/g) ?? []).length, 1, 'the picker dialog asks for that encode once')
   // #602: the write is the funnel's, and it is handed the one encode's own buffer, so
   // the bytes measured are still the bytes that went to the socket.
   assert.match(dialog, /writeRawTo\(client, encoded\.buffer,/, 'the bytes written are the bytes measured')
   assert.match(dialog, /log\('pickerDialog', \{/, 'the pickerDialog record is still written')
   assert.match(dialog, /bytes: encoded\.buffer\.length/, 'and it carries the size it wrote')
-  assert.match(dialog, /try \{\s*encoded = encodeFrame\(/, 'the params build is inside a guard too')
 })
 
 // #417: a refusal's reason, as a bounded map. The reasons are a closed set the leg
