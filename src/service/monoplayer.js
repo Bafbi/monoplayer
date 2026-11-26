@@ -703,14 +703,24 @@ export function createMonoplayer ({
   let puppetAnsweredDialog = null
   const transferChain = { visited: new Set(), depth: 0, resetTimer: null }
 
-  // #416: the account the lane speaks for, and the body this core serves. Both are
-  // read at the call, so a record written after a claim names the body it moved to,
-  // and a record that names a body itself keeps that one. There is no channel here:
-  // a channel is the front leg's record (src/core/channels.js).
+  // #416: the account the lane speaks for, and the body this core is serving. Both
+  // are read at the call, so a record written after a claim names the body it moved
+  // to, and a record that names a body itself keeps that one. There is no channel
+  // here: a channel is the front leg's record (src/core/channels.js).
   const recordAccount = account ?? accountIdentifier({ uuid: cfg.puppet.uuid, name: cfg.puppet.username })
 
+  // The body a record names, or null when the lane holds none. A picker lane dials
+  // nothing until a claim does, so its records before a pick name the account and no
+  // body: the configured address is a body it would serve, not one it holds (#263
+  // D2). A body whose session ended is still the body the lane serves, and
+  // `claimedBody` outlives the connection for exactly that reason.
+  function recordBody () {
+    if (claimedBody !== null) return claimedBody
+    return backendSessionOpen ? activeBody : null
+  }
+
   function log (event, fields = {}) {
-    const record = stampIdentity(fields, { account: recordAccount, body: activeBody })
+    const record = stampIdentity(fields, { account: recordAccount, body: recordBody() })
     const line = redact(JSON.stringify({ t: clock?.now?.() ?? Date.now(), event, ...record }))
     logs.push(line)
     if (logs.length > 4096) logs.shift()

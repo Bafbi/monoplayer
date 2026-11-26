@@ -54,7 +54,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 
-import { RECORD_IDENTITY_FIELDS, stampIdentity } from '../core/channels.js'
+import { stampIdentity } from '../core/channels.js'
 import { redact } from './redact.js'
 
 // A frame longer than this keeps its header and loses its body.
@@ -555,9 +555,8 @@ export function createJournal ({
       }
       const payload = toBuffer(buffer)
       const len = payload ? payload.length : 0
-      // #416: the account, and the body this frame crossed. A frame is one body's
-      // stream, so it names the body and never a channel: the same frame reaches
-      // every channel on that body (src/core/channels.js).
+      // #416: the account, and the body this frame crossed. A frame names a body and
+      // never a channel: one frame reaches every channel on that body.
       const record = stampIdentity(
         { t: clock(), dir: direction, state, name: label, len },
         { account, body })
@@ -577,19 +576,17 @@ export function createJournal ({
 
     event (name, fields = {}) {
       if (closed) return
-      const identity = {}
       const record = { t: clock(), event: String(name ?? 'event') }
       if (fields && typeof fields === 'object') {
         for (const [key, value] of Object.entries(fields)) {
           if (key === 't' || key === 'event') continue
           if (value === undefined || SECRET_KEY.test(key)) continue
-          if (RECORD_IDENTITY_FIELDS.includes(key)) identity[key] = normalize(value)
-          else record[key] = normalize(value)
+          record[key] = normalize(value)
         }
       }
-      // #416: the identity a caller passes is the record's own, and the account is
-      // the lane's. An identity key the event leaves null is absent, not written.
-      const stamped = stampIdentity(record, { ...identity, account })
+      // #416: the lane's account fills in what the event does not name, and a null
+      // or empty identity key is left out (src/core/channels.js).
+      const stamped = stampIdentity(record, { account })
       if (append('events', stamped, 'event:' + stamped.event)) stats.events++
     },
 

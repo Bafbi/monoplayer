@@ -937,12 +937,9 @@ function createFrontLeg ({
     return id === undefined ? null : channels.of(id)
   }
 
-  // #416: one record about a connection. The body and the channel are the ones this
-  // connection holds at the moment of the call, read from the registry rather than
-  // copied, so a record written before a pick names neither and a record written
-  // after the channel closed names neither either: an identifier that names nothing
-  // is absent, not null (#263 D2). The account is the lane's, and the sink that
-  // writes the line stamps it.
+  // #416: one record about a connection, carrying the body and the channel it holds
+  // at the moment of the call, read from the registry rather than copied. The account
+  // is the lane's, and the sink that writes the line stamps it (src/core/channels.js).
   function record (client, event, fields = {}) {
     return log(event, stampIdentity(fields, channelIdentity(channelFor(client))))
   }
@@ -1886,7 +1883,7 @@ function createFrontLeg ({
       // connection. A client that never claimed releases nothing.
       const released = claims.release(holderIds.get(client))
       if (released !== null) {
-        log('pickerClaimReleased', {
+        record(client, 'pickerClaimReleased', {
           username: client.username ?? null,
           uuid: client.uuid ?? null,
           body: released.body,

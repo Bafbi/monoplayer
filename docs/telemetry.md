@@ -71,19 +71,19 @@ Attribute values are strings, booleans, or integers (`intValue` is a decimal str
 
 ### The identity on a record
 
-Every log record and every journal record names the account that wrote it, and the records that describe a body or a channel name those too. The three keys are shaped in one place — `recordIdentity` and `stampIdentity` in `src/core/channels.js` — so no call site composes them, and the sinks stamp them rather than each `log` call.
+The sinks stamp the identity on the records they write, so no call site composes it. `recordIdentity` and `stampIdentity` in `src/core/channels.js` decide the shape.
 
 | Key | Where it is written | What it holds |
 | --- | --- | --- |
-| `account` | Every log record the service and both legs write, every OTLP log record, and every journal frame and event. | The lane's account, as one identifier: the alias custody resolved, else its UUID, else the name an offline lane joins as. Absent only on a lane that holds no account at all. |
-| `body` | Every core record, the front leg's records about a connection, every journal frame record, and the heartbeat's `channels` rows. | The body's server slug, `pickSlug(host:port)` (`src/core/picker.js`): the name a claim uses, and the `body` attribute of the `monoplayer.body.*` gauges. |
+| `account` | Every log record the service and both legs write, every OTLP log record, and every journal frame and event. | The lane's account, as one identifier: the alias custody resolved, else its UUID, else the name an offline lane joins as. A lane that holds no account writes no `account` key. |
+| `body` | Every core record written while the core holds a body, the front leg's records about a connection, every journal frame record, and the heartbeat's `channels` rows. | The body's server slug, `pickSlug(host:port)` (`src/core/picker.js`). It is the name a claim uses, and the `body` attribute of the `monoplayer.body.*` gauges. |
 | `channel` | The front leg's records about a connection, and the heartbeat's `channels` rows. | The channel's id, which is the holder id the front leg gave that connection (`src/core/channels.js`). |
 
-A key is written where the thing it names exists, and left out where it does not (#263 D2). A record written before a body exists carries `account` and no `body` key: a picker join is served before the client picks a server, so its records name the account and the connection's own facts, and nothing else. Writing `body: null` there would make "every record with a body" a query that also returns the records without one.
+A key is written where the thing it names exists, and left out where it does not (#263 D2). A record written before a body exists therefore carries `account` and no `body` key. A picker join is served before the client picks a server, and a picker lane dials no body until a claim does. Writing `body: null` on such a record would make "every record with a body" a query that returns records without one.
 
-The core names the body it serves and never a channel: a channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry, so a record written after a channel closed names no channel either.
+The core names the body it holds and never a channel. A channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry. A record written after a channel closed names no channel either.
 
-`channel` is a journal and log key and never a metric attribute. The allowed-server list bounds how many bodies there are; a channel is one connection, so a channel attribute would be one series per socket (#415, #263 D1). The three `monoplayer.body.*` gauges carry the `body` attribute, and no metric carries a channel.
+A record carries `channel` in the log and the journal, and never as a metric attribute. The allowed-server list bounds how many bodies there are. A channel is one connection, so a channel attribute would be one series per socket (#415, #263 D1). No metric carries a channel.
 
 ### The attach record
 
