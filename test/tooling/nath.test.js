@@ -6,11 +6,11 @@
 // reply the host would have given.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const TOOL = path.join(ROOT, 'tools', 'nath.sh')
@@ -190,7 +190,7 @@ printf '\\x89PNG\\r\\n\\x1a\\n0000' > "$last"
 function harness ({ sshBody = RECORD_SSH, host = {}, fake = true } = {}) {
   let stop = () => {}
   let pid = null
-  const dir = mkdtempSync(path.join(tmpdir(), 'nath-'))
+  const dir = tempRoot('nath-')
   const bin = path.join(dir, 'bin')
   mkdirSync(bin)
   const log = path.join(dir, 'calls.log')

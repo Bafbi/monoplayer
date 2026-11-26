@@ -6,9 +6,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 import { readMiseTasks } from './mise-toml.js'
 
 const SCRIPT = path.join(
@@ -143,7 +143,7 @@ const FIND_SHIM = [
 // are about an empty or a failed copy-back turn it off, so each fails for its own reason
 // and not for the dialect (#370).
 function workspace ({ strictFind = true } = {}) {
-  const root = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-cluster-'))
+  const root = tempRoot('monoplayer-cluster-')
   const bin = path.join(root, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   fs.writeFileSync(path.join(bin, 'kubectl'), SHIM, { mode: 0o755 })
@@ -378,7 +378,7 @@ const TOKEN_JS = (() => {
 
 // One account directory holding one cached token: obtainedOn, then how long it lasts.
 function tokenDir ({ expiresIn = 600, leftMs = null } = {}) {
-  const dir = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-token-'))
+  const dir = tempRoot('monoplayer-token-')
   const obtainedOn = leftMs === null ? Date.now() - 60000 : Date.now() - (expiresIn * 1000 - leftMs)
   fs.writeFileSync(path.join(dir, 'mca-cache.json'), JSON.stringify({ mca: { obtainedOn, expires_in: expiresIn } }))
   return dir
@@ -400,9 +400,9 @@ test('a token inside the login margin is expired, and one outside it is not', ()
 })
 
 test('a cache with no token and a cache with no expiry are both unknown, never ok', () => {
-  const empty = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-token-'))
+  const empty = tempRoot('monoplayer-token-')
   assert.equal(readToken(empty), 'unknown|no cached token|')
-  const partial = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-token-'))
+  const partial = tempRoot('monoplayer-token-')
   fs.writeFileSync(path.join(partial, 'mca-cache.json'), JSON.stringify({ mca: { access_token: 'x' } }))
   assert.equal(readToken(partial), 'unknown|no readable expiry|')
 })
@@ -668,7 +668,7 @@ test('a default run names one lane in its lease and in the backend it dials', ()
 // hand.
 test('a lane that cannot be derived refuses, and keeps the sentence that says how', () => {
   const space = workspace()
-  const notGit = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-not-git-'))
+  const notGit = tempRoot('monoplayer-not-git-')
   const { status, output, calls } = run(space, { MONOPLAYER_GATE_WORKTREE: notGit })
 
   assert.equal(status, 2, output)

@@ -6,8 +6,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import {
   ALLOWED_SERVERS_VERSION,
@@ -22,7 +22,7 @@ const PLAYER = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
 const OTHER = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
 
 function controlDir (label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `monoplayer-control-${label}-`))
+  return tempRoot(`monoplayer-control-${label}-`)
 }
 
 // One allowed-server file in a directory of its own, for the cases that name two.

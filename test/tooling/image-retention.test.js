@@ -9,9 +9,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 import {
   DEFAULT_KEEP_LAST,
@@ -43,9 +43,8 @@ function version (tags, { digest = null, day = 1 } = {}) {
 const digestOf = entry => entry.digest
 const removedDigests = result => result.remove.map(digestOf).sort()
 
-function workspace (t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-retention-'))
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+function workspace () {
+  const dir = tempRoot('monoplayer-retention-')
   const write = (name, text) => {
     const file = path.join(dir, name)
     fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -218,11 +217,11 @@ test('parsePins survives a trailing comment and reads kustomize newTag', () => {
   assert.deepEqual([...pins.tags], ['sha-1a2b3c4'], 'newTag is read, and only for this image')
 })
 
-test('a pin list line that is not a pin fails the job instead of protecting nothing', t => {
+test('a pin list line that is not a pin fails the job instead of protecting nothing', () => {
   // A full image reference is what kubectl and the branch workflow print, so it is
   // the likeliest paste. It matches no package tag, so accepting it would look
   // like a registered pin and delete the tag anyway.
-  const s = scenario(t)
+  const s = scenario()
   const pins = s.space.write('bad-pins.txt', 'ghcr.io/bafbi/monoplayer:sha-1a2b3c4  # dev\n')
 
   const result = s.space.run('plan', '--versions', s.data, '--deploy', s.deploy, '--manifests', s.manifests, '--pins', pins)
@@ -233,8 +232,8 @@ test('a pin list line that is not a pin fails the job instead of protecting noth
   assert.equal(result.stdout.includes('would delete'), false, 'nothing is planned')
 })
 
-test('a missing manifest directory is a refusal, not an empty allowlist', t => {
-  const s = scenario(t)
+test('a missing manifest directory is a refusal, not an empty allowlist', () => {
+  const s = scenario()
 
   const result = s.space.run('plan', '--versions', s.data, '--deploy', s.deploy,
     '--manifests', path.join(s.space.dir, 'no-such-dir'), '--pins', s.pins)
@@ -243,8 +242,8 @@ test('a missing manifest directory is a refusal, not an empty allowlist', t => {
   assert.match(result.stderr, /no-such-dir/, 'the message names the directory')
 })
 
-test('readPins walks the manifest tree and finds a lane pin', t => {
-  const space = workspace(t)
+test('readPins walks the manifest tree and finds a lane pin', () => {
+  const space = workspace()
   space.write('deploy/dev/monoplayer.yaml', 'image: ghcr.io/bafbi/monoplayer:main\n')
   space.write('deploy/gate/paper.yaml', 'image: ghcr.io/bafbi/monoplayer@sha256:' + 'c'.repeat(64) + '\n')
   space.write('deploy/dev/README.md', 'image: ghcr.io/bafbi/monoplayer:not-a-manifest\n')
@@ -343,8 +342,8 @@ const DEPLOY_KUSTOMIZATION = [
 
 const PIN_LIST = '# the pin nobody carries in a manifest\n'
 
-function scenario (t) {
-  const space = workspace(t)
+function scenario () {
+  const space = workspace()
   const live = version(['sha-0000001'], { digest: 'sha256:' + 'd'.repeat(64), day: 1 })
   const older = version(['sha-0000002'], { day: 2 })
   const newest = version(['main', 'sha-0000003'], { day: 9 })
@@ -357,8 +356,8 @@ function scenario (t) {
   return { space, versions, live, older, newest, deploy, pins, manifests: path.dirname(manifests) + '/..', data }
 }
 
-test('plan lists what it would delete and deletes nothing', t => {
-  const s = scenario(t)
+test('plan lists what it would delete and deletes nothing', () => {
+  const s = scenario()
 
   const result = s.space.run('plan', '--versions', s.data, '--deploy', s.deploy, '--manifests', s.manifests, '--keep', '1')
 
@@ -376,8 +375,8 @@ test('plan lists what it would delete and deletes nothing', t => {
   )
 })
 
-test('plan refuses to guess when the deploy pin cannot be read', t => {
-  const s = scenario(t)
+test('plan refuses to guess when the deploy pin cannot be read', () => {
+  const s = scenario()
 
   const result = s.space.run('plan', '--versions', s.data, '--deploy', path.join(s.space.dir, 'missing.yaml'), '--manifests', s.manifests)
 
@@ -386,10 +385,10 @@ test('plan refuses to guess when the deploy pin cannot be read', t => {
   assert.equal(result.stdout.includes('would delete'), false, 'nothing is proposed')
 })
 
-test('a bare or wrong invocation exits 2 with the usage on stderr', t => {
+test('a bare or wrong invocation exits 2 with the usage on stderr', () => {
   // The house precedent for tools/*.mjs (test/tooling/journal-cli.test.js): a
   // command line that cannot be right is a usage error, not an empty answer.
-  const s = scenario(t)
+  const s = scenario()
 
   for (const args of [[], ['nope'], ['plan'], ['plan', '--deploy'], ['plan', '--deploy', 'x', '--wat'], ['apply', '--deploy', s.deploy]]) {
     const result = s.space.run(...args)
@@ -398,8 +397,8 @@ test('a bare or wrong invocation exits 2 with the usage on stderr', t => {
   }
 })
 
-test('apply refuses a planning flag instead of ignoring it', t => {
-  const s = scenario(t)
+test('apply refuses a planning flag instead of ignoring it', () => {
+  const s = scenario()
   const planFile = s.space.write('plan.json', JSON.stringify({ remove: [] }))
 
   const result = s.space.run('apply', '--plan', planFile, '--deploy', s.deploy, '--keep', '5')
@@ -408,9 +407,9 @@ test('apply refuses a planning flag instead of ignoring it', t => {
   assert.match(result.stderr, /--keep belongs to plan/, 'the message names the flag and the command')
 })
 
-test('apply refuses a plan entry it cannot read, before any request', t => {
+test('apply refuses a plan entry it cannot read, before any request', () => {
   // A hand-edited artifact is the one input apply cannot trust.
-  const s = scenario(t)
+  const s = scenario()
   const planFile = s.space.write('plan.json', JSON.stringify({
     remove: [{ digest: s.older.name, tags: s.older.metadata.container.tags }]
   }))
@@ -422,10 +421,10 @@ test('apply refuses a plan entry it cannot read, before any request', t => {
   assert.match(result.stderr, /no usable id/, 'the reason is the entry, not the network')
 })
 
-test('apply refuses a plan entry that carries main, even when no pin names it now', t => {
+test('apply refuses a plan entry that carries main, even when no pin names it now', () => {
   // The plans in a plan file should never contain this. An edited one can, and
   // apply is the half of the design that has to fail closed.
-  const s = scenario(t)
+  const s = scenario()
   const planFile = s.space.write('plan.json', JSON.stringify({
     remove: [{ id: s.newest.id, digest: s.newest.name, tags: ['main', 'sha-0000003'] }]
   }))
@@ -447,8 +446,8 @@ test('the dev lane tells the operator to register a pin it sets', () => {
   assert.match(lane, /register it/, 'and says to register it')
 })
 
-test('apply deletes the ids in a reviewed plan and nothing else', t => {
-  const s = scenario(t)
+test('apply deletes the ids in a reviewed plan and nothing else', () => {
+  const s = scenario()
   const planned = s.space.run('plan', '--versions', s.data, '--deploy', s.deploy, '--manifests', s.manifests, '--keep', '1', '--json')
   assert.equal(planned.status, 0, planned.stderr)
   const planFile = path.join(s.space.dir, 'plan.json')
@@ -461,8 +460,8 @@ test('apply deletes the ids in a reviewed plan and nothing else', t => {
   assert.doesNotMatch(result.stdout, new RegExp(s.live.id), 'a kept version is not in the plan')
 })
 
-test('apply refuses a plan whose target became a pin, before any request', t => {
-  const s = scenario(t)
+test('apply refuses a plan whose target became a pin, before any request', () => {
+  const s = scenario()
   // The plan was reviewed, then someone pinned the version by digest.
   const planFile = path.join(s.space.dir, 'plan.json')
   fs.writeFileSync(planFile, JSON.stringify({

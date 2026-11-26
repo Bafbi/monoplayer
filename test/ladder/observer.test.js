@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import {
   ABSENT_FACTS,
@@ -188,7 +188,7 @@ test('two records for one connection merge into one view', () => {
 })
 
 test('--single takes the server facts from the file it is given', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const dir = tempRoot('observer-')
   const file = path.join(dir, 'views.jsonl')
   const facts = path.join(dir, 'server.json')
   const reportPath = path.join(dir, 'report.json')
@@ -207,7 +207,7 @@ test('--single takes the server facts from the file it is given', () => {
 })
 
 test('an unreadable server facts file leaves every absence unexplained', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const dir = tempRoot('observer-')
   const file = path.join(dir, 'views.jsonl')
   const bare = base()
   delete bare.codeOfConduct
@@ -222,7 +222,7 @@ test('an unreadable server facts file leaves every absence unexplained', () => {
 })
 
 test('--single reads one log and compares its first and last view', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const dir = tempRoot('observer-')
   const file = path.join(dir, 'views.jsonl')
   const reportPath = path.join(dir, 'report.json')
   fs.writeFileSync(file, log(base(), base({ address: '198.51.100.9:40000' })))
@@ -240,7 +240,7 @@ test('--single reads one log and compares its first and last view', () => {
 })
 
 test('--single refuses a log that holds one view', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-'))
+  const dir = tempRoot('observer-')
   const file = path.join(dir, 'views.jsonl')
   fs.writeFileSync(file, log(base()))
   const out = []

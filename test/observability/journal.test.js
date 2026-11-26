@@ -3,8 +3,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import {
   createJournal,
@@ -23,16 +23,15 @@ const HOUR_LATER = hourOf(NOW + 60 * 60 * 1000)
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 
 function tempDir () {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-journal-'))
+  return tempRoot('monoplayer-journal-')
 }
 
 function readLines (file) {
   return fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line))
 }
 
-function withJournal (t, options = {}) {
+function withJournal (options = {}) {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const journal = createJournal({ dir, clock: () => NOW, ...options })
   return { dir, journal }
 }
@@ -79,8 +78,8 @@ test('no directory means a no-op with no file', () => {
 // What a shard holds
 // ---------------------------------------------------------------------------
 
-test('a kept frame round-trips: raw bytes as base64, in an hour shard, with epoch timestamps', async t => {
-  const { dir, journal } = withJournal(t)
+test('a kept frame round-trips: raw bytes as base64, in an hour shard, with epoch timestamps', async () => {
+  const { dir, journal } = withJournal()
   const payload = Buffer.from([0x00, 0x01, 0x02, 0xff, 0x7f])
 
   assert.equal(journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: payload }), true)
@@ -106,8 +105,8 @@ test('a kept frame round-trips: raw bytes as base64, in an hour shard, with epoc
   assert.equal(Buffer.from(records[1].b64, 'base64').toString(), 'mine')
 })
 
-test('a kept frame longer than 8192 bytes keeps its header and loses its body', async t => {
-  const { dir, journal } = withJournal(t)
+test('a kept frame longer than 8192 bytes keeps its header and loses its body', async () => {
+  const { dir, journal } = withJournal()
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.alloc(8193, 0x41) })
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.alloc(8192, 0x42) })
   journal.close()
@@ -127,8 +126,8 @@ test('a kept frame longer than 8192 bytes keeps its header and loses its body', 
   assert.equal(journal.stats().truncated, 1)
 })
 
-test('chunks and light are length-only at any size, in their own shard', async t => {
-  const { dir, journal } = withJournal(t)
+test('chunks and light are length-only at any size, in their own shard', async () => {
+  const { dir, journal } = withJournal()
   journal.frame({ dir: 's2c', state: 'play', name: 'map_chunk', buffer: Buffer.alloc(64) })
   journal.frame({ dir: 's2c', state: 'play', name: 'update_light', buffer: Buffer.alloc(4096) })
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.alloc(64) })
@@ -147,8 +146,8 @@ test('chunks and light are length-only at any size, in their own shard', async t
   assert.equal(login.length, 2, 'the login record is in the frames shard: ' + login.join(', '))
 })
 
-test('the entity stream is dropped, and a spawn beside it is kept', async t => {
-  const { dir, journal } = withJournal(t)
+test('the entity stream is dropped, and a spawn beside it is kept', async () => {
+  const { dir, journal } = withJournal()
   for (const name of ['entity_metadata', 'rel_entity_move', 'sync_entity_position', 'entity_teleport']) {
     assert.equal(journal.frame({ dir: 's2c', state: 'play', name, buffer: Buffer.from(name) }), false, name)
   }
@@ -161,8 +160,8 @@ test('the entity stream is dropped, and a spawn beside it is kept', async t => {
   assert.equal(journal.stats().frames, 1)
 })
 
-test('chat frames and secret-shaped frame names are never journaled', async t => {
-  const { dir, journal } = withJournal(t)
+test('chat frames and secret-shaped frame names are never journaled', async () => {
+  const { dir, journal } = withJournal()
   const skipped = [
     'chat_message',
     'system_chat',
@@ -183,8 +182,8 @@ test('chat frames and secret-shaped frame names are never journaled', async t =>
   assert.equal(journal.stats().dropped, 0, 'a skip is not a policy drop')
 })
 
-test('lifecycle events are one line with fields, and secret-shaped fields are dropped', async t => {
-  const { dir, journal } = withJournal(t)
+test('lifecycle events are one line with fields, and secret-shaped fields are dropped', async () => {
+  const { dir, journal } = withJournal()
   journal.event('attach', {
     name: 'Bafbi',
     uuid: PLAYER,
@@ -212,9 +211,8 @@ test('lifecycle events are one line with fields, and secret-shaped fields are dr
 // Sharding by hour (#217)
 // ---------------------------------------------------------------------------
 
-test('the hour comes from the record, so two hours are two shards', async t => {
+test('the hour comes from the record, so two hours are two shards', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   let clock = NOW
   const journal = createJournal({ dir, clock: () => clock })
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('first') })
@@ -236,8 +234,8 @@ test('the hour comes from the record, so two hours are two shards', async t => {
   assert.equal(journal.stats().sealed, 2)
 })
 
-test('a shard seals when the next record would pass maxBytes, and the next one takes -2', async t => {
-  const { dir, journal } = withJournal(t, { maxBytes: 300 })
+test('a shard seals when the next record would pass maxBytes, and the next one takes -2', async () => {
+  const { dir, journal } = withJournal({ maxBytes: 300 })
   for (let index = 0; index < 4; index++) {
     journal.frame({ dir: 's2c', state: 'play', name: `frame_${index}`, buffer: Buffer.alloc(100, index) })
   }
@@ -258,8 +256,8 @@ test('a shard seals when the next record would pass maxBytes, and the next one t
   assert.deepEqual(frames, ['frame_0', 'frame_1', 'frame_2', 'frame_3'])
 })
 
-test('a seal writes gzip and a manifest, and removes the plain shard', async t => {
-  const { dir, journal } = withJournal(t)
+test('a seal writes gzip and a manifest, and removes the plain shard', async () => {
+  const { dir, journal } = withJournal()
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('one') })
   journal.frame({ dir: 'c2s', state: 'play', name: 'chat_ack', buffer: Buffer.from('two') })
   journal.event('attach', { name: 'Bafbi' })
@@ -291,8 +289,8 @@ test('a seal writes gzip and a manifest, and removes the plain shard', async t =
   assert.deepEqual(events.names, { 'event:attach': 1 })
 })
 
-test('close flushes, is idempotent, and a closed journal ignores new frames', async t => {
-  const { dir, journal } = withJournal(t)
+test('close flushes, is idempotent, and a closed journal ignores new frames', async () => {
+  const { dir, journal } = withJournal()
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('one') })
   journal.close()
   journal.close()
@@ -313,9 +311,8 @@ test('close flushes, is idempotent, and a closed journal ignores new frames', as
 // The live CrashLoop: the custody volume filled, and the first write after
 // start was the token cache, so the pod log blamed the backend with ENOSPC at
 // stage: backend_connect. The journal's own failure names itself and the path.
-test('#96 a volume with no room for the budget turns the journal off and names the path', async t => {
+test('#96 a volume with no room for the budget turns the journal off and names the path', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const volume = blocks => ({ ...fs, statfsSync: () => ({ bsize: 4096, blocks, bfree: blocks, bavail: blocks }) })
 
   // The directory holds at most the budget plus one shard per kind, so the
@@ -336,9 +333,8 @@ test('#96 a volume with no room for the budget turns the journal off and names t
   assert.equal(roomy.stats().disabledReason, null)
 })
 
-test('#96 a directory that cannot be created for lack of space reports journal_volume_full', async t => {
+test('#96 a directory that cannot be created for lack of space reports journal_volume_full', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const noSpace = {
     ...fs,
     mkdirSync: () => {
@@ -353,9 +349,8 @@ test('#96 a directory that cannot be created for lack of space reports journal_v
   assert.equal(journal.stats().dir, dir)
 })
 
-test('#96 a write that fills the volume stops the journal, keeps the shard readable, and counts one failure', async t => {
+test('#96 a write that fills the volume stops the journal, keeps the shard readable, and counts one failure', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   let writes = 0
   const fills = {
     ...fs,
@@ -386,9 +381,8 @@ test('#96 a write that fills the volume stops the journal, keeps the shard reada
   assert.deepEqual(records.map(record => record.name), ['one'])
 })
 
-test('#96 a shard past the age cap is pruned with its manifest, and an age cap of 0 turns the rule off', async t => {
+test('#96 a shard past the age cap is pruned with its manifest, and an age cap of 0 turns the rule off', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const day = 24 * 60 * 60 * 1000
   const age = file => fs.utimesSync(file, new Date(NOW - 8 * day), new Date(NOW - 8 * day))
   const stale = createJournal({ dir, clock: () => NOW - 8 * day })
@@ -419,9 +413,8 @@ test('#96 a shard past the age cap is pruned with its manifest, and an age cap o
     'the stale shard and its manifest are gone: ' + left.join(', '))
 })
 
-test('#96 the directory budget drops the oldest hours, and the live shard is never dropped', async t => {
+test('#96 the directory budget drops the oldest hours, and the live shard is never dropped', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   // Four hours, oldest first, each one a sealed shard with a manifest.
   for (let hour = 0; hour < 4; hour++) {
     const journal = createJournal({ dir, clock: () => NOW + hour * 60 * 60 * 1000 })
@@ -451,8 +444,8 @@ test('#96 the directory budget drops the oldest hours, and the live shard is nev
     'the live shard survives: ' + kept.join(', '))
 })
 
-test('#96 the shard being written is never pruned, whatever the budget', async t => {
-  const { dir, journal } = withJournal(t, { maxBytes: 10_000, maxTotalBytes: 50 })
+test('#96 the shard being written is never pruned, whatever the budget', async () => {
+  const { dir, journal } = withJournal({ maxBytes: 10_000, maxTotalBytes: 50 })
   for (let index = 0; index < 4; index++) {
     journal.frame({ dir: 's2c', state: 'play', name: `frame_${index}`, buffer: Buffer.alloc(100, index) })
   }
@@ -488,9 +481,8 @@ test('shard names sort by hour, then sequence, then kind, and a sealed shard win
   ])
 })
 
-test('a journal written by createJournal reads back record for record, across garbled kinds and hours', async t => {
+test('a journal written by createJournal reads back record for record, across garbled kinds and hours', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   let clock = NOW
   const journal = createJournal({ dir, clock: () => clock })
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('chunk') })
@@ -515,9 +507,8 @@ test('a journal written by createJournal reads back record for record, across ga
   assert.equal(entries[0].line, 1)
 })
 
-test('readManifests answers for a sealed shard from the writer and for a live one by reading it', async t => {
+test('readManifests answers for a sealed shard from the writer and for a live one by reading it', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   let clock = NOW
   const journal = createJournal({ dir, clock: () => clock })
   journal.frame({ dir: 's2c', state: 'play', name: 'login', buffer: Buffer.from('one') })
@@ -542,9 +533,8 @@ test('readManifests answers for a sealed shard from the writer and for a live on
   assert.equal(derived.from, NOW)
 })
 
-test('a malformed line fails with path and line number', async t => {
+test('a malformed line fails with path and line number', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const file = path.join(dir, `journal-${HOUR}-frames-1.ndjson`)
   fs.writeFileSync(file, '{"t":1,"event":"start"}\nnot json\n')
 
@@ -555,9 +545,8 @@ test('a malformed line fails with path and line number', async t => {
   })
 })
 
-test('an unterminated last line is skipped, because the service may still be writing it', async t => {
+test('an unterminated last line is skipped, because the service may still be writing it', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const file = path.join(dir, `journal-${HOUR}-frames-1.ndjson`)
   fs.writeFileSync(file, '{"t":1,"event":"start"}\n{"t":2,"eve')
 
@@ -565,9 +554,8 @@ test('an unterminated last line is skipped, because the service may still be wri
   assert.deepEqual(entries.map(entry => entry.record), [{ t: 1, event: 'start' }])
 })
 
-test('a shard that is sealed away mid-read is skipped, not fatal', async t => {
+test('a shard that is sealed away mid-read is skipped, not fatal', async () => {
   const dir = tempDir()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   // Two hours, so the listing holds two hours. The second hour's shard is
   // removed between the listing and its open, exactly as a seal would do it.
   const first = createJournal({ dir, clock: () => NOW })
@@ -596,8 +584,8 @@ test('a file that is not a journal name is ignored, however shard-shaped', () =>
 // #416: the journal is the one artifact a diagnosis reads, so every record names
 // the account that serves the lane, and a frame names the body it crossed. A key
 // that names nothing is absent, never null (#263 D2).
-test('#416 a journal names the account on every record and the body a frame crossed', async t => {
-  const { dir, journal } = withJournal(t, { account: 'sky' })
+test('#416 a journal names the account on every record and the body a frame crossed', async () => {
+  const { dir, journal } = withJournal({ account: 'sky' })
   const x = Buffer.from('x').toString('base64')
   const y = Buffer.from('y').toString('base64')
 
@@ -623,8 +611,8 @@ test('#416 a journal names the account on every record and the body a frame cros
   assert.equal('body' in channels, false, 'a null body on an event is absent, not null')
 })
 
-test('#416 a journal with no account writes no account key', async t => {
-  const { dir, journal } = withJournal(t)
+test('#416 a journal with no account writes no account key', async () => {
+  const { dir, journal } = withJournal()
   journal.event('liveReady', { warm: true })
   journal.close()
 

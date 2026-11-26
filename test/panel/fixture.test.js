@@ -9,9 +9,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 import { parseFixture } from '../../src/panel/fixture.js'
 import { startPanel } from '../../src/panel/start.js'
@@ -35,14 +35,14 @@ const puppet = (overrides = {}) => ({
 
 // A token file the panel would find in a pod: mounted, and not empty.
 function tokenFile (contents) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-token-'))
+  const dir = tempRoot('panel-token-')
   const file = path.join(dir, 'token')
   fs.writeFileSync(file, contents)
   return file
 }
 
 function fixtureFile (document) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-fixture-'))
+  const dir = tempRoot('panel-fixture-')
   const file = path.join(dir, 'fixture.json')
   fs.writeFileSync(file, JSON.stringify(document))
   return file

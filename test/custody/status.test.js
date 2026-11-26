@@ -5,13 +5,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import { createAuthStatus, accountTokenExpiry, stringifyForReport, redactForReport, scanForLeaks } from '../../src/custody/status.js'
 import { atomicWriteFile } from '../../src/custody/cache.js'
 
-const dir = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'auth-status-')), 'puppet')
+const dir = () => path.join(tempRoot('auth-status-'), 'puppet')
 const PLAYER = { dashed: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af', name: 'Bafbi' }
 
 // Synthetic sentinels: token-shaped but clearly fake.
@@ -52,7 +52,7 @@ test('collect(): uuid/name/alias come from the account profile', async () => {
 })
 
 test('collect(): a missing account directory is reported, never created', async () => {
-  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-status-missing-'))
+  const parent = tempRoot('auth-status-missing-')
   const root = path.join(parent, 'accounts', PLAYER.dashed)
   const status = createAuthStatus({ uuid: PLAYER.dashed, dir: root })
   const report = await status.collect()

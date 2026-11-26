@@ -5,10 +5,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 import { buildClientOptions } from '../../src/ladder/bot.js'
 import {
@@ -22,9 +22,8 @@ import {
 const PUPPET_UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH_UUID = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 
-function tempAccounts (t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-online-'))
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+function tempAccounts () {
+  const dir = tempRoot('monoplayer-online-')
 
   function write (uuid, profile) {
     const accountDir = path.join(dir, uuid)
@@ -223,8 +222,8 @@ test('buildClientOptions refuses a plain cache path', () => {
   )
 })
 
-test('resolveOnlineAccounts resolves the puppet and attach aliases', (t) => {
-  const fixture = tempAccounts(t)
+test('resolveOnlineAccounts resolves the puppet and attach aliases', () => {
+  const fixture = tempAccounts()
   fixture.write(PUPPET_UUID, { name: 'GlowSquidye', alias: 'glowsquidye', authTitle: '00000000441cc96b', deviceType: 'Nintendo' })
   fixture.write(ATTACH_UUID, { name: 'Bafbi', alias: 'bafbi', authTitle: '00000000441cc96b', deviceType: 'Nintendo' })
 
@@ -237,8 +236,8 @@ test('resolveOnlineAccounts resolves the puppet and attach aliases', (t) => {
   assert.equal(resolved.attach.alias, 'bafbi')
 })
 
-test('resolveOnlineAccounts reports a missing puppet as a setup error', (t) => {
-  const fixture = tempAccounts(t)
+test('resolveOnlineAccounts reports a missing puppet as a setup error', () => {
+  const fixture = tempAccounts()
   fixture.write(ATTACH_UUID, { name: 'Bafbi', alias: 'bafbi' })
 
   const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
@@ -250,8 +249,8 @@ test('resolveOnlineAccounts reports a missing puppet as a setup error', (t) => {
   assert.match(resolved.reason, /puppet:/)
 })
 
-test('resolveOnlineAccounts reports a missing attach account as a setup error', (t) => {
-  const fixture = tempAccounts(t)
+test('resolveOnlineAccounts reports a missing attach account as a setup error', () => {
+  const fixture = tempAccounts()
   fixture.write(PUPPET_UUID, { name: 'GlowSquidye', alias: 'glowsquidye' })
 
   const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
@@ -261,8 +260,8 @@ test('resolveOnlineAccounts reports a missing attach account as a setup error', 
   assert.match(resolved.reason, /attach:/)
 })
 
-test('resolveOnlineAccounts reports both missing accounts from an empty tree', (t) => {
-  const fixture = tempAccounts(t)
+test('resolveOnlineAccounts reports both missing accounts from an empty tree', () => {
+  const fixture = tempAccounts()
   const resolved = resolveOnlineAccounts({ accountsDir: fixture.dir })
   assert.equal(resolved.ok, false)
   assert.deepEqual(resolved.missing.map(entry => entry.role), ['puppet', 'attach'])

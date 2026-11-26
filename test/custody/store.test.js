@@ -4,15 +4,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { tempRoot } from '../support/temp.js'
 
 import { createWhitelistStore, createNameLookup, WHITELIST_VERSION } from '../../src/custody/store.js'
 
 const PLAYER = { dashed: '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af', undashed: '7FAD1E81B0E94A3C8CCB9E41F3A4B3AF', name: 'Bafbi' }
 
 function tmpFile (label) {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), `auth-wl-${label}-`)), 'whitelist.json')
+  return path.join(tempRoot(`auth-wl-${label}-`), 'whitelist.json')
 }
 
 const resolvingLookup = () => async name => {

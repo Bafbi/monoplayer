@@ -17,9 +17,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { tempRoot } from '../support/temp.js'
 
 import { loadLadder } from '../../src/ladder/next-rung.js'
 import { readMiseTasks } from './mise-toml.js'
@@ -70,8 +70,8 @@ test('a rung hands its arguments to the command, not to the hint', () => {
 // The proof. This runs the script mise would run, under bash, with a fake `node`
 // that keeps its argv. `bash -c script rung ARGS...` is the shape mise uses for a
 // shebang script: $0 is the name, and $@ holds the arguments.
-function rig (t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-rung-args-'))
+function rig () {
+  const dir = tempRoot('monoplayer-rung-args-')
   const bin = path.join(dir, 'bin')
   const log = path.join(dir, 'argv.log')
   fs.mkdirSync(bin)
@@ -86,7 +86,6 @@ function rig (t) {
     ].join('\n'),
     { mode: 0o755 }
   )
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
 
   return (script, args, fakeExit) => {
     fs.writeFileSync(log, '')
@@ -100,8 +99,8 @@ function rig (t) {
   }
 }
 
-test('the arguments reach the command, and the hint stays quiet when it succeeds', (t) => {
-  const run = rig(t)
+test('the arguments reach the command, and the hint stays quiet when it succeeds', () => {
+  const run = rig()
 
   for (const name of RUNGS.filter(rung => !REFUSES.has(rung) && !LEASED.has(rung))) {
     const script = tasks.get(name).run

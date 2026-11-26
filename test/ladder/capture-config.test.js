@@ -13,8 +13,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 import { LaneError } from '../../src/driver/lane.js'
 import {
@@ -143,7 +143,7 @@ test('#322 importing the capture runs nothing', () => {
 // The refusal is a setup failure, before the join and before the fixture: exit 2, the
 // script's own sentence, and no file at --out.
 test('#322 a capture that can name no lane writes no fixture', () => {
-  const where = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-capture-lane-'))
+  const where = tempRoot('monoplayer-capture-lane-')
   const out = path.join(where, 'config-baseline.json')
   const run = spawnSync(process.execPath, [CAPTURE, '--out', out], {
     encoding: 'utf8',
@@ -186,7 +186,7 @@ test('#367 a capture with no build refuses to write one', () => {
 // The refusal is a setup failure, before the join and before the fixture: exit 2, the
 // module's own sentence, and no file at --out.
 test('#367 a capture that names no build writes no fixture', () => {
-  const where = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-capture-build-'))
+  const where = tempRoot('monoplayer-capture-build-')
   const out = path.join(where, 'config-baseline.json')
   const run = spawnSync(process.execPath, [CAPTURE, '--lane', 'monoplayer-gate-x', '--out', out], {
     encoding: 'utf8',

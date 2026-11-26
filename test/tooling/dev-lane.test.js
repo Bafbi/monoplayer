@@ -5,9 +5,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoot } from '../support/temp.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
@@ -167,7 +167,7 @@ function appliedWhitelist () {
 }
 
 function workspace () {
-  const dir = fs.mkdtempSync(path.join(tmpdir(), 'monoplayer-dev-lane-'))
+  const dir = tempRoot('monoplayer-dev-lane-')
   const bin = path.join(dir, 'bin')
   const fixtures = path.join(dir, 'fixtures')
   fs.mkdirSync(bin, { recursive: true })
