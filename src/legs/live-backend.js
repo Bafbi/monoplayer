@@ -46,6 +46,8 @@
 import mc from 'minecraft-protocol'
 
 import { buildCustomClickAction, chooseDialogAction, decideDialogAutoAnswer } from '../core/dialog-codec.js'
+import { stampIdentity } from '../core/channels.js'
+import { pickSlug } from '../core/picker.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { isLoopbackHost } from './offline-identity.js'
 
@@ -56,6 +58,28 @@ export const LEG_SWALLOWED = new Set(['keep_alive'])
 // The most dialog answers one backend connection may attempt. A server that
 // keeps asking is a loop, not a gate.
 const DIALOG_ATTEMPT_LIMIT = 5
+
+// #432: the body a target derives, the slug a claim names it with
+// (src/core/picker.js). A target that names no address is no body, so no record
+// names one for it (#263 D2). The port is read as the config document spells it,
+// a number or the quoted string a JSON file can hold, because `pickSlug` reads
+// either and a leg that dials one should name the body a claim names.
+export function bodySlugFor (target) {
+  const host = target?.host
+  const port = target?.port
+  const namedHost = typeof host === 'string' && host.length > 0
+  const namedPort = (typeof port === 'number' && Number.isFinite(port)) ||
+    (typeof port === 'string' && port.length > 0)
+  return namedHost && namedPort ? pickSlug(host + ':' + port) : null
+}
+
+// A log that names the body of the target it reads at each call. The target is a
+// function because a claim moves it, and each record belongs to the connection or
+// the constructor that wrote it.
+function recordsFor (sinkLog, targetOf) {
+  return (event, fields = {}) =>
+    sinkLog(event, stampIdentity(fields, { body: bodySlugFor(targetOf()) }))
+}
 
 // Answer one `show_dialog` the backend asked, on the puppet's own connection.
 //
@@ -336,7 +360,7 @@ function createBackendLeg ({
   host,
   port,
   version,
-  log,
+  log: sinkLog,
   connectTimeoutMs,
   dialogAction,
   // Consulted per dialog, so a leg built before any client exists still
@@ -371,14 +395,6 @@ function createBackendLeg ({
   // (sky-2: "Vous ne pouvez pas vous connecter ... par cette méthode!").
   let nextTransferIntent = false
 
-  function onError ({ error } = {}) {
-    const message = String(error?.message ?? error).slice(0, 200)
-    // Token/auth internals can appear in some library error messages; the
-    // core log line passes through redact() but we keep the surface minimal.
-    log('backendError', { error: message })
-    errorHandler?.({ error })
-  }
-
   function connect () {
     // A live client that has not ended is already connected. An ended client
     // is cleared by its end handler, so a reconnect creates a fresh one.
@@ -387,8 +403,22 @@ function createBackendLeg ({
     // May throw synchronously (the live writer-lock refusal keeps that shape).
     // A reconnect re-acquires the custody lock the ended connection released.
     const connection = prepareConnection()
-    log('backendConnect', connectLogFields(connection, target))
+    // #432: every record this connection writes names the body it dialled, not
+    // only the address. The body is captured here rather than read from the leg,
+    // because an event can arrive after a claim has moved the leg to another
+    // body, and a record about this socket names the body this socket dialled.
+    const dialled = { ...target }
+    const log = recordsFor(sinkLog, () => dialled)
+    log('backendConnect', connectLogFields(connection, dialled))
     ended = false
+
+    function onError ({ error } = {}) {
+      const message = String(error?.message ?? error).slice(0, 200)
+      // Token/auth internals can appear in some library error messages; the
+      // core log line passes through redact() but we keep the surface minimal.
+      log('backendError', { error: message })
+      errorHandler?.({ error })
+    }
 
     return new Promise((resolve, reject) => {
       let settled = false
@@ -601,7 +631,9 @@ function createBackendLeg ({
         write: (packetName, params) => client.write(packetName, params),
         writeRaw: body => client.writeRaw(body),
         onAnswered: onDialogAnswered,
-        log
+        // #432: no connection owns this answer, so the leg's current target is
+        // the body it is about.
+        log: recordsFor(sinkLog, () => target)
       })
       dialogResponses = outcome.responses
       return outcome
@@ -685,7 +717,10 @@ export function createLiveBackendLeg (options = {}) {
   if (accountDir && cacheDir) {
     // The raw directory override is deprecated; the account directory wins.
     try {
-      log('deprecation', {
+      // #432: this record is written before the leg exists, so it reads the target
+      // the constructor was given rather than the one the leg would hold.
+      const record = recordsFor(log, () => ({ host, port }))
+      record('deprecation', {
         message: 'cacheDir is deprecated and ignored when accountDir is set',
         accountDir,
         cacheDir
