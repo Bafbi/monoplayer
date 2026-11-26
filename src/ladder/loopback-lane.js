@@ -90,7 +90,7 @@ const oneTurn = () => new Promise(resolve => setTimeout(resolve, 0))
 // a transfer-chain reset, a configuration deadline, and a reconnect backoff
 // (src/service/monoplayer.js:1509, :1691, src/core/session.js:232). The
 // reconnect one is armed while the lane is already closing: ending the backend
-// leg is a fault, and a fault schedules a retry nobody will answer.
+// leg is a fault, and a fault schedules a reconnect nobody will answer.
 //
 // Exported for the drain's own cases (test/ladder/loopback-lane.test.js): what a
 // close does to a timer armed after its first reading is arithmetic over this
@@ -199,6 +199,22 @@ export async function drainTimers (ledger, { turns = DRAIN_TURNS, turn = oneTurn
     reading = ledger.pending()
   }
   return { dropped, reading }
+}
+
+// #663: the one timer a lane's close is evidence for. Two can sit in the ledger
+// when a close begins, and they are not the same claim. The transfer-chain reset
+// is armed by every backend play login (src/service/monoplayer.js:3645) and
+// cleared by the teardown on the backend leg's own end (:3268), so a close that
+// drops it dropped a timer the close had already cancelled. The reconnect backoff
+// is the one the close arms: ending the backend leg is a fault, and a fault arms a
+// reconnect nobody will answer (src/core/session.js:232), at the first delay of its
+// backoff. `ms` is the caller's: O68 reads it from the lane's own document
+// (core.config.reconnect.delayMs), and the case in test/ladder/loopback-lane.test.js
+// passes it a literal. A record that swept the chain timer alone therefore fails,
+// rather than passing on the wrong evidence.
+export function droppedReconnect (record, { ms } = {}) {
+  if (!Number.isFinite(ms) || ms <= 0) return false
+  return (record?.timersDropped ?? []).some(timer => timer.ms === ms)
 }
 
 export async function createLoopbackLane ({

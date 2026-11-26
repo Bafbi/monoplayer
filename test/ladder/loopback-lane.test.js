@@ -1,4 +1,5 @@
-// The two waits inside `createLoopbackLane`'s close (#661).
+// The two waits inside `createLoopbackLane`'s close (#661), and the record the
+// close writes that O68 reads (#663).
 //
 // `close()` reports the timers a lane left armed, and the lane arms the last one
 // behind the backend leg's own socket end: ending the backend leg is a fault, and a
@@ -23,7 +24,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-import { endOfLeg, drainTimers, laneClock } from '../../src/ladder/loopback-lane.js'
+import { endOfLeg, drainTimers, laneClock, droppedReconnect } from '../../src/ladder/loopback-lane.js'
 
 // One turn of the event loop, as the close takes them.
 const turn = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -80,6 +81,37 @@ test('a timer armed after the first drop is dropped by the next pass, and counte
     'both timers are in the record, including the one the first drop could not see')
   assert.deepEqual(reading, [], 'nothing is armed once a pass arms nothing')
   assert.equal(passes, 2, 'the drain stopped at the pass that armed nothing')
+})
+
+test('a close that drops only the transfer chain timer dropped no reconnect', () => {
+  // #663: the two shapes 40 real closes took at e7c5029. The chain reset is armed
+  // by the backend's play login, 120 s before this close could matter, and the
+  // teardown clears it on the leg's end; the reconnect backoff is the one the close
+  // arms. Any dropped timer satisfied the old reading, so both shapes below passed
+  // it while only the third is evidence that the close ended what it left.
+  const chainOnly = { timersDropped: [{ id: 2, ms: 120_000 }], timersLeft: [] }
+  const chainAndRetryLeft = {
+    timersDropped: [{ id: 2, ms: 120_000 }],
+    timersLeft: [{ id: 3, ms: 1000 }]
+  }
+  const named = { timersDropped: [{ id: 2, ms: 1000 }], timersLeft: [] }
+  const both = {
+    timersDropped: [{ id: 2, ms: 120_000 }, { id: 3, ms: 1000 }],
+    timersLeft: []
+  }
+
+  assert.equal(droppedReconnect(chainOnly, { ms: 1000 }), false,
+    'the chain reset the teardown already cleared is not the reconnect')
+  assert.equal(droppedReconnect(chainAndRetryLeft, { ms: 1000 }), false,
+    'a reconnect the record lists as still armed is not one its dropped list names')
+  assert.equal(droppedReconnect(both, { ms: 1000 }), true,
+    'the close dropped the backoff, and the delay names which')
+  assert.equal(droppedReconnect({ timersDropped: [], timersLeft: [] }, { ms: 1000 }), false,
+    'a close that armed nothing dropped no reconnect')
+  assert.equal(droppedReconnect(named, {}), false,
+    'a caller that names no delay gets no answer, so a miswired assertion fails')
+  assert.equal(droppedReconnect(named, { ms: 0 }), false,
+    'a zero delay names no backoff')
 })
 
 test('a clean close takes no turn at all', async () => {

@@ -1147,7 +1147,8 @@ first dial and its target warms in five seconds.
   protocol bot, and the words are read off the `disconnect` frame it decoded.
 
 - `O68` a lane built by `createLoopbackLane` serves a client with the parts it was
-  handed, then ends its client, its sockets and its armed timers on one close (#594).
+  handed, then on one close ends its client, its sockets and the reconnect it armed, and leaves no
+  timer armed (#594, #663).
   `createRig` (#223) ended the three sockets it opened and left every client and every
   timer to the assertion, which is why one rig's teardown is four lines in the rung's
   `finally` block and the file's teardown is one line per object. The factory is that
@@ -1167,10 +1168,16 @@ first dial and its target warms in five seconds.
   opened reports its own end, so no teardown line names it. The front's own wire counters
   saw at least five frames and rejected none, and the journal holds `login` and `map_chunk`,
   so the wire check and the journal are wired and observed rather than wired and assumed.
-  And the lane's clock holds no armed timer: ending the backend leg is a backend fault, and
-  a fault arms a reconnect backoff (`src/core/session.js:232`), so a lane that closes its
-  legs and stops leaves a 1 s timer and a handle the process keeps until it fires. The lane drops it,
-  and the record says how many it dropped. The second close returns the same record and
+  And the lane's clock holds no armed timer, and the timer it dropped is the reconnect: ending
+  the backend leg is a backend fault, and a fault arms a reconnect backoff
+  (`src/core/session.js:232`), so a lane that closes its legs and stops leaves a 1 s timer and a
+  handle the process keeps until it fires. Any dropped timer is not the same claim (#663). The
+  transfer-chain reset can be armed beside it, and the teardown clears that one, so a close that
+  drops it alone proves nothing. `droppedReconnect` (`src/ladder/loopback-lane.js`) names the timer
+  this assertion wants, and the rung asks for it by the delay the lane's own document gives. The
+  evidence prints that delay beside the record's list of ids and delays. A core stopped with a
+  transfer, a handover or a landed fault in flight still holds the chain timer, which is #697 and not
+  this assertion. The second close returns the same record and
   does nothing, because the rung's `finally` block calls it unconditionally: a throw later
   in the run must not leave the lane to the hand-written list, and a close that already ran
   must not throw on the way out.
