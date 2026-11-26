@@ -44,7 +44,7 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 | `src/observability/secrets.js` | Secret scanner for reports: findings with index and kind, spans rewritten to `[REDACTED]<kind>`. Custody and the driver lane both import it here | pure |
 | `src/legs/fake-legs.js` | Test fakes for both legs (no sockets) | test-only |
 | `src/service/monoplayer.js` | Composition root: config (`loadConfig`, `DEFAULT_CONFIG`), leg wiring, metrics, logs; CLI skeleton | adapters injected |
-| `src/service/cli.js` | CLI plumbing every entry point shares: `flag`, `detail`, `candidateLines`, `withTimeout` | pure; one timer, no sockets |
+| `src/service/cli.js` | CLI plumbing every entry point shares: `flag`, `detail`, `candidateLines`, `withTimeout`, `waitFor` | pure; at most one pending timer per call, no sockets |
 
 ### Cache domains and bounds (`state-cache`)
 
@@ -483,13 +483,15 @@ listing the lane's allowed servers.
   label, a width and one custom action. About 12 000 servers fit under the 2 MiB
   ceiling `show_dialog` reads. Measured while #255 was written, so do not
   re-measure.
-- **The list is the allowed-server key (#265).** The picker offers the servers in
-  `allowed-servers.json`, read at each offer through `control.allowedServers()`. A
-  panel edit is therefore what the next join sees, with no restart. A live file that
-  cannot be parsed is named and ignored. The copy Git commits answers in its place,
-  because a broken list must not leave a client in a dialog with no buttons. A lane
-  with no such key offers nothing, because the list is what a picker lane offers and
-  not the backend it dials.
+- **The list is the allowed-server key, and two variables name it (#265, #356).** The
+  picker offers the servers in `allowed-servers.json`, read at each offer through
+  `control.allowedServers()`. `allowedServerSources` in `src/service/control.js` holds
+  the order the two are asked in. A panel edit is therefore what the next join sees,
+  with no restart. When the live key offers no list, the copy Git commits answers, if
+  the lane names one and it reads. That covers a live file the lane never named,
+  cannot read or cannot parse, because a broken list must not leave a client in a
+  dialog with no buttons. A lane that names neither variable offers nothing, because
+  the list is what a picker lane offers and not the backend it dials.
 
   A client that joins a lane with nothing to offer hears that in one sentence about
   the lane (#315). It never picked a server, so no sentence names one. The sentence is
@@ -498,11 +500,12 @@ listing the lane's allowed servers.
   Why the list is empty is the offer's to say, and so is where to fix it.
   `pickerOffered` carries the answer's `reason`, the `file` it came from, and the `at`
   entry when the refusal names one, beside the source and the count. Each answer is a
-  different edit: `no_key` is a variable to set, `live_missing` a file to write,
-  `empty_list` a server to add, `seed_missing` a mount to fix, and `unreadable` a file
-  to repair. A file that does not parse answers with the code `parseAllowedServers`
-  refused with, so the entry to fix is named rather than nine repairs sharing one word.
-  The refusal's own line repeats the reason.
+  different edit. `no_key` is a variable to set, either
+  `MONOPLAYER_ALLOWED_SERVERS` or `MONOPLAYER_ALLOWED_SERVERS_SEED`. `live_missing` is
+  a file to write, `empty_list` a server to add, `seed_missing` a mount to fix, and
+  `unreadable` a file to repair. A file that does not parse answers with the code
+  `parseAllowedServers` refused with, so the entry to fix is named rather than nine
+  repairs sharing one word. The refusal's own line repeats the reason.
 
   Each row's name is the canonical `host:port` its claim
   dials. A claim labels a body with the row's slug, while the body's state cache is
