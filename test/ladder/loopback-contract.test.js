@@ -93,7 +93,7 @@ test('every assertion the loopback declares is documented, and the reverse', () 
   assert.ok(drifted.declared.length > 0, 'src/ladder/loopback.js declares its assertions with LOOPBACK_ASSERTION_IDS')
   assert.ok(drifted.documented.length > 0, 'docs/testing-ladder.md documents the contract as bullets')
   // The repeated id, not the whole list: the repair is to remove one, and a message
-  // that printed all 79 would not say which.
+  // that printed the whole list would not say which.
   const repeated = ids => ids.filter((id, index) => ids.indexOf(id) !== index)
   assert.deepEqual(repeated(drifted.declared), [], 'no assertion id is declared twice')
   assert.deepEqual(repeated(drifted.documented), [], 'no assertion id is documented twice')

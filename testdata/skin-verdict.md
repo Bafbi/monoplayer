@@ -358,3 +358,49 @@ the same client. So the old session's vanilla default is not evidence about the
 attach path. Of its two attaches, the one whose window fits a default is the one
 after the 20:44:26 transfer, where the old code wrote no frame. That reading stays
 an inference: no client-side record dates the sighting.
+
+## A spectator's own player: the account's skin, measured at the login (#618)
+
+Date: 2026-11-26, 21:42Z. **The measurement below is of the login, not of a render.** The
+three cases above still hold as written; nothing here was measured again on a client.
+
+[#614](https://github.com/Bafbi/monoplayer/issues/614) wrote no `player_info` entry naming a
+spectator's own player, so its body fell back to `DefaultPlayerSkin.get(uuid)` — the control
+case above. [#618](https://github.com/Bafbi/monoplayer/issues/618) asks whether the
+`hasJoined` answer this deployment is handed carries a `textures` property at all, because an
+entry can only carry the skin the proxy was given. It does.
+
+What was read: the front leg's own record of each login, on a real Microsoft account through
+the live online front. The run was `mise run online:cluster -- --backend-host
+paper.monoplayer-dev.svc.cluster.local --backend-port 25565 -- --verbose`: the script copies
+this branch's `src` into a throwaway pod in the live namespace, so the front leg under test is
+this branch's `createLiveFrontLeg` (online-mode, the real `hasJoined` gate), and the backend
+it attaches to is the dev Paper. The rung passed 13 of its 14 assertions (N11 skipped: no
+unwhitelisted Microsoft account is configured) in 34.9 s, and the account directory it was
+given came back unchanged, so no token chain was touched.
+
+```json
+{"event":"attachAllowed","username":"Bafbi","uuid":"6eb73524-ff88-4a62-a8d0-c63905e7afba","verifier":"online-mode_hasjoined","whitelist":".secrets/attach-whitelist.json","textures":true}
+```
+
+Twice, for the two attaches the rung makes (N10 detaches and reattaches). `textures` is the
+field #618 added to that line: `profileTextures(client.profile) !== null`, where
+`client.profile` is the body `minecraft-protocol` assigned from the sessionserver before the
+front's synchronous login hook ran (`node_modules/minecraft-protocol/src/server/login.js:167`).
+
+This is not a dev-lane front pod's log. The dev lane's proxy runs the `main` image, which
+carries none of this branch's read; the front leg that answered here is this branch's code in
+that pod. The account's own skin is therefore present on the body the front verifies, on this
+deployment's own login path, and the property is what the new entry carries.
+
+What the fix would show in this page's control case, from the client code quoted above and
+**not** measured again: with an entry naming the human's UUID, `AbstractClientPlayer.getSkin()`
+returns `info.getSkin()` instead of the `DefaultPlayerSkin` fallback, so the control case
+resolves the account's own texture (`minecraft:skins/<hash>`) rather than
+`minecraft:textures/entity/player/slim/noor.png`. Re-running the three cases would make that a
+reading; until then it is the client's documented behaviour plus a proxy-side measurement.
+
+For a spectator the same rule now writes that entry on the spectator's own channel alone, and
+what a client draws for a body it does not drive is still unmeasured
+([#325](https://github.com/Bafbi/monoplayer/issues/325)).
+

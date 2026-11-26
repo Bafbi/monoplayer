@@ -58,6 +58,12 @@ const VERSION = '26.1'
 // see. The margin is for the platform's timer, not for the product.
 const MOVE_WINDOW_WAIT_MS = MOVE_INTERVAL_MS + 40
 const DEFAULT_REPORT = '.reports/loopback-report.json'
+// #618: two accounts' own skins, distinct in every field, for the one assertion that reads
+// a spectator's socket for both. The puppet's is what a backend's own `player_info` says
+// and the spectator's is what its account's answer said, and O73 fails if either frame
+// carries the other's value.
+const O73_PUPPET_SKIN = { name: 'textures', value: 'cHVwcGV0LXNraW4tYnk=', signature: 'cHVwcGV0LXNpZw==' }
+const O73_OWN_SKIN = { name: 'textures', value: 'd2F0Y2hlci1za2luLWJ5', signature: 'd2F0Y2hlci1zaWc=' }
 
 // Every assertion this rung makes, in the order it makes them. This list is the
 // declaration `test/ladder/loopback-contract.test.js` reads: a bullet in
@@ -85,7 +91,9 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   // #636: O69 reads the rig O63 leaves, so it runs between O63 and O64. It was
   // declared beside O68, where #635's commit appended it, and nothing noticed
   // until the run started checking the order (#623).
-  'O63', 'O69', 'O64', 'O65', 'O66'
+  // #618: O73 lands a spectator on the body O65 leaves driven, so it runs between O65 and
+  // O66, before O66 empties the lane's allowed-server list.
+  'O63', 'O69', 'O64', 'O65', 'O73', 'O66'
 ])
 
 // #623: the list is the run order, and this is the rule that holds the run to it. The
@@ -306,6 +314,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // #636: the client that watches beside the driver, so the driver can be measured for what
   // it is told about it.
   let pickerBot22 = null
+  // #618: the client whose own player is read for the skin its account sent.
+  let pickerBot23 = null
   // #602: the leg and the client O72 builds. They are this check's own because its
   // body configuration is, and createLoopbackLane takes a rig, whose front leg reads
   // the core's cache.
@@ -2939,7 +2949,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Onlooker'),
       // #636: the client that watches beside the driver, so the driver's own socket can
       // be read for what it is told about it.
-      offlineUuid('Nearby')
+      offlineUuid('Nearby'),
+      // #618: the client whose own player is read for the skin its account sent, and the
+      // only one this rig supplies properties for.
+      offlineUuid('OwnSkin')
     ]
     // #265: the list the lane offers comes from the allowed-server key (#262). So
     // the rig writes the two files the lane reads: the live list the panel edits,
@@ -3010,6 +3023,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // No cached backend configuration exists, and none is invented: the front's
         // cached replay path must find nothing here.
         configurationBaseline: pickerBaseline,
+        // #618: the one thing an offline lane cannot get from a sessionserver, supplied
+        // the way a deployed lane gets it from one: the properties the account's answer
+        // carried. Only OwnSkin has any, and only that client's landing is read for it.
+        profiles: { OwnSkin: [O73_OWN_SKIN] },
         pickerServers: createPickerServerReader({ control: pickerControl, log }),
         onPickerPick: pick => pickerPicks.push(pick),
         onPickerVerb: verb => pickerVerbs.push(verb),
@@ -4692,7 +4709,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     const nearbyUuid = offlineUuid('Nearby')
     // What this client is told *about the others*: the owner's second half is "spectator
     // between themself", and the only client that can read it is the one landing. It sees the
-    // watchers already on the body, and nothing naming itself.
+    // watchers already on the body, and nothing naming itself: this rig supplies no properties
+    // for it, and #618's entry naming a spectator is owed only to a client whose account sent
+    // a skin (O73 is the row that supplies one).
     const nearbySaw = { entries: [], spawns: [] }
     pickerBot22.client.on('player_info', packet => nearbySaw.entries.push(packet))
     pickerBot22.client.on('spawn_entity', packet => nearbySaw.spawns.push(packet))
@@ -5559,6 +5578,132 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         afterFault.claims.some(claim => claim.body === pickSlug(pickerBodyName) && claim.name === 'Fault') &&
         afterFault.dials === 2,
       evidence.fault
+    )
+
+    // --- O73: a spectator's own player wears its own account's skin (#618) ---
+    // #614's rule was "no entry names a spectator's own player", and a client with no entry
+    // for the body it controls resolves `DefaultPlayerSkin.get(uuid)`: a vanilla default,
+    // which is what testdata/skin-verdict.md measured. #618 corrects it — an entry names the
+    // spectator, carrying the property its account's hasJoined answer carried, written on
+    // that spectator's channel alone — and this row reads both entries on one socket: the
+    // body's, naming the puppet with the puppet's skin, and the spectator's, naming itself
+    // with its account's.
+    //
+    // Two things this rig has to be given, because neither a fake backend nor an offline lane
+    // has them. The puppet's skin arrives the way O52's frame does: through the body's own
+    // server, because the fake has no sender for `player_info`. The spectator's arrives the
+    // way a deployed lane's does: the front's `profiles` option, which is this rig's stand-in
+    // for the sessionserver's answer (src/legs/live-front.js).
+    const entriesBefore = pickerCore.metrics.skinFramesWritten
+    for (const client of Object.values(pickerBodyFake.server.clients)) {
+      // 26.2 reads a bitflag object here and writes nothing for the bare name, so the
+      // frame is spelled the way that version's own data reads it (measured: the string
+      // form encodes to 19 bytes with no entry in it).
+      client.write('player_info', {
+        action: { add_player: true },
+        data: [{ uuid: puppetUuid, player: { name: 'GlowSquidye', properties: [O73_PUPPET_SKIN] } }]
+      })
+    }
+    await waitFor(
+      () => pickerCore.metrics.skinFramesWritten > entriesBefore,
+      'the skin the backend states, in the proxy\'s hands',
+      15_000
+    )
+    const ownUuid = offlineUuid('OwnSkin')
+    const ownSaw = { entries: [] }
+    pickerBot23 = createBot({ port: picker.port, username: 'OwnSkin', version: pickerVersion })
+    await pickerBot23.waitFor(
+      () => pickerBot23.received.dialogs.length === 1,
+      'the picker at the client whose own player this row reads',
+      15_000
+    )
+    pickerBot23.client.on('player_info', packet => ownSaw.entries.push(packet))
+    const ownLanding = pickerFront.spectate({
+      username: 'OwnSkin',
+      body: pickSlug(pickerBodyName),
+      server: pickerBodyName
+    })
+    await pickerBot23.waitFor(
+      () => pickerBot23.received.login !== null,
+      'the body at the spectator whose own skin this row reads',
+      30_000
+    )
+    // Both entries are written on the landing, so the reads are of frames this client
+    // received rather than of a write the leg counted (#618: a write nobody received is not
+    // an entry, which is what #134's refusal-and-repair is about).
+    const entriesOf = uuid => ownSaw.entries
+      .flatMap(packet => packet.data ?? [])
+      .filter(entry => sameUuid(entry.uuid, uuid))
+      .map(entry => ({
+        name: entry.player?.name ?? null,
+        textures: (entry.player?.properties ?? [])
+          .filter(property => property.name === 'textures')
+          .map(property => property.value)
+      }))
+    await waitFor(
+      () => entriesOf(puppetUuid).length >= 1 && entriesOf(ownUuid).length >= 1,
+      "the two entries a landing owes: the body's and the spectator's own",
+      15_000
+    )
+    await waitFor(
+      () => logs.some(entry => entry.event === 'spectated' && entry.fields?.username === 'OwnSkin'),
+      "the front's own record of the landing it wrote the entry for",
+      15_000
+    )
+    const ownEntries = entriesOf(ownUuid)
+    const puppetEntries = entriesOf(puppetUuid)
+    // The front's record of the same landing: what it says it handed the core, beside what
+    // the socket says arrived. The landing's return value is the leg's own answer to the
+    // click and not the attach's, so the record is where this fact lives.
+    const ownRecord = logs
+      .filter(entry => entry.event === 'spectated' && entry.fields?.username === 'OwnSkin')
+      .at(-1)?.fields ?? null
+    // #618: the packet the front wrote, read as the socket's own record of it. The skin is
+    // 'own' when the entry names the spectator with its account's value, and 'puppet' when
+    // the body's entry carries the puppet's — and the bug #516 introduced is either value on
+    // the wrong entry, which the comparisons below fail on.
+    evidence.skins = {
+      landing: ownLanding,
+      record: ownRecord,
+      own: ownEntries,
+      puppet: puppetEntries,
+      ownUuid,
+      puppetUuid,
+      supplied: { own: O73_OWN_SKIN.value, puppet: O73_PUPPET_SKIN.value }
+    }
+    check(
+      'O73',
+      "a spectator's own player is named by an entry carrying its own account's skin, and every entry naming the puppet carries the puppet's: one entry naming each, two skins, and neither on the other's body",
+      ownLanding.watching === true &&
+        ownRecord?.skinSupplied === true &&
+        // The spectator's own entry: its name, its account's one property, and never the
+        // puppet's value. A client draws the body it controls from this entry, so this is
+        // the frame that decides what a spectator's own player wears.
+        ownEntries.length === 1 &&
+        ownEntries[0].name === 'OwnSkin' &&
+        // One property, and it is the account's: a frame carrying both values has length 2
+        // here and fails, so the equality is also the cross-check that the puppet's value is
+        // not on this entry.
+        ownEntries[0].textures.length === 1 &&
+        ownEntries[0].textures[0] === O73_OWN_SKIN.value &&
+        // The body's entry, on the same socket: the puppet's own value, and never the
+        // spectator's. This is #614's half, unchanged, read beside the new one. There can be
+        // more than one, because the replay carries the backend's own frame and the proxy
+        // writes its entry on the pass beside it (O69 records the same count), so the claim is
+        // about every entry that names the puppet and not about how many there are.
+        puppetEntries.length >= 1 &&
+        puppetEntries.every(entry => entry.name === 'GlowSquidye') &&
+        puppetEntries.every(entry => entry.textures.length === 1) &&
+        puppetEntries.every(entry => entry.textures[0] === O73_PUPPET_SKIN.value),
+      evidence.skins
+    )
+    // The row leaves the rig as O65 left it: the spectator goes, and the body it was drawn
+    // in keeps the driver that holds it.
+    await pickerBot23.close()
+    await waitFor(
+      () => pickerCore.laneState().bodies[0].spectators === 0,
+      'the landing gone before the lane with no list is read',
+      15_000
     )
 
     // --- O66: a lane with no list refuses the join in a sentence about the lane (#315) ---

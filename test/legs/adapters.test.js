@@ -16,7 +16,7 @@ import { createBackendFrameForwarder, createOfflineBackendLeg, MAX_BACKEND_FRAME
 import minecraftData from 'minecraft-data'
 
 import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
-import { createConfigPathInterceptor, createLiveFrontLeg, createOfflineFrontLeg } from '../../src/legs/live-front.js'
+import { createConfigPathInterceptor, createLiveFrontLeg, createOfflineFrontLeg, profileTextures } from '../../src/legs/live-front.js'
 import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 import { synthAttach, LEG_OWNED } from '../../src/core/join-synth.js'
 import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
@@ -342,6 +342,61 @@ test('attach check + whitelist store (public APIs embedded by the live front leg
 // the service hands it whatever loadConfig returned. Both read `CHAT_MODES` from
 // src/core/clientbound-policy.js (#103), so the two cannot drift apart. The test
 // stays as the tripwire for a local copy coming back.
+// #618: a client's own skin is on the profile the front verified, and the front holds no
+// skin of its own. `client.profile` is the sessionserver's hasJoined body, set by the
+// library before the front's own hook; an offline client has none, and a lane with no
+// sessionserver supplies the properties by hand (the offline leg's `profiles` option).
+test("the front reads an account's own skin off the profile it verified, and invents none", () => {
+  const signed = { name: 'textures', value: 'dGV4dHVyZXM=', signature: 'c2lnbmF0dXJl' }
+  assert.deepEqual(
+    profileTextures({ id: '6eb73524ff884a62a8d0c63905e7afba', name: 'Bafbi', properties: [signed] }),
+    { value: 'dGV4dHVyZXM=', signature: 'c2lnbmF0dXJl' },
+    "the property is the account's own, carried as it arrived"
+  )
+  assert.deepEqual(
+    profileTextures({ properties: [{ name: 'textures', value: 'dGV4dHVyZXM=' }] }),
+    { value: 'dGV4dHVyZXM=' },
+    'an unsigned property is carried without a signature the proxy added'
+  )
+  assert.equal(profileTextures({ name: 'Bafbi', properties: [] }), null, 'no property is no skin')
+  assert.equal(profileTextures({ name: 'Bafbi' }), null)
+  assert.equal(profileTextures(undefined), null, 'an offline client holds no profile at all')
+  assert.equal(profileTextures({ properties: [{ name: 'textures', value: '' }] }), null,
+    'a property with no value is not a skin')
+  assert.equal(profileTextures({ properties: [{ name: 'textures' }] }), null)
+})
+
+// #618: the offline leg's stand-in for the sessionserver. It is an option on the
+// constructor a rung builds, and the deployed leg refuses it: a live lane's answer comes
+// from Mojang, and a name that let a caller plant one would be a skin nobody verified.
+test("#618 the offline leg takes the account's properties, and the live leg refuses to", () => {
+  const build = profiles => createOfflineFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    offlineWhitelist: [PLAYER],
+    getSnapshotConfig: () => [],
+    wireMode: 'off',
+    profiles
+  })
+  assert.doesNotThrow(() => build({ Bafbi: [{ name: 'textures', value: 'dGV4dHVyZXM=' }] }))
+  assert.doesNotThrow(() => build(null))
+  assert.throws(() => build('a blob'), /profiles must be null or an object/)
+  assert.throws(() => build({ Bafbi: 'a blob' }), /must be an array of profile properties/)
+  assert.throws(
+    () => createLiveFrontLeg({
+      host: '127.0.0.1',
+      port: 0,
+      version: '26.1',
+      attachWhitelistFile: path.join(os.tmpdir(), 'monoplayer-profiles-refused.json'),
+      getSnapshotConfig: () => [],
+      wireMode: 'off',
+      profiles: {}
+    }),
+    /does not accept profiles/
+  )
+})
+
 test('the live front leg accepts every chat mode the config accepts', () => {
   const build = chat => createLiveFrontLeg({
     host: '127.0.0.1',

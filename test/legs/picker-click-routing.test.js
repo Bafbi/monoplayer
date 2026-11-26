@@ -28,6 +28,11 @@
 // claim is O56's to prove and not this file's: what is proved here is that the click
 // reaches the landing.
 //
+// #618: one test reads what the leg hands the core rather than what a click did — the
+// textures property a spectator's landing carries, and the login record that says whether the
+// account's answer had one. It is the same seam: a real click, a real frame, and a fact the leg
+// recorded or handed over.
+//
 // #616: one click refuses instead of acting — Disconnect on a body a claim holds — and
 // its sentence, its record and its count are read here, because a refusal that reached
 // the log and not `front.pickerRefusalsByReason` makes a complete count read as a
@@ -97,7 +102,7 @@ function records (lines, event) {
 //
 // `rows` is the list the lane offers, handed over as it is, so a test can change it
 // while a dialog is open on the client.
-async function withPickerLane (run, { rows = [{ name: SERVER }] } = {}) {
+async function withPickerLane (run, { rows = [{ name: SERVER }], ...legOptions } = {}) {
   // The reader answers null for a missing file, and the leg then denies every join
   // `picker_unavailable`: the timeouts would name the dialog rather than the recording.
   assert.notEqual(BASELINE, null,
@@ -120,7 +125,10 @@ async function withPickerLane (run, { rows = [{ name: SERVER }] } = {}) {
     // The wire check is not this file's subject, and a failure in it would read as a
     // routing failure.
     wireMode: 'off',
-    log: (event, fields) => lines.push({ event, fields })
+    log: (event, fields) => lines.push({ event, fields }),
+    // #618: what a test hands the lane in place of a sessionserver's answer, spread last
+    // so a test states the one option it changes and inherits the rest.
+    ...legOptions
   })
   let bot = null
   try {
@@ -266,6 +274,51 @@ test("#615 a Spectate on the server's own dialog lands the client as a spectator
     assert.equal(leg.metrics.pickerVerbs, 1, 'a Spectate the lane carries is a verb, not a refusal')
     assert.equal(leg.metrics.pickerRefusals, 0)
     assert.deepEqual(clientErrors, [])
+  })
+})
+
+// #618: a spectator's own player wears the skin its account's hasJoined answer
+// carried, and the front is where that property is. This file reads the hand-over: what
+// the landing call-in is handed, on a lane that was given an account's properties and on
+// one that was given none. Whether the core writes the frame, and what it carries, is
+// test/service/spectate.test.js's; what a real socket receives is O73's.
+test("#618 a landing is handed the textures the client's account sent, and nothing when it sent none", async () => {
+  // The property an account's hasJoined answer carries, as the account's own.
+  const OWN_SKIN = { name: 'textures', value: 'd2F0Y2hlciBza2lu', signature: 'd2F0Y2hlciBzaWc=' }
+  const handovers = []
+  await withPickerLane(async ({ leg, lines, click }) => {
+    // The core's answer is the harness's; what this test reads is its argument.
+    leg.setSpectatorAttach(payload => {
+      handovers.push(payload)
+      return { watching: true, frames: 0 }
+    })
+    click(verbIdFor('spectate', SERVER))
+    await settleUntil(() => handovers.length === 1, 'the spectator landing the leg reported')
+    assert.deepEqual(handovers[0].skin, { value: OWN_SKIN.value, signature: OWN_SKIN.signature },
+      "the landing is handed the account's own property, as it arrived")
+    assert.equal(handovers[0].name, NAME)
+    assert.equal(handovers[0].uuid, offlineUuid(NAME), 'the uuid is the one the front verified, not a second copy')
+    assert.equal(typeof handovers[0].channel, 'string', 'and the channel is the one the landing opened')
+    // #618's measurement, on the same join: the leg's own record says whether the answer
+    // carried the property, which is what a deployed lane is read for.
+    assert.equal(records(lines, 'attachAllowed')[0].textures, true,
+      'the login record says the body it verified carried textures')
+    assert.equal(records(lines, 'spectated')[0].skinSupplied, true, 'and the landing records the skin it was handed')
+  }, { profiles: { [NAME]: [OWN_SKIN] } })
+
+  // The same lane with nothing supplied is a lane whose sessionserver answered with no
+  // property, and the landing is handed null rather than a skin this leg invented.
+  const bare = []
+  await withPickerLane(async ({ leg, lines, click }) => {
+    leg.setSpectatorAttach(payload => {
+      bare.push(payload)
+      return { watching: true, frames: 0 }
+    })
+    click(verbIdFor('spectate', SERVER))
+    await settleUntil(() => bare.length === 1, 'the second spectator landing')
+    assert.equal(bare[0].skin, null, 'no property supplied is no skin, never a default this leg made up')
+    assert.equal(records(lines, 'attachAllowed')[0].textures, false)
+    assert.equal(records(lines, 'spectated')[0].skinSupplied, false)
   })
 })
 

@@ -1071,6 +1071,30 @@ first dial and its target warms in five seconds.
   What it cannot prove: the claimed half of the pair. A claim is held by a client
   standing in the body, and keeping that client through the fault is #334.
 
+- `O73` a spectator's own player is named by an entry carrying its own account's
+  skin, and the entry naming the puppet carries the puppet's (#618). O65 leaves the body
+  attached to the client that claimed it back, so there is a driven body to watch. The
+  puppet's skin arrives the way `O52`'s frame does, through the body's own server, because
+  the fake has no sender for `player_info`. The spectator's arrives the way a deployed
+  lane's does: the front's `profiles` option, which is an offline lane's stand-in for the
+  sessionserver's answer (`src/legs/live-front.js`).
+
+  A client joins, lands on that body as its spectator, and both entries are read off its own
+  socket: every entry naming the puppet carries the puppet's value, and the one naming the
+  spectator carries its own account's value. The two values differ in value and signature,
+  and each entry is held to its own value alone, so a frame carrying the wrong skin fails.
+  That cross is what [#516](https://github.com/Bafbi/monoplayer/issues/516) introduced — a
+  spectator's own body wearing the puppet's skin,
+  [#614](https://github.com/Bafbi/monoplayer/issues/614)'s third item — and this is the row
+  that fails if it comes back.
+
+  What it cannot prove: that a real client draws either skin. A bot records no pixels, and
+  the two real clients that could are the dev lane's run (#634). Nor is this the row that
+  proves the addressing: a frame written to every channel of the body would land in the same
+  array, so what is read here is what that socket received. The one-channel write is
+  `deliverEach`'s in `src/legs/live-front.js`, and `test/service/spectate.test.js` pins the
+  channel the entry is written on against the fake leg.
+
 - `O66` a lane with no list refuses a join in a sentence about the lane, and its offer
   says why the list is empty (#315). O61 proved the offer falls back to the seed when
   the live file cannot be parsed. This is the case with nothing behind it: both files
@@ -1222,8 +1246,10 @@ first dial and its target warms in five seconds.
   count can see.
 
   The owner's second half — *spectator between themself* — is read on the other socket. The
-  client that lands is drawn the watcher already on the body, entry and body both, and
-  nothing on its own socket names the player it is itself.
+  client that lands is drawn the watcher already on the body, entry and body both. Nothing
+  on its own socket names the player it is itself: this rig supplies no properties for that
+  client, so no entry is owed for its own player. `O73` is the row that supplies one, and
+  the entry naming a spectator is that spectator's own channel's.
 
   Then the second position source. The spectator's own client sends a position, the front
   drops the frame (#269) and hands the core the pose out of it, and the driver's copy of that

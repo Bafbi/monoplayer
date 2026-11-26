@@ -490,11 +490,18 @@ unclaimed, which is a body a client may watch.
   need a default for the driver who never answers. A body with no driver is the
   ordinary case rather than an error: a claim is released when its connection ends,
   and the body keeps its backend session. So the ordinary case is watchable.
-- **A spectator is told who the body is, and offered its pack (#614).** Two things a
-  replay cannot carry reach that channel after it. The skin entry names the puppet and
-  is written to every channel of the body, because a client draws a player from that
-  player's entry and the relayed one left the cache's ring long ago. No entry names the
-  spectator, whose own player stays the skin its client resolves. And the packs the
+- **A spectator is told who the body is, offered its pack, and named itself (#614,
+  #618).** Three things a replay cannot carry reach that channel after it. The body's
+  skin entry names the puppet and is written to every channel of the body, because a
+  client draws a player from that player's entry and the relayed one left the cache's
+  ring long ago. An entry names the spectator too, on its own channel and carrying the
+  texture its account's `hasJoined` answer carried, because a client with no entry for
+  the body it controls resolves a vanilla default rather than its own skin. That
+  property is the account's and never the puppet's: the puppet's skin on a spectator's
+  own body is what [#516](https://github.com/Bafbi/monoplayer/issues/516) introduced,
+  [#614](https://github.com/Bafbi/monoplayer/issues/614)'s third item reported, and
+  [#618](https://github.com/Bafbi/monoplayer/issues/618) closes.
+  And the packs the
   body holds are offered in the state the spectator is in: a pack the backend sent
   during its own configuration phase is re-encoded into play, which 26.1 and 26.2 both
   define (`add_resource_pack` is `0x51` in play and `0x09` in configuration over one

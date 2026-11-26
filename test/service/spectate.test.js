@@ -24,6 +24,9 @@ const PLAYER = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const WATCHER = '11111111-2222-3333-4444-555555555555'
 const PUPPET = 'ea45ba2e-f47d-43ee-9604-b20af90be1f1'
 const TEXTURES = { name: 'textures', value: 'dGV4dHVyZXM=', signature: 'c2lnbmF0dXJl' }
+// #618: the spectator's own account skin, distinct from the puppet's in every field, so
+// a frame that carries the wrong one is a frame this file can tell apart.
+const WATCHER_TEXTURES = { value: 'd2F0Y2hlciBza2lu', signature: 'd2F0Y2hlciBzaWc=' }
 const CLAIMED = { body: pickSlug(TARGET.host + ':' + TARGET.port), target: TARGET }
 
 // A body a spectator could be offered and is not: one server, one body id.
@@ -255,19 +258,25 @@ test('#259 a spectator of a body nobody drives is handed that body as it stands'
 })
 
 // #614: one rule for who sees the puppet. The entry that names the puppet goes to
-// every channel of the body, and no entry names a spectator's own player.
+// every channel of the body, and no channel is handed the puppet's skin on its own
+// player.
 //
-// #516 wrote one entry per channel, naming that channel's own player. A client draws a
-// player's body from the entry that names that player, so a spectator's own player wore
-// the puppet's skin and no entry named the puppet at all. Both halves of the owner's
-// report follow from that one choice, and the fix is the rule: the body's entry names
-// the puppet, every channel of the body receives it, and a spectator is never named.
+// #516 wrote one entry per channel, naming that channel's own player, carrying the
+// puppet's textures. A client draws a player's body from the entry that names that
+// player, so a spectator's own player wore the puppet's skin and no entry named the
+// puppet at all. Both halves of the owner's report follow from that one choice, and the
+// fix is the rule: the body's entry names the puppet, and every channel of the body
+// receives it.
 //
 // The driver keeps a second entry, and it is #99's frame: the measured client resolved
 // the puppet's skin for the body it controls from the entry naming that player
-// (testdata/skin-verdict.md). A spectator's client draws its own player, which is not
-// that body, so it is owed no entry of its own.
-test('#614 a spectator is handed the entry that names the puppet, and none that names itself', async () => {
+// (testdata/skin-verdict.md).
+//
+// #618: a spectator is named too, by an entry that carries its own account's skin
+// (test below). This test is the other half of that rule: an account whose answer
+// carried no textures hands the landing nothing, so no entry names that spectator and
+// its client resolves the default it always did.
+test('#614 a spectator whose account sent no textures is handed the entry that names the puppet, and none that names itself', async () => {
   const rig = makeCore({ config: skinConfig() })
   await landABody(rig)
   deliverPlayerInfo(rig)
@@ -295,10 +304,78 @@ test('#614 a spectator is handed the entry that names the puppet, and none that 
   assert.equal(spectatorPass[0].packet.data[0].player.name, 'Wiriaw')
   assert.deepEqual(spectatorPass[0].packet.data[0].player.properties, [TEXTURES])
   assert.equal(skinFrames(rig.frontLeg).some(frame => frame.packet.data[0].uuid === WATCHER), false,
-    "no frame names the spectator, so its own player keeps the skin its account's client draws")
+    'no frame names the spectator, because this landing was handed no skin for it (#618)')
   assert.equal(rig.core.metrics.skinFramesWritten, 3)
   // The spectator's mode frames are still the last word on that socket (#259).
   assert.equal(rig.frontLeg.frames().at(-1).name, 'abilities')
+})
+
+// #618: the correction of #614's rule. "No entry names a spectator's own player" leaves a
+// client to resolve `DefaultPlayerSkin.get(uuid)` for the body it controls, which is a
+// vanilla default and not the account's skin (testdata/skin-verdict.md, control case).
+//
+// The rule now: an entry names the spectator, carrying the property the account's own
+// hasJoined answer carried, and it is written on that spectator's channel alone. Two
+// entries, two skins — the body's carries the puppet's, the spectator's carries its own —
+// and neither may cross. What the puppet is owed here is unchanged: every channel of the
+// body still receives the entry naming it.
+test('#618 a spectator is named by an entry carrying its own account skin, and never the puppet\'s', async () => {
+  const rig = makeCore({ config: skinConfig() })
+  await landABody(rig)
+  deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  const before = {
+    frames: skinFrames(rig.frontLeg).length,
+    written: rig.core.metrics.skinFramesWritten
+  }
+
+  // The front verifies this client and hands the landing the property off the profile
+  // the sessionserver answered: the spectator's own, which no frame of this body has.
+  const view = rig.core.spectateView({
+    name: 'Watcher',
+    uuid: WATCHER,
+    channel: 'spectator-channel',
+    skin: WATCHER_TEXTURES
+  })
+  assert.equal(view.watching, true)
+
+  const landed = skinFrames(rig.frontLeg).slice(before.frames)
+  assert.deepEqual(landed.map(frame => frame.packet.data[0].uuid), [PUPPET, WATCHER],
+    "two entries: the body's, naming the puppet, then the one naming the spectator itself")
+  const [bodyEntry, ownEntry] = landed
+  assert.equal(bodyEntry.channel, null, "the body's entry is still every channel's")
+  assert.deepEqual(bodyEntry.packet.data[0].player.properties, [TEXTURES],
+    "and it still carries the puppet's skin, signature and all")
+  assert.equal(ownEntry.channel, 'spectator-channel', "the spectator's entry is its own channel's alone")
+  assert.equal(ownEntry.packet.data[0].player.name, 'Watcher')
+  assert.deepEqual(ownEntry.packet.data[0].player.properties,
+    [{ name: 'textures', value: WATCHER_TEXTURES.value, signature: WATCHER_TEXTURES.signature }],
+    "the property is the account's own, carried as it arrived")
+  assert.notDeepEqual(ownEntry.packet.data[0].player.properties, bodyEntry.packet.data[0].player.properties,
+    "two entries, two skins: the puppet's never reaches the body the spectator controls (#516)")
+  assert.equal(ownEntry.packet.action.update_listed, undefined, 'the tab list gains no line for it')
+  assert.equal(view.ownSkin, true, 'the landing says the entry was written')
+  assert.equal(rig.core.metrics.skinFramesWritten, before.written + 2,
+    "both entries count as skin frames written")
+})
+
+// #618's guard, from the other side: a landing handed no skin writes no entry of its own,
+// and the account's client keeps the vanilla default. #516's bug was the puppet's skin on
+// the spectator's own body, and the only frame that could put it there is this one.
+test('#618 a landing handed no skin writes no entry of its own, and never the puppet\'s', async () => {
+  const rig = makeCore({ config: skinConfig() })
+  await landABody(rig)
+  deliverPlayerInfo(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER })
+  const before = skinFrames(rig.frontLeg).length
+
+  const view = rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'spectator-channel' })
+  const landed = skinFrames(rig.frontLeg).slice(before)
+
+  assert.equal(view.ownSkin, false, 'the landing says nothing was written for its own player')
+  assert.deepEqual(landed.map(frame => frame.packet.data[0].uuid), [PUPPET],
+    "only the body's entry: no frame names the spectator, so its own player keeps the default")
+  assert.equal(landed.some(frame => frame.packet.data[0].uuid === WATCHER), false)
 })
 
 // #218's shape, on a spectator's socket. The relayed `player_info` is ordinary state in
@@ -329,7 +406,11 @@ test('#614 a spectator that lands after the cache forgot the puppet is still tol
 // frame for one play state is a write nobody sees. The body's entry is a fact about the
 // connection a client holds, so a landing is what a channel is owed it on, and a skin
 // change is what every channel is owed again.
-test('#614 no entry names a spectator, however often the skin changes', async () => {
+//
+// #618: and nothing rewrites a spectator's own entry, because a change of the puppet's
+// property is not a change of the spectator's account. This landing was handed no skin,
+// which is the case that has no entry to rewrite.
+test('#614 no entry names a spectator whose account sent no textures, however often the puppet\'s skin changes', async () => {
   const rig = makeCore({ config: skinConfig() })
   await landABody(rig)
   deliverPlayerInfo(rig)
