@@ -164,5 +164,15 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   assert.match(landing, /bumpPickerRefusal\(reason\)/, 'and it is what counts them')
   assert.match(landing, /record\(client, 'spectateRefused', \{/, 'and what records them')
   assert.equal((landing.match(/watching: false/g) ?? []).length, 2,
-    'the two shape literals are the answer the core built and the closure, and no branch builds a third')
+    'the two shape literals are the answer the leg builds when it has no core, and the closure, and no branch builds a third')
+
+  // #435: the landing is counted after the write that ends the client's phase. Before
+  // it, a phase the leg could not end read as a landing and a refusal at once, and
+  // `finish_failed` now counts as the refusal it is. No test can make that write
+  // throw without reaching into the library's socket, so the order is the fact pinned.
+  const landingCount = landing.indexOf('metrics.spectateLandings++')
+  const landingWrite = landing.indexOf("client.write('finish_configuration'")
+  assert.ok(landingWrite > 0, 'the write that ends the phase is still in this function')
+  assert.ok(landingCount > landingWrite,
+    'the landing is counted after the phase-end write, so a write that threw is not a landing')
 })

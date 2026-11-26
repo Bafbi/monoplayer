@@ -25,8 +25,14 @@ const NAME = 'Probe'
 const BODY = 'sky'
 
 // One configuration frame a body's cache can hold, so a spectator's replay has
-// something to write. A body with none is the state the second refusal describes.
-const ONE_CONFIG_FRAME = [{ name: 'registry_data', buffer: Buffer.from('config:registry_data') }]
+// something to write, and a real one: the client decodes what the leg writes, and a
+// made-up payload lands in the gate's output as a parser error. A body with no frame
+// at all is the state the second refusal describes.
+const ONE_CONFIG_FRAME = [{
+  name: 'feature_flags',
+  buffer: mc.createSerializer({ state: 'configuration', isServer: true, version: VERSION })
+    .createPacketBuffer({ name: 'feature_flags', params: { features: ['minecraft:test'] } })
+}]
 
 async function settleUntil (read, label, timeoutMs = 10_000) {
   const started = Date.now()
@@ -40,6 +46,7 @@ async function settleUntil (read, label, timeoutMs = 10_000) {
 // closed before the leg, because a leg that closes first ends it from the far side.
 async function withWatchingClient (config, run) {
   const lines = []
+  const clientErrors = []
   const leg = createOfflineFrontLeg({
     host: '127.0.0.1',
     port: 0,
@@ -63,13 +70,26 @@ async function withWatchingClient (config, run) {
     bot = mc.createClient({
       host: '127.0.0.1', port, username: NAME, version: VERSION, auth: 'offline', keepAlive: false
     })
-    // A connection the lane closed from its side must not fail the test run as an
-    // unhandled error: every assertion here is about the record and the counter.
-    bot.on('error', () => {})
-    await settleUntil(() => leg.metrics.allowed === 1, 'the login the leg admitted')
-    return await run({ leg, lines })
+    // A connection the lane closed from its side would otherwise fail the run as an
+    // unhandled error event, which names no test. Collected instead, so a test that
+    // expects none can say so and a real one is read back rather than swallowed.
+    bot.on('error', error => clientErrors.push(String(error?.message ?? error)))
+    // The leg admits a login inside its own synchronous window, before it writes the
+    // login success that moves the client into configuration. A Spectate called in
+    // between hands the client a configuration frame it decodes as a login one, so
+    // the wait is for both facts: the admit, and the client's own phase.
+    const states = []
+    bot.on('state', next => states.push(next))
+    await settleUntil(
+      () => leg.metrics.allowed === 1 && states.includes('configuration'),
+      'the login the leg admitted in the client\'s configuration phase'
+    )
+    return await run({ leg, lines, clientErrors })
   } finally {
-    try { bot?.end('done') } catch { /* the client was already gone */ }
+    // The socket goes first: the library's own end() waits out its close timeout for
+    // an answer from a lane that has nothing left to say, and a test file is not the
+    // place to spend thirty seconds of the gate on it.
+    try { bot?.socket?.destroy() } catch { /* the client was already gone */ }
     await leg.close()
   }
 }
@@ -79,7 +99,7 @@ const refusals = lines => lines
   .map(line => line.fields)
 
 test('#435 a body whose configuration replay writes no frame is refused, recorded and counted', async () => {
-  await withWatchingClient([], async ({ leg, lines }) => {
+  await withWatchingClient([], async ({ leg, lines, clientErrors }) => {
     const answer = leg.spectate({ username: NAME, body: BODY, server: BODY })
 
     assert.equal(answer.watching, false)
@@ -94,15 +114,21 @@ test('#435 a body whose configuration replay writes no frame is refused, recorde
     assert.deepEqual(leg.metrics.pickerRefusalsByReason, { no_cached_configuration: 1 })
     // The channel was opened for a client it then could not deliver, so it is gone.
     assert.deepEqual(leg.channels, [], 'a refused spectator holds no channel')
+    // A refused Spectate is not a landing, and the two numbers are read off the
+    // same run so neither can be right while the other is wrong.
+    assert.equal(leg.metrics.spectateLandings, 0)
+    assert.deepEqual(clientErrors, [])
   })
 })
 
 test('#435 a Spectate the channel refuses is recorded and counted', async () => {
-  await withWatchingClient(ONE_CONFIG_FRAME, async ({ leg, lines }) => {
+  await withWatchingClient(ONE_CONFIG_FRAME, async ({ leg, lines, clientErrors }) => {
     // One connection holds one channel, so the second Spectate from the same
     // connection is the channel refusing it.
     const first = leg.spectate({ username: NAME, body: BODY, server: BODY })
     assert.equal(first.watching, true, 'the fixture spectator lands')
+    assert.equal(leg.metrics.spectateLandings, 1, 'a landing is counted, and counted once')
+    assert.equal(lines.filter(line => line.event === 'spectateLanded').length, 1)
 
     const second = leg.spectate({ username: NAME, body: BODY, server: BODY })
     assert.equal(second.watching, false)
@@ -113,5 +139,7 @@ test('#435 a Spectate the channel refuses is recorded and counted', async () => 
     assert.deepEqual(leg.metrics.pickerRefusalsByReason, { channel_refused: 1 })
     // The channel's own counter is a different question, and it still answers it.
     assert.equal(leg.metrics.channelRefused, 1)
+    assert.equal(leg.metrics.spectateLandings, 1, 'the refusal adds no landing')
+    assert.deepEqual(clientErrors, [])
   })
 })
