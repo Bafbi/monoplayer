@@ -4,14 +4,14 @@
 //   node src/ladder/loopback.js [--report <file>] [--verbose]
 //
 // Exit codes: 0 all assertions pass, 1 assertion/timeout failure, 2 setup
-// failure. A check whose id LOOPBACK_ASSERTION_IDS does not hold, and a check
-// that repeats an id, also exit 1: each throws where it is called. The report is
-// written in finally, even on failure.
+// failure. A finished run whose checks are not the order LOOPBACK_ASSERTION_IDS
+// declares also exits 1. The report is written in finally, even on failure.
 //
 // Assertions are the contract (docs/testing-ladder.md). LOOPBACK_ASSERTION_IDS
-// below declares every id, in the order this file runs them, and
-// docs/testing-ladder.md documents each one. A FAIL is a real finding; do not
-// weaken a check to get a green run.
+// below is the run order, and orderDrift holds the two together: the nth check
+// must name the nth id, so a list out of order with this file fails, naming the
+// position that disagrees (#623). docs/testing-ladder.md documents each id. A FAIL
+// is a real finding. Do not weaken a check to get a green run.
 //
 // A check that needs a lane of its own builds one with createLoopbackLane
 // (loopback-lane.js, #594) and adds it to `lanes`: the lane owns its client, its
@@ -59,29 +59,84 @@ const VERSION = '26.1'
 const MOVE_WINDOW_WAIT_MS = MOVE_INTERVAL_MS + 40
 const DEFAULT_REPORT = '.reports/loopback-report.json'
 
-// Every assertion this rung makes. This list is the declaration
-// `test/ladder/loopback-contract.test.js` reads: a bullet in docs/testing-ladder.md
-// with no id here fails the guard, and an id here that no check ran fails the run.
-// A check() call that moves out of this file keeps its id here, because the guard
-// reads the list and not the source (#593).
+// Every assertion this rung makes, in the order it makes them. This list is the
+// declaration `test/ladder/loopback-contract.test.js` reads: a bullet in
+// docs/testing-ladder.md with no id here fails the guard, and an id here that no
+// check reached fails the run.
+//
+// The end of the run holds this list and the file together: the nth check must name
+// the nth id, so a list that disagrees with the file fails, and the failure names the
+// edit (#623). The list is still a claim beside the calls and not their dispatch.
+// Making it the dispatch is an entries array of { id, claim, observe }, which needs
+// every assertion body out of this function, and #623 stays open for it.
+//
+// A check that moves into a helper module keeps its id here, because the guard reads
+// the list and not the source (#593).
 export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'R0', 'O1', 'O2', 'O3', 'O4', 'O5', 'O6', 'O7', 'O8', 'O9',
   'O36', 'O46', 'O27', 'O28', 'O10', 'O11', 'O29', 'O45', 'O12', 'O11b',
   'O13', 'O14', 'O67', 'O37', 'O30', 'O31', 'O47', 'O32', 'O15', 'O16',
   'O17', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'O24', 'O24b', 'O25',
   'O26', 'O38', 'O41', 'O41b', 'O39', 'O40', 'O33', 'O34', 'O42', 'O35',
-  'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O69', 'O52', 'O53', 'O55', 'O55b',
+  'O43', 'O44', 'O48', 'O49', 'O50', 'O51', 'O68', 'O52', 'O53', 'O55', 'O55b',
   'O56', 'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62', 'O70', 'O71',
   // #602: the landing's funnel, which runs between O71 and O63.
   'O72',
-  'O63', 'O64', 'O65', 'O66'
+  // #636: O69 reads the rig O63 leaves, so it runs between O63 and O64. It was
+  // declared beside O68, where #635's commit appended it, and nothing noticed
+  // until the run started checking the order (#623).
+  'O63', 'O69', 'O64', 'O65', 'O66'
 ])
 
-// The ids this list declares that a run never ran. The guard reads the list and
-// not the calls, so only the run can see a check that was deleted (#593).
-export function declaredButNotRun (declared, ran) {
-  const seen = new Set(ran)
-  return declared.filter(id => !seen.has(id))
+// #623: the list is the run order, and this is the rule that holds the run to it. The
+// run asks once, with the ids it recorded in the order it recorded them, so the
+// comparison runs after every check and a run that ends out of order still reports
+// every assertion it made.
+//
+// Four answers, and null is the good one. An id the list declares and no check made
+// is a deleted check, or one never written. An id a check made and the list does not
+// declare is a check outside the contract. An id made twice is the one sequence
+// broken. With both sides holding the same ids, the first position whose id is not
+// the one the run recorded there is the order: a check moved in the file, or an id
+// moved in the list.
+//
+// A list that declares an id twice is not here. The sets and the order agree at both
+// sites, so only a reader of the declaration sees the repeat, and
+// test/ladder/loopback-contract.test.js is that reader.
+export function orderDrift (ids, ran) {
+  const listed = new Set(ids)
+  const made = new Set(ran)
+  const unrun = ids.filter(id => !made.has(id))
+  if (unrun.length > 0) return { kind: 'unrun', ids: unrun }
+  const undeclared = ran.filter(id => !listed.has(id))
+  if (undeclared.length > 0) return { kind: 'undeclared', ids: undeclared }
+  if (ran.length > ids.length) {
+    const counted = new Map()
+    for (const id of ran) counted.set(id, (counted.get(id) ?? 0) + 1)
+    return { kind: 'repeated', ids: [...counted.keys()].filter(id => counted.get(id) > 1) }
+  }
+  const at = ids.findIndex((id, index) => ran[index] !== id)
+  return at === -1 ? null : { kind: 'order', at, declared: ids[at], ran: ran[at] }
+}
+
+// The edit each answer asks for, one repair each, because a check with no id and an
+// id with no check are fixed on opposite sides of the contract.
+function driftMessage ({ kind, ids, at, declared, ran }) {
+  if (kind === 'unrun') {
+    return `LOOPBACK_ASSERTION_IDS declares ${ids.join(', ')}, which no check made: add the check, or remove the id`
+  }
+  if (kind === 'undeclared') {
+    const one = ids.length === 1
+    return `the run made ${ids.join(', ')}, which LOOPBACK_ASSERTION_IDS does not declare: ` +
+      (one
+        ? `add ${ids[0]} to the list at the position the run makes the check, or remove the check`
+        : 'add them to the list at the positions the run makes the checks, or remove the checks')
+  }
+  if (kind === 'repeated') {
+    return `${ids.join(', ')} ran more than once, and the ids are one sequence: each names one check`
+  }
+  return `position ${at + 1} disagrees: the run reached ${ran} and LOOPBACK_ASSERTION_IDS declares ${declared}. ` +
+    `The list is the run order, so move ${declared} in the list to the position the run reaches it, or move the check that names ${ran}`
 }
 
 // A port nothing listens on: the cheapest dial a target refuses. The socket is
@@ -102,11 +157,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   const reportPath = flag(argv, '--report') ?? DEFAULT_REPORT
   const startedAt = Date.now()
 
+  // Every check, in the order it ran. The end of the run holds this against
+  // LOOPBACK_ASSERTION_IDS, which is the declaration's order (#623).
   const assertions = []
-  // Every id the list declares, and every id a check ran, so the end of the run
-  // can name the one that was declared and never ran (#593).
-  const declaredIds = new Set(LOOPBACK_ASSERTION_IDS)
-  const ranIds = []
   const logs = []
   // Bounded wait for a check that must report what arrived instead of throwing.
   const settleUntil = async (pred, ms) => {
@@ -298,15 +351,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // stream of the rig it belongs to (#223): two rigs may share a tag, and none
   // reads another's lines.
   function check (id, name, ok, info = null) {
-    // The list is the declaration, so a check cannot name an id it does not
-    // hold: that is the half of the contract a reader of the list cannot see.
-    if (!declaredIds.has(id)) {
-      throw new Error(`assertion ${id} is not in LOOPBACK_ASSERTION_IDS: add it to the list, and document it`)
-    }
-    if (ranIds.includes(id)) {
-      throw new Error(`assertion ${id} ran twice: the ids are one sequence, and each names one check`)
-    }
-    ranIds.push(id)
     const record = { id, name, ok: ok === true, detail: info }
     assertions.push(record)
     if (!record.ok) failed = true
@@ -5650,18 +5694,16 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (failed && exitCode === 0) exitCode = 1
     if (runError && exitCode === 0) exitCode = 1
 
-    // A run that failed before its checks started has nothing to say about them.
-    // A run that finished must have run every id the list declares, or a deleted
-    // check would leave its bullet and its id behind and nothing would notice.
+    // A run that threw has nothing to say about its checks. A run that finished must
+    // have made every check the list declares, in the order it declares them. Without
+    // this, a deleted check would leave its bullet and its id behind and nothing
+    // would notice (#623).
     if (!runError) {
-      const unrun = declaredButNotRun(LOOPBACK_ASSERTION_IDS, ranIds)
-      if (unrun.length > 0) {
+      const drift = orderDrift(LOOPBACK_ASSERTION_IDS, assertions.map(entry => entry.id))
+      if (drift !== null) {
         failed = true
         if (exitCode === 0) exitCode = 1
-        process.stderr.write(
-          `loopback: LOOPBACK_ASSERTION_IDS declares ${unrun.join(', ')}, which no check ran: ` +
-          'add the check, or remove the id\n'
-        )
+        process.stderr.write(`loopback: ${driftMessage(drift)}\n`)
       }
     }
 
