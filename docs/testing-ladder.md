@@ -1300,7 +1300,7 @@ The report is metadata only: no frame bytes, no `.secrets` paths, no tokens.
 
 ### Online rung assertion contract
 
-`mise run online` returns N1-N13. `evaluateOnlineAssertions` in
+`mise run online` returns N1-N14. `evaluateOnlineAssertions` in
 `src/ladder/online.js` is the source; the id list and the claim behind each id
 live there.
 - `N13` the state the attaching client decoded matches the state the attach
@@ -1310,6 +1310,16 @@ live there.
   both sides. N13 fails when those K frames never arrive (30 s bound), when the
   decoded names differ from the replay's names in order, or when any compared
   domain differs. The loopback's O27 checks the same cut on a real protocol bot.
+- `N14` the client information the bot reported reached the backend leg at the
+  cap. The bot sends its own Client Information in the configuration phase. The
+  packet the backend leg is handed at attach carries the reported `locale`,
+  `skinParts`, and `mainHand`. Its view distance is the one the backend's own
+  login advertised, never the bot's render distance. The bot's values differ from
+  the protocol library's defaults on purpose: a frame carrying the defaults is the
+  rung with the call-in declined, and N14 fails on it. It also fails when the core
+  recorded no client information for the join, or when the client's own render
+  distance crosses. O26 checks the same merge on a fake backend, and what the
+  server then makes of a join is `mise run observer:run`'s question.
 
 ## The driver parity lane
 

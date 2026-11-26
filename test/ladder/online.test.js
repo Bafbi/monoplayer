@@ -1,5 +1,5 @@
 // Socket-free tests for the online rung's pure pieces: the bot client-option
-// builder, account resolution, and the N1-N12 assertion contract.
+// builder, account resolution, and the N1-N14 assertion contract.
 //
 // No sockets, no auth, no .secrets read. Fixture accounts live in a temp tree.
 import { test } from 'node:test'
@@ -13,6 +13,7 @@ import { tempRoot } from '../support/temp.js'
 import { buildClientOptions } from '../../src/ladder/bot.js'
 import {
   ONLINE_ASSERTION_IDS,
+  RUNG_CLIENT_SETTINGS,
   buildOnlineBotOptions,
   evaluateOnlineAssertions,
   resolveOnlineAccounts,
@@ -37,6 +38,11 @@ function tempAccounts () {
 
   return { dir, write }
 }
+
+// The gate Paper's view distance, as the backend's play login advertises it. A
+// number the bot never asks for, so a merge that let the client's own render
+// distance cross is a difference on this evidence.
+const BACKEND_CAP = 10
 
 function allPassEvidence () {
   return {
@@ -97,7 +103,16 @@ function allPassEvidence () {
         chunks: { ok: true }
       }
     },
-    custody: { puppetLockReleased: true }
+    custody: { puppetLockReleased: true },
+    // #610: the core's record of the join's client information, and the two
+    // settings packets the backend leg was handed. Edge and Gate fill these with
+    // the behaviour each case is about.
+    clientInformation: {
+      reported: { ...RUNG_CLIENT_SETTINGS, requestedViewDistance: RUNG_CLIENT_SETTINGS.viewDistance },
+      loginSettings: { locale: 'en_us', viewDistance: BACKEND_CAP, skinParts: 127, mainHand: 1 },
+      attachSettings: { ...RUNG_CLIENT_SETTINGS, viewDistance: BACKEND_CAP },
+      cap: BACKEND_CAP
+    }
   }
 }
 
@@ -156,6 +171,20 @@ test('an empty MONOPLAYER_VERSION is unset, never a version of its own', () => {
   assert.equal(rungBotVersion({ MONOPLAYER_VERSION: '' }), '26.2')
   assert.equal(rungBotVersion({}), '26.2')
   assert.equal(rungBotVersion({ MONOPLAYER_VERSION: '26.1' }), '26.1')
+})
+
+// #610: the bot the rung joins with carries the client information N14 compares
+// against. Without it the frames on both sides are the library's defaults, and
+// the assertion cannot tell a wired join from a declined one.
+test('#610 the rung builds its bot with its own client information', () => {
+  const options = buildRungBotOptions()
+  assert.deepEqual(options.clientSettings, RUNG_CLIENT_SETTINGS,
+    'the rung passes the constant N14 reads, so a test and the rung cannot disagree')
+  for (const [field, dflt] of [['locale', 'en_us'], ['viewDistance', 10], ['skinParts', 127], ['mainHand', 1]]) {
+    assert.notEqual(RUNG_CLIENT_SETTINGS[field], dflt,
+      'the rung bot\'s ' + field + ' is not the protocol library default: ' + dflt +
+      ', or N14 would pass with the client-information call-in declined')
+  }
 })
 
 test('a bot option set carries the version it was given', () => {
@@ -279,7 +308,7 @@ test('a clean run passes N1-N10 and N12 and skips N11 honestly', () => {
   const assertions = evaluateOnlineAssertions(allPassEvidence())
   const byId = Object.fromEntries(assertions.map(assertion => [assertion.id, assertion]))
 
-  for (const id of ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N12', 'N13']) {
+  for (const id of ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10', 'N12', 'N13', 'N14']) {
     assert.equal(byId[id].status, 'pass', `${id}: ${JSON.stringify(byId[id].detail)}`)
     assert.equal(byId[id].ok, true)
   }
@@ -289,7 +318,7 @@ test('a clean run passes N1-N10 and N12 and skips N11 honestly', () => {
   const summary = summarizeAssertions(assertions)
   assert.deepEqual(
     { pass: summary.pass, fail: summary.fail, not_observed: summary.not_observed, total: summary.total },
-    { pass: 12, fail: 0, not_observed: 1, total: 13 }
+    { pass: 13, fail: 0, not_observed: 1, total: 14 }
   )
 })
 
@@ -313,6 +342,53 @@ test('N11 passes only when a real denial was observed', () => {
   evidence.denial = { observed: true, denied: 1, playFrames: 2, errors: 0 }
   const failed = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N11')
   assert.equal(failed.status, 'fail')
+})
+
+// #610: what the backend saw for this join, not what the core meant to send.
+// The attach frame is the backend leg's own write, so the fields are the ones a
+// real Paper received; the reported side is the core's clientInformation record.
+test('#610 N14 passes when the bot\'s own fields reach the backend at the cap', () => {
+  const n14 = evaluateOnlineAssertions(allPassEvidence()).find(assertion => assertion.id === 'N14')
+  assert.equal(n14.status, 'pass', JSON.stringify(n14.detail))
+  assert.equal(n14.detail.attachSettings.locale, 'fr_fr')
+  assert.equal(n14.detail.attachSettings.viewDistance, BACKEND_CAP)
+})
+
+test('#610 N14 fails when the attach frame carries the defaults, which is the cut wiring', () => {
+  const evidence = allPassEvidence()
+  // The core recorded the bot's fields, and the leg was handed the defaults the
+  // merge produces with no human: exactly what a rung that declines the
+  // client-information call-in sends.
+  evidence.clientInformation.attachSettings = { locale: 'en_us', viewDistance: BACKEND_CAP, skinParts: 127, mainHand: 1 }
+
+  const n14 = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N14')
+  assert.equal(n14.status, 'fail')
+  assert.equal(n14.detail.reported.locale, 'fr_fr')
+  assert.equal(n14.detail.attachSettings.locale, 'en_us')
+})
+
+test('#610 N14 fails when the client\'s own view distance crosses instead of the cap', () => {
+  const evidence = allPassEvidence()
+  evidence.clientInformation.attachSettings = { ...RUNG_CLIENT_SETTINGS, viewDistance: RUNG_CLIENT_SETTINGS.viewDistance }
+
+  const n14 = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N14')
+  assert.equal(n14.status, 'fail')
+  assert.equal(n14.detail.attachSettings.viewDistance, 2)
+  assert.equal(n14.detail.cap, BACKEND_CAP)
+})
+
+test('#610 N14 fails closed when the core recorded no client information', () => {
+  for (const empty of [
+    { reported: null, loginSettings: null, attachSettings: null, cap: null },
+    { reported: null, loginSettings: { viewDistance: BACKEND_CAP }, attachSettings: { ...RUNG_CLIENT_SETTINGS, viewDistance: BACKEND_CAP }, cap: BACKEND_CAP },
+    { reported: { ...RUNG_CLIENT_SETTINGS, requestedViewDistance: 2 }, loginSettings: null, attachSettings: null, cap: BACKEND_CAP }
+  ]) {
+    const evidence = allPassEvidence()
+    evidence.clientInformation = empty
+
+    const n14 = evaluateOnlineAssertions(evidence).find(assertion => assertion.id === 'N14')
+    assert.equal(n14.status, 'fail', JSON.stringify(empty))
+  }
 })
 
 test('a broken run fails the matching assertions', () => {
