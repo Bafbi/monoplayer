@@ -2,6 +2,7 @@
 // Used by test/service/monoplayer.test.js. The real legs (minecraft-protocol)
 // implement the same interfaces — see docs/product-core.md — and are built in G1/M4.
 
+import { CHANNEL_ROLES } from '../core/channels.js'
 import { createClaims } from '../core/claims.js'
 
 // Backend leg adapter (fake): implements the interface createMonoplayer wires
@@ -99,10 +100,15 @@ export function createFakeFrontLeg () {
   // added there reaches this double and the real board together. The board's two rules
   // come with it: a test cannot plant a claim production refused.
   const claims = createClaims()
+  // #636: the channels this leg holds, as the real leg's registry reports them. The fake
+  // opens none of its own — a test lands a channel through the core — so a case that needs
+  // to see the driver's channel says so with `channelRecord`.
+  const channelRecords = []
   let loginStartHandler = null
   let serverboundHandler = null
   let detachHandler = null
   let clientSettingsHandler = null
+  let spectatorPoseHandler = null
   let configuringHandler = null
   let reconfiguredHandler = null
 
@@ -119,6 +125,9 @@ export function createFakeFrontLeg () {
     setServerboundHandler (fn) { serverboundHandler = fn },
     setDetachHandler (fn) { detachHandler = fn },
     setClientSettingsHandler (fn) { clientSettingsHandler = fn },
+    // #636: where a spectator's own client says it is. The fake records the registration;
+    // a test drives the core's method instead of a socket.
+    setSpectatorPose (fn) { spectatorPoseHandler = fn },
     setConfiguringHandler (fn) { configuringHandler = fn },
     setReconfiguredHandler (fn) { reconfiguredHandler = fn },
     // #22: the core asks the client to re-enter configuration on the same
@@ -147,6 +156,20 @@ export function createFakeFrontLeg () {
     // board answers with a copy, as the real leg's `claimOn` does, so a reader cannot
     // write into the claim it read.
     claimOn (body) { return claims.claimOn(body) },
+    // #636: the channels this leg holds. The real leg publishes its registry; the fake has
+    // no sockets, so a test names the channels it wants the core to see.
+    get channels () { return channelRecords.map(record => ({ ...record })) },
+    channelRecord ({ id, role = CHANNEL_ROLES.DRIVER, body = null }) {
+      const record = { id, role, body, name: null, at: 0, delivered: null, settings: null, settingsAt: null }
+      channelRecords.push(record)
+      return { ...record }
+    },
+    forgetChannelRecord (id) {
+      const index = channelRecords.findIndex(record => record.id === id)
+      if (index === -1) return null
+      const [removed] = channelRecords.splice(index, 1)
+      return { ...removed }
+    },
     setClient ({ username, uuid }) {
       client.username = username
       client.uuid = uuid
@@ -184,6 +207,12 @@ export function createFakeFrontLeg () {
         ended.push(record)
       }
       return decision
+    },
+    // #636: simulate a spectator's own movement frame, which the real leg reads and then
+    // drops. The call-in is what the core is told; the frame reaches no pipeline.
+    spectatorMoved ({ channel, name = 'position_look', data = {} } = {}) {
+      if (!spectatorPoseHandler) throw new Error('no spectator pose handler')
+      return spectatorPoseHandler({ channel, name, data })
     },
     // Simulate a serverbound frame from the attached client, in the phase it
     // was sent in: a configuration answer is not a play frame (#16).

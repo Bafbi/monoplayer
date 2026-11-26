@@ -38,6 +38,10 @@
 //                                                 //   -> { watching, reason }
 //     setSpectatorAttach(fn)                      // optional: fn({ name, uuid, channel })
 //                                                 //   -> { watching, frames, replayed }
+//     setSpectatorPose(fn)                        // optional: fn({ channel, name, data })
+//                                                 //   a spectator's own movement frame,
+//                                                 //   which never reaches the pipeline (#636)
+//     setSpectatorLeft(fn)                        // optional: fn({ channel, name })
 //     write(name, packet, { synth, channel })     // clientbound, packet level
 //     writeRaw(buffer, meta, { channel })         // clientbound, frame level
 //     end(reason)                                 // kick/deny every channel
@@ -86,7 +90,8 @@ import { createFrontIdentity } from '../core/identity.js'
 import { synthAttach } from '../core/join-synth.js'
 import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
-import { SKIN_FRAME, carriesTextures, skinEntryOf, skinPlayerInfoPacket } from '../core/skin.js'
+import { SKIN_FRAME, carriesTextures, playerInfoEntry, skinEntryOf, skinPlayerInfoPacket } from '../core/skin.js'
+import { CHANNEL_ROLES } from '../core/channels.js'
 import { createVirtualPlayers, playerEntityTypeFor } from '../core/virtual-players.js'
 import { spectatorModeFrames } from '../core/spectator-mode.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
@@ -529,6 +534,7 @@ export function createMonoplayer ({
     // #635: the entities the proxy wrote for the puppet, per frame: a spawn, a move, and
     // the despawn that ends a life. A frame the leg could not deliver is not counted, so
     // each of these is a frame a client was told.
+    virtualPlayersAnnounced: 0,
     virtualPlayersSpawned: 0,
     virtualPlayersMoved: 0,
     virtualPlayersDespawned: 0,
@@ -642,10 +648,12 @@ export function createMonoplayer ({
   // would take one spectator away for it, and the relay would stop under a spectator
   // that stayed.
   //
-  // The value is the player that channel is (its name and UUID) and whether it holds
-  // the entry that names it (#516). Both fields are the core's own copy: the leg's
-  // channel record (src/core/channels.js) holds what the leg answers from its socket,
-  // and the core is told a spectator's identity once, when it lands.
+  // The value is the player that channel is (its name and UUID) and where its client is.
+  // All three are the core's own copy: the leg's channel record (src/core/channels.js)
+  // holds what the leg answers from its socket, and the core is told a spectator's identity
+  // once, when it lands. #636: the pose joins them, seeded from the body's own pose at the
+  // landing, because the proxy is what put that client there, and moved by the frames the
+  // front hands over after it (#269 drops the frame and keeps the position).
   const spectators = new Map()
   let brandAnnounced = false // #17: one brand per backend connection
   let backendViewDistance = null // #18: the backend's advertised cap, this connection
@@ -2148,30 +2156,120 @@ export function createMonoplayer ({
   // leg could not deliver is not counted, because a number here is frames that reached a
   // socket.
   //
-  // The roster is the spectators. The driver's channel speaks for the puppet itself, and
-  // the core holds no driver channel id (#525), so it is not offered and the module's own
-  // rule — a channel is never told about the player it speaks for — has nothing to refuse
-  // today.
+  // #636: the roster is every channel of the body, and the players are two sources.
+  //
+  // The driver's channel speaks for the puppet itself, so the module's own rule — a channel
+  // is never told about the player it speaks for — is what keeps the driver from being handed
+  // a second copy of the body it already controls. The core holds no driver channel id
+  // (#525), so it is read from the front's registry, the one place a channel id exists: the
+  // renderer writes one frame per channel, which is what lets a report name who was told
+  // what, and a write that names nobody cannot say that.
+  //
+  // The second position source is a spectator's own client: #269 drops its frames at the
+  // front, and the front hands this module the pose out of them. A spectator that has not
+  // moved keeps the pose the proxy put it at.
   const virtualPlayers = createVirtualPlayers({
     world: {
       players () {
         // Nothing to spawn until a play state is being delivered, and a player the config
         // resolved no UUID for is a player the proxy cannot name.
         if (!canDeliverPlay()) return []
+        const players = []
         const uuid = cfg.puppet.uuid ?? null
-        if (typeof uuid !== 'string' || uuid === '') return []
-        return [{ uuid, name: cfg.puppet.username ?? null, pose: session.currentPose }]
+        if (typeof uuid === 'string' && uuid !== '') {
+          // `entry: false` is this caller's own mark, read by `playerEntry` below and by
+          // nothing else: #614's skin path announces the puppet, and one entry written twice
+          // for one UUID is a race the client resolves by keeping whichever came first.
+          players.push({ uuid, name: cfg.puppet.username ?? null, pose: session.currentPose, entry: false })
+        }
+        for (const spectator of spectators.values()) {
+          if (typeof spectator.uuid !== 'string' || spectator.uuid === '') continue
+          if (spectator.pose === null || spectator.pose === undefined) continue
+          players.push({ uuid: spectator.uuid, name: spectator.name ?? null, pose: spectator.pose })
+        }
+        return players
       }
     },
-    channels: () => [...spectators].map(([channel, spectator]) => ({ id: channel, uuid: spectator.uuid ?? null })),
+    channels: () => channelRoster(),
+    // #636: the entry a client needs before it places a body. The puppet's is #614's, and
+    // this answers null for it. A spectator's carries a name and no property: the proxy holds
+    // no skin for a spectator and invents none (docs/transparency.md).
+    entryFor: playerEntry,
     // A player entity type belongs to a protocol version, and a lane pinned to one must not
     // draw the other's body. The config's version is the pin every leg reads.
     entityType: playerEntityTypeFor(cfg.version)
   })
 
+  // Every channel of the body, with the player it speaks for: the driver's is the puppet,
+  // and a spectator's is itself. Read at every sweep, so a channel that opened or closed is
+  // a channel this answer already knows about.
+  function channelRoster () {
+    const roster = []
+    const uuid = cfg.puppet.uuid ?? null
+    const driver = driverChannelId()
+    if (driver !== null && typeof uuid === 'string' && uuid !== '') roster.push({ id: driver, uuid })
+    for (const [id, spectator] of spectators) roster.push({ id, uuid: spectator.uuid ?? null })
+    return roster
+  }
+
+  // The one fact about the driver the core cannot otherwise name. A channel is the front
+  // leg's record (src/core/channels.js) and the core holds none of its own (#525), so this
+  // reads the registry the leg publishes. A leg without one reports no driver, and the
+  // renderer then tells the spectators about each other and nobody about the driver.
+  function driverChannelId () {
+    const held = frontLeg?.channels
+    if (!Array.isArray(held)) return null
+    for (const channel of held) {
+      if (channel?.role !== CHANNEL_ROLES.DRIVER) continue
+      return typeof channel.id === 'string' && channel.id !== '' ? channel.id : null
+    }
+    return null
+  }
+
+  // The announcement of one virtual player, or null for the player this session's own skin
+  // path writes. Neither failure throws: the body is still owed to every other player, and a
+  // throw here would end the sweep for all of them. Both write one line, because a client that
+  // holds no entry drops the body that follows it and no later frame repairs that.
+  function playerEntry (player = {}) {
+    if (player.entry === false) return null
+    const uuid = player.uuid
+    const name = player.name
+    if (typeof uuid !== 'string' || uuid === '' || typeof name !== 'string' || name === '') {
+      log('virtualPlayerAnnounceRefused', { reason: 'no_identity', uuid: uuid ?? null, name: name ?? null })
+      return null
+    }
+    try {
+      return { name: SKIN_FRAME, packet: playerInfoEntry({ uuid, name }) }
+    } catch (error) {
+      metrics.virtualPlayersRefused++
+      log('virtualPlayerAnnounceRefused', {
+        reason: 'packet',
+        uuid,
+        name,
+        error: String(error?.message ?? error).slice(0, 200)
+      })
+      return null
+    }
+  }
+
+  // #636: a spectator's own client moved. The frame is dropped at the front like every
+  // spectator frame (#269); this is the pose out of it, and the body's other channels are
+  // drawn from that. One sweep per frame, so the renderer's own window decides what is
+  // written: a burst of twenty poses a second is at most one move per channel per tick.
+  function spectatorPose ({ channel = null, name = null, data = null } = {}) {
+    if (typeof channel !== 'string' || channel === '') return { recorded: false, reason: 'no_channel' }
+    const spectator = spectators.get(channel)
+    if (spectator === undefined) return { recorded: false, reason: 'not_a_spectator' }
+    const pose = capturePose(spectator.pose ?? session.currentPose, name, data ?? {})
+    spectators.set(channel, { ...spectator, pose })
+    if (canDeliverPlay()) writeVirtualPlayers({ reason: 'spectator_movement' })
+    return { recorded: true, pose }
+  }
+
   // The counter each kind of virtual-player frame is counted in. One table, so a frame kind
   // the module adds is a row here rather than a fourth branch in the loop below.
   const VIRTUAL_PLAYER_COUNTERS = Object.freeze({
+    entry: 'virtualPlayersAnnounced',
     spawn: 'virtualPlayersSpawned',
     move: 'virtualPlayersMoved',
     despawn: 'virtualPlayersDespawned'
@@ -2206,8 +2304,10 @@ export function createMonoplayer ({
         if (delivered === false) continue
         written++
         metrics[VIRTUAL_PLAYER_COUNTERS[frame.kind]]++
-        // One line per spawn and per despawn: a move is the one frame here that arrives at
-        // the body's own rate, and a record per move is a record per frame.
+        // One line per entry, per spawn and per despawn: a move is the one frame here that
+        // arrives at the body's own rate, and a record per move is a record per frame. The
+        // line names the channel, which is the half of the report a counter cannot carry
+        // (no metric names a channel, docs/telemetry.md).
         if (frame.kind === 'move') continue
         log('virtualPlayerWritten', { reason, channel: update.channel, frame: frame.name })
       }
@@ -2763,7 +2863,10 @@ export function createMonoplayer ({
     // #614: the channel is a channel of the body from here, which is what the held
     // packs are offered on and what the relay counts while it watches. Recorded before
     // the entry below, so this pass reaches the body it names.
-    spectators.set(channel, { name, uuid })
+    // #636: the pose starts where the proxy put that client. The replay's synthesized
+    // position is the body's own pose, so a spectator that has not moved is standing in
+    // the body, and a spectator nobody can place would be drawn nowhere at all.
+    spectators.set(channel, { name, uuid, pose: session.currentPose })
     // #614: the body's entry, naming the puppet, on every channel of the body. Written
     // before the mode frames below, which are the last word on this socket (#259).
     sendPuppetSkin({ reason: 'spectate' })
@@ -2808,6 +2911,10 @@ export function createMonoplayer ({
   // was never the spectator's.
   function spectatorLeft ({ channel = null, name = null } = {}) {
     if (typeof channel === 'string') spectators.delete(channel)
+    // #636: every channel still open was told about that player, so each is owed the one
+    // destroy that ends it. Written even when that was the last spectator: the driver may
+    // still hold the body, and it is the client that has to stop drawing the one who left.
+    if (canDeliverPlay()) writeVirtualPlayers({ reason: 'spectate_left' })
     log('spectateLeft', { channel, name, spectators: spectators.size, state: session.state })
     emit('spectate_left', { channel, name, spectators: spectators.size })
     return { watching: spectators.size }
@@ -3656,6 +3763,7 @@ export function createMonoplayer ({
     // channel that asked. #259 adds the third: a spectator's channel ended.
     spectateBody,
     spectateView,
+    spectatorPose,
     spectatorLeft,
     // #22: the front leg reports the client answered the reconfiguration's
     // finish frame and is back in play on its own connection.

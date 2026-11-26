@@ -97,6 +97,7 @@ import { bumpBounded } from '../core/bounded-counter.js'
 import { CLAIM_REFUSAL, createClaims } from '../core/claims.js'
 import { CHANNEL_ROLES, channelIdentity, createChannels, stampIdentity } from '../core/channels.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
+import { isPoseFrame } from '../core/relay.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
   PICK_VERBS,
@@ -631,6 +632,9 @@ function createFrontLeg ({
   // Spectate verb is refused in words.
   let spectateBodyHandler = null
   let spectatorAttachHandler = null
+  // #636: where a spectator's own client says it is. The core draws it for the body's
+  // other channels, and this leg is the only place the frame exists.
+  let spectatorPoseHandler = null
   // #259: the body this lane serves, and whether it has one up, so a row can say
   // `unclaimed` rather than `down` about a body a spectator could join. Absent is a
   // leg with no core, and every row then reads what the list says.
@@ -1963,7 +1967,25 @@ function createFrontLeg ({
       const channel = channelFor(client)
       if (channel !== null && channel.role === CHANNEL_ROLES.SPECTATOR) {
         metrics.spectatorFramesDropped++
-        record(client, 'spectatorFrameDropped', { username: client.username ?? null, state: meta.state, name: meta.name })
+        // #636: where its client is, read before the frame goes nowhere. A spectator is not
+        // a player the server knows, so nothing it sends can be relayed — and the proxy draws
+        // it for the body's other channels, which is why the position is the one thing this
+        // leg keeps. The frame itself still reaches no core pipeline: the call-in carries a
+        // pose and nothing else, and a pose is never written to the backend.
+        const same = decoded.state === meta.state && decoded.byName[meta.name] !== undefined
+        const moved = isPoseFrame(meta.name) && same
+        if (moved) {
+          spectatorPoseHandler?.({ channel: channel.id, name: meta.name, data: decoded.byName[meta.name] })
+          // Consumed, like the driver's own frames below: a decode left standing is one a
+          // later frame of the same name can be confused for.
+          decoded.byName[meta.name] = undefined
+        }
+        record(client, 'spectatorFrameDropped', {
+          username: client.username ?? null,
+          state: meta.state,
+          name: meta.name,
+          moved
+        })
         return
       }
       // #16: a configuration-phase frame reaches the core as well. The human's
@@ -2319,6 +2341,7 @@ function createFrontLeg ({
     // waiting for an answer nobody sends.
     setSpectateBody (fn) { spectateBodyHandler = typeof fn === 'function' ? fn : null },
     setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
+    setSpectatorPose (fn) { spectatorPoseHandler = typeof fn === 'function' ? fn : null },
     // #259: the body this lane serves and whether it is up, for the picker's rows.
     setBodyServed (fn) { bodyServedHandler = typeof fn === 'function' ? fn : null },
     // #261: the Disconnect verb's answer. The core ends the session, and a lane

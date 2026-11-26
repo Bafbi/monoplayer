@@ -194,3 +194,140 @@ test('#635 a respawn voids the client\'s entities, so the body is destroyed and 
   assert.equal(rig.core.metrics.virtualPlayersDespawned, 1)
   assert.equal(rig.core.metrics.virtualPlayersSpawned, 2)
 })
+
+// --- #636: the channels see each other ---
+//
+// The owner's ask: "making the claim client be able to see the spectator in a transparent
+// way would be nice and also spectator between themself". The seam is the same rig, and
+// what a socket hides is the whole point of the case: which channel was told what, in what
+// order, and which channel was told nothing.
+const DRIVER_CHANNEL = 'holder-driver'
+// The human's own account. The driver's channel speaks for the puppet all the same, which
+// is the rule that keeps the body's own client from being handed a second copy of itself.
+const HUMAN = 'aaaabbbb-cccc-dddd-eeee-ffff00001111'
+const WATCHER_B = '99999999-8888-7777-6666-555555555555'
+const CHANNEL_B = 'spectator-channel-b'
+
+const framesOn = (frontLeg, channel) => frontLeg.frames().filter(frame => frame.channel === channel)
+const namesOn = (frontLeg, channel) => framesOn(frontLeg, channel).map(frame => frame.name)
+
+// One body, a driver, and the driver's channel in the front's registry, which is where a
+// channel id exists.
+async function driverOnABody (rig) {
+  rig.frontLeg.channelRecord({ id: DRIVER_CHANNEL, role: 'driver' })
+  await landABody(rig)
+  rig.core.attachPlayer({ name: 'Pilot', uuid: HUMAN })
+  return rig
+}
+
+test('#636 the driver sees who is watching: an entry, then a body, at the position that client sent', async () => {
+  const rig = await driverOnABody(makeCore({ config: config() }))
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
+
+  const told = framesOn(rig.frontLeg, DRIVER_CHANNEL)
+  const entry = told.findIndex(frame => frame.name === 'player_info' && frame.packet.data[0].uuid === WATCHER)
+  const body = told.findIndex(frame => frame.name === 'spawn_entity' && frame.packet.objectUUID === WATCHER)
+  assert.ok(entry !== -1, 'the driver is told who is watching, or its client drops the body that follows')
+  assert.ok(body !== -1, 'and is given a body for that UUID')
+  assert.ok(entry < body, 'the entry comes first: a spawn before it is a body the client throws away')
+  const spawn = told[body].packet
+  assert.ok(spawn.entityId >= 1_000_000_000, 'the id is the proxy\'s own, not one a backend hands out')
+
+  // The driver's own world keeps exactly itself: the puppet\'s body is the body it controls.
+  assert.equal(told.filter(frame => frame.name === 'spawn_entity' && frame.packet.objectUUID === PUPPET).length, 0,
+    'no second copy of the body the driver controls')
+
+  // The spectator\'s client moves, which is the second position source. Outside the
+  // coalescing window the spawn opened, so one frame is owed.
+  rig.clock.tick(50)
+  const sent = { x: 9.5, y: 10.5, z: 11.5, yaw: 90, pitch: 0 }
+  rig.frontLeg.spectatorMoved({ channel: CHANNEL, name: 'position_look', data: sent })
+  const moves = framesOn(rig.frontLeg, DRIVER_CHANNEL).filter(frame => frame.name === 'entity_teleport')
+  assert.equal(moves.length, 1, 'one move frame for the pose that arrived')
+  assert.deepEqual([moves[0].packet.x, moves[0].packet.y, moves[0].packet.z], [sent.x, sent.y, sent.z])
+  assert.equal(moves[0].packet.entityId, spawn.entityId, 'for the body the spawn gave it')
+  // The counters are frames, per channel, because that is what a client was told: one body
+  // for the spectator's view of the puppet and one for the driver's view of the spectator,
+  // one announcement each, and the move on the one channel that was not the mover's own.
+  assert.equal(rig.core.metrics.virtualPlayersMoved, 1)
+  assert.equal(rig.core.metrics.virtualPlayersSpawned, 2)
+  assert.equal(rig.core.metrics.virtualPlayersAnnounced, 1, 'one announcement, for the one player #614 does not name')
+  assert.equal(rig.core.metrics.virtualPlayersDespawned, 0)
+})
+
+test('#636 two spectators see each other, and neither is told about itself', async () => {
+  const rig = await driverOnABody(makeCore({ config: config() }))
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
+  rig.frontLeg.channelRecord({ id: CHANNEL_B, role: 'spectator' })
+  rig.core.spectateView({ name: 'Second', uuid: WATCHER_B, channel: CHANNEL_B })
+
+  // Each spectator\'s socket carries the other player\'s entry and body.
+  const entriesOn = channel => framesOn(rig.frontLeg, channel)
+    .filter(frame => frame.name === 'player_info').map(frame => frame.packet.data[0].uuid)
+  const bodiesOn = channel => framesOn(rig.frontLeg, channel)
+    .filter(frame => frame.name === 'spawn_entity').map(frame => frame.packet.objectUUID)
+
+  assert.ok(entriesOn(CHANNEL).includes(WATCHER_B), 'the first spectator is told about the second')
+  assert.ok(bodiesOn(CHANNEL).includes(WATCHER_B))
+  assert.ok(entriesOn(CHANNEL_B).includes(WATCHER), 'and the second about the first')
+  assert.ok(bodiesOn(CHANNEL_B).includes(WATCHER))
+  assert.ok(!entriesOn(CHANNEL).includes(WATCHER), 'nobody is told about themselves')
+  assert.ok(!bodiesOn(CHANNEL).includes(WATCHER))
+  assert.ok(!entriesOn(CHANNEL_B).includes(WATCHER_B))
+  assert.ok(!bodiesOn(CHANNEL_B).includes(WATCHER_B))
+  // The driver sees both, and still not itself.
+  const driverBodies = bodiesOn(DRIVER_CHANNEL)
+  assert.deepEqual(driverBodies.sort(), [WATCHER, WATCHER_B].sort())
+  assert.ok(!driverBodies.includes(PUPPET))
+
+  // One spectator moving moves the other one\'s copy of it, and not the mover\'s own.
+  rig.clock.tick(50)
+  rig.frontLeg.spectatorMoved({ channel: CHANNEL, name: 'position', data: { x: 4, y: 70, z: 4 } })
+  assert.equal(framesOn(rig.frontLeg, CHANNEL_B).filter(frame => frame.name === 'entity_teleport').length, 1)
+  assert.equal(framesOn(rig.frontLeg, CHANNEL).filter(frame => frame.name === 'entity_teleport').length, 0)
+})
+
+test('#636 a spectator that leaves is destroyed on the channels that were shown it', async () => {
+  const rig = await driverOnABody(makeCore({ config: config() }))
+  rig.frontLeg.channelRecord({ id: CHANNEL_B, role: 'spectator' })
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
+  rig.core.spectateView({ name: 'Second', uuid: WATCHER_B, channel: CHANNEL_B })
+  const body = framesOn(rig.frontLeg, DRIVER_CHANNEL)
+    .find(frame => frame.name === 'spawn_entity' && frame.packet.objectUUID === WATCHER).packet
+
+  // The spectator\'s client goes: its channel closes, and the front says so.
+  rig.frontLeg.forgetChannelRecord(CHANNEL)
+  rig.core.spectatorLeft({ channel: CHANNEL, name: 'Watcher' })
+
+  for (const channel of [DRIVER_CHANNEL, CHANNEL_B]) {
+    const destroyed = framesOn(rig.frontLeg, channel)
+      .filter(frame => frame.name === 'entity_destroy').flatMap(frame => frame.packet.entityIds)
+    assert.deepEqual(destroyed, [body.entityId], 'the id that channel was given, on ' + channel)
+  }
+  assert.equal(rig.core.metrics.virtualPlayersDespawned, 2, 'two channels were shown it, so two destroys')
+})
+
+test('#636 a spectator\'s own position reaches no backend frame, and names nothing on the puppet\'s connection', async () => {
+  // The transparency rule (docs/transparency.md): a spectator carries no claim, because the
+  // server does not know it exists. The frames this ticket adds are clientbound, and the one
+  // serverbound thing a spectator now contributes is a pose. Anything else would be the
+  // proxy telling the server about a player it never admitted.
+  const rig = await driverOnABody(makeCore({ config: config() }))
+  const clients = {
+    raw: rig.backendLeg.rawWrites().length,
+    packets: rig.backendLeg.packetWrites().length,
+    forwarded: rig.core.metrics.serverboundForwarded
+  }
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: CHANNEL })
+  rig.clock.tick(50)
+  rig.frontLeg.spectatorMoved({ channel: CHANNEL, name: 'position_look', data: { x: 1, y: 2, z: 3, yaw: 0, pitch: 0 } })
+
+  assert.equal(rig.backendLeg.rawWrites().length, clients.raw, 'no raw frame reached the puppet\'s connection')
+  assert.equal(rig.backendLeg.packetWrites().length, clients.packets, 'and no packet did either')
+  assert.equal(rig.core.metrics.serverboundForwarded, clients.forwarded, 'and nothing was forwarded')
+  // Named, not only counted: no frame the backend was handed says the spectator exists.
+  const written = JSON.stringify([rig.backendLeg.rawWrites(), rig.backendLeg.packetWrites()])
+  assert.ok(!written.includes(WATCHER), 'no serverbound frame names the spectator\'s UUID')
+  assert.ok(!written.toLowerCase().includes('watcher'), 'and none names it either')
+})
+

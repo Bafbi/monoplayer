@@ -118,22 +118,40 @@ export function carriesTextures (packet) {
   return false
 }
 
-// One `player_info` frame that gives `uuid` the skin of `property`. The name is
-// the client's own name for the human: the profile in the frame is the only place
-// the client learns which account the entry belongs to, and the human's client
+// One `player_info` frame naming one player, and the skin it carries if the proxy holds
+// one. The name is the client's own name for the human: the profile in the frame is the
+// only place the client learns which account the entry belongs to, and the human's client
 // already holds that name.
+//
+// #636: the property is optional, and a frame with none claims no skin. A client refuses
+// a player-typed `spawn_entity` whose UUID it holds no entry for — it logs "Server
+// attempted to add player prior to adding player info" and adds no entity — so the entry
+// is the condition of drawing a body, not decoration on it. The players that ticket makes
+// visible are the body's channels, and the proxy holds no skin for a spectator and invents
+// none (docs/transparency.md): its entry names the player it is about and lists no
+// property, and the client draws a vanilla default.
+export function playerInfoEntry ({ uuid, name, property = null } = {}) {
+  if (typeof uuid !== 'string' || uuid === '') throw new TypeError('playerInfoEntry needs a uuid')
+  if (typeof name !== 'string' || name === '') throw new TypeError('playerInfoEntry needs a name')
+  const properties = []
+  if (property !== null) {
+    if (typeof property.value !== 'string' || property.value === '') {
+      throw new TypeError('playerInfoEntry needs a textures property with a value, or none')
+    }
+    const textures = { name: TEXTURES_PROPERTY, value: property.value }
+    if (typeof property.signature === 'string' && property.signature !== '') textures.signature = property.signature
+    properties.push(textures)
+  }
+  return { action: { ...ADD_PLAYER_ONLY }, data: [{ uuid, player: { name, properties } }] }
+}
+
+// The same frame for a player whose skin the proxy holds. The guard is the caller's
+// contract: #99 and #614 write one only for a property the backend stated.
 export function skinPlayerInfoPacket ({ uuid, name, property } = {}) {
-  if (typeof uuid !== 'string' || uuid === '') throw new TypeError('skinPlayerInfoPacket needs a uuid')
-  if (typeof name !== 'string' || name === '') throw new TypeError('skinPlayerInfoPacket needs a name')
   if (!property || typeof property.value !== 'string' || property.value === '') {
     throw new TypeError('skinPlayerInfoPacket needs a textures property with a value')
   }
-  const textures = { name: TEXTURES_PROPERTY, value: property.value }
-  if (typeof property.signature === 'string' && property.signature !== '') textures.signature = property.signature
-  return {
-    action: { ...ADD_PLAYER_ONLY },
-    data: [{ uuid, player: { name, properties: [textures] } }]
-  }
+  return playerInfoEntry({ uuid, name, property })
 }
 
 // The same property with its signature removed. Nothing in the product sends

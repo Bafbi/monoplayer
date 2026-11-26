@@ -2,9 +2,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  POSE_FRAME_NAMES,
   classifyServerbound,
   capturePose,
   chatText,
+  isPoseFrame,
   CHAT_SERVERBOUND,
   speaks,
   CLIENT_IDENTITY_CHANNELS,
@@ -12,6 +14,26 @@ import {
   SERVERBOUND_DROPS,
   SERVERBOUND_REWRITE
 } from '../../src/core/relay.js'
+
+test('#636 the frames that carry where a client is are the ones capturePose reads', () => {
+  // #636: two sources read a pose — the body's own client over the relay, and a spectator's
+  // client at the front, whose frame is dropped after its position is taken. One list, so a
+  // caller that has to tell a movement frame from the rest asks the module that reads it.
+  assert.deepEqual([...POSE_FRAME_NAMES].sort(), ['look', 'position', 'position_look'])
+  const before = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }
+  for (const name of POSE_FRAME_NAMES) {
+    assert.equal(isPoseFrame(name), true, name)
+    const after = capturePose(before, name, { x: 1, y: 2, z: 3, yaw: 90, pitch: 45 })
+    assert.notDeepEqual(after, before, 'the frame the list names is a frame capturePose changes: ' + name)
+  }
+  // A frame a client sends that carries no position is not on the list, and reading one
+  // would invent a pose out of a packet that has none.
+  for (const name of ['flying', 'chat_message', 'settings', 'entity_action', 'keep_alive']) {
+    assert.equal(isPoseFrame(name), false, name)
+    assert.deepEqual(capturePose(before, name, { x: 1, y: 2, z: 3 }), before,
+      'and capturePose leaves the pose alone for it: ' + name)
+  }
+})
 
 test('per-leg connection mechanics drop serverbound', () => {
   for (const name of ['teleport_confirm', 'keep_alive', 'configuration_acknowledged', 'chunk_batch_received', 'cookie_response', 'pong', 'message_acknowledgement']) {

@@ -166,6 +166,16 @@ const numeric = v => typeof v === 'number' && Number.isFinite(v)
 // but attaching-client movement must update it too, so a reattach lands
 // where the player actually left the puppet (spike invariant).
 
+// The frames that carry where a client is, in either direction: the body's own client
+// sends them, and so does a spectator's (#636). One list, so a caller that has to tell a
+// movement frame from the rest asks the module that reads it instead of keeping a second
+// copy that can drift from `capturePose`'s branches.
+export const POSE_FRAME_NAMES = Object.freeze(['position', 'position_look', 'look'])
+
+export function isPoseFrame (name) {
+  return POSE_FRAME_NAMES.includes(name)
+}
+
 // Pure pose update. backend = true for a backend position frame (authoritative
 // teleport); false for a serverbound client movement frame.
 export function capturePose (pose, name, data, { backend = false } = {}) {

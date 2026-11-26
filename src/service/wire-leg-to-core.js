@@ -121,6 +121,16 @@ export const LEG_CALL_INS = Object.freeze([
     // #269: a spectator's channel ended, so the core can stop relaying a body
     // nobody is in play on.
     handler: core => payload => core.spectatorLeft(payload)
+  },
+  {
+    name: 'setSpectatorPose',
+    required: false,
+    reaches: 'spectatorPose',
+    // #636: where a spectator's own client says it is. The frame itself is dropped, as
+    // #269 drops every spectator frame: this carries a pose and nothing else, so nothing a
+    // spectator sends can reach the backend. The core draws it for the body's other
+    // channels, which is the only thing it is for.
+    handler: core => payload => core.spectatorPose(payload)
   }
 ])
 
