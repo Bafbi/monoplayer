@@ -1068,12 +1068,17 @@ export async function startLive ({ argv = [], io = process } = {}) {
     // following, or the server the session is already on. There is nothing left to
     // rank, so the dial is the first that exists.
     const dialTarget = due.target ?? currentTarget
+    // A transfer dial, and the return to the server a transfer moved the session
+    // to, ask the target for the transfer handshake and keep the cookies: the
+    // behaviour every lane had before this ticket. Anything else is a fresh login
+    // on the server the session is already on.
+    //
+    // Beside `dialTarget`, never inside the `try` below: the block that records a
+    // successful reconnect reads it, and a `const` inside the `try` is scoped to
+    // that block, so the read threw `ReferenceError: transferDial is not defined`
+    // on every reconnect that connected.
+    const transferDial = due.target !== null || currentIsTransfer
     try {
-      // A transfer dial, and the return to the server a transfer moved the session
-      // to, ask the target for the transfer handshake and keep the cookies: the
-      // behaviour every lane had before this ticket. Anything else is a fresh login
-      // on the server the session is already on.
-      const transferDial = due.target !== null || currentIsTransfer
       backend.setTarget(dialTarget, dialIntent({ transfer: transferDial, target: dialTarget, base: baseTarget }))
       if (due.target !== null) {
         currentTarget = { ...dialTarget }
