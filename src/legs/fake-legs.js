@@ -89,7 +89,7 @@ export function createFakeBackendLeg () {
 // login-start / attach / detach call-ins for the core to drive.
 export function createFakeFrontLeg () {
   const sent = [] // {kind:'raw'|'packet'|'synth', name, buffer?, packet?, reason?}
-  const ended = [] // {reason}
+  const ended = [] // {reason, text?} — text is the words a denial names (#365)
   const reconfiguredCalls = [] // {reason} per startReconfiguration (#22)
   // #261: the claims this leg holds, keyed by body.
   const claims = new Map()
@@ -152,13 +152,29 @@ export function createFakeFrontLeg () {
 
     // Simulate the client's login start; the core's decision comes back
     // synchronously (identity gate). Like the real front leg, a denied login
-    // start is ended with the deny reason BEFORE Login Success is sent.
+    // start is ended with the deny reason BEFORE Login Success is sent, and the
+    // record below stands for that end.
+    //
+    // #365: a denial also carries `decision.text`, the sentence the player reads,
+    // and the real leg writes it into the login-state disconnect (#312). The record
+    // of the end keeps those words beside the `denied:` slug the assertions match,
+    // so a service test reads the sentence with no socket.
+    //
+    // It is recorded here rather than through `end(reason)`: that method is the
+    // adapter's kick, and the core never hands it a sentence. A denial that names no
+    // words records none, rather than a null a reader would take to mean the player
+    // read nothing: the fallback `attach denied (<reason>)` is the front leg's own
+    // policy, and this double does not speak it.
     loginStart ({ name = 'Bafbi', uuid }) {
       if (!loginStartHandler) throw new Error('createMonoplayer().start() not called')
       client.uuid = uuid
       client.name = name
       const decision = loginStartHandler({ name, uuid, username: name })
-      if (!decision.allowed) leg.end(`denied:${decision.reason}`)
+      if (!decision.allowed) {
+        const record = { reason: `denied:${decision.reason}` }
+        if (decision.text != null) record.text = decision.text
+        ended.push(record)
+      }
       return decision
     },
     // Simulate a serverbound frame from the attached client, in the phase it
