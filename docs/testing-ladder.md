@@ -769,8 +769,8 @@ first dial and its target warms in five seconds.
   recording's `tags`, `feature_flags`, `select_known_packs` and `custom_payload`
   before the body's own copies of those four frames. The registry set is the one
   set of the phase since #598, and that is what the client loaded at
-  `finish_configuration`; the other four frames replace one another by key rather
-  than colliding, and nothing here measures whether a client accepts the repeat.
+  `finish_configuration`; nothing here measures what a client does with the other
+  four frames repeated, and #603 is where that is measured.
   The body is a `minecraft-protocol` fake whose configuration is the library's
   own, `prismarine-chunk` has no 26.2 implementation, and the body therefore sends
   a chunk batch with nothing in it (`chunks: 'empty'`). This proves the selected

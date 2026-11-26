@@ -421,8 +421,8 @@ unclaimed, which is a body a client may watch.
   configuration phase is still open from the baseline, so it continues with that
   body's configuration frames and ends with one `finish_configuration`. The phase
   carried no registry set before it, so the body's is the one set the client loads.
-  The core
-  then replays the body's play state on the connection the client already held.
+  The core then replays the body's play state on the connection the client
+  already held.
   Each body owns its state cache (#260), so the frames the dial brings land in that
   body's cache and no other's. One body is still served at a time, because the
   session holds one backend connection: a claim on a different body is refused
@@ -441,9 +441,10 @@ unclaimed, which is a body a client may watch.
   and it is the body's (#598). The phase still carries the recording's `tags`,
   `feature_flags`, `select_known_packs` and `custom_payload` before the body's own
   copies of those four frames, and no rung measures whether a vanilla client accepts
-  that. Tags replace one another by registry key where a registry id collides, which
-  is why only the registry set was fatal. The only client on the offline rung is a
-  protocol bot, and the body it lands on is a `minecraft-protocol` fake without
+  that. The disconnect a real client reported was a duplicate registry key, and
+  nothing here measured what it does with a repeated tag, feature flag, known pack
+  or custom payload. #603 is where that is measured. The only client on the offline
+  rung is a protocol bot, and the body it lands on is a `minecraft-protocol` fake without
   terrain (`prismarine-chunk` has no 26.2 implementation). Rung 4 is where a real
   client answers. If a client refuses the remaining doubled frames, the fallback is
   to finish the client into an empty world and hand it over through the

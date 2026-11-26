@@ -17,8 +17,11 @@
 // holds the command to refresh it. Two captures of the same server are
 // byte-identical, so the file is evidence and not a snapshot of a mood.
 //
-// What the module does not do: decode a frame, reorder one, or add one. A frame
-// the server did not send is exactly the failure this file exists to avoid.
+// What the module does not do: decode a frame, reorder one, add one, or edit one.
+// A frame the server did not send is exactly the failure this file exists to
+// avoid. The one frame a phase leaves out is the registry set a picker may not
+// carry (#598), and `baselineFramesFor` leaves it out by not putting it in the list
+// a join is served from.
 import fs from 'node:fs'
 
 import { clientboundPolicy } from '../core/clientbound-policy.js'
@@ -29,10 +32,13 @@ import { decodeVarInt } from '../core/client-settings.js'
 // purpose (#257), and the phase ends at the pick or the refusal.
 export const BASELINE_FINISH_FRAME = 'finish_configuration'
 
-// The frames the ticket names, and the reason each one is required. A capture
-// missing one is a bad capture, not a smaller baseline: a client that gets
-// registries without tags, or packs without a registry to resolve them against,
-// is exactly the client that refuses the phase.
+// The frames the ticket names, and the reason each one is required of a capture.
+// A capture missing one is a bad capture and not a smaller baseline: the recording
+// is evidence of what one server sent, and half of a phase is not evidence of
+// anything. What a phase then serves is a different question, answered by
+// `baselineFramesFor`: a picker serves the recording without its registry set
+// (#598), and whether a client accepts known packs and tags with no registry to
+// resolve them against is unmeasured here (#603).
 export const BASELINE_REQUIRED_FRAMES = Object.freeze([
   'select_known_packs',
   'feature_flags',
@@ -141,6 +147,15 @@ export function defaultBaselinePath () {
   return new URL('./configuration-baseline/26.2.json', import.meta.url)
 }
 
+// #598: the set a picker phase never carries. A client loads registries once, at
+// the frame that ends the phase, and a second copy of a registry id is not a
+// merge: it is a disconnect ("Adding duplicate key 'ResourceKey[minecraft:
+// worldgen/biome / minecraft:badlands]' to registry", at
+// `ClientboundFinishConfigurationPacket`). The picker's phase is the recording's,
+// and the body a claim lands continues that same open phase with its own frames,
+// so the recording's registry set would be the first of two.
+const PICKER_WITHHELD_FRAMES = new Set(['registry_data'])
+
 // The frames a picker join is served. Null when the baseline was recorded at
 // another protocol version. The configuration state happens to carry the same
 // packet ids in 26.1 and 26.2 (`node tools/protocol.mjs diff 26.1 26.2
@@ -148,17 +163,9 @@ export function defaultBaselinePath () {
 // it is the line between evidence and a guess. The recording is evidence for the
 // version it was taken at, and a lane that speaks another version has none.
 //
-// #598: a picker phase carries no registry data, and this reader is where that is
-// decided, so the frame is never handed to a writer that could send it. A client
-// loads registries once, at the frame that ends the phase, and a second copy of a
-// registry id is not a merge: it is a disconnect ("Adding duplicate key
-// 'ResourceKey[minecraft:worldgen/biome / minecraft:badlands]' to registry", at
-// `ClientboundFinishConfigurationPacket`). The picker's phase is the recording's,
-// and the body a claim lands continues that same open phase with its own frames,
-// so the recording's registry set is the first of two. The dialog needs a phase
+// The registry set is withheld here, and no other reader serves a join, so the
+// frame is never handed to a writer that could send it. The dialog needs a phase
 // the client parses; a registry set is the one thing only the body supplies.
-const PICKER_WITHHELD_FRAMES = new Set(['registry_data'])
-
 export function baselineFramesFor (baseline, { version } = {}) {
   if (!baseline) return null
   if (typeof version !== 'string' || version.length === 0) return null
