@@ -437,10 +437,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // dialog: the dialog waits for the human instead of being clicked (#20).
       backend: { dialogAction: 'last' },
       core: { journal },
-      attach: ({ rig, player }) => {
+      // #607: the cut is taken around the handler the rig's core installed, so this
+      // hook records and nothing else: the handler's argument is the table's.
+      attach: ({ rig, player, attachPlayer }) => {
         const attachSnapshot = rig.core.cache.snapshot()
         const attachPose = rig.core.session.currentPose
-        const outcome = rig.core.attachPlayer({ ...player, includeConfig: false })
+        const outcome = attachPlayer(player)
         if (outcome.attached) {
           attachCuts.push({ snapshot: { ...attachSnapshot, pose: attachPose }, replayFrames: outcome.frames ?? [] })
         }
@@ -2470,8 +2472,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         }),
         whitelist: entityWhitelist,
         wire: createWireChecker({ version: VERSION }),
-        attach: ({ rig, player }) => {
-          const outcome = rig.core.attachPlayer({ ...player, includeConfig: false })
+        attach: ({ player, attachPlayer }) => {
+          const outcome = attachPlayer(player)
           if (outcome.attached) entityAttaches.push(outcome.frames ?? [])
           return outcome
         },
