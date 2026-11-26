@@ -1238,19 +1238,22 @@ first dial and its target warms in five seconds.
 - `O72` a landing writes a body's configuration through the one clientbound funnel: the frame
   the policy replays reaches the client, and the frame it refuses does not (#602).
 
-  The front leg documents one funnel for a clientbound raw frame — `writeRawTo` in
-  `src/legs/live-front.js`, which carries the clientbound policy backstop, the
-  reconfiguration hold, the state check and the wire check. #602 found three writers beside
-  it, and a landing was one of them, so a body's configuration went to a client that is
-  mid-phase with no policy check at all. The reader's own filter was the second half: it
-  asked `decision !== 'block'`, which admits the frames a connection owns and the dialog the
-  human answers, so the two classes a replay must never carry were the two it could carry.
+  The front leg documents one funnel for a clientbound raw frame: `writeRawTo` in
+  `src/legs/live-front.js`. It carries the clientbound policy backstop, the reconfiguration
+  hold, the state check and the wire check. #602 found three writers beside it, and a landing
+  was one of them, so a body's configuration reached a client mid-phase with no policy check
+  at all. The replay reader was the other half. It asked `decision !== 'block'`, and that
+  admits the frames a connection owns and the dialog the human answers.
 
   The rig is this check's own because the body it lands is a hand-picked configuration rather
-  than a cache, which is the point: the funnel must refuse a snapshot it cannot trust. A
-  picker client joins, the leg lands it in that body, and the client's own frame list is the
-  evidence: the ordinary frame the landing wrote is there, and neither the control dialog nor
-  the blocked connection control is, in the whole connection and not only after the landing.
+  than a cache, which is the point: the snapshot is one the leg cannot trust. A picker client
+  joins, the leg lands it in that body, and the client's own frame list is the evidence: the
+  ordinary frame the landing wrote is there, and neither the control dialog nor the blocked
+  connection control is, in the whole connection and not only after the landing.
+
+  The funnel's own refusal of a blocked frame is not this row's to read, and it cannot be: the
+  reader strips such a frame before the funnel sees it. That gate is
+  `test/legs/config-landing-policy.test.js`, at the write a landing makes.
   Both refused frames are real frames of this version, built with the same serializer the
   leg's own writer uses, so a client that received one would decode it rather than fail on
   it, and the assertion reads the frame and not a parse error.

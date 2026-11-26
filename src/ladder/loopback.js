@@ -45,6 +45,7 @@ import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-par
 import { baselineRegistryIds, readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { chooseDialogAction } from '../core/dialog-codec.js'
 import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
+import { clientboundPolicy } from '../core/clientbound-policy.js'
 import { createPickerServerReader } from '../service/start-live.js'
 import { FIRST_VIRTUAL_ENTITY_ID, MOVE_INTERVAL_MS } from '../core/virtual-players.js'
 import minecraftData from 'minecraft-data'
@@ -4754,19 +4755,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // --- O72: a landing writes no frame the clientbound policy refuses (#602) ---
-    // The front leg has one funnel for a clientbound raw frame: the policy backstop,
-    // the reconfiguration hold, the state check, the wire check. #602 found three
-    // writers beside it, and a landing was one of them, so a body's configuration went
-    // to a client with no policy check at all. `replayableConfigFrames` filtered with
-    // `decision !== 'block'`, which admits the frames a connection owns and the dialog
-    // the human answers, so the two classes a replay must never carry were the two it
-    // could carry.
+    // The leg's one raw funnel is writeRawTo; the ticket and the rule are in
+    // src/legs/live-front.js there. What this row adds is the client's own view of a
+    // landing, on a body whose configuration is a hand-picked set rather than a cache.
     //
-    // The rig is a leg of this check's own, because the body it lands is a hand-picked
-    // configuration rather than a cache: the point is what the funnel does with a
-    // snapshot it cannot trust. Both refused frames are real frames of this version,
-    // built with the same serializer the leg's own writer uses, so a client that
-    // receives one decodes it instead of failing on it.
+    // The refused frames are real frames of this version, so a client that received one
+    // would decode it instead of failing on it, and the assertion reads the frame rather
+    // than a parse error.
     const funnelName = 'Funnel'
     const funnelWire = createWireChecker({ version: pickerVersion })
     const funnelSerializer = mc.createSerializer({ state: 'configuration', isServer: true, version: pickerVersion })
@@ -4819,8 +4814,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       15_000
     )
     const funnelNames = funnelBot.received.names
-    const funnelRefused = funnelNames.filter(frame =>
-      frame.name === 'transfer' || frame.name === 'code_of_conduct')
+    // Derived from the body rather than named here: a frame added to it is a frame this
+    // row then refuses to let through, and a body that stopped holding one fails the
+    // count below instead of passing quietly.
+    const funnelRefusable = funnelBody
+      .filter(frame => clientboundPolicy('configuration', frame.name).replay === false)
+      .map(frame => frame.name)
+    const funnelRefused = funnelNames.filter(frame => funnelRefusable.includes(frame.name))
     evidence.rawFunnel = {
       landing: {
         watching: funnelLanding.watching,
@@ -4830,6 +4830,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       configuration: funnelNames
         .filter(frame => frame.state === 'configuration')
         .map(frame => frame.name),
+      refusable: funnelRefusable,
       refused: funnelRefused.map(frame => frame.name),
       policyRefused: funnelFront.metrics.policyRefused,
       stateRefused: funnelFront.metrics.stateRefused,
@@ -4842,6 +4843,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       funnelLanding.watching === true &&
         funnelLanding.frames === 1 &&
         funnelNames.some(frame => frame.name === 'reset_chat') &&
+        funnelRefusable.length >= 2 &&
         funnelRefused.length === 0 &&
         funnelBot.received.errors.length === 0 &&
         funnelBot.received.leftovers.length === 0,

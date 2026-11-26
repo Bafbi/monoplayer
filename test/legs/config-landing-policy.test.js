@@ -1,4 +1,10 @@
-// #602: the landing is the funnel's business too.
+// #602 and #599: the landing is the funnel's business too.
+//
+// Two rules of the one funnel are read here because they need the same rig: the policy
+// a landing asks before it writes a body's configuration (#602), and the rule against a
+// configuration frame offered after the phase's finish (#599). The second is the window
+// a landing leaves open, because the leg's own state has not caught up until the client
+// answers.
 //
 // The front leg documents one funnel for a clientbound raw frame — writeRawTo in
 // src/legs/live-front.js, which carries the clientbound policy backstop, the
@@ -111,7 +117,12 @@ test('#602 a landing writes a body\'s configuration through the policy, not arou
   })
 })
 
-test('#602 a frame the policy blocks never reaches a landed client', async () => {
+// The two gates, and why this test drives the funnel itself. A landing cannot be handed a
+// blocked frame: `replayableConfigFrames` strips it first, which the test above reads on
+// the wire. What this one pins is the gate behind that reader, at the write a landing makes
+// (`leg.writeRaw` is the leg's own entry to it), so a future landing that skipped the reader
+// would still be refused here.
+test('#602 the funnel a landing writes through refuses a frame the policy blocks', async () => {
   await withPickerClient(async ({ leg, written, body }) => {
     const answer = leg.spectate({ username: NAME, body: BODY, server: BODY })
     assert.equal(answer.watching, true, 'the body lands the client it named')

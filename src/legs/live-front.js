@@ -204,8 +204,11 @@ export function createConfigPathInterceptor ({
       for (const frame of baselineConfigFrames) {
         // The recording carries the server's finish. The picker never sends one.
         if (frame.name === finishName) continue
-        writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
-        stats.baselineFrames++
+        // #602: `writeRaw` is the leg's funnel now, and it answers false for a frame it
+        // refuses. A frame that did not go is not a frame this counted.
+        if (writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) {
+          stats.baselineFrames++
+        }
       }
       onBaselineFrames?.()
       return
@@ -213,8 +216,9 @@ export function createConfigPathInterceptor ({
     if (cachedConfigFrames.length > 0) {
       for (const frame of cachedConfigFrames) {
         if (frame.name === finishName) continue // finish goes out exactly once, from the call site below
-        writeRaw(frame.buffer, { state: 'configuration', name: frame.name })
-        stats.replayedConfigFrames++
+        if (writeRaw(frame.buffer, { state: 'configuration', name: frame.name }) !== false) {
+          stats.replayedConfigFrames++
+        }
       }
     } else if (allowLibraryFallback) {
       for (const entry of stashed) {
@@ -253,11 +257,18 @@ export function createConfigPathInterceptor ({
       return
     }
     // #602: the phase's finish closes the phase whichever writer sends it. A landing
-    // writes it through this function on a client whose path is already resolved — the
-    // picker's baseline, and the cached replay — and a configuration frame after it is
+    // writes it through this function on a client whose path is already resolved (the
+    // picker's baseline, and the cached replay), and a configuration frame after it is
     // one the client reads in play (#541). `finishSent` was set only where this leg's
     // own resolve wrote the finish, so those two clients were the gap.
-    if (name === finishName) finishSent = true
+    //
+    // Set after the write and from its answer: a finish that threw is a phase still open,
+    // and that is what lets the refusal's own `disconnect` through the guard above.
+    if (name === finishName) {
+      const sent = originalWrite(name, params)
+      finishSent = sent !== false
+      return sent
+    }
     return originalWrite(name, params)
   }
 
@@ -1172,11 +1183,11 @@ function createFrontLeg ({
   // set.
   //
   // #602: `replay` is the policy's own answer to this question, and it is the only one
-  // that fits. `decision !== 'block'` is not the same predicate: it admits the frames a
+  // that fits. `decision !== 'block'` is not the same predicate. It admits the frames a
   // connection owns (`keep_alive`, `ping`) and the dialog the human answers
-  // (`code_of_conduct`), none of which a second client may be handed as part of its
-  // phase, and `state-cache.js` and `configuration-baseline.js` already read this same
-  // field to answer it. One question, one answer, where the table holds it.
+  // (`code_of_conduct`), and a second client may be handed neither as part of its phase.
+  // `configuration-baseline.js` asks the table this same question about the picker's
+  // recording, so a landing and the phase it continues answer alike.
   function replayableConfigFrames () {
     return getSnapshotConfig().filter(
       frame => typeof frame?.name === 'string' &&
