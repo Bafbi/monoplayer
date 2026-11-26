@@ -12,7 +12,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createBackendFrameForwarder } from '../../src/legs/live-backend.js'
+import { createBackendFrameForwarder, MAX_BACKEND_FRAME_NAMES } from '../../src/legs/live-backend.js'
+import minecraftData from 'minecraft-data'
+
+import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
 import { createConfigPathInterceptor, createLiveFrontLeg } from '../../src/legs/live-front.js'
 import { synthAttach, LEG_OWNED } from '../../src/core/join-synth.js'
 import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
@@ -99,6 +102,42 @@ test('backend forwarder: bundle delimiters drop, enclosed packets relay individu
   assert.deepEqual(frames.map(f => f.name), ['add_entity', 'map_chunk', 'login'])
   assert.equal(forwarder.counters.bundledDelimiters, 2)
   assert.equal(forwarder.counters.bundledFramesRelayed, 2)
+})
+
+// #554: the forwarder's name map is copied into every heartbeat line, so its size is a
+// log line's size. What this leg owns is the cap it passes and the key it counts under;
+// the rule itself is src/core/bounded-counter.js's, so it is not restated here.
+test('#554 the forwarder counts under the key and cap the leg passes', () => {
+  const forwarder = createBackendFrameForwarder({ deliver: () => {} })
+  const past = 5
+  const names = Array.from({ length: MAX_BACKEND_FRAME_NAMES + past }, (_, index) => 'frame-' + index)
+  const shared = {}
+  for (const name of names) {
+    forwarder.onRaw(buf('x'), { name, state: 'play' })
+    bumpBounded(shared, `play/${name}`, MAX_BACKEND_FRAME_NAMES)
+  }
+
+  assert.deepEqual(forwarder.nameCounts, shared,
+    'the leg keys the map state/name and hands the shared rule its own cap, so the rule the map follows is the one in src/core/bounded-counter.js')
+  assert.equal(forwarder.nameCounts[OVERFLOW_KEY], past,
+    'and the cap is a bound that bites: the last five names of a run past it are turned away')
+})
+
+// The cap is a number, so a test keeps it true: a protocol version that adds frames
+// must not push a real name into the overflow bucket with nothing failing first.
+test('#554 the cap is headroom over the clientbound vocabulary, not a second one', () => {
+  const clientboundNames = (version, state) => Object.values(
+    minecraftData(version).protocol[state].toClient.types.packet[1][0].type[1].mappings)
+  const vocabulary = ['login', 'configuration', 'play']
+    .reduce((total, state) => total + clientboundNames('26.2', state).length, 0)
+
+  assert.ok(vocabulary > 0, 'the guard found the frames it counts')
+  assert.ok(MAX_BACKEND_FRAME_NAMES > vocabulary,
+    `the cap is above the ${vocabulary} state/name pairs a version names, so a real frame is not the overflow bucket`)
+  for (const state of ['login', 'configuration', 'play']) {
+    assert.equal(clientboundNames('26.1', state).length, clientboundNames('26.2', state).length,
+      `the two versions the cap's comment names hold the same ${state} names, so the larger one is the one counted`)
+  }
 })
 
 test('join-synth includeConfig:false omits the configuration replay prefix', () => {

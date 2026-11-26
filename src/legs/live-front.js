@@ -322,6 +322,11 @@ export function emitCheckedRaw ({
   if (wireCheck && wireMode !== 'off') {
     stats.checked++
     if (!stats.byState) stats.byState = {}
+    // #554: the one name map in the legs that takes no cap. Its key is the wire state,
+    // which this leg and the core write as literals and the library's own state machine
+    // writes from its five, so the map is bounded by that vocabulary rather than by a
+    // number. A cap could only fold a state nobody here has seen into a bucket that is
+    // not a state name, and the map's whole fact is which state a frame was refused in.
     const stateKey = state ?? 'unknown'
     stats.byState[stateKey] = (stats.byState[stateKey] ?? 0) + 1
     let result
