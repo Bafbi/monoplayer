@@ -87,6 +87,7 @@ import { synthAttach } from '../core/join-synth.js'
 import { replaySummary } from '../core/replay-summary.js'
 import { noticeFrames, noticeId, systemChatFrame } from '../core/notice.js'
 import { SKIN_FRAME, carriesTextures, skinEntryOf, skinPlayerInfoPacket } from '../core/skin.js'
+import { createVirtualPlayers } from '../core/virtual-players.js'
 import { classifyServerbound, capturePose, chatText } from '../core/relay.js'
 import { CHAT_FRAMES, CHAT_MODES, chatRelayAllowed, clientboundPolicy, DECISION } from '../core/clientbound-policy.js'
 import { createPendingDialog } from '../core/pending-dialog.js'
@@ -538,6 +539,13 @@ export function createMonoplayer ({
     // the puppet's skin.
     skinFramesWritten: 0,
     skinFramesRefused: 0,
+    // #635: the entities the proxy wrote for the puppet, per frame: a spawn, a move, and
+    // the despawn that ends a life. A frame the leg could not deliver is not counted, so
+    // each of these is a frame a client was told.
+    virtualPlayersSpawned: 0,
+    virtualPlayersMoved: 0,
+    virtualPlayersDespawned: 0,
+    virtualPlayerFramesRefused: 0,
     // #22: same-connection reconfiguration.
     transfersSeamless: 0,
     reconfigurationsStarted: 0,
@@ -2139,6 +2147,81 @@ export function createMonoplayer ({
     return frontLeg.writeRaw(frame.buffer, { state: 'play', name: frame.name }, { channel }) !== false
   }
 
+  // --- #635: the puppet as a player entity, on every channel but its own ---
+  //
+  // A client draws another player from a `player_info` entry *and an entity for that
+  // UUID*, and a Minecraft server never sends a client its own player entity. The body's
+  // own stream therefore carries no spawn for the puppet, and a spectator's world held a
+  // tab list line and nobody standing in it. #614 gave every channel the entry; this is
+  // the body that goes with it.
+  //
+  // The module owns the order, the entity identity and the coalescing
+  // (src/core/virtual-players.js). What is here is the delivery: the world it reads, the
+  // roster it may write to, and the counters that say what a client was told. A frame the
+  // leg could not deliver is not counted, because a number here is frames that reached a
+  // socket.
+  //
+  // The roster is the spectators. The driver's channel speaks for the puppet itself, and
+  // the core holds no driver channel id (#525), so it is not offered and the module's own
+  // rule — a channel is never told about the player it speaks for — has nothing to refuse
+  // today.
+  const virtualPlayers = createVirtualPlayers({
+    world: {
+      players () {
+        // Nothing to spawn until a play state is being delivered, and a player the config
+        // resolved no UUID for is a player the proxy cannot name.
+        if (!canDeliverPlay()) return []
+        const uuid = cfg.puppet.uuid ?? null
+        if (typeof uuid !== 'string' || uuid === '') return []
+        return [{ uuid, name: cfg.puppet.username ?? null, pose: session.currentPose }]
+      }
+    },
+    channels: () => [...spectators].map(([channel, spectator]) => ({ id: channel, uuid: spectator.uuid ?? null }))
+  })
+
+  // What the spectators are owed now, written where it goes. One sweep per moment the
+  // world changes: a spectator landing, a pose the puppet's own client sent, a backend
+  // teleport, and a world change.
+  function writeVirtualPlayers ({ reason = 'sweep' } = {}) {
+    const updates = virtualPlayers.sweep({ at: clockNow() })
+    let written = 0
+    for (const update of updates) {
+      for (const frame of update.frames) {
+        let delivered
+        try {
+          delivered = frontLeg.write(frame.name, frame.packet, { channel: update.channel })
+        } catch (error) {
+          metrics.virtualPlayerFramesRefused++
+          log('virtualPlayerRefused', {
+            reason,
+            channel: update.channel,
+            frame: frame.name,
+            error: String(error?.message ?? error).slice(0, 200)
+          })
+          // The channel still has a client, so what it was owed is owed again: the next
+          // sweep destroys the id it never received a body for and spawns it again.
+          virtualPlayers.void({ channel: update.channel })
+          continue
+        }
+        // The leg answers false when no socket holds that channel any more. A frame that
+        // reached nobody is not counted as told.
+        if (delivered === false) continue
+        written++
+        if (frame.name === 'entity_teleport') {
+          metrics.virtualPlayersMoved++
+          continue
+        }
+        if (frame.name === 'spawn_entity') metrics.virtualPlayersSpawned++
+        else metrics.virtualPlayersDespawned++
+        // One line per spawn and per despawn: a move is the one frame here that arrives
+        // at the body's own rate, and a record per move is a record per frame.
+        log('virtualPlayerWritten', { reason, channel: update.channel, frame: frame.name })
+        emit('virtual_player', { reason, channel: update.channel, frame: frame.name })
+      }
+    }
+    return written
+  }
+
   // The replay half of an attach: the join prefix and the warm state as they
   // stand now. Shared by the warm attach and the early attach, which has
   // already followed the live stream into play.
@@ -2149,6 +2232,9 @@ export function createMonoplayer ({
     // #134: Excalia moves the puppet mid-session, so a client that re-entered
     // play arrives here owed the frame again.
     forgetPuppetSkin()
+    // #635: and a new play state holds no entity either, for the same reason the entry
+    // went with it. The next sweep destroys the id it gave and spawns it again.
+    virtualPlayers.void({ reason })
     const source = snapshot ?? cache.snapshot()
     const synthesized = synthAttach({
       snapshot: source,
@@ -2691,6 +2777,12 @@ export function createMonoplayer ({
     // #614: the body's entry, naming the puppet, on every channel of the body. Written
     // before the mode frames below, which are the last word on this socket (#259).
     sendPuppetSkin({ reason: 'spectate' })
+    // #635: and the entity the entry is for. The order is the module's: the entry above
+    // names the puppet, and a spawn is what gives a client a body for it. Written after
+    // the replay and outside it, so the parity rung's expectation still sees a join
+    // stream this proxy added no body to.
+    virtualPlayers.void({ channel })
+    const virtualFrames = writeVirtualPlayers({ reason: 'spectate' })
     // #614: and the packs the body holds. A spectator lands in play, so a pack the
     // backend sent during its own configuration was withheld from it. The held copy is
     // the one a client that lands later reads.
@@ -2707,14 +2799,18 @@ export function createMonoplayer ({
       channel,
       frames: written,
       replayed: synthesized.counts.replayed,
+      // #635: what this client was told about the puppet's body, beside the frames it was
+      // told about the world. A zero here beside a zero in the counters is the report the
+      // owner filed.
+      virtualFrames,
       modeFrames,
       packsOffered,
       body: claimedBody,
       state: session.state,
       attached
     })
-    emit('spectate_view', { name, channel, frames: written, modeFrames, packsOffered })
-    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, modeFrames, packsOffered }
+    emit('spectate_view', { name, channel, frames: written, modeFrames, virtualFrames, packsOffered })
+    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, modeFrames, virtualFrames, packsOffered }
   }
 
   // #259: a spectator's channel closed. Its client is gone, so the relay stops when
@@ -3157,6 +3253,9 @@ export function createMonoplayer ({
         session.setPose(
           capturePose(session.currentPose, serverbound.name, serverbound.data)
         )
+        // #635: where the puppet's own client says it is, the spectator's copy of it
+        // follows. A channel that is not watching costs one comparison.
+        if (spectators.size > 0) writeVirtualPlayers({ reason: 'movement' })
       }
       // #16: the frame carries its own state. A configuration answer reaches a
       // puppet that is still in configuration, where a play-state write would
@@ -3404,6 +3503,9 @@ export function createMonoplayer ({
           flags: 0
         }, { synth: true })
         metrics.positionsSynthesized++
+        // #635: after the body's own position frame, so a spectator's world moves in the
+        // order it was told about.
+        if (spectators.size > 0) writeVirtualPlayers({ reason: 'teleport' })
       }
       if (cache.push('play', name, buffer, data).cached) metrics.framesCached++
       return
@@ -3498,6 +3600,14 @@ export function createMonoplayer ({
     // #87: the first terrain frame is what lets a held move release its client.
     if (name === 'map_chunk') maybeCompleteReconfiguration()
     if (canDeliverPlay()) frontLeg.writeRaw(buffer, { state: 'play', name })
+    // #635: `respawn` is a new dimension, and the client's entity map goes with it
+    // (src/core/state-cache.js flushes its entities on the same frame). The destroy and
+    // the fresh spawn are owed *after* the frame that voided them, or the respawn would
+    // take the puppet away again.
+    if (name === 'respawn') {
+      virtualPlayers.void({ reason: 'respawn' })
+      if (spectators.size > 0) writeVirtualPlayers({ reason: 'respawn' })
+    }
   }
 
   async function stop ({ reason = 'stopped' } = {}) {
