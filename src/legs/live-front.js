@@ -272,9 +272,12 @@ export function createConfigPathInterceptor ({
   // client already has that frame on the wire, so the library's deferred write
   // must never follow it.
   function finishFromCore () {
+    // #541: every round on the connection closes here, not only the first. A
+    // login-phase replay already resolved the interceptor, and a later followed
+    // move still ends its phase on the core's finish frame.
+    finished = true
     if (resolved) return false
     resolved = true
-    finished = true
     stats.finishedByCore++
     return true
   }

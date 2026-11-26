@@ -141,6 +141,22 @@ test('#541 the next round opens the phase again, so its keep-alives are sent', (
   assert.equal(r.interceptor.stats.suppressedAfterFinish, 0)
 })
 
+test('#541 a later round in cached mode closes the phase as well', () => {
+  // The login replay resolves the interceptor on the first finish. A followed
+  // move on the same connection opens a second round, and its finish frame is
+  // the core's too, so the phase has to close again.
+  const r = rig({ live: false, cached: [{ name: 'registry_data', buffer: Buffer.from('r') }] })
+  r.interceptor.write('finish_configuration', {})
+  assert.equal(r.interceptor.replayMode, 'cached_replay')
+  r.endConfiguration()
+  r.interceptor.write('start_configuration', {})
+  r.startConfiguration()
+  assert.equal(r.interceptor.finishFromCore(), false, 'the login replay already resolved the interceptor')
+  r.interceptor.write('keep_alive', { keepAliveId: 9n })
+  assert.deepEqual(r.writes.map(write => write.name), ['finish_configuration', 'start_configuration'])
+  assert.equal(r.interceptor.stats.suppressedAfterFinish, 1)
+})
+
 test('#257 a baseline for another protocol version is not a baseline', () => {
   // The choice of baseline is the leg's (baselineFramesFor returns null for a
   // version it does not have), so an empty baseline is what the interceptor sees
