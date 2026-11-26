@@ -51,12 +51,42 @@ test('the lint rung syntax-checks the tools as well as src and test', () => {
   assert.match(lint.body, /-name '\*\.mjs'/, 'lint checks the .mjs tools')
 })
 
-test('check runs the three cheap rungs and nothing else', () => {
+// #215. The gate used to be a bare `depends`, and mise sends SIGTERM to every
+// still-running sibling the moment one rung fails. A killed rung then printed the
+// reason it was killed as if it were its own failure, which is how a unit file
+// that holds no promise came to report one. So the gate owns no dependency edge:
+// it runs the list below through `mise run --continue-on-error`, and mise names
+// each rung that failed.
+test('the gate runs every rung to its end and names the ones that failed', () => {
   const check = tasks.get('check')
+  const rungs = tasks.get('check:rungs')
 
   assert.ok(check, 'mise.toml defines check')
-  assert.deepEqual(check.depends, ['lint', 'test', 'loopback'])
-  assert.doesNotMatch(check.body, /^\s*run\s*=/m, 'check composes rungs instead of running a command')
+  // A dependency edge is the thing mise cancels. The gate must own the run.
+  assert.deepEqual(check.depends, [], 'check has no sibling for a failure to cancel (#215)')
+  assert.match(
+    check.run,
+    /exec mise run --continue-on-error --skip-tools check:rungs/,
+    'check runs its rungs with --continue-on-error, so no rung is killed'
+  )
+  assert.match(check.run, /\[ "\$#" -eq 0 \]/, 'check refuses an argument it cannot forward')
+
+  assert.ok(rungs, 'mise.toml defines the list of rungs check runs')
+  assert.deepEqual(rungs.depends, ['lint', 'test', 'loopback'], 'the gate runs the three cheap rungs and nothing else')
+  assert.doesNotMatch(rungs.body, /^\s*run\s*=/m, 'the list composes rungs instead of running a command')
+  assert.match(rungs.description, /mise run check/, 'the list says the gate is how to run it')
+})
+
+// The gate stays one command, because that is what AGENTS.md tells an agent to
+// run before it reports a change done. The ticket that split attribution from
+// cancellation (#215) keeps that promise, so the promise is checked here.
+test('AGENTS.md names the gate as one command, and says what a red one reports', () => {
+  const agents = fs.readFileSync(new URL('../../AGENTS.md', import.meta.url), 'utf8')
+  const bullet = agents.split('\n').find(line => line.includes('**The gate**'))
+
+  assert.ok(bullet, 'AGENTS.md carries the gate bullet')
+  assert.match(bullet, /`mise run check`/, 'the done criterion is one command')
+  assert.match(bullet, /names the rungs that failed/, 'and a red gate names the rungs that failed')
 })
 
 test('every verify:<area> task composes tasks instead of copying a command', () => {
