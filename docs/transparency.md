@@ -108,25 +108,32 @@ own skin.
 
 `skin.showPuppetSkin` (on by default, `MONOPLAYER_SKIN_SHOW_PUPPET=0` to turn
 it off) is the proxy's one switch for skin entries, and off means no entry carrying a
-skin, the puppet's or a spectator's. The entries that only name a body (#636's
-announcement, below) carry no property and are written either way. With it on it writes
-up to three `player_info` `add_player` entries carrying a skin. Two carry
-the textures property the backend sent for the puppet, and one carries the skin the
-spectator's own account sent this lane. Which entry a client receives is the whole
-rule ([#614](https://github.com/Bafbi/monoplayer/issues/614),
-[#618](https://github.com/Bafbi/monoplayer/issues/618)):
+skin, the puppet's or a spectator's. An entry that only names a body (#636's
+announcement, below) is written either way. It carries a property only while the switch
+is on.
+
+With the switch on, every entry the proxy writes for a player whose skin it holds
+carries that player's own. The puppet's goes to every channel of the body. Each
+spectator's goes to its own channel, and to every channel that is told about that
+spectator. Which entry a client receives is the whole rule
+([#614](https://github.com/Bafbi/monoplayer/issues/614),
+[#618](https://github.com/Bafbi/monoplayer/issues/618),
+[#685](https://github.com/Bafbi/monoplayer/issues/685)):
 
 | Entry | Who receives it | Why |
 |---|---|---|
 | The body's, naming the puppet | every channel of the body: its driver and each spectator | A client draws a player from that player's entry, and a spectator lands on a body whose relayed entry for the puppet has left the cache's generic ring, which a live session fills and evicts (`src/core/state-cache.js`). The entry is written on every pass, so a channel that arrives late is told who the body is |
 | The driver's own, naming the uuid the front verified | the body, once per play state | The client draws the body it controls from the entry naming that player, which is what [#99](https://github.com/Bafbi/monoplayer/issues/99) measured |
 | The spectator's own, naming the uuid the front verified for that client | that spectator's channel alone, at its landing | Its own client draws that body, and with no entry it resolves `DefaultPlayerSkin.get(uuid)`: a vanilla default, measured in [skin-verdict.md](../testdata/skin-verdict.md). The property is the account's own, from the `hasJoined` answer the front verified, and never the puppet's. An entry that names a spectator with the puppet's property is what [#516](https://github.com/Bafbi/monoplayer/issues/516) introduced, and its third item in [#614](https://github.com/Bafbi/monoplayer/issues/614) is the report |
+| The same spectator's, on a channel that does not speak for it | every other channel of the body: its driver's, and each other spectator's | A client draws a player it does not control from that player's entry, and an entry with no property is a vanilla default. Before [#685](https://github.com/Bafbi/monoplayer/issues/685) this entry carried no property at all, so a driver drew every spectator in a default and one spectator drew another in one. It is the same property as the row above, off the same record, so a spectator wears one skin on every channel of the body |
 
 | Fact | Why |
 |---|---|
-| The puppet's property is the server's own, and a spectator's is its account's own | The proxy invents no skin. A proxy that saw no `player_info` from the backend writes no frame for the puppet, and a property it cannot read is not a property it has. The puppet's property and name come from the puppet's own entry, chosen by the UUID the config resolved for the account, so a frame that also lists other players never donates their skins or their names. A spectator's property is the one its own `hasJoined` answer carried: the front verifies that account before it lands the client, and an answer with no property is a spectator the proxy writes no entry for |
+| The puppet's property is the server's own, and a spectator's is its account's own | The proxy invents no skin. A proxy that saw no `player_info` from the backend writes no frame for the puppet, and a property it cannot read is not a property it has. The puppet's property and name come from the puppet's own entry, chosen by the UUID the config resolved for the account, so a frame that also lists other players never donates their skins or their names. A spectator's property is the one its own `hasJoined` answer carried: the front verifies that account before it lands the client. An answer with no property is a spectator the proxy writes no entry carrying a skin for, and every client keeps the default for that player |
 | No entry carries `update_listed` | The client's tab list is its own listed set, which only that action fills, so no entry gains a line beside the puppet's |
-| The spectator's entry is owed at its landing | Its landing is the play state it holds: one connection, one entry map. Nothing rewrites it afterwards, because a change of the puppet's property is not a change of the spectator's account. A new play state would be owed it again, and no path sends a spectator into one today: the reconfiguration round is written to the driver's connection alone (`startReconfiguration`, #22) |
+| The spectator's own entry is owed at its landing | Its landing is the play state it holds: one connection, one entry map. Nothing rewrites it afterwards, because a change of the puppet's property is not a change of the spectator's account. A new play state would be owed it again, and no path sends a spectator into one today: the reconfiguration round is written to the driver's connection alone (`startReconfiguration`, #22) |
+| One record holds a spectator's skin | The property lives with the spectator, in the per-channel map the service keeps (`spectators`, `src/service/monoplayer.js`). The two writers read it and keep no copy: the entry on that spectator's own channel (`sendSpectatorSkin`) and the announcement of that player on every other channel (`entryFor`). A landing is the one write that sets it, so the two cannot disagree about a skin |
+| The entry naming another client's body is owed on every pass | The pass is a channel that has just been handed a body, or one whose client's entity map was voided by a world change, so the announcement and the body it belongs to are written again (`src/core/virtual-players.js`). A channel that arrives late therefore learns who is watching, and what each of them wears |
 | The driver's entry is owed once per play state | An entry the client already holds wins over a later `add_player` for the same UUID, so a second frame for one play state would be a write nobody sees. A reconfiguration is a new play state: the client builds a new `ClientPacketListener`, whose entry map starts empty, so the frame goes out again after a transfer ([#134](https://github.com/Bafbi/monoplayer/issues/134)) |
 | The body's entry is owed on every pass | The pass is a client that has just been handed the body, so the entry is a fact about that client's play state and not about the property. A new property value rewrites it for every channel at once |
 | An unsigned property would work too | The client asks for a secure property only for players other than the one it controls. The frame carries the property as it arrived, so the proxy adds no signature and strips none |
@@ -135,16 +142,29 @@ The driver's entry is written to the body, because the core holds no channel id 
 driver (#525). A spectator therefore also holds an entry naming the driver, a player it
 does not control, which its client draws nothing from.
 
-A spectator's own player wears its account's skin, because an entry names it (#618).
-Before that, [#614](https://github.com/Bafbi/monoplayer/issues/614) wrote none, and a
-client with no entry for its own UUID resolves `DefaultPlayerSkin.get(uuid)`: a vanilla
-default, which is the measured fallback recorded in
-[skin-verdict.md](../testdata/skin-verdict.md) and not the account's skin. The property
-is the one `hasJoined` answered the front with, so a lane whose answer carries no
-`textures` property writes no entry for that spectator, and its own player keeps the
-default. The proxy still invents no skin. What a client draws for a body it does not
-drive is unmeasured, and [#325](https://github.com/Bafbi/monoplayer/issues/325) is the
-row that would measure it.
+A spectator's own player wears its account's skin, because an entry names it (#618), and
+every other client on the body draws that spectator in the same skin, because the entry
+that names it for them carries the same property (#685). Before #618 the spectator's own
+client resolved `DefaultPlayerSkin.get(uuid)`, a vanilla default recorded in
+[skin-verdict.md](../testdata/skin-verdict.md). Before #685 every other client did too,
+because the entry that told one channel about another client's body carried no property
+at all.
+
+The property is the one `hasJoined` answered the front with, so a lane whose answer
+carries no `textures` property writes no entry carrying a skin for that spectator, and
+every client keeps the default for it. The proxy still invents no skin.
+
+The two writes differ in one measured way. A client asks for a signed property only for
+a player it does not control: `PlayerInfo.createSkinLookup` passes
+`requireSecure = !isLocalPlayer(profileId)`, as
+[skin-verdict.md](../testdata/skin-verdict.md) records. The entry naming a spectator on
+its own channel may therefore carry the property unsigned. The entry naming that
+spectator for another client may not. The proxy carries the property as `hasJoined`
+answered it, signed, and adds no signature and strips none.
+
+What a client *draws* for a body it does not drive is unmeasured: the frames are
+checkable and the rendering is not.
+[#325](https://github.com/Bafbi/monoplayer/issues/325) is the row that would measure it.
 
 The measured answer to the ticket's open question — does a 26.x client accept a
 `textures` property signed for a different profile UUID — is yes. Three runs on

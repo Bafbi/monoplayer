@@ -1095,6 +1095,29 @@ first dial and its target warms in five seconds.
   `deliverEach`'s in `src/legs/live-front.js`, and `test/service/spectate.test.js` pins the
   channel the entry is written on against the fake leg.
 
+- `O76` a channel told about a spectator is told that spectator's own skin, and the entry
+  naming the puppet keeps the puppet's (#685). `O73` read one socket for the body's entry and
+  the spectator's own. This reads the half a second client needs: the entry that tells one
+  channel about **another** client's body, which carried no property before this row and left
+  a driver drawing every spectator in a vanilla default.
+
+  `O65` leaves the body driven and `O73` leaves it unwatched, so two accounts land on it in
+  turn. Each is supplied the properties its sessionserver answer would have carried, through
+  the front's `profiles` option: the same stand-in `O73` uses.
+
+  Two sockets are read: the driver's, which already holds the body, and the one that landed
+  first. The driver's socket then carries three bodies and three skins. They are the puppet's,
+  the first spectator's, and the second's, and every entry is held to its own player's value.
+  An entry carrying another player's skin fails. The first spectator's socket carries the
+  second one's entry with the second one's skin, and its own entry carries the value the
+  driver's copy of that player carries.
+
+  What it cannot prove: that a client draws it. Both halves are frames on a socket, and the
+  rendering is the dev lane's witnessed row (#634, #685). Nor does it prove a *signed*
+  property is required here: a client asks for one only for a player it does not control, and
+  this rig's signatures are the fixtures' own, so the signature half is
+  [skin-verdict.md](../testdata/skin-verdict.md)'s and a real client's.
+
 - `O66` a lane with no list refuses a join in a sentence about the lane, and its offer
   says why the list is empty (#315). O61 proved the offer falls back to the seed when
   the live file cannot be parsed. This is the case with nothing behind it: both files
@@ -1255,8 +1278,9 @@ first dial and its target warms in five seconds.
   The owner's second half — *spectator between themself* — is read on the other socket. The
   client that lands is drawn the watcher already on the body, entry and body both. Nothing
   on its own socket names the player it is itself: this rig supplies no properties for that
-  client, so no entry is owed for its own player. `O73` is the row that supplies one, and
-  the entry naming a spectator is that spectator's own channel's.
+  client, so no entry carrying a skin is owed for its own player. `O73` is the row that
+  supplies one, for that client's own channel, and `O76` is the row that supplies one for
+  every other channel of the body.
 
   Then the second position source. The spectator's own client sends a position, the front
   drops the frame (#269) and hands the core the pose out of it, and the driver's copy of that

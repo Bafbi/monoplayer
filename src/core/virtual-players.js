@@ -14,17 +14,22 @@
 // 5058 frames replayed) and the world is empty. This module is the missing half.
 //
 // #636: the entry is not built here, and the caller says which players it owes. Two
-// players reach this module, and only one of them has an entry this module can use: #614's frame
-// names the puppet and carries the property the backend sent, and the entry that tells one
-// channel about another client's body carries no property at all. So the caller hands over
-// `entryFor`, which answers the frame for a player it does not announce itself and null for
-// the one it does, and this module puts it first when it spawns.
+// players reach this module: #614's frame names the puppet and carries the property the
+// backend sent, and a spectator is announced by the caller's own frame. So the caller hands
+// over `entryFor`, which answers the frame for a player it does not announce itself and null
+// for the one it does, and this module puts it first when it spawns.
 //
-// #618: and a spectator's own player now has an entry of its own, carrying its account's
-// skin — written on that spectator's channel alone (src/service/monoplayer.js,
-// `sendSpectatorSkin`). It is deliberately not this module's: no channel is announced to
-// itself, so the skin a player's own body wears and the skin another client draws for that
-// player are two claims, and this module still answers the second with no property.
+// #618: and a spectator's own player has an entry of its own, carrying its account's skin,
+// written on that spectator's channel alone (src/service/monoplayer.js,
+// `sendSpectatorSkin`). That write is not this module's: no channel is announced to itself,
+// so the entry naming a player on the channel it speaks for is the service's.
+//
+// #685: the entry this module does write for a spectator carries that spectator's skin too.
+// The fact rides the caller's row, `{ uuid, name, pose, skin }`, and this module neither
+// reads nor copies it, exactly as it handles `pose`: the caller's `entryFor` turns the row
+// into a frame. The two writes come off one record in the service, so a spectator wears one
+// skin on every channel of the body. A channel told about another client's body then draws
+// that client rather than a vanilla default.
 //
 // Why the pair cannot be split: a client refuses a player-typed `spawn_entity` whose UUID
 // it holds no `player_info` entry for. It logs "Server attempted to add player prior to
@@ -211,6 +216,8 @@ function despawnFrame (entityId) {
 //               here is a copy that can go stale. `name` is not written by this module:
 //               the name a client draws comes from the entry, which is `entryFor`'s frame or
 //               #614's. It is here because the caller builds that frame from this row (#636).
+//               Any further field on the row is the caller's own and reaches `entryFor`
+//               untouched: #685's `skin` is one, and this module never reads it.
 //   channels    `() -> [{ id, uuid }]`: one entry per connection a player may be written
 //               to, with the player that connection speaks for, or null when it speaks for
 //               nobody. A channel is never told about its own player, which is the rule
