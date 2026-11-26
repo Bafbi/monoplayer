@@ -239,11 +239,22 @@ export function createConfigPathInterceptor ({
     finishSent = true
   }
 
+  // #599: one rule, two write paths. A configuration frame offered after this phase's
+  // finish is one the client reads in play (#541), and the flag that says so is this
+  // interceptor's. The leg's raw funnel asks this, because the rule the interceptor keeps
+  // for the library's own writer has to hold for every other writer too. A second
+  // statement of the condition is a second answer, waiting to disagree.
+  function refusesAfterFinish ({ state = null } = {}) {
+    return finishSent === true && state === 'configuration'
+  }
+
   function wrappedWrite (name, params) {
     if (!isConfigurationState()) {
       return originalWrite(name, params)
     }
-    if (finishSent) {
+    // The frame this writer carries is the state the library serializes it in, and the
+    // gate above has already said that state is configuration.
+    if (refusesAfterFinish({ state: 'configuration' })) {
       // #541: past this phase's finish, a configuration frame is one the client
       // reads in play. Nothing is written, and the caller is told so it does not
       // count the frame as delivered.
@@ -305,11 +316,9 @@ export function createConfigPathInterceptor ({
     reopenConfiguration,
     get live () { return live },
     get resolved () { return resolved },
-    // #599: the phase's finish is on the wire, so a configuration frame offered after
-    // it is one the client reads in play. The leg's raw funnel asks this, because the
-    // rule the interceptor keeps for the library's own writer has to hold for every
-    // other writer too.
-    get finishSent () { return finishSent },
+    // #599: exported so the leg's raw funnel asks the rule instead of restating it. The
+    // comment above the function is the rule's one home.
+    refusesAfterFinish,
     get replayMode () {
       if (live) return 'live_stream'
       if (!resolved) return 'pending'
@@ -704,7 +713,7 @@ function createFrontLeg ({
   // cannot disagree about how many refusals there were. #616: the disconnect's own
   // number is written by that same helper, so a refusing branch has one place to
   // count and not two numbers it must remember.
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -1287,12 +1296,11 @@ function createFrontLeg ({
         record(client, 'configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
         denyConnection(client, 'backend_not_ready')
       },
-      // #541: one line per dropped frame, and the leg's own counter. The client it
-      // was aimed at has left the phase, so this never reaches the wire.
-      // #541: one line per dropped frame, with its name. The client it was
-      // aimed at has left the phase, so this never reaches the wire.
+      // #541 and #599: the library's own writer dropped a frame, and the client it was
+      // aimed at has left the phase, so this never reaches the wire. One line and one
+      // count, in the function the raw funnel calls for the same refusal.
       onSuppressed: ({ name: dropped = null } = {}) => {
-        record(client, 'configFrameAfterFinish', { name: dropped })
+        recordAfterFinishDrop(client, { name: dropped, state: 'configuration' })
       }
     })
     client.write = interceptor.write
@@ -1360,6 +1368,19 @@ function createFrontLeg ({
     })
   }
 
+  // #417 and #600: one configuration dialog, encoded once for the connection it goes to.
+  // Both dialogs this leg authors are its own params, so their bytes are the leg's and the
+  // wire check can read them. The params build is inside the guard as well as the encode: a
+  // throw here would otherwise leave the caller for the library's own finish hook, and the
+  // one client this leg can answer would be lost instead of told why.
+  function encodeDialogFrame (client, params) {
+    try {
+      return encodeFrame({ serializer: client.serializer ?? null, name: 'show_dialog', params })
+    } catch (error) {
+      return { ok: false, buffer: null, error: String(error?.message ?? error).slice(0, 200) }
+    }
+  }
+
   // The frames are on the wire and the client can parse a dialog now. The dialog
   // is the phase: no finish_configuration follows it.
   function sendPickerDialog (client, { title = 'Choose a server' } = {}) {
@@ -1384,16 +1405,7 @@ function createFrontLeg ({
     // The params build is inside the guard as well as the encode: a throw here would
     // otherwise leave this function for the library's own finish hook, and the one
     // client this leg can answer would be lost instead of told why.
-    let encoded = { ok: false, buffer: null, error: 'the dialog was never built' }
-    try {
-      encoded = encodeFrame({
-        serializer: client.serializer ?? null,
-        name: 'show_dialog',
-        params: pickerDialogParams({ rows, title })
-      })
-    } catch (error) {
-      encoded = { ok: false, buffer: null, error: String(error?.message ?? error).slice(0, 200) }
-    }
+    const encoded = encodeDialogFrame(client, pickerDialogParams({ rows, title }))
     let written = false
     if (!encoded.ok) {
       log('pickerDialogFailed', { error: encoded.error })
@@ -1465,17 +1477,25 @@ function createFrontLeg ({
   // client gets that server's own dialog. A pick is the first half of a choice, not
   // the end of the connection (#266).
   //
-  // A packet-object configuration write, and this names what it does not take: no policy
-  // backstop, no state check, no wire check. The library serializes it against whatever
-  // state the client holds, which is the gap #600 is about. The bytes are the dialog's own
-  // params, so there is nothing a wire check could compare them to.
+  // A configuration frame this leg authored from its own params, which is what makes its
+  // bytes the leg's to encode. So it is written as a raw frame through the funnel, as the
+  // picker's dialog is, rather than as a packet object the wire check cannot see (#600).
+  // The params are the leg's own, so there is nothing here for the check to disagree with.
+  // The state and the policy are the two rules it takes.
+  //
+  // It leaves the library's own writer, so the interceptor's guard is not what refuses it:
+  // the funnel's is, and that is where the count and the line for a refused frame live.
   function sendServerDialog (client, server) {
     let written = false
-    try {
-      client.write('show_dialog', serverDialogParams({ server }))
-      written = true
-    } catch (error) {
-      log('pickerServerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+    const encoded = encodeDialogFrame(client, serverDialogParams({ server }))
+    if (!encoded.ok) {
+      log('pickerServerDialogFailed', { error: encoded.error })
+    } else {
+      try {
+        written = writeRawTo(client, encoded.buffer, { state: 'configuration', name: 'show_dialog' })
+      } catch (error) {
+        log('pickerServerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      }
     }
     if (written) metrics.pickerServerDialogs++
     log('pickerServerDialog', {
@@ -2325,11 +2345,47 @@ function createFrontLeg ({
 
   // --- #269: delivery, one channel at a time ---
 
-  // The library-serialized packet path (the synthesized position, the skin, a
-  // notice). The wire checker guards raw frames in writeRawTo; a packet object
-  // cannot carry trailing bytes.
+  // #600: the only state a packet object reaches a client in here. A configuration frame is
+  // a raw frame (sendServerDialog), so this is not a default a caller can weaken.
+  const PACKET_PATH_STATE = 'play'
+
+  // #599: one drop, one count, one line. Both write paths that can refuse a configuration
+  // frame after its phase's finish come here, so the count cannot be true on one path and
+  // false on the other, which is the pair of numbers #602 found for the policy.
+  function recordAfterFinishDrop (client, { name = null, state = null } = {}) {
+    metrics.configFramesAfterFinish++
+    record(client, 'configFrameAfterFinish', { name, state })
+  }
+
+  // #16 and #600: one frame must reach the client in a state it can parse. A frame written
+  // in another state is read as a different packet's id, with the rest of its bytes left
+  // over: #541 is that measurement, and writeRawTo names it.
+  // Both writers ask this: the raw funnel has the frame's bytes and its declared state,
+  // and a packet object has the state its caller declares, because the library serializes
+  // one with whatever state the client holds.
+  function refuseStateMismatch (client, { name = null, state = null } = {}) {
+    if (!state || !client?.state || state === client.state) return false
+    metrics.stateRefused++
+    record(client, 'clientboundStateMismatch', { name, frameState: state, clientState: client.state })
+    return true
+  }
+
+  // The library-serialized packet path (the synthesized position, the skin, a notice). A
+  // packet object has no bytes for the wire check to read, so the check it can take is the
+  // one about state.
+  //
+  // #600: "a packet object cannot carry trailing bytes" is true of the bytes and false of
+  // the failure class. A frame serialized with the configuration table while the client
+  // reads play is a configuration id the client decodes as another packet, with the rest
+  // of the frame left over. So the frame's state is not a caller's declaration to forget or
+  // to get wrong: every packet object this path may carry is a play frame, and a frame that
+  // belongs to a configuration phase is encoded and written through writeRawTo, where the
+  // wire check sees it (sendServerDialog, and sendPickerDialog before it).
   function writePacketTo (client, name, packet) {
     if (!client || typeof client.write !== 'function') return false
+    // The state the client would read this frame in, before the library picks a table for
+    // it. A refusal here is a frame that never reaches the wire, counted and named.
+    if (refuseStateMismatch(client, { state: PACKET_PATH_STATE, name })) return false
     // #541: the interceptor answers false for a frame it dropped, and a frame
     // that never reached the wire is not a frame the channel was delivered.
     if (client.write(name, packet) === false) return false
@@ -2337,7 +2393,7 @@ function createFrontLeg ({
     // serializes it. The frames it carries are the synthesized position, the skin
     // and a notice: a fixed handful per connection, and the one gap in a channel's
     // byte count, which docs/telemetry.md names.
-    noteDelivered(client, { state: client.state === 'configuration' ? 'configuration' : 'play', name })
+    noteDelivered(client, { state: PACKET_PATH_STATE, name })
     return true
   }
 
@@ -2347,10 +2403,12 @@ function createFrontLeg ({
   // twice, so neither client can be handed a frame in a state it cannot parse.
   //
   // #602: this is the leg's only raw writer. The config interceptor's replay, a claim
-  // landing, a spectator landing and the reconfiguration flush all come here, so a
-  // check added below is a check every clientbound raw frame takes. A writer that
-  // called emitCheckedRaw directly would have the wire check and none of the rest,
-  // which is the hole #602 found three of.
+  // landing, a spectator landing, the reconfiguration flush and both of the leg's own
+  // dialogs come here, so a check added below is a check every clientbound raw frame
+  // takes. A writer that called emitCheckedRaw directly would have the wire check and
+  // none of the rest, which is the hole #602 found three of. #600 moved the picker's
+  // server dialog off the packet path and onto this one, because its bytes are the
+  // leg's own and the wire check can read them.
   function writeRawTo (client, buffer, meta = null) {
     if (!client) return false
     // Last-write check: even if the core router regresses, a frame the
@@ -2392,23 +2450,15 @@ function createFrontLeg ({
     // #16: a relayed frame must reach the client in a state it can parse. A
     // configuration frame written while the client is still in login is read
     // as a login packet, which kills the connection. Refuse and log instead.
-    if (meta?.state && client.state && meta.state !== client.state) {
-      metrics.stateRefused++
-      record(client, 'clientboundStateMismatch', {
-        name: meta.name,
-        frameState: meta.state,
-        clientState: client.state
-      })
-      return false
-    }
+    if (refuseStateMismatch(client, meta ?? {})) return false
     // #599: this phase's finish is on the wire, so the client reads play from here and
     // a configuration frame arriving now is another packet's id with the rest of its
     // bytes left over (#541 read 9 bytes as `acknowledge_player_digging`). The leg's own
     // state has not caught up until the client answers, which is why the state check
     // above passes in exactly this window. The interceptor refuses the library's writer
     // this way; this is the same rule for every writer that comes here.
-    if (meta?.state === 'configuration' && clients.get(client)?.interceptor?.finishSent === true) {
-      record(client, 'configFrameAfterFinish', { name: meta.name })
+    if (clients.get(client)?.interceptor?.refusesAfterFinish?.({ state: meta?.state ?? null }) === true) {
+      recordAfterFinishDrop(client, { name: meta?.name ?? null, state: meta?.state ?? null })
       return false
     }
     if (dumpRaw) {
