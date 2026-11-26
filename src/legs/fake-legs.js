@@ -2,6 +2,8 @@
 // Used by test/service/monoplayer.test.js. The real legs (minecraft-protocol)
 // implement the same interfaces — see docs/product-core.md — and are built in G1/M4.
 
+import { createClaims } from '../core/claims.js'
+
 // Backend leg adapter (fake): implements the interface createMonoplayer wires
 // against. Frames are {state: 'configuration'|'play', name, buffer?, data?};
 // `buffer` is opaque to the core. Records everything written back to the
@@ -91,8 +93,12 @@ export function createFakeFrontLeg () {
   const sent = [] // {kind:'raw'|'packet'|'synth', name, buffer?, packet?, reason?}
   const ended = [] // {reason, text?} — text is the words a denial names (#365)
   const reconfiguredCalls = [] // {reason} per startReconfiguration (#22)
-  // #261: the claims this leg holds, keyed by body.
-  const claims = new Map()
+  // #261: the claims this leg holds, one board keyed by body. #631: the board is the
+  // real leg's (`createClaims` in src/core/claims.js), so the record a reader sees is
+  // `claimView`'s, whether it asked `claimOn` or holds what `claim` returned. A field
+  // added there reaches this double and the real board together. The board's two rules
+  // come with it: a test cannot plant a claim production refused.
+  const claims = createClaims()
   let loginStartHandler = null
   let serverboundHandler = null
   let detachHandler = null
@@ -137,8 +143,10 @@ export function createFakeFrontLeg () {
     // #261: the claim on one body, or null. The real leg records a claim where a
     // client answers a body's dialog and releases it when that connection ends; the
     // fake holds whatever a test puts on it, so a fault can be driven with a claim
-    // held and with none. The core reads this instead of keeping a copy.
-    claimOn (body) { return claims.get(body) ?? null },
+    // held and with none. The core reads this instead of keeping a copy. #631: the
+    // board answers with a copy, as the real leg's `claimOn` does, so a reader cannot
+    // write into the claim it read.
+    claimOn (body) { return claims.claimOn(body) },
     setClient ({ username, uuid }) {
       client.username = username
       client.uuid = uuid
@@ -206,13 +214,25 @@ export function createFakeFrontLeg () {
     },
     reconfigurations: () => [...reconfiguredCalls],
 
-    // A claim on a body, the way the real leg's board holds one.
-    claim (body, { name = 'Bafbi', holder = 'holder-1' } = {}) {
-      const record = { body, server: body, holder, name, at: 0 }
-      claims.set(body, record)
-      return { ...record }
+    // A claim on a body, the way the real leg's board holds one, through that board.
+    // #631: the moment it was recorded arrives through the board's own seam (`at`), so
+    // a planted claim is the same row on every run. The other fields are this helper's
+    // parameters, so an input added to the board's `claim` is a parameter added here.
+    // A refusal is thrown, not dropped: a double that kept a claim the board refused
+    // would fail its case three assertions from the cause.
+    claim (body, { name = 'Bafbi', holder = 'holder-1', at = 0 } = {}) {
+      const outcome = claims.claim({ body, server: body, holder, name, at })
+      if (!outcome.ok) throw new Error('fake front leg: claim refused: ' + outcome.reason)
+      return outcome.claim
     },
-    releaseClaim (body) { return claims.delete(body) },
+    // #631: the board releases by holder and a test knows a body, so the claim is
+    // read first. Answers whether there was a claim to release, as the map did.
+    releaseClaim (body) {
+      const held = claims.claimOn(body)
+      if (held === null) return false
+      claims.release(held.holder)
+      return true
+    },
   }
 
   return leg
