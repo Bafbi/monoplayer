@@ -9,10 +9,13 @@ import { tempRoot } from '../support/temp.js'
 
 import {
   createPickerServerReader,
+  createReconnectHandler,
   envOverlay,
   journalVolumeFull,
   unidentifiedSkinWarning
 } from '../../src/service/start-live.js'
+import { createTransferFollowController } from '../../src/core/transfer-follow.js'
+import { makeCore } from '../support/harness.js'
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { createControlDocument } from '../../src/service/control.js'
 import {
@@ -417,4 +420,94 @@ test('#356 a lane that names only the seed offers the seed to the picker', () =>
     'the row the seed holds is the row the picker draws')
   assert.deepEqual(said, [{ event: 'pickerOffered', source: 'seed', servers: 1, reason: null, file: seedFile, at: null }],
     'and the line says the seed answered, and which file that was')
+})
+
+// #540: the reconnect handler runs only inside a started process, so no test had
+// ever executed it. #536's `ReferenceError` sat on its success path for a day:
+// every reconnect that connected was recorded as one that did not, the settled
+// target never advanced, and #229's revert had nothing to revert to. The handler
+// is now a function this file calls, and these are the only places it runs.
+const TRANSFER = Object.freeze({ host: 'sky-2.excalia.fr', port: 25565 })
+const OTHER = Object.freeze({ host: 'sky-9.excalia.fr', port: 25565 })
+
+function reconnectRig ({ warm = { hasConfig: true, hasPrefix: true, warm: true } } = {}) {
+  const { core } = makeCore()
+  const calls = []
+  const stages = []
+  let rejects = 0
+  const backend = {
+    calls,
+    async connect () { calls.push({ call: 'connect' }) },
+    setTarget (target, intent = {}) {
+      if (rejects > 0) {
+        rejects--
+        throw new Error('transport not connected')
+      }
+      calls.push({ call: 'setTarget', target: { ...target }, intent: { ...intent } })
+    }
+  }
+  const log = []
+  const { onReconnectDue } = createReconnectHandler({
+    core,
+    backend,
+    follow: createTransferFollowController(),
+    baseTarget: { host: '127.0.0.1', port: 25565 },
+    settleWarm: async ({ stage }) => {
+      stages.push(stage)
+      return warm
+    },
+    log: (event, fields = {}) => log.push({ event, fields })
+  })
+  return {
+    handler: onReconnectDue,
+    log,
+    calls,
+    stages,
+    core,
+    setWarm: next => { warm = next },
+    // The next setTarget refuses, as the leg does for a dial it cannot make.
+    rejectNextTarget: () => { rejects = 1 }
+  }
+}
+
+const events = rig => rig.log.map(line => line.event)
+
+test('#540 a followed reconnect that connects is recorded as a reconnect, not a failure', async () => {
+  const rig = reconnectRig()
+  await rig.handler({ delayMs: 250, attempt: 1, target: TRANSFER })
+
+  assert.deepEqual(events(rig), ['transferFollowConnect', 'backendReconnect'],
+    'the success path records the reconnect it made, and nothing calls it a failure')
+  const success = rig.log.at(-1).fields
+  assert.equal(success.followed, true, 'the record says the dial followed a transfer')
+  assert.equal(success.target, 'sky-2.excalia.fr:25565', 'and which body it landed on')
+  assert.equal(rig.calls[0].intent.transfer, true, 'a followed dial asks for the transfer handshake')
+  assert.deepEqual(rig.stages, ['transfer'], 'and warms as a transfer, not as a plain reconnect')
+})
+
+test('#540 a reconnect after a followed transfer keeps the dialect and the server', async () => {
+  const rig = reconnectRig()
+  await rig.handler({ delayMs: 250, attempt: 1, target: TRANSFER })
+  const settled = rig.calls.length
+  await rig.handler({ delayMs: 500, attempt: 2 })
+
+  assert.deepEqual(rig.calls[settled].target, { ...TRANSFER },
+    'a plain fault dials the server the session is on, not the configured base')
+  assert.equal(rig.calls[settled].intent.transfer, true,
+    'and keeps the transfer handshake, because that server is off the base')
+  assert.deepEqual(rig.stages.slice(1), ['reconnect'], 'a retry of the same server is a reconnect')
+})
+
+test('#540 a followed target the leg rejects reverts to the server the session settled on', async () => {
+  const rig = reconnectRig()
+  await rig.handler({ delayMs: 250, attempt: 1, target: TRANSFER })
+  const settled = rig.calls.length
+  rig.rejectNextTarget()
+  await rig.handler({ delayMs: 500, attempt: 2, target: OTHER })
+
+  assert.deepEqual(rig.calls[settled].target, { ...TRANSFER },
+    'the revert dials the server the session settled on, not the one that was refused')
+  assert.equal(rig.calls[settled].intent.keepCookies, true,
+    'and keeps the cookies, because the settled server was reached by a transfer')
+  assert.ok(events(rig).includes('transferFollowTargetRejected'), 'the refusal is on the record')
 })
