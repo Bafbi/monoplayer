@@ -61,6 +61,7 @@
 import { WARM_MARKER } from '../core/state-cache.js'
 import { createBodyCaches } from '../core/body-caches.js'
 import { pickSlug } from '../core/picker.js'
+import { accountIdentifier, stampIdentity } from '../core/channels.js'
 import { forceWarm, shouldForceWarm } from './readiness.js'
 import {
   FABRIC_BRAND,
@@ -393,6 +394,11 @@ export function createMonoplayer ({
   logStream = null,
   telemetry = NOOP_TELEMETRY,
   journal = NOOP_JOURNAL,
+  // #416: the account every record this core writes names, as one identifier. The
+  // service passes the one it resolved. A core built from a config document alone
+  // derives it from the puppet it holds. Null names none, and then no record here
+  // carries an account key.
+  account = null,
   // #229: a function returning the attach whitelist now, called at each login.
   // The live orchestrator passes one when the whitelist file is named, so a UUID
   // added to the file takes effect on the next login with no restart. Null is the
@@ -697,14 +703,31 @@ export function createMonoplayer ({
   let puppetAnsweredDialog = null
   const transferChain = { visited: new Set(), depth: 0, resetTimer: null }
 
+  // #416: the account the lane speaks for, and the body this core is serving. Both
+  // are read at the call, so a record written after a claim names the body it moved
+  // to, and a record that names a body itself keeps that one. There is no channel
+  // here: a channel is the front leg's record (src/core/channels.js).
+  const recordAccount = account ?? accountIdentifier({ uuid: cfg.puppet.uuid, name: cfg.puppet.username })
+
+  // The body a record names, or null when the lane holds none. The open session is
+  // what says the lane holds one: a picker lane dials nothing until a claim does, so
+  // its records before a pick name the account and no body (#263 D2). The body is
+  // `activeBody`, which a claim's dial and a followed move both set, so a record
+  // after a move names the body the session is on and not the one it left. The
+  // records that name a body after its session ended pass their own.
+  function recordBody () {
+    return backendSessionOpen ? activeBody : null
+  }
+
   function log (event, fields = {}) {
-    const line = redact(JSON.stringify({ t: clock?.now?.() ?? Date.now(), event, ...fields }))
+    const record = stampIdentity(fields, { account: recordAccount, body: recordBody() })
+    const line = redact(JSON.stringify({ t: clock?.now?.() ?? Date.now(), event, ...record }))
     logs.push(line)
     if (logs.length > 4096) logs.shift()
     if (logStream) logStream.write(line + '\n')
     emit('log', { line })
     // Lifecycle records only: one OTLP log per core log call, never per frame.
-    telemetry.log({ event, fields })
+    telemetry.log({ event, fields: record })
   }
 
   function emit (type, payload) {
@@ -2726,7 +2749,9 @@ export function createMonoplayer ({
       backendSessionOpen = true
       // Exact packet journal + one frame counter per backend frame. Lifecycle
       // log records come only from the log() funnel, never one per frame.
-      journal.frame({ dir: 's2c', state, name, buffer })
+      // #416: the body this frame crossed. Never a channel: one body's stream reaches
+      // every channel on it (src/core/channels.js).
+      journal.frame({ dir: 's2c', state, name, buffer, body: activeBody })
       const metricPolicy = state === 'play' || state === 'configuration'
         ? clientboundPolicy(state, name)
         : null
@@ -2831,7 +2856,7 @@ export function createMonoplayer ({
       const decision = attachedNow
         ? classifyServerbound(name, serverbound.data, { mode: cfg.chat, state })
         : { action: 'drop', chat: false }
-      journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer })
+      journal.frame({ dir: 'c2s', state, name, buffer: serverbound.buffer, body: activeBody })
       telemetry.metric('monoplayer.frames', 1, {
         direction: 'c2s',
         state,

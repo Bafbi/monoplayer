@@ -39,6 +39,64 @@ export const CHANNEL_REFUSAL = Object.freeze({
   IN_USE: 'in_use'
 })
 
+// #416: the identity a record carries. One record says three things at once: the
+// account the lane speaks for, the body the record is about, and the channel it was
+// written on. The three are named once, here, so a caller never repeats them and no
+// two records can disagree about what a `body` field means.
+//
+// A key is written only where the thing it names exists (#263 D2): a record written
+// before a pick carries the account and no `body` key, because a `body: null`
+// would make "every record with a body" a query that also returns the records
+// without one.
+//
+// Journal and log records carry all three. No OTLP metric carries the channel: a
+// body is bounded by the allowed-server list, and a channel is one connection, so a
+// channel attribute is one series per socket (#415, #263 D1). The gauge side of
+// that rule is test/service/heartbeat-groups.test.js.
+export const RECORD_IDENTITY_FIELDS = Object.freeze(['account', 'body', 'channel'])
+
+const namesSomething = value => typeof value === 'string' && value.length > 0
+
+// The identity three as they are written: present keys only.
+export function recordIdentity ({ account = null, body = null, channel = null } = {}) {
+  const identity = {}
+  if (namesSomething(account)) identity.account = account
+  if (namesSomething(body)) identity.body = body
+  if (namesSomething(channel)) identity.channel = channel
+  return identity
+}
+
+// One record's field map with the identity filled in. A field the caller names
+// itself wins, because a record about another body knows better than the context
+// does. That covers a claim's body and a pick the lane refused. A null or empty
+// identity key is removed from the caller's fields rather than written.
+export function stampIdentity (fields = {}, identity = {}) {
+  const stamped = {}
+  for (const [key, value] of Object.entries(fields ?? {})) {
+    if (RECORD_IDENTITY_FIELDS.includes(key) && !namesSomething(value)) continue
+    stamped[key] = value
+  }
+  return { ...recordIdentity(identity), ...stamped }
+}
+
+// The lane's account, as one identifier: the alias the custody tree resolved, else
+// its UUID, else the name an offline lane joins as. Null when the lane holds no
+// account at all, which is the one record shape that names none.
+export function accountIdentifier ({ alias = null, uuid = null, name = null } = {}) {
+  for (const candidate of [alias, uuid, name]) {
+    if (namesSomething(candidate)) return candidate
+  }
+  return null
+}
+
+// One channel's identity: what a record about it says. A channel the lane admitted
+// with no claim names no body, so it writes none. The account is the lane's and not
+// the channel's, so it is stamped where the line is written, not here.
+export function channelIdentity (channel) {
+  if (channel === null || typeof channel !== 'object') return {}
+  return recordIdentity({ body: channel.body, channel: channel.id })
+}
+
 // The key one body's channels live under. A connection the lane admitted with no
 // claim names no body, and the empty body is what it is filed under. Two callers
 // read this: the registry below, and #415's heartbeat, which groups the same way so

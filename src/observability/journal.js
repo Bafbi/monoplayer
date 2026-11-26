@@ -54,6 +54,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 
+import { stampIdentity } from '../core/channels.js'
 import { redact } from './redact.js'
 
 // A frame longer than this keeps its header and loses its body.
@@ -236,7 +237,12 @@ export function createJournal ({
   maxTotalBytes = DEFAULT_MAX_TOTAL_BYTES,
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   clock = () => Date.now(),
-  fs = nodeFs
+  fs = nodeFs,
+  // #416: the account the lane speaks for, written on every record here. One
+  // value for the life of the process, so it is stamped where the record is
+  // built rather than at each of the seven call sites. Null is a lane with no
+  // account, which writes none rather than a null (#263 D2).
+  account = null
 } = {}) {
   const configured = typeof dir === 'string' && dir.trim() !== ''
   if (!configured) return disabledJournal({ reason: 'no_dir' })
@@ -535,7 +541,7 @@ export function createJournal ({
   return {
     enabled: true,
 
-    frame ({ dir: direction = 's2c', state = null, name = null, buffer = null } = {}) {
+    frame ({ dir: direction = 's2c', state = null, name = null, buffer = null, body = null } = {}) {
       if (closed) return false
       const label = typeof name === 'string' ? name : String(name ?? 'unknown')
       if (skipName(label)) {
@@ -549,7 +555,11 @@ export function createJournal ({
       }
       const payload = toBuffer(buffer)
       const len = payload ? payload.length : 0
-      const record = { t: clock(), dir: direction, state, name: label, len }
+      // #416: the account, and the body this frame crossed. A frame names a body and
+      // never a channel: one frame reaches every channel on that body.
+      const record = stampIdentity(
+        { t: clock(), dir: direction, state, name: label, len },
+        { account, body })
       if (policy === 'length') {
         // The policy never keeps this body, whatever its size.
         record.lengthOnly = true
@@ -574,7 +584,10 @@ export function createJournal ({
           record[key] = normalize(value)
         }
       }
-      if (append('events', record, 'event:' + record.event)) stats.events++
+      // #416: the lane's account fills in what the event does not name, and a null
+      // or empty identity key is left out (src/core/channels.js).
+      const stamped = stampIdentity(record, { account })
+      if (append('events', stamped, 'event:' + stamped.event)) stats.events++
     },
 
     close () {

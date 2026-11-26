@@ -92,7 +92,7 @@ import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { isLoopbackHost } from './offline-identity.js'
 import { CLAIM_REFUSAL, claimRefusalText, createClaims } from '../core/claims.js'
-import { CHANNEL_ROLES, createChannels } from '../core/channels.js'
+import { CHANNEL_ROLES, channelIdentity, createChannels, stampIdentity } from '../core/channels.js'
 import { CHAT_MODES, clientboundPolicy, mayCrossToFront } from '../core/clientbound-policy.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
@@ -771,7 +771,7 @@ function createFrontLeg ({
       server.on('playerJoin', client => {
         const ctx = clients.get(client)
         if (ctx) {
-          log('configResolved', { mode: ctx.interceptor.replayMode, ...ctx.interceptor.stats })
+          record(client, 'configResolved', { mode: ctx.interceptor.replayMode, ...ctx.interceptor.stats })
         }
         onClientJoined(client)
       })
@@ -852,14 +852,14 @@ function createFrontLeg ({
       const outcome = coreAttachConfiguring({ name: client.username, uuid: client.uuid })
       if (!outcome || outcome.attached !== true) {
         metrics.denied++
-        log('attachConfiguringFailed', {
+        record(client, 'attachConfiguringFailed', {
           username: client.username ?? null,
           reason: outcome?.reason ?? 'backend_not_ready'
         })
         denyConnection(client, outcome?.reason ?? 'backend_not_ready')
         return
       }
-      log('attachConfiguring', { username: client.username, uuid: client.uuid })
+      record(client, 'attachConfiguring', { username: client.username, uuid: client.uuid })
     }
   }
 
@@ -922,12 +922,10 @@ function createFrontLeg ({
     clientByChannel.set(outcome.channel.id, client)
     const ctx = clients.get(client)
     if (ctx) ctx.channel = outcome.channel.id
-    log('channelOpen', {
+    record(client, 'channelOpen', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
-      channel: outcome.channel.id,
-      role: outcome.channel.role,
-      body: outcome.channel.body
+      role: outcome.channel.role
     })
     return outcome.channel
   }
@@ -939,17 +937,34 @@ function createFrontLeg ({
     return id === undefined ? null : channels.of(id)
   }
 
+  // #416: one record about a connection, carrying the body and the channel it holds
+  // at the moment of the call, read from the registry rather than copied. The account
+  // is the lane's, and the sink that writes the line stamps it (src/core/channels.js).
+  function record (client, event, fields = {}) {
+    return log(event, stampIdentity(fields, channelIdentity(channelFor(client))))
+  }
+
+  // The same record about a channel that has just closed. `closeChannel` returns the
+  // view, and the registry no longer holds it.
+  function recordOfChannel (channel, event, fields = {}) {
+    return log(event, stampIdentity(fields, channelIdentity(channel)))
+  }
+
+  // A log function bound to one connection, for the helpers that write their own
+  // records and hold a socket rather than the leg's registry (the wire checker).
+  function recordFor (client) {
+    return (event, fields = {}) => record(client, event, fields)
+  }
+
   function closeChannel (client) {
     const id = holderIds.get(client)
     if (id === undefined) return null
     const closed = channels.close(id)
     if (closed === null) return null
     clientByChannel.delete(id)
-    log('channelClosed', {
+    recordOfChannel(closed, 'channelClosed', {
       username: client.username ?? null,
-      channel: closed.id,
       role: closed.role,
-      body: closed.body,
       frames: closed.delivered.frames
     })
     return closed
@@ -1072,7 +1087,7 @@ function createFrontLeg ({
         if (dumpRaw) {
           dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
         }
-        return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
+        return emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
       },
       isConfigurationState: () => client.state === 'configuration',
       cachedConfigFrames,
@@ -1083,7 +1098,7 @@ function createFrontLeg ({
         try {
           configuringHandler?.({ name: client.username ?? null, uuid: client.uuid ?? null })
         } catch (error) {
-          log('configuringHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+          record(client, 'configuringHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
         }
       },
       // Live only: an empty snapshot means the puppet has no backend session
@@ -1091,7 +1106,7 @@ function createFrontLeg ({
       // client on missing registry tags, so deny and let the player retry.
       allowLibraryFallback: false,
       onUnavailable: () => {
-        log('configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
+        record(client, 'configUnavailable', { username: client.username ?? null, reason: 'no_cached_backend_config' })
         denyConnection(client, 'backend_not_ready')
       }
     })
@@ -1478,10 +1493,9 @@ function createFrontLeg ({
     const written = sent.written
     leavePicker(client)
     metrics.claimLanded++
-    log('pickerClaimLanded', {
+    record(client, 'pickerClaimLanded', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
-      body: claim.body,
       server: claim.server,
       target: outcome.target ?? null,
       frames: written,
@@ -1490,8 +1504,7 @@ function createFrontLeg ({
     try {
       client.write('finish_configuration', {})
     } catch (error) {
-      log('pickerClaimFinishFailed', {
-        body: claim.body,
+      record(client, 'pickerClaimFinishFailed', {
         server: claim.server,
         error: String(error?.message ?? error).slice(0, 200)
       })
@@ -1551,19 +1564,16 @@ function createFrontLeg ({
     }
     leavePicker(client)
     metrics.spectateLandings++
-    log('spectateLanded', {
+    record(client, 'spectateLanded', {
       username: client.username ?? null,
       uuid: client.uuid ?? null,
-      channel: channel.id,
-      body: channel.body,
       server: named,
       frames: sent.written
     })
     try {
       client.write('finish_configuration', {})
     } catch (error) {
-      log('spectateFinishFailed', {
-        body: channel.body,
+      record(client, 'spectateFinishFailed', {
         server: named,
         error: String(error?.message ?? error).slice(0, 200)
       })
@@ -1591,7 +1601,7 @@ function createFrontLeg ({
         wireCheck,
         wireMode,
         stats: wireStats,
-        log
+        log: recordFor(client)
       })
       if (sent) {
         written++
@@ -1688,9 +1698,9 @@ function createFrontLeg ({
     try {
       client.write('disconnect', { reason: { type: 'string', value: text } })
     } catch (error) {
-      log('configurationDisconnectFailed', { reason, error: String(error?.message ?? error).slice(0, 200) })
+      record(client, 'configurationDisconnectFailed', { reason, error: String(error?.message ?? error).slice(0, 200) })
     }
-    log('configurationEnded', { reason, username: client.username ?? null })
+    record(client, 'configurationEnded', { reason, username: client.username ?? null })
     try {
       client.end('picker: ' + reason)
     } catch {
@@ -1716,10 +1726,9 @@ function createFrontLeg ({
           channel: channel.id
         })
       if (watched?.watching !== true) {
-        log('spectateFailed', {
+        record(client, 'spectateFailed', {
           username: client.username ?? null,
           uuid: client.uuid ?? null,
-          body: channel.body,
           reason: watched?.reason ?? 'no_answer'
         })
         try { client.end(`spectate refused (${watched?.reason ?? 'no_answer'})`) } catch { /* already gone */ }
@@ -1727,11 +1736,9 @@ function createFrontLeg ({
       }
       channels.markReplay(channel.id)
       metrics.spectatorJoins++
-      log('spectated', {
+      record(client, 'spectated', {
         username: client.username ?? null,
         uuid: client.uuid ?? null,
-        channel: channel.id,
-        body: channel.body,
         frames: watched.frames ?? null,
         replayed: watched.replayed ?? null
       })
@@ -1752,7 +1759,7 @@ function createFrontLeg ({
     const outcome = coreAttach({ name: client.username, uuid: client.uuid })
 
     if (!outcome.attached) {
-      log('attachFailed', { username: client.username, uuid: client.uuid, reason: outcome.reason })
+      record(client, 'attachFailed', { username: client.username, uuid: client.uuid, reason: outcome.reason })
       client.end(`attach denied (${outcome.reason})`)
       return
     }
@@ -1760,7 +1767,7 @@ function createFrontLeg ({
     // been handed its one replay.
     if (held !== null) channels.markReplay(held.id)
     metrics.attaches++
-    log('attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })
+    record(client, 'attached', { username: client.username, uuid: client.uuid, replayed: outcome.replayed })
   }
 
   // #258: the body a claim dials. Set by the core when the lane can serve a
@@ -1800,7 +1807,7 @@ function createFrontLeg ({
       const channel = channelFor(client)
       if (channel !== null && channel.role === CHANNEL_ROLES.SPECTATOR) {
         metrics.spectatorFramesDropped++
-        log('spectatorFrameDropped', { username: client.username ?? null, state: meta.state, name: meta.name })
+        record(client, 'spectatorFrameDropped', { username: client.username ?? null, state: meta.state, name: meta.name })
         return
       }
       // #16: a configuration-phase frame reaches the core as well. The human's
@@ -1837,15 +1844,15 @@ function createFrontLeg ({
     try {
       client.state = 'play'
     } catch (error) {
-      log('frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      record(client, 'frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
       return { reconfigured: false }
     }
     metrics.reconfigured++
-    log('frontReconfigured', { username: client.username ?? null, uuid: client.uuid ?? null })
+    record(client, 'frontReconfigured', { username: client.username ?? null, uuid: client.uuid ?? null })
     try {
       reconfiguredHandler?.({ name: client.username ?? null, uuid: client.uuid ?? null })
     } catch (error) {
-      log('reconfiguredHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+      record(client, 'reconfiguredHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
     }
     return { reconfigured: true }
   }
@@ -1882,7 +1889,7 @@ function createFrontLeg ({
       // connection. A client that never claimed releases nothing.
       const released = claims.release(holderIds.get(client))
       if (released !== null) {
-        log('pickerClaimReleased', {
+        record(client, 'pickerClaimReleased', {
           username: client.username ?? null,
           uuid: client.uuid ?? null,
           body: released.body,
@@ -1896,13 +1903,13 @@ function createFrontLeg ({
       // ends a spectator and nothing else, because the body was never theirs.
       const closed = closeChannel(client)
       if (closed !== null && closed.role === CHANNEL_ROLES.DRIVER) {
-        log('frontDetach', { reason: String(reason).slice(0, 160), attached: true, channels: channels.size })
+        recordOfChannel(closed, 'frontDetach', { reason: String(reason).slice(0, 160), attached: true, channels: channels.size })
         detachHandler?.({ reason: String(reason) })
       } else if (closed !== null && closed.role === CHANNEL_ROLES.SPECTATOR) {
         // #259: a spectator leaving is the end of a spectator and nothing else. The
         // body was never theirs, so the core is told only so it can stop relaying
         // when nobody is left to receive.
-        log('frontClientEnd', {
+        recordOfChannel(closed, 'frontClientEnd', {
           reason: String(reason).slice(0, 160),
           attached: false,
           role: closed.role,
@@ -1910,7 +1917,7 @@ function createFrontLeg ({
         })
         spectatorLeftHandler?.({ channel: closed.id, name: closed.name })
       } else if (closed !== null || clients.has(client)) {
-        log('frontClientEnd', {
+        recordOfChannel(closed, 'frontClientEnd', {
           reason: String(reason).slice(0, 160),
           attached: false,
           role: closed === null ? null : closed.role,
@@ -1919,7 +1926,7 @@ function createFrontLeg ({
       }
     })
     client.on('error', err => {
-      log('frontClientError', { error: String(err.message).slice(0, 200) })
+      record(client, 'frontClientError', { error: String(err.message).slice(0, 200) })
       errorHandler?.({ error: err })
     })
     // #18: the human's Client Information, as it arrives. A joining client
@@ -1941,22 +1948,21 @@ function createFrontLeg ({
       channels.settings(channel.id, data, { at: Date.now() })
       if (channel.role !== CHANNEL_ROLES.DRIVER) {
         metrics.spectatorSettings++
-        log('spectatorClientInformation', {
+        record(client, 'spectatorClientInformation', {
           username: client.username ?? null,
           state,
-          channel: channel.id,
           locale: data?.locale ?? null
         })
         return
       }
       if (!reportsClientInformation({ role: channel.role, state })) {
-        log('clientInformationNotReported', { username: client.username ?? null, state })
+        record(client, 'clientInformationNotReported', { username: client.username ?? null, state })
         return
       }
       try {
         clientSettingsHandler?.({ ...data })
       } catch (error) {
-        log('clientSettingsHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
+        record(client, 'clientSettingsHandlerError', { error: String(error?.message ?? error).slice(0, 200) })
       }
     })
   }
@@ -1979,17 +1985,17 @@ function createFrontLeg ({
     if (!driver) return { started: false, reason: 'no_client' }
     const ctx = clients.get(driver)
     if (ctx?.pendingReconfiguration) {
-      log('frontReconfigureRefused', { reason: 'already_reconfiguring' })
+      record(driver, 'frontReconfigureRefused', { reason: 'already_reconfiguring' })
       return { started: false, reason: 'already_reconfiguring' }
     }
     if (driver.state !== 'play') {
-      log('frontReconfigureRefused', { reason: 'client_not_in_play', state: driver.state })
+      record(driver, 'frontReconfigureRefused', { reason: 'client_not_in_play', state: driver.state })
       return { started: false, reason: 'client_not_in_play', state: driver.state }
     }
     try {
       driver.write('start_configuration', {})
     } catch (error) {
-      log('frontReconfigureWriteFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      record(driver, 'frontReconfigureWriteFailed', { error: String(error?.message ?? error).slice(0, 200) })
       return { started: false, reason: 'write_failed' }
     }
     if (ctx) {
@@ -1997,7 +2003,7 @@ function createFrontLeg ({
       ctx.reconfiguring = false
     }
     metrics.reconfigurations++
-    log('frontReconfiguration', { reason, username: driver.username ?? null })
+    record(driver, 'frontReconfiguration', { reason, username: driver.username ?? null })
     return { started: true, reason }
   }
 
@@ -2011,16 +2017,16 @@ function createFrontLeg ({
     try {
       client.state = 'configuration'
     } catch (error) {
-      log('frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      record(client, 'frontReconfigureStateFailed', { error: String(error?.message ?? error).slice(0, 200) })
       return { acknowledged: false }
     }
     ctx.reconfiguring = true
     for (const frame of pending.frames) {
-      const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log })
+      const sent = emitCheckedRaw({ client, buffer: frame.buffer, meta: frame.meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
       if (sent) noteDelivered(client, frame.meta)
     }
     metrics.reconfigurationFramesFlushed += pending.frames.length
-    log('frontReconfigurationAcknowledged', {
+    record(client, 'frontReconfigurationAcknowledged', {
       username: client.username ?? null,
       flushedFrames: pending.frames.length,
       droppedFrames: pending.dropped
@@ -2054,7 +2060,7 @@ function createFrontLeg ({
       if (!mayCrossToFront(meta.state, meta.name, { chat: chatMode })) {
         const policy = clientboundPolicy(meta.state, meta.name)
         metrics.policyRefused++
-        log('clientboundRefused', {
+        record(client, 'clientboundRefused', {
           state: meta.state,
           name: meta.name,
           unknown: policy.unknown === true
@@ -2078,7 +2084,7 @@ function createFrontLeg ({
       }
       if (pending.dropped > 0 && !pending.overflowLogged) {
         pending.overflowLogged = true
-        log('frontReconfigurationOverflow', { dropped: pending.dropped })
+        record(client, 'frontReconfigurationOverflow', { dropped: pending.dropped })
       }
       return true
     }
@@ -2087,7 +2093,7 @@ function createFrontLeg ({
     // as a login packet, which kills the connection. Refuse and log instead.
     if (meta?.state && client.state && meta.state !== client.state) {
       metrics.stateRefused++
-      log('clientboundStateMismatch', {
+      record(client, 'clientboundStateMismatch', {
         name: meta.name,
         frameState: meta.state,
         clientState: client.state
@@ -2103,10 +2109,10 @@ function createFrontLeg ({
     if (meta?.state === 'configuration' && meta?.name === 'finish_configuration') {
       const ctx = clients.get(client)
       if (ctx?.interceptor?.finishFromCore()) {
-        log('configFinishedByCore', { username: client.username ?? null })
+        record(client, 'configFinishedByCore', { username: client.username ?? null })
       }
     }
-    const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log })
+    const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
     if (sent) noteDelivered(client, meta)
     return sent
   }

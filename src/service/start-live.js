@@ -89,7 +89,7 @@ import { offlineUuid } from '../legs/offline-identity.js'
 import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
-import { bodyKey } from '../core/channels.js'
+import { accountIdentifier, bodyKey, stampIdentity } from '../core/channels.js'
 import { pickerOfferedRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
@@ -653,6 +653,22 @@ export async function dialBodyAtBoot ({ cfg, backend, log = () => {}, connectTim
   return { dialled: true, reason: null }
 }
 
+// #416: the JSONL log every record of the service and both legs passes through.
+// The account is the lane's, so it is stamped here, once, rather than at each of
+// the call sites that would otherwise repeat it. A lane with no account writes no
+// account key, never a null (#263 D2).
+export function createJsonlLog ({ sink, account = null }) {
+  return (event, fields = {}) => {
+    try {
+      sink.write(redact(JSON.stringify({
+        t: new Date().toISOString(),
+        event,
+        ...stampIdentity(fields, { account })
+      })) + '\n')
+    } catch { /* never let logging kill the legs */ }
+  }
+}
+
 export async function startLive ({ argv = [], io = process } = {}) {
   const stdout = io.stdout ?? process.stdout
   const stderr = io.stderr ?? process.stderr
@@ -763,11 +779,14 @@ export async function startLive ({ argv = [], io = process } = {}) {
   if (process.env.MONOPLAYER_LOG) {
     sink = fs.createWriteStream(process.env.MONOPLAYER_LOG, { flags: 'a' })
   }
-  const log = (event, fields = {}) => {
-    try {
-      sink.write(redact(JSON.stringify({ t: new Date().toISOString(), event, ...fields })) + '\n')
-    } catch { /* never let logging kill the legs */ }
-  }
+  // #416: the account every record names, resolved before any leg exists: the
+  // alias custody knows, else its UUID, else the name an offline lane joins as.
+  const accountId = accountIdentifier({
+    alias: resolved?.account.alias ?? null,
+    uuid: cfg.puppet.uuid ?? null,
+    name: cfg.puppet.username ?? null
+  })
+  const log = createJsonlLog({ sink, account: accountId })
 
   // Attach-time raw byte dump (diagnostic; off by default).
   let dumpRaw = null
@@ -845,7 +864,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   const telemetryEnv = { ...process.env }
   if (accountAlias) telemetryEnv.MONOPLAYER_ACCOUNT_ALIAS = accountAlias
   const telemetry = createTelemetry({ env: telemetryEnv, log })
-  const journal = createJournal(cfg.journal)
+  // #416: the account reaches every journal record from here, and the body a frame
+  // crossed is passed by the core that serves it.
+  const journal = createJournal({ ...cfg.journal, account: accountId })
   // #96: a journal volume with no room for its budget is reported here, with
   // the path, before any leg opens. The journal stays off; a diagnostic
   // artifact does not take the front down with it.
@@ -889,6 +910,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
     backendLeg: backend,
     frontLeg: front,
     clock,
+    // #416: the same identifier the log sink stamps, so a core record and the line
+    // the sink writes name one account.
+    account: accountId,
     logStream: { write: line => log('core', { line }) },
     telemetry,
     journal,
