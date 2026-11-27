@@ -112,11 +112,11 @@ const closes = tickets => ticketList(tickets) + ' ' + agree(tickets.length, 'clo
 // would otherwise miss: a step of lag, the tab list, no hands in first person. The page cannot add
 // detail this sentence lacks without becoming a second home for it.
 // `openUntil` is the declaration that a step is expected to be `not-seen` today, and the tickets
-// that would change it (#920). Optional, like `because`: five steps carry none, because five steps
-// a run taken today shows. `verifyWitness` accepts a `not-seen` on a step that carries it and on no
-// other, so the declaration is a list with a reason per entry rather than a relaxed check. A row of
-// the witness cannot carry one: the file is hand-edited, and a step that could declare itself absent
-// would pass by writing a line.
+// that would change it (#920). Optional, like `because`: a step a run taken today shows carries no
+// `openUntil` at all, rather than a null standing in for one. `verifyWitness` accepts a `not-seen`
+// on a step that carries it and on no other, so the declaration is a list with a reason per entry
+// rather than a relaxed check. A row of the witness cannot carry one: the file is hand-edited, and
+// a step that could declare itself absent would pass by writing a line.
 // `because` is the failure sentence, and it is optional on purpose: what the operator reads when a
 // step fails is the page's prose, except where that sentence states a fact this module computes
 // (#882). Then the sentence is built here — the mode step's count is `spectatorModeFrames().length`,
@@ -484,13 +484,13 @@ const RECORDED_STATES = new Set(['seen', 'not-seen'])
 // guard, and a test can assert an empty list rather than an absent key.
 const refuse = reason => ({ ok: false, reason, gaps: [], stale: [] })
 
-// What a declared gap is, on the result: the step, the sentence the operator read, the tickets that
-// close it, and what they recorded. `openUntil` keeps the field's name, so the step, the result and
-// the two printed lines call one thing one name.
-const gapOf = step => ({ id: step.id, claim: step.claim, openUntil: step.openUntil, evidence: step.evidence })
+// A step the module declares expected absent, as the result names it: the step, the sentence the
+// operator read, the tickets that close it, and what they recorded. Both lists the check returns are
+// this shape, so a printed line takes one entry, and `openUntil` keeps the field's name throughout.
+const declaredOf = step => ({ id: step.id, claim: step.claim, openUntil: step.openUntil, evidence: step.evidence })
 
-// The one line a declared gap is printed on, wherever this module prints one, so three readers
-// cannot word it differently: the command's pass, the report beside the step, and nothing else.
+// The one line a declared gap is printed on, wherever this module prints one, so its two readers
+// cannot word it differently: the command's pass and the report beside the step.
 // `withEvidence` is for the caller that has not printed the operator's words on the line above.
 const gapLine = (step, { withEvidence = false } = {}) =>
   'known gap: ' + step.claim + ' — not seen' +
@@ -610,8 +610,8 @@ export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
   return {
     ok: true,
     reason: null,
-    gaps: notSeen.map(gapOf),
-    stale: settled.filter(step => step.state === 'seen' && step.openUntil !== null).map(gapOf)
+    gaps: notSeen.map(declaredOf),
+    stale: settled.filter(step => step.state === 'seen' && step.openUntil !== null).map(declaredOf)
   }
 }
 
