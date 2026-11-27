@@ -509,10 +509,22 @@ test('every record the reader relies on is written by a leg', () => {
 // the whole page still answered for a row the table did not hold, so a runbook could lose a row and
 // keep its record's name alive in the prose around it.
 //
+// What this reads, and what it does not (#876): one table's rows, and, below them, no second table.
+// Every other line of the section is compared to nothing, so a record's fact restated there is a
+// second home, and the copy that drifts.
+//
+// Both halves are runnable. Add a sentence to the prose claiming the `heartbeat` record is written
+// every 10 minutes, and this file stays green. Add four words to a row's cell, and it fails, naming
+// the row. The runbook says which half is read, because a reader cannot see the difference.
+// test/tooling/dev-lane-proof.test.js reads that section too, and it asks rather than compares: the
+// counter names in the lower paragraph have to be there, and the service has to count each one.
+// Neither file compares a sentence of that prose to anything.
+//
 // One repair per kind, because they are four different edits in two files: a record with no row, a
 // row with no record, a sentence reworded on one side, and a row moved out of the list's order. The
 // order is the list's, not the run's: `pickerEmpty` is documented last and written at the picker. The
-// reworded one quotes both cells, because a cell is 300 characters and its name is not the edit.
+// reworded one quotes both cells, because a cell can run to hundreds of characters and its name is
+// not the edit.
 //
 // What is not asked, here or anywhere: whether a record a leg starts writing has a row in RECORDS.
 // The legs write far more names than this list holds, and that is the list's judgement, so the two
