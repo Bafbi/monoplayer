@@ -601,7 +601,7 @@ test('the composition root header keeps no copy of a leg interface (#763)', () =
 //
 // The event rule is this case's own, and it is the one place here that a marker word is read: a
 // backticked name the block calls an event has to be one the core emits. The shape is
-// test/tooling/document-pointers.test.js's "title" in page, where a marker word decides what a
+// test/tooling/surface-pointers.test.js's "title" in page, where a marker word decides what a
 // quoted name is. Neither shape it reads is this one, so this case says what it reads instead of
 // borrowing that file's authority. Its limit is real: a sentence rewritten to keep the event and
 // drop the word "event" fails here, and the repair is to write it in the shape this case reads.
@@ -652,7 +652,7 @@ test('the comment above the wiring names the module, the tables its two calls ap
 
   // The pointer: the file that owns what a row is, and the replacement for a different
   // registration. A module that moves or is renamed leaves this sentence pointing nowhere, which
-  // is the shape test/tooling/document-pointers.test.js sweeps for in the documents.
+  // is the shape test/tooling/surface-pointers.test.js sweeps for in the documents.
   assert.ok(block.includes('src/service/wire-leg-to-core.js'),
     'the comment above the wiring does not name src/service/wire-leg-to-core.js. That module is the ' +
     'one home of the call-ins a leg interface carries, so it is also the answer to what a lane does ' +

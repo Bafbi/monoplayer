@@ -12,10 +12,10 @@
 // older than three heartbeats is its own state so it is never coloured as live
 // (#231).
 //
-// #248 split the one renderer in src/panel/page.js into these views, and made this
-// function the fragment the stream writes: the first render and every tick after it
-// are the same code, so a number on the page and a number five seconds later cannot
-// disagree.
+// #248 split the one renderer into these views, and the document half is
+// src/panel/views/page.js. This function is the fragment the stream writes: the
+// first render and every tick after it are the same code, so a number on the page
+// and a number five seconds later cannot disagree.
 import {
   bytes, count, dayWord, entryTally, env, escape, group, heading, list, present, row,
   sourced, span, uuidDecision, yesno
