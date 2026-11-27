@@ -1,5 +1,6 @@
-// The small vocabulary every view shares: escaping, the null-versus-zero rules,
-// and the two shapes a fact is printed in (#248).
+// The small vocabulary every view shares: escaping, the null-versus-zero rules, the
+// shapes a fact is printed in, and the words an attach-whitelist entry is answered in
+// when one list is read two ways (#248, #748).
 //
 // One place, because the page's promise is that a number never appears without
 // the record it came from. That promise is enforced by row() and sourced(), and a
@@ -48,6 +49,31 @@ export function span (value) {
   if (value >= 86_400_000) return value + ' ms (' + Math.round((value / 86_400_000) * 10) / 10 + ' days)'
   if (value >= 3_600_000) return value + ' ms (' + Math.round((value / 3_600_000) * 10) / 10 + ' hours)'
   return value + ' ms'
+}
+
+// The words one attach-whitelist entry's UUID decision is printed in. The decision is
+// whether a Mojang session can ever authenticate that entry's uuid, and the term is the
+// glossary's (#747). Both places the page prints it ask this: the row under the card,
+// which shows the list the lane started with, and the "Who may attach" block below,
+// which shows the file as it stands. `mise run dev:status` settled the same wording
+// (#677), so an operator comparing the three reads one vocabulary.
+export const uuidDecision = refusalReason => (present(refusalReason)
+  ? 'cannot authenticate: ' + refusalReason
+  : 'can authenticate')
+
+// How many entries a list holds, with the fault when some of them admit nobody, as one
+// clause: "3 entries, 1 of which can authenticate". The card's startup row and the "Who
+// may attach" block both print this, and `mise run dev:status` settled the wording
+// (#677), so an operator comparing the three reads one sentence. `usable` is the number
+// of entries with no refusal reason. Null is a list whose answers could not be read, and
+// such a list carries no ratio: an unknown count of usable entries is not a fault.
+export function entryTally (count, usable) {
+  const size = count === 1 ? '1 entry' : count + ' entries'
+  if (usable === null || usable >= count) return size
+  if (count === 1) return size + ', and it cannot authenticate'
+  return size + (usable === 0
+    ? ', and none of them can authenticate'
+    : ', ' + usable + ' of which can authenticate')
 }
 
 export function row (label, value) {
