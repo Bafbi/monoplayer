@@ -30,7 +30,9 @@
 //         module in src/service/ has a row: the wiring module landed with none.
 //
 // What is compared is names. No sentence is parsed, because a guard that read English
-// would be a guard that lies about what it checked. Two things are left to review, and
+// would be a guard that lies about what it checked. The interface section's prose is
+// scanned for two name shapes, a `set…` call-in and a `core.…` method (#691), and
+// nothing else in a sentence is read. Two things are left to review, and
 // no test decides them: what "the copy Git commits answers" covers, and that a lane
 // naming neither variable offers nothing. What the offer does with the two sources is
 // driven through src/service/control.js by test/service/control.test.js, including
@@ -261,6 +263,38 @@ test('the interface section names no call-in the two tables do not declare', () 
     'src/service/wire-leg-to-core.js declares ' + (unknown.length === 1 ? 'it' : 'them') + '. A call-in ' +
     'the module does not carry is one a reader looks for in the table and cannot find (#606). Name the row ' +
     'that exists, or add the row first.')
+})
+
+// A core method named in the section's prose is a claim about the same tables: "the
+// front leg calls `core.processLoginStart`" says a registration reaches that method.
+// The setter scan above cannot see one, because a method carries no `set` prefix, and
+// that is the hole #691 came through: the sentence named `core.processVerifySession`,
+// no row reached it, and nothing here said so. The row's `reaches` is the fact, so the
+// name is held to it rather than to a list kept in this file.
+//
+// What this case does not read: a method written without the `core.` prefix. The section
+// names a core method bare too (`backendFrame`, `chat`, one paragraph down), and a bare
+// name is the same shape as a leg's own member (`claimOn`, `write`, `end`, in the fenced
+// blocks below), so no rule here can tell the two apart. The prefix is what says "this is
+// the core's", and a sentence that claims a call without it is the review's to catch.
+test('the interface section names no core method the two tables do not reach', () => {
+  const reached = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]
+    .map(row => row.reaches)
+    .filter(name => name !== undefined)
+  // A method name carries a capital. That is what keeps the section's own pointer to
+  // `src/service/wire-leg-to-core.js` from reading as a call to `core.js`.
+  const named = [...new Set([...interfaceSection().matchAll(/\bcore\.([a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)/g)]
+    .map(match => match[1]))]
+  assert.ok(named.length > 0,
+    'the interface section names no core method at all, so this case checked nothing. The section states ' +
+    'which call-ins the front leg makes in order, and that sentence is what a reader writes a leg from.')
+  const unknown = named.filter(name => !reached.includes(name))
+  assert.deepEqual(unknown, [],
+    'the interface section names ' + unknown.join(', ') + ' as a method of the core, and no row of ' +
+    'FRONT_LEG_CALL_INS or BACKEND_LEG_CALL_INS reaches ' + (unknown.length === 1 ? 'it' : 'them') + '. A ' +
+    'core method no call-in reaches is one no leg calls, so the sentence sends a reader to a lane that does ' +
+    'not exist, which is what #691 found. Add the row that reaches it, with a leg that carries it, or take ' +
+    'the name off the page.')
 })
 
 for (const { table, leg, rows } of INTERFACES) {

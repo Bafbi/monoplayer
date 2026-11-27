@@ -836,10 +836,10 @@ test('no committed attach whitelist names a uuid derived from its own name', () 
   // the live one is what the dev seed copies.
   //
   // A version-3 UUID is Java's nameUUIDFromBytes, the value src/legs/offline-identity.js
-  // computes, and Mojang issues version 4: this front verifies each login against Mojang
-  // (src/core/identity.js, verifySession), so a name-derived entry can never attach. The
-  // offline legs are the lane where one belongs (GLOSSARY.md, "test-double lane"), and
-  // no manifest here composes them.
+  // computes, and Mojang issues version 4: this front's library verifies each login against
+  // Mojang (online-mode hasJoined, then src/custody/attach.js `checkVerified`), so a
+  // name-derived entry can never attach. The offline legs are the lane where one belongs
+  // (GLOSSARY.md, "test-double lane"), and no manifest here composes them.
   //
   // What this case does not carry: the dev document is empty, so the loop below reads one
   // entry in the tree today. The teeth are the fixture cases above, which run the script

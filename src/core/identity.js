@@ -1,17 +1,21 @@
 // B1 monoplayer core: pure front-leg identity gate with an injected verifier.
 //
-// Two gates run before the attaching client ever gets Login Success:
+// Two gates the core offers an attaching client before its Login Success:
 //   1. Login Start (#0x00) review: the claimed UUID must be on the attach
 //      whitelist. A non-whitelisted UUID is denied right here — before any
 //      encryption response, session verification, or Login Success packet.
-//   2. Session verify (online-mode): after the front leg's encryption response,
-//      the injected verifier resolves the client's session-server lookup
-//      ("hasJoined"). Exact name+UUID match required.
+//      Every lane runs this one.
+//   2. Session verify (online-mode): the injected verifier resolves the client's
+//      session-server lookup ("hasJoined"), and an exact name+UUID match is
+//      required. No lane injects a verifier and no lane calls it (#691): the
+//      online front leg's library answers `hasJoined` before `beforeLogin`, and
+//      src/custody/attach.js `checkVerified` holds that answer to the whitelist.
+//      #721 decides whether this step is wired or deleted.
 //
 // The decision is returned; the front-leg adapter owns every I/O side effect
 // (kick packets, disconnects, encryption handshake). Purity also means no
 // verifier is provided: the caller injects the live session-mo lookup
-// (G1) or a stub.
+// (G1) or a stub. No caller does today.
 
 export const DENY_REASONS = Object.freeze({
   NOT_WHITELISTED: 'not_whitelisted',
