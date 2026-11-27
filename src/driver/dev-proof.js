@@ -92,11 +92,18 @@ export const RECORDS = Object.freeze([
 // (#881). It says what a correct run looks like in the operator's terms, including the cues they
 // would otherwise miss: a step of lag, the tab list, no hands in first person. The page cannot add
 // detail this sentence lacks without becoming a second home for it.
-// `test/driver/dev-proof.test.js` holds the runbook's table to all three fields, both ways.
+// `because` is the failure sentence, and it is optional on purpose: what the operator reads when a
+// step fails is the page's prose, except where that sentence states a fact this module computes
+// (#882). Then the sentence is built here — the mode step's count is `spectatorModeFrames().length`,
+// so a third frame fails the guard on the page's cell instead of leaving it quietly stale — and the
+// page's cell is this string word for word, the same way it is `claim`'s. A step with no derived fact
+// in its failure cell has no `because` at all rather than a null standing in for one: the absence
+// is the signal that the page's wording is the only home for that cell, and it stays the page's.
+// `test/driver/dev-proof.test.js` holds the runbook's table to every field, both ways.
 export const OPERATOR_STEPS = Object.freeze([
   { id: 'puppet-renders', record: 'puppetSkinSent', claim: 'the puppet renders where the driving client stands, wearing the puppet\'s skin' },
   { id: 'puppet-walks', record: 'heartbeat', claim: 'the puppet walks when the driving client walks, a fraction of a step behind' },
-  { id: 'spectator-mode', record: 'spectateView', claim: 'the spectator flies, takes no damage, and cannot break or place' },
+  { id: 'spectator-mode', record: 'spectateView', claim: 'the spectator flies, takes no damage, and cannot break or place', because: 'survival behaviour: `spectateView.modeFrames` was not ' + spectatorModeFrames().length },
   { id: 'spectator-own-body', record: null, claim: 'the spectator has no body of its own, and no hands in first person (#647: this step fails until it lands)' },
   { id: 'drawn-for-driver', record: 'virtualPlayerWritten', claim: 'the spectator appears to the driving client, standing in the world and in the tab list, wearing a default skin' },
   { id: 'drawn-once', record: 'virtualPlayerWritten', claim: 'the driving client is drawn once, not twice: one body, and it is yours' }
@@ -114,7 +121,10 @@ export const CLAIMS = Object.freeze([
   { id: 'body', text: 'the puppet had a body there: a spawn_entity for its UUID' },
   { id: 'move', text: 'a move frame was written after the landing, so the puppet was not standing still on every socket' },
   { id: 'seen-by-driver', text: 'the spectator was announced and spawned on the driver\'s own socket' },
-  { id: 'mode', text: 'the spectator was told it is a spectator: game_state_change, then abilities' }
+  // The pair's two frames, in the order the module writes them: the hand copy #882 found on the
+  // runbook's page, one file over, with the same repair — built here, so a third frame reaches this
+  // sentence instead of leaving it naming the two it always has.
+  { id: 'mode', text: 'the spectator was told it is a spectator: ' + spectatorModeFrames().map(frame => frame.name).join(', then ') }
 ])
 
 // The events that stop a run before its first landing, or after it.

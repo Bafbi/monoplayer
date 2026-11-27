@@ -748,6 +748,15 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // held to the claim word for word, both ways: the comparison reads both texts, so neither is
 // derived from the other, and it strips nothing. Emphasis in a cell is a different sentence.
 //
+// The fourth cell is the next seam (#882). It is the page's prose, one reading deep: it names the
+// step's record and nothing else, so a count written in it was a copy nobody read. The mode step's
+// cell said the pair's length was `2`, which is `spectatorModeFrames().length` — a third frame in that
+// module would have left the page saying two while every spectator row went red. That cell is now the
+// step's own `because` sentence, built in the module with the count inside it, and compared word for
+// word like the claim. A step whose failure cell states no derived fact carries no `because`, and its
+// cell stays the page's, which is why the field is optional: five steps carry no `because`, and no
+// empty string standing in for one.
+//
 // Read as rows, inside its own section, keyed by the id each row carries — never as the page,
 // because the runbook names these steps in the prose around the table too. A row says where to
 // look, what to see there, and the record that says otherwise when it is missing, so the guard
@@ -756,13 +765,21 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // in the record table and in this one.
 const STEP_SECTION = 'What you should see'
 
-test('the runbook\'s step table is OPERATOR_STEPS, a name, a sentence, and a record where a step has one, both ways', () => {
+test('the runbook\'s step table is OPERATOR_STEPS: a name, a sentence, a record where a step has one, and a failure sentence where a step states a count, both ways', () => {
   const rows = stepRows(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'))
 
   // Both sides have to be read, or a table rewritten as prose would leave the comparison holding
   // two empty lists and passing.
   assert.ok(rows.length > 0, 'the "' + STEP_SECTION + '" section carries the table an operator reads')
   assert.ok(OPERATOR_STEPS.length > 0, 'the module names the steps only a person can answer')
+
+  // A failure sentence is a cell, so it carries no pipe and no line break: the precondition the
+  // record table asks of `RECORDS`' sentences, and the one thing that would let the comparison
+  // below pass while the page rendered something else.
+  for (const { id, because } of OPERATOR_STEPS.filter(step => typeof step.because === 'string')) {
+    assert.ok(!because.includes('|') && !because.includes('\n'),
+      'the failure sentence for ' + id + ' fits one markdown cell: no pipe and no line break')
+  }
 
   assert.deepEqual(stepDisagreement(stepDrift(rows)), [],
     'the runbook\'s step table and OPERATOR_STEPS disagree')
@@ -804,6 +821,9 @@ const duplicated = ids => ids.filter((id, at) => ids.indexOf(id) !== at)
 function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
   const rowOf = new Map(rows.map(row => [row.id, row]))
   const stepOf = new Map(steps.map(step => [step.id, step]))
+  // A step that states a fact the module computes carries its failure sentence here; one that does
+  // not carries nothing, and no cell of it is compared beyond the record's name.
+  const statesFailure = step => typeof step.because === 'string'
   const missingRow = steps.map(step => step.id).filter(id => !rowOf.has(id))
   const missingStep = rows.map(row => row.id).filter(id => !stepOf.has(id))
   const thin = rows
@@ -820,8 +840,12 @@ function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
     if (row === undefined || row.see === '' || row.see === step.claim) return []
     return [{ id: step.id, table: row.see, module: step.claim }]
   })
+  // A step whose cell is the module's sentence already forces the record's name, because the
+  // sentence carries it. So a cell that lost the name and the sentence is one defect, reported once
+  // as a reworded failure: two messages would ask for one edit twice.
   const unnamedRecord = steps
-    .filter(step => step.record !== null && rowOf.has(step.id) && !namesRecord(rowOf.get(step.id), step.record))
+    .filter(step => step.record !== null && !statesFailure(step) && rowOf.has(step.id) &&
+      !namesRecord(rowOf.get(step.id), step.record))
     .map(step => ({ id: step.id, record: step.record }))
   const unlistedRecord = steps
     .filter(step => step.record !== null && !records.some(record => record.name === step.record))
@@ -829,7 +853,18 @@ function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
   const repeated = [...new Set([...duplicated(rows.map(row => row.id)), ...duplicated(steps.map(step => step.id))])]
   const sameNames = missingRow.length === 0 && missingStep.length === 0 && rows.length === steps.length
   const moved = sameNames ? rows.map(row => row.id).filter((id, at) => id !== steps[at].id) : []
-  return { missingRow, missingStep, thin, reworded, unnamedRecord, unlistedRecord, repeated, moved }
+  // #882: the failure cell is the page's prose, except where the step states a fact the module
+  // computes. Then the step's `because` is the sentence and the page's cell is that sentence word for
+  // word, so a count the module changes moves the page instead of leaving it saying the old number.
+  // A step with no `because` is not compared here: its cell is the page's, and `namesRecord` is all
+  // the guard reads of it. An empty cell is `thin`'s finding, as above.
+  const rewordedFailure = steps.flatMap(step => {
+    if (!statesFailure(step)) return []
+    const row = rowOf.get(step.id)
+    if (row === undefined || row.because === '' || row.because === step.because) return []
+    return [{ id: step.id, table: row.because, module: step.because }]
+  })
+  return { missingRow, missingStep, thin, reworded, rewordedFailure, unnamedRecord, unlistedRecord, repeated, moved }
 }
 
 // A row names its record in backticks in the last cell, alone or at the head of a field path: the
@@ -842,8 +877,8 @@ function namesRecord (row, record) {
 
 // The edit each disagreement asks for, one sentence each, naming the row and the side it is on. A
 // message that said only "the table and the steps disagree" would leave the reader to work out
-// which of the seven edits is theirs, and which row.
-function stepDisagreement ({ missingRow, missingStep, thin, reworded, unnamedRecord, unlistedRecord, repeated, moved }) {
+// which of the edits is theirs, and which row.
+function stepDisagreement ({ missingRow, missingStep, thin, reworded, rewordedFailure, unnamedRecord, unlistedRecord, repeated, moved }) {
   return [
     ...missingRow.map(id => 'deploy/dev/README.md\'s "' + STEP_SECTION + '" table has no row for step ' + id +
       ', which OPERATOR_STEPS carries: add a row with `' + id + '` in the Step cell, or remove the step'),
@@ -855,6 +890,10 @@ function stepDisagreement ({ missingRow, missingStep, thin, reworded, unnamedRec
     // the claim is what the witness writes and quotes back, and the cell is what the operator reads.
     ...reworded.map(({ id, table, module }) => 'deploy/dev/README.md\'s "You should see" cell for ' + id +
       ' is not the step\'s claim\n  the table says: ' + table + '\n  OPERATOR_STEPS says: ' + module),
+    // #882: both texts, because either side can be the edit: a module sentence that changed its
+    // count, or a page that still states the old one.
+    ...rewordedFailure.map(({ id, table, module }) => 'deploy/dev/README.md\'s failure cell for ' + id +
+      ' is not the step\'s sentence\n  the table says: ' + table + '\n  OPERATOR_STEPS says: ' + module),
     ...unnamedRecord.map(({ id, record }) => 'the runbook\'s row for ' + id + ' does not name `' + record +
       '`, the record that goes into the log when the step fails: name it in the last cell, where the operator reads it'),
     ...unlistedRecord.map(({ id, record }) => 'OPERATOR_STEPS gives step ' + id + ' the record `' + record +
@@ -868,7 +907,7 @@ function stepDisagreement ({ missingRow, missingStep, thin, reworded, unnamedRec
 
 // Fixtures, not the tree: the comparison is held by a page built here, so a drift in the runbook
 // cannot make this case about the drift instead of the guard.
-test('the step comparison reports a row on one side only, a thin row, a reworded sentence, and a row naming no record', () => {
+test('the step comparison reports a row on one side only, a thin row, a reworded sentence, a reworded failure sentence, and a row naming no record', () => {
   // The claim and the cell are the same words in the fixture, because that is the state the tree
   // has to hold: a fixture that started apart from itself would report a drift on every case below.
   const steps = [
@@ -956,6 +995,32 @@ test('the step comparison reports a row on one side only, a thin row, a reworded
   const moved = stepDrift(stepRows(page([rows[1], rows[0]])), steps, records)
   assert.deepEqual(moved.moved, ['second-step', 'first-step'])
   assert.match(stepDisagreement(moved)[0], /^the runbook's step table is not in OPERATOR_STEPS's order at second-step/)
+
+  // #882: the failure cell that states a count. The step's sentence carries the number, so the
+  // page's cell and the module are one string, and a page that still says the old number is the
+  // drift. The record name stays in it, because a failure with no log line to open is no use.
+  const counted = [{ ...steps[0], because: 'no `alphaRecord` in the log: was not 2' }, steps[1]]
+  const countedCell = 'no `alphaRecord` in the log: was not 2'
+  assert.deepEqual(stepDisagreement(stepDrift(stepRows(page([{ ...rows[0], because: countedCell }, rows[1]])), counted, records)), [],
+    'the count the module states and the count the page states are one string, so the fixture agrees')
+
+  const stale = stepDrift(stepRows(page([{ ...rows[0], because: 'no `alphaRecord` in the log: was not 3' }, rows[1]])), counted, records)
+  assert.deepEqual(stale.rewordedFailure.map(({ id }) => id), ['first-step'],
+    'a page stating a different count is the finding this compares')
+  assert.match(stepDisagreement(stale)[0],
+    /^deploy\/dev\/README\.md's failure cell for first-step is not the step's sentence\n  the table says: no `alphaRecord` in the log: was not 3\n  OPERATOR_STEPS says: no `alphaRecord` in the log: was not 2$/)
+
+  // One defect is one finding here too: a cell that is not the sentence and also lost the record name
+  // is the failure comparison's, because the module's sentence carries the name the cell was told to
+  // hold. Two messages would ask for one edit twice.
+  const countedAndUnnamed = stepDrift(stepRows(page([{ ...rows[0], because: 'was not 3' }, rows[1]])), counted, records)
+  assert.deepEqual(countedAndUnnamed.rewordedFailure.map(({ id }) => id), ['first-step'])
+  assert.deepEqual(countedAndUnnamed.unnamedRecord, [],
+    'the record name is inside the module sentence, so a cell that lost both is one edit')
+
+  // A step that states no derived fact keeps the page's wording: no `because`, and nothing reads it.
+  assert.deepEqual(stepDrift(stepRows(page([{ ...rows[0], because: 'the page\'s own words, and no `alphaRecord`' }, rows[1]])), steps, records).rewordedFailure,
+    [], 'a step with no derived fact keeps the page\'s prose, so the guard reads only its record name')
 
   assert.equal(namesRecord({ because: '`spectateView.modeFrames` was not 2' }, 'spectateView'),
     true, 'a record named with the field to read inside it is named')
