@@ -39,6 +39,10 @@ import { pathToFileURL } from 'node:url'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { spectatorModeFrames } from '../core/spectator-mode.js'
+// The one rule a step expected absent is recorded under, and the sentences a refusal is built from.
+// Both hand-filled witnesses read them from src/driver/checks.js, so the dev lane and the G0 lane
+// accept a declared gap by the same code rather than by two copies that agree today (#943).
+import { GAP_STATE, agree, closes, commaAnd, declaredOf, gapSplit, namedIds, ticketList } from './checks.js'
 
 const USAGE = `usage: kubectl -n monoplayer-dev logs deploy/monoplayer | node src/driver/dev-proof.js
        node src/driver/dev-proof.js --path .reports/dev-log.jsonl [--json] [--witness FILE]
@@ -101,15 +105,6 @@ export const RECORDS = Object.freeze([
 // the step's failure sentence is built from them, so the runbook's cell for the step — held to that
 // sentence word for word (#882) — follows a ticket edited here instead of naming one that landed.
 const OWN_BODY_TICKETS = Object.freeze([647, 645])
-
-// The tickets a declaration names, as the sentence reads them: "#647", or "#647 and #645".
-const ticketList = tickets => tickets.map(ticket => '#' + ticket).join(' and ')
-
-// The verb that agrees with a count, so a sentence built on one does not spell the choice out.
-const agree = (count, one, many) => (count === 1 ? one : many)
-
-// What a declaration says it takes to close it: "#647 and #645 close it", or one of them.
-const closes = tickets => ticketList(tickets) + ' ' + agree(tickets.length, 'closes', 'close') + ' it'
 
 // The claims only a person can answer, in the order the runbook's table asks for them. The
 // states are the document's: `pending` until somebody looks, then `seen` or `not-seen`.
@@ -508,7 +503,7 @@ const OPEN_STATES = new Set(['pending'])
 // `pending` and `not-seen` and passed everything else, so a hand-edited row saying 'deferred' or
 // 'SKIPPED' with evidence beside it verified as a finished proof. The vocabulary is the document's,
 // so it is read here rather than assumed.
-const RECORDED_STATES = new Set(['seen', 'not-seen'])
+const RECORDED_STATES = new Set(['seen', GAP_STATE])
 
 // A refusal, with the two lists a pass reads kept in the shape: a caller that prints them needs no
 // guard, and a test can assert an empty list rather than an absent key.
@@ -518,11 +513,6 @@ const refuse = reason => ({ ok: false, reason, gaps: [], stale: [] })
 // the log it was re-derived from, or false when the witness's own copy was all there was (#923).
 // One builder, so the two passes cannot describe themselves differently.
 const pass = (human, frames) => ({ ok: true, reason: null, gaps: human.gaps, stale: human.stale, frames })
-
-// A step the module declares expected absent, as the result names it: the step, the sentence the
-// operator read, the tickets that close it, and what they recorded. Both lists the check returns are
-// this shape, so a printed line takes one entry, and `openUntil` keeps the field's name throughout.
-const declaredOf = step => ({ id: step.id, claim: step.claim, openUntil: step.openUntil, evidence: step.evidence })
 
 // The one line a declared gap is printed on, wherever this module prints one, so its two readers
 // cannot word it differently: the command's pass and the report beside the step.
@@ -538,11 +528,6 @@ const staleLine = step =>
   'stale declaration: ' + step.claim + ' — seen, and OPERATOR_STEPS still expects it not seen until ' +
   ticketList(step.openUntil) + ' ' + agree(step.openUntil.length, 'lands', 'land') +
   ': drop the step\'s openUntil in the change that closes it'
-
-const namedIds = ids => ids.map(id => '`' + id + '`').join(', ')
-
-// A list in a sentence: "row 1, row 2 and row 3".
-const commaAnd = items => (items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' and ' + items.at(-1))
 
 // What is wrong with the rows before their states are read: whether they are OPERATOR_STEPS, by
 // id and in its order. A row is named by its `id` and never by its `claim`: the claim is prose a
@@ -681,14 +666,14 @@ export function verifyWitness (document, { lane = WITNESS_LANE, log = null } = {
   if (document.completed !== true) {
     return refuse('every step is recorded, and the document is not marked completed: set completed true')
   }
-  const notSeen = settled.filter(step => step.state === 'not-seen')
   // #920: a `not-seen` is the finding it always was, on every step but the ones this module declares
-  // expected absent today. The declaration is a list with a ticket per entry, not a relaxed check:
-  // the refusal keeps the sentence it always had, and names the one gap this run does expect, so an
-  // operator holding two `not-seen` rows is told which one is the honest one.
-  const unexpected = notSeen.filter(step => step.openUntil === null)
+  // expected absent today. The split is `gapSplit`'s, shared with the unmodded witness one file over,
+  // so the two documents read one rule rather than two that agree today (#943). The declaration is a
+  // list with a ticket per entry, not a relaxed check: the refusal keeps the sentence it always had,
+  // and names the one gap this run does expect, so an operator holding two `not-seen` rows is told
+  // which one is the honest one.
+  const { declared, gaps, unexpected } = gapSplit(settled)
   if (unexpected.length > 0) {
-    const declared = settled.filter(step => step.openUntil !== null)
     return refuse('not seen: ' + unexpected.map(step => step.claim + ' (' + step.evidence + ')').join('; ') +
       (declared.length === 0
         ? ''
@@ -698,7 +683,7 @@ export function verifyWitness (document, { lane = WITNESS_LANE, log = null } = {
   // What the human half answered, built once: both passes carry it, and the only thing that differs
   // between them is what answered the frames half.
   const human = {
-    gaps: notSeen.map(declaredOf),
+    gaps: gaps.map(declaredOf),
     stale: settled.filter(step => step.state === 'seen' && step.openUntil !== null).map(declaredOf)
   }
   const frames = document.frames ?? {}
