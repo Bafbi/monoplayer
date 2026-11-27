@@ -58,7 +58,9 @@ spectator landed at all: that is a run that never reached its second client.
 // leaving a reader hunting a line that is no longer written.
 export const RECORDS = Object.freeze([
   { name: 'pickerServed', what: 'a client reached the picker. A run with none never joined the lane' },
+  { name: 'pickerDialog', what: 'the picker\'s list was offered to a client: one `actions` entry per row, and the `bytes` it cost when the frame went out. It is written even when the write failed, so a client with `pickerServed` and no `pickerDialog` was never offered a list at all, and `pickerDialogFailed` beside it says why the write did not go' },
   { name: 'pickerPick', what: 'a client clicked a row on the picker and the click was read. It names that row\'s `slug` and, when the offer still held the row, its `server`. `known` is false when it did not. A run with `pickerServed` and no `pickerPick` is a client that never clicked one' },
+  { name: 'pickerServerDialog', what: 'the chosen server\'s own dialog was offered, with the `verbs` a client may answer it with. It is written even when the write failed, so `pickerPick` with no `pickerVerb` is a client that was never shown this dialog, or never answered it, and `pickerServerDialogFailed` beside it says why the write did not go' },
   { name: 'pickerVerb', what: 'a client answered the chosen server\'s own dialog, carrying the `verb` (`claim`, `spectate` or `disconnect`) and the `server`. This is the click that dials a body or starts a landing. A verb the lane cannot act on writes `pickerVerbRefused` instead' },
   { name: 'claimDial', what: 'a client claimed a body, so a body was dialled. This is where the puppet reaches the Paper' },
   { name: 'spectateView', what: 'a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet\'s body, and `modeFrames` is the spectator game mode pair' },

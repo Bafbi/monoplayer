@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
+import { functionBody } from '../support/source-scan.js'
 
 import {
   CLAIMS,
@@ -404,6 +405,58 @@ test('every record the reader relies on is one the runbook names and a leg write
       .map(([file]) => file)
     assert.ok(wrote.length > 0,
       'a leg writes ' + name + ': no log(\'' + name + '\') in ' + Object.keys(writers).join(', '))
+  }
+})
+
+// The table and the list in one order, both ways. The case above walks RECORDS and asks the
+// runbook for a row, so a row with no entry behind it passed; and neither direction asks
+// whether a record a leg writes is in the list at all, which is how #829's line went missing
+// from both. One comparison, name for name, because the count of two lists that disagree says
+// nothing about which row moved. The order is the list's, not the run's: `pickerEmpty` is
+// documented last and written at the picker.
+test('the runbook\'s record table is the list, name for name and row for row', () => {
+  const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
+  assert.deepEqual(tableRecords(readme), RECORDS.map(record => record.name),
+    'the runbook\'s table is RECORDS in the list\'s own order')
+})
+
+// One table's record names: the rows under its own header, so no other table in the runbook can
+// answer for this one.
+function tableRecords (readme) {
+  const lines = readme.split('\n')
+  const header = lines.findIndex(line => line.startsWith('| Record | What it says |'))
+  assert.notEqual(header, -1, 'the runbook carries the record table')
+  const names = []
+  for (let index = header + 2; index < lines.length && lines[index].startsWith('|'); index += 1) {
+    const name = lines[index].match(/^\| `([A-Za-z0-9_]+)` \|/)
+    assert.ok(name !== null, 'every row of the record table opens with one record name: ' + lines[index])
+    names.push(name[1])
+  }
+  return names
+}
+
+// #829: a picker click writes a dialog at each end of it, and a dialog's records are the
+// operator's proof that a client was shown one. The two senders are read as source, so a line
+// added to either is a name this fails on until RECORDS carries it, or an entry beside it names
+// it the way `pickerVerb` names `pickerVerbRefused` — the refusal a reader greps for, and not a
+// row of its own.
+test('every record a picker dialog writes is named by the list, as a row or in an entry', () => {
+  const front = fs.readFileSync(path.join(ROOT, 'src', 'legs', 'live-front.js'), 'utf8')
+  const named = new Set(RECORDS.map(record => record.name))
+  for (const { what } of RECORDS) {
+    for (const quoted of what.matchAll(/`([A-Za-z0-9_]+)`/g)) named.add(quoted[1])
+  }
+
+  for (const sender of ['sendPickerDialog', 'sendServerDialog']) {
+    const written = [...new Set([...functionBody(front, sender).matchAll(/log\('([A-Za-z0-9_]+)'/g)]
+      .map(match => match[1]))]
+    assert.ok(written.length > 0, 'the scan reads what ' + sender + ' writes')
+    // Named, not necessarily a row: `pickerVerbRefused` is named in `pickerVerb`'s sentence and
+    // is deliberately not a row of its own. A record another entry's prose happens to name passes
+    // here too, which is the price of the list's own idiom.
+    for (const name of written) {
+      assert.ok(named.has(name), 'RECORDS names ' + name + ', which ' + sender + ' writes')
+    }
   }
 })
 
