@@ -90,6 +90,10 @@ _Avoid_: gate one, precheck
 The attach check's session step: the Mojang sessionserver confirms that the connecting account's session matches the name and UUID it claims. In a live lane `minecraft-protocol`'s login handler answers `hasJoined` before the leg's `beforeLogin`, and `src/legs/live-front.js` counts that refusal as `sessionVerificationRefused` and records it as `libraryLoginRefused` (#722, #742). `src/core/identity.js` keeps no copy of the step.
 _Avoid_: hasJoined check, auth check
 
+**UUID decision**:
+The answer the shape rule gives one attach-whitelist entry's uuid: nothing when a Mojang session can ever authenticate it, and the reason when none can. `uuidRefusalReason` in `src/custody/util.js` is the rule, and it owns which uuid shapes it refuses. `scripts/dev-lane.sh` reports one per entry and `src/panel/` prints one beside each row. It is not the whitelist review, which compares the uuid a login claims against this list, and this decision asks nothing about a login. It is not a verdict, which is one scenario's pass or fail with the evidence that produced it (#747).
+_Avoid_: result, status, report, verdict, admission
+
 ## The proxy
 
 **Service**:
@@ -361,7 +365,7 @@ One named check in a validation plan, such as one backend in a matrix or one fau
 _Avoid_: gate, milestone, stage
 
 **Verdict**:
-The pass or fail result of one scenario, with the evidence that produced it.
+The pass or fail result of one scenario, with the evidence that produced it. It is not a UUID decision, which is one attach-whitelist entry's answer to whether a Mojang session can ever authenticate it, and which no scenario produced.
 _Avoid_: result, status, report
 
 **Evidence**:

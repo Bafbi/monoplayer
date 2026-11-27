@@ -160,7 +160,7 @@ test('GET is the parsed list, with the ConfigMap name and its resourceVersion', 
 // #705: the count alone cannot tell a lane with two usable entries from one whose
 // second entry is name-derived, which is the state #677 found in a live document. So
 // the summary names each entry with the answer #703 owns, beside the count it keeps.
-// The verdict sits beside `document`, never inside an entry: the next patch writes those
+// The UUID decision sits beside `document`, never inside an entry: the next patch writes those
 // entries back, so a field stamped there would reach the ConfigMap.
 test('GET names every entry beside the count, and which of them a login can use', async () => {
   const rig = await panel({

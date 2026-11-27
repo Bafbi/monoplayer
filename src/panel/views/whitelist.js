@@ -18,7 +18,7 @@ import { uuidRefusalReason } from '../../custody/util.js'
 // uuid is printed because the remove request names it, and because two accounts can
 // share a name over time.
 //
-// The verdict is #705's, and its rule is `uuidRefusalReason`'s in src/custody/util.js:
+// The UUID decision is #705's, and its rule is `uuidRefusalReason`'s in src/custody/util.js:
 // the panel judges here rather than printing a count, because a list of two entries
 // where one uuid Java derived from a name reads as healthy otherwise, which is the
 // state #677 found in the dev lane's document.
@@ -37,7 +37,7 @@ function renderEntry (puppet, entry, refusalReason) {
     '      <li class="entry">',
     '        <span class="who"><span class="player">' + escape(who) + '</span> <code>' + escape(uuid) + '</code></span>',
     '        <span class="when">added ' + escape(added) + '</span>',
-    '        <span class="verdict' + (refusalReason === null ? '' : ' unusable') + '">' +
+    '        <span class="uuid-decision' + (refusalReason === null ? '' : ' unusable') + '">' +
       (refusalReason === null
         ? 'can authenticate'
         : 'cannot authenticate: ' + escape(refusalReason)) + '</span>',

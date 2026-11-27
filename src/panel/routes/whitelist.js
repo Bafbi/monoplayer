@@ -90,7 +90,7 @@ const reason = error => String(error?.message ?? error).slice(0, 300)
 
 // One entry as a reader needs it: who, which uuid, and whether a Mojang session can
 // answer for it (#705). `refusalReason` is `uuidRefusalReason`'s own answer, null when
-// nothing about the entry's shape stops a login, so the verdict has one spelling here
+// nothing about the entry's shape stops a login, so the UUID decision has one spelling here
 // and no second boolean that could disagree with it (#703).
 //
 // This sits beside `document`, never inside an entry. `document.players` is what the
