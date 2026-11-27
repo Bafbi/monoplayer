@@ -946,10 +946,11 @@ executable spec.
 
 Every member the core calls on a leg is declared in `src/service/wire-leg-to-core.js`:
 one table per interface, one row per member. A row is a call-in the core registers on the
-leg, the delivery a frame goes through, or a call the core makes when the leg carries one,
-and `required` says whether a leg without it hides a client. This page names those rows
-and states no shape; a row's shape, and the method a registration reaches, are the
-table's (#726).
+leg, the delivery a frame goes through, or a call the core makes when the leg carries one.
+The comment above a row, or above the block it sits in, says what a leg without that row
+costs, in that row's or that block's own terms.
+This page names those rows and states no shape; a row's shape, and the method a registration
+reaches, are the table's (#726).
 
 `BACKEND_LEG_CALL_INS`:
 
