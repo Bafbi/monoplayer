@@ -61,14 +61,11 @@
 // A leg that carries none of them is a leg with no core in front of it, which the
 // two pre-auth rungs build on purpose. They never come here.
 //
-// The report is what a reader checks: two lists of names, and the reader of each one
-// is named here. `missing` names every declared call-in the leg does not carry,
-// and the core puts those names on its start line, one list per interface.
-// `called` names every row the core calls on the leg rather than registers: the
-// delivery, the dial and the reads alike. The backend's two optional calls are read from
-// that list rather than a `typeof` guard in the core's body (backendCarries,
-// src/service/monoplayer.js); the front's three are still tested by `typeof` where they
-// are used, so for those the row's work is the name on the report.
+// The report is one list of names, and its reader is named here. `missing` names every
+// declared call-in the leg does not carry, and the core puts those names on its start
+// line, one list per interface. That is the whole report: a row the leg answered is a row
+// `missing` does not name, so a second list of the carried rows would state the table
+// twice (#818).
 // #757: `wired` and `requiredMissing` are gone, each for the reason #718 removed
 // `handlers`: no module read them, and a field whose only reader is a test describes a
 // caller the tests build for themselves. `wired` named the rows the leg installed, which
@@ -79,8 +76,17 @@
 // `required` flag on each row had no reader but it. The flag went with it: the comments
 // above the rows already say what a leg without one costs.
 //
-// The two fields that remain are read in src/service/monoplayer.js, and the case
-// "#757 every field of the report has a production reader" holds this list to them.
+// #818: `called` went for the reason `wired` did, one field along. It named the call rows
+// the leg answered, which is the table's call rows minus `missing`, so it carried no fact
+// of its own. Only the backend's half had a production reader — `backendCarries` in
+// src/service/monoplayer.js, the question whether a call the core makes is a hole the leg
+// has — so that reader asks `missing` now, and the front's half, which no module read,
+// went with it. The front's three optional calls are still tested by `typeof` where they
+// are used (#726): that is the leg's shape at the call, not a row it carried, and
+// `laneState` asks the leg at each read because this report is null until start().
+//
+// The field that remains is read in src/service/monoplayer.js, and the case
+// "#757 every field of the report has a production reader" holds this list to it.
 // A missing row is not thrown on: src/legs/fake-legs.js carries neither setCoreAttach
 // nor setCoreAttachConfiguring, and the tests that build a core on it attach through
 // the core instead.
@@ -370,8 +376,8 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
   }
 ].map(Object.freeze))
 
-// Hand every declared registration to the leg that carries it, measure every call
-// it answers, and report the rows it lacks either way.
+// Hand every declared registration to the leg that carries it, and report every row it
+// lacks, registration or call.
 //
 // #824: a leg refuses a second registration on a call-in it already filled, so a lane's
 // earlier registration is what this call throws on, naming the call-in. That throw is the
@@ -385,8 +391,8 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
 //
 // The core keeps the report in `legWiring`, one per interface, in start(): the start
 // record carries each interface's `missing`, and `backendCarries` reads the backend's
-// `called`. The core publishes no report on its handle, because every reader of one was a
-// test (#817).
+// `missing` for a call. The core publishes no report on its handle, because every reader
+// of one was a test (#817).
 //
 // #718: no field carries a handler. #607 reported every one it installed, so a lane
 // wrapping a call-in after start() could call the function the leg was handed instead
@@ -401,7 +407,6 @@ export function wireLegToCore ({ core, leg, table } = {}) {
   if (!Array.isArray(table)) {
     throw new TypeError('wireLegToCore needs the table of the interface it wires: FRONT_LEG_CALL_INS or BACKEND_LEG_CALL_INS')
   }
-  const called = []
   const missing = []
   for (const entry of table) {
     const method = leg === null || leg === undefined ? undefined : leg[entry.name]
@@ -409,15 +414,12 @@ export function wireLegToCore ({ core, leg, table } = {}) {
       missing.push(entry.name)
       continue
     }
-    // A call-in the core calls needs nothing registered; its presence is the whole
-    // contract, and the report is where a reader learns it.
-    if (entry.kind === 'call') {
-      called.push(entry.name)
-      continue
-    }
+    // A call-in the core calls needs nothing registered: its presence is the whole
+    // contract, and a hole is the fact a reader acts on (#818).
+    if (entry.kind === 'call') continue
     // #718: built here and handed over, not kept. The doc comment on the function
     // says why no field carries one.
     method.call(leg, entry.handler(core))
   }
-  return { called, missing }
+  return { missing }
 }

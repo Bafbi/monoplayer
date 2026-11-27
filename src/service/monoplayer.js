@@ -3344,11 +3344,17 @@ export function createMonoplayer ({
   // --- wiring ---
 
   // #605: whether the backend leg carries a call-in the core makes on it. The
-  // table owns the list, the report says what the leg carried, and the start record
+  // table owns the list, the report says what the leg did not carry, and the start record
   // names a hole, so the core reads the report instead of testing the leg's shape a
   // second time.
+  //
+  // #818: the report holds one list, so a call row the leg answered is a name `missing`
+  // does not carry. The row is looked up in the table first, because a name that is no
+  // call row of BACKEND_LEG_CALL_INS is a question this cannot answer, and `missing`
+  // would answer it as carried.
   function backendCarries (name) {
-    return legWiring !== null && legWiring.backend.called.includes(name)
+    const row = BACKEND_LEG_CALL_INS.find(entry => entry.name === name)
+    return row?.kind === 'call' && legWiring !== null && !legWiring.backend.missing.includes(name)
   }
 
   function start () {
