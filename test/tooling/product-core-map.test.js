@@ -1,4 +1,4 @@
-// #340, #371, #606, #668, #690, #726, #763, #825: the cells of docs/product-core.md and its leg interface,
+// #340, #371, #606, #668, #690, #726, #763, #825, #893: the cells of docs/product-core.md and its leg interface,
 // each pinned to the module that owns the fact it states.
 //
 // The page is a map of where a decision lives. A cell that names half a list sends a
@@ -49,6 +49,12 @@
 //         a capability the report dropped. #592's case and #718's hold two of its four claims
 //         already; the pointer to the module that owns a row and the event were held by nothing.
 //         The section below reads them, and the block now names the tables its own calls apply.
+//
+//   #893  the record of the report's retired fields named three, and #818's `called` was not one of
+//         them: #818 removed it and #894 landed the removal with this file outside the run's fence. A record
+//         short by one is worse than none, because the next reader takes the surviving list as the
+//         whole of it and writes the name back. The list names it now, and the set beside it asks the
+//         next retirement to be written down.
 //
 //   #668  the section was a third home of the leg interfaces, restated by hand, and nothing
 //         read it. #606 and #690 made it the page's view of what a row cannot name; this entry
@@ -688,19 +694,39 @@ test('the comment above the wiring names the module, the tables its two calls ap
     'does (#683, #825). Name the event the core emits.')
 })
 
-// The names the report used to carry. #718 removed `handlers` and #757 removed `wired` and
-// `requiredMissing`, so the report carries none of them, and there is nothing in the tree to
-// derive the list from: it is the record of those three retirements. A whole word match reads it,
-// and the
-// block is the only text this case looks at, so a sentence there that used `wired` in the ordinary
-// sense would fail and needs rewording. That costs one word, and the miss it buys is the drift
-// #758 was.
+// The names the report used to carry. #718 removed `handlers`, #757 removed `wired` and
+// `requiredMissing`, and #818 removed `called`, so the report carries none of them, and there is
+// nothing in the tree to derive the list from: it is the record of those four retirements. What each
+// one named, and why it went, is the header of src/service/wire-leg-to-core.js: this list is the
+// names and not the reasons, because the module that owns the report is where a field's replacement
+// is. A whole word match reads it, and the block is the only text this case looks at, so a sentence
+// there that used `wired` in the ordinary sense would fail and needs rewording. That costs one word,
+// and the miss it buys is the drift #758 was.
+//
+// #893: `called` was missing from that record. A retirement becomes visible when the field's row
+// leaves `REPORT_READERS` in test/service/wire-leg-to-core.test.js (#757). Nothing there asks this
+// list to grow, so #818's removal landed and left this file's line out. `EVER_FIELDS` below is that
+// ask: a name it holds that the report no longer carries is a retirement this list has to name.
 //
 // The block's own word is the singular, "carries names and no handler", and this list cannot see
 // it: `handlers` is a field name and `handler` is English. The assertion below the list
 // holds that sentence instead, by asking every field of the report to be a list of names, so a
 // field holding a function fails here whatever it is called.
-const RETIRED_FIELDS = ['handlers', 'wired', 'requiredMissing']
+const RETIRED_FIELDS = ['handlers', 'wired', 'requiredMissing', 'called']
+
+// Every field the report has carried, in the order the retirements went, the live one last. It is the
+// record this file allows where no module holds one: the report's own keys cannot say what a past key
+// was, because a deletion takes its own record with it (test/ladder/loopback-contract.test.js:185).
+//
+// The live name is a copy of the report's key on purpose, and the case named #893 fails when the copy
+// slips. The four retired names are typed twice for a sharper reason: a name `EVER_FIELDS` keeps and
+// `RETIRED_FIELDS` drops is the only thing that notices a retirement line going, so the obvious
+// de-duplication, `[...RETIRED_FIELDS, 'missing']`, is a silent weakening of the record.
+//
+// `EVER_FIELDS` only grows. A rename that drops one field and adds another therefore keeps a sum of
+// `RETIRED_FIELDS` and the report's fields the same size, and leaves this set naming the field that
+// went, which is why the case named #893 reads a set and not a count.
+const EVER_FIELDS = ['handlers', 'wired', 'requiredMissing', 'called', 'missing']
 
 test('the comment above the wiring spells no field the report no longer carries (#825)', () => {
   const block = wiringComment()
@@ -732,10 +758,53 @@ test('the comment above the wiring spells no field the report no longer carries 
   }
 })
 
-// What this section cannot see: a sentence whose names all survive a rewrite, and a claim written
-// in words no name marks. The first is a fact lost rather than a fact lied about, and #718's and
-// #757's cases hold the fact itself. The second is a reviewer's, for the reason the file's header
-// gives.
+// #893: the record of the report's fields, read in both directions. The case above holds the comment
+// above the wiring to this record; this one holds the record to the report. #818 removed `called` and
+// the record kept three names, so the block could have promised a fourth field unchallenged. A count
+// would have caught that day and not the next: a rename that drops one field and adds another keeps
+// the sum. It is its own case because a failure here is the record's, and the ticket a reader needs is
+// this one, not the comment's (#825).
+test('the record of the report fields is whole, in both directions (#893)', () => {
+  const report = wireLegToCore({ core: {}, leg: {}, table: FRONT_LEG_CALL_INS })
+  const fields = Object.keys(report)
+  assert.ok(fields.length > 0,
+    'this case read no field of the report wireLegToCore returns, so it checked nothing (#893).')
+
+  const unknown = RETIRED_FIELDS.filter(name => !EVER_FIELDS.includes(name))
+  assert.deepEqual(unknown, [],
+    'RETIRED_FIELDS names ' + unknown.join(', ') + ', and EVER_FIELDS names no such ' +
+    (unknown.length === 1 ? 'field' : 'fields') + '. EVER_FIELDS is every name the report has ' +
+    'carried, the retired ones included (test/ladder/loopback-contract.test.js:305 makes the same ' +
+    'claim one record over). A retirement line it does not hold names a field this report never had, ' +
+    'and the next reader takes the name for a real one. Add ' +
+    (unknown.length === 1 ? 'the name' : 'the names') + ' to EVER_FIELDS, or drop ' +
+    (unknown.length === 1 ? 'the line' : 'the lines') + ' from RETIRED_FIELDS (#893).')
+
+  const unread = fields.filter(name => !EVER_FIELDS.includes(name))
+  assert.deepEqual(unread, [],
+    'the report carries ' + unread.join(', ') + ', and EVER_FIELDS in this file names no such ' +
+    (unread.length === 1 ? 'field' : 'fields') + '. Add ' + (unread.length === 1 ? 'it' : 'them') +
+    ' to EVER_FIELDS, beside the names it retires, so a reader meets the field before it goes the way ' +
+    'of the four there (#893).')
+
+  const unrecorded = EVER_FIELDS.filter(name => !fields.includes(name) && !RETIRED_FIELDS.includes(name))
+  assert.deepEqual(unrecorded, [],
+    'EVER_FIELDS names ' + unrecorded.join(', ') + ', the report carries ' +
+    (unrecorded.length === 1 ? 'no such field' : 'no such fields') + ', and RETIRED_FIELDS does not ' +
+    'retire ' + (unrecorded.length === 1 ? 'it' : 'them') + '. One of two edits is missing. If the ' +
+    'report dropped the field, add it to RETIRED_FIELDS with the ticket that removed it: the next ' +
+    'reader takes the surviving list as the whole of it and writes the name back into the comment ' +
+    'above the wiring. If a retirement line was deleted, put it back, because the name is the only ' +
+    'thing that says the field must not return (#818, #893).')
+})
+
+// What this section cannot see: a sentence whose names all survive a rewrite, a claim written in
+// words no name marks, and the record's own history. The first is a fact lost rather than a fact lied
+// about, and #718's and #757's cases hold the fact itself. The second is a reviewer's, for the reason
+// the file's header gives. The third is one record over, test/ladder/loopback-contract.test.js's
+// limit: `EVER_FIELDS` and `RETIRED_FIELDS` lowered in one commit pass this case, and nothing but the
+// diff says whether that change found the retirement or hid it. No checksum closes it either, because
+// the same edit lowers the checksum.
 
 // The module map's section, read to its next heading so a `src/...js` row in another
 // table of the page cannot answer for a module the map never names. It is the bound
