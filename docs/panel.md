@@ -191,21 +191,50 @@ nobody claimed has no claim age, and a spectator holds none. A connection the la
 admitted itself names no body. Those rows say so in words instead of printing a zero
 or a blank (#263 D2).
 
-**The `Last attach` card draws the attach stream's two numbers side by side.** `replayed`
-is the frames a socket took, and `refused` is the frames the front leg refused or threw
-on. [telemetry.md](telemetry.md) defines both (#717, #735). Neither number is the total,
-and the card never adds them. A refusal is not a fault: the card says what the gap is
-instead of letting a reader take it for a lane to repair
-([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before the
-field existed says it carries no refusal count. A record that carries neither count
-draws no row.
+**The `Last attach` card draws the attach stream's delivery, then the counts the record
+carries beside it.** `replayed` is the frames a socket took. `refused` is the frames the
+front leg refused or threw on. `synthesizedPositions` is the count of join positions the
+replay invented: `replayed` never counts one, and `refused` counts one the leg refused.
+[telemetry.md](telemetry.md) defines all three (#717, #735, #834). None of them is the
+total, and the card never adds or divides them. A refusal is not a fault, so the card says
+what the gap is rather than letting a reader take it for a lane to repair
+([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before `refused`
+existed says which half of the delivery it cannot answer. A record that carries none of them
+draws no such row.
+
+Under them come the record's own groups, because those are the numbers a reader sets
+against the delivery. The bodies the stream gave a spawn sit beside the bodies it named in
+a metadata frame with no spawn before them, which is #213's defect measured. The tab list
+the client is handed sits beside the count of those players that got a body, which is the
+shape [#218](https://github.com/Bafbi/monoplayer/issues/218) describes. What the dialog
+holder and the pack holder kept and re-sent is a row set of its own, and the record calls
+those held and resent. A group the record does not carry draws no heading, so a lane older
+than the group says nothing rather than drawing zeros.
+
+The projection keeps each group whole, so a domain or a body count the record grows reaches
+`/api/puppets/<name>` with no edit in the panel. The card draws the fields the doc names:
+`domains` as one row that joins whatever it holds, and the rest under their own words,
+because a row called `replayed` under Entities says less than one called `bodies given a
+spawn`. Those are two questions with two homes, and neither is this page: whether the
+record's doc names every field the record writes is
+[#868](https://github.com/Bafbi/monoplayer/issues/868)'s, and whether this card draws every
+field the doc names is this page's.
+
+**Some fields of that record are declared, not drawn.** The declaration sits beside the
+projection in `src/panel/activity.js`, one line per field with the reason a reader can
+check (#834). A documented field that is neither a row here nor a line there fails the
+gate, and so does a name the projection invents. That is the pair of readings #735 cost a
+reader two files to make, and the page's own reading of the attach record is now checked
+against the doc that defines it.
 
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning
 sentence. `null` means the custody cache does not say, which is not "no expiry".
 
 `GET /api/puppets/<name>` serves the same facts as one JSON object, for an agent
-that would rather not parse the page. A name the registry does not hold is a 404.
+that would rather not parse the page. A name the registry does not hold is a 404. Each group
+of the attach record is nested there under its own name, as the record nests it, so the row
+the card calls `bodies without a spawn` is `attach.entities.withoutSpawn` in that object.
 
 ## The page updates itself, without a reload
 

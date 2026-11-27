@@ -23,6 +23,13 @@
 // now a rule about the group and not about the field: a counter is a number, and a
 // counter group admits no string at all, which is the one place a secret lives.
 //
+// The attach record is neither of those two cases, because one record holds a label, a
+// duration, a flag, a position, and groups of counts. Its groups are projected whole, its
+// scalars are picked by name, and the fields the card declines are declared in
+// ATTACH_DECLINED with the reason each one is not a row. That declaration is what lets
+// docs/telemetry.md's field list and this file's be compared (#834): the doc cannot see a
+// projection, and a projection cannot see its own omissions.
+//
 // Read-only: nothing here writes a record, a file, or a ConfigMap.
 import { redact } from '../observability/redact.js'
 
@@ -42,7 +49,27 @@ export const EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000
 const JOURNAL = ['enabled', 'disabledReason', 'dir', 'file', 'frames', 'events', 'bytes', 'sealed',
   'pruned', 'prunedBytes', 'skipped', 'dropped', 'truncated', 'errors', 'dirBytes', 'freeBytes', 'requiredBytes']
 const WIRE = ['checked', 'rejected']
-const DOMAINS = ['config', 'prefix', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic']
+
+// The attach record's fields the card does not draw, each with the reason it is not a row
+// (#834). The projection picks its scalars by name, so a field the doc documents and this
+// file never picks is a number the page silently drops, which is what #735 was for
+// `refused`: documented, written, counted, and no row. So the file declares the half it
+// declines, in one place, and test/panel/attach-doc.test.js holds this declaration and
+// docs/telemetry.md's own field list together: a documented field with no row and no line
+// here is a red gate, and a line here for a field the doc does not name is red too.
+//
+// The rule #743 gave `front` and `metrics` — a counter is a number, so every counter is a
+// row — cannot be this record's whole rule, because an attach record is not one shape: a
+// label (name, reason), a duration (tookMs), a flag (includeConfig), a position (pose), and
+// groups of counts. A shape rule over the top level would admit all of those and the card
+// would print a position as a count. It holds for the groups, which are projected whole;
+// the scalars are picked by name, and the fields this card has no row for are here.
+export const ATTACH_DECLINED = {
+  pose: 'A position is three coordinates and a look angle, and the card has no shape for one: its rows are counts, durations, labels and one flag. The record carries the pose for the pod log, which is where a reader who needs it looks, and this page has no neighbour to place it beside.',
+  backendLogins: 'The heartbeat draws this counter already, in its own row set. A second copy under "Last attach" would be one number at a second instant, which reads as a second measurement of it.',
+  skippedLegOwned: 'These are the frames a leg writes itself, so the replay skipped them rather than losing them. Beside `replayed` and `refused` a third count would read as a third loss, and this one is not a loss at all.'
+}
+
 // #419: the two groups #415 added, from the two tables under "The per-body and
 // per-channel groups" in docs/telemetry.md. That page is still their home:
 // test/panel/groups.test.js compares these lists to its Field column in both
@@ -407,6 +434,10 @@ function attachFacts (record) {
     at: time(record.t).at,
     name: typeof record.name === 'string' ? clean(record.name) : null,
     reason: typeof record.reason === 'string' ? clean(record.reason) : null,
+    // The flag an attach carries about itself, drawn as yes or no. `domains.config` cannot
+    // answer it: that count is 0 both when the attach leaves the prefix out and when the
+    // prefix held nothing, which is why the record carries the flag beside it.
+    includeConfig: typeof record.includeConfig === 'boolean' ? record.includeConfig : null,
     replayed: counter(record, 'replayed'),
     // #735: the other half of the delivery #717 split out, which is every frame the leg
     // refused or threw on. The two stay apart and are never added: `replayed` excludes
@@ -414,10 +445,22 @@ function attachFacts (record) {
     // a ratio would print a frame count that is not one (docs/telemetry.md).
     refused: counter(record, 'refused'),
     tookMs: counter(record, 'tookMs'),
-    domains: pick(record.domains, DOMAINS),
-    // Non-zero is #213's defect, measured: a body the client was told about and
-    // never saw appear.
-    withoutSpawn: counter(record.entities, 'withoutSpawn')
+    // #834: the third number of the delivery, beside the two #717 split it into. `replayed`
+    // excludes the position the replay invents and `refused` includes one the leg refused,
+    // so a reader comparing those two needs this count to place the difference.
+    synthesizedPositions: counter(record, 'synthesizedPositions'),
+    // #834: the record's groups of counts, whole and projected by shape, which is the rule
+    // #743 gave `front` and `metrics`. The list that stood here named each key of `domains`
+    // and one key of `entities`, so a key the cache or the summary grew reached the pod log
+    // and no page. The groups are kept whole now, which is what the doc guard and
+    // `GET /api/puppets/<name>` read; the view draws the fields docs/telemetry.md names,
+    // under its own words. `entities.withoutSpawn` is #213's defect measured: a body the
+    // client was told about and never saw appear, and the view says so beside the number.
+    domains: pickCounters(record.domains),
+    entities: pickCounters(record.entities),
+    players: pickCounters(record.players),
+    dialogs: pickCounters(record.dialogs),
+    packs: pickCounters(record.packs)
   }
 }
 

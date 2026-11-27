@@ -297,7 +297,9 @@
           "latest": 1,
           "generic": 42
         },
-        "withoutSpawn": 0
+        "entities": {
+          "withoutSpawn": 0
+        }
       },
       "tail": {
         "lines": 5,
