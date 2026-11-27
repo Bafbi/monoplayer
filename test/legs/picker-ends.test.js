@@ -26,22 +26,31 @@
 // is the record's `text`. The empty offer is the case no check touches, and there the
 // client is told: the disconnect it decoded is read back.
 //
-// What is not driven here, and why (#710's third criterion): the arm where the write
-// itself throws, `try { writeRawTo } catch` in sendPickerDialog and sendServerDialog,
-// which is what puts `error` on the record. The only object that throws there is
-// minecraft-protocol's own server-side client for the connection, and replacing it means
-// reaching into the library's socket. A fake that threw in its place would stand in for
-// the socket, which is the substitution test/legs/spectate-refusal.test.js refuses in so
-// many words. Both arms answer the same `written === false`, so the record and the count
-// this file proves are the same ones; what it does not prove is the `error` field.
+// What is not driven here, and why (#710's third criterion). Three things answer
+// `written === false`, and two of them are the record's `error` key:
 //
-// What this file costs, and why (#749): the two dialog cases take under a second and the
-// file takes thirty. A refused dialog is ended twice — once by the wire check's own rule
-// and once by `endConfiguration` — and the second end overwrites the library's close
-// timer, so one timer of 30 s is left armed with nothing to clear it and the process
-// cannot exit until it fires. Refusing a baseline frame instead, which is one end, exits in
-// 0 ms; so does the empty offer, which is `endConfiguration` alone. #749 is that defect
-// and carries the duration assertion this file cannot make while it stands.
+//   - `writeRawTo` throwing, caught by `try { writeRawTo } catch` in sendPickerDialog and
+//     sendServerDialog. The only object that throws there is minecraft-protocol's own
+//     server-side client for the connection, and replacing it means reaching into the
+//     library's socket. A fake that threw in its place would stand in for the socket, which
+//     is the substitution test/legs/spectate-refusal.test.js refuses in so many words.
+//   - the encode answering not-ok (`encodeDialogFrame`), which is a connection with no
+//     serializer or a params build that threw. A listening leg always has the serializer the
+//     library gave its client, so this one is unreachable from a real client too, and no fake
+//     short of a hand-built client object reaches it either.
+//   - the funnel answering false, which is this file's two dialog cases. It sets no `error`.
+//
+// So the record and the count these cases read are the ones all three write, and the key
+// left unproved is `error`, from either of the first two.
+//
+// What this file costs, and why (#749): the assertions take under a second, and the file
+// takes about thirty on the box this was written on. The cost is the leg's, not the test's:
+// a refused dialog is ended twice, once by the wire check's own rule and once by
+// `endConfiguration`, and the second end overwrites the library's close timer. One timer of
+// 30 s is then left armed with nothing to clear it, and the process cannot exit until it
+// fires. Refusing a baseline frame instead is one end and exits in 0 ms, and so is the empty
+// offer, which is `endConfiguration` alone. #749 is that defect, and it carries the duration
+// assertion this file cannot make while it stands.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import mc from 'minecraft-protocol'
@@ -253,9 +262,10 @@ test('#710 a server dialog the leg could not write is recorded and counted', asy
 
 test('#710 a lane with no rows to offer is recorded, counted, and the client is told', async () => {
   await withPickerLane(async ({ leg, lines, dialogs, disconnects, clientErrors }) => {
-    // The two files the lane reads are unparseable, in the word its parser answers with
-    // (#372): the lane has nothing to offer, and its offer says which repair brings the
-    // list back.
+    // The offer this rig hands over holds no rows and carries the parser's own code (#372)
+    // as its reason, which is the cause that rides beside the word the map is keyed by. The
+    // lane that reads two unparseable files and answers with this same offer is O66's, in
+    // the loopback: here the offer is the rig's, because the refusal is the leg's.
     await settleUntil(() => disconnects.length === 1, 'the sentence a lane that offers nothing gives')
     await settleUntil(() => lines.some(line => line.event === 'frontClientEnd'), 'the client ended')
 

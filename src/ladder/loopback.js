@@ -6046,12 +6046,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     )
 
     // --- O77: the empty offer is counted, not only recorded (#710, #670) ---
-    // #670 gave the lane's empty offer a record with its reason and a count in the map a
-    // cap is decided from. O66 proved that record reaches a client's join; the count was
-    // read by nothing, so a lane that kept writing the line and stopped moving the map
-    // would have stayed green. #710 is that gap, and this is its loopback half: the same
-    // empty lane, one more join, and both numbers read off it as a delta, so what is
-    // asserted is this refusal and not the run's total.
+    // The reasoning is docs/testing-ladder.md's to carry. The mechanism is here: the same
+    // empty lane O66 leaves, one more join, and both numbers read as a delta around it, so
+    // what is asserted is this refusal and not the run's total.
     const refusalsBefore = pickerFront.metrics.pickerRefusals
     const emptyBefore = pickerFront.metrics.pickerRefusalsByReason.empty_offer ?? 0
     const countMark = logs.length
