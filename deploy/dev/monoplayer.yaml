@@ -182,7 +182,7 @@ data:
   # Every entry has to be a UUID a Mojang session answers for: the front verifies each
   # login against Mojang before it shows a picker (src/legs/live-front.js), and the core's
   # `reviewLoginStart` (src/core/identity.js) then reviews the whitelist. `uuidRefusalReason`
-  # (src/custody/util.js) is the rule an entry is held to.
+  # (src/custody/util.js) is the shape rule an entry is held to.
   #
   # `mise run dev:up` is the only command in the tree that writes this key, and it judges
   # every list it writes with `tools/whitelist.mjs`: it leaves out an entry no login can
