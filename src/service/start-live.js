@@ -75,7 +75,7 @@
 //   5. front leg listen, readiness log (no secrets), process stays alive
 import fs from 'node:fs'
 
-import { createMonoplayer, loadConfig } from './monoplayer.js'
+import { createMonoplayer, hostRefusal, loadConfig, portRefusal } from './monoplayer.js'
 import { createControlDocument, dialIntent, revertAfterRestore } from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
@@ -378,13 +378,43 @@ export function emitBodyGauges (telemetry, bodies = []) {
 
 export function envOverlay (doc, env = process.env, warn = () => {}) {
   const out = { ...doc }
+  // #891: the two addresses this lane binds and dials. An address variable is refused
+  // here, by name, rather than left for loadConfig to refuse by config key: the operator
+  // wrote the variable, and "config.front.port" sends them to the Deployment's args line
+  // instead of its env block. The shape is loadConfig's rule, called with the label this
+  // site knows.
+  //
+  // It throws where the numbers in this function are named in a warning and left at their
+  // default, and the difference is what a default can be. A number has a bounded
+  // default to fall back on, so a typo costs the operator the value they meant. An address
+  // has none: the compiled front is loopback, and a front left there serves nobody outside
+  // the pod, which is the silent misconfiguration this ticket is about.
+  const refuseAddress = (variable, raw, reason) => {
+    if (reason !== null) throw new TypeError(variable + ' ' + reason + ', got ' + JSON.stringify(raw))
+  }
   const front = { ...doc.front }
-  if (env.MONOPLAYER_FRONT_HOST) front.host = env.MONOPLAYER_FRONT_HOST
-  if (env.MONOPLAYER_FRONT_PORT) front.port = Number(env.MONOPLAYER_FRONT_PORT)
+  if (env.MONOPLAYER_FRONT_HOST) {
+    refuseAddress('MONOPLAYER_FRONT_HOST', env.MONOPLAYER_FRONT_HOST, hostRefusal(env.MONOPLAYER_FRONT_HOST))
+    front.host = env.MONOPLAYER_FRONT_HOST
+  }
+  if (env.MONOPLAYER_FRONT_PORT) {
+    const port = Number(env.MONOPLAYER_FRONT_PORT)
+    // 0 is a bind asking the OS for a port, which the offline rung and the parity lane
+    // do; the backend's floor is 1, where a dial reaches nothing.
+    refuseAddress('MONOPLAYER_FRONT_PORT', env.MONOPLAYER_FRONT_PORT, portRefusal(port, 0))
+    front.port = port
+  }
   if (Object.keys(front).length) out.front = front
   const backend = { ...doc.backend }
-  if (env.MONOPLAYER_BACKEND_HOST) backend.host = env.MONOPLAYER_BACKEND_HOST
-  if (env.MONOPLAYER_BACKEND_PORT) backend.port = Number(env.MONOPLAYER_BACKEND_PORT)
+  if (env.MONOPLAYER_BACKEND_HOST) {
+    refuseAddress('MONOPLAYER_BACKEND_HOST', env.MONOPLAYER_BACKEND_HOST, hostRefusal(env.MONOPLAYER_BACKEND_HOST))
+    backend.host = env.MONOPLAYER_BACKEND_HOST
+  }
+  if (env.MONOPLAYER_BACKEND_PORT) {
+    const port = Number(env.MONOPLAYER_BACKEND_PORT)
+    refuseAddress('MONOPLAYER_BACKEND_PORT', env.MONOPLAYER_BACKEND_PORT, portRefusal(port))
+    backend.port = port
+  }
   out.backend = backend
   const puppet = { ...doc.puppet }
   if (env.MONOPLAYER_PUPPET_ACCOUNT) puppet.account = env.MONOPLAYER_PUPPET_ACCOUNT

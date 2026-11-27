@@ -86,6 +86,7 @@ import { createTransfer, TRANSFER_KINDS } from '../core/transfer.js'
 import { redact } from '../observability/redact.js'
 import { DEFAULT_DEADLINE_MS, DEFAULT_MAX_CONNECTIONS, MAX_DEADLINE_MS } from '../core/preauth-window.js'
 import { flag } from './cli.js'
+import { isIPv6 } from 'node:net'
 import { pathToFileURL } from 'node:url'
 
 // --- config ---
@@ -248,6 +249,52 @@ export const DEFAULT_CONFIG = Object.freeze({
   })
 })
 
+// #891: what stops a host, or a port, from being part of an address this service can
+// bind or dial, as the half of a sentence an operator reads; null when nothing does. The
+// caller appends the value, because it is the one that knows whether it holds a config
+// key or a variable somebody typed.
+//
+// The shape is #815's, read from the other end. A record spells an address `host:port`
+// with an IPv6 host in brackets (src/service/start-live.js, `addressName`), so a reader
+// can split the host from the port. Config is the pair before that spelling, and it takes
+// the host the socket layer takes: a name or an IP address, bare. A colon in a host is
+// either an IPv6 address or a port that belongs in the key beside it, and `isIPv6` is
+// the parser the sockets layer itself uses to tell those two apart.
+//
+// What is not asked is whether the host resolves. That is a DNS query in a config loader,
+// and a lane whose backend is coming back up must start and retry rather than refuse to
+// boot.
+export function hostRefusal (host) {
+  // A bracket is the record's, not the host's: `[2001:db8::1]:25565` is one string a
+  // record prints, and the two halves of it are two config keys here.
+  if (typeof host !== 'string' || host.trim() === '' || host.includes('/')) {
+    return 'must be a host: a DNS name or an IP address, with no scheme and no path'
+  }
+  if (host !== host.trim()) return 'must be a host with no surrounding space'
+  // A space inside a host is a paste of two values or a quoted YAML scalar, and neither
+  // resolves. Naming the space is the whole of the fix.
+  if (/\s/.test(host)) return 'must be a host with no space'
+  if (host.includes('[') || host.includes(']')) {
+    return 'must be a host with no brackets: a bracket belongs to the `host:port` a record prints'
+  }
+  if (host.includes(':') && !isIPv6(host)) {
+    return 'must be a host with no port: that colon is not an IPv6 address, and a port has its own key'
+  }
+  return null
+}
+
+// #891: the port beside that host. `floor` is 0 for a bind that asks the OS for a free
+// port, which is how the offline rung and the parity lane come up, and 1 for a dial: a
+// connection to port 0 reaches nothing, whatever a listener makes of it.
+export function portRefusal (port, floor = 1) {
+  if (Number.isInteger(port) && port >= floor && port <= 65535) return null
+  return 'must be an integer from ' + floor + ' to 65535'
+}
+
+// The value as the operator wrote it: a string keeps its quotes, so a port that is not a
+// number reads as the text that produced it rather than as the NaN it became.
+const written = value => typeof value === 'string' ? JSON.stringify(value) : String(value)
+
 export function loadConfig (doc = {}) {
   const merged = {
     ...DEFAULT_CONFIG,
@@ -265,6 +312,20 @@ export function loadConfig (doc = {}) {
   }
   if (!Array.isArray(merged.attachWhitelist)) {
     throw new TypeError('config.attachWhitelist must be an array of UUIDs')
+  }
+  // #891: the two addresses this service binds and dials. Every key beside them was
+  // checked and these four were not, so a mistyped port or a host carrying its own port
+  // reached the bind and the dial: the lane started, could not connect, and said nothing
+  // until a client tried. The front's port may be 0, a bind asking the OS for one.
+  for (const [section, floor] of [['front', 0], ['backend', 1]]) {
+    const reason = hostRefusal(merged[section].host)
+    if (reason !== null) {
+      throw new TypeError('config.' + section + '.host ' + reason + ', got ' + written(merged[section].host))
+    }
+    const portReason = portRefusal(merged[section].port, floor)
+    if (portReason !== null) {
+      throw new TypeError('config.' + section + '.port ' + portReason + ', got ' + written(merged[section].port))
+    }
   }
   // #262: the allowed-server list's two paths, resolved once, so a value that
   // cannot name a file is refused at boot. Neither file's contents are read here:

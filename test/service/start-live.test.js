@@ -276,6 +276,51 @@ test('#205 a deadline past what a timer can hold is named and ignored, so a typo
   assert.equal(loadConfig(out).preAuth.deadlineMs, DEFAULT_DEADLINE_MS)
 })
 
+// #891: the two addresses a deployed lane is set by. The overlay is where the operator
+// writes, so it names the variable they wrote when it refuses one: a config key sends
+// them to the Deployment's args line instead of its env block. The refusal is a throw
+// rather than the named-and-ignored warning every other number gets here, because a
+// number has a bounded default to fall back on and an address has none: the compiled
+// front is loopback, and a front left on loopback serves nobody outside the pod.
+test('#891 MONOPLAYER_FRONT_HOST and MONOPLAYER_BACKEND_HOST refuse a value that is not a host', () => {
+  for (const variable of ['MONOPLAYER_FRONT_HOST', 'MONOPLAYER_BACKEND_HOST']) {
+    for (const bad of ['play2.excalia.fr:25565', '[::1]', 'play2.excalia.fr:', ' 127.0.0.1']) {
+      assert.throws(() => envOverlay({}, { [variable]: bad }), error => {
+        assert.match(error.message, new RegExp(variable + ' must be a host'))
+        assert.ok(error.message.includes(bad), 'the message carries what was typed: ' + error.message)
+        return error instanceof TypeError
+      }, variable + ' ' + JSON.stringify(bad))
+    }
+    const good = envOverlay({}, { [variable]: '2001:db8::1' })
+    const section = variable === 'MONOPLAYER_FRONT_HOST' ? good.front : good.backend
+    assert.equal(section.host, '2001:db8::1', 'an IPv6 host is written bare and read bare')
+  }
+})
+
+test('#891 MONOPLAYER_FRONT_PORT and MONOPLAYER_BACKEND_PORT refuse a port no socket can use', () => {
+  for (const variable of ['MONOPLAYER_FRONT_PORT', 'MONOPLAYER_BACKEND_PORT']) {
+    const floor = variable === 'MONOPLAYER_FRONT_PORT' ? 0 : 1
+    for (const bad of ['2556O', '70000', '-1', '25565.5', '']) {
+      if (bad === '') {
+        // An empty variable is an unset one here, as it is for every other name.
+        assert.equal(envOverlay({}, { [variable]: '' })[variable === 'MONOPLAYER_FRONT_PORT' ? 'front' : 'backend']?.port,
+          undefined, variable + ' empty sets no port')
+        continue
+      }
+      assert.throws(() => envOverlay({}, { [variable]: bad }), error => {
+        assert.match(error.message,
+          new RegExp(variable + ' must be an integer from ' + floor + ' to 65535, got "' + bad + '"'))
+        return error instanceof TypeError
+      }, variable + ' ' + bad)
+    }
+    const key = variable === 'MONOPLAYER_FRONT_PORT' ? 'front' : 'backend'
+    assert.equal(envOverlay({}, { [variable]: '25565' })[key].port, 25565,
+      'a port the socket can take is the number beside its host')
+  }
+  assert.equal(envOverlay({}, { MONOPLAYER_FRONT_PORT: '0' }).front.port, 0,
+    'the front may still ask the OS for one')
+})
+
 // #229/#264: the control document's compiled switches. Two paths are left, and the
 // compiled document names neither: an unset variable leaves the lane reading the
 // snapshot it always read.
