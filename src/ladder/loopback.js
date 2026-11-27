@@ -2813,10 +2813,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // --- O53: the control document's whitelist reloads at each login (#229) ---
     // The point of the control document is an edit an operator can make without a
     // deploy and without a restart, and the whitelist is the half a refusal can
-    // prove. Two gates decide a login: the core's login review and the front
-    // leg's own store, so a unit test of either proves half. This rig writes the
-    // file, refuses a real socket, adds that UUID to the file on disk, and joins
-    // again on the same process, with no restart and no reconnect.
+    // prove. The core's login review reads that file at each login, and it is the
+    // one review a login gets (#756), so a unit test of the read proves the read
+    // and not that a login reaches it. This rig writes the file, refuses a real
+    // socket, adds that UUID to the file on disk, and joins again on the same
+    // process, with no restart and no reconnect.
     controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-control-'))
     const controlWhitelistFile = path.join(controlDir, 'attach-whitelist.json')
     const firstUuid = offlineUuid('Attach')

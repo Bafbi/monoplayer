@@ -624,12 +624,49 @@ function evaluateCoreDecision (coreDecision) {
   // #257: the core may allow a login that has no backend to attach to, and say so
   // with `picker: true`. The flag is carried, not inferred: the front serves the
   // picker only where the core decided it may.
-  return { ok: true, reason: null, picker: decision.picker === true, phase: decision.phase ?? null }
+  //
+  // #756: the account the core reviewed travels with the answer, so the leg names
+  // the uuid and the name that were compared rather than reading them a second time.
+  return {
+    ok: true,
+    reason: null,
+    picker: decision.picker === true,
+    phase: decision.phase ?? null,
+    uuid: decision.uuid ?? null,
+    username: decision.name ?? decision.username ?? null
+  }
 }
 
+// #756: one login, one review of the attach whitelist.
+//
+// The comparison is the core's identity gate's. `identity.reviewLoginStart` reads the
+// document through `whitelistSource`, the per-login reload the control document turns on
+// (#229), and its refusal is the one `monoplayer.denials` counts and `attach_denied`
+// names. A handler that answered has therefore answered the whole question, and this leg
+// does not hold the same uuid to the same document again: two comparisons can disagree,
+// and a torn read between them refused a login the core had just allowed under a second
+// reason — whichever ran first was the sentence an operator read. One login also parsed
+// that document twice for one answer.
+//
+// `check` stays the gate for a lane whose core wired no login-start handler: the
+// socket-free rigs, and test/legs/session-verification-refused.test.js, which builds the
+// deployed leg with no core. There the leg's own check is the only review there is, so
+// the fallback is a gate and not a copy of one.
 function decideViaCheck ({ client, store = null, check, coreDecision = null } = {}) {
+  // What the core was asked, which is not the same fact as what it answered: a lane with
+  // no handler hands nothing here, and its answer is not an allow.
+  const reviewed = coreDecision !== null && coreDecision !== undefined
   const core = evaluateCoreDecision(coreDecision)
   if (!core.ok) return core
+  if (reviewed) {
+    return {
+      ok: true,
+      reason: null,
+      uuid: core.uuid ?? null,
+      username: core.username ?? null,
+      picker: core.picker === true
+    }
+  }
   if (!check || typeof check.checkVerified !== 'function') {
     return { ok: false, reason: 'check_unavailable' }
   }
@@ -652,8 +689,9 @@ function decideViaCheck ({ client, store = null, check, coreDecision = null } = 
   }
 }
 
-// Pure online attach decision: core loginStart (fail closed), then the real
-// hasJoined-backed whitelist check. Exported for socket-free tests.
+// Pure online attach decision: the core's loginStart review, which fails closed, and
+// the leg's own hasJoined-backed check for a lane whose core answered nothing. Exported
+// for socket-free tests.
 export function decideOnlineAttach (input = {}) {
   return decideViaCheck(input)
 }

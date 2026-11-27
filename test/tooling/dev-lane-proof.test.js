@@ -140,5 +140,8 @@ test('a login is verified and whitelisted before the picker, which is what makes
   assert.match(CORE, /identity\.reviewLoginStart\(payload\)/, 'the whitelist reviews the login')
   assert.match(FRONT, /'online-mode': onlineMode/, 'on a front leg running its configured mode')
   assert.match(ATTACH, /function checkVerified[\s\S]*?store\.has\(uuid\)/, 'and its attach check decides on the uuid the client carries')
-  assert.match(FRONT, /check\.checkVerified\(\{ client, store \}\)/, 'which the leg runs over its own beforeLogin')
+  // #756: the core's review is the one review a login gets, so the leg's own check
+  // answers only a lane whose core wired no login-start handler. The count itself is
+  // proven by a run, in test/legs/whitelist-reviewed-once.test.js, not by this text.
+  assert.match(FRONT, /check\.checkVerified\(\{ client, store \}\)/, 'which the leg runs over its own beforeLogin when the core answered nothing')
 })
