@@ -6,13 +6,13 @@
 # Velocity 4.3.1 needs Java 25; itzg/mc-proxy:java25 provides it. The jar is
 # downloaded at pod start from the PaperMC fill API as
 #   velocity-4.3.1-45.jar (sha256 0844bcabdcdb4f5b875906fd4c3365bc1bb76918e42bc595ed88ad195258dd75)
-# pinned by VELOCITY_VERSION + VELOCITY_BUILD_ID below. See
-# docs/paper-behind-velocity.md ("Digest pinning") for turning the tag pins into
-# digest pins before any longer-lived lane.
+# pinned by VELOCITY_VERSION + VELOCITY_BUILD_ID below. See "Digest pinning" in
+# `docs/paper-behind-velocity.md` for turning the tag pins into digest pins before
+# any longer-lived lane.
 #
 # The forwarding secret is never a manifest or ConfigMap value: pods read it
 # from the `gate-__instance__-velocity` Secret, which `gate:up` creates when it is absent
-# (README, "One tree, one lane, one value").
+# ("One tree, one lane, one value" in `deploy/driver/README.md`).
 apiVersion: v1
 kind: ConfigMap
 metadata:

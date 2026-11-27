@@ -1,5 +1,5 @@
-// Row registry for the backend matrix (docs/driver-lane-plan.md, "Backend
-// matrix" / "Pins that matter"). Pure data + pure helpers: no I/O, no env, no
+// Row registry for the backend matrix: "Backend matrix" and "Pins that matter" in
+// `docs/driver-lane-plan.md`. Pure data + pure helpers: no I/O, no env, no
 // child processes, so the M4 unit tests stay fully offline.
 //
 // Names here must match the Kubernetes objects in deploy/driver/:

@@ -385,11 +385,13 @@ the log when it fails.
 Every "You should see" cell is `OPERATOR_STEPS`'s `claim` for its step, word for word
 (`src/driver/dev-proof.js`). `test/driver/dev-proof.test.js` reads the cell and the claim against
 each other in both directions, so a row here cannot ask for something the witness does not record.
-Of the other two cells the guard reads two things: that the last one names the step's record, and,
-where `OPERATOR_STEPS` carries a `because` for the step, that the last cell is that sentence word
-for word. The `spectator-mode` sentence is built with `spectatorModeFrames().length` in it, so a
-third frame in `src/core/spectator-mode.js` fails the guard rather than leaving this page quietly
-stale. The rest of their prose is this page's, and nothing compares it.
+Of the two diagnostic cells, the guard reads the names. The last cell names the step's record,
+and, where `OPERATOR_STEPS` carries a `because` for the step, it is that sentence word for word.
+The `spectator-mode` sentence is built with `spectatorModeFrames().length` in it, so a third frame
+in `src/core/spectator-mode.js` fails the guard rather than leaving this page quietly stale. Every
+other record the last cell writes is one `FAILURE_READS` declares in
+`test/driver/dev-proof.test.js`, and that table says, row by row, why the rest of the cell is this
+page's prose.
 
 | Step | Look at | You should see | If you do not |
 |---|---|---|---|
@@ -408,8 +410,8 @@ one channel about another client's body carries no texture, so a third party dra
 is about the spectator's own body, not this one.
 
 `#645` is the other open half and it is invisible here: a spectator's replay carries the body's
-own game mode frames, and the spectator's own pair is written last, so the client ends correct.
-It is a frame on the wrong socket, not a screen you can catch.
+own game mode frames, and the spectator's own mode frames are written last, so the client ends
+correct. It is a frame on the wrong socket, not a screen you can catch.
 
 Two clients cannot show a *third* one: that a spectator is drawn for another spectator is
 `O71`'s, and it needs a third account in the same list, on the same body. Two clients cover
@@ -453,10 +455,10 @@ than compares: it wants them here, and the service to count each one.
 | `pickerServerDialog` | the chosen server's own dialog was offered, with the `verbs` a client may answer it with. It is written even when the write failed, so `pickerPick` with no `pickerVerb` is a client that was never shown this dialog, or never answered it, and `pickerServerDialogFailed` beside it says why the write did not go |
 | `pickerVerb` | a client answered the chosen server's own dialog, carrying the `verb` (`claim`, `spectate` or `disconnect`) and the `server`. This is the click that dials a body or starts a landing. A verb the lane cannot act on writes `pickerVerbRefused` instead |
 | `claimDial` | a client claimed a body, so a body was dialled. This is where the puppet reaches the Paper |
-| `spectateView` | a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet's body, and `modeFrames` is the spectator game mode pair |
+| `spectateView` | a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet's body, and `modeFrames` is the spectator game mode frames the core writes, `game_state_change` then `abilities` |
 | `spectateRefused` | the Spectate click was refused, with the core's own reason |
 | `spectateViewRefused` | the landing itself was refused, with the reason |
-| `spectateModeRefused` | the spectator game mode pair could not be written to that socket |
+| `spectateModeRefused` | the spectator game mode frames could not be written to that socket |
 | `puppetSkinSent` | #614's `player_info` went out: the body's entry, naming the puppet, or the driving client's own entry. `puppet` says which entry it is, `true` for the body's and `false` for the driver's own. `name` is the player it named, `signed` whether the puppet's textures property carried a signature, and `reason` what asked for it. It is one frame for the whole body, with no channel, so this record is the entry for every socket at once |
 | `puppetSkinKnown` | the backend's own `player_info` carried a textures property for the puppet. Without it there is no entry to write, and a client drops the spawn that follows |
 | `puppetSkinWithheld` | an entry the proxy would not write, because the profile it names has no UUID or no name |

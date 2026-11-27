@@ -29,12 +29,14 @@ Scope split, so nothing is doubled by another workstream:
 | Toxiproxy | `ghcr.io/shopify/toxiproxy:2.13.0` | 2026-10-14 release |
 | itzg backend image | `itzg/minecraft-server:2026.10.1-java25` | same pin as the G0 pod |
 
-**Digest pinning note.** Manifests pin tags, not digests (the itzg images get
-re-tagged upstream, and velocity's jar is fetched at pod start — its *jar* is
-the real pin, and the fill-data object id above is its sha-256). Before any
-lane outlives the gate: `docker buildx imagetools inspect itzg/mc-proxy:java25`
-and `crane digest ghcr.io/shopify/toxiproxy:2.13.0`, then switch the manifests
-to `image@sha256:<digest>`.
+### Digest pinning
+
+Manifests pin tags, not digests: the itzg images get re-tagged upstream, and
+velocity's jar is fetched at pod start, so its *jar* is the real pin and the
+fill-data object id above is its sha-256. Before any lane outlives the gate:
+`docker buildx imagetools inspect itzg/mc-proxy:java25` and
+`crane digest ghcr.io/shopify/toxiproxy:2.13.0`, then switch the manifests to
+`image@sha256:<digest>`.
 
 ## Secrets (never committed)
 

@@ -385,7 +385,13 @@ const resolve = (token, block) => {
 // The page shape: a quoted section title beside a page, as '"title" in docs/page.md'. The
 // page has to hold a heading with the title in it, because the sentence sends a reader to a
 // section and not to the page, and a heading may carry a parenthetical after the title.
-const SECTION = /"([^"]{3,})"\s+(?:in|of|under)\s+`([^\s`]+\.md)`/g
+//
+// A comment that sends a reader to two sections of one page writes both titles before the one
+// page: '"Backend matrix" and "Pins that matter" in docs/driver-lane-plan.md'. The run of titles
+// is one claim about one page, so every title in it is asked for; reading only the last would
+// leave the first heading free to be renamed (#957).
+const SECTION = /((?:"[^"]{3,}"(?:\s*(?:,|and)\s*)?)+)\s+(?:in|of|under)\s+`([^\s`]+\.md)`/g
+const titlesOf = run => [...run.matchAll(/"([^"]{3,})"/g)].map(match => match[1])
 const headlined = (page, title) => read(page).split('\n')
   .some(line => /^#{1,6}\s/.test(line) && line.includes(title))
 
@@ -425,10 +431,12 @@ function scan () {
         else counts.word += 1
       }
       for (const match of block.text.matchAll(SECTION)) {
-        const [, title, page] = match
+        const [, run, page] = match
         if (!fs.existsSync(path.join(ROOT, page))) continue
-        counts.section += 1
-        if (!headlined(page, title)) sections.push(where(block, match.index) + ' names the section "' + title + '" of ' + page)
+        for (const title of titlesOf(run)) {
+          counts.section += 1
+          if (!headlined(page, title)) sections.push(where(block, match.index) + ' names the section "' + title + '" of ' + page)
+        }
       }
       for (const match of block.text.matchAll(SYMBOL)) {
         const name = match[1]

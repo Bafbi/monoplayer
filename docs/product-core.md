@@ -514,12 +514,12 @@ unclaimed, which is a body a client may watch.
   at the front, so nothing it says can deny the body its pack.
 - **A spectator's client is told what it is (#259).** The replay carries the body's own
   game mode and abilities, because those are `latest` frames in the body's cache. So
-  two frames go to that channel after the replay: `game_state_change` with reason 3
-  and game mode 3, then `abilities` with the flags vanilla sends a spectator
-  (invulnerable, flying, flying allowed) at the protocol's two speeds. They are the
-  last word on that socket. A later frame from the body reaches the driver and never
-  a spectator's channel, so the body's next mode change cannot put a spectator back in
-  the driver's world.
+  the spectator game mode frames go to that channel after the replay:
+  `game_state_change` with reason 3 and game mode 3, then `abilities` with the flags
+  vanilla sends a spectator (invulnerable, flying, flying allowed) at the protocol's two
+  speeds. They are the last word on that socket. A later frame from the body reaches the
+  driver and never a spectator's channel, so the body's next mode change cannot put a
+  spectator back in the driver's world.
 - **The picker is the door on a lane that has one (#259).** Every admitted join is
   served the picker, whatever the session is doing, because a claim is the only thing
   that puts a client into a body. Before this, a join while a warm body stood with
