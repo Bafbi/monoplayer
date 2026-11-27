@@ -996,18 +996,19 @@ preAuthStats
 Three members are left for the blocks below, and a row cannot name any of them. A
 reading is a value rather than a method: `channels` is the board of connections a body
 holds, and `target` is the address a leg keeps open. `close()` is a method no core code
-calls: the rig's teardown and the shutdown after a failed start await it, and the signal
-handler calls it and exits, so each block names it and the guard asks for it by name. `test/tooling/product-core-map.test.js` holds
-both blocks to the calls `src/service/monoplayer.js` makes, so a member the core starts
-calling and a block omits fails there, and so does a name a leg no longer answers (#690,
-#712).
+calls, and the three teardowns await it: the rig's, and both shutdowns in
+`src/service/start-live.js` since #773 (#662). So each block names it, and
+`test/tooling/product-core-map.test.js` asks for it by name. That case holds both blocks
+to the calls `src/service/monoplayer.js` makes, so a member the core starts calling and a
+block omits fails there, and so does a name a leg no longer answers (#690, #712).
 
 ```js
 backendLeg = {                    // = the GlowSquidye puppet session
   target                          // { host, port }: the address the leg is dialled at, as a copy
   close()                         // resolves once the socket the leg ended has reported its
                                   // own end, bounded by the leg's own wait: the wait rig.close()
-                                  // and the shutdown after a failed start await (#662)
+                                  // and both shutdowns in src/service/start-live.js await
+                                  // (#662, #773)
 }
 
 frontLeg = {                      // a body's channels: its driver and its spectators (#269)

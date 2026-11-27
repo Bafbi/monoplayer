@@ -1,8 +1,9 @@
 // Unit target: src/service/start-live.js, the parts a test can reach without a
 // process — the env-to-config mapping a deployed lane reads, the picker's offer, the
-// journal's volume answer, the skin warning, and the reconnect handler the lane
-// registers (#540). The kept connection (#22) is the overlay's case that matters:
-// its default is off, and a lane turns it on through this overlay.
+// journal's volume answer, the skin warning, the reconnect handler the lane registers
+// (#540), and the shutdown a signal runs (#773). The kept connection (#22) is the
+// overlay's case that matters: its default is off, and a lane turns it on through
+// this overlay.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -13,6 +14,7 @@ import {
   attachWhitelistEntries,
   createPickerServerReader,
   createReconnectHandler,
+  createShutdownHandler,
   envOverlay,
   journalVolumeFull,
   unidentifiedSkinWarning
@@ -570,4 +572,103 @@ test('#540 a followed target the leg rejects reverts to the server the session s
   assert.equal(rig.calls[settled].intent.keepCookies, true,
     'and keeps the cookies, because the settled server was reached by a transfer')
   assert.ok(events(rig).includes('transferFollowTargetRejected'), 'the refusal is on the record')
+})
+
+// --- #773: the signal shutdown ---
+//
+// The handler lives in createShutdownHandler so a case can drive it, the way #540
+// moved the reconnect handler out. exit is a parameter and not process.exit, so what
+// a SIGTERM does to a process is a value a test reads rather than a process it kills.
+// The wait itself is #662's: close() resolves once the socket the leg ended has
+// reported its own end, bounded by the leg. A case here uses a close that resolves
+// late, because an exit that ran first would look identical with a close that
+// resolved at once.
+
+const late = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+function shutdownRig (overrides = {}) {
+  const order = []
+  const lines = []
+  const records = []
+  const exits = []
+  const stoppedWith = []
+  const handler = createShutdownHandler({
+    core: { stop: async ({ reason } = {}) => { order.push('core'); stoppedWith.push(reason) } },
+    front: { close: async () => { await late(20); order.push('front') } },
+    backend: { close: async () => { await late(20); order.push('backend') } },
+    telemetry: { flush: async () => { order.push('telemetry') } },
+    journal: {
+      event: (name, fields) => records.push({ name, ...fields }),
+      close: () => { order.push('journal') }
+    },
+    sink: { end: () => { order.push('sink') } },
+    stdout: { write: () => {} },
+    log: (name, fields) => lines.push({ name, ...fields }),
+    exit: code => { order.push('exit:' + code); exits.push(code) },
+    ...overrides
+  })
+  return { handler, order, lines, records, exits, stoppedWith }
+}
+
+test('#773 a signal shutdown has not exited while a leg is still closing', async () => {
+  const { handler, order } = shutdownRig()
+  const running = handler.stop('SIGTERM')
+  await late(5)
+  assert.deepEqual(order, ['core'],
+    'the core stopped and nothing else has run: an exit taken here would cut the wait #662 gave close()')
+  await running
+})
+
+test('#773 a signal shutdown awaits both closes, then its records, then exits 0', async () => {
+  const { handler, order } = shutdownRig()
+  await handler.stop('SIGTERM')
+  assert.deepEqual(order, ['core', 'front', 'backend', 'telemetry', 'journal', 'sink', 'exit:0'],
+    'both closes resolve before anything is flushed, closed, or exited')
+})
+
+test('#773 a leg whose close throws is named on the record and the other leg still closes', async () => {
+  const closedLegs = []
+  const { handler, lines, records, exits, stoppedWith } = shutdownRig({
+    front: { close: async () => { throw new Error('front wedged') } },
+    backend: { close: async () => { closedLegs.push('backend') } }
+  })
+  await handler.stop('SIGINT')
+  assert.deepEqual(closedLegs, ['backend'], 'the leg that did not throw still closed, because one throw is not a reason to skip the other')
+  assert.deepEqual(exits, [0], 'a leg that failed to close does not fail the stop: the pod is going either way')
+  assert.deepEqual(stoppedWith, ['signal:SIGINT'], 'the core was stopped with the signal that arrived')
+  for (const record of [lines, records]) {
+    const closed = record.find(entry => entry.name === 'legsClosed')
+    assert.ok(closed, 'the teardown records what the closes reported, before the process goes')
+    assert.equal(closed.reason, 'signal:SIGINT', 'the record repeats the reason the core was stopped with')
+    assert.equal(closed.frontCloseError, 'front wedged', 'the leg that threw is named')
+    assert.equal(closed.backendCloseError, null, 'and the leg that closed cleanly is not blamed')
+    assert.equal(typeof closed.closeMs, 'number', 'with how long the closes took, which is what a slow rollout is read for')
+  }
+})
+
+test('#773 a second signal during a shutdown does not run the shutdown again', async () => {
+  let closes = 0
+  const exits = []
+  const { handler } = shutdownRig({
+    front: { close: async () => { closes += 1 } },
+    backend: { close: async () => { closes += 1 } },
+    exit: code => { exits.push(code) }
+  })
+  await Promise.all([handler.stop('SIGTERM'), handler.stop('SIGTERM')])
+  assert.equal(closes, 2, 'one close per leg: the second signal found a shutdown already in flight')
+  assert.deepEqual(exits, [0], 'and it exited once')
+})
+
+test('#773 a teardown never ends the stream the process was handed', async () => {
+  // Both shutdown paths read this rule, and the failure path had it before #773: a
+  // sink that is stdout is the process's own stream, so ending it is not the lane's.
+  const ends = []
+  const stdout = { end: () => { ends.push('stdout') } }
+  const { handler } = shutdownRig({ sink: stdout, stdout })
+  await handler.stop('SIGTERM')
+  assert.deepEqual(ends, [], 'a teardown never ends the stream the process was handed')
+  const opened = { end: () => { ends.push('file') } }
+  const second = shutdownRig({ sink: opened, stdout })
+  await second.handler.stop('SIGTERM')
+  assert.deepEqual(ends, ['file'], 'and it does end the file the lane opened')
 })
