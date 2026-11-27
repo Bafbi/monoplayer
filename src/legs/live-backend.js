@@ -60,6 +60,24 @@ export const LEG_SWALLOWED = new Set(['keep_alive'])
 // keeps asking is a loop, not a gate.
 const DIALOG_ATTEMPT_LIMIT = 5
 
+// How long close() waits for the socket it ended to report its own end (#662).
+// The event comes back from the kernel, so the wait is the socket's, not a number
+// of turns. The bound is the leg's, not each caller's: a wedged peer must not hold
+// a shutdown, and the library's own close timeout bounds the same wait at 30 s,
+// which is a shutdown an operator ends by hand.
+//
+// The number repeats the bot's bound (src/ladder/bot.js:239-243) and the lane's
+// (src/ladder/loopback-lane.js:71) rather than importing it, because the legs sit
+// below the ladder: a rung imports a leg, never the reverse.
+const END_TIMEOUT_MS = 2000
+
+// How long a close waits, after destroying the socket it gave up on, for the end
+// that destroy reports. A destroyed socket reports its close on a later turn, and
+// the leg's end handler runs on that event, so a close that destroyed and returned
+// would answer ahead of the fault this leg reports. This bound covers only a client
+// whose socket never attached, where a destroy reaches nothing to report.
+const AFTER_DESTROY_MS = 250
+
 // #432: the body a target derives, the slug a claim names it with
 // (src/core/picker.js). A target that names no address is no body, so no record
 // names one for it (#263 D2). The port is read as the config document spells it,
@@ -371,6 +389,7 @@ function createBackendLeg ({
   version,
   log: sinkLog,
   connectTimeoutMs,
+  endTimeoutMs = END_TIMEOUT_MS,
   dialogAction,
   // Consulted per dialog, so a leg built before any client exists still
   // answers correctly once one attaches. The orchestrator reads the core.
@@ -420,6 +439,10 @@ function createBackendLeg ({
     const log = recordsFor(sinkLog, () => dialled)
     log('backendConnect', connectLogFields(connection, dialled))
     ended = false
+    // A dial is a new socket, so the teardown a caller waits on is this
+    // connection's (#662): a close() after a reconnect must answer for the
+    // socket that reconnect opened, not for the one it replaced.
+    closePromise = null
 
     function onError ({ error } = {}) {
       const message = String(error?.message ?? error).slice(0, 200)
@@ -676,28 +699,68 @@ function createBackendLeg ({
     get client () { return client },
     get ended () { return ended },
     forwarderStats () { return forwarder ? { ...forwarder.counters, names: { ...forwarder.nameCounts } } : null },
+    // Resolves once the socket this leg ended has reported its own end (#662),
+    // not once the decision to end it was taken. `end()` sets `ended` and asks the
+    // socket to close; the event comes back from the kernel, and the handler
+    // connect() installed for it is where the fault the core schedules a
+    // reconnect on is reported (src/core/session.js:232). A caller that awaits this
+    // and then reads a ledger reads a socket that has ended — or, on the bound
+    // below, one this leg destroyed, whose end handler runs the turn after.
+    //
+    // Teardown order here: the socket, then the tokens, then the caller. The
+    // custody writer lock is what keeps a token rotation from signing out the
+    // session this socket still holds (the custody rule in this file's header), so
+    // a close that ends the socket itself releases it only once the socket is gone.
+    // `end()` releases at its own call instead, before the socket ends, because a
+    // stop that never reaches close() must not hold the lock behind a socket that
+    // may never report; on that path the release here is a no-op (`lockHeld` in
+    // the live constructor's releaseTokens).
     close () {
       if (closePromise) return closePromise
       closePromise = new Promise(resolve => {
         const current = client
-        if (!current || ended) {
+        let done = false
+        let bound = null
+        const settle = () => {
+          if (done) return
+          done = true
+          clearTimeout(bound)
+          current?.removeListener('end', settle)
+          // Only the connection this close ended may release the tokens. A dial that
+          // landed while this waited took the writer lock for its own socket, and
+          // freeing it here would hand the account to a second writer while the leg
+          // is still using it. The end handler reads the same identity, and drops the
+          // client to null on its way out.
+          if (client === current || client === null) releaseTokens()
+          resolve()
+        }
+        // Nothing live to wait for: the leg never dialled, or the socket has
+        // already ended and its handler dropped the client it held. The second
+        // reading is the library's own flag, which is true only after its end
+        // event fired, so a listener added now would wait out the bound instead.
+        if (!current || current.ended === true) {
           releaseTokens()
           resolve()
           return
         }
-        let done = false
-        const finish = () => {
-          if (done) return
-          done = true
-          releaseTokens()
-          resolve()
-        }
-        current.once('end', finish)
+        // A peer that never closes must not hold the caller. The bound destroys the
+        // socket it gave up on, as the bot's close does (src/ladder/bot.js:239-243),
+        // so a close that resolved without the event leaves no connection behind it.
+        bound = setTimeout(() => {
+          try { current.socket?.destroy() } catch { /* already gone */ }
+          bound = setTimeout(settle, AFTER_DESTROY_MS)
+          bound.unref?.()
+        }, endTimeoutMs)
+        bound.unref?.()
+        current.once('end', settle)
+        // `end()` asked already: a second ask re-runs a close that is in flight, so
+        // this close waits for the socket and asks for nothing.
+        if (ended) return
         try {
           if (typeof current._end === 'function') current._end('proxy_stopped')
           else current.end('proxy_stopped')
         } catch {
-          finish()
+          settle()
         }
       })
       return closePromise
@@ -821,6 +884,9 @@ export function createOfflineBackendLeg (options = {}) {
     username = OFFLINE_PUPPET_USERNAME,
     log = () => {},
     connectTimeoutMs = 15000,
+    // How long close() waits for a socket that has not reported its end (#662).
+    // A rung that needs the bound reached says so; unset takes the leg's default.
+    endTimeoutMs,
     // The configuration-gate policy, so a rung can run one and prove it does
     // not reach play (#20). Off by default: an offline leg answers nothing.
     dialogAction = null,
@@ -868,6 +934,9 @@ export function createOfflineBackendLeg (options = {}) {
   if (!Number.isFinite(connectTimeoutMs) || connectTimeoutMs < 0) {
     throw new TypeError('connectTimeoutMs must be a non-negative number')
   }
+  if (endTimeoutMs !== undefined && (!Number.isFinite(endTimeoutMs) || endTimeoutMs < 0)) {
+    throw new TypeError('endTimeoutMs must be a non-negative number')
+  }
 
   return createBackendLeg({
     kind: 'offline-backend-leg',
@@ -876,6 +945,7 @@ export function createOfflineBackendLeg (options = {}) {
     version,
     log,
     connectTimeoutMs,
+    endTimeoutMs,
     dialogAction,
     isHumanAttached,
     onDialogAnswered,
