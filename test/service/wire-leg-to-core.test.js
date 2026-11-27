@@ -79,16 +79,14 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
   // carries one, and the pre-auth read. This leg carries every one of them.
   assert.deepEqual(wiring.called, FRONT_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
     'every call row of the front table is carried, and none of them is registered')
-  // #757: the report no longer counts what it installed, so the count is read from two
-  // sides instead of one field: the leg recorded which registration reached it, and the
-  // report names the calls it carried. The two are disjoint and together they are the
-  // table, so a row both registered and carried fails here — a sum of two lengths would
-  // have let it through.
+  // #757: the report no longer counts what it installed, so the two sides are read
+  // directly: the leg recorded which registration reached it, and the report names the
+  // calls it carried. Each list is held to its own rows of the table, so a row both
+  // registered and carried fails on the report, and a row that reached neither fails on
+  // the leg's record.
   const registrationRows = FRONT_LEG_CALL_INS.filter(row => row.kind === 'register').map(row => row.name)
   assert.deepEqual([...handlers.keys()].sort(), registrationRows.sort(),
     'every register row reached the leg, and no call row did')
-  assert.equal(wiring.called.length, FRONT_LEG_CALL_INS.length - registrationRows.length,
-    'and the call rows are the rest of the table, so every declared call-in was either registered on the leg or carried by it')
 
   // The payload shapes a caller must not have to know. `attachPlayer` takes
   // includeConfig, and a lane's attach never re-sends the configuration phase:
@@ -149,6 +147,11 @@ test('#605 the core hands every backend call-in to a leg that carries them', () 
     'a backend leg that carries every row is wired whole')
   assert.deepEqual(wiring.called, BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
     'every call row of the backend table is carried: the delivery, the dial and the two optional calls')
+  // #757: the same reading of the leg's own record the front case makes, so neither table
+  // is the one the partition happens to be checked on.
+  const registrationRows = BACKEND_LEG_CALL_INS.filter(row => row.kind === 'register').map(row => row.name)
+  assert.deepEqual([...handlers.keys()].sort(), registrationRows.sort(),
+    'every register row reached the backend leg, and no call row did')
 
   handlers.get('setFrameHandler')({ state: 'play', name: 'login', buffer: Buffer.from('x'), data: { entityId: 42 } })
   assert.deepEqual(calls.at(-1), {

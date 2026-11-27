@@ -59,8 +59,8 @@
 // reader asked it — that every row reached the leg — is a claim about the table, and
 // test/service/wire-leg-to-core.test.js makes it where it builds a leg row by row.
 // `requiredMissing` named the subset of the holes the leg's own default hides, and the
-// `required` flag on each row had no reader but it. The flag went with it: each row's
-// comment already says what a leg without that row costs.
+// `required` flag on each row had no reader but it. The flag went with it: the comments
+// above the rows already say what a leg without one costs.
 //
 // The two fields that remain are read in src/service/monoplayer.js, and the case
 // "#757 every field of the report has a production reader" holds this list to them.
