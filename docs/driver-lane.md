@@ -125,14 +125,17 @@ checklist the command generates. Each row is one step: set its `state` to `ok`
 when you saw it hold, and write what you saw in its `evidence`. Then save the
 checklist as `testdata/driver-unmodded-witness.json` with `completed: true`.
 
-`not-seen` records a step you could not see, and the check accepts it on one
-condition: the step's entry in `UNMODDED_STEPS` carries `openUntil`, the tickets
-that close it, the way the dev lane's `OPERATOR_STEPS` does. A row cannot make that
-declaration itself. The witness is hand-edited, and a step that could declare
-itself absent would pass by writing a line. So the day a G0 step becomes one an
-operator cannot see, add that step's `openUntil` to the list in the change that finds
-the gap, naming the tickets that close it, and drop it again in the commit that lands
-them. The checklist the lane writes then says which step it is.
+`not-seen` records a step you could not see. The check accepts it on one condition:
+the step's entry in `UNMODDED_STEPS` carries `openUntil`, the tickets that close it,
+the way the dev lane's `OPERATOR_STEPS` does. A row cannot make that declaration
+itself. The witness is hand-edited, and a step that could declare itself absent would
+pass by writing a line.
+
+So when a G0 step becomes one an operator cannot see, add its `openUntil` to the list
+in the change that finds the gap, and name the tickets that close it. Drop the field
+in the commit that lands them. The checklist the lane writes then says which step it
+is. Record `not-seen` on any other step and the check refuses the document, naming the
+step.
 
 `--verify-g0` reads those rows, not the flag over them, and the refusal names the
 row it stops on. What a row has to record is the checklist's own `how` list, which

@@ -182,7 +182,7 @@ const notSeen = (witness, over = {}) => witness.steps.map(step => (step.id === D
   ? { ...step, state: 'not-seen', evidence: 'relaunched, and the client reattached at the spawn point', ...over }
   : step))
 
-test('a step its list declares expected absent verifies when it is recorded not-seen, and the pass names the gap', () => {
+test('a step its list declares expected absent verifies when it is recorded not-seen, and the checklist names the step', () => {
   const witness = recorded()
   witness.steps = notSeen(witness)
   const verdict = verifyUnmoddedWitness(witness, { steps: declaredList() })
@@ -196,7 +196,7 @@ test('a step its list declares expected absent verifies when it is recorded not-
     'an honest run with the declared gap is a record, not a finding: ' + verdict.reason)
   // The other half of the declaration: a fix landing must not turn an honest record red. The step is
   // seen, the list still declares it, and the record passes — the dev lane prints a `stale
-  // declaration:` line for the operator, and the G0 command has no line to print yet (#960).
+  // declaration:` line for the operator, and the G0 command has no line to print yet (#963).
   assert.deepEqual(verifyUnmoddedWitness(recorded(), { steps: declaredList() }),
     { ok: true, reason: null }, 'a declared step the operator did see is still a record')
 })
@@ -208,7 +208,7 @@ test('a not-seen on a step nothing declares is refused, in a sentence naming the
     ok: false,
     reason: 'not seen: `rejoin` (relaunched, and the client reattached at the spawn point): ' +
       'no step this run reads is declared expected absent, so every step is recorded `ok`. ' +
-      'A step recorded `not-seen` needs an `openUntil` entry in the list the check reads, naming the tickets that close it'
+      'A step recorded `not-seen` passes only when the step list declares it expected absent with `openUntil`, naming the tickets that close it'
   }, 'a not-seen is the finding it always was unless the list\'s own entry accounts for it')
 })
 
