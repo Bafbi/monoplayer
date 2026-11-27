@@ -349,6 +349,24 @@ function renderAttach (attach) {
     row('reason', attach.reason),
     row('took', count(attach.tookMs) === null ? null : attach.tookMs + ' ms'),
     row('replayed', count(attach.replayed)),
+    // #735: the other half of the delivery #717 split out, under the record's own word for
+    // it. A replay count with no second number reads as a total, which is the half-fact
+    // this row ends. A refusal is not a fault, so the row names the gap and never asks for
+    // a repair (docs/adr/a-refused-replay-frame-is-not-retried.md).
+    //
+    // The row claims no delivery. The number mixes a frame the leg answered false with one
+    // whose write threw, and a throw may have reached an earlier channel
+    // (docs/telemetry.md).
+    //
+    // A record written before the field existed counted a refused frame as a replay, so it
+    // says which half it cannot answer rather than printing a zero it never measured.
+    row('refused', count(attach.refused) === null
+      ? (count(attach.replayed) === null
+          ? null
+          : 'unknown: the record carries no refusal count, so a frame the leg refused is not separated from the ones it wrote')
+      : attach.refused + (attach.refused === 0
+          ? ''
+          : ' (a frame the front leg refused or threw on, and the attach stream is written once, so the client keeps the gap until it attaches again)')),
     row('domains', domains),
     // Non-zero is #213's defect, measured, so it is named as such rather than
     // left as a number a reader has to interpret.

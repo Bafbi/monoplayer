@@ -364,6 +364,53 @@ test('the last attach names the bodies that never spawned', () => {
   assert.equal(card.attach.domains.chunks, 40)
 })
 
+// #735: #717 split the attach record's delivery into the frames a socket took and the
+// frames the front leg refused, and the card kept drawing one half. A replay count then
+// read as a total, and the operator could not tell a replay that lost a frame from one
+// that lost none, which is the whole point of the split.
+//
+// The two numbers are drawn apart and never added: replayed excludes the synthesized
+// position while refused includes a position the leg refused (docs/telemetry.md), so a
+// ratio between them would print a frame count that is not a frame count.
+test('#735 the last attach draws the frames the leg refused beside the ones it wrote', () => {
+  const withRefused = refused => ({ ...attach, refused })
+  const cardOf = record => facts({ log: { text: tail(startLive, record, heartbeat) } })
+  const pageOf = card => renderPage({ version: 1, puppets: [puppet] }, [card])
+
+  const clean = cardOf(withRefused(0))
+  assert.equal(clean.attach.refused, 0, 'a record that carries the count carries it as a number, zero included')
+  const cleanPage = pageOf(clean)
+  assert.match(cleanPage, /<dt>replayed<\/dt><dd>120<\/dd>/,
+    'the frames the attach stream wrote, which is the frames a socket took')
+  assert.match(cleanPage, /<dt>refused<\/dt><dd>0<\/dd>/,
+    'and the frames the leg refused, which is zero: the card shows both numbers, so neither reads as the whole')
+
+  const lossy = cardOf(withRefused(1))
+  assert.equal(lossy.attach.refused, 1)
+  const lossyPage = pageOf(lossy)
+  assert.match(lossyPage, /<dt>replayed<\/dt><dd>120<\/dd>/, 'the same 120 took a socket')
+  assert.match(lossyPage,
+    /<dt>refused<\/dt><dd>1 \(a frame the front leg refused or threw on, and the attach stream is written once, so the client keeps the gap until it attaches again\)<\/dd>/,
+    'one refused frame is a gap in the client world, said in words, and the drop is the behaviour #738 decided rather than a fault')
+
+  // A record written before the field existed answers nothing, and the page says so
+  // instead of printing a zero the record never measured.
+  const older = cardOf(attach)
+  assert.equal(older.attach.refused, null)
+  const olderPage = pageOf(older)
+  assert.match(olderPage,
+    /<dt>refused<\/dt><dd>unknown: the record carries no refusal count, so a frame the leg refused is not separated from the ones it wrote<\/dd>/,
+    'a lane older than the field says which half it cannot answer')
+
+  // A record that carries neither count has no pair to draw, and the card says nothing
+  // rather than a sentence about a number the record never wrote.
+  const bare = cardOf({ t: attach.t, event: 'attach', name: 'Bafbi', reason: 'attach' })
+  assert.equal(bare.attach.refused, null)
+  assert.equal(bare.attach.replayed, null)
+  assert.doesNotMatch(pageOf(bare), /<dt>refused<\/dt>|<dt>replayed<\/dt>/,
+    'two absent counts are not a pair, and neither is a zero')
+})
+
 // --- the four sentences ---
 
 const sentence = (card) => card.state.reason

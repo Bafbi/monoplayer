@@ -145,6 +145,15 @@ nobody claimed has no claim age, and a spectator holds none. A connection the la
 admitted itself names no body. Those rows say so in words instead of printing a zero
 or a blank (#263 D2).
 
+**The `Last attach` card draws the attach stream's two numbers side by side.** `replayed`
+is the frames a socket took, and `refused` is the frames the front leg refused or threw
+on. [telemetry.md](telemetry.md) defines both (#717, #735). Neither number is the total,
+and the card never adds them. A refusal is not a fault: the card says what the gap is
+instead of letting a reader take it for a lane to repair
+([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before the
+field existed says it carries no refusal count. A record that carries neither count
+draws no row.
+
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning
 sentence. `null` means the custody cache does not say, which is not "no expiry".

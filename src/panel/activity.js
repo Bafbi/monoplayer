@@ -403,6 +403,11 @@ function attachFacts (record) {
     name: typeof record.name === 'string' ? clean(record.name) : null,
     reason: typeof record.reason === 'string' ? clean(record.reason) : null,
     replayed: counter(record, 'replayed'),
+    // #735: the other half of the delivery #717 split out, which is every frame the leg
+    // refused or threw on. The two stay apart and are never added: `replayed` excludes
+    // the synthesized position and this includes a position the leg refused, so a sum or
+    // a ratio would print a frame count that is not one (docs/telemetry.md).
+    refused: counter(record, 'refused'),
     tookMs: counter(record, 'tookMs'),
     domains: pick(record.domains, DOMAINS),
     // Non-zero is #213's defect, measured: a body the client was told about and
