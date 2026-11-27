@@ -12,6 +12,7 @@ import { RECORD_IDENTITY_FIELDS } from '../../src/core/channels.js'
 import { MAX_REFUSAL_REASONS, PICKER_REFUSAL_REASONS } from '../../src/legs/live-front.js'
 import { CLAIM_REFUSAL } from '../../src/core/claims.js'
 import { OVERFLOW_KEY, UNKNOWN_KEY } from '../../src/core/bounded-counter.js'
+import { PICK_VERBS } from '../../src/core/picker.js'
 import { DENY_REASONS } from '../../src/custody/attach.js'
 import { pickerClaimOutcome } from '../../src/service/start-live.js'
 
@@ -426,6 +427,212 @@ test('#722 the doc names the sessionserver refusal, its reason, and the counter 
     'the service still samples the leg counter the doc names')
   assert.match(START_LIVE, /monoplayer\.session\.refused[\s\S]{0,200}DENY_REASONS\.HASJOINED_FAILED/,
     'and the series it writes carries the reason the doc names')
+})
+
+// #709: the words `configurationEnded`'s `reason` can hold, read off the leg's own end
+// sites. Every end takes three arguments and the reason is the second: a literal at ten
+// sites, and one string concatenation at the eleventh, which is the guard for a verb no lane
+// carries. These two helpers are a third copy of a scanner: endSites is endConfigurationSites
+// in test/legs/picker-numbers.test.js, and argumentsOf is its splitArguments, character for
+// character. #764 names the two this file already shared with that one (countedSites and
+// sourceBody) and not these two, which a comment on it now names.
+function endSites (source) {
+  const sites = []
+  for (let at = source.indexOf('endConfiguration('); at !== -1; at = source.indexOf('endConfiguration(', at + 1)) {
+    // The declaration, which is not a call.
+    if (/function\s+$/.test(source.slice(0, at))) continue
+    const open = source.indexOf('(', at)
+    let depth = 0
+    let end = -1
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === '(') depth += 1
+      else if (source[i] === ')') {
+        depth -= 1
+        if (depth === 0) { end = i; break }
+      }
+    }
+    assert.notEqual(end, -1, 'the end site at byte ' + at + ' closes')
+    sites.push({ at, args: source.slice(open + 1, end) })
+  }
+  return sites
+}
+
+// One call's arguments, split at the commas that sit outside brackets, braces and strings.
+// The third argument of an end is a call as often as a name, so a plain split on a comma
+// would cut it in two.
+function argumentsOf (text) {
+  const args = []
+  let depth = 0
+  let quote = null
+  let from = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]
+    if (quote !== null) {
+      if (char === '\\') i += 1
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
+    if (char === '(' || char === '{' || char === '[') depth += 1
+    else if (char === ')' || char === '}' || char === ']') depth -= 1
+    else if (char === ',' && depth === 0) { args.push(text.slice(from, i).trim()); from = i + 1 }
+  }
+  args.push(text.slice(from).trim())
+  return args
+}
+
+// The one end whose word is composed rather than written: the guard for a verb `PICK_VERBS`
+// carries and this leg has no branch for. It is one pattern on the page, because it is one
+// site in the code, and the page names the verbs the pattern takes.
+const UNBUILT_SITE = /^'verb_' \+ [\w$]+\.verb \+ '_unbuilt'$/
+const UNBUILT_WORD = 'verb_<verb>_unbuilt'
+
+// The words the leg ends a client under: ten of them, sorted.
+function endWords (source) {
+  const words = new Set()
+  for (const site of endSites(source)) {
+    const reason = argumentsOf(site.args)[1] ?? ''
+    if (UNBUILT_SITE.test(reason)) {
+      words.add(UNBUILT_WORD)
+      continue
+    }
+    const literal = reason.match(/^'([a-z][a-z0-9_]*)'$/)
+    assert.notEqual(literal, null,
+      'the end site at byte ' + site.at + ' passes a reason this case cannot read: ' + reason +
+        '. Give it a quoted word, or teach this case the shape it writes')
+    words.add(literal[1])
+  }
+  return [...words].sort()
+}
+
+// The page's own section on that record, and the words its table states in the first cell. A
+// word in another column, such as the refusal key a row explains, is not a word of this set.
+function endSection (doc = TELEMETRY) {
+  const at = doc.indexOf('\n### The picker end record\n')
+  assert.notEqual(at, -1, 'docs/telemetry.md documents the picker end record')
+  const next = doc.indexOf('\n#', at + 1)
+  return doc.slice(at, next === -1 ? doc.length : next)
+}
+
+function endRows (doc = TELEMETRY) {
+  const cells = line => line.split('|').map(cell => cell.trim())
+  return endSection(doc).split('\n')
+    .filter(line => /^\| `[a-z][a-z0-9_<>]*` \|/.test(line))
+    .map(line => ({ word: cells(line)[1].replaceAll('`', ''), cells: cells(line) }))
+}
+
+// Every file under src/, which is where a record name is either written or read.
+function sourceFiles (dir = path.join(ROOT, 'src'), found = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) sourceFiles(full, found)
+    else if (entry.name.endsWith('.js')) found.push(full)
+  }
+  return found
+}
+
+// #709: the end line's reason is a second vocabulary on one client, and no page named it: an
+// operator reading `picker_empty` on a journal line had to guess, when the map beside the same
+// client was keyed `empty_offer`. The set is stated once in the leg's end sites and once for an
+// operator, so this holds the two equal in both directions, the way #671 holds the refusal set.
+// It reads names and no behaviour: test/legs/picker-ends.test.js is what ends a real leg and
+// reads the record it wrote.
+test('#709 the page names every word an ended client is recorded under, and no other', () => {
+  const words = endWords(LIVE_FRONT)
+  const rows = endRows()
+  const pageWords = rows.map(row => row.word)
+
+  // The set is closed only while the record has one write site: a second
+  // record(client, 'configurationEnded', ...) in the leg would write a word no end site
+  // passes, and this case would never see it.
+  assert.equal(LIVE_FRONT.match(/'configurationEnded'/g).length, 1,
+    'src/legs/live-front.js writes the record once, which is what makes its end sites the whole set: ' +
+      "a second write site needs its own reader in this case, and its words in the table")
+
+  assert.ok(endSection().includes('closed'),
+    'the section claims the set is closed, which this case is what makes true')
+
+  const missingFromPage = words.filter(word => !pageWords.includes(word))
+  assert.deepEqual(missingFromPage, [],
+    'src/legs/live-front.js ends a client under ' + missingFromPage.join(', ') + ', and docs/telemetry.md\'s ' +
+      '"The picker end record" table omits ' + (missingFromPage.length === 1 ? 'it' : 'them') +
+      ': add ' + (missingFromPage.length === 1 ? 'a row' : 'a row each') + ' saying what wrote it')
+
+  const notWritten = pageWords.filter(word => !words.includes(word))
+  assert.deepEqual(notWritten, [],
+    'docs/telemetry.md\'s "The picker end record" table names ' + notWritten.join(', ') +
+      ', and no end site in src/legs/live-front.js writes ' + (notWritten.length === 1 ? 'it' : 'them') +
+      ': delete ' + (notWritten.length === 1 ? 'the row' : 'the rows') + ', or add the site that ends a client under it')
+
+  // One row per word: a second row would let the table state two producers for one end.
+  assert.deepEqual(pageWords.slice().sort(),
+    pageWords.slice().sort().filter((word, index, all) => all.indexOf(word) === index),
+    'the table names a word twice')
+
+  // The pattern's verbs, off the module that owns them, in both directions: a verb the dialogs
+  // gained, or a verb they dropped, is a section that no longer names what the pattern can take.
+  const section = endSection()
+  const named = section.match(/member of `PICK_VERBS` \(([^)]*)\)/)
+  assert.notEqual(named, null, 'the section names the verbs the pattern takes, in a parenthetical after PICK_VERBS')
+  const pageVerbs = [...named[1].matchAll(/`([a-z][a-z0-9_]*)`/g)].map(match => match[1]).sort()
+  assert.deepEqual(pageVerbs, [...PICK_VERBS].sort(),
+    'the section names ' + pageVerbs.join(', ') + ' as the verbs PICK_VERBS carries, and PICK_VERBS is ' +
+      [...PICK_VERBS].join(', ') + ': name them all, and no other, in the parenthetical after PICK_VERBS')
+
+  // The page says the failed disconnect carries the same reason, so the two records are one
+  // word set here rather than a second one a reader has to find.
+  assert.match(LIVE_FRONT, /configurationDisconnectFailed', \{\s*reason,/,
+    'endConfiguration reports a disconnect it could not write under the same reason the end line carries')
+})
+
+// #709: which of the ten is an interface and which is documentation of a decision is a claim
+// about code, so this reads it off src/. One reader filters that record on one word, and a
+// second reader on another word is a word the page calls documentation and no longer is. A line
+// that names the record and quotes no word is a comment, so it is skipped; and a branch that
+// compares the reason to a variable rather than to a literal is not seen here, because what the
+// page claims is which words a reader names, and a word a reader names is a literal. The scan
+// is one line wide: a filter that names the record on one line and compares `reason` on the
+// next is invisible, and nothing in src/ reads that way today.
+test('#709 only spectate_refused is branched on, and the page says which word it is', () => {
+  const LEG = path.join('src', 'legs', 'live-front.js')
+  const LOOPBACK = path.join('src', 'ladder', 'loopback.js')
+  const mentions = []
+  for (const file of sourceFiles()) {
+    const relative = path.relative(ROOT, file)
+    if (relative === LEG) continue
+    fs.readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
+      if (line.includes('configurationEnded')) mentions.push({ where: relative + ':' + (index + 1), line })
+    })
+  }
+  const branches = mentions.filter(mention => /'[a-z][a-z0-9_]*'/.test(mention.line))
+  assert.ok(branches.length > 0, 'the page names src/ladder/loopback.js as the record\'s one reader, and no file but the leg compares its reason with a word')
+
+  for (const branch of branches) {
+    const words = [...branch.line.matchAll(/'([a-z][a-z0-9_]*)'/g)].map(match => match[1])
+    assert.deepEqual(words, ['spectate_refused'],
+      branch.where + ' compares configurationEnded\'s reason with ' +
+        (words.length === 0 ? 'no word' : words.join(', ')) +
+        ', and the page says the only word a branch reads is spectate_refused: name that branch and its word in ' +
+        '"The picker end record"\'s "Branched on" column, and in this case')
+  }
+
+  // The file the page names is the branch this case reads, so a reader that stops comparing the
+  // record with a word leaves a row pointing at nothing.
+  assert.ok(branches.some(branch => branch.where.startsWith(LOOPBACK + ':')),
+    'docs/telemetry.md names src/ladder/loopback.js as the reader of spectate_refused, and it no longer compares the record with a word')
+
+  // The table's third column, row by row: the one reader's path, or the word no.
+  for (const row of endRows()) {
+    const branched = row.cells[3] ?? ''
+    if (row.word === 'spectate_refused') {
+      assert.equal(branched, '`src/ladder/loopback.js`',
+        'the row for ' + row.word + ' names the file that reads it, which is ' +
+          branches.map(branch => branch.where).join(', '))
+      continue
+    }
+    assert.equal(branched, 'no',
+      'the row for ' + row.word + ' says no branch reads it, in the table\'s third column: ' + branched)
+  }
 })
 
 test('docs/ quote the value once, so a reader has one place to check it', () => {

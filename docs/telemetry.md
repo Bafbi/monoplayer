@@ -404,6 +404,63 @@ reads as `null` and never as a missing key. That object is what
 `monoplayer.picker_claims` counts, and a verb that is not a claim carries no
 `claim` key, because no claim was recorded.
 
+### The picker end record
+
+One `configurationEnded` line is written for every picker client the front leg ends. Its
+fields are `reason` and `username`, which is `null` when the client never gave one, beside
+the identity keys the sinks stamp. A picker client holds no channel until its claim or its
+Spectate lands, so most of these lines carry `account` and no `channel`. A claim or a
+Spectate landing whose phase-end write threw carries both. A `disconnect` the leg could not
+write is reported beside the end line: `configurationDisconnectFailed` carries the same
+`reason` and the `error` the write threw, and the client is ended either way. No heartbeat
+carries this record: the front leg writes it, so it is read from the JSONL log.
+
+That `reason` is the end phase's own word, and not the key of the refusal map. The two
+vocabularies name one client from two sides, and they rarely spell the same word:
+
+- For "why was this client ended", read `configurationEnded` and its `reason`.
+- For "what did the refusal map count", read `front.pickerRefusalsByReason` in the
+  heartbeat, and the refusal's own line: `pickerEmpty`, `pickerDialogFailed`,
+  `pickerServerDialogFailed`, `pickerVerbRefused`, `pickerPickRefused`,
+  `pickerClaimRefused`, `pickerDisconnectRefused`, `pickerClaimFinishFailed`, or
+  `spectateRefused`. Every one of those carries the word the map is keyed by.
+
+A lane with no rows to offer ends `picker_empty` and counts `empty_offer`. A claim
+landing that lost its phase-end write ends `claim_failed`, a Spectate landing that lost
+the same write ends `spectate_refused`, and both count the one key `finish_failed`. Where
+the two words differ, a line that answers one question does not answer the other. One
+word is the same on both sides: a dialog the leg could not write ends
+`picker_unavailable`, and the map counts it under `picker_unavailable`.
+
+Nine words and one pattern reach that `reason`, and `src/legs/live-front.js` mints every
+one of them. No library word reaches this field: an unfamiliar string here is this repo's
+own, and a `grep` of `src/` finds the site that wrote it, except for the one pattern,
+whose site `grep '_unbuilt' src/legs/live-front.js` finds. The set is closed, and
+`test/observability/telemetry-doc.test.js` reads it against this table in both directions
+(#709).
+
+| Word | What wrote it | Branched on |
+| --- | --- | --- |
+| `picker_empty` | The lane's offer held no rows, so there was no dialog to show (`pickerEmpty`). | no |
+| `picker_unavailable` | The leg could not write the picker's dialog or a server's dialog (`pickerDialogFailed`, `pickerServerDialogFailed`). | no |
+| `picker_refused` | A click the picker board could not read, under `unknown_id`, `malformed` or `unknown_verb` (`pickerVerbRefused`). | no |
+| `pick_refused` | A pick naming a server the offer does not carry (`pickerPickRefused`). | no |
+| `verb_refused` | A verb naming a server the offer does not carry (`pickerVerbRefused`). | no |
+| `disconnect_refused` | A Disconnect verb on a body a claim holds (`pickerDisconnectRefused`). | no |
+| `claim_refused` | A claim another connection holds, or a second claim on this one (`pickerClaimRefused`). | no |
+| `spectate_refused` | The Spectate landing refused to land the client: the answer declined, the channel would not open, the body had no cached configuration, or the phase-end write threw (`spectateRefused`). | `src/ladder/loopback.js` |
+| `claim_failed` | A granted claim whose `finish_configuration` write threw (`pickerClaimFinishFailed`). | no |
+| `verb_<verb>_unbuilt` | A verb in `PICK_VERBS` with no branch in `handlePickerVerb`. | no |
+
+Only one of the ten is an interface. `src/ladder/loopback.js` filters `configurationEnded`
+on `spectate_refused`, so renaming that word moves the loopback's evidence with it. The
+other nine are the record of a decision no branch reads, so renaming one costs an edit to
+this table and to the tests that pin the word, and nothing in `src/`.
+
+`verb_<verb>_unbuilt` is the one pattern: `<verb>` is a member of `PICK_VERBS` (`claim`,
+`spectate`, `disconnect`), and no client reaches it, because the board answers
+`unknown_verb` for a verb it does not carry before the branch that writes it runs.
+
 ## Packet journal
 
 The journal keeps 48 hours of the frames a diagnosis reads: the frames that answer player visibility, transfers, dialogs, resource packs, wire drops, and chat. It is not a replay log. It drops the entity stream and keeps terrain length-only, because at 441 frames a second a record of everything is 11 GB a day and almost none of it is read (#217).
