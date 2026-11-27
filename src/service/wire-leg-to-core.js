@@ -49,6 +49,12 @@
 //   3. a lane's, made after that start(). It refuses at the lane's line, so the report
 //      keeps meaning what it says: the handler behind a carried name is the core's.
 //
+// #918: a fourth registration existed, and it never reached a setter: an own-property write
+// replaced the setter itself. The lane's function then answered the core's registration, or the
+// core's handler went with the write, and the report named the member either way. Every leg now
+// seals those members non-writable at its own return (src/legs/call-in-handler.js's
+// `sealCallIns`), so nothing installs a replacement and an assignment throws where it is made.
+//
 // A lane that wires a leg it built for something else — src/ladder/loopback.js's two body
 // legs (O59), and #666's raw funnel — registers on a leg no core is handed. That
 // registration is the only one the call-in ever takes. A lane with a core registers

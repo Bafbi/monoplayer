@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import { createOfflineFrontLeg } from '../../src/legs/live-front.js'
 import { createOfflineBackendLeg } from '../../src/legs/live-backend.js'
 import { createFakeFrontLeg, createFakeBackendLeg } from '../../src/legs/fake-legs.js'
+import { CALL_IN_SETTER } from '../../src/legs/call-in-handler.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS, wireLegToCore } from '../../src/service/wire-leg-to-core.js'
 
@@ -157,4 +158,87 @@ test('#824 a lane\'s own leg takes one registration per call-in and nothing else
     assert.doesNotThrow(() => leg[row.name](() => {}),
       row.name + ' takes one registration on a leg no core is handed: src/ladder/loopback.js builds such legs, and a rule that refused this one would refuse the rungs')
   }
+})
+
+// #918: #824 refused the second registration inside the setter, and an own-property write never
+// reached it: `leg.setCoreAttach = fn` replaced the setter, so before the core's start() the
+// lane's function answered the core's registration and after it the core's handler was gone,
+// while `wireLegToCore` read the member as carried either way. The property carries the rule now
+// (src/legs/call-in-handler.js's `sealCallIns`). Three routes reach a member of an object, and
+// the case below takes each: an assignment, a `defineProperty`, and a `delete`. The fourth is the
+// field behind the setter, which is a closure variable and has no name on the leg.
+//
+// Seam: the legs' own members, which are the surface #918 is about. Nothing here listens,
+// dials or attaches, so the walk needs no socket, no core and no custody.
+const LEGS = [
+  ['live front leg', frontLeg, FRONT_LEG_CALL_INS],
+  ['live backend leg', backendLeg, BACKEND_LEG_CALL_INS],
+  ['fake front leg', createFakeFrontLeg, FRONT_LEG_CALL_INS],
+  ['fake backend leg', createFakeBackendLeg, BACKEND_LEG_CALL_INS]
+]
+
+// The call-in setters a leg carries, as its own members. The walk reads the rule the seal reads
+// (CALL_IN_SETTER, imported) rather than spelling it a second time, and a walk that found nothing
+// fails below, so a rule that stopped matching the members is this case and not a green silence.
+function callInSetters (leg) {
+  return Object.keys(leg).filter(name => CALL_IN_SETTER.test(name) && typeof leg[name] === 'function')
+}
+
+test('#918 a leg\'s call-in setter cannot be written over, and the call-in keeps its handler', () => {
+  for (const [label, build, table] of LEGS) {
+    const names = callInSetters(build())
+    assert.ok(names.length > 0, label + ' carries call-in setters, or this case asserts nothing')
+    // The rows whose member holds a handler, so the one registration below is a registration
+    // and not a call like setTarget.
+    const registering = new Set(table.filter(row => row.kind === 'register').map(row => row.name))
+
+    for (const name of names) {
+      const leg = build()
+      const setter = leg[name]
+      assert.throws(() => { leg[name] = second }, TypeError,
+        label + ': ' + name + ' refuses the assignment. Before #918 it took it in silence, which is the route around #824')
+      assert.equal(leg[name], setter,
+        label + ': and the refused write left the setter the leg was built with')
+
+      const descriptor = Object.getOwnPropertyDescriptor(leg, name)
+      assert.equal(descriptor.writable, false,
+        label + ': ' + name + ' holds a call-in, so a write over it installs a handler the core never made (#918). The member is not writable')
+      assert.equal(descriptor.configurable, false,
+        label + ': and it is not configurable either, or a descriptor write is the same replacement by another spelling')
+      assert.throws(() => Object.defineProperty(leg, name, { value: second }), TypeError,
+        label + ': ' + name + ' refuses a descriptor write too, so the property is the leg\'s and not the caller\'s')
+      assert.throws(() => { delete leg[name] }, TypeError,
+        label + ': and it cannot be deleted, which would leave the core a call-in short with the report naming the hole')
+
+      if (!registering.has(name)) continue
+      // The legitimate case, on the leg the write was refused over: the setter still takes the
+      // one registration a lane or the core makes. A seal that refused this would refuse a
+      // correct lane, and #887 is what a core left half-started by a throw costs.
+      assert.doesNotThrow(() => leg[name](first),
+        label + ': ' + name + ' takes the one registration a lane or the core makes')
+      assert.throws(() => leg[name](second), new RegExp(name + ' already holds a handler'),
+        label + ': and the second is still refused in the call-in\'s own name, which is #824 standing beside the property')
+    }
+  }
+})
+
+// The fourth route, and the one no descriptor can close: a caller that writes the field the
+// setter fills. It is a closure variable in every leg, so the name has no member to write, and
+// a write of that name adds something the leg never reads. This case is green before #918 as
+// well, and it is here to say why the setter was the only route worth sealing.
+test('#918 the field behind a call-in is a closure variable, so the setter is the only name a caller writes', () => {
+  const leg = createFakeFrontLeg()
+  let answered = null
+  leg.setServerboundHandler(({ name }) => { answered = name })
+
+  assert.equal('serverboundHandler' in leg, false,
+    'the field the setter fills is not a member under its own name, which is why the setter was the whole surface #824 had to guard')
+
+  leg.serverboundHandler = () => { answered = 'written over' }
+  leg.serverbound({ name: 'player_chat' })
+  assert.equal(answered, 'player_chat',
+    'a write of that name adds a member the leg reads nowhere, and the registration still answers')
+
+  assert.equal('coreAttach' in frontLeg(), false,
+    'and the real front leg is the same shape: the attach the core registers is the one its setter filled')
 })

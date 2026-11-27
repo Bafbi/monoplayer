@@ -51,7 +51,7 @@ import { stampIdentity } from '../core/channels.js'
 import { pickSlug } from '../core/picker.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { isLoopbackHost } from './offline-identity.js'
-import { createCallInHandlers } from './call-in-handler.js'
+import { createCallInHandlers, sealCallIns } from './call-in-handler.js'
 
 // Frames consumed by the library keep-alive plugin, never delivered to the
 // core (the core router would answer them a second time).
@@ -619,7 +619,9 @@ function createBackendLeg ({
   }
 
   // --- backendLeg interface (docs/product-core.md) ---
-  return {
+  // #918: sealed at the one return that hands a backend leg out, live or offline (both build
+  // here), so a lane cannot write over a call-in setter and take the core's handler with it.
+  return sealCallIns({
     kind,
     connect,
     setFrameHandler (fn) { frameHandler = fillCallIn('setFrameHandler', fn) },
@@ -772,7 +774,7 @@ function createBackendLeg ({
       })
       return closePromise
     }
-  }
+  })
 }
 
 export function createLiveBackendLeg (options = {}) {

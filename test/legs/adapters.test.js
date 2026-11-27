@@ -24,6 +24,7 @@ import { synthAttach, LEG_OWNED } from '../../src/core/join-synth.js'
 import { createMonoplayer, DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { createStateCache } from '../../src/core/state-cache.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { CALL_IN_SETTER } from '../../src/legs/call-in-handler.js'
 import { createAttachCheck } from '../../src/custody/attach.js'
 import { createWhitelistStore } from '../../src/custody/store.js'
 import { tempRoot } from '../support/temp.js'
@@ -865,3 +866,39 @@ test('#672 every leg answers a `call` row with the fields the core reads off it'
     'a leg that answers { ok, why } answers nothing the core reads')
 })
 
+
+// #918: every leg seals the members a caller writes into it, whichever factory built it. The
+// refusal itself — the three routes into a member, and the registration a seal must leave
+// working — is test/legs/call-in-slots.test.js's, one case beside #824's cases. What this case
+// adds is the walk: it reads LEGS, and the #727 coverage case holds that list to the factories
+// src/legs/ exports, so a seventh factory cannot ship a leg a caller can write over. The walk
+// reads what the rule names, so a member the rule does not name is the #672 case above.
+test('#918 every leg a factory builds seals the setters a caller could write over', () => {
+  // The walk reads the prototype chain as the #672 walk above does, so a factory that built its
+  // leg from a class is caught rather than passed: `sealCallIns` seals the own members a factory
+  // returns, and an inherited setter answers a caller through a descriptor read here.
+  const settersOf = leg => {
+    const found = []
+    for (let object = leg; object !== null && object !== Object.prototype; object = Object.getPrototypeOf(object)) {
+      for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(object))) {
+        if (CALL_IN_SETTER.test(name) && typeof descriptor.value === 'function') found.push({ name, descriptor })
+      }
+    }
+    return found
+  }
+  let sealed = 0
+  for (const { factory, label, build } of LEGS) {
+    const leg = build()
+    const setters = settersOf(leg)
+    assert.ok(setters.length > 0,
+      label + ' carries a setter, or ' + factory + ' is outside this case and nothing says so')
+    for (const { name, descriptor } of setters) {
+      assert.equal(descriptor.writable, false,
+        label + ': ' + name + ' is writable, so a write over it installs a handler the core never made (#918). ' + factory + ' returns the leg through sealCallIns of src/legs/call-in-handler.js')
+      assert.equal(descriptor.configurable, false,
+        label + ': ' + name + ' is configurable, so a descriptor write reaches the same hole by another spelling')
+      sealed++
+    }
+  }
+  assert.ok(sealed > 0, 'the walk found legs to read')
+})

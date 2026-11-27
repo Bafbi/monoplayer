@@ -50,8 +50,9 @@
 // builds a leg and starts a core.
 //
 // #824: a call-in holds one handler, and a lane's hand registration on a leg it hands the
-// core is refused at this start() rather than replaced in silence. The rule is
-// src/legs/call-in-handler.js's.
+// core is refused at this start() rather than replaced in silence. #918: the member holding
+// that setter cannot be written over either, so the refusal is the property's and not only the
+// call's. Both rules are src/legs/call-in-handler.js's.
 
 import { bumpBounded } from '../core/bounded-counter.js'
 import { WARM_MARKER } from '../core/state-cache.js'
