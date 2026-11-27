@@ -3351,11 +3351,11 @@ export function createMonoplayer ({
     if (started) return
     started = true
 
-    // #592, #605: the core applies both tables here and in no other place. What a
-    // row is, and what a lane does when it needs a different registration, are
-    // src/service/wire-leg-to-core.js's. The report carries names and no handler
-    // (#718). The attach cut a lane used to wrap is the core's own `attach` event
-    // (#683).
+    // #592, #605: the core applies FRONT_LEG_CALL_INS and BACKEND_LEG_CALL_INS here, and
+    // in no other place. What a row is, and what a lane does when it needs a different
+    // registration, are src/service/wire-leg-to-core.js's. The report carries names and
+    // no handler (#718). The attach cut a lane used to wrap is the core's own `attach`
+    // event (#683).
     legWiring = {
       backend: wireLegToCore({ core: handle, leg: backendLeg, table: BACKEND_LEG_CALL_INS }),
       front: wireLegToCore({ core: handle, leg: frontLeg, table: FRONT_LEG_CALL_INS })
