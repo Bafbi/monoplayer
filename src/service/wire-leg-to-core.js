@@ -82,10 +82,19 @@
 //
 // One half of it had a production reader. `backendCarries` in src/service/monoplayer.js
 // asks whether a call the core makes is a hole the leg has, and it asks `missing` now.
-// The front's half was read by no module, so it went with the field. The front's three
-// optional calls are still tested by `typeof` where they are used (#726): that is the
-// leg's shape at the call, not a row it carried. `laneState` asks the leg at each read,
-// because this report is null until start().
+// The front's half was read by no module, so it went with the field. The front's conditional
+// calls are still tested by `typeof` where they are used (#726), and every leg keeps a
+// default behind one. They are `claimOn`, `startReconfiguration`, `finishConfigurationFrame`
+// and `preAuthStats`: the rows this table declares past the delivery. That is the leg's shape
+// at the call, not a row it carried. `laneState` asks the leg at each read, because this
+// report is null until start().
+//
+// #935: this sentence counted those calls, and the count read short by one. #627 added
+// `preAuthStats` in a block of its own at the end of the front table, so a reader counting the
+// block above it left that row out. This list is the only prose home of it: the #935 case in
+// test/service/wire-leg-to-core.test.js derives the set from this table and from the `typeof`
+// tests in src/service/monoplayer.js, and a row that changes halves fails there. That failure
+// is where the edit to this list starts.
 //
 // The field that remains is read in src/service/monoplayer.js, and the case
 // "#757 every field of the report has a production reader" holds this list to it.
