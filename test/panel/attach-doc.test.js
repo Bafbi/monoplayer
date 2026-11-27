@@ -22,7 +22,9 @@
 // is the writer's drift, and nothing holds it for this record yet. test/observability/
 // telemetry-doc.test.js does that comparison for `startLive`, and #868 carries it for the
 // attach record. Until it lands, a field the service starts writing and this page and its
-// doc both lack is a number in the pod log.
+// doc both lack is a number in the pod log. The same holds for a key the record adds inside
+// a group: the projection keeps the group whole, and the card draws the fields the doc names
+// under its own words, so a key the doc never names is #868's question and not this file's.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

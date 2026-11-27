@@ -199,8 +199,8 @@ replay invented: `replayed` never counts one, and `refused` counts one the leg r
 total, and the card never adds or divides them. A refusal is not a fault, so the card says
 what the gap is rather than letting a reader take it for a lane to repair
 ([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before `refused`
-existed says which half of the delivery it cannot answer. A record that carries none of the
-three draws no such row.
+existed says which half of the delivery it cannot answer. A record that carries none of them
+draws no such row.
 
 Under them come the record's own groups, because those are the numbers a reader sets
 against the delivery. The bodies the stream gave a spawn sit beside the bodies it named in
@@ -211,12 +211,14 @@ holder and the pack holder kept and re-sent is a row set of its own, and the rec
 those held and resent. A group the record does not carry draws no heading, so a lane older
 than the group says nothing rather than drawing zeros.
 
-The five groups are drawn whole, by shape and not from a list, so a domain or a body count
-the record grows is a row with no edit here. That is
-[#743](https://github.com/Bafbi/monoplayer/issues/743)'s rule, and the two halves it
-implies are two questions: whether the record's own doc names the field is
-[#868](https://github.com/Bafbi/monoplayer/issues/868)'s, and whether this card draws what
-the doc names is this page's.
+The projection keeps each group whole, so a domain or a body count the record grows reaches
+`/api/puppets/<name>` with no edit in the panel. The card draws the fields the doc names:
+`domains` as one row that joins whatever it holds, and the rest under their own words,
+because a row called `replayed` under Entities says less than one called `bodies given a
+spawn`. Those are two questions with two homes, and neither is this page: whether the
+record's doc names every field the record writes is
+[#868](https://github.com/Bafbi/monoplayer/issues/868)'s, and whether this card draws every
+field the doc names is this page's.
 
 **Some fields of that record are declared, not drawn.** The declaration sits beside the
 projection in `src/panel/activity.js`, one line per field with the reason a reader can

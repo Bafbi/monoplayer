@@ -24,9 +24,9 @@
 // counter group admits no string at all, which is the one place a secret lives.
 //
 // The attach record is neither of those two cases, because one record holds a label, a
-// duration, a flag, a position, and five groups of counts. Its five groups are projected by
-// shape, its scalars are picked by name, and the four fields the card declines are declared
-// in ATTACH_DECLINED with the reason each one is not a row. That declaration is what lets
+// duration, a flag, a position, and groups of counts. Its groups are projected whole, its
+// scalars are picked by name, and the fields the card declines are declared in
+// ATTACH_DECLINED with the reason each one is not a row. That declaration is what lets
 // docs/telemetry.md's field list and this file's be compared (#834): the doc cannot see a
 // projection, and a projection cannot see its own omissions.
 //
@@ -46,29 +46,30 @@ export const EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000
 // heartbeat does not carry and the shard's name, and the wire group has two documented
 // fields that are not counters, a map and a sentence, which this list drops. #782 is
 // the ticket that says which fields of those two never reach the page.
-// The attach record's fields the card does not draw, each with the reason it is not a
-// row (#834). The projection picks its fields by name, so a field the doc documents and
-// this file never picks is a number the page silently drops, which is what #735 was for
+const JOURNAL = ['enabled', 'disabledReason', 'dir', 'file', 'frames', 'events', 'bytes', 'sealed',
+  'pruned', 'prunedBytes', 'skipped', 'dropped', 'truncated', 'errors', 'dirBytes', 'freeBytes', 'requiredBytes']
+const WIRE = ['checked', 'rejected']
+
+// The attach record's fields the card does not draw, each with the reason it is not a row
+// (#834). The projection picks its scalars by name, so a field the doc documents and this
+// file never picks is a number the page silently drops, which is what #735 was for
 // `refused`: documented, written, counted, and no row. So the file declares the half it
 // declines, in one place, and test/panel/attach-doc.test.js holds this declaration and
 // docs/telemetry.md's own field list together: a documented field with no row and no line
 // here is a red gate, and a line here for a field the doc does not name is red too.
 //
 // The rule #743 gave `front` and `metrics` — a counter is a number, so every counter is a
-// row — cannot be this record's rule, because an attach record is not one shape: a label
-// (name, reason), a duration (tookMs), a flag (includeConfig), a position (pose), and five
-// groups of counts. A shape rule would admit all of those and the card would then print a
-// position as a count. The five groups are projected by shape, which is where the rule
-// holds; the rest are picked by name, and the four this card has no row for are here.
+// row — cannot be this record's whole rule, because an attach record is not one shape: a
+// label (name, reason), a duration (tookMs), a flag (includeConfig), a position (pose), and
+// groups of counts. A shape rule over the top level would admit all of those and the card
+// would print a position as a count. It holds for the groups, which are projected whole;
+// the scalars are picked by name, and the fields this card has no row for are here.
 export const ATTACH_DECLINED = {
-  pose: 'A position is three coordinates and a look angle, and every other row on the card is a count or a duration. The record carries it for the log and for the parity rung, which compares one client\'s landing against another\'s, so it has a reader: it just has no neighbour here to be compared with.',
+  pose: 'A position is three coordinates and a look angle, and the card has no shape for one: its rows are counts, durations, labels and one flag. The record carries the pose for the pod log, which is where a reader who needs it looks, and this page has no neighbour to place it beside.',
   backendLogins: 'The heartbeat draws this counter already, in its own row set. A second copy under "Last attach" would be one number at a second instant, which reads as a second measurement of it.',
   skippedLegOwned: 'These are the frames a leg writes itself, so the replay skipped them rather than losing them. Beside `replayed` and `refused` a third count would read as a third loss, and this one is not a loss at all.'
 }
 
-const JOURNAL = ['enabled', 'disabledReason', 'dir', 'file', 'frames', 'events', 'bytes', 'sealed',
-  'pruned', 'prunedBytes', 'skipped', 'dropped', 'truncated', 'errors', 'dirBytes', 'freeBytes', 'requiredBytes']
-const WIRE = ['checked', 'rejected']
 // #419: the two groups #415 added, from the two tables under "The per-body and
 // per-channel groups" in docs/telemetry.md. That page is still their home:
 // test/panel/groups.test.js compares these lists to its Field column in both
@@ -448,11 +449,13 @@ function attachFacts (record) {
     // excludes the position the replay invents and `refused` includes one the leg refused,
     // so a reader comparing those two needs this count to place the difference.
     synthesizedPositions: counter(record, 'synthesizedPositions'),
-    // #834: the five groups of counts, whole and projected by shape, which is the rule
-    // #743 gave `front` and `metrics`. The list that stood here named `domains`'s eight keys
-    // and one key of `entities`, so a domain the cache grew and a body count the summary
-    // added stopped at the pod log. `entities.withoutSpawn` is #213's defect measured: a
-    // body the client was told about and never saw appear, and the view says so in words.
+    // #834: the record's groups of counts, whole and projected by shape, which is the rule
+    // #743 gave `front` and `metrics`. The list that stood here named each key of `domains`
+    // and one key of `entities`, so a key the cache or the summary grew reached the pod log
+    // and no page. The groups are kept whole now, which is what the doc guard and
+    // `GET /api/puppets/<name>` read; the view draws the fields docs/telemetry.md names,
+    // under its own words. `entities.withoutSpawn` is #213's defect measured: a body the
+    // client was told about and never saw appear, and the view says so beside the number.
     domains: pickCounters(record.domains),
     entities: pickCounters(record.entities),
     players: pickCounters(record.players),
