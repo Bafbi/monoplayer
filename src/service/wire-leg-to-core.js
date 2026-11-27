@@ -27,20 +27,23 @@
 // The core applies both tables once, in its start(), so no lane can forget a
 // call-in on the leg it hands the core, and the payload shapes live in one file. A
 // lane that wires a leg it built for something else — src/ladder/loopback.js's two
-// body legs (O59) — says so at the line. #607: a lane that wants a different
-// registration wraps one call-in after start(), and calls the handler this file
-// built, reported as `handlers`, so it writes no payload shape a second time.
-// #683: no lane wraps one today, and the report site says what reads the handlers
-// now.
+// body legs (O59) — says so at the line, and a lane that wants a different
+// registration writes one there too. The report carries no handler: #607 published
+// them for a lane that wrapped a call-in after start(), #683 deleted the last such
+// lane, and #718 removed the field.
 //
 // A leg that carries none of them is a leg with no core in front of it, which the
 // two pre-auth rungs build on purpose. They never come here.
 //
-// The report is what a reader checks. `missing` names every declared call-in the
-// leg does not carry, and `requiredMissing` names the subset the leg's own
-// default hides. The core puts the missing names on its start line, one list per
-// interface, and a test holds the real legs to an empty list. A missing one is not
-// thrown on: src/legs/fake-legs.js carries neither setCoreAttach nor
+// The report is what a reader checks: four lists of names, and the reader of each
+// one is named here. `missing` names every declared call-in the leg does not carry,
+// and the core puts those names on its start line, one list per interface.
+// `called` names the rows the core calls on the leg rather than registers, which is
+// how the core learns it carries one (backendCarries, src/service/monoplayer.js).
+// `requiredMissing` and `wired` have one reader each, and both are
+// test/service/wire-leg-to-core.test.js: the subset the leg's own default hides, and
+// the rows it installed, held to the table rather than to a lane. A missing one is
+// not thrown on: src/legs/fake-legs.js carries neither setCoreAttach nor
 // setCoreAttachConfiguring, and the tests that build a core on it attach through
 // the core instead.
 // test/service/wire-leg-to-core.test.js reads the report, and
@@ -272,15 +275,15 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
 // register every call-in against nothing. The table is required too, so a leg is
 // never measured against the other interface's rows.
 //
-// #607: the report carries every registration's handler, so a caller that wraps one
-// after start() calls the handler the leg was handed and adds its record around it,
-// rather than writing the payload a second time. The core puts the whole report on
-// `legWiring`, one per interface, which is where a caller reads it from.
+// The core puts the whole report on `legWiring`, one per interface, which is where
+// its readers reach it.
 //
-// #683: no lane wraps one today. The two that did took the attach cut, and the core
-// publishes that cut itself now, so `handlers` is what each leg was handed, read by
-// the tests that hold the wiring to it (test/service/wire-leg-to-core.test.js) and by
-// no lane.
+// #718: no field carries a handler. #607 reported every one it installed, so a lane
+// wrapping a call-in after start() could call the function the leg was handed instead
+// of writing the payload a second time. #683 deleted the two lanes that did, because
+// the attach cut is the core's own event now, and a handler in this report is a fact
+// about a caller no module writes. The tests were the only reader, so the field went
+// with them: a lane that needs a different registration writes it at its line.
 export function wireLegToCore ({ core, leg, table } = {}) {
   if (core === null || typeof core !== 'object') {
     throw new TypeError('wireLegToCore needs the core its call-ins reach: wireLegToCore({ core, leg, table })')
@@ -292,7 +295,6 @@ export function wireLegToCore ({ core, leg, table } = {}) {
   const called = []
   const missing = []
   const requiredMissing = []
-  const handlers = {}
   for (const entry of table) {
     const method = leg === null || leg === undefined ? undefined : leg[entry.name]
     if (typeof method !== 'function') {
@@ -306,16 +308,10 @@ export function wireLegToCore ({ core, leg, table } = {}) {
       called.push(entry.name)
       continue
     }
-    // #607: the handler is built once, here, and reported, so a caller that wraps
-    // this row after start() calls the function the leg was handed rather than
-    // writing the payload a second time. A row this leg does not carry has no
-    // handler: nothing installed it, and `wired` says so.
-    handlers[entry.name] = entry.handler(core)
-    method.call(leg, handlers[entry.name])
+    // #718: built here and handed over, not kept. The doc comment on the function
+    // says why no field carries one.
+    method.call(leg, entry.handler(core))
     wired.push(entry.name)
   }
-  // #607: the handlers ride the report so a caller reaches one off the started core
-  // without importing a table. The object is frozen for the reason the rows are: a
-  // handler a reader can replace at run time is a payload shape with two authors.
-  return { wired, called, missing, requiredMissing, handlers: Object.freeze(handlers) }
+  return { wired, called, missing, requiredMissing }
 }
