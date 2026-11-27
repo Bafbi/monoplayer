@@ -499,10 +499,12 @@ export function witnessDocument (report, { now = new Date().toISOString(), sourc
 
 const OPEN_STATES = new Set(['pending'])
 
-// The states a recorded row may be in. Every other string is refused: before #920 the check read
-// `pending` and `not-seen` and passed everything else, so a hand-edited row saying 'deferred' or
-// 'SKIPPED' with evidence beside it verified as a finished proof. The vocabulary is the document's,
-// so it is read here rather than assumed.
+// The states a recorded row may be in: `seen` is this document's word for a step the operator saw
+// hold, and `GAP_STATE` is the gap state both witnesses spell the same way, so it is imported rather
+// than typed again. Every other string is refused: before #920 the check read `pending` and
+// `not-seen` and passed everything else, so a hand-edited row saying 'deferred' or 'SKIPPED' with
+// evidence beside it verified as a finished proof. The vocabulary is the document's, so it is read
+// here rather than assumed.
 const RECORDED_STATES = new Set(['seen', GAP_STATE])
 
 // A refusal, with the two lists a pass reads kept in the shape: a caller that prints them needs no

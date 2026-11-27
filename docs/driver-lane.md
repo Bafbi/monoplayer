@@ -130,9 +130,9 @@ condition: the step's entry in `UNMODDED_STEPS` carries `openUntil`, the tickets
 that close it, the way the dev lane's `OPERATOR_STEPS` does. A row cannot make that
 declaration itself. The witness is hand-edited, and a step that could declare
 itself absent would pass by writing a line. So the day a G0 step becomes one an
-operator cannot see, the declaration is an edit to that list, in the commit that
-lands the ticket which closes it, and the checklist the lane writes then says which
-step it is. The check refuses a `not-seen` on any other step and names it.
+operator cannot see, add that step's `openUntil` to the list in the change that finds
+the gap, naming the tickets that close it, and drop it again in the commit that lands
+them. The checklist the lane writes then says which step it is.
 
 `--verify-g0` reads those rows, not the flag over them, and the refusal names the
 row it stops on. What a row has to record is the checklist's own `how` list, which

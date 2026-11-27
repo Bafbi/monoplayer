@@ -84,7 +84,7 @@ test('a witness marked completed over a step that is missing is refused, and nam
 test('a witness marked completed over a step still pending is refused, and names the step', () => {
   const witness = recorded()
   witness.steps = witness.steps.map(step => (step.id === 'move' ? { ...step, state: 'pending' } : step))
-  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'still pending: `move`', gaps: [] })
+  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'still pending: `move`' })
 })
 
 test('a step left on the placeholder evidence is refused, and named', () => {
@@ -103,13 +103,13 @@ test('an indented placeholder is still a placeholder, and is refused', () => {
     ? { ...step, evidence: '  ' + UNMODDED_PLACEHOLDER + ': notes]' }
     : step))
   assert.deepEqual(verifyUnmoddedWitness(witness),
-    { ok: false, reason: 'the placeholder `[MANUAL` is not evidence: `render`', gaps: [] })
+    { ok: false, reason: 'the placeholder `[MANUAL` is not evidence: `render`' })
 })
 
 test('a step left with no evidence at all is refused, and named', () => {
   const witness = recorded()
   witness.steps = witness.steps.map(step => (step.id === 'rejoin' ? { ...step, evidence: '  ' } : step))
-  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'no evidence recorded: `rejoin`', gaps: [] })
+  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'no evidence recorded: `rejoin`' })
 })
 
 test('a step recorded as anything but ok is refused, and named, whatever word the operator wrote', () => {
@@ -126,7 +126,7 @@ test('a step recorded as anything but ok is refused, and named, whatever word th
 test('a witness whose every step is recorded but which nobody marked completed is refused', () => {
   const witness = { ...recorded(), completed: false }
   assert.deepEqual(verifyUnmoddedWitness(witness),
-    { ok: false, reason: 'every step is recorded and the witness is not marked completed: set completed true', gaps: [] })
+    { ok: false, reason: 'every step is recorded and the witness is not marked completed: set completed true' })
 })
 
 test('a row that records no step id is refused: the eight steps are named, not counted', () => {
@@ -157,12 +157,12 @@ test('a step recorded twice counts once, and the step it displaced is unwitnesse
     .map(step => (step.id === 'join' ? [...[step], { ...step }] : [step]))
     .flat()
   assert.deepEqual(verifyUnmoddedWitness(witness), {
-    ok: false, reason: 'unwitnessed: `rejoin`; recorded twice: `join`', gaps: []
+    ok: false, reason: 'unwitnessed: `rejoin`; recorded twice: `join`'
   })
 })
 
 test('a witness whose every step is ok, with evidence, and signed, passes', () => {
-  assert.deepEqual(verifyUnmoddedWitness(recorded()), { ok: true, reason: null, gaps: [] })
+  assert.deepEqual(verifyUnmoddedWitness(recorded()), { ok: true, reason: null })
 })
 
 // #943: the dev lane's witness accepts a `not-seen` on a step its list declares expected absent
@@ -186,14 +186,19 @@ test('a step its list declares expected absent verifies when it is recorded not-
   const witness = recorded()
   witness.steps = notSeen(witness)
   const verdict = verifyUnmoddedWitness(witness, { steps: declaredList() })
-  assert.deepEqual({ ok: verdict.ok, reason: verdict.reason }, { ok: true, reason: null },
+  // The writer reads the same list: the checklist an operator is handed names the step it expects
+  // them to record as a gap, out of the declaration rather than out of prose that could drift.
+  const checklist = unmoddedWitness({ server: SERVER, steps: declaredList() })
+  assert.ok(checklist.limitations.some(line => line.includes('The step \'' + DECLARED_STEP + '\' is expected to be not-seen today: #647 closes it')),
+    'the generated checklist names the declared step and the ticket that closes it: ' + checklist.limitations.join(' | '))
+  assert.equal(checklist.steps.length, declaredList().length, 'and still writes one row per step')
+  assert.deepEqual(verdict, { ok: true, reason: null },
     'an honest run with the declared gap is a record, not a finding: ' + verdict.reason)
-  assert.deepEqual(verdict.gaps, [{
-    id: DECLARED_STEP,
-    claim: UNMODDED_STEPS.find(step => step.id === DECLARED_STEP).claim,
-    openUntil: [647],
-    evidence: 'relaunched, and the client reattached at the spawn point'
-  }], 'the gap the pass accepted is named, with the tickets that close it')
+  // The other half of the declaration: a fix landing must not turn an honest record red. The step is
+  // seen, the list still declares it, and the record passes — the dev lane prints a `stale
+  // declaration:` line for the operator, and the G0 command has no line to print yet (#960).
+  assert.deepEqual(verifyUnmoddedWitness(recorded(), { steps: declaredList() }),
+    { ok: true, reason: null }, 'a declared step the operator did see is still a record')
 })
 
 test('a not-seen on a step nothing declares is refused, in a sentence naming the step', () => {
@@ -202,9 +207,8 @@ test('a not-seen on a step nothing declares is refused, in a sentence naming the
   assert.deepEqual(verifyUnmoddedWitness(witness), {
     ok: false,
     reason: 'not seen: `rejoin` (relaunched, and the client reattached at the spawn point): ' +
-      'no step of UNMODDED_STEPS is declared expected absent, so every step of this run is recorded `ok`. ' +
-      'A step recorded `not-seen` needs its own entry in that list to declare it, with the tickets that close it',
-    gaps: []
+      'no step this run reads is declared expected absent, so every step is recorded `ok`. ' +
+      'A step recorded `not-seen` needs an `openUntil` entry in the list the check reads, naming the tickets that close it'
   }, 'a not-seen is the finding it always was unless the list\'s own entry accounts for it')
 })
 
@@ -245,7 +249,7 @@ test('the runbook states the rule for a step expected absent, in the section an 
 
 test('the witness is read as a document: no file, another lane, no rows', () => {
   assert.deepEqual(verifyUnmoddedWitness(null),
-    { ok: false, reason: 'the unmodded witness file is missing or is not a document: run --lane unmodded first', gaps: [] })
+    { ok: false, reason: 'the unmodded witness file is missing or is not a document: run --lane unmodded first' })
   assert.match(verifyUnmoddedWitness({ ...recorded(), lane: 'driver' }).reason,
     /^the witness names lane "driver", not "unmodded"$/)
   assert.match(verifyUnmoddedWitness({ ...recorded(), steps: undefined }).reason,

@@ -239,8 +239,9 @@ export const declaredOf = step => ({ id: step.id, claim: step.claim, openUntil: 
 // declared it expected absent and what the operator recorded. This is the whole of
 // the rule, and it is the one function both witnesses call: a `not-seen` is the
 // finding it always was unless a declaration accounts for it, and the declaration is
-// the list's entry, never the row's. A row is settled against its list before it
-// reaches here, so every row carries `openUntil` or a null.
+// the list's entry, never the row's. It reads `openUntil ?? null`, so a row that never
+// met a list is undeclared, which is the direction that refuses rather than the one
+// that passes.
 //
 // `declared` is every step the list declares, whatever the operator recorded: a
 // refusal names those, because an operator holding a `not-seen` nobody declared needs
@@ -298,15 +299,20 @@ export const UNMODDED_STEPS = Object.freeze([
 // template is not.
 export const UNMODDED_PLACEHOLDER = '[MANUAL'
 
-// The one state that records a step the operator saw, and it held. Every other
-// state is a refusal, which is why there is no list of failing states: `ok` is the
-// only pass, so a word nobody defined cannot be read as one.
+// The state that records a step the operator saw, and it held. It is the only pass on
+// a step the list does not declare expected absent; a declared one may be recorded
+// `not-seen` instead, and every other word is a refusal (#943). So there is no list of
+// failing states: a word nobody defined cannot be read as a pass.
 export const UNMODDED_STATE_OK = 'ok'
 
 // The document `--lane unmodded` writes: every step pending, every row carrying the
 // placeholder, and `completed` false. Nothing in it is a pass. The operator's own
 // edits are the record, and the check reads those, not this file's prose.
-export function unmoddedWitness ({ server = '', now = new Date().toISOString() } = {}) {
+//
+// `steps` is the list the check is asked to read, and it is `UNMODDED_STEPS` for every
+// caller in the tree: the writer and the checker take it the same way, so a test can
+// read what the checklist says about a declaration the way it reads the verdict.
+export function unmoddedWitness ({ server = '', now = new Date().toISOString(), steps = UNMODDED_STEPS } = {}) {
   return {
     gate: 'B', row: 'B5-unmodded-witness (G0 manual lane)',
     lane: UNMODDED_WITNESS_LANE,
@@ -320,7 +326,7 @@ export function unmoddedWitness ({ server = '', now = new Date().toISOString() }
       'For each step below, do the action by hand, capture a grim screenshot, and set the row to `' + UNMODDED_STATE_OK + '` when you saw it hold. A step this list declares expected absent may be recorded `' + GAP_STATE + '` instead. Leave a row `pending` until you have looked.',
       'Write what you saw in the row\'s `evidence`. A `' + UNMODDED_PLACEHOLDER + '` placeholder is not evidence, and the check refuses it.'
     ],
-    steps: UNMODDED_STEPS.map(({ id, claim }) => ({
+    steps: steps.map(({ id, claim }) => ({
       id, claim, state: 'pending', evidence: UNMODDED_PLACEHOLDER + ': what you saw]'
     })),
     limitations: [
@@ -329,17 +335,12 @@ export function unmoddedWitness ({ server = '', now = new Date().toISOString() }
       'When every step carries a record — `' + UNMODDED_STATE_OK + '`, or `' + GAP_STATE + '` on a declared step — set completed true and copy this file to testdata/' + UNMODDED_WITNESS_FILE + '.',
       // #943: built from the declaration, so a step declared expected absent reaches this document
       // instead of leaving the operator to discover the rule in a refusal.
-      ...UNMODDED_STEPS.filter(step => step.openUntil !== undefined).map(step =>
+      ...steps.filter(step => step.openUntil !== undefined).map(step =>
         'The step \'' + step.id + '\' is expected to be ' + GAP_STATE + ' today: ' + closes(step.openUntil) +
         '. Record it ' + GAP_STATE + ' with what you saw, and the check accepts that gap.')
     ]
   }
 }
-
-// A refusal, with the list a pass carries kept in the shape: a caller that reads it
-// needs no guard, and a test can assert an empty list rather than an absent key. The
-// dev lane's witness keeps the same two shapes for the same reason (#920).
-const refuse = reason => ({ ok: false, reason, gaps: [] })
 
 // What is wrong with the rows before any state is read: whether one row records
 // each step of the run, once, by id. No total is checked and no order is checked.
@@ -393,14 +394,14 @@ function witnessRowRefusal (rows, list) {
 // the declaration is code, and the row's own copy of it is overwritten below.
 export function verifyUnmoddedWitness (document, { steps = UNMODDED_STEPS } = {}) {
   if (document === null || typeof document !== 'object') {
-    return refuse('the unmodded witness file is missing or is not a document: run --lane unmodded first')
+    return { ok: false, reason: 'the unmodded witness file is missing or is not a document: run --lane unmodded first' }
   }
   if (document.lane !== UNMODDED_WITNESS_LANE) {
-    return refuse('the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(UNMODDED_WITNESS_LANE))
+    return { ok: false, reason: 'the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(UNMODDED_WITNESS_LANE) }
   }
   const rows = Array.isArray(document.steps) ? document.steps : []
   const misplaced = witnessRowRefusal(rows, steps)
-  if (misplaced !== null) return refuse(misplaced)
+  if (misplaced !== null) return { ok: false, reason: misplaced }
   const byId = new Map(rows.map(row => [row.id, row]))
   // Past the identity check every step is present once, and the row is read against
   // the list's step: the claim is the list's, because a row's own claim is a label
@@ -413,34 +414,40 @@ export function verifyUnmoddedWitness (document, { steps = UNMODDED_STEPS } = {}
   }))
   const open = settled.filter(step => step.state === undefined || step.state === 'pending')
   if (open.length > 0) {
-    return refuse('still pending: ' + namedIds(open.map(step => step.id)))
+    return { ok: false, reason: 'still pending: ' + namedIds(open.map(step => step.id)) }
   }
   const silent = settled.filter(step => typeof step.evidence !== 'string' || step.evidence.trim() === '')
   if (silent.length > 0) {
-    return refuse('no evidence recorded: ' + namedIds(silent.map(step => step.id)))
+    return { ok: false, reason: 'no evidence recorded: ' + namedIds(silent.map(step => step.id)) }
   }
   // Trimmed before the prefix is read: the file is hand-edited, and a placeholder
   // an operator indented records exactly as little as the one the writer emits.
   const placeholder = settled.filter(step => step.evidence.trim().startsWith(UNMODDED_PLACEHOLDER))
   if (placeholder.length > 0) {
-    return refuse('the placeholder `' + UNMODDED_PLACEHOLDER + '` is not evidence: ' + namedIds(placeholder.map(step => step.id)))
+    return { ok: false, reason: 'the placeholder `' + UNMODDED_PLACEHOLDER + '` is not evidence: ' + namedIds(placeholder.map(step => step.id)) }
   }
   const unknown = settled.filter(step => step.state !== UNMODDED_STATE_OK && step.state !== GAP_STATE)
   if (unknown.length > 0) {
-    return refuse('not ok: ' + unknown.map(step => '`' + step.id + '` is `' + String(step.state) + '` (' + step.evidence + ')').join('; '))
+    return { ok: false, reason: 'not ok: ' + unknown.map(step => '`' + step.id + '` is `' + String(step.state) + '` (' + step.evidence + ')').join('; ') }
   }
   if (document.completed !== true) {
-    return refuse('every step is recorded and the witness is not marked completed: set completed true')
+    return { ok: false, reason: 'every step is recorded and the witness is not marked completed: set completed true' }
   }
   // The one rule, read from the one place both witnesses keep it (#943).
-  const { declared, gaps, unexpected } = gapSplit(settled)
+  const { declared, unexpected } = gapSplit(settled)
   if (unexpected.length > 0) {
     const recorded = 'not seen: ' + unexpected.map(step => '`' + step.id + '` (' + step.evidence + ')').join('; ')
-    return refuse(declared.length === 0
-      ? recorded + ': no step of UNMODDED_STEPS is declared expected absent, so every step of this run is recorded `' +
-        UNMODDED_STATE_OK + '`. A step recorded `' + GAP_STATE + '` needs its own entry in that list to declare it, with the tickets that close it'
-      : recorded + ': the only `' + GAP_STATE + '` this run accepts is a step declared expected absent, ' +
-        commaAnd(declared.map(step => '`' + step.id + '` (' + closes(step.openUntil) + ')')))
+    return {
+      ok: false,
+      reason: declared.length === 0
+        ? recorded + ': no step this run reads is declared expected absent, so every step is recorded `' +
+          UNMODDED_STATE_OK + '`. A step recorded `' + GAP_STATE + '` needs an `openUntil` entry in the list the check reads, naming the tickets that close it'
+        : recorded + ': the only `' + GAP_STATE + '` this run accepts is a step declared expected absent, ' +
+          commaAnd(declared.map(step => '`' + step.id + '` (' + closes(step.openUntil) + ')'))
+    }
   }
-  return { ok: true, reason: null, gaps: gaps.map(declaredOf) }
+  // No list of accepted gaps on the way out: the one caller reads `ok` and `reason`, and the
+  // operator's own document is where the gap they recorded stays visible (#960 gives the command's
+  // pass line the gap to print, which is the change that needs the field).
+  return { ok: true, reason: null }
 }
