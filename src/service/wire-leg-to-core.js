@@ -204,8 +204,7 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   // snapshot reports `preAuth` as null. The names it answers are the window's own
   // (`stats()`, src/core/preauth-window.js) and this row carries none of them, for the
   // reason the header gives: test/legs/adapters.test.js compares each answering leg to
-  // that module, so a leg answering four of the five numbers fails a case rather than
-  // a snapshot.
+  // that module, so a leg that leaves one name out fails a case rather than a snapshot.
   {
     kind: 'call',
     name: 'preAuthStats',
