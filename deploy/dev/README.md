@@ -433,11 +433,11 @@ list these come from, and a guard holds this table to it:
 | `spectateRefused` | the Spectate click was refused, with the core's own reason |
 | `spectateViewRefused` | the landing itself was refused, with the reason |
 | `spectateModeRefused` | the spectator game mode pair could not be written to that socket |
-| `puppetSkinSent` | #614's `player_info` naming the puppet went out, with the reason it was written. It is one frame for the whole body with no channel, so this record is the entry for every socket at once. A skin that is not the puppet's starts here |
+| `puppetSkinSent` | #614's `player_info` naming the puppet went out, with the reason it was written. It is one frame for the whole body, with no channel, so this record is the entry for every socket at once |
 | `puppetSkinKnown` | the backend's own `player_info` carried a textures property for the puppet. Without it there is no entry to write, and a client drops the spawn that follows |
 | `puppetSkinWithheld` | an entry the proxy would not write, because the profile it names has no UUID or no name |
 | `puppetSkinRefused` | the entry could not be built, or the leg could not deliver it |
-| `virtualPlayerWritten` | one per entry, spawn and despawn, naming the socket and the frame. This is the only record that says which channel a frame reached, because no counter names a channel |
+| `virtualPlayerWritten` | one per entry, spawn and despawn, naming the socket and the frame. The only record that says which channel a frame reached, because no counter names a channel |
 | `virtualPlayerRefused` | the leg threw on a write, with the frame, the socket and the error |
 | `virtualPlayerAnnounceRefused` | a player the proxy could not name, so no socket was told about it |
 | `attachDenied` | a login was refused before the picker, with the reason. `not_whitelisted` is the account not being in the lane's list |
