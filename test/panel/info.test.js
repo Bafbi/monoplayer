@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 
 import { activity } from '../../src/panel/activity.js'
+import { uuidRefusalReason } from '../../src/custody/util.js'
 import { deploymentCaps, ReadRefused } from '../../src/panel/kube.js'
 import { renderPage } from '../../src/panel/views/page.js'
 import { createPanelHandler } from '../../src/panel/server.js'
@@ -32,9 +33,21 @@ const HEARTBEAT_MS = Date.parse(HEARTBEAT_AT)
 const NOW = HEARTBEAT_MS + 12_000
 const START_AT = '2026-11-18T09:00:00.000Z'
 
+// Three uuids: two Mojang could issue, and one Java derived from a name, which is the
+// shape #677 found in the dev lane's own document. `entryOf` asks `uuidRefusalReason`
+// for each, so the record below is the one the lane writes (#705) and this file never
+// spells an entry's answer a second time (#703).
+const V4 = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
+const SECOND = '7fad1e81-b0e9-4a3c-8ccb-9e41f3a4b3af'
+const DERIVED = '62e2a856-7342-3096-b19f-938454443a11'
+const entryOf = uuid => ({ uuid, refusalReason: uuidRefusalReason(uuid) })
+
 // #331: one label for one fact. The start record carries the backend the lane
 // dialled, which is the configured one, and no second copy of it. The panel still
 // shows both facts, because a reconnect moves the effective one and not this one.
+//
+// #748: and the entries the count counts, with the UUID decision the same read wrote
+// (#705). The panel prints this record's answer; it does not make a second one.
 const startLive = {
   t: START_AT,
   event: 'startLive',
@@ -42,6 +55,7 @@ const startLive = {
   front: '0.0.0.0:25565',
   backend: 'play2.excalia.fr:25565',
   whitelistCount: 1,
+  whitelistEntries: [entryOf(V4)],
   control: { whitelistReload: true }
 }
 
@@ -234,7 +248,12 @@ test('the heartbeat fields are the documented ones, projected by name', () => {
   // a different fact with no timestamp.
   assert.deepEqual(backend.effective, { value: 'play2.excalia.fr:25565', source: 'start', at: START_AT })
   assert.deepEqual(backend.registry, { value: 'play2.excalia.fr:25565', source: 'registry', at: null })
-  assert.deepEqual(whitelist, { count: 1, at: START_AT, source: 'startLive' })
+  assert.deepEqual(whitelist, {
+    count: 1,
+    at: START_AT,
+    source: 'startLive',
+    entries: [entryOf(V4)]
+  }, 'the count, and the entry it counts, from the one record')
   // The pre-auth caps are only in the lines the window writes, each with its own
   // timestamp.
   assert.deepEqual(preAuth, {
@@ -253,6 +272,89 @@ test('a successful reconnect moves the effective backend off the start record', 
   // transfer leaves it where the lane started. One record field, two facts.
   assert.deepEqual(card.backend.configured, { value: 'play2.excalia.fr:25565', source: 'start', at: START_AT },
     'the configured target is the start record\'s backend, and a transfer does not move it')
+})
+
+// #748: this row was the last place the panel reported a whitelist size and named no
+// entry. A count cannot tell three controllers from two and one uuid nobody owns, which
+// is the state #677 found in the dev lane's document. The card is the one of the three
+// places that shows the list.
+test('the start row names the entries it counts, with the decision the record wrote', () => {
+  const entries = [V4, SECOND, DERIVED].map(entryOf)
+  const card = activity({
+    puppet,
+    pod,
+    log: { text: tail({ ...startLive, whitelistCount: 3, whitelistEntries: entries }, heartbeat) },
+    now: NOW
+  })
+  assert.deepEqual(card.whitelist.entries, entries, 'the entries reach the page, in the record\'s order')
+  assert.equal(card.whitelist.count, 3, 'and the count is the list the row names')
+  const page = renderPage({ version: 1, puppets: [puppet] }, [card])
+  // The fault is stated where the count is: a row of three with one bad entry is easy
+  // to read past, and the words are the block's and `mise run dev:status`'s (#677).
+  assert.match(page, /3 entries, 2 of which can authenticate \(startLive, 2026-11-18T09:00:00\.000Z\)/)
+  // One row per entry, each under the uuid the lane started with: the answer travels
+  // with its entry, so two lists cannot fall out of step by position.
+  for (const uuid of [V4, SECOND]) {
+    assert.ok(page.includes('<dt>' + uuid + '</dt><dd>can authenticate</dd>'),
+      'the page names ' + uuid + ' and says a session can answer for it')
+  }
+  assert.ok(page.includes('<dt>' + DERIVED + '</dt><dd>cannot authenticate: ' + uuidRefusalReason(DERIVED) + '</dd>'),
+    'the derived uuid is named as one no Mojang session can answer for, in the one home\'s words')
+  // A lane where every entry is usable carries no ratio sentence: one sentence per fact.
+  const healthy = renderPage({ version: 1, puppets: [puppet] }, [facts()])
+  assert.match(healthy, /1 entry \(startLive, 2026-11-18T09:00:00\.000Z\); re-read at each login/)
+  assert.doesNotMatch(healthy, /of which can authenticate/, 'nothing is wrong, so nothing says a ratio')
+})
+
+// The record that names no entry is a lane older than #705, or a tail whose only start
+// line is the core one. The row keeps the count and says in one clause where the
+// per-entry answer is, rather than printing a number that reads as the whole fact.
+test('a start record that names no entry shows the count and points at the block', () => {
+  const { whitelistEntries, ...countOnly } = startLive
+  const card = activity({ puppet, pod, log: { text: tail(countOnly, heartbeat) }, now: NOW })
+  assert.deepEqual(card.whitelist, { count: 1, at: START_AT, source: 'startLive', entries: null })
+  const page = renderPage({ version: 1, puppets: [puppet] }, [card])
+  assert.match(page, /1 entry \(startLive, 2026-11-18T09:00:00\.000Z\); the record carries no per-entry answer, and the attach whitelist block below answers for the file as it stands/)
+  assert.doesNotMatch(page, /Whitelist entries at start/, 'and it draws no empty row set')
+
+  // An entry that carries a uuid and no decision is a record this page cannot read, and
+  // absent is not a yes: printing it as usable would turn a missing answer into a
+  // positive one, which is the failure #748 is about.
+  const undecided = activity({
+    puppet,
+    pod,
+    log: { text: tail({ ...startLive, whitelistEntries: [{ uuid: DERIVED }] }, heartbeat) },
+    now: NOW
+  })
+  assert.equal(undecided.whitelist.entries, null, 'a list with no answer in it is no list')
+  const undecidedPage = renderPage({ version: 1, puppets: [puppet] }, [undecided])
+  assert.doesNotMatch(undecidedPage, /can authenticate/, 'the entry it cannot answer for is not called usable')
+  assert.match(undecidedPage, /the record carries no per-entry answer/)
+
+  // The core start record carries uuids and no answer, so it is the count's source and
+  // never the row's: the panel prints the decision the lane made, not one it invents.
+  const core = { t: START_AT, event: 'start', whitelist: [V4, DERIVED] }
+  const coreCard = activity({ puppet, pod, log: { text: tail(core, heartbeat) }, now: NOW })
+  assert.deepEqual(coreCard.whitelist, { count: 2, at: START_AT, source: 'start', entries: null })
+})
+
+test('an entry whose uuid the record could not normalise is named, not dropped', () => {
+  const card = activity({
+    puppet,
+    pod,
+    log: {
+      text: tail({
+        ...startLive,
+        whitelistEntries: [{ uuid: null, refusalReason: uuidRefusalReason(null) }]
+      }, heartbeat)
+    },
+    now: NOW
+  })
+  assert.deepEqual(card.whitelist.entries, [{ uuid: null, refusalReason: uuidRefusalReason(null) }],
+    'the entry that admits nobody is the last one a projection may drop')
+  const page = renderPage({ version: 1, puppets: [puppet] }, [card])
+  assert.ok(page.includes('<dt>no uuid recorded</dt><dd>cannot authenticate: ' + uuidRefusalReason(null) + '</dd>'))
+  assert.match(page, /and it cannot authenticate/, 'one entry, and it admits nobody')
 })
 
 test('the last attach names the bodies that never spawned', () => {
@@ -450,6 +552,8 @@ test('/api/puppets/<name> answers the same facts the page shows', async () => {
     assert.equal(body.heartbeat.at, HEARTBEAT_AT)
     assert.equal(body.heartbeat.sizes.chunks, 166)
     assert.equal(body.state.state, 'serving')
+    // #748: an agent reads the same row the browser does, entry by entry.
+    assert.deepEqual(body.whitelist.entries, [{ uuid: V4, refusalReason: null }])
     assert.equal((await fetch(url + '/api/puppets/nobody')).status, 404)
   } finally {
     await close()

@@ -11,7 +11,7 @@
 // replaces the live region's innerHTML every 5 s and carries this list beside it as an
 // out-of-band swap, so a tick refreshes the entries without touching a half-typed name
 // or a remove button the operator has just armed.
-import { escape, present } from './html.js'
+import { entryTally, escape, present, uuidDecision } from './html.js'
 import { uuidRefusalReason } from '../../custody/util.js'
 
 // One entry: who, which uuid, when it was added, and whether a login can use it. The
@@ -25,7 +25,9 @@ import { uuidRefusalReason } from '../../custody/util.js'
 //
 // "can authenticate" is that script's word, and it means what the rule can answer:
 // nothing about the entry's shape stops a Mojang session answering. A uuid of the
-// right shape that nobody owns still fails its login, and no read can tell that.
+// right shape that nobody owns still fails its login, and no read can tell that. The
+// words are `uuidDecision`'s in ./html.js, so the card's startup row and this block
+// cannot drift into two sentences for one answer (#748).
 //
 // The answer to a removal is not printed in the row: a tick would take it away with the
 // row it belongs to. It goes to the block's answer area, outside the list.
@@ -37,10 +39,8 @@ function renderEntry (puppet, entry, refusalReason) {
     '      <li class="entry">',
     '        <span class="who"><span class="player">' + escape(who) + '</span> <code>' + escape(uuid) + '</code></span>',
     '        <span class="when">added ' + escape(added) + '</span>',
-    '        <span class="uuid-decision' + (refusalReason === null ? '' : ' unusable') + '">' +
-      (refusalReason === null
-        ? 'can authenticate'
-        : 'cannot authenticate: ' + escape(refusalReason)) + '</span>',
+    '        <span class="uuid-decision' + (present(refusalReason) ? ' unusable' : '') + '">' +
+      escape(uuidDecision(refusalReason)) + '</span>',
     // data-key is the key the page holds its armed confirmation under, so a tick that
     // replaces this button paints the confirmation back onto it. data-name is what that
     // confirmation reads back, so the second press asks about a person. The allowed
@@ -80,18 +80,11 @@ export function renderEntries ({ puppet, list }) {
   const judged = players.map(entry => ({ entry, why: uuidRefusalReason(entry?.uuid, entry?.name) }))
   const usable = judged.filter(({ why }) => why === null).length
   // A list where some entry cannot authenticate is a fault, and it is stated above the
-  // rows: a row of eight with one derived uuid is easy to read past. The sentence is
-  // `mise run dev:status`'s, so an operator who reads one reads the other without
-  // translating. The two are copies, and no test ties them: the script's sentence lives
-  // in a shell heredoc. One entry is the one place this says it differently, because
-  // "none of them" is wrong for a list of one.
+  // rows: a row of eight with one derived uuid is easy to read past. The words are
+  // `entryTally`'s, which the card's startup row prints too, and `mise run dev:status`
+  // settled them (#677, #748).
   if (usable < players.length) {
-    const single = players.length === 1
-    lines.push('    <p class="refused">attach whitelist names ' + players.length +
-      (single ? ' entry' : ' entries') +
-      (usable === 0
-        ? (single ? ', and it cannot authenticate' : ', and none of them can authenticate')
-        : ', ' + usable + ' of which can authenticate') +
+    lines.push('    <p class="refused">attach whitelist names ' + entryTally(players.length, usable) +
       '</p>\n')
   }
   lines.push('    <ul class="entries">\n')

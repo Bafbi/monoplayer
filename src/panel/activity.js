@@ -265,15 +265,44 @@ function backendFacts ({ puppet, start, reconnect, failed }) {
   }
 }
 
-// The attach whitelist's size. `startLive.whitelistCount` is the count the live
-// service resolved; the core's `start` record carries the list itself, and its
-// length is the same fact on a lane that never wrote a startLive line.
+// The entries the record names, with the UUID decision the lane wrote for each (#705). A
+// list that carries a uuid and no decision is not one this page can read. Printing such an
+// entry as usable would turn an absent answer into a positive one, and that is the failure
+// #748 is about. Such a record answers nothing, so the row keeps the count and points at
+// the block.
+function whitelistEntries (start) {
+  const rows = pickRows(start.whitelistEntries, ['uuid', 'refusalReason'])
+  if (rows === null) return null
+  return rows.every(row => 'refusalReason' in row) ? rows : null
+}
+
+// The attach whitelist as the lane started with it: the count, and the entries that same
+// read named (#748). `startLive.whitelistCount` is the number the live service resolved,
+// and `startLive.whitelistEntries` is the read's own list, one object per entry carrying
+// the UUID decision the lane's `uuidRefusalReason` gave it (#705). This file prints that
+// decision rather than asking the rule again: the answer and the count are one read, so a
+// row cannot say 3 and judge 2, and src/custody/util.js stays the one home of the rule
+// (#703). The list holds uuids and no names, which is the half of the rule a startup read
+// can ask: only a login tells a uuid nobody owns apart from a real entry.
+//
+// The core's `start` record carries the list as uuids and no answer, and its length is the
+// count on a lane that never wrote a startLive line. It is the count's source and never the
+// row's: the panel prints the decision the lane wrote, and never one it invented, so those
+// rows name nothing and the view says where the per-entry answer is.
 function whitelistFacts (start, coreStart) {
   if (start !== null && typeof start.whitelistCount === 'number') {
-    return { count: start.whitelistCount, at: time(start.t).at, source: 'startLive' }
+    const entries = whitelistEntries(start)
+    return {
+      // One read, so the number and the rows below it cannot disagree. A record that
+      // carries no list is a lane older than #705, and its own count is the fact.
+      count: entries === null ? start.whitelistCount : entries.length,
+      at: time(start.t).at,
+      source: 'startLive',
+      entries
+    }
   }
   if (coreStart !== null && Array.isArray(coreStart.whitelist)) {
-    return { count: coreStart.whitelist.length, at: time(coreStart.t).at, source: 'start' }
+    return { count: coreStart.whitelist.length, at: time(coreStart.t).at, source: 'start', entries: null }
   }
   return null
 }

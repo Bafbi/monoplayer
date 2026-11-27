@@ -17,7 +17,8 @@
 // are the same code, so a number on the page and a number five seconds later cannot
 // disagree.
 import {
-  bytes, count, dayWord, env, escape, group, heading, list, present, row, sourced, span, yesno
+  bytes, count, dayWord, entryTally, env, escape, group, heading, list, present, row,
+  sourced, span, uuidDecision, yesno
 } from './html.js'
 import { renderStage } from './stage.js'
 
@@ -253,6 +254,34 @@ function renderHeartbeat (facts) {
   return lines.join('')
 }
 
+// The count and the fault that follows it, from the same list (#677, #748). A list of
+// three where one entry admits nobody must not read as healthy: one bad row of three is
+// easy to read past. A list whose answers could not be read carries no ratio, because
+// unknown is not a fault.
+function whitelistTally (whitelist) {
+  const usable = Array.isArray(whitelist.entries)
+    ? whitelist.entries.filter(entry => !present(entry.refusalReason)).length
+    : null
+  return entryTally(whitelist.count, usable)
+}
+
+// The entries the count counted (#748): one row each, under the uuid the lane started
+// with and the UUID decision the same read wrote (#705). The answer travels with its
+// entry, so the two lists cannot fall out of step by position, and this file judges
+// nothing: the lane asked `uuidRefusalReason` once, when it wrote the record, and
+// src/custody/util.js stays that rule's one home (#703).
+//
+// A row per entry, not a disclosure: the stream replaces this region's innerHTML every
+// 5 s, so anything the operator opens here closes under their hand. A lane with twenty
+// entries gets twenty rows, which is a list the card can carry and a number is not.
+function renderWhitelistEntries (whitelist) {
+  if (whitelist === null || !Array.isArray(whitelist.entries) || whitelist.entries.length === 0) return ''
+  return group('Whitelist entries at start', whitelist.entries.map(entry => row(
+    present(entry.uuid) ? entry.uuid : 'no uuid recorded',
+    uuidDecision(entry.refusalReason)
+  )))
+}
+
 function renderStart (facts) {
   const start = facts.start ?? {}
   const control = start.control ?? {}
@@ -260,13 +289,17 @@ function renderStart (facts) {
   const dial = facts.backend.lastDial
   const lines = [heading('Start', start.at ?? null)]
 
-  // The whitelist count is the one the lane resolved at startup. #229 re-reads the
-  // whitelist at each login, so an edit after start is invisible here, and both
-  // the label and the timestamp say so.
+  // The whitelist as the lane started with it: the count, the entries under it, and the
+  // timestamp of the read they came from. #229 re-reads the whitelist at each login, so
+  // an edit after start is invisible here, and both the label and the timestamp say so.
+  // A record that names no entry says where the per-entry answer is instead.
   const whitelistText = whitelist === null
     ? 'unknown, and no start record is in the tail'
-    : whitelist.count + (whitelist.count === 1 ? ' entry' : ' entries') + ' (' + whitelist.source +
+    : whitelistTally(whitelist) + ' (' + whitelist.source +
       (present(whitelist.at) ? ', ' + whitelist.at : '') + ')' +
+      (Array.isArray(whitelist.entries)
+        ? ''
+        : '; the record carries no per-entry answer, and the attach whitelist block below answers for the file as it stands') +
       (control.whitelistReload === true ? '; re-read at each login' : '')
 
   lines.push(group('Puppet', [
@@ -281,6 +314,7 @@ function renderStart (facts) {
     row('attach whitelist at start', whitelistText),
     row('whitelist reload', yesno(control.whitelistReload))
   ]))
+  lines.push(renderWhitelistEntries(whitelist))
   return lines.join('')
 }
 

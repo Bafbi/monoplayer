@@ -114,7 +114,17 @@
       "whitelist": {
         "count": 2,
         "at": "2026-11-18T09:00:00.000Z",
-        "source": "startLive"
+        "source": "startLive",
+        "entries": [
+          {
+            "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
+            "refusalReason": null
+          },
+          {
+            "uuid": "424ac88b-7531-3224-8934-922380568a46",
+            "refusalReason": "a version-3 uuid is not one Mojang issues, so no Mojang session answers for it"
+          }
+        ]
       },
       "preAuth": {
         "maxConnections": 3,
@@ -272,7 +282,8 @@
       "whitelist": {
         "count": 0,
         "at": "2026-11-18T09:41:00.000Z",
-        "source": "startLive"
+        "source": "startLive",
+        "entries": []
       },
       "preAuth": {
         "maxConnections": null,

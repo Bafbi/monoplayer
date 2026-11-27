@@ -68,17 +68,26 @@ stale record shown as live is the failure this page exists to prevent.
 Some facts are stated only by the lines that carry them, and the card says so
 rather than guessing:
 
-- **The attach whitelist's size and the effective backend** come from the
+- **The attach whitelist at start and the effective backend** come from the
   `startLive` record. The tail is 400 lines, so a pod older than that has no start
   record in it: the card prints `unknown, and no start record is in the tail`, and
   shows the registry's own backend beside it, labelled `registry` with no
   timestamp.
-- **The `attach whitelist at start` count is the one the lane resolved at startup.**
-  The control document re-reads the whitelist at each login (#229), so an edit made
-  after start is invisible in that row. The block under the card is the list itself,
-  read on every tick, so an edit shows there within five seconds. Those are two
-  different facts and the page never merges them: one is what the lane started with,
-  the other is what the file holds now.
+- **The `attach whitelist at start` row names the entries it counts.** The count and
+  the rows are one read: the list the start record names, and its length.
+  `Whitelist entries at start`, below the row, holds one row per entry: the uuid, and
+  the UUID decision `uuidRefusalReason` in `src/custody/util.js` gave it, in the
+  words the "Who may attach" block prints. The answer is the one the start record
+  wrote, so the panel prints a decision and never makes a second one, and the count
+  carries the fault when an entry admits nobody. The startup list holds uuids and no
+  names, so a row names the uuid and never the name a login would claim. A record
+  written before the field existed, or a tail whose only start line is the core
+  `start` one, shows the count and says where the per-entry answer is.
+- **That row and the block under the card are two different facts.** The control
+  document re-reads the whitelist at each login (#229), so an edit made after start is
+  invisible in the rows above. The block is the list itself, read on every tick, so an
+  edit shows there within five seconds. The page never merges them: one is what the
+  lane started with, the other is what the file holds now.
 - **The effective backend is the last successful dial**, so a puppet that followed a
   transfer shows where it is now rather than where it started. `last dial` shows the
   newest dial of either outcome with `connected` or `failed`, because a reconnect
