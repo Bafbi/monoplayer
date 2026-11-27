@@ -2474,6 +2474,10 @@ export function createMonoplayer ({
       if (!taken) {
         refused++
         log('replayFrameRefused', { name, reason, frame: frame.name, ...(error === null ? {} : { error }) })
+        // #738: and it is not offered again. This loop is one synchronous turn, so no cause
+        // of a refusal can change between two of its writes, and a retry that waited long
+        // enough to be answered differently would write out of order into a join whose order
+        // is the point (docs/adr/a-refused-replay-frame-is-not-retried.md).
         continue
       }
       // The invented position is the one frame here `replayed` does not count: it was
@@ -3080,6 +3084,8 @@ export function createMonoplayer ({
           frame: frame.name,
           ...(error === null ? {} : { error })
         })
+        // #738: one pass, and no second offer, for the reason the attach's own drop gives
+        // (docs/adr/a-refused-replay-frame-is-not-retried.md).
         continue
       }
       frames++
