@@ -1,5 +1,5 @@
-// The document: one head, one card per puppet (#248 split it out of the one
-// renderer in src/panel/page.js).
+// The document: one head, one card per puppet (#248 split the one renderer into the
+// views beside this one).
 //
 // The page loads four files and all four come from the panel itself, under
 // /static/ (src/panel/assets.js). No CDN: a tailnet-only control plane must not
