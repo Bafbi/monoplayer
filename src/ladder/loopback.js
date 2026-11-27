@@ -102,7 +102,9 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   // until the run started checking the order (#623).
   // #618: O73 lands a spectator on the body O65 leaves driven, so it runs between O65 and
   // O66, before O66 empties the lane's allowed-server list.
-  'O63', 'O69', 'O64', 'O65', 'O73', 'O76', 'O66'
+  // #710: O77 reads the count behind O66's refusal, so it runs on the lane O66 leaves
+  // empty and after it.
+  'O63', 'O69', 'O64', 'O65', 'O73', 'O76', 'O66', 'O77'
 ])
 
 // #681: the highest number an assertion id has ever used. A new assertion takes the
@@ -112,7 +114,7 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
 // test/ladder/loopback-contract.test.js keeps the record of every id ever declared and
 // reads both rules against it; docs/testing-ladder.md says which edit each failure asks
 // for.
-export const LOOPBACK_ASSERTION_HIGH_WATER = 76
+export const LOOPBACK_ASSERTION_HIGH_WATER = 77
 
 // #623: the list is the run order, and this is the rule that holds the run to it. The
 // run asks once, with the ids it recorded in the order it recorded them, so the
@@ -333,6 +335,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot18 = null
   // #315: the client that joins a lane whose allowed-server list is empty.
   let pickerBot19 = null
+  // #710: the second client on that lane, whose join is the one the count is read from.
+  let pickerBot26 = null
   // #635: the client that lands on the driven body to look at the puppet.
   let pickerBot20 = null
   let pickerBot21 = null
@@ -2976,7 +2980,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       offlineUuid('Fault'),
       // #315: the client that joins a lane offering nothing. The whitelist is checked
       // before the picker, so this client has to be known to reach the refusal.
+      // #710: and a second one, whose join is the one O77 reads the count from.
       offlineUuid('Empty'),
+      offlineUuid('EmptyCount'),
       // #635: the client that lands to look at the puppet's body.
       offlineUuid('Sightline'),
       // #633: the client that lands beside a driver to read the mode frames both of
@@ -6038,6 +6044,47 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       evidence.empty
     )
 
+    // --- O77: the empty offer is counted, not only recorded (#710, #670) ---
+    // #670 gave the lane's empty offer a record with its reason and a count in the map a
+    // cap is decided from. O66 proved that record reaches a client's join; the count was
+    // read by nothing, so a lane that kept writing the line and stopped moving the map
+    // would have stayed green. #710 is that gap, and this is its loopback half: the same
+    // empty lane, one more join, and both numbers read off it as a delta, so what is
+    // asserted is this refusal and not the run's total.
+    const refusalsBefore = pickerFront.metrics.pickerRefusals
+    const emptyBefore = pickerFront.metrics.pickerRefusalsByReason.empty_offer ?? 0
+    const countMark = logs.length
+    pickerBot26 = createBot({ port: picker.port, username: 'EmptyCount', version: pickerVersion })
+    await pickerBot26.waitFor(
+      () => pickerBot26.received.ended !== null,
+      'the client a lane with no list refuses, for the count',
+      15_000
+    )
+    const refusalsAfter = pickerFront.metrics.pickerRefusals
+    const emptyAfter = pickerFront.metrics.pickerRefusalsByReason.empty_offer ?? 0
+    const countedEmpties = logs
+      .slice(countMark)
+      .filter(entry => entry.event === 'pickerEmpty')
+      .map(entry => entry.fields)
+    evidence.emptyCount = {
+      records: countedEmpties,
+      refusals: { before: refusalsBefore, after: refusalsAfter },
+      emptyOffer: { before: emptyBefore, after: emptyAfter }
+    }
+    check(
+      'O77',
+      'a lane with no rows to offer counts the refusal it records, so the map a cap is decided from moves with the line',
+      // One record for this join, under the word the map is keyed by, and both numbers the
+      // leg keeps moving by exactly one: the total an operator charts, and the reason a
+      // reader greps. A record that stopped being written, or a count that stopped moving,
+      // is a failing half of this and neither is silent.
+      countedEmpties.length === 1 &&
+        countedEmpties[0].reason === 'empty_offer' &&
+        refusalsAfter - refusalsBefore === 1 &&
+        emptyAfter - emptyBefore === 1,
+      evidence.emptyCount
+    )
+
   } catch (error) {
     runError = error
     exitCode = phase === 'setup' ? 2 : 1
@@ -6049,7 +6096,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     for (const lane of lanes) {
       try { await lane.close() } catch { /* best effort */ }
     }
-    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20, pickerBot21, pickerBot22, funnelBot]) {
+    for (const bot of [attachBot2, attachBot1, rivalBot, bot9, bot8, bot7, bot6, bot5, bot4, bot3, bot2, bot1, stranger, capBot, capRefusedBot, deadlineBot, deadlineStranger, controlBot2, controlBot1, pickerBot, pickerBot2, pickerBot3, pickerBot4, pickerBot5, pickerBot6, pickerBot7, pickerBot8, pickerBot9, pickerBot10, pickerBot11, pickerBot12, pickerBot13, pickerBot15, pickerBot16, pickerBot17, pickerBot18, pickerBot19, pickerBot20, pickerBot21, pickerBot22, pickerBot26, funnelBot]) {
       try { await bot?.close?.() } catch { /* best effort */ }
     }
     try { capSocket?.destroy?.() } catch { /* best effort */ }

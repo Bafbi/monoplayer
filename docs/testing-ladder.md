@@ -1413,6 +1413,24 @@ first dial and its target warms in five seconds.
   whose name it was handed from a play one. That is why the one configuration frame the leg authored
   here left for the funnel, and why `test/legs/raw-funnel.test.js` counts the writers.
 
+- `O77` a lane with no rows to offer counts the refusal it records, so the map a cap is decided from
+  moves with the line (#710, #670).
+
+  #670 made the empty offer a counted refusal with a record of its own. O66 proves that record
+  reaches a client's join; the count beside it was read by nothing, so a lane that kept writing
+  `pickerEmpty` and stopped moving `front.pickerRefusalsByReason` would have stayed green. This is
+  O66's empty lane and one more join on it, and both numbers are read as a delta around that join:
+  the total (`pickerRefusals`) and the reason (`empty_offer`), each up by exactly one, beside
+  exactly one new record carrying the word the map is keyed by.
+
+  What it cannot prove: that the count is right on a lane that offers rows. A refusal is the only
+  thing that moves it, and a lane with rows is every other picker assertion in the run and the total
+  they leave behind.
+
+  The leg's half of #710 is `test/legs/picker-ends.test.js`: the two dialogs the leg could not write
+  and the lane with no rows, each driven at a real front leg with the record and the count read off
+  one run.
+
 ## The client parity rung
 
 `mise run parity:run` answers one question: what does a client that joined a

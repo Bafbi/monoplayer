@@ -193,7 +193,7 @@ const EVER = [
   'O49', 'O50', 'O51', 'O52', 'O53', 'O54', 'O54b', 'O55', 'O55b', 'O56',
   'O56b', 'O56c', 'O57', 'O58', 'O59', 'O60', 'O60b', 'O61', 'O62', 'O63',
   'O64', 'O65', 'O66', 'O67', 'O68', 'O69', 'O70', 'O71', 'O72', 'O73',
-  'O74', 'O75', 'O76'
+  'O74', 'O75', 'O76', 'O77'
 ]
 
 // The ids this repository has retired, by id, with the claim the number used to name.
