@@ -58,8 +58,8 @@ const SERVER = 'sky:25565'
 const SLUG = pickSlug(SERVER)
 const BASELINE = readConfigurationBaseline()
 
-// Ten seconds fails a hang well inside one gate cycle: this file runs in about five, and a
-// box running several agents gets the headroom.
+// Ten seconds fails a hang well inside one gate cycle: the work in each case takes about a
+// second, and a box running several agents gets the headroom.
 async function settleUntil (read, label, timeoutMs = 10_000) {
   const started = Date.now()
   while (!read()) {

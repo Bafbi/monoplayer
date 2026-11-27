@@ -335,8 +335,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   let pickerBot18 = null
   // #315: the client that joins a lane whose allowed-server list is empty.
   let pickerBot19 = null
-  // #710: the second client on that lane, whose join is the one the count is read from.
-  let pickerBot26 = null
   // #635: the client that lands on the driven body to look at the puppet.
   let pickerBot20 = null
   let pickerBot21 = null
@@ -349,6 +347,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
   // each entry can be read for the skin it carries.
   let pickerBot24 = null
   let pickerBot25 = null
+  // #710: a second client on #315's empty lane, whose join is the one O77 reads the count
+  // from.
+  let pickerBot26 = null
   // #602: the leg and the client O72 builds. They are this check's own because its
   // body configuration is, and createLoopbackLane takes a rig, whose front leg reads
   // the core's cache.
