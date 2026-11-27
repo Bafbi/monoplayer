@@ -12,6 +12,7 @@ import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 import { uuidRefusalReason } from '../../src/custody/util.js'
 import { whitelistAnswer } from '../../tools/whitelist.mjs'
+import { commentAbove } from './manifest-reader.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
@@ -940,6 +941,41 @@ test('the uuid predicate has one home, and every reader asks it', () => {
   // The runbook is a reader too, and it was one of the three places that stated the rule
   // in prose (#703). A pointer nothing checks is the copy that drifts, so the section that
   // carries the rule is held to the function the way the code is.
+  //
+  // Two surfaces carry that rule, and #871 is the second one: the section below, and the comment
+  // beside the value in the manifest. The comment is where a reader looks first, because it sits
+  // on the line they are about to edit, and #723 emptied it of the version by hand with no case
+  // red. A comment that restates a guarded thing is the copy that rots, and it sat on a surface no
+  // case read.
+  //
+  // What the two reads cover: 1 section of a page (deploy/dev/README.md, "## The attach
+  // whitelist", from its heading to the next one) and 1 comment run of 1 manifest, the one above
+  // attach-whitelist.json:. That run was 16 lines at 9543912b, a measurement and not a claim.
+  //
+  // What they do not cover: every other comment run of that manifest, and every other section of
+  // the page. No case reads those for a stated version, so a version written into one would pass.
+  // The pointers in them are surface-pointers.test.js's half, not this one's. That is the limit of
+  // the two reads, said rather than implied.
+  //
+  // One spelling for both reads, because a version is one fact. The pattern the section was held
+  // to before #871 was /nameUUIDFromBytes|version 4|version-4/, which is blind to "version 3", to
+  // a capital "Version 4", and to the spelling #723's comment used, "one version:" wrapping onto
+  // "4." on the next line.
+  //
+  // The adjacency class stays off \n, so a match cannot reach from one sentence to a digit in the
+  // next: "a version" ending a line and "4 of the entries" opening the next is not a stated
+  // version. Only the colon form reaches a line break, because that is the one shape that wraps
+  // when a sentence is about to give a value, and #723's sentence is exactly that shape.
+  //
+  // The cost of that one alternative, said rather than left to be found: a line ending "version:"
+  // followed by a line beginning with a digit is refused whether it gives the value or starts a
+  // count. The two read the same, so a guard cannot tell them apart, and the fix for a false red is
+  // to reword one comment line. Without it, the drift #723 removed by hand comes back green.
+  //
+  // What it does not refuse: a version stated with words between ("the version number is 4"), and
+  // a word that places the digit ("the thirteenth character"). Neither states a version.
+  const VERSION = /\bversions?[ \t:()=-]*[34]\b\)?|nameUUIDFromBytes|\bversion:[ \t]*\n[ \t]*[34]\b/i
+
   const runbook = fs.readFileSync(path.join(DEV, 'README.md'), 'utf8')
   const start = runbook.indexOf('## The attach whitelist')
   assert.ok(start >= 0, 'deploy/dev/README.md keeps the section that carries the rule')
@@ -947,8 +983,22 @@ test('the uuid predicate has one home, and every reader asks it', () => {
   const rules = runbook.slice(start, next === -1 ? runbook.length : next)
   assert.match(rules, /uuidRefusalReason/, 'the section names the function, so a reader checks the code rather than trusting the page')
   assert.match(rules, /src\/custody\/util\.js/, 'and the file it lives in')
-  assert.doesNotMatch(rules, /nameUUIDFromBytes|version 4|version-4/,
+  assert.doesNotMatch(rules, VERSION,
     'and states no version of its own: the docstring is where the versions are written down')
+
+  // The comment beside the key, read as the surface it is rather than as data. Its pointers are
+  // surface-pointers.test.js's half; this is the fact, and a version stated here is a second copy
+  // of the docstring's, not a note about it.
+  const comment = commentAbove(fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8'),
+    'attach-whitelist.json: |', 'deploy/dev/monoplayer.yaml')
+  const stated = comment.text.match(VERSION)
+  if (stated !== null) {
+    const from = comment.lineOf[stated.index]
+    const to = comment.lineOf[stated.index + stated[0].length - 1]
+    assert.fail('deploy/dev/monoplayer.yaml:' + (from === to ? from : from + '-' + to) + ' states "' +
+      stated[0].replace(/\n/g, ' ') + '" in the comment above attach-whitelist.json:, and the ' +
+      'versions have one home: the docstring of uuidRefusalReason in src/custody/util.js (#871)')
+  }
 })
 
 test('set-image puts the branch image on the dev proxy only', () => {
