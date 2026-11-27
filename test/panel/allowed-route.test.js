@@ -17,7 +17,7 @@ import http from 'node:http'
 import { createPanelHandler } from '../../src/panel/server.js'
 import { mergePatchBody, ReadRefused, WriteRefused } from '../../src/panel/kube.js'
 import { createControlDocument } from '../../src/service/control.js'
-import { ALLOWED_KEY } from '../../src/panel/routes/allowed.js'
+import { ALLOWED_KEY, targetOf } from '../../src/panel/routes/allowed.js'
 import { pickTarget } from '../../src/core/picker.js'
 
 const CONTROL = 'monoplayer-control'
@@ -647,7 +647,10 @@ test('#890 an IPv6 server is added, printed bracketed, read back by the lane, an
     const audit = rig.lines().find(line => line.event === 'panelAllowedServerAdd')
     assert.equal(audit.server, IPV6_WRITTEN, 'the audit line names the row the operator sees')
 
-    // The removal takes the address the row is called, which is the printed one.
+    // The removal takes the address the row is called, which is the printed one. The literal the
+    // ticket names is this segment decoded, and the route reads it back as the row it just wrote.
+    assert.deepEqual(targetOf(IPV6_WRITTEN), { target: { host: IPV6.host, port: IPV6.port } },
+      '[2001:db8::1]:25565 is the address the removal path takes, once the path decodes it')
     const removed = await fetch(rig.url + '/api/puppets/glowsquidye/allowed-servers/' +
       encodeURIComponent(IPV6_WRITTEN), { method: 'DELETE' })
     assert.equal(removed.status, 200)
@@ -706,5 +709,24 @@ test('#890 a refusal says which half of the address broke', async () => {
     assert.equal(rig.state.patches.length, 0, 'neither refusal wrote a document')
   } finally {
     await rig.close()
+  }
+})
+
+// #890: two sentences this route owes a reader, and neither had a case. A document the lane cannot
+// read is refused by the field that broke and by the rule's own words, which is where an operator
+// learns which line of the file to open.
+test('#890 a document that names no host, or a port that is not one, is refused by the field', async () => {
+  for (const [broken, said] of [
+    ['{"version": 1, "servers": [{"host": "", "port": 25565}]}', /servers\[0\]\.host must name a host, and it is empty/],
+    ['{"version": 1, "servers": [{"host": "paper.example.net", "port": "25565"}]}', /servers\[0\]\.port must be an integer from 1 to 65535/]
+  ]) {
+    const rig = await panel({ cluster: cluster({ live: broken }) })
+    try {
+      const response = await fetch(rig.url + '/api/puppets/glowsquidye/allowed-servers')
+      assert.equal(response.status, 500)
+      assert.match(await response.text(), said)
+    } finally {
+      await rig.close()
+    }
   }
 })

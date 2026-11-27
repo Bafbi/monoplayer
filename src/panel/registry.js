@@ -51,7 +51,7 @@ const quote = value => JSON.stringify(value ?? null)
 // the range check a typo becomes a backend that fails at the socket. Anything the
 // address shape does not match is still judged as a hostname, so no name this cluster
 // resolved before is refused now.
-export function isTargetHost (value) {
+function isTargetHost (value) {
   if (typeof value !== 'string') return false
   if (IPV4.test(value)) return value.split('.').every(octet => Number(octet) <= 255)
   return HOSTNAME.test(value)

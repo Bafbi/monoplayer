@@ -50,6 +50,10 @@
 // through, so a test hands in a fake and the route cannot tell it from the cluster.
 import { addressName, pickTarget } from '../../core/picker.js'
 import { ALLOWED_SERVERS_VERSION, addressKey, parseAllowedServers } from '../../service/control.js'
+// #890: the rules that judge a host and a port are the service's, so a value this route accepts is
+// one a lane can dial and the refusal is the sentence an operator reads at boot. That puts the
+// service's composition root on the panel's import graph for three pure functions, which
+// src/core/picker.js's header argues against (#889); #909 is the ticket that moves them beside it.
 import { addressSentence, hostRefusal, portRefusal } from '../../service/monoplayer.js'
 import { BODY_TOO_LARGE, readBody } from './body.js'
 import { configMapYaml } from './whitelist.js'
@@ -94,7 +98,9 @@ export function refusalText ({ reason: code, at = null }) {
   // else. This used to say a host had to be a hostname or an IPv4 address, which was never true
   // of the file a lane reads: a bare IPv6 host is one it dials.
   if (code === 'host') return where + '.host must name a host, and it is empty'
-  if (code === 'port') return where + '.port must be an integer between 1 and 65535'
+  // One rule, one sentence: `portRefusal` says the same thing about a port a caller sent, and an
+  // operator reading both on one page should not have to check whether they are two rules.
+  if (code === 'port') return where + '.port must be an integer from 1 to 65535'
   if (code === 'duplicate') return where + ' names an address an earlier entry already names'
   return where + ' cannot be read: ' + String(code)
 }
@@ -131,8 +137,11 @@ export function targetOf (raw) {
   const target = pickTarget(text)
   if (target === null) {
     return {
-      refusal: 'the address in the path must be host:port, with a host a dial can take and a port ' +
-        'from 1 to 65535, got ' + JSON.stringify(text)
+      // One string, so this cannot say which half broke the way the body can: it names both rules
+      // and quotes the value. `pickTarget` is the reader of the rule, and a string it cannot split
+      // is one where the port is as likely to be the typo as the host.
+      refusal: 'the address in the path is not host:port with a host a dial can take and a port from ' +
+        '1 to 65535, got ' + JSON.stringify(text)
     }
   }
   const hostReason = hostRefusal(target.host)

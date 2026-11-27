@@ -302,11 +302,11 @@ test('a fixture the panel cannot act on is refused by name', () => {
     [JSON.stringify({ ...base, allowed: { glowsquidye: {} } }),
       /allowed\["glowsquidye"\] names neither a live document nor a seed/],
     [JSON.stringify({ ...base, allowed: { glowsquidye: { document: { version: 1, servers: [{ host: 'paper.example.net', port: '25565' }] } } } }),
-      /allowed\["glowsquidye"\]\.document: servers\[0\]\.port must be an integer between 1 and 65535/],
+      /allowed\["glowsquidye"\]\.document: servers\[0\]\.port must be an integer from 1 to 65535/],
     // And the seed is judged by the same parser, so a recording cannot hold a fallback
     // the lane would refuse to read.
     [JSON.stringify({ ...base, allowed: { glowsquidye: { seed: { version: 1, servers: [{ host: 'paper.example.net', port: 70000 }] } } } }),
-      /allowed\["glowsquidye"\]\.seed: servers\[0\]\.port must be an integer between 1 and 65535/],
+      /allowed\["glowsquidye"\]\.seed: servers\[0\]\.port must be an integer from 1 to 65535/],
     [JSON.stringify({ ...base, allowed: { glowsquidye: { ...allowedFor('glowsquidye').glowsquidye, documents: {} } } }),
       /allowed\["glowsquidye"\] has the unknown key "documents"/]
   ]

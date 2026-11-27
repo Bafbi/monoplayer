@@ -38,29 +38,21 @@ const JOINS = [/\.host\)? \+ ':' \+/, /\$\{[^}]*\.host\}:\$\{[^}]*\.port\}/]
 // The split, which is the rule's other half and belongs where the rule is.
 const SPLIT = "lastIndexOf(':')"
 
-function walk (dir) {
-  const found = []
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
-      // What the browser loads is not a module this walk can judge.
-      if (entry.name === 'public') continue
-      found.push(...walk(full))
-    } else if (entry.name.endsWith('.js')) {
-      found.push(full)
-    }
-  }
-  return found
-}
-
-const modules = () => walk(PANEL).map(file => ({
-  name: path.relative(ROOT, file),
-  source: fs.readFileSync(file, 'utf8')
-}))
+// One listing call, not a walk of its own: test/panel/record-doc.test.js already reads this
+// directory, and two ways to descend it disagree the day one learns a shape the other does not.
+const modules = () => fs.readdirSync(PANEL, { recursive: true, encoding: 'utf8' })
+  .filter(file => file.endsWith('.js'))
+  // What the browser loads is not a module this scan can judge.
+  .filter(file => !file.startsWith('public' + path.sep))
+  .map(file => ({
+    name: path.join('src', 'panel', file),
+    source: fs.readFileSync(path.join(PANEL, file), 'utf8')
+  }))
 
 test('#890 no panel module joins a host and a port into an address itself', () => {
   const found = modules()
-  assert.ok(found.length >= 8, 'the walk found the panel modules, so this case is not vacuous')
+  assert.ok(found.some(module => module.name === 'src/panel/views/allowed.js'),
+    'the listing reached the view that draws a row, so this case is not vacuous')
   for (const { name, source } of found) {
     for (const join of JOINS) {
       assert.doesNotMatch(source, join,

@@ -510,11 +510,13 @@ was added, then the form that adds one.
   `[2001:db8::1]`, and `2001:db8::1:25565` hands it `2001:db8::1`. The route takes the
   bracket off before it asks the host rule, so both are one server, and it stores the bare
   host: a bracket belongs to the printed address.
-- **a refusal names the half that broke.** The route judges the host with the rule the
-  service boots on (`hostRefusal`) and the port with its own (`portRefusal`), so a host or
-  a port the panel refuses is one `--start` refuses too, in the same sentence. The answer
-  opens with `host` or `port`, which is the field to fix, and the page prints the sentence
-  whole behind the value that was sent. The shape an IPv6 host takes is learned there.
+- **a refusal names the half that broke.** The route judges the host with `hostRefusal` and
+  the port with `portRefusal`, the two rules the service asks at boot, so a value the panel
+  refuses is one `--start` refuses too, in the same sentence. An answer about the body opens
+  with `host` or `port`, the field to fix, and the page prints the sentence whole behind the
+  value that was sent. An address in a path is one string, so its answer names both rules
+  and quotes the value: nothing there can tell which half was the typo. An operator who
+  breaks the rule learns the shape from the sentence.
 - **removing asks twice.** The first press arms the button and sends nothing, the second
   sends the `DELETE`, and an arm nobody uses disarms after ten seconds. The arm is held by
   the page, keyed by the card and the row, because a tick replaces the row it sits in and one
@@ -557,11 +559,12 @@ field holds. A port is an integer from 1 to 65535. A body that sends `"25565"` a
 refused rather than coerced, so the file the lane reads never holds a port as a
 string.
 
-That is the whole of the rule, and it lives in `hostRefusal` and `portRefusal` in
-`src/service/monoplayer.js`: the panel calls them, it does not restate them. So the route
-accepts a host a `--start` accepts and refuses one it refuses, including a single label
-such as `paper`, which the pod's search domains can resolve. It also accepts an IPv4 shape
-with an octet out of range, which `hostRefusal` cannot tell from a numeric hostname.
+The rule itself is `hostRefusal` and `portRefusal` in `src/service/monoplayer.js`, which
+is what the panel calls: where this paragraph and that function disagree, the function is
+right and this paragraph is old. So the route accepts a host a `--start` accepts and
+refuses one it refuses, including a single label such as `paper`, which the pod's search
+domains can resolve. It also accepts an IPv4 shape with an octet out of range, which
+`hostRefusal` cannot tell from a numeric hostname.
 
 Those rules are what the route accepts on a **write**. A document already in the
 ConfigMap is read as written: the lane dials what the operator put there, so a host no
