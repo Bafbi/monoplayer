@@ -4,7 +4,7 @@
 
 import { CHANNEL_ROLES } from '../core/channels.js'
 import { createClaims } from '../core/claims.js'
-import { createCallInHandlers } from './call-in-handler.js'
+import { createCallInHandlers, sealCallIns } from './call-in-handler.js'
 
 // #886: each double keeps one handler per call-in through the guard the real legs import
 // (src/legs/call-in-handler.js), not a copy of it. Plain assignment let a service test plant
@@ -95,7 +95,10 @@ export function createFakeBackendLeg () {
     }
   }
 
-  return leg
+  // #918: the doubles seal in the same words the real legs do, for #886's reason one level
+  // along: a double a test can write a setter over is a double that answers a lane the real
+  // leg would throw at.
+  return sealCallIns(leg)
 }
 
 // Front leg recorder (fake): implements the interface createMonoplayer wires
@@ -276,5 +279,6 @@ export function createFakeFrontLeg () {
     },
   }
 
-  return leg
+  // #918: sealed at the double's own return, as src/legs/live-front.js's is.
+  return sealCallIns(leg)
 }

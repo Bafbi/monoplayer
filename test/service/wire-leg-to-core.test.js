@@ -293,8 +293,10 @@ function laneSources () {
 // The count is of a literal: `.setX(` reads a plain call and an optional one (`.setX(`,
 // `?.setX(`). A member reached through a computed name, or destructured off the leg, is outside
 // a count of source text, which is the trade the file's header names. An assignment over the
-// setter (`leg.setX = fn`) is outside it too, and it also walks past the refusal #824 gave every
-// call-in, so that spelling is #918 rather than a sentence here.
+// setter (`leg.setX = fn`) is outside it too, and this count still cannot see one. #918 is why
+// that spelling is no longer a hole: a leg seals every call-in setter non-writable at its own
+// return (src/legs/call-in-handler.js), and test/legs/call-in-slots.test.js is where the write
+// and the descriptor are refused.
 function handRegistrations (rows, lanes, excused) {
   const wrong = []
   for (const { name } of rows) {
@@ -771,9 +773,11 @@ test('#592 a leg with a hole is named on the start record', () => {
     getSnapshotConfig: () => [],
     wireMode: 'off'
   })
-  const holey = new Proxy(leg, {
-    get (target, name) { return name === 'setBodyServed' ? undefined : target[name] }
-  })
+  // #918: a leg's call-in setters are non-configurable now, and a proxy may not report a
+  // non-configurable own member as absent. So the hole is a member the leg's own prototype
+  // answers and this object shadows with nothing, which is what a leg without that row carries.
+  // The leg stays the real one underneath, so its own getters answer as they always did.
+  const holey = Object.create(leg, { setBodyServed: { value: undefined } })
   const lines = []
   const core = createMonoplayer({
     config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),

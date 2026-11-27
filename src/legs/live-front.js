@@ -94,7 +94,7 @@
 import mc from 'minecraft-protocol'
 
 import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
-import { createCallInHandlers } from './call-in-handler.js'
+import { createCallInHandlers, sealCallIns } from './call-in-handler.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { pickTextures } from '../core/skin.js'
@@ -2946,7 +2946,9 @@ function createFrontLeg ({
     return sent
   }
 
-  return {
+  // #918: sealed at the one return that hands a front leg out, real or offline (both build
+  // here), so a lane cannot write over a call-in setter and take the core's handler with it.
+  return sealCallIns({
     kind,
     listen,
 
@@ -3079,7 +3081,7 @@ function createFrontLeg ({
       })
       return closePromise
     }
-  }
+  })
 }
 
 // #618: the textures property on the profile an account's hasJoined answered with,

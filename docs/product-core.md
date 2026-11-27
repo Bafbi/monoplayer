@@ -995,9 +995,10 @@ preAuthStats
 ```
 
 A row the core registers is a call-in, and a call-in holds one handler. Its setter refuses
-the second registration. `src/service/wire-leg-to-core.js` says which registration reaches a
-call-in and what each one costs (#824). `src/legs/call-in-handler.js` is where a leg refuses
-the second. A lane that builds a leg no core is handed registers on it directly.
+the second registration, and the member holding that setter cannot be written over (#918).
+`src/service/wire-leg-to-core.js` says which registration reaches a call-in and what each one
+costs (#824). `src/legs/call-in-handler.js` is where a leg refuses the second and where it
+seals the member. A lane that builds a leg no core is handed registers on it directly.
 
 Three members are left for the blocks below, and a row cannot name any of them. A
 reading is a value rather than a method: `channels` is the board of connections a body
