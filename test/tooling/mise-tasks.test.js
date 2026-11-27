@@ -7,8 +7,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 import { loadLadder } from '../../src/ladder/next-rung.js'
+import { tempRoot } from '../support/temp.js'
 import { readMiseTasks } from './mise-toml.js'
 
 const AREAS = ['relay', 'custody', 'driver', 'deploy']
@@ -224,4 +228,78 @@ test('the lint rung resolves every identifier its files read, not only their syn
 
   const config = fs.readFileSync(new URL('../../eslint.config.js', import.meta.url), 'utf8')
   assert.match(config, /'no-undef': 'error'/, 'no-undef is the rule that catches a read of a name no scope declares')
+})
+
+// #846. `pnpm exec eslint` with no file list parses every `.js` and `.mjs` under
+// #846. `pnpm exec eslint` with no file list parses every `.js` and `.mjs` under
+// the working directory, gitignored or not. A throwaway script under `.scratch/`
+// is the placement AGENTS.md asks for, so one of those failed the gate for every
+// worktree of the clone. The stage is handed the files git owns instead.
+// The fixture is a temp repo, never a scratch file in this one: a test that
+// litters the working directory is the defect it is testing.
+test('the lint rung resolves the files git owns, not every file under the working directory (#846)', () => {
+  const resolveStage = tasks
+    .get('lint')
+    .body
+    .match(/git ls-files[^|\n]*\|\s*xargs -0[^\n]*pnpm exec eslint[^\n]*/)
+  assert.ok(resolveStage, 'the resolve stage is handed a file list, because a bare pnpm exec eslint walks the working directory')
+
+  // A command's NUL-separated output, as a list. Both lists below come from one.
+  const nulList = (command, cwd) => spawnSync('bash', ['-c', command], { cwd })
+    .stdout.toString()
+    .split('\0')
+    .filter(Boolean)
+
+  const dir = tempRoot('monoplayer-lint-scope-')
+  const write = (name, body) => {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true })
+    fs.writeFileSync(path.join(dir, name), body)
+  }
+  const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' })
+
+  git('init', '--quiet')
+  write('.gitignore', '.scratch/\n')
+  write('src/tracked.js', 'export const tracked = 1\n')
+  write('test/added-later.js', 'export const later = 1\n')
+  write('.scratch/throwaway.js', 'function a() {\n  if (x) {\n')
+  git('add', '.gitignore', 'src/tracked.js')
+
+  const [listCommand] = resolveStage[0].match(/git ls-files[^|\n]*/)
+  const listed = nulList(listCommand, dir)
+
+  assert.ok(listed.includes('src/tracked.js'), 'a tracked source file is resolved')
+  assert.ok(listed.includes('test/added-later.js'), 'a new source file is resolved before anyone commits it')
+  assert.deepEqual(
+    listed.filter(name => name.startsWith('.scratch/')),
+    [],
+    'a throwaway script under .scratch/ is not resolved, so it cannot fail the gate'
+  )
+
+  // The flags the stage needs, each load-bearing. Measured:
+  // `printf '' | xargs printf 'ran\n'` prints `ran` and exits 0, so `-r` is what
+  // stops an empty list from becoming the bare walk this change removes.
+  // `eslint gone.js` exits 2 with "No files matching the pattern", and `--cached`
+  // still lists a file deleted in the working tree before the deletion is staged.
+  assert.match(resolveStage[0], /xargs -0 -r\b/, 'an empty list runs nothing instead of every file under the working directory')
+  assert.match(resolveStage[0], /--no-error-on-unmatched-pattern/, 'a file deleted but still indexed does not fail the run')
+  assert.match(resolveStage[0], /--no-warn-ignored/, 'a file git owns that the config ignores does not warn on every run')
+  const eslintArguments = resolveStage[0].match(/pnpm exec eslint([^)]*)/)[1].split(/\s+/).filter(Boolean)
+  assert.deepEqual(
+    eslintArguments.filter(argument => !argument.startsWith('--')),
+    [],
+    'eslint is handed the list and nothing else, so a path argument cannot add the working directory back'
+  )
+
+  // The change swaps a whole-tree walk for a list, so its own risk is a list
+  // narrower than the walk it replaced. Every tracked file under the three
+  // directories the parse stage walks has to be on it.
+  const root = fileURLToPath(new URL('../..', import.meta.url))
+  const resolved = nulList(listCommand, root)
+  const walked = nulList('git ls-files -z -- src test tools', root).filter(name => /\.m?js$/.test(name))
+
+  assert.deepEqual(
+    walked.filter(name => !resolved.includes(name)),
+    [],
+    'every tracked file the parse stage reads is on the resolve stage list'
+  )
 })
