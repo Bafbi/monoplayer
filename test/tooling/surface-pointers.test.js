@@ -46,12 +46,12 @@
 // read. One is a backticked identifier with a path beside it, as 'x in path' or 'x (path)':
 // the file has to declare the identifier. The other is a quoted section title beside a page,
 // as '"title" in page': the page has to hold a heading with the title in it, which is the
-// shape a section rename breaks; a page named first with its title in a parenthesis is the
-// same claim the other way round, and it is not read. A sentence that names a module and no
-// identifier is not read, and neither is an identifier with no path beside it, because
-// deciding which sentence names the right module is a reviewer's call and not a parse. What is compared is names: a
-// row that points at a file which exists and no longer holds the fact is stale in a way
-// nothing here can see.
+// shape a section rename breaks. A page named first, with its title after a comma or in a
+// parenthesis, is the same claim the other way round, and it is read too (#965). A sentence
+// that names a module and no identifier is not read, and neither is an identifier with no path
+// beside it, because deciding which sentence names the right module is a reviewer's call and
+// not a parse. What is compared is names: a row that points at a file which exists and no
+// longer holds the fact is stale in a way nothing here can see.
 //
 // A name with no extension is neither a path nor a bare name to this file: `Dockerfile` in a
 // sentence is a word, and a rename of it stays green. So does a path inside a package the
@@ -382,18 +382,47 @@ const resolve = (token, block) => {
   return nearby(token, block)
 }
 
-// The page shape: a quoted section title beside a page, as '"title" in docs/page.md'. The
-// page has to hold a heading with the title in it, because the sentence sends a reader to a
-// section and not to the page, and a heading may carry a parenthetical after the title.
+// The page shape: a quoted section title beside a page, in either order. The page has to hold a
+// heading with the title in it, because the sentence sends a reader to a section and not to the
+// page, and a heading may carry a parenthetical after the title.
 //
 // A comment that sends a reader to two sections of one page writes both titles before the one
-// page: '"Backend matrix" and "Pins that matter" in docs/driver-lane-plan.md'. The run of titles
+// page: '"Backend matrix" and "Pins that matter" in `docs/driver-lane-plan.md`'. The run of titles
 // is one claim about one page, so every title in it is asked for; reading only the last would
 // leave the first heading free to be renamed (#957).
-const SECTION = /((?:"[^"]{3,}"(?:\s*(?:,|and)\s*)?)+)\s+(?:in|of|under)\s+`([^\s`]+\.md)`/g
+//
+// A title after the page is the same claim the other way round, as '`docs/telemetry.md`, under
+// "The per-body and per-channel groups"' or 'docs/driver-lane.md ("Reaching the dev lane")'.
+// #957 rewrote the five sentences written that way and left the grammar that missed them, so the
+// class stayed open (#965). The separator is a comma, an opening parenthesis, or a comma and the
+// connector word the sentence keeps, as in '`page`, under "title"'. The page may stand as prose,
+// because the shape this reads is the one a sentence writes. A page followed by prose and then a
+// quotation is not a section pointer: the header of src/legs/live-front.js writes
+// 'docs/telemetry.md says the reason is "..."', and no heading holds that sentence.
+const PAGE = '[\\w][\\w./-]*\\.md'
+const TITLES = '(?:"[^"]{3,}"(?:\\s*(?:,|and)\\s*)?)+'
+const SECTION = new RegExp('(' + TITLES + ')\\s+(?:in|of|under)\\s+`(' + PAGE + ')`', 'g')
+const SECTION_PAGE_FIRST = new RegExp('`?(' + PAGE + ')`?\\s*(?:,\\s*(?:(?:in|of|under)\\s+)?|\\(\\s*)(' + TITLES + ')', 'g')
 const titlesOf = run => [...run.matchAll(/"([^"]{3,})"/g)].map(match => match[1])
 const headlined = (page, title) => read(page).split('\n')
   .some(line => /^#{1,6}\s/.test(line) && line.includes(title))
+
+// One block's page pointers: how many titles it asks a page for, and the ones the page does not
+// hold. The case below drives this with a block it builds, because the tree writes one page-first
+// pointer and one instance cannot hold the arm.
+function sectionsOf (block) {
+  const out = { followed: 0, wrong: [] }
+  const claim = (page, run, at) => {
+    if (!fs.existsSync(path.join(ROOT, page))) return
+    for (const title of titlesOf(run)) {
+      out.followed += 1
+      if (!headlined(page, title)) out.wrong.push(where(block, at) + ' names the section "' + title + '" of ' + page)
+    }
+  }
+  for (const match of block.text.matchAll(SECTION)) claim(match[2], match[1], match.index)
+  for (const match of block.text.matchAll(SECTION_PAGE_FIRST)) claim(match[1], match[2], match.index)
+  return out
+}
 
 function scan () {
   const counts = {
@@ -430,14 +459,9 @@ function scan () {
         else if (kind !== 'word') counts[kind] += 1
         else counts.word += 1
       }
-      for (const match of block.text.matchAll(SECTION)) {
-        const [, run, page] = match
-        if (!fs.existsSync(path.join(ROOT, page))) continue
-        for (const title of titlesOf(run)) {
-          counts.section += 1
-          if (!headlined(page, title)) sections.push(where(block, match.index) + ' names the section "' + title + '" of ' + page)
-        }
-      }
+      const held = sectionsOf(block)
+      counts.section += held.followed
+      sections.push(...held.wrong)
       for (const match of block.text.matchAll(SYMBOL)) {
         const name = match[1]
         const at = resolve(match[2] ?? match[3], block)
@@ -488,6 +512,52 @@ test('a section a surface names is a heading in the page it names', () => {
   assert.deepEqual(sections, [], 'a surface sends a reader to a section a page does not have:\n- ' +
     sections.join('\n- ') +
     '\nName the heading that is there, or point at the file and let the page hold its own headings')
+})
+
+// A comment this file builds rather than reads. `headlined` opens the page itself, so the page is
+// real and the title is one it holds or one it does not.
+const blockOf = (file, text) => ({ file, kind: 'comment', text, lineOf: new Array(text.length + 1).fill(1) })
+
+// The page-first arm is held here, not by the tree's one instance. Rewrite that sentence
+// (src/service/start-live.js) and the arm is dead code no case reads, which is the coverage #965
+// was filed for. Every title below is a heading of a real page, except the one the case asserts is
+// missing, and the last two statements must not fire at all.
+test('a page named first is read for its heading, in a parenthesis or after a comma', () => {
+  const page = 'docs/telemetry.md'
+  const title = 'The per-body and per-channel groups'
+  const says = text => sectionsOf(blockOf('src/service/start-live.js', text))
+
+  const comma = says('`' + page + '`, under "' + title + '", defines every field below')
+  assert.equal(comma.followed, 1, 'a page named first with its title after a comma is one section ' +
+    'pointer, and this file reads it: ' + JSON.stringify(comma))
+  assert.deepEqual(comma.wrong, [], 'the page holds that heading, so the pointer is not a failure')
+
+  const parenthesis = says(page + ' ("' + title + '")')
+  assert.equal(parenthesis.followed, 1, 'a page named first with its title in a parenthesis is the ' +
+    'same claim the other way round, and this file reads it: ' + JSON.stringify(parenthesis))
+
+  const two = says('`' + page + '`, "' + title + '" and "The heartbeat record"')
+  assert.equal(two.followed, 2, 'a run of titles after one page is one claim about that page, so ' +
+    'both headings are asked for: ' + JSON.stringify(two))
+  assert.deepEqual(two.wrong, [], 'both titles are headings of that page, so neither is a failure')
+
+  const missing = says('`' + page + '`, "No heading in this page"')
+  assert.equal(missing.wrong.length, 1, 'a page named first is read for the heading it names, so a ' +
+    'title the page does not hold fails here: ' + JSON.stringify(missing))
+  assert.match(missing.wrong[0], /names the section "No heading in this page" of docs\/telemetry\.md/,
+    'the failure names the title and the page it is missing from')
+
+  const noTitle = says('`' + page + '` is where those groups are defined')
+  assert.equal(noTitle.followed, 0, 'a page with no title beside it is not a section pointer: ' +
+    JSON.stringify(noTitle))
+
+  const prose = says(page + ' says the reason is "the body\'s configuration replay wrote no frame"')
+  assert.equal(prose.followed, 0, 'the words between a page and a quotation are not a separator: ' +
+    JSON.stringify(prose))
+
+  const aside = says(page + ', and the note "that number is not a measurement" is beside it')
+  assert.equal(aside.followed, 0, 'a comma and prose before a quotation is not a separator either, ' +
+    'unless that prose is the connector in, of or under: ' + JSON.stringify(aside))
 })
 
 // An entry that outlives the token it explains is the same stale pointer one table over, so the
@@ -625,8 +695,9 @@ test('the guard reads all three surfaces, a path, a bare name, a nearby path and
   assert.ok(counts.symbol >= 5, 'the surfaces name ' + counts.symbol + ' identifiers beside a path, and ' +
     'this file reads them: a sentence reworded to name no identifier is one the shape cannot follow, ' +
     'so name the identifier beside its path again')
-  assert.ok(counts.section >= 1, 'the surfaces name ' + counts.section + ' sections beside a page, and this ' +
-    'file reads them: "title" in a page is the shape a section rename breaks, so quote the heading')
+  assert.ok(counts.section >= 5, 'the surfaces name ' + counts.section + ' sections beside a page, and this ' +
+    'file reads them in either order: "title" in a page is the shape a section rename breaks, and so is ' +
+    'a page with the title after it. Quote the heading, and raise this floor when you add one')
   if (process.env.POINTER_COUNTS) {
     console.log('pointers: ' + JSON.stringify(counts))
     console.log('followed: ' + (counts.path + counts.beside + counts.key + counts.symbol + counts.section) +
