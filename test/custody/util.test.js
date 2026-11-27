@@ -1,10 +1,10 @@
-// The one home for "can a Mojang session ever answer for this uuid" (#703, and #704's
-// interim home while that ticket is open). The panel's write route asks it, and the dev
-// lane's report and its guard spell the same rule by hand until #703 brings them here.
-// Mojang issues version 4, and a version-3 uuid is Java's nameUUIDFromBytes over
-// `OfflinePlayer:<name>`.
+// The one home for "can a Mojang session ever answer for this uuid" (#703). The panel's
+// write route asks it, and the dev lane's report and its guard ask it too, so the three
+// readers hold one rule. The cases below are what the rule can and cannot settle: the
+// last one is the edge, and it is here so nobody reads the predicate as proof.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 
 import { normalizeUuid, uuidRefusalReason, uuidVersion } from '../../src/custody/util.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
@@ -61,4 +61,17 @@ test('a string that is not a uuid is refused rather than answered as usable', ()
   for (const notAUuid of ['', 'nope', '6eb73524-ff88-4a62-a8d0', null, undefined, 42]) {
     assert.match(uuidRefusalReason(notAUuid), /not a uuid/, JSON.stringify(notAUuid))
   }
+})
+
+test('a version-4 uuid that is the bare md5 of a name is admitted, and that is the edge', () => {
+  // The edge the docstring names, pinned so nobody reads the predicate as proof: the bare
+  // md5 of a name, whose thirteenth digit happens to be 4, is admitted. Java stamps the
+  // version into `offlineUuid`, so the name check compares a different string.
+  const bareMd5 = name => normalizeUuid(
+    createHash('md5').update('OfflinePlayer:' + name, 'utf8').digest('hex'))
+  const fabricated = bareMd5('Charlie')
+  assert.equal(uuidVersion(fabricated), 4, 'the fixture is only this case if its own digest carries a 4')
+  assert.notEqual(offlineUuid('Charlie'), fabricated, 'Java stamps the version, so the derived value is another uuid')
+  assert.equal(uuidRefusalReason(fabricated), null, 'so it is admitted: this is a shape check, not a proof')
+  assert.equal(uuidRefusalReason(fabricated, 'Charlie'), null, 'and having the name does not close it')
 })

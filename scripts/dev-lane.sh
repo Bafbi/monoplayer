@@ -171,17 +171,13 @@ whitelist_is_empty() {
 
 # An entry the lane can never admit: the dev front verifies every login against Mojang
 # (deploy/dev/monoplayer.yaml composes no offline legs), and no Mojang account holds a
-# UUID derived from a name. That is Java's nameUUIDFromBytes: `md5("OfflinePlayer:<name>")`
-# with the version nibble set to 3 (src/legs/offline-identity.js), and Mojang issues
-# version 4, so version is the whole test and the name-derived one is a case of it. The
-# loopback rig builds its own controller list from exactly those UUIDs
+# UUID derived from a name. `uuidRefusalReason` in src/custody/util.js answers it (#677,
+# #703), and its docstring says what the answer settles and what it cannot.
+#
+# The loopback rig builds its own controller list from exactly those UUIDs
 # (`pickerWhitelist`, src/ladder/loopback.js), which is how the shape reaches a lane
 # somebody hand-edited: a rig name in a control document is a controller that admits
 # nobody, and a count of entries cannot see it (#677).
-#
-# What a version-4 UUID is: necessary. A mistyped version-4 UUID is still unusable, and
-# answering that needs Mojang, which this command never asks. So a line here says the
-# shape can be answered for, not that the account behind it exists.
 #
 # One program, because reading this document has one home and three callers. `report`
 # prints a verdict per entry, which is what `status` shows. `prune` writes the document
@@ -191,35 +187,18 @@ whitelist_is_empty() {
 # says which list an apply replaced. `up` is the writer, so `up` removes them.
 whitelist_judgement() {
   cat <<'NODE'
-const { offlineUuid } = await import(process.env.ROOT + '/src/legs/offline-identity.js')
+const { uuidRefusalReason } = await import(process.env.ROOT + '/src/custody/util.js')
 // `node -e` hands the extra words in argv[1..], with no script path in front of them.
 const [mode, document] = process.argv.slice(1)
 
 const label = player => (typeof player?.name === 'string' && player.name !== '' ? player.name : '(no name)')
 const uuidOf = player => String(player?.uuid ?? '')
 
-// A UUID's version is the thirteenth hex digit, and both spellings the repo's parser
-// accepts have to be read the same way: an entry written without dashes is a login the
-// custody store already takes (src/custody/util.js, normalizeUuid).
-const hex = player => uuidOf(player).toLowerCase().replace(/-/g, '')
-
 // Why no Mojang session can answer for this entry, or null when nothing about its shape
-// stops it. The name is read first, so the line can name the string that was hashed; the
-// version then answers the entry whose name was edited after it was made.
-function refusal (player) {
-  const digits = hex(player)
-  const name = typeof player?.name === 'string' && player.name !== '' ? player.name : null
-  if (!/^[0-9a-f]{32}$/.test(digits)) {
-    return 'it is not a uuid, so no login can match it'
-  }
-  if (name !== null && offlineUuid(name).toLowerCase().replace(/-/g, '') === digits) {
-    return 'its uuid is md5("OfflinePlayer:' + name + '"), so no Mojang session answers for it'
-  }
-  if (digits.charAt(12) !== '4') {
-    return 'a version-' + digits.charAt(12) + ' uuid is not one Mojang issues, so no Mojang session answers for it'
-  }
-  return null
-}
+// stops it. `uuidRefusalReason` answers it, in the module that accepts both spellings a
+// document may carry, so this file judges nothing itself (#703). The name goes with the
+// uuid because it is what makes the answer name the hashed string rather than the version.
+const refusal = player => uuidRefusalReason(uuidOf(player), player?.name)
 
 // A document this program could not read is said out loud: answering "no entries" to it
 // is how a broken control document reads as a lane with nothing to fix.

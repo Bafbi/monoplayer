@@ -20,7 +20,8 @@ export function normalizeUuid (raw) {
 }
 
 // The version a UUID carries, read from either spelling, or null when the string is
-// not a UUID at all.
+// not a UUID at all. `uuidRefusalReason` below is the answer callers want; this is the
+// fact it reads.
 //
 // Mojang issues version 4, and nothing else: every uuid the profile endpoints answer
 // carries a 4 in this position. Version 3 is Java's UUID.nameUUIDFromBytes over
@@ -34,14 +35,21 @@ export function uuidVersion (raw) {
 }
 
 // Why no Mojang session can ever answer for this uuid, or null when nothing about its
-// shape stops one. It is the rule the panel's write route asks of every add. The dev
-// lane's report and its guard spell the same rule by hand (`scripts/dev-lane.sh`,
-// `test/tooling/dev-lane.test.js`), and #703 is where those come to call this.
+// shape stops one. It is the rule the panel's write route asks of every add, and the dev
+// lane's report and its guard ask of every entry (`scripts/dev-lane.sh`,
+// `test/tooling/dev-lane.test.js`), so the rule has one spelling (#703).
 //
 // The version is necessary and not sufficient. Mojang issues version 4 and nothing
 // else, and version 3 is Java's UUID.nameUUIDFromBytes over `OfflinePlayer:<name>`, so
 // a derived uuid is refused here. A version-4 uuid a caller mistyped is still
 // admitted, because nothing here asks Mojang. Only a login tells the two apart.
+//
+// The name-derived check has the same edge, and it is worth naming because it looks
+// tighter than it is. Java overwrites the version digit with 3 after the digest, so the
+// bare md5 of `OfflinePlayer:<name>` is a different string, and one whose thirteenth
+// digit happens to be 4 is admitted: the name check compares the stamped value and finds
+// another uuid, and the version check reads 4. Nothing here can tell it from an issued
+// one either.
 //
 // The name is optional and is used only when the caller has one. A uuid a request
 // supplied arrives with no name, so the version is the whole check there. An entry in

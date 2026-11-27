@@ -505,11 +505,12 @@ An empty whitelist denies every login. It does not stop the lane: `--start` logs
 The whitelist says who may control the proxy, not a token, and the dev lane
 serves the same human.
 
-Every entry has to be a UUID a Mojang session answers for, and Mojang issues one
-version: 4. A version-3 UUID is Java's `nameUUIDFromBytes` of `OfflinePlayer:<name>`
-(`src/legs/offline-identity.js`), which is what a lane with no authentication mints —
-the shape the loopback rig's own controller list carries, for the names its bots use.
-No account owns one.
+Every entry has to be a UUID a Mojang session answers for. `uuidRefusalReason` in
+`src/custody/util.js` is that rule, and its docstring says what the answer settles and what
+it cannot. A lane with no authentication mints a
+UUID from a name instead (`offlineUuid`, `src/legs/offline-identity.js`), which is the
+shape the loopback rig's own controller list carries, for the names its bots use. No
+account owns one.
 
 `mise run dev:up` judges every list it writes: the document in the manifest, the list
 the lane held, and the one it copies from the live lane. It leaves out every entry no

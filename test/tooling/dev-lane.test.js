@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { tempRoot } from '../support/temp.js'
 import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
+import { uuidRefusalReason } from '../../src/custody/util.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
@@ -535,6 +536,25 @@ test('status judges a uuid by its version, whichever spelling it is written in',
   assert.match(output, /Garbage not-a-uuid cannot authenticate: it is not a uuid, so no login can match it/)
 })
 
+test('status reads a padded uuid the way the custody store does', () => {
+  // #703, and the one behaviour the old copy got wrong in the direction that loses an
+  // entry: it lowercased and de-dashed the string without trimming it, so an entry a login
+  // can use was dropped here and by `dev:up`'s prune. `normalizeUuid` trims
+  // (src/custody/util.js), and the store (src/custody/store.js) and the panel
+  // (src/panel/routes/whitelist.js) both parse entries through it, so a hand-edited
+  // document now reads the same way in all three. deploy/dev/README.md tells the operator
+  // to edit the ConfigMap, which is where a stray space comes from.
+  const space = workspace()
+  const document = JSON.stringify({
+    version: 1,
+    players: [{ uuid: ' 6eb73524-ff88-4a62-a8d0-c63905e7afba ', name: 'Bafbi' }]
+  })
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), document + '\n')
+  const { status, output } = run(space, ['status'])
+  assert.equal(status, 0, output)
+  assert.match(output, /attach whitelist names 1 entry, and it can authenticate/, output)
+})
+
 test('status does not report a document it could not read as an empty list', () => {
   // The read answered, and the answer was not a document. Saying "names 0 entries" here is
   // the same defect as the count this ticket is about: a lane reported as fine because
@@ -835,11 +855,12 @@ test('no committed attach whitelist names a uuid derived from its own name', () 
   // is read here, because the dev lane's is the one an edit reaches the lane through and
   // the live one is what the dev seed copies.
   //
-  // A version-3 UUID is Java's nameUUIDFromBytes, the value src/legs/offline-identity.js
-  // computes, and Mojang issues version 4: this front's library verifies each login against
-  // Mojang (online-mode hasJoined, then src/custody/attach.js `checkVerified`), so a
-  // name-derived entry can never attach. The offline legs are the lane where one belongs
-  // (GLOSSARY.md, "test-double lane"), and no manifest here composes them.
+  // The rule is `uuidRefusalReason` in src/custody/util.js: this front verifies each login
+  // against Mojang (online-mode hasJoined, then src/custody/attach.js `checkVerified`), so
+  // an entry no Mojang session answers for can never attach. The offline legs are the lane
+  // where a name-derived uuid belongs (GLOSSARY.md, "test-double lane"), and no manifest
+  // here composes them. This case asks that function rather than spelling any part of the
+  // rule a second time (#703).
   //
   // What this case does not carry: the dev document is empty, so the loop below reads one
   // entry in the tree today. The teeth are the fixture cases above, which run the script
@@ -850,23 +871,64 @@ test('no committed attach whitelist names a uuid derived from its own name', () 
     const document = JSON.parse(whitelistText(fs.readFileSync(path.join(ROOT, file), 'utf8')))
     assert.ok(Array.isArray(document.players), file + ' declares the player array')
     for (const player of document.players) {
-      // The version is the thirteenth hex digit, so the dashes come off first: the custody
-      // store takes either spelling (src/custody/util.js, normalizeUuid), and reading the
-      // dashed index alone lets an entry written without them through.
-      const digits = String(player.uuid ?? '').toLowerCase().replace(/-/g, '')
-      assert.match(digits, /^[0-9a-f]{32}$/, file + ' names ' + player.name + ' with something that is not a uuid')
-      assert.equal(digits.charAt(12), '4',
-        file + ' names ' + player.name + ' with a version-' + digits.charAt(12) + ' uuid, and this lane can only be logged into by a version 4 one: a name-derived one is the loopback rig\'s (#677)')
-      if (typeof player.name === 'string' && player.name !== '') {
-        assert.notEqual(digits, offlineUuid(player.name).toLowerCase().replace(/-/g, ''),
-          file + ' names md5("OfflinePlayer:' + player.name + '"), the entry #677 found')
-      }
+      // One answer, from the module that owns it: the shape, the version the uuid carries,
+      // and the md5 of the entry's own name are one refusal, not three checks. A reader
+      // that spells one of them here is the second rule #677 paid for (#703).
+      const name = typeof player.name === 'string' && player.name !== '' ? player.name : null
+      const refused = uuidRefusalReason(player.uuid, name)
+      assert.equal(refused, null,
+        file + ' names ' + player.name + ' ' + player.uuid + ', and no Mojang session answers for it: ' + refused + ' (#677)')
     }
   }
   for (const { name, text } of manifests()) {
     assert.doesNotMatch(text, /MONOPLAYER_OFFLINE_LEGS/,
       name + ' composes the offline legs, which is the one lane a name-derived uuid belongs to: docs/deployment.md')
   }
+})
+
+test('the uuid predicate has one home, and every reader asks it', () => {
+  // #703: three places decided whether an attach-whitelist uuid can be authenticated, and
+  // each spelled the version itself. `scripts/dev-lane.sh` read the thirteenth digit of
+  // the digits, this file read the same digit at a different index, and a reader that reads
+  // one spelling lets an entry written in the other through. This case holds each of them
+  // to the one home: a reader that spells the version again is the defect, and it is
+  // cheaper to see here than in a run.
+  //
+  // A version check is one of three shapes (an index, a `charAt`, or a comparison against
+  // the number), so all three are refused rather than the spelling the tree uses today.
+  const script = fs.readFileSync(SCRIPT, 'utf8')
+  assert.match(script, /await import\([^\n]*\/src\/custody\/util\.js['"]?\)/,
+    'dev-lane.sh imports the judgement from the custody module')
+  assert.match(script, /uuidRefusalReason\(/, 'and calls it, rather than naming it in a comment')
+  assert.doesNotMatch(script, /charAt\(|[!=]==\s*["']4["']|[!=]==\s*4\b/,
+    'and reads no version of its own: the digit sits at a different index in each spelling, which is how one reader let an undashed uuid through')
+  assert.doesNotMatch(script, /\^\[0-9a-f\]\{32\}\$/,
+    'and checks no shape of its own: normalizeUuid is the reader that knows both spellings')
+  assert.doesNotMatch(script, /offlineUuid\(/,
+    'and hashes no name of its own: the name-derived case is part of the same answer, not a second rule')
+
+  // This file is a reader too, and a guard is the easiest place to spell the rule again.
+  const own = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')
+  assert.match(own, /uuidRefusalReason\(/, 'this file asks the same function')
+  assert.doesNotMatch(own, /charAt\(|[!=]==\s*["']4["']|[!=]==\s*4\b/, 'and reads no version itself')
+
+  // The panel route, which #704 already pointed at the function.
+  const panel = fs.readFileSync(path.join(ROOT, 'src', 'panel', 'routes', 'whitelist.js'), 'utf8')
+  assert.match(panel, /uuidRefusalReason\(/, 'the panel route asks it too')
+  assert.doesNotMatch(panel, /charAt\(|[!=]==\s*["']4["']|[!=]==\s*4\b/, 'and reads no version itself')
+
+  // The runbook is a reader too, and it was one of the three places that stated the rule
+  // in prose (#703). A pointer nothing checks is the copy that drifts, so the section that
+  // carries the rule is held to the function the way the code is.
+  const runbook = fs.readFileSync(path.join(DEV, 'README.md'), 'utf8')
+  const start = runbook.indexOf('## The attach whitelist')
+  assert.ok(start >= 0, 'deploy/dev/README.md keeps the section that carries the rule')
+  const next = runbook.indexOf('\n## ', start + 1)
+  const rules = runbook.slice(start, next === -1 ? runbook.length : next)
+  assert.match(rules, /uuidRefusalReason/, 'the section names the function, so a reader checks the code rather than trusting the page')
+  assert.match(rules, /src\/custody\/util\.js/, 'and the file it lives in')
+  assert.doesNotMatch(rules, /nameUUIDFromBytes|version 4|version-4/,
+    'and states no version of its own: the docstring is where the versions are written down')
 })
 
 test('set-image puts the branch image on the dev proxy only', () => {
