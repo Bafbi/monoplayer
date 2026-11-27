@@ -737,10 +737,10 @@ test('#887 a start() the wiring refused leaves a core a second start() asks agai
     'the wiring refuses on the call-in the lane filled, which is the report #824 exists for')
   assert.equal(core.started, false,
     'the flag says the legs are wired, and they are not: it is set after the wiring, so a refused registration leaves it false')
-  assert.equal(core.legWiring, null,
-    'and no report is published, because the two legs were not both wired')
+  // #894 took the wiring report off the handle, so the start record is what a reader
+  // has left of it: a refused start writes none.
   assert.deepEqual(lines.filter(line => line.event === 'start'), [],
-    'nor does a start record claim a start that did not happen')
+    'and no start record claims a start that did not happen')
 
   assert.throws(() => core.start(), /already holds a handler/,
     'a second start() asks again, instead of returning at the guard on a core with no call-ins. It cannot converge: ' +
