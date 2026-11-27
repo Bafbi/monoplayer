@@ -20,8 +20,7 @@
 // all and the journal's policy drops the move frame this proof needs.
 //
 // What it reads: `RECORDS`, the one list of the records a run is made of. The table in the
-// runbook is held to it by `test/driver/dev-proof.test.js`, in the case named "every record the
-// reader relies on is one the runbook names and a leg writes", so the two cannot drift.
+// runbook is held to it by `test/driver/dev-proof.test.js`, so the two cannot drift.
 //
 // The two halves. `claimsOf` answers the claims a machine can. The other half —
 // `OPERATOR_STEPS`, what a person must see — is never answered here: `witnessDocument` writes
