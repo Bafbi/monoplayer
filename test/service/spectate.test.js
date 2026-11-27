@@ -8,10 +8,19 @@
 // The rule this file pins (#259): any client the lane's identity gate admitted may
 // watch any body the lane serves and has up, whether or not a driver holds it, and
 // no dial is made for a spectator.
+//
+// A second seam, for #737: the last case reads two files as they stand,
+// docs/telemetry.md and the log('spectateView', ...) call in src/service/monoplayer.js,
+// because what that record's fields mean is a fact the page owns and nothing else compares
+// the two. It reads text and no behaviour; every case above it drives the fake legs.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { pickSlug } from '../../src/core/picker.js'
+import { synthAttach } from '../../src/core/join-synth.js'
 import { makeCore } from '../support/harness.js'
 
 // The body a claim dials: a server that is not the lane's configured backend, so
@@ -675,3 +684,217 @@ test('#685 a landing handed a property the builder refuses is announced without 
     .map(frame => frame.packet.objectUUID)
   assert.ok(spawned.includes(WATCHER), 'and the body it belongs to is still spawned')
 })
+
+// --- #737: what the landing's record counts -------------------------------------------
+//
+// #717 fixed the attach record so its two numbers are disjoint: `replayed` is the cached
+// frames a socket took, `refused` is every frame it did not. The landing kept the older
+// pair, where `replayed` was what the replay built and `frames` was what a socket took,
+// so one word meant two things across the two records (#737).
+//
+// Seam: the `spectateView` record, the landing's return value, and the core's log, on the
+// fake legs (test/support/harness.js). A case refuses a frame by replacing one method on
+// the fake front leg — the shape test/service/replay-refused.test.js uses, and the answer
+// src/legs/live-front.js gives when it refuses a raw frame. The fake answers `undefined`
+// to every write, which the core reads as taken, so the control case needs no patch.
+
+// The cached frames the replay builds for this body, from the module that builds it, so
+// the count is not a number this file wrote down.
+const builtFor = rig => synthAttach({
+  snapshot: rig.core.cache.snapshot(),
+  pose: rig.core.session.currentPose,
+  includeConfig: false
+}).counts.replayed
+
+// The one `spectateView` record a case wrote.
+function viewRecord (logLines) {
+  const records = logLines.filter(line => line.event === 'spectateView')
+  assert.equal(records.length, 1, 'one landing writes one record')
+  return records[0]
+}
+
+// A body with more than the join prefix in its cache, so a refused frame changes a count.
+async function landAndWatch (logLines) {
+  const rig = makeCore({ config: { picker: true }, logLines })
+  await landABody(rig)
+  for (let i = 0; i < 3; i++) {
+    rig.backendLeg.deliver({ state: 'play', name: 'sound_effect', buffer: Buffer.from('play:sound_effect:' + i), data: { soundId: 'minecraft:block.note_block.harp', x: i } })
+  }
+  return rig
+}
+
+test('#737 a landing counts the frames the leg took as replayed, and the position is not one of them', async () => {
+  const logLines = []
+  const rig = await landAndWatch(logLines)
+  const built = builtFor(rig)
+  assert.ok(built > 0, 'the fixture replays cached frames, so the pair compares two numbers')
+
+  const landing = rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'watch' })
+  assert.equal(landing.watching, true, 'the landing ran')
+  assert.equal(landing.replayed, built, 'a cached frame the leg took is counted once')
+  assert.equal(landing.refused, 0, 'and nothing was refused')
+
+  const record = viewRecord(logLines)
+  assert.equal(record.replayed, landing.replayed, 'the record carries the same count the landing answered')
+  assert.equal(record.refused, 0, 'and the refusal count the attach record has, at zero')
+  assert.equal(record.frames, built + 1,
+    'every replay frame the socket took, the synthesized position included, which replayed never counts')
+})
+
+test('#737 a cached frame the leg refused is counted as refused, and not as replayed', async () => {
+  const control = await landAndWatch([])
+  const taken = control.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'watch' })
+
+  const logLines = []
+  const refused = await landAndWatch(logLines)
+  const writeRaw = refused.frontLeg.writeRaw.bind(refused.frontLeg)
+  refused.frontLeg.writeRaw = (buffer, meta, options = {}) => {
+    if (meta?.name === 'login') return false
+    return writeRaw(buffer, meta, options)
+  }
+  const landing = refused.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'watch' })
+  assert.equal(landing.watching, true, 'a refused frame is not a refused landing')
+
+  const record = viewRecord(logLines)
+  assert.equal(record.refused, 1, 'the record says the leg refused one frame')
+  assert.equal(record.replayed, taken.replayed - 1, 'and does not count it as taken')
+  assert.equal(record.replayed + record.refused, taken.replayed,
+    'what the leg took plus what it refused is the cached frames the control landing took')
+  assert.equal(landing.replayed, record.replayed, 'the answer and the record are one count')
+  assert.equal(landing.refused, 1)
+  assert.equal(record.frames, taken.replayed,
+    'the socket took every cached frame but that one, and the position is the last of them')
+
+  const lines = logLines.filter(line => line.event === 'replayFrameRefused')
+  assert.equal(lines.length, 1, 'one line per refused frame, on this path too (#717)')
+  assert.equal(lines[0].frame, 'login', 'the line names the frame the client never got')
+  assert.equal(lines[0].reason, 'spectate', 'and the path that replayed it')
+  assert.equal(lines[0].channel, 'watch', 'and the socket it was written to')
+})
+
+test('#737 a synthesized position the leg refused is refused, and was never a replayed frame', async () => {
+  const logLines = []
+  const rig = await landAndWatch(logLines)
+  const built = builtFor(rig)
+  const write = rig.frontLeg.write.bind(rig.frontLeg)
+  rig.frontLeg.write = (name, packet, options = {}) => {
+    if (name === 'position') return false
+    return write(name, packet, options)
+  }
+
+  const landing = rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'watch' })
+  const record = viewRecord(logLines)
+  assert.equal(record.refused, 1, 'the one frame the leg refused is counted')
+  assert.equal(record.replayed, built, 'the cached frames were taken, so none of them moved')
+  assert.equal(record.frames, built, 'and the socket took every cached frame, the position excepted')
+  assert.equal(landing.replayed, built)
+  assert.equal(logLines.filter(line => line.event === 'replayFrameRefused')[0].frame, 'position')
+})
+
+test('#737 a write that throws on a landing is refused, and the landing still lands (#739)', async () => {
+  const logLines = []
+  const rig = await landAndWatch(logLines)
+  const built = builtFor(rig)
+  const writeRaw = rig.frontLeg.writeRaw.bind(rig.frontLeg)
+  rig.frontLeg.writeRaw = (buffer, meta, options = {}) => {
+    if (meta?.name === 'sound_effect') throw new Error('socket gone')
+    return writeRaw(buffer, meta, options)
+  }
+
+  const landing = rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'watch' })
+  assert.equal(landing.watching, true, 'a throw costs one frame, not the landing')
+  const record = viewRecord(logLines)
+  assert.equal(record.refused, 3, 'every frame the leg threw on is refused')
+  assert.equal(record.replayed, built - 3, 'and none of them is counted as taken')
+
+  const lines = logLines.filter(line => line.event === 'replayFrameRefused')
+  assert.equal(lines.length, 3)
+  assert.equal(lines[0].error, 'socket gone', 'the leg keeps the reason the frame did not leave (#739)')
+});
+
+// #737: the claim the ticket is about, in one case: the two records use one vocabulary for
+// the same two counts. Both replays are built from one body and refused the same frame, so
+// the number under each name is the number the other record puts there.
+test('#737 the attach record and the landing record count the same two things the same way', async () => {
+  const logLines = []
+  const rig = await landAndWatch(logLines)
+  const writeRaw = rig.frontLeg.writeRaw.bind(rig.frontLeg)
+  rig.frontLeg.writeRaw = (buffer, meta, options = {}) => {
+    if (meta?.name === 'login') return false
+    return writeRaw(buffer, meta, options)
+  }
+
+  rig.core.attachPlayer({ name: 'Pilot', uuid: PLAYER, includeConfig: false })
+  const attachRecord = logLines.filter(line => line.event === 'attach').at(-1)
+  rig.core.spectateView({ name: 'Watcher', uuid: WATCHER, channel: 'watch' })
+  const landingRecord = viewRecord(logLines)
+
+  assert.equal(attachRecord.refused, 1, 'the attach record counts the refused frame')
+  assert.equal(landingRecord.refused, 1, 'and the landing record counts it the same way')
+  assert.equal(landingRecord.replayed, attachRecord.replayed,
+    'the same cached frames were taken on both paths, so one word cannot mean two counts')
+  assert.equal(landingRecord.replayed + landingRecord.refused, attachRecord.replayed + attachRecord.refused,
+    'and each record carries the other number under the same word')
+
+  // The refusal is one event per path, named in one word each.
+  const refusals = logLines.filter(line => line.event === 'replayFrameRefused')
+  assert.deepEqual(refusals.map(line => line.reason), ['attach', 'spectate'],
+    'one line per replayed frame the leg refused, in the order the replays ran')
+})
+
+// #737: docs/telemetry.md owns what these fields mean, so a rename that leaves the page
+// describing the old pair is a page nobody can trust. The labels are read off the call that
+// writes the record, by brace matching, so a field added there is caught until the page has
+// a row for it.
+//
+// Its natural home is test/observability/telemetry-doc.test.js, which reads every other
+// telemetry row; this run's fence keeps its work in test/service/.
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+function landingLabels (source) {
+  const open = source.indexOf("log('spectateView', {")
+  assert.notEqual(open, -1, 'src/service/monoplayer.js writes the landing record')
+  const from = source.indexOf('{', open)
+  let depth = 0
+  let end = -1
+  for (let i = from; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) { end = i; break }
+    }
+  }
+  assert.notEqual(end, -1, 'the landing record closes')
+  const labels = []
+  let inner = 0
+  for (const line of source.slice(from + 1, end).split('\n')) {
+    if (inner === 0) {
+      const named = line.match(/^\s*([A-Za-z_$][\w$]*)\s*[:,]/)
+      if (named !== null) labels.push(named[1])
+    }
+    inner += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length
+  }
+  return labels
+}
+
+test('#737 the page names every field the landing record writes, and which count is which', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'service', 'monoplayer.js'), 'utf8')
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'telemetry.md'), 'utf8')
+  const at = doc.indexOf('\n### The spectator landing record\n')
+  assert.notEqual(at, -1, 'docs/telemetry.md documents the landing record')
+  const next = doc.indexOf('\n## ', at + 1)
+  const section = doc.slice(at, next === -1 ? doc.length : next)
+
+  const labels = landingLabels(source)
+  assert.ok(labels.length > 5, 'the record writes the fields this case reads: ' + labels.join(', '))
+  const missing = labels.filter(label => !section.includes('`' + label + '`'))
+  assert.deepEqual(missing, [],
+    'docs/telemetry.md landing section omits ' + missing.join(', ') +
+      ': add a row for each, or delete the field from the record')
+
+  // Read as one line, so a reflow of the paragraph is not a failing gate.
+  const flat = section.replace(/\s+/g, ' ')
+  assert.match(flat, /`replayed` is the cached frames this socket took/,
+    'the section says which count replayed is, in the words the attach record uses')
+  assert.match(flat, /`attach` event's `frames` is the replay's frame list/,
+    'and says that frames on the attach event is a list, which is the other half of #737')
+});
