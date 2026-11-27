@@ -48,7 +48,7 @@ invocation is refused: with no `MONOPLAYER_BACKEND_HOST` and no `--config`,
 | `src/core/body-caches.js` | The cache each body owns: one state cache per body, created on its first dial and shared by that body's readers | pure |
 | `src/core/join-synth.js` | Ordered attach stream from a snapshot: config replay, join prefix, ONE synthesized position per attach, warm domains | pure |
 | `src/core/preauth-window.js` | The count of sockets inside the pre-auth window, and the total cap on it (#201) | pure |
-| `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + optional online-mode `hasJoined` via injected verifier | pure, verifier injected |
+| `src/core/identity.js` | Front-leg identity gates: Login Start whitelist review (deny **before Login Success** by construction) + `verifySession`, whose verifier no lane injects and which nothing calls: the live leg's library answers `hasJoined` before `beforeLogin` (#691) | pure, verifier injected |
 | `src/core/relay.js` | Serverbound drop rules (per-leg mechanics + the chat frames whose text is spoken as the puppet), pose capture (backend teleport authoritative over client movement) | pure |
 | `src/core/clientbound-policy.js` | One decision table for every clientbound frame: state, cache-only, live-only, per-leg, or blocked. Drives the router, cache, join-synth, and the front's replay filter | pure |
 | `src/core/session.js` | `boot → warm → attached ⇄ detached`, `transferring` for a client that follows a move, `reconnecting` with **exactly one** scheduled reconnect, `down` for a body nobody claims or one a player ended, `failed` fallback; `backendLogins` counts only real backend logins | pure, injected clock |
@@ -1007,9 +1007,12 @@ own client information (`src/core/channels.js`). The claim decides who drives
 (`src/core/claims.js`); a channel is what each connection is handed, and a
 spectator's frames never reach the core's pipeline.
 
-The front leg calls, in order, `core.processLoginStart` (the whitelist review),
-`core.processVerifySession` (session verification, only with a real verifier),
-then `core.attachPlayer` after the leg sends the forged puppet Login Success.
+The front leg calls, in order, `core.processLoginStart` (the whitelist review), then
+`core.attachPlayer`, after the leg sends the forged puppet Login Success. The leg
+verifies the session before either call: `online-mode` makes its library answer the
+sessionserver's `hasJoined`, and `checkVerified` (`src/custody/attach.js`) holds that
+answer to the attach whitelist. The core is handed a name and a uuid that are already
+verified, and offers no call-in for a second pass (#691).
 The forged profile comes from `config.puppet`; profile capture is leg work.
 
 Everything else (`backendFrame` routing, chat blocking, pose, keep-alive
@@ -1050,6 +1053,9 @@ above (real Paper, online-mode, official client) stays the acceptance record.
 - **G1**: real puppet Microsoft auth (device-code bootstrap, rolling refresh
   token in `.secrets/accounts/<uuid>/`, `prismarine-auth`), real `hasJoined` verifier
   injected into `createFrontIdentity({ verifyProfile })`, real secret custody.
+  `verifySession` has no caller in the service since #691: the live front leg's library
+  answers `hasJoined`, so G1 either gives the core a call-in that can refuse a client or
+  drops the injected verifier.
 - **M4**: real backend leg against Velocity (modern forwarding), real front
   leg (encryption, Login Success forging, per-leg keep-alive timers),
   Toxiproxy on the puppet leg.
@@ -1093,9 +1099,10 @@ above (real Paper, online-mode, official client) stays the acceptance record.
   stale. It is absolute, so the error does not accumulate.
 - Chunk unload during the join prefix is replayed as captured (no-op then
   reload); an unload of a post-warm chunk removes the cached chunk.
-- `identity.js` session verification passes through when no verifier is injected — safe for
-  B1 fakes but the live front leg MUST inject a real verifier (online-mode
-  front leg) or B4 cannot pass.
+- Session verification is the leg's, not `identity.js`'s: the online front leg's library
+  answers the sessionserver's `hasJoined` before `beforeLogin`. `identity.js`
+  `verifySession` passes through when no verifier is injected, and no lane injects one, so
+  no live join is decided there (#691).
 - Session "one reconnect" is per fault episode; B3's F1–F6 fidelity (e.g. F6
   60s-window semantics) is the session wiring's responsibility later.
 - Redaction is pattern-based (fields, Bearer, JWT shapes). Real-token logs

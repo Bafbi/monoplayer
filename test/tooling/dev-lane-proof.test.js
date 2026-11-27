@@ -27,6 +27,7 @@ const CORE = read('src/service/monoplayer.js')
 const FRONT = read('src/legs/live-front.js')
 const START = read('src/service/start-live.js')
 const PROOF = read('src/driver/dev-proof.js')
+const ATTACH = read('src/custody/attach.js')
 
 const SECTION = 'The two-client proof'
 
@@ -127,9 +128,17 @@ test('the proof says which half no counter can answer, and never claims it', () 
 })
 
 test('a login is verified and whitelisted before the picker, which is what makes the account list the gate', () => {
-  // The section turns on this: an entry whose UUID nobody owns can never reach a picker. The
-  // gate is the core's (src/core/identity.js), called from the composition root's login path.
+  // The section turns on this: an entry whose UUID nobody owns can never reach a picker. Two
+  // gates hold it, in two places. The whitelist is the core's (src/core/identity.js), called
+  // from the composition root's login path.
+  //
+  // #691: the sessionserver's hasJoined is the leg's, not the core's. This case used to read
+  // `await identity.verifySession(payload)` in CORE for that half, and that line lived in
+  // `processVerifySession`, which no lane called: a guard matching a function nothing runs
+  // proves nothing about a join. So it reads each fact the claim stands on, in the file that
+  // holds it.
   assert.match(CORE, /identity\.reviewLoginStart\(payload\)/, 'the whitelist reviews the login')
-  assert.match(CORE, /await identity\.verifySession\(payload\)/, 'and the session is verified against Mojang')
   assert.match(FRONT, /'online-mode': onlineMode/, 'on a front leg running its configured mode')
+  assert.match(ATTACH, /function checkVerified[\s\S]*?store\.has\(uuid\)/, 'and its attach check decides on the uuid the client carries')
+  assert.match(FRONT, /check\.checkVerified\(\{ client, store \}\)/, 'which the leg runs over its own beforeLogin')
 })

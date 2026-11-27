@@ -145,7 +145,7 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | --- | --- | --- | --- |
 | `monoplayer.frames` | sum | `direction` (`s2c`/`c2s`), `state`, `name`, `result` | Backend frames received and front frames delivered. `result` is `forwarded` or `dropped` on `c2s`, and `forwarded` or `ignored` on `s2c`. |
 | `monoplayer.attaches` | sum | `player` | Successful attach attempts. |
-| `monoplayer.denials` | sum | `reason`, `phase` | Login-start and verify-session denials. |
+| `monoplayer.denials` | sum | `reason`, `phase` | Login-start denials. `phase` is `login_start` and no other value: the verify-session denial has had no path since #691. |
 | `monoplayer.replay.frames` | sum | `player` | Frames written by the join replay per attach. |
 | `monoplayer.skin.frames` | sum | `player` | `player_info` skin entries written, and `player` names the player each entry names. Three kinds (#614, #618): the body's entry names the puppet and is written to every channel of the body on every pass, the driver's own entry names the driving player once per play state, and a spectator's own entry names that spectator and is written once, on its own channel, carrying the skin its account's answer carried. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |

@@ -893,32 +893,13 @@ export function createMonoplayer ({
     return canAttachConfiguring ? { ...decision, phase: 'configuring' } : decision
   }
 
-  // Session verification (only when a verifier was injected): hasJoined.
-  async function processVerifySession (payload = {}) {
-    const decision = await identity.verifySession(payload)
-    if (!decision.allowed) {
-      metrics.denials++
-      telemetry.metric('monoplayer.denials', 1, { reason: decision.reason, phase: decision.phase })
-      log('verifyDenied', { reason: decision.reason, phase: decision.phase, uuid: payload.uuid, name: payload.name })
-      emit('verify_denied', decision)
-      return decision
-    }
-    if (!session.isAttachReady() && session.state !== STATES.ATTACHED) {
-      const denied = {
-        allowed: false,
-        reason: 'backend_not_ready',
-        phase: decision.phase,
-        uuid: decision.uuid ?? payload.uuid,
-        name: decision.name ?? payload.name
-      }
-      metrics.denials++
-      telemetry.metric('monoplayer.denials', 1, { reason: denied.reason, phase: denied.phase })
-      log('verifyDenied', { reason: denied.reason, phase: denied.phase, uuid: denied.uuid, name: denied.name })
-      emit('verify_denied', denied)
-      return denied
-    }
-    return decision
-  }
+  // #691: there is no call-in for session verification. The front leg's library answers
+  // the sessionserver's hasJoined before `beforeLogin` runs, and the leg holds that
+  // answer to the attach whitelist there (src/custody/attach.js, `checkVerified`), so
+  // the core is handed a name and a uuid the leg has already verified. A second pass in
+  // here had no verifier injected by any lane and no caller in this repo, which is why it
+  // is gone rather than declared: a row would put a call on the login path that can only
+  // allow while no lane injects a verifier. #721 decides whether G1 injects one.
 
   // #98: the pack is the puppet's installation and the human's answer.
   //
@@ -3927,7 +3908,6 @@ export function createMonoplayer ({
     configuringReady,
     notePuppetDialogAnswer,
     noteClientSettings,
-    processVerifySession,
     attachPlayer,
     detachPlayer,
     abortTransfer,
