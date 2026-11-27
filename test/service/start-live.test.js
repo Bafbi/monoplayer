@@ -507,8 +507,8 @@ test('#540 a reconnect after a followed transfer keeps the dialect and the serve
 // carries the entries beside the count, each with the verdict #703 put in one home, and
 // the count is that list's length so the two cannot disagree.
 //
-// The startup list is an array of uuids: src/service/control.js:134-137 drops the
-// names, and the config guard refuses a list that is not uuids. So this record asks
+// The startup list is an array of uuids: `attachWhitelist` in src/service/control.js
+// drops the names, and the config guard refuses a list that is not uuids. So this record asks
 // the version half of the rule, which is the half that refuses a name-derived uuid
 // (md5("OfflinePlayer:<name>") carries version 3). The panel holds the names, and its
 // answer is the whole rule.

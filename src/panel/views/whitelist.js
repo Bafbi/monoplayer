@@ -37,9 +37,10 @@ function renderEntry (puppet, entry, refusalReason) {
     '      <li class="entry">',
     '        <span class="who"><span class="player">' + escape(who) + '</span> <code>' + escape(uuid) + '</code></span>',
     '        <span class="when">added ' + escape(added) + '</span>',
-    '        <span class="verdict">' + (refusalReason === null
-      ? 'can authenticate'
-      : 'cannot authenticate: ' + escape(refusalReason)) + '</span>',
+    '        <span class="verdict' + (refusalReason === null ? '' : ' unusable') + '">' +
+      (refusalReason === null
+        ? 'can authenticate'
+        : 'cannot authenticate: ' + escape(refusalReason)) + '</span>',
     // data-key is the key the page holds its armed confirmation under, so a tick that
     // replaces this button paints the confirmation back onto it. data-name is what that
     // confirmation reads back, so the second press asks about a person. The allowed
@@ -74,9 +75,10 @@ export function renderEntries ({ puppet, list }) {
     return lines.join('')
   }
   // One judgement per entry, computed once, so the ratio and the rows cannot be two
-  // answers about one list (scripts/dev-lane.sh does the same, #677).
-  const refusals = players.map(entry => uuidRefusalReason(entry?.uuid, entry?.name))
-  const usable = refusals.filter(why => why === null).length
+  // answers about one list (scripts/dev-lane.sh does the same, #677). Each entry travels
+  // with its own answer, so the two lists cannot fall out of step by position.
+  const judged = players.map(entry => ({ entry, why: uuidRefusalReason(entry?.uuid, entry?.name) }))
+  const usable = judged.filter(({ why }) => why === null).length
   // A list where some entry cannot authenticate is a fault, and it is stated above the
   // rows: a row of eight with one derived uuid is easy to read past. The sentence is
   // `mise run dev:status`'s, so an operator who reads one reads the other without
@@ -89,7 +91,7 @@ export function renderEntries ({ puppet, list }) {
       '</p>\n')
   }
   lines.push('    <ul class="entries">\n')
-  for (const [index, entry] of players.entries()) lines.push(renderEntry(puppet, entry, refusals[index]) + '\n')
+  for (const { entry, why } of judged) lines.push(renderEntry(puppet, entry, why) + '\n')
   lines.push('    </ul>\n')
   return lines.join('')
 }

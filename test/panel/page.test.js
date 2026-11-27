@@ -142,7 +142,8 @@ test('the whitelist block says which entries a login can use, and which it canno
   const healthy = renderCard(puppet, facts(), listOf([
     { uuid: V4, name: 'Bafbi', addedAt: '2026-11-17T09:12:00.000Z' }
   ]))
-  assert.match(healthy, /can authenticate/, 'an entry a session can answer for says so')
+  assert.match(healthy, /<span class="verdict">can authenticate<\/span>/,
+    'an entry a session can answer for says so, and carries no fault class')
   assert.doesNotMatch(healthy, /cannot authenticate/, 'and a usable entry is never marked unusable')
   assert.doesNotMatch(healthy, /attach whitelist names/, 'a lane where every entry can authenticate carries no warning')
 
@@ -152,8 +153,8 @@ test('the whitelist block says which entries a login can use, and which it canno
   ]))
   assert.match(mixed, /attach whitelist names 2 entries, 1 of which can authenticate/,
     'a lane with one unusable entry does not read as healthy')
-  assert.match(mixed, /cannot authenticate: its uuid is md5\(&quot;OfflinePlayer:Pilot&quot;\), so no Mojang session answers for it/,
-    'the reason is the sentence the one home wrote, and it names the entry it is about')
+  assert.match(mixed, /<span class="verdict unusable">cannot authenticate: its uuid is md5\(&quot;OfflinePlayer:Pilot&quot;\), so no Mojang session answers for it<\/span>/,
+    'the reason is the sentence the one home wrote, in the ink the stylesheet gives a fault')
   assert.match(mixed, /can authenticate/, 'the usable entry is still named as one')
 
   const none = renderCard(puppet, facts(), listOf([
