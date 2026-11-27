@@ -12,7 +12,10 @@
 // Seam: a real protocol client at a listening offline front leg, as
 // test/legs/picker-click-routing.test.js and test/legs/spectate-refusal.test.js drive it.
 // Nothing here stands in for the leg. Every assertion reads a record the leg wrote, a
-// number the leg counted, or a frame the client decoded.
+// number the leg counted, a frame the client decoded, or — in #749's two cases only — the
+// timer handle the leg's own end armed. That last one is not a copy of the leg's state: it
+// is the object the process holds, read at the functions that arm and clear it, because a
+// leaked handle is exactly what no record can show.
 //
 // The two dialogs are refused by the leg's own wire check, which is the seam that decides
 // whether a configuration frame this leg authored reaches the socket: in `wireMode:
@@ -43,14 +46,15 @@
 // So the record and the count these cases read are the ones all three write, and the key
 // left unproved is `error`, from either of the first two.
 //
-// What this file costs, and why (#749): the assertions take under a second, and the file
-// takes about thirty on the box this was written on. The cost is the leg's, not the test's:
-// a refused dialog is ended twice, once by the wire check's own rule and once by
-// `endConfiguration`, and the second end overwrites the library's close timer. One timer of
-// 30 s is then left armed with nothing to clear it, and the process cannot exit until it
-// fires. Refusing a baseline frame instead is one end and exits in 0 ms, and so is the empty
-// offer, which is `endConfiguration` alone. #749 is that defect, and it carries the duration
-// assertion this file cannot make while it stands.
+// What this file cost, and what #749 was: the assertions took under a second and the file
+// took about thirty on the box it was written on, and the cost was the leg's. A refused
+// dialog was ended twice, once by the wire check's own rule and once by
+// `endConfiguration`, and the second end overwrote the library's close timer. One timer of
+// 30 s was then left armed with nothing to clear it, and the process could not exit until it
+// fired. Refusing a baseline frame instead was one end and exited in 0 ms, and so was the
+// empty offer, which is `endConfiguration` alone. The two cases below assert the timer
+// count each refused dialog leaves, so the second end cannot come back, and the file is back
+// to the under-a-second the rest of this directory runs in.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import mc from 'minecraft-protocol'
@@ -75,6 +79,62 @@ async function settleUntil (read, label, timeoutMs = 10_000) {
     if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for ' + label)
     await new Promise(resolve => setTimeout(resolve, 20))
   }
+}
+
+// #749: the close timer a leg's ends arm. minecraft-protocol arms one on every
+// `client.end()` — `this.closeTimer = setTimeout(socket.destroy.bind(socket), closeTimeout)`,
+// its `src/client.js`, resolved with `node -p "require.resolve('minecraft-protocol')"` — and
+// keeps only the newest handle on the client, while the socket's close clears only the handle
+// the field holds at that moment. So one end on a connection arms one timer and the socket's
+// close clears it, and a second end on the same connection arms a second timer whose handle
+// overwrites the first, leaving the first armed with nothing left to clear it. `closeTimeout`
+// is 30 000 ms, and it is a close timeout: the wait, after `end()`, for the peer to close
+// before the library destroys the socket. An armed one is a handle in this process and
+// holds its event loop open for that whole wait, which is what made this file read as 31 s
+// in `node --test` while its assertions took under a second.
+//
+// The count below is the timer itself, not a copy of it: an armed handle no end cleared is
+// the second end that overwrote the first, and no record can show it, because no record is
+// a handle. It is read at the two functions that arm and clear timers — the same read
+// test/service/cli.test.js:80 makes of a handle — rather than counted in the process's
+// active resources, which are process-wide: a count carries every timer in flight, so an
+// unrelated one armed or cleared in the same window moves it.
+//
+// The stack is what makes it the end's timer, and both frames are needed: the arm sits under
+// the library's own `Client.end`, and the frame under that is this leg's. 30 s is not a
+// private length — the library arms two more (its login timeout, src/server/login.js:44) and
+// this leg arms a third (its pre-auth deadline, src/core/preauth-window.js
+// DEFAULT_DEADLINE_MS) — and none of those is this timer.
+const CLOSE_TIMEOUT_MS = 30_000
+const LEG_END = stack => stack.includes('Client.end') && stack.includes('live-front.js')
+
+async function watchCloseTimers (run) {
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  const armed = []
+  const cleared = new Set()
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    const handle = realSetTimeout(fn, ms, ...rest)
+    if (ms === CLOSE_TIMEOUT_MS && LEG_END(String(new Error().stack))) armed.push(handle)
+    return handle
+  }
+  globalThis.clearTimeout = (handle, ...rest) => {
+    if (armed.includes(handle)) cleared.add(handle)
+    return realClearTimeout(handle, ...rest)
+  }
+  const watch = { armed, cleared }
+  try {
+    watch.result = await run(watch)
+    return watch
+  } finally {
+    globalThis.setTimeout = realSetTimeout
+    globalThis.clearTimeout = realClearTimeout
+  }
+}
+
+// Every close timer the leg armed and nothing cleared: the ones that hold this process open.
+function stillArmed (watch) {
+  return watch.armed.filter(handle => watch.cleared.has(handle) === false).length
 }
 
 function records (lines, event) {
@@ -107,6 +167,7 @@ async function withPickerLane (run, { rows = [{ name: SERVER }], offerReason = n
   const lines = []
   const control = { refuse: false }
   const asked = []
+
   const leg = createOfflineFrontLeg({
     host: '127.0.0.1',
     port: 0,
@@ -218,6 +279,33 @@ test('#710 a picker dialog the leg could not write is recorded and counted', asy
   })
 })
 
+// #749: the same refused dialog, read for what the end costs the process rather than what
+// it records. The refusal is the funnel's, and the funnel's own rule ends the client with
+// `wire_reject`; the dialog's branch then ends it again through `endConfiguration`,
+// because that call had no way to know the connection was already gone. This case is that
+// second end: one end arms one close timer and the socket's close clears it, and two ends
+// arm two and clear one, so the timers left are the ends over one.
+test('#749 a refused picker dialog ends the client once and leaves no timer armed', async () => {
+  const watch = await watchCloseTimers(() => withPickerLane(async ({ lines, control, clientErrors }) => {
+    control.refuse = true
+    await settleUntil(() => lines.some(line => line.event === 'frontClientEnd'),
+      'the refused client to end, and its socket to close after it')
+
+    assert.deepEqual(records(lines, 'pickerDialogFailed').map(fields => fields.reason), ['picker_unavailable'],
+      'the refusal the funnel made is still recorded and counted, and the end does not lose it')
+    // One end line per connection, and the sentence it carries: the end is skipped, not
+    // the record. A reader who asks why this client left still gets the answer.
+    const [ended] = records(lines, 'configurationEnded')
+    assert.equal(records(lines, 'configurationEnded').length, 1, 'one end record on a connection the funnel ended')
+    assert.equal(ended.reason, 'picker_unavailable')
+    assert.deepEqual(clientErrors, [])
+  }))
+  assert.equal(watch.armed.length, 1,
+    'one end on this connection, and one end arms one close timer of 30 s')
+  assert.equal(stillArmed(watch), 0,
+    'and the socket close cleared it, so no 30 s close timeout is left holding this process')
+})
+
 test('#710 a server dialog the leg could not write is recorded and counted', async () => {
   await withPickerLane(async ({ leg, lines, control, dialogs, disconnects, clientErrors, click }) => {
     // The picker's own dialog is written, so the client has a list to click. Then the door
@@ -258,6 +346,29 @@ test('#710 a server dialog the leg could not write is recorded and counted', asy
     assert.deepEqual(disconnects, [],
       'the wire check ended the connection without a disconnect frame, so the sentence the record carries reached no client')
   })
+})
+
+// #749: the twin. A refused server dialog is the same shape as a refused picker dialog
+// one click later — the funnel ends the client and the dialog's branch ends it again — so
+// the family is read here rather than assumed from the case above. Two endings in this
+// file's rig that both lose their timer are two endings in the lane.
+test('#749 a refused server dialog ends the client once and leaves no timer armed', async () => {
+  const watch = await watchCloseTimers(() => withPickerLane(async ({ lines, control, dialogs, clientErrors, click }) => {
+    await settleUntil(() => dialogs.length === 1, 'the picker dialog at the client')
+    control.refuse = true
+    click(dialogIds(dialogs[0])[0])
+    await settleUntil(() => lines.some(line => line.event === 'frontClientEnd'),
+      'the refused client to end, and its socket to close after it')
+
+    assert.deepEqual(records(lines, 'pickerServerDialogFailed').map(fields => fields.reason), ['picker_unavailable'],
+      "the server dialog's own refusal is still recorded and counted")
+    assert.equal(records(lines, 'configurationEnded').length, 1, 'one end record on a connection the funnel ended')
+    assert.deepEqual(clientErrors, [])
+  }))
+  assert.equal(watch.armed.length, 1,
+    'one end on this connection, and one end arms one close timer of 30 s')
+  assert.equal(stillArmed(watch), 0,
+    'and the socket close cleared it, so no 30 s close timeout is left holding this process')
 })
 
 test('#710 a lane with no rows to offer is recorded, counted, and the client is told', async () => {

@@ -767,7 +767,7 @@ function createFrontLeg ({
   // number is written by that same helper, so a refusing branch has one place to
   // count and not two numbers it must remember.
   const metrics = { denied: 0, sessionVerificationRefused: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
-  const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
+  const clients = new Map() // Client -> { interceptor, channel, picker, loginAt, endRequested, ended }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
   // its own client information. The claim decides who may drive a body
@@ -1422,7 +1422,20 @@ function createFrontLeg ({
     // not the landing: the picker's dialog is written from this same phase. The
     // picker's duration is this stamp subtracted at the pick, so it is one
     // connection's time and never one player name's.
-    clients.set(client, { interceptor, picker: picker !== null, loginAt: Date.now() })
+    clients.set(client, {
+      interceptor,
+      picker: picker !== null,
+      loginAt: Date.now(),
+      // #749: whether an end has been asked for on this connection. It is not `ended`,
+      // which the library's `'end'` event sets when the socket is already gone: this is
+      // the earlier fact, and the one `endConfiguration` needs, because the library arms
+      // a close timer at every `end()` and keeps only the newest handle. A second end on
+      // one client therefore leaves the first timer armed with nothing to clear it, and it
+      // holds the process for its 30 s. The funnel marks it, and so does `endConfiguration`
+      // before the end it takes itself, so a second end from either one is a no-op.
+      endRequested: false,
+      ended: false
+    })
     lastInterceptor = interceptor
     return interceptor
   }
@@ -2160,8 +2173,10 @@ function createFrontLeg ({
 
   // Leave configuration with a message. The library's own end() writes nothing in
   // this state (its override covers login and play only), so the frame is
-  // written here and the socket is ended after it. A client that is told why it
-  // is leaving is the whole difference between a refusal and a hang.
+  // written here and the socket is ended after it — unless the connection is already
+  // on its way out, where the frame is a no-op and the end is somebody else's (see
+  // #749 below). A client that is told why it is leaving is the whole difference
+  // between a refusal and a hang.
   //
   // This write cannot go through writeRawTo, and the checks it does not take are the
   // reason: the policy blocks a configuration `disconnect` and a `transfer` because they
@@ -2174,6 +2189,18 @@ function createFrontLeg ({
       record(client, 'configurationDisconnectFailed', { reason, error: String(error?.message ?? error).slice(0, 200) })
     }
     record(client, 'configurationEnded', { reason, username: client.username ?? null })
+    // #749: one end per client. The record is written either way, because the record is
+    // what tells a reader why this client left; the end is not, when an end has already
+    // been asked for. A frame the funnel refused in `wireMode: 'throw'` ended it
+    // (emitCheckedRaw's own rule, and the funnel marks the connection's record), so a
+    // second end here would arm a close timer the library can no longer clear and hold the
+    // process for the whole of its 30 s close timeout, which is how long this lane's tests
+    // paid after #710. Both dialog failures end here — a picker dialog the leg could not
+    // write, and a server's — so one guard covers both, and the mark below is what makes a
+    // second end from this function a no-op as well.
+    const ctx = clients.get(client)
+    if (ctx?.endRequested === true) return
+    if (ctx) ctx.endRequested = true
     try {
       client.end('picker: ' + reason)
     } catch {
@@ -2671,7 +2698,17 @@ function createFrontLeg ({
       }
     }
     const sent = emitCheckedRaw({ client, buffer, meta, wireCheck, wireMode, stats: wireStats, log: recordFor(client) })
-    if (sent) noteDelivered(client, meta, { bytes: buffer.length })
+    if (sent) {
+      noteDelivered(client, meta, { bytes: buffer.length })
+    } else {
+      // #749: the check's own rule ended this client, with `wire_reject` and before
+      // anything else on this path could speak. That end goes on the connection's own
+      // record, because the caller that wrote the frame is about to end the same client
+      // for its own reason and has no other way to know. `endConfiguration` is that
+      // caller, and it is where the second end was.
+      const ctx = clients.get(client)
+      if (ctx) ctx.endRequested = true
+    }
     return sent
   }
 
