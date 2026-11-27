@@ -223,6 +223,12 @@ test('the committed fixture holds the states a reviewer has to see', () => {
   const counts = registry.puppets.map(puppet => whitelists.get(puppet.name).document.players.length)
   assert.ok(counts.includes(0), 'a puppet nobody may attach as: ' + counts.join(', '))
   assert.ok(counts.some(count => count > 0), 'a puppet with entries: ' + counts.join(', '))
+  // And the attach card's replay pair (#735): one puppet's last attach lost a frame, so
+  // a reviewer sees the two numbers drawn apart rather than one count that reads as a
+  // total.
+  const attaches = registry.puppets.map(puppet => facts.get(puppet.name).attach).filter(attach => attach !== null)
+  assert.ok(attaches.some(attach => attach.refused > 0),
+    'a last attach that lost a frame: ' + JSON.stringify(attaches.map(attach => attach.refused)))
   const withEntries = registry.puppets.find(puppet => whitelists.get(puppet.name).document.players.length > 0)
   assert.ok(withEntries !== undefined)
   for (const player of whitelists.get(withEntries.name).document.players) {
