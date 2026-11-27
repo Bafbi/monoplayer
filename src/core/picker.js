@@ -572,6 +572,11 @@ export function createPickerBoard ({ claims = null, channels = null } = {}) {
     if (verb !== null && !PICK_VERBS.includes(verb)) return verbRefusalText({ verb, server })
     switch (verb) {
       case 'claim':
+        // #708: a claim this lane granted and could not land is not a contention, so it
+        // is not `claimRefusalText`'s. The sentence is the one this module already owns
+        // for that case (#258), and the reason is the word the Spectate landing refuses
+        // the same failed write with (#435); the leg counts it once, in `refuseAndCount`.
+        if (reason === 'finish_failed') return claimFailureText({ server })
         return claimRefusalText({ reason, server, holder, claimed })
       case 'spectate':
         return spectateRefusalText({ server, reason })

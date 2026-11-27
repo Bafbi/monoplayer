@@ -160,22 +160,9 @@ function refusalSites (source) {
 }
 
 // The helper's own body: what it writes is the rule, so the guard reads it rather than
-// trusting a comment.
+// trusting a comment. One brace scan, below, reads every body this file asks about (#708).
 function helperBody (source) {
-  const at = source.indexOf('function refuseAndCount (')
-  assert.notEqual(at, -1, 'the helper exists')
-  // The body's brace, not the one the parameters are destructured in.
-  const from = source.indexOf(') {', at) + 2
-  assert.ok(from > 2, 'the helper has a body')
-  let depth = 0
-  for (let i = from; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(from + 1, i)
-    }
-  }
-  assert.fail('the helper closes')
+  return functionBody(source, 'refuseAndCount')
 }
 
 // The word one counted refusal passes, read out of its own object literal, so the site
@@ -201,11 +188,15 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   const helper = SOURCE.slice(start, start + 500)
   assert.match(helper, /bumpReason\(/, 'the helper is what bumps the map')
 
-  // Nine refusal sites, each named by the word its own record carries: the two
+  // Ten refusal sites, each named by the word its own record carries: the two
   // dialogs the leg could not write, the lane with no rows to offer (#670), the three a
   // click's own answer refuses (a frame that did not read, and a server the offer does
   // not carry at either level), the claim the core answers, the Spectate landing's own
-  // refusals, and the Disconnect verb (#616) refused because a claim holds the body.
+  // refusals, the Disconnect verb (#616) refused because a claim holds the body, and the
+  // claim landing that lost its phase-end write (#708). The Spectate landing's phase-end
+  // refusal and the claim landing's are one write failing on two paths, so they pass one
+  // word: `finish_failed` names the write that did not happen. Each arm's
+  // `configurationEnded` line keeps its own word (`spectate_refused`, `claim_failed`).
   // The key each one passes is asserted too, because a site swapped to the wrong word
   // still counts and still lies about why.
   //
@@ -219,6 +210,7 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   assert.deepEqual(sites, [
     "'disconnect_claimed'",
     "'empty_offer'",
+    "'finish_failed'",
     "'picker_unavailable'",
     "'picker_unavailable'",
     'answer.reason',
@@ -288,7 +280,7 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
 // record, so a site cannot count without telling a reader why.
 test('#670 every counted refusal writes its own record, and the record carries the reason and the sentence', () => {
   const sites = refusalSites(SOURCE)
-  assert.ok(sites.length >= 9, 'the leg counts nine refusals, and the guard reads each site: ' + sites.length)
+  assert.ok(sites.length >= 10, 'the leg counts ten refusals, and the guard reads each site: ' + sites.length)
   // The scanner looks for the call as it is written today. A site spelled around it, with
   // a space before the argument or an alias, would pass every assertion below unseen.
   assert.equal((SOURCE.match(/refuseAndCount\s*\(/g) ?? []).length, sites.length + 1,
@@ -330,3 +322,173 @@ test('#670 every counted refusal writes its own record, and the record carries t
   assert.match(empty[0], /reason: 'empty_offer'/, 'and it counts under the word the board composes its sentence from')
   assert.match(empty[0], /offerReason: offer\.reason/, 'while the offer own cause, which names the file to repair, rides beside it')
 })
+
+// #708: every `endConfiguration(client, '<reason>', <sentence>)` call in the leg, as its
+// argument list rather than as a line. The sentence is the last argument, and it is a call
+// or a property access as often as a name, so the arguments are split at the commas that sit
+// outside braces, brackets and strings.
+function splitArguments (source) {
+  const args = []
+  let depth = 0
+  let quote = null
+  let from = 0
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i]
+    if (quote !== null) {
+      if (char === '\\') i += 1
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
+    if (char === '(' || char === '{' || char === '[') depth += 1
+    else if (char === ')' || char === '}' || char === ']') depth -= 1
+    else if (char === ',' && depth === 0) { args.push(source.slice(from, i).trim()); from = i + 1 }
+  }
+  args.push(source.slice(from).trim())
+  return args
+}
+
+function endConfigurationSites (source) {
+  const sites = []
+  for (let at = source.indexOf('endConfiguration(');
+    at !== -1;
+    at = source.indexOf('endConfiguration(', at + 1)) {
+    // The definition, not a call, and the one spelling that is not a call at all.
+    if (/function\s+$/.test(source.slice(0, at))) continue
+    const open = source.indexOf('(', at)
+    let depth = 0
+    let end = -1
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === '(') depth += 1
+      else if (source[i] === ')') {
+        depth -= 1
+        if (depth === 0) { end = i; break }
+      }
+    }
+    assert.notEqual(end, -1, 'the end site at byte ' + at + ' closes')
+    sites.push({ at, args: splitArguments(source.slice(open + 1, end)) })
+  }
+  return sites
+}
+
+// The function the call sits in. The leg's own functions are declared at two spaces inside
+// createFrontLeg, so the nearest of those above the call is its own.
+function enclosingFunction (source, at) {
+  const declared = [...source.slice(0, at).matchAll(/\n {2}function (\w+) \(/g)]
+  assert.notEqual(declared.length, 0, 'the end site at byte ' + at + ' is inside a function')
+  return declared[declared.length - 1][1]
+}
+
+// A function's body and where it starts in the source, so an assertion can be made about
+// the text in front of a call rather than about the function as a whole.
+function functionSpan (source, name) {
+  const at = source.indexOf('\n  function ' + name + ' (')
+  assert.notEqual(at, -1, 'the leg has the function ' + name)
+  // The body's brace, not the one a destructured parameter opens.
+  const open = source.indexOf(') {', at) + 2
+  assert.ok(open > 2, name + ' has a body')
+  let depth = 0
+  for (let i = open; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) return { from: open + 1, body: source.slice(open + 1, i) }
+    }
+  }
+  assert.fail(name + ' closes')
+}
+
+function functionBody (source, name) {
+  return functionSpan(source, name).body
+}
+
+// #708: the ends the argument scan above cannot judge on its own are listed here, with
+// what the guard knows about them and how it knows it.
+//
+// A picker client is ended in three shapes. Eight of them pass a local the counted
+// helper returned in the same function; two pass the `.text` a function handed back
+// (`recordClaim`'s refusal, which is the claim's, and `landSpectator`'s, which is the
+// Spectate landing's); and one composes its own sentence and counts nothing, which is the
+// verb guard no client reaches (#670). Anything else is a sentence written at the call
+// site, which is #708: `endConfiguration(client, 'claim_failed', claimFailureText({ ... }))`
+// told the client why it was leaving and left both the count and the record short.
+//
+// What this proves and what it does not: it reads the sentence argument, so a sentence
+// composed at the end is red. A local named `text` is accepted when the function that
+// ends the client also calls the helper; a function holding one counted arm and one arm
+// that binds its own `text` would pass, because this is a source scan and not a
+// dataflow proof. The count and the record of a counted arm are held by the two guards
+// above, off the same scan, so the three read the one helper between them.
+test('#708 every sentence an ended picker client is given comes from a counted refusal', () => {
+  const sites = endConfigurationSites(SOURCE)
+  // The ends, in the order they appear in `live-front.js`, each named by the reason its
+  // own line records. A new arm reds this list until it is named here.
+  assert.deepEqual(sites.map(site => site.args[1]), [
+    "'picker_empty'",
+    "'picker_unavailable'",
+    "'picker_refused'",
+    "'picker_unavailable'",
+    "'verb_refused'",
+    "'disconnect_refused'",
+    "'claim_refused'",
+    "'spectate_refused'",
+    "'verb_' + answer.verb + '_unbuilt'",
+    "'claim_failed'",
+    "'pick_refused'"
+  ], 'the leg ends a picker client from eleven places, in this order, with these reasons')
+
+  // The two names a sentence arrives under when the function that composes it is not the
+  // one that ends the client, and the function each one is handed by.
+  const HANDED_BACK = { claimed: 'recordClaim', landing: 'landSpectator' }
+
+  for (const site of sites) {
+    const [client, reason, sentence] = site.args
+    assert.equal(client, 'client', 'every end is one connection\'s own')
+    // The one end whose sentence counts nothing, named with its reason so a second such
+    // arm cannot arrive unremarked: no client reaches it, because the board answers
+    // `unknown_verb` for a verb it does not carry before this branch can run (#670).
+    if (reason === "'verb_' + answer.verb + '_unbuilt'") {
+      assert.equal(sentence, 'pickerBoard.refuse({ verb: answer.verb, server: server.name })',
+        'the unbuilt-verb guard is the one end that composes its sentence and counts nothing')
+      continue
+    }
+    const local = sentence.match(/^(\w+)$/)
+    if (local !== null) {
+      const owner = enclosingFunction(SOURCE, site.at)
+      const span = functionSpan(SOURCE, owner)
+      // The binding in scope at the call, which is the last one written before it, and
+      // its initialiser. A function holding a counted arm and an arm that binds its own
+      // sentence cannot pass on the strength of the counted arm next door, and a rename
+      // of the counted local costs nothing here.
+      const bindings = [...span.body.slice(0, site.at - span.from)
+        .matchAll(new RegExp('\\b(?:const|let|var) ' + local[1] + ' =', 'g'))]
+      assert.notEqual(bindings.length, 0,
+        reason + ' names a local ' + owner + ' binds (' + sentence + '), and the guard reads the binding')
+      const bindingAt = bindings[bindings.length - 1].index
+      assert.match(span.body.slice(bindingAt, bindingAt + 400), /refuseAndCount\(\{/,
+        reason + ' hands over the counted helper\'s own sentence, in ' + owner)
+      continue
+    }
+    const handed = sentence.match(/^(\w+)\.text$/)
+    assert.notEqual(handed, null,
+      reason + ' hands over a sentence composed at the call site (' + sentence + '). A picker end ' +
+        'whose sentence is composed here is a refusal nothing counted (#708)')
+    const producer = HANDED_BACK[handed[1]]
+    assert.equal(typeof producer, 'string',
+      handed[1] + ' is a value this guard knows the origin of, or a new one it must be told about')
+    assert.match(functionBody(SOURCE, producer), /refuseAndCount\(\{/,
+      handed[1] + ' is handed back by ' + producer + ', which composes it through the counted helper')
+  }
+
+  // #435's ordering rule, which this landing was the second to break: the landing is
+  // counted after the frame that ends the client's phase, so a phase the leg could not
+  // end is a refusal and never also a landing. The Spectate landing's order is pinned
+  // above; this is the claim landing's, which #708 moved.
+  const claimLanding = functionBody(SOURCE, 'landClaimedClient')
+  const claimWrite = claimLanding.indexOf("client.write('finish_configuration'")
+  const claimCount = claimLanding.indexOf('metrics.claimLanded++')
+  assert.ok(claimWrite > 0, 'the claim landing writes the frame that ends the phase')
+  assert.ok(claimCount > claimWrite,
+    'the claim landing is counted after that write, so a claim whose phase-end write threw is a refusal and not a landing')
+})
+
