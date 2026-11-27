@@ -167,6 +167,14 @@ passed driver-lane reports whose newest run finished within 24 hours**, and the
 every assertion in their reports, and nothing is averaged or carried over. The
 witness half is read row by row, in the lane above.
 
+A pass prints what it accepted. A step the witness recorded `not-seen` on, which
+`UNMODDED_STEPS` declares expected absent, prints one `known gap:` line. A step you
+did see, and which the list still declares expected absent, prints a
+`stale declaration:` line naming the list and the tickets: drop the step's
+`openUntil` in the change that closes them. Neither line fails the pass. An honest
+record must not turn red because a fix landed, and the pass sentence names the step
+the witness did not see instead of claiming the operator saw every one.
+
 The age window exists because a report set sitting on disk proves nothing on its
 own: before 2026-11-09 the reports were committed, so the check passed without
 anything having run. Move the window with `--max-age-hours N`.

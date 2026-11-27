@@ -28,7 +28,8 @@ import { laneTargets, resolveGateLane } from './lane.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
 import {
-  verifyG0Evidence, verifyUnmoddedWitness, versionRefusal, unmoddedWitness, UNMODDED_WITNESS_FILE,
+  verifyG0Evidence, verifyUnmoddedWitness, versionRefusal, unmoddedWitness, formatUnmoddedPass,
+  UNMODDED_WITNESS_FILE,
 } from './checks.js'
 import { redactSecrets } from '../observability/secrets.js'
 
@@ -431,7 +432,10 @@ async function verifyG0 (opts) {
     console.error('Generate a checklist first: node src/driver/run.js --lane unmodded')
     return 1
   }
-  console.log('G0 VERIFIED: 2/2 consecutive driver-lane reports passed and the unmodded witness records every step.')
+  // #963: the pass prints every gap it accepted and every declaration the witness outlived, worded by
+  // checks.js's formatter, so the terminal that says the proof stands also says what it does not show.
+  // Neither line is fatal: a fix landing must not turn an honest record red (#920).
+  console.log(formatUnmoddedPass(witnessVerdict))
   return 0
 }
 

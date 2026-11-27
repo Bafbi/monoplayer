@@ -490,6 +490,17 @@ test('the runbook names the lines a gapped proof prints, and the labels come fro
   }
 })
 
+// #963: the report walks the document as it stands, and the document a run writes first holds a
+// pending row on the one step a ticket declares expected absent. Reading the declaration rule here
+// instead of the row's own word called that pending row a stale declaration, which claims sight the
+// record does not have.
+test('a report over a pending witness names the declared step pending, and calls nothing stale', () => {
+  const report = verdict(readingOf(run()))
+  const printed = formatVerdict(report, { witnessPath: 'w', witness: witnessDocument(report) })
+  assert.match(printed, /^\s+PENDING\s+the spectator has no body of its own/m, 'the declared step is still pending')
+  assert.doesNotMatch(printed, /stale declaration:/, 'and a row nobody recorded is not a declaration outlived')
+})
+
 // The declaration is `OPERATOR_STEPS`'s fact, so it cannot come from the document: the file is
 // hand-edited, and a row that could declare itself expected-absent would pass by writing a line.
 test('the declaration is the module\'s, and a row that declares itself expected-absent changes nothing', () => {
