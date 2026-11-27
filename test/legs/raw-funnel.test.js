@@ -103,3 +103,43 @@ test('#600 the packet-object path is refused by state, and the server dialog is 
   assert.equal(count(dialog, 'writeRawTo('), 1, 'the server dialog is a raw frame the wire check sees')
   assert.equal(count(dialog, '.write('), 0, 'and no packet-object write is left beside it')
 })
+
+// #820: one predicate, one count, one line, on both of the leg's write paths. The rows above
+// pin that shape for the state rule and the phase-finish rule; this one pins it for the
+// socket's own answer, because deleting either call site is otherwise a silent regression:
+// the predicate's own cases stay green and nothing else fails.
+test('#820 the closed-socket refusal is one predicate, one count and one line on both write paths', () => {
+  const source = fs.readFileSync(LEG, 'utf8')
+
+  assert.equal(count(source, 'function closedSocketReason ('), 1,
+    'the socket question is asked in one function')
+  assert.equal(count(source, 'export const CLOSED_SOCKET_REASONS'), 1,
+    'and its reasons are one closed set')
+  assert.equal(count(source, 'function refuseClosedSocket ('), 1,
+    'one function counts a refused frame and writes the line about it')
+  assert.equal(count(source, 'metrics.clientboundSocketClosed++'), 1,
+    'the count is bumped in one function, so the count and the line cannot disagree')
+  assert.equal(count(source, "record(client, 'clientboundSocketClosed'"), 1,
+    'and the line is written there too')
+  assert.equal(count(source, 'refuseClosedSocket(client'), 2,
+    "both of the leg's write paths ask it: the packet path and the raw funnel")
+
+  // The raw half on the funnel's own slice, so a call moved out of the funnel into a helper
+  // nobody calls is read as the regression it is.
+  const funnel = source.slice(
+    source.indexOf('function writeRawTo ('),
+    source.indexOf('const sent = emitCheckedRaw')
+  )
+  assert.ok(funnel.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.equal(count(funnel, 'refuseClosedSocket(client'), 1,
+    'the raw funnel asks it before it hands the frame to the socket')
+
+  const packetPath = source.slice(
+    source.indexOf('function writePacketTo ('),
+    source.indexOf('function writeRawTo (')
+  )
+  assert.ok(packetPath.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.equal(count(packetPath, 'refuseClosedSocket(client'), 1,
+    'and the packet path asks it before the library writes the packet object')
+})
+
