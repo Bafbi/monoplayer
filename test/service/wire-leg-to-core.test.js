@@ -328,19 +328,40 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
     }
   }
 
-  // setCoreAttach is the one a lane may wrap, and exactly two do: the rig, to
-  // read the attach record, and the online rung, to cut its evidence. Each
-  // registers one, after the core wired the default.
-  assert.equal(count(LANES['src/ladder/rig.js'], '.setCoreAttach('), 1,
-    'src/ladder/rig.js keeps its one wrapper, and no copy of the ritual around it')
-  assert.equal(count(read('src/ladder/online.js'), '.setCoreAttach('), 1,
-    'src/ladder/online.js keeps its one wrapper')
-  assert.equal(count(LANES['src/service/start-live.js'], '.setCoreAttach('), 0,
-    'src/service/start-live.js registers none: the live lane has no wrapper')
-  assert.equal(count(LANES['src/ladder/client-parity.js'], '.setCoreAttach('), 0,
-    'src/ladder/client-parity.js registers none')
-  assert.equal(count(LANES['src/ladder/loopback.js'], '.setCoreAttach('), 0,
-    'src/ladder/loopback.js registers none')
+  // #683: no lane wraps the attach call-in any more. The rig factory used to offer
+  // an `attach` hook for exactly that, and the three lanes that need the cut took
+  // it, each reading the cache snapshot and the pose around the call. The core
+  // publishes the cut of every replay it performs now, so a wrapper here is a lane
+  // taking its own copy again: the defect #607 left and #683 closes.
+  //
+  // The set is the directory, not a list of files, for the reason the case below
+  // gives for the same walk: a module added under src/ladder is a caller too, and a
+  // hand-kept list would let it through.
+  const callers = fs.readdirSync(path.join(ROOT, 'src/ladder'))
+    .filter(name => name.endsWith('.js'))
+    .map(name => 'src/ladder/' + name)
+  callers.push('src/service/start-live.js')
+  assert.ok(callers.includes('src/ladder/rig.js') && callers.includes('src/ladder/online.js'),
+    'the walk found the modules it reads, so a moved directory fails here rather than passing')
+  for (const file of callers) {
+    assert.equal(count(code(read(file)), '.setCoreAttach('), 0,
+      file + ' leaves the attach call-in alone: the cut is the core\'s event, not a wrapper\'s record')
+  }
+
+  // And the lanes that record a cut subscribe to it instead. A file a row does not
+  // name states 0, so a new lane that subscribes fails here until its row says how
+  // many replays it records; a lane that neither wraps nor subscribes records
+  // nothing, and its parity rung fails on the empty cut.
+  const ATTACH_SUBSCRIBERS = {
+    // The main rig's O27 and O28, and the entity rig's O51.
+    'src/ladder/loopback.js': 2,
+    // N13's cut.
+    'src/ladder/online.js': 1
+  }
+  for (const file of callers) {
+    assert.equal(count(code(read(file)), ".on('attach'"), ATTACH_SUBSCRIBERS[file] ?? 0,
+      file + ' subscribes to the attach event ' + (ATTACH_SUBSCRIBERS[file] ?? 0) + ' times: a lane that records a cut reads the core\'s publish, and one that records none names no event')
+  }
 })
 
 // #607: the wrapper a lane adds around one call-in needs the handler the table

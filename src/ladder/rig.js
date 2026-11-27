@@ -65,7 +65,6 @@ export async function createRig ({
   front: frontOptions = {},
   backend: backendOptions = {},
   core: coreOptions = {},
-  attach = null,
   reconnect = null,
   order = ['connect', 'ready', 'listen'],
   onStep = null
@@ -127,26 +126,11 @@ export async function createRig ({
   })
 
   // #592: start() wires the attach and configuration call-ins, so a rig registers
-  // nothing by hand except the one thing its call supplies. `attach` wraps the
-  // core's own attach call-in, and it is registered after start() because start()
-  // is what sets the default it wraps. The hook a call supplies carries the record
-  // its assertion reads and returns the attach outcome, so a rig that names no
-  // `attach` gets the plain call-in.
-  //
-  // #607: the hook adds that record around the handler start() installed, which is
-  // the report's `handlers.setCoreAttach`, and hands it on as `attachPlayer`. The
-  // payload stays the table's: a rig passes the one the leg sent, untouched.
+  // nothing by hand. #683: it takes no attach hook either. A rig that records the
+  // cut of a replay subscribes to `attach` on the core it is handed, after start(),
+  // and reads the values the core published rather than taking its own copy around
+  // the call.
   core.start()
-  if (attach !== null) {
-    const attachPlayer = core.legWiring.front.handlers.setCoreAttach
-    // #607: the report offers the handlers it installed, so a leg that carried no
-    // setter has none here. Say that rather than meeting it as a TypeError inside
-    // the leg's own login path.
-    if (attachPlayer === undefined) {
-      throw new TypeError('createRig: the front leg carries no setCoreAttach, so a rig with an attach hook has nothing to wrap')
-    }
-    front.setCoreAttach(player => attach({ rig, player, attachPlayer }))
-  }
 
   // Registered after start(), as every rig did before this factory: start() emits
   // only 'start', so a due reconnect comes from a later fault, never from start.

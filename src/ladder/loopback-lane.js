@@ -250,7 +250,6 @@ export async function createLoopbackLane ({
   front: frontOptions = {},
   backend: backendOptions = {},
   core: coreOptions = {},
-  attach = null,
   reconnect = null,
   order = ['connect', 'ready', 'listen'],
   onStep = null
@@ -307,7 +306,6 @@ export async function createLoopbackLane ({
       ...(control === null ? {} : { whitelistSource: control.attachWhitelist }),
       ...coreOptions
     },
-    attach,
     reconnect,
     order,
     onStep

@@ -2438,9 +2438,13 @@ export function createMonoplayer ({
     // play arrives here owed the frame again.
     forgetPuppetSkin()
     const source = snapshot ?? cache.snapshot()
+    // #683: the pose is read once, here, and it is the one this replay is built
+    // from and publishes. A lane used to read it a second time around the call,
+    // which was the same value only because the call is one synchronous turn.
+    const pose = session.currentPose
     const synthesized = synthAttach({
       snapshot: source,
-      pose: session.currentPose,
+      pose,
       teleportId: frontTeleportSeq,
       includeConfig
     })
@@ -2491,13 +2495,37 @@ export function createMonoplayer ({
       skippedLegOwned: synthesized.counts.skipped,
       includeConfig,
       backendLogins: session.backendLogins,
-      pose: session.currentPose,
+      pose,
       tookMs: (clock?.now?.() ?? Date.now()) - startedAt,
       ...replaySummary(source, { includeConfig }),
       dialogs: { held: dialogHeld, resent: dialogResent },
       packs: { held: packHeld, resent: packResent }
     })
-    emit('attach', { name, replayed: synthesized.counts.replayed })
+    // #683: the attach this core performed, published at the end of the replay so no
+    // lane derives the cut. Only the two reasons that are a client's own join are an
+    // attach: the warm play login (`attach`) and a client that attached during the
+    // puppet's configuration (`early_attach`, replayed at its login or once the
+    // backend warmed). Everything else this function replays is a client already in
+    // play whose state a move is restoring, and that is not an attach: it keeps the
+    // event it already has (`reconfiguration`, `reconfiguration_restored`,
+    // `transfer_restored`), so a listener needs no filter and the live lane, which
+    // follows moves, publishes nothing here.
+    //
+    // `snapshot` and `pose` are the two arguments `synthAttach` was handed and
+    // `frames` is what it wrote, so the published cut is the value the replay used
+    // rather than a copy a caller took around the call. `snapshot` is a value and not
+    // a view of the cache: it stays the state this replay was built from as later
+    // traffic arrives (#597 keeps the cache's own reading on `laneState`).
+    if (reason === 'attach' || reason === 'early_attach') {
+      emit('attach', {
+        name,
+        reason,
+        replayed: synthesized.counts.replayed,
+        frames: synthesized.frames,
+        snapshot: source,
+        pose
+      })
+    }
     return { attached: true, replayed: synthesized.counts.replayed, frames: synthesized.frames }
   }
 
