@@ -353,8 +353,8 @@ The driver's own half is unbuilt too. The mod reports no game mode and no abilit
 `tools/driver/src/main/java/eu/monoplayer/driver/DriverServer.java` is where that reading
 and the report field it feeds would go.
 
-The picker's own buttons need no new op, though no run has shown it yet. The client
-draws a `minecraft:multi_action` dialog as `MultiButtonDialogScreen`, because
+The picker's own buttons need no new op, though no run has shown it yet (#720 is the run).
+The client draws a `minecraft:multi_action` dialog as `MultiButtonDialogScreen`, because
 `DialogScreens` in the 26.2 client maps that type to it. That screen builds one `Button`
 per action. `DialogScreen.init` adds every one of them to the screen's children. So
 `DriverServer.clickButton` reaches them the way it reaches any other button: it matches an
@@ -367,8 +367,43 @@ Those classes and methods are the 26.2 client's own, not this repository's.
 `mise run driver:build` leaves the client jar it compiles against in the Gradle cache.
 `net/minecraft/client/gui/screens/dialog/` in that jar is where to read them.
 
-The one-client reading, `screen` on a client held in a picker, is owed still (#720). It
-is what would turn the paragraph above from an argument into an observation.
+The one-client reading, `screen` on a client held in a picker, is still owed (#720), and
+it is what would turn the paragraph above from an argument into an observation.
+`tools/driver/picker-read.mjs` is that run as one command. It reads the screen of the
+client the front is holding, presses the row that screen names, and reads the screen again.
+Then it presses Spectate, reads the front's log for the frames it read, and writes the
+payloads to `.reports/picker-read.json`.
+
+The picker is the dev lane's, not a gate Paper's ([the dev runbook](../dev/README.md),
+"Offline, and why that is allowed here"). A lane whose volume has never held the dev account
+needs the flow under "The first run" first. The lane admits only the accounts on its attach
+whitelist, and one that is not on it is refused `not_whitelisted` before any dialog
+([the attach whitelist](../dev/README.md#the-attach-whitelist)), so the first run is somebody
+the lane already admits.
+
+```bash
+mise run dev:up
+tools/nath.sh launch gate-b-player-262-fabric -s <the dev lane's front>:25565 -a <your player name>
+ssh -N -L 25599:127.0.0.1:25599 bafbi@nath.tail41e568.ts.net   # another shell
+node tools/driver/picker-read.mjs
+```
+
+Its exit status is the finding. 0 records what the run showed, 1 names the row that did not
+hold, and 2 says the front's log could not be read: the one read that tells a press from a
+frame that never arrived.
+
+`--row` picks the row by a substring of its label, and `--state` says which state word that
+row must carry. A row reads `down` before anything dialled the body, `claimed` while
+somebody drives it, and `unclaimed` after a claim ended and the body is still up
+(`pickerRowForBody`, [src/core/picker.js](../../src/core/picker.js)).
+
+`.reports/` is gitignored, so the report is evidence for the ticket and not a page. The run's
+answer goes in a comment on #720, and the paragraph above changes only when a run has payloads
+to quote.
+
+No run has taken this reading yet: the display host has been offline each time it was
+wanted. A client held in this picker is not a claim, so nothing in this page is a
+measurement of one.
 
 Two narrower rows were considered and rejected. A protocol bot driving the body would
 measure a bot where the row exists to witness two real clients. Reading the spectator's

@@ -68,6 +68,23 @@ ssh -N -L 25599:127.0.0.1:25599 bafbi@nath.tail41e568.ts.net
 node tools/driver/driver-client.mjs status
 ```
 
+## One reading, as one command (#720)
+
+`picker-read.mjs` takes the whole picker reading with that tunnel up: `status`, `screen`,
+a `click` on the row the screen itself names, `screen` again, `click Spectate`, `screen`
+after it, and the front's log lines for the frames it read. It writes
+`.reports/picker-read.json` and prints the rows that held and the ones that did not.
+
+```bash
+node tools/driver/picker-read.mjs                    # the dev lane's front
+node tools/driver/picker-read.mjs --log FILE         # a saved front log instead of kubectl
+node tools/driver/picker-read.mjs --state unclaimed  # a body that stood after a claim ended
+```
+
+It presses a label it read and never an empty one: `click` with no argument sends
+`label: ""`, which matches the first button on the screen. The run it belongs to, and the
+lane it uses, are in [deploy/driver/README.md](../../deploy/driver/README.md).
+
 ## Commands
 
 | Command | What it does |
