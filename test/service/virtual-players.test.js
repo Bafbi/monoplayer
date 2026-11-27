@@ -12,8 +12,10 @@
 //                  half; this file pins the order on one socket).
 //   the exemption  a channel is never told about the player it speaks for, so the body's
 //                  own stream carries no spawn and the parity rung's premise survives.
-//   the honesty    a frame the leg could not deliver is not counted, and what it was owed
-//                  is written on the next pass.
+//   the honesty    a frame the leg could not deliver is not counted, and the leg's two
+//                  refusals are two events: a throw leaves a channel that is owed the frame on
+//                  the next pass, and a false says nothing is owed, and both are refusals
+//                  (#736).
 //
 // Seam: the fake-integration rig (test/support/harness.js). What a socket hides is exactly
 // which channel a frame went to and in what order, and the fake front leg records both
@@ -111,6 +113,7 @@ test('#635 a spectator is told the puppet\'s body, after the entry that names it
   assert.equal(rig.core.metrics.virtualPlayersSpawned, 1)
   assert.equal(rig.core.metrics.virtualPlayersMoved, 0)
   assert.equal(rig.core.metrics.virtualPlayersDespawned, 0)
+  assert.equal(rig.core.metrics.virtualPlayersRefused, 0, 'a socket took every frame, so nothing was refused')
 
   // No other socket and no broadcast carries a spawn: a channel is never told about the
   // player it speaks for, and the body's own stream is not a place for one.
@@ -170,6 +173,70 @@ test('#635 a spawn the leg refused is owed again, and is not counted as told', a
   assert.equal(entityFrames(rig.frontLeg, 'entity_destroy').length, 1,
     'the id it never received a body for is destroyed first, then spawned')
   assert.equal(rig.core.metrics.virtualPlayersSpawned, 1)
+})
+
+test('#736 a spawn the leg answers false for is a refusal, not a frame the client was told', async () => {
+  const logLines = []
+  const rig = makeCore({ config: config(), logLines })
+  await landABody(rig)
+  const write = rig.frontLeg.write.bind(rig.frontLeg)
+  // The leg's own answer for a frame it did not take: `false`, and the frame is dropped. The
+  // fake answers `undefined`, which the core reads as taken, so a refusal is this one patched
+  // method — the shape test/service/replay-refused.test.js uses.
+  rig.frontLeg.write = (name, packet, options = {}) =>
+    name === 'spawn_entity' ? false : write(name, packet, options)
+
+  spectate(rig)
+
+  // The two numbers, apart. `Spawned` is the frames a socket took, and this socket took
+  // none; `Refused` is the frames a socket did not, and it is where the false lands. A
+  // case that only asserted their sum would pass a build that counted the frame twice.
+  assert.equal(rig.core.metrics.virtualPlayersSpawned, 0, 'a frame no socket took is not counted as told')
+  assert.equal(rig.core.metrics.virtualPlayersRefused, 1, 'and the refusal is the number that moved')
+  assert.equal(rig.core.metrics.virtualPlayersAnnounced, 0,
+    'the entry is written by the skin path here, so the refusal is the spawn and nothing else')
+  assert.equal(rig.core.metrics.virtualPlayersDespawned, 0)
+  assert.equal(rig.core.metrics.virtualPlayersMoved, 0)
+
+  // Where the operator looks next: one line, naming the frame and the channel, and carrying no
+  // `error`, because a false is not a throw.
+  const refused = logLines.filter(line => line.event === 'virtualPlayerRefused')
+  assert.equal(refused.length, 1, 'one line for the one frame the leg did not take')
+  assert.equal(refused[0].frame, 'spawn_entity', 'the line names the frame no client received')
+  assert.equal(refused[0].channel, CHANNEL)
+  assert.equal(refused[0].reason, 'spectate', 'and the path that wrote it')
+  assert.ok(!('error' in refused[0]), 'a false is the leg saying no, not the leg raising')
+  assert.equal(logLines.filter(line => line.event === 'virtualPlayerWritten').length, 0,
+    'and nothing counts the frame as written')
+})
+
+test('#736 a move the leg answers false for moves the refusal counter, not the move counter', async () => {
+  const logLines = []
+  const rig = makeCore({ config: config(), logLines })
+  await landABody(rig)
+  spectate(rig)
+  assert.equal(rig.core.metrics.virtualPlayersMoved, 0, 'the landing wrote no move yet')
+
+  const write = rig.frontLeg.write.bind(rig.frontLeg)
+  rig.frontLeg.write = (name, packet, options = {}) =>
+    name === 'entity_teleport' ? false : write(name, packet, options)
+
+  // The puppet walks, one window later, so the steady-state path writes its move.
+  rig.clock.tick(50)
+  rig.frontLeg.serverbound({ name: 'position', data: { x: 5, y: 64, z: 5 } })
+
+  // The frame the leg answered false for is the same event on this path as on the landing:
+  // the move counter counts the moves a socket took, and this socket took none of them.
+  assert.equal(rig.core.metrics.virtualPlayersMoved, 0, 'a move no socket took is not a frame a client was told')
+  assert.equal(rig.core.metrics.virtualPlayersRefused, 1, 'it is the refusal')
+  assert.equal(rig.core.metrics.virtualPlayersSpawned, 1, 'and the spawn that landed is untouched')
+
+  const refused = logLines.filter(line => line.event === 'virtualPlayerRefused')
+  assert.equal(refused.length, 1)
+  assert.equal(refused[0].frame, 'entity_teleport')
+  assert.equal(refused[0].channel, CHANNEL)
+  assert.equal(refused[0].reason, 'movement', 'the sweep this move came out of: the puppet walked')
+  assert.ok(!('error' in refused[0]))
 })
 
 test('#635 a respawn voids the client\'s entities, so the body is destroyed and spawned again', async () => {

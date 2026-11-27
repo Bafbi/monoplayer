@@ -516,8 +516,8 @@ export function createMonoplayer ({
     skinFramesWritten: 0,
     skinFramesRefused: 0,
     // #635: the entities the proxy wrote for the puppet, per frame: a spawn, a move, and
-    // the despawn that ends a life. A frame the leg could not deliver is not counted, so
-    // each of these is a frame a client was told.
+    // the despawn that ends a life. A frame the leg could not deliver is not counted here,
+    // so each of these is a frame a client was told; the refusal is `virtualPlayersRefused`.
     virtualPlayersAnnounced: 0,
     virtualPlayersSpawned: 0,
     virtualPlayersMoved: 0,
@@ -2213,8 +2213,8 @@ export function createMonoplayer ({
   // The module owns the order, the entity identity and the coalescing
   // (src/core/virtual-players.js). What is here is the delivery: the world it reads, the
   // roster it may write to, and the counters that say what a client was told. A frame the
-  // leg could not deliver is not counted, because a number here is frames that reached a
-  // socket.
+  // leg could not deliver is not counted in those, because a number there is frames that
+  // reached a socket; it is a refusal, and `virtualPlayersRefused` is the field that says so.
   //
   // #636: the roster is every channel of the body, and the players are two sources.
   //
@@ -2382,9 +2382,22 @@ export function createMonoplayer ({
           virtualPlayers.forget({ channel: update.channel })
           continue
         }
-        // The leg answers false when no socket holds that channel any more. A frame that
-        // reached nobody is not counted as told.
-        if (delivered === false) continue
+        // The leg answers false when it did not take the frame (#736), and one boolean is all
+        // it answers: no socket holds that channel, or the client is in a state this frame
+        // does not parse in (`refuseStateMismatch`, which the leg counts as
+        // `front.stateRefused`), or the #541 interceptor dropped it. This branch cannot see
+        // which, and none of the three is a frame a client was told, so it lands where the
+        // throw above lands: the same counter, the same line, and `error` as the separator
+        // (docs/telemetry.md, #739).
+        //
+        // No `forget`, unlike the throw: re-owing would climb this counter once per sweep on
+        // a channel the front no longer reports, which `owed()` already drops. The two causes
+        // where the client is still there are the cost of that, and they are #800.
+        if (delivered === false) {
+          metrics.virtualPlayersRefused++
+          log('virtualPlayerRefused', { reason, channel: update.channel, frame: frame.name })
+          continue
+        }
         written++
         metrics[VIRTUAL_PLAYER_COUNTERS[frame.kind]]++
         // One line per entry, per spawn and per despawn: a move is the one frame here that
