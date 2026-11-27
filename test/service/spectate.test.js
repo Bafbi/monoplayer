@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { pickSlug } from '../../src/core/picker.js'
 import { synthAttach } from '../../src/core/join-synth.js'
 import { makeCore } from '../support/harness.js'
+import { blockSpan, topLevelNames } from '../support/source-scan.js'
 
 // The body a claim dials: a server that is not the lane's configured backend, so
 // "the body this lane serves" and "the body it was configured with" stay apart.
@@ -853,27 +854,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 function landingLabels (source) {
   const open = source.indexOf("log('spectateView', {")
   assert.notEqual(open, -1, 'src/service/monoplayer.js writes the landing record')
-  const from = source.indexOf('{', open)
-  let depth = 0
-  let end = -1
-  for (let i = from; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) { end = i; break }
-    }
-  }
-  assert.notEqual(end, -1, 'the landing record closes')
-  const labels = []
-  let inner = 0
-  for (const line of source.slice(from + 1, end).split('\n')) {
-    if (inner === 0) {
-      const named = line.match(/^\s*([A-Za-z_$][\w$]*)\s*[:,]/)
-      if (named !== null) labels.push(named[1])
-    }
-    inner += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length
-  }
-  return labels
+  return topLevelNames(blockSpan(source, open, 'the spectateView record in src/service/monoplayer.js').body)
 }
 
 test('#737 the page names every field the landing record writes, and which count is which', () => {

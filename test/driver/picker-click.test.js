@@ -14,6 +14,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { blockSpan } from '../support/source-scan.js'
+
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SERVER = 'tools/driver/src/main/java/eu/monoplayer/driver/DriverServer.java'
 
@@ -26,15 +28,7 @@ function method (signature) {
   const text = source()
   const start = text.indexOf(signature)
   assert.ok(start > -1, SERVER + ' holds ' + signature)
-  let depth = 0
-  for (let index = start; index < text.length; index++) {
-    if (text[index] === '{') depth++
-    else if (text[index] === '}') {
-      depth--
-      if (depth === 0) return text.slice(start, index + 1)
-    }
-  }
-  assert.fail(SERVER + ' closes ' + signature + ' with a brace')
+  return text.slice(start, blockSpan(text, start, signature + ' in ' + SERVER).close + 1)
 }
 
 test('click reads the children list a dialog screen builds its buttons into', () => {

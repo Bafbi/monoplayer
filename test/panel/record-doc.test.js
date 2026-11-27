@@ -32,6 +32,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { blockSpan, callSpans, signatureSpan } from '../support/source-scan.js'
+
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 const PANEL = path.join(ROOT, 'src', 'panel')
@@ -84,27 +86,14 @@ function panelNames (text) {
   return [...text.matchAll(/(['"])panel([A-Z][A-Za-z]*)\1/g)].map(match => 'panel' + match[2])
 }
 
-// Every log() call in a piece of source: its event name when the first argument is
-// that name, where the call starts, where its first argument ends, and where the call
-// closes. Read by paren matching and not by line shape, so a reformat changes
-// nothing.
+// Every log() call in a piece of source that names a panel record: that name, where the
+// call starts, where its arguments open, and where the call closes. The call's extent and
+// its first argument are read by the shared scan, so a reformat still changes nothing.
 function logCalls (source) {
   const calls = []
-  for (const call of source.matchAll(/\blog\(/g)) {
-    const from = call.index + call[0].length
-    let depth = 0
-    let end = -1
-    let close = source.length
-    for (let i = from; i < source.length; i += 1) {
-      const char = source[i]
-      if ('([{'.includes(char)) depth += 1
-      else if (')]}'.includes(char)) {
-        if (depth === 0) { close = i; break }
-        depth -= 1
-      } else if (char === ',' && depth === 0 && end === -1) end = i
-    }
-    const [name] = panelNames(source.slice(from, end === -1 ? close : end))
-    if (name !== undefined) calls.push({ name, at: call.index, from, close })
+  for (const call of callSpans(source, 'log')) {
+    const [name] = panelNames(call.args[0])
+    if (name !== undefined) calls.push({ name, at: call.at, open: call.open, close: call.close })
   }
   return calls
 }
@@ -142,24 +131,6 @@ function waitedRecords (file) {
   return [...file.matchAll(/event === '(panel[A-Z][A-Za-z]*)'/g)].map(match => match[1])
 }
 
-// The body of a function, found by its signature and closed by brace matching. The
-// page's claim is about the order of statements in stop(), so this reads statements
-// and not lines.
-function bodyOf (source, signature) {
-  const open = source.indexOf(signature)
-  assert.notEqual(open, -1, STREAM + ' declares ' + signature)
-  const from = source.indexOf('{', open)
-  let depth = 0
-  for (let i = from; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(from + 1, i)
-    }
-  }
-  return assert.fail(STREAM + ': ' + signature + ' closes')
-}
-
 // The timers a function clears, each with the position of the statement that clears
 // it. Two shapes count: a clearInterval that names the timer, and a loop over a list
 // of timers that clears each in turn — "both intervals are cleared here" is the claim,
@@ -177,23 +148,18 @@ function clearedTimers (body) {
   return cleared
 }
 
-// The keys of the payload a log() call writes, by brace matching inside that call and
-// not by line shape: `ticks, beats` is shorthand and carries no colon, so a split on
-// the names that do would report half of the record.
+// The keys of the payload a log() call writes. The payload is brace matched inside the call,
+// and then split at its commas: this record's payload is written on one line, so the reader
+// that walks a literal line by line (topLevelNames in test/support/source-scan.js, which the
+// telemetry guards use) sees one field where this one has three. `ticks, beats` is shorthand,
+// so each part is read down to its first colon and a part with none keeps its whole name.
 function recordFields (body, call) {
-  const from = body.indexOf('{', call.from)
+  const from = body.indexOf('{', call.open)
   assert.ok(from !== -1 && from < call.close, STREAM + ' writes ' + call.name + ' with a payload')
-  let depth = 0
-  let end = -1
-  for (let i = from; i < call.close; i += 1) {
-    if (body[i] === '{') depth += 1
-    else if (body[i] === '}') {
-      depth -= 1
-      if (depth === 0) { end = i; break }
-    }
-  }
-  assert.notEqual(end, -1, STREAM + ': the payload of ' + call.name + ' closes')
-  return body.slice(from + 1, end).split(',')
+  // Read inside the call, so a payload that spills past it is a throw rather than a field
+  // list taken from whatever follows.
+  return blockSpan(body.slice(from, call.close), 0,
+    'the payload of ' + call.name + ' in ' + STREAM).body.split(',')
     .map(part => part.trim().split(':')[0].trim())
     .filter(part => part !== '')
 }
@@ -254,7 +220,7 @@ test('#341 both intervals are cleared before panelStreamEnd is written, as the p
     'docs/panel.md states the order: ' + ORDER_CLAIM + '. It is the sentence #330\'s test depends on')
 
   const source = read(STREAM)
-  const body = bodyOf(source, 'function stop ()')
+  const body = signatureSpan(source, 'function stop ()', 'function stop () in ' + STREAM).body
   const end = logCalls(body).find(call => call.name === 'panelStreamEnd')
   assert.ok(end, 'stop() writes panelStreamEnd: ' + STREAM)
   // The intervals the file creates, named as the variables that hold them, so the
@@ -274,7 +240,7 @@ test('#341 both intervals are cleared before panelStreamEnd is written, as the p
 })
 
 test('#341 panelStreamEnd carries the puppet, the ticks and the beats the page promises', () => {
-  const body = bodyOf(read(STREAM), 'function stop ()')
+  const body = signatureSpan(read(STREAM), 'function stop ()', 'function stop () in ' + STREAM).body
   const call = logCalls(body).find(entry => entry.name === 'panelStreamEnd')
   assert.ok(call, 'stop() writes panelStreamEnd: ' + STREAM)
   const fields = recordFields(body, call)
