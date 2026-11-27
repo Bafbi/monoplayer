@@ -383,7 +383,7 @@ cell names that step, and the last column names the record that goes into the lo
 
 | Step | Look at | You should see | If you do not |
 |---|---|---|---|
-| `puppet-renders` | the watching client, the world | a player standing where the driving client stands, wearing the puppet's skin | a player with a default skin: `puppetSkinSent` holds the entry and its `signed` flag, and an unsigned texture is one the client cannot verify. No player at all: `puppetSkinWithheld` or `puppetSkinRefused`, and no `puppetSkinKnown`: no entry was written, and a client drops the spawn that follows |
+| `puppet-renders` | the watching client, the world | a player standing where the driving client stands, wearing the puppet's skin | a player with a default skin: `puppetSkinSent` holds the entry and its `signed` flag, and an unsigned texture is one the client cannot verify. That record is written for the driving client's own player too, with `puppet` false, because a client draws the body it controls from the entry naming itself. The reader takes only a `puppet` true line written after the landing as the body's entry. No player at all: `puppetSkinWithheld` or `puppetSkinRefused`, and no `puppetSkinKnown`: no entry was written, and a client drops the spawn that follows |
 | `puppet-walks` | the watching client, while the driver walks | that player walks after it, a fraction of a step behind | it stands still: the `heartbeat` counted `virtualPlayersMoved` 0, so no move frame reached a spectator |
 | `spectator-mode` | the watching client, movement | flight, no damage, no block break, no block place: a spectator is a camera | survival behaviour: `spectateView.modeFrames` was not 2 |
 | `spectator-own-body` | the watching client, F5 | no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: that is #647. **Expected to fail until #647 lands**, because the client is not told its own player-list entry and so does not treat itself as a spectator |
@@ -420,7 +420,12 @@ node src/driver/dev-proof.js --path .reports/dev-log.jsonl --json > .reports/dev
 ```
 
 The records behind it, and what each one rules out. `RECORDS` in `src/driver/dev-proof.js` is the
-list these come from, and a guard holds this table to it:
+list these come from, and `test/driver/dev-proof.test.js` holds every row of this table to it, name
+and sentence both ways, so a cell here is the module's sentence word for word. No other line of this
+section is compared to anything, so a record's fact written in the prose is the copy that drifts.
+Where the module's sentence cannot say what an operator needs, the step table above carries it. The
+counter names below are the exception, and `test/tooling/dev-lane-proof.test.js` asks rather than
+compares: it wants them here, and the service to count each one.
 
 | Record | What it says |
 |---|---|
@@ -445,8 +450,7 @@ list these come from, and a guard holds this table to it:
 | `pickerEmpty` | the picker offered no row, so there was nothing to claim |
 | `heartbeat` | the counters, every 30 seconds: `metrics.virtualPlayers*`, `metrics.skinFramesWritten`, and one row per socket with its role |
 
-The counters are in the `heartbeat` record, which the proxy writes every 30 seconds. The
-reader prints the ones a run needs: `spectatorViews`, `skinFramesWritten`,
+The reader prints the counters a run needs: `spectatorViews`, `skinFramesWritten`,
 `virtualPlayersAnnounced`, `virtualPlayersSpawned`, `virtualPlayersMoved`,
 `virtualPlayersDespawned` and `virtualPlayersRefused`. The frame counters count a frame the
 leg answered for, so they say a socket took it. `spectatorViews` counts landings, and
