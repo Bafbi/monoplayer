@@ -75,7 +75,7 @@
 //   5. front leg listen, readiness log (no secrets), process stays alive
 import fs from 'node:fs'
 
-import { createMonoplayer, loadConfig } from './monoplayer.js'
+import { addressSentence, createMonoplayer, hostRefusal, loadConfig, portRefusal } from './monoplayer.js'
 import { createControlDocument, dialIntent, revertAfterRestore } from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
@@ -90,7 +90,7 @@ import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { accountIdentifier, bodyKey, stampIdentity } from '../core/channels.js'
-import { pickerOfferedRows, pickerRows } from '../core/picker.js'
+import { addressName, pickerOfferedRows, pickerRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
@@ -177,16 +177,11 @@ export function attachWhitelistEntries (uuids) {
   }))
 }
 
-// #815: one spelling for an address a record prints. #746 made the allowed-server list
-// below read as the picker names a row, and the addresses beside it were template strings,
-// so one record wrote one IPv6 address bracketed and unbracketed: `2001:db8::1:25565` has
-// no place a reader can split the host from the port. The rule is the picker's
-// (src/core/picker.js, canonicalPickName), reached through `pickerRows` rather than spelled
-// again here, the way the list below reaches it. A host that holds no colon reads as it
-// always did.
-export function addressName (host, port) {
-  return pickerRows([{ name: host + ':' + port }])[0].name
-}
+// #815, #889: every record below spells an address with the one rule,
+// `addressName` in src/core/picker.js. It lived here, and #889 moved it where a leg could
+// reach it too; the service calls it and defines none of its own. A record that joins a host
+// and a port itself is the second spelling #815 is about, and test/service/start-live.test.js
+// fails on one.
 
 // #746: the start record counted the allowed servers it offers and named none. It is the
 // defect #601 fixed in the loopback payloads, #677 in the dev lane's report, and #705 one
@@ -378,13 +373,48 @@ export function emitBodyGauges (telemetry, bodies = []) {
 
 export function envOverlay (doc, env = process.env, warn = () => {}) {
   const out = { ...doc }
+  // #891: the two addresses this lane binds and dials. An address variable is refused
+  // here, by name, rather than left for loadConfig to refuse by config key: the operator
+  // wrote the variable, and "config.front.port" sends them to the Deployment's args line
+  // instead of its env block. The shape is loadConfig's rule, called with the label this
+  // site knows.
+  //
+  // It throws where the numbers in this function are named in a warning and left at their
+  // default, and the difference is what a default can be. A number has a bounded
+  // default to fall back on, so a typo costs the operator the value they meant. An address
+  // has none: the compiled front is loopback, and a front left there serves nobody outside
+  // the pod, which is the silent misconfiguration this ticket is about.
+  const refuseAddress = (variable, raw, reason) => {
+    if (reason !== null) throw new TypeError(addressSentence(variable, reason, raw))
+  }
+  // A variable that holds only space is an unset one, the way a blank path is in
+  // src/service/control.js: a deployment template that interpolates an empty value writes
+  // "", and a paste that catches a space is not an address. Read either as a host or a
+  // port and the two keys would disagree about the same blank.
+  const given = value => typeof value === 'string' && value.trim() !== ''
   const front = { ...doc.front }
-  if (env.MONOPLAYER_FRONT_HOST) front.host = env.MONOPLAYER_FRONT_HOST
-  if (env.MONOPLAYER_FRONT_PORT) front.port = Number(env.MONOPLAYER_FRONT_PORT)
+  if (given(env.MONOPLAYER_FRONT_HOST)) {
+    refuseAddress('MONOPLAYER_FRONT_HOST', env.MONOPLAYER_FRONT_HOST, hostRefusal(env.MONOPLAYER_FRONT_HOST))
+    front.host = env.MONOPLAYER_FRONT_HOST
+  }
+  if (given(env.MONOPLAYER_FRONT_PORT)) {
+    const port = Number(env.MONOPLAYER_FRONT_PORT)
+    // 0 is a bind asking the OS for a port, which the offline rung and the parity lane
+    // do; the backend's floor is 1, where a dial reaches nothing.
+    refuseAddress('MONOPLAYER_FRONT_PORT', env.MONOPLAYER_FRONT_PORT, portRefusal(port, 0))
+    front.port = port
+  }
   if (Object.keys(front).length) out.front = front
   const backend = { ...doc.backend }
-  if (env.MONOPLAYER_BACKEND_HOST) backend.host = env.MONOPLAYER_BACKEND_HOST
-  if (env.MONOPLAYER_BACKEND_PORT) backend.port = Number(env.MONOPLAYER_BACKEND_PORT)
+  if (given(env.MONOPLAYER_BACKEND_HOST)) {
+    refuseAddress('MONOPLAYER_BACKEND_HOST', env.MONOPLAYER_BACKEND_HOST, hostRefusal(env.MONOPLAYER_BACKEND_HOST))
+    backend.host = env.MONOPLAYER_BACKEND_HOST
+  }
+  if (given(env.MONOPLAYER_BACKEND_PORT)) {
+    const port = Number(env.MONOPLAYER_BACKEND_PORT)
+    refuseAddress('MONOPLAYER_BACKEND_PORT', env.MONOPLAYER_BACKEND_PORT, portRefusal(port))
+    backend.port = port
+  }
   out.backend = backend
   const puppet = { ...doc.puppet }
   if (env.MONOPLAYER_PUPPET_ACCOUNT) puppet.account = env.MONOPLAYER_PUPPET_ACCOUNT

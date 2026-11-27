@@ -12,7 +12,6 @@ import { blockAfter } from '../support/source-scan.js'
 import { tempRoot } from '../support/temp.js'
 
 import {
-  addressName,
   allowedServerAddresses,
   attachWhitelistEntries,
   startControlRecord,
@@ -23,6 +22,7 @@ import {
   journalVolumeFull,
   unidentifiedSkinWarning
 } from '../../src/service/start-live.js'
+import { addressName } from '../../src/core/picker.js'
 import { createTransferFollowController } from '../../src/core/transfer-follow.js'
 import { makeCore } from '../support/harness.js'
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
@@ -274,6 +274,64 @@ test('#205 a deadline past what a timer can hold is named and ignored, so a typo
   assert.match(warnings[0], /MONOPLAYER_PREAUTH_DEADLINE_MS/)
   assert.match(warnings[0], new RegExp(String(MAX_DEADLINE_MS)), 'the warning names the ceiling')
   assert.equal(loadConfig(out).preAuth.deadlineMs, DEFAULT_DEADLINE_MS)
+})
+
+// #891: the two addresses a deployed lane is set by. The overlay is where the operator
+// writes, so it names the variable they wrote when it refuses one: a config key sends
+// them to the Deployment's args line instead of its env block. The refusal is a throw
+// rather than the named-and-ignored warning every other number gets here, because a
+// number has a bounded default to fall back on and an address has none: the compiled
+// front is loopback, and a front left on loopback serves nobody outside the pod.
+test('#891 MONOPLAYER_FRONT_HOST and MONOPLAYER_BACKEND_HOST refuse a value that is not a host', () => {
+  for (const variable of ['MONOPLAYER_FRONT_HOST', 'MONOPLAYER_BACKEND_HOST']) {
+    const blank = variable === 'MONOPLAYER_FRONT_HOST' ? 'front' : 'backend'
+    assert.equal(envOverlay({}, { [variable]: ' ' })[blank]?.host, undefined, variable + ' blank sets no host')
+    for (const bad of ['play2.excalia.fr:25565', '[::1]', 'play2.excalia.fr:', ' 127.0.0.1']) {
+      assert.throws(() => envOverlay({}, { [variable]: bad }), error => {
+        assert.match(error.message, new RegExp(variable + ' must be a host'))
+        assert.ok(error.message.includes(bad), 'the message carries what was typed: ' + error.message)
+        return error instanceof TypeError
+      }, variable + ' ' + JSON.stringify(bad))
+    }
+    const good = envOverlay({}, { [variable]: '2001:db8::1' })
+    const section = variable === 'MONOPLAYER_FRONT_HOST' ? good.front : good.backend
+    assert.equal(section.host, '2001:db8::1', 'an IPv6 host is written bare and read bare')
+  }
+})
+
+test('#891 MONOPLAYER_FRONT_PORT and MONOPLAYER_BACKEND_PORT refuse a port no socket can use', () => {
+  for (const variable of ['MONOPLAYER_FRONT_PORT', 'MONOPLAYER_BACKEND_PORT']) {
+    const floor = variable === 'MONOPLAYER_FRONT_PORT' ? 0 : 1
+    for (const bad of ['2556O', '70000', '-1', '25565.5', '']) {
+      if (bad === '') {
+        // An empty variable is an unset one here, as it is for every other name, and so
+        // is one holding only space: a template that interpolates nothing and a paste
+        // that catches a blank are the same fact.
+        const key = variable === 'MONOPLAYER_FRONT_PORT' ? 'front' : 'backend'
+        assert.equal(envOverlay({}, { [variable]: '' })[key]?.port, undefined, variable + ' empty sets no port')
+        assert.equal(envOverlay({}, { [variable]: ' ' })[key]?.port, undefined, variable + ' blank sets no port')
+        continue
+      }
+      assert.throws(() => envOverlay({}, { [variable]: bad }), error => {
+        assert.match(error.message,
+          new RegExp(variable + ' must be an integer from ' + floor + ' to 65535, got "' + bad + '"'))
+        return error instanceof TypeError
+      }, variable + ' ' + bad)
+    }
+    const key = variable === 'MONOPLAYER_FRONT_PORT' ? 'front' : 'backend'
+    assert.equal(envOverlay({}, { [variable]: '25565' })[key].port, 25565,
+      'a port the socket can take is the number beside its host')
+  }
+  assert.equal(envOverlay({}, { MONOPLAYER_FRONT_PORT: '0' }).front.port, 0,
+    'the front may still ask the OS for one')
+})
+
+test('#891 an IPv6 front on an ephemeral port is still spelled where a reader can split it', () => {
+  // #891 was filed on the start record writing `2001:db8::1:0`. The config accepts a
+  // front port of 0, because that is a bind asking the OS for one, so the spelling is
+  // where the defect is closed.
+  assert.equal(addressName('2001:db8::1', 0), '[2001:db8::1]:0',
+    'the host keeps its brackets beside a port the picker declines to dial')
 })
 
 // #229/#264: the control document's compiled switches. Two paths are left, and the
@@ -671,7 +729,7 @@ test('#815 an address that needs no bracket is written as it always was', () => 
   assert.equal(addressName('10.0.0.1', 25565), '10.0.0.1:25565', 'an IPv4 host has one colon')
   assert.equal(addressName('play2.excalia.fr', 25565), 'play2.excalia.fr:25565', 'and so does a name')
   assert.equal(addressName('[2001:db8::1]', 25565), '[2001:db8::1]:25565',
-    'a host the config already bracketed is not bracketed twice')
+    'the rule is idempotent, so a caller that brackets a host itself is not bracketed twice')
 })
 
 test('#815 every address a record joins is spelled by the one rule', () => {
@@ -693,12 +751,16 @@ test('#815 every address a record joins is spelled by the one rule', () => {
     assert.doesNotMatch(body, /`\$\{[^`]*\.host\}:\$\{[^`]*\.port\}`/,
       marker + ' joins a host and a port itself, which is the second spelling')
   }
-  // A seventh record that joined an address itself must fail here too, so the scan runs over
-  // the file with the rule's own body taken out, not over the six markers above.
-  const rule = blockAfter(source, 'export function addressName', 'the address rule in src/service/start-live.js')
-  const outside = source.slice(0, rule.open) + source.slice(rule.close + 1)
-  assert.doesNotMatch(outside, /\$\{[^`}]*\.host\}:\$\{[^`}]*\.port\}|\.host \+ ':' \+ /,
-    'something outside the rule joins a host and a port itself, in either spelling')
+  // #889 moved the rule to src/core/picker.js, so the service imports the one rule and
+  // defines none: a definition here would be the re-spelling this ticket is about, and the
+  // six markers above read green through either. So the scan is the whole file, not the file
+  // less a block, and it asks for the import that replaces the block.
+  assert.match(source, /import \{[^}]*\baddressName\b[^}]*\} from '\.\.\/core\/picker\.js'/,
+    'the service imports the one address rule (#889), rather than defining a second')
+  assert.doesNotMatch(source, /function addressName \(/,
+    'and keeps no second definition of it')
+  assert.doesNotMatch(source, /\$\{[^`}]*\.host\}:\$\{[^`}]*\.port\}|\.host \+ ':' \+ /,
+    'nothing in the service joins a host and a port itself, in either spelling')
 
   // `backendAddress` is the one address two records share (#331), so it is where the rule
   // is called once for both.

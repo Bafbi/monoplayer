@@ -245,9 +245,12 @@ and why, and gives a default only to say what happens when you leave it unset.
 Required:
 
 - `MONOPLAYER_BACKEND_HOST`: `--start` refuses to run without it. Point it at
-  the Season 3 backend, `play2.excalia.fr`, for the live deployment.
+  the Season 3 backend, `play2.excalia.fr`, for the live deployment. It is a
+  host and nothing else: the port has its own variable below, and an IPv6
+  address is written bare (`2001:db8::1`), not in the brackets a record prints.
+  A value that is not a host refuses to start, naming the variable.
 - `MONOPLAYER_FRONT_HOST=0.0.0.0`: the default is loopback, which only accepts
-  pod-local connections.
+  pod-local connections. It takes the same shape as `MONOPLAYER_BACKEND_HOST`.
 
 Common:
 
@@ -292,8 +295,13 @@ Common:
   holds; Node fires a longer one at 1 ms), is named and ignored here, and a config
   document that sets one refuses to start.
 - `MONOPLAYER_LOG` to write JSONL to a file instead of stdout
-- `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT`: the two ports. Leave
-  both unset unless the deployment moves one.
+- `MONOPLAYER_BACKEND_PORT` and `MONOPLAYER_FRONT_PORT`: the two ports, as
+  integers: the backend's from 1 to 65535, and the front's from 0, where 0 asks
+  the OS for a free port. Leave both unset unless the deployment moves one. A
+  value that is not an integer in its range refuses to start, naming the
+  variable. A deployed lane must not ask for a free port: the Service targets
+  the port a manifest names, so a front the OS moved is a front nothing routes
+  to. 0 is for a lane on this machine.
 - `MONOPLAYER_RECONNECT_ATTEMPTS` (`0` = unlimited; unset keeps a config
   file's `reconnect.attempts`, which is unlimited when the file sets none) and
   `MONOPLAYER_RECONNECT_MAX_DELAY_MS`, the cap on the delay between attempts
