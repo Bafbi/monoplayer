@@ -4,6 +4,16 @@
 
 import { CHANNEL_ROLES } from '../core/channels.js'
 import { createClaims } from '../core/claims.js'
+import { createCallInHandlers } from './call-in-handler.js'
+
+// #886: each double keeps one handler per call-in through the guard the real legs import
+// (src/legs/call-in-handler.js), not a copy of it. Plain assignment let a service test plant
+// a registration on top of the core's and read a whole wiring off a leg whose real
+// counterpart throws. That is #631's general form: a double that answers more than the thing
+// it stands for is a test that passes on a lane that would not boot.
+//
+// A double keeps its holes: it carries neither setCoreAttach nor setCoreAttachConfiguring,
+// and test/service/wire-leg-to-core.test.js declares the rest of them.
 
 // Backend leg adapter (fake): implements the interface createMonoplayer wires
 // against. Frames are {state: 'configuration'|'play', name, buffer?, data?};
@@ -21,6 +31,7 @@ export function createFakeBackendLeg () {
   let ended = 0
   let target = null
   const targets = []
+  const fillCallIn = createCallInHandlers()
 
   const leg = {
     kind: 'fake-backend-leg',
@@ -30,9 +41,9 @@ export function createFakeBackendLeg () {
       connected = true
       return Promise.resolve()
     },
-    setFrameHandler (fn) { frameHandler = fn },
-    setEndHandler (fn) { endHandler = fn },
-    setErrorHandler (fn) { errorHandler = fn },
+    setFrameHandler (fn) { frameHandler = fillCallIn('setFrameHandler', fn) },
+    setEndHandler (fn) { endHandler = fillCallIn('setEndHandler', fn) },
+    setErrorHandler (fn) { errorHandler = fillCallIn('setErrorHandler', fn) },
     writeRaw (buffer, meta) { written.raw.push({ buffer, meta }) },
     write (name, packet, meta) { written.packets.push({ name, packet, meta }) },
     // #258: the target the core hands over for the next connect. The real leg
@@ -111,6 +122,7 @@ export function createFakeFrontLeg () {
   let spectatorPoseHandler = null
   let configuringHandler = null
   let reconfiguredHandler = null
+  const fillCallIn = createCallInHandlers()
 
   const client = {
     username: 'Bafbi',
@@ -121,15 +133,15 @@ export function createFakeFrontLeg () {
     kind: 'fake-front-leg',
 
     // Interface used by createMonoplayer:
-    setLoginStartHandler (fn) { loginStartHandler = fn },
-    setServerboundHandler (fn) { serverboundHandler = fn },
-    setDetachHandler (fn) { detachHandler = fn },
-    setClientSettingsHandler (fn) { clientSettingsHandler = fn },
+    setLoginStartHandler (fn) { loginStartHandler = fillCallIn('setLoginStartHandler', fn) },
+    setServerboundHandler (fn) { serverboundHandler = fillCallIn('setServerboundHandler', fn) },
+    setDetachHandler (fn) { detachHandler = fillCallIn('setDetachHandler', fn) },
+    setClientSettingsHandler (fn) { clientSettingsHandler = fillCallIn('setClientSettingsHandler', fn) },
     // #636: where a spectator's own client says it is. The fake records the registration;
     // a test drives the core's method instead of a socket.
-    setSpectatorPose (fn) { spectatorPoseHandler = fn },
-    setConfiguringHandler (fn) { configuringHandler = fn },
-    setReconfiguredHandler (fn) { reconfiguredHandler = fn },
+    setSpectatorPose (fn) { spectatorPoseHandler = fillCallIn('setSpectatorPose', fn) },
+    setConfiguringHandler (fn) { configuringHandler = fillCallIn('setConfiguringHandler', fn) },
+    setReconfiguredHandler (fn) { reconfiguredHandler = fillCallIn('setReconfiguredHandler', fn) },
     // #22: the core asks the client to re-enter configuration on the same
     // connection. The fake records the request; the core drives the state.
     startReconfiguration ({ reason = 'transfer' } = {}) {
