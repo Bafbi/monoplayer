@@ -447,7 +447,10 @@ export function reportsClientInformation ({ role = null, state = null } = {}) {
 // #435: the cap is headroom over the closed set, never the set's size. A named
 // reason that reaches the cap is a reason an operator's chart shows as `other`,
 // which reads as a reason nobody named.
-export const MAX_REFUSAL_REASONS = 20
+// #670: raised from 20, because `empty_offer` joined the set and the two buckets the
+// rule adds past it, `unknown` and `other`, are keys of the same map. The set is
+// docs/telemetry.md's list; this number stays one clear of it.
+export const MAX_REFUSAL_REASONS = 22
 export function bumpReason (map, reason) {
   return bumpBounded(map, reason, MAX_REFUSAL_REASONS)
 }
@@ -1402,11 +1405,24 @@ function createFrontLeg ({
     const rows = offer.rows
     if (rows.length === 0) {
       // #315: the lane offers nothing, and the client hears that. It never picked a
-      // server, so a sentence about one names a choice nobody made. The reason is the
-      // offer's own, repeated here because the offer's line is written once per
-      // distinct answer and the second join on an empty list reads none (#315).
-      const text = pickerBoard.refuse({ reason: 'empty_offer' })
-      log('pickerEmpty', { username: client.username ?? null, reason: offer.reason, text })
+      // server, so a sentence about one names a choice nobody made.
+      //
+      // #670: and this client is one the picker ended, so it counts where the other
+      // sentences count and its record carries the word the map is keyed by. The map
+      // already holds the clients the lane could not deliver, not only the clicks it
+      // turned down: `finish_failed` and `no_cached_configuration` are a Spectate the
+      // answer allowed and the landing then lost. A lane with no rows is that same
+      // family. The reason a reader acts on is the offer's own, `not_json` or
+      // `unreadable`, which names the file to repair (#372); it rides `offerReason`,
+      // because `reason` is the word this map is keyed by.
+      const text = refuseAndCount({
+        reason: 'empty_offer',
+        record: fields => log('pickerEmpty', {
+          username: client.username ?? null,
+          offerReason: offer.reason,
+          ...fields
+        })
+      })
       endConfiguration(client, 'picker_empty', text)
       return
     }

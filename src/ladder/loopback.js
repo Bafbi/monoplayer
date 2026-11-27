@@ -6020,7 +6020,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // The refusal names the lane, never a server the client did not pick, and the
         // sentence the client was told is the one the lane said it chose.
         emptyRefusals.length === 1 &&
-        emptyRefusals[0].reason === 'not_json' &&
+        // #670: the record's `reason` is the word the refusal map is keyed by, so the
+        // parser's own code moved beside it.
+        emptyRefusals[0].reason === 'empty_offer' &&
+        emptyRefusals[0].offerReason === 'not_json' &&
         /this lane is not offering any server/.test(String(emptyRefusals[0].text ?? '')) &&
         toldText.length === 1 &&
         toldText[0].includes('this lane is not offering any server') &&

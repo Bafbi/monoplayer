@@ -173,6 +173,26 @@ test('#290 the doc names the claim counter, its attribute, and every outcome it 
   }
 })
 
+// #670: a client the picker ends because the lane offers no rows is a client the refusal
+// map answers for, like the one whose dialog the leg could not write: both are pickers
+// the lane could not give, not only requests it turned down. The page has to name the
+// word, and say where the offer's own cause went, because that parser code is the fact
+// an operator repairs a file from (#315, #372).
+test('#670 the page counts a lane with no rows as a refusal, and says where the offer cause went', () => {
+  const row = prefix => TELEMETRY.split('\n').find(line => line.startsWith(prefix))
+  const refusals = row('| `front.pickerRefusals`')
+  const pickers = row('| `front.pickers`')
+  assert.ok(refusals, 'the page documents the refusal map')
+  assert.ok(pickers, 'and the picker join counters')
+
+  assert.ok(refusals.includes('`empty_offer`'),
+    'the refusal row names the word a lane with no rows counts under')
+  assert.match(refusals, /pickerEmpty[^|]*offerReason/,
+    'and says where the offer own cause went, so a reader does not look for it in `reason`')
+  assert.match(pickers, /no row to offer/,
+    'the join row says such a join is counted there too, because it was served before it ended')
+})
+
 test('docs/ quote the value once, so a reader has one place to check it', () => {
   const hits = []
   for (const file of docFiles()) {
