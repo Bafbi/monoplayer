@@ -41,6 +41,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { DECISION, clientboundPolicy } from '../core/clientbound-policy.js'
+import { addressName, pickTarget } from '../core/picker.js'
 import { DEFAULT_ACCOUNTS_DIR } from '../custody/accounts.js'
 import { createFakeBackend, emptySlot, itemStack } from '../legs/fake-backend.js'
 import { offlineUuid } from '../legs/offline-identity.js'
@@ -96,11 +97,17 @@ export function parseEndpoint (text, label = 'endpoint') {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(label + ' needs a port in 1..65535, got ' + JSON.stringify(String(text).slice(separator + 1)))
   }
-  return { host: assertDeployableTarget(host), port }
+  // #889: the rule that writes an address reads it back (src/core/picker.js, addressName and
+  // pickTarget), so the brackets come off here and the socket gets the address it dials. The
+  // split above is the port's own sentence; a host it cannot read is the empty one below.
+  const parsed = pickTarget(String(text))
+  return { host: assertDeployableTarget(parsed === null ? host : parsed.host), port }
 }
 
+// #889: the string this builds and the one an operator writes by hand are one address
+// (src/core/picker.js). The truthiness test is not a spelling and stays.
 function joinEndpoint (host, port) {
-  return host && port ? host + ':' + port : undefined
+  return host && port ? addressName(host, port) : undefined
 }
 
 // The differences that are not findings yet, because the ticket that makes the
@@ -520,7 +527,7 @@ export function startJoin ({
 
   return {
     label,
-    endpoint: host + ':' + port,
+    endpoint: addressName(host, port),
     version,
     identity,
     bot,

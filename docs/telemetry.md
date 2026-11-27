@@ -421,7 +421,7 @@ a heartbeat.
 | `startLive` | `control.allowedServers` | object | The allowed-server key (#262) as this lane read it at startup. It carries `file` and `seed`, the two paths the config names, and `source`, which of them answered, or `none`. It carries `count` and `servers` too, whose row follows. The picker reads the file again at each offer (#265), so this is the read at start, not the list a join is offered now. The log line and the journal event carry the same block. |
 | `startLive` | `control.allowedServers.servers` | list | One address per server the lane offers, in the file's order, and `count` is this list's length (#746). An address is written as the picker names a row: `host:port`, and a bracketed IPv6 address keeps its brackets. Nothing on this path holds a name to print, and whether a server answers is not asked. |
 | `start` | `whitelist` | list | The core's copy of the same whitelist, one UUID per entry. Its length is `whitelistCount`. |
-| `backendReconnect`, `backendReconnectFailed` | `target` | label | The `host:port` a reconnect dialled, spelled as the start record spells one: a host holding a colon keeps its brackets (#815). `backendReconnect` is a dial that connected, and `backendReconnectFailed` one that did not, with `error` and no `warm`. |
+| `backendReconnect`, `backendReconnectFailed` | `target` | label | The `host:port` a reconnect dialled, spelled by the one rule for an address (`src/core/picker.js`): a host holding a colon keeps its brackets (#815, #889). The service and the offline rung write this record with the same field, and both spell it by that rule. `backendReconnect` is a dial that connected, and `backendReconnectFailed` one that did not, with `error` and no `warm`. |
 | `backendReconnect`, `backendReconnectFailed` | `delayMs`, `attempt`, `backendLogins`, `followed`, `warm`, `state` | count, boolean, label | The delay before the dial, its attempt number, the logins the session completed, whether a followed transfer landed, whether the cache came back warm, and the session's state after it. |
 
 The panel reads them to name the effective backend, the configured one, and the
@@ -467,6 +467,10 @@ write threw writes `pickerClaimFinishFailed` instead of `pickerClaimLanded`: the
 that sentence counted it (#708, #670). A claim whose dial or its configuration failed
 instead is not this line: it writes `pickerClaimRestored` and the client is offered
 the list again.
+`pickerClaimLanding` is the dial itself: `body`, then `server`, the row's name, and
+`target`, the address the leg dialled. Both are the one spelling
+(`src/core/picker.js`, `addressName`), so an IPv6 host keeps its brackets in both and
+the record cannot disagree with itself (#815, #889).
 
 The picker's Disconnect verb writes one of two lines. A body a claim holds refuses it:
 `pickerDisconnectRefused` carries the reason `disconnect_claimed`, the driver the
