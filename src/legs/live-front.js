@@ -647,12 +647,15 @@ function evaluateCoreDecision (coreDecision) {
 // The comparison is the core's identity gate's. `identity.reviewLoginStart` reads the
 // document through `whitelistSource`, the per-login reload the control document turns on
 // (#229), and its refusal is the one `monoplayer.denials` counts and `attach_denied`
-// names. The core's login call-in reaches `identity.reviewLoginStart` before anything
-// else, so an answer from it has already compared the whitelist, and this leg does not
-// hold the same uuid to the same document again. Two comparisons can disagree, and a torn
-// read between them refused a login the core had just allowed under a second reason.
-// Whichever ran first was the sentence an operator read. One login also parsed that
-// document twice for one answer.
+// names.
+//
+// One decision, two records: the leg counts and records the same refusal on its own
+// surface, because it is the one that kicks the client. The core's login call-in reaches
+// `identity.reviewLoginStart` before anything else, so an answer from it has already
+// compared the whitelist, and this leg does not hold the same uuid to the same document
+// again. Two comparisons can disagree, and a torn read between them refused a login the
+// core had just allowed under a second reason. Whichever ran first was the sentence an
+// operator read. One login also parsed that document twice for one answer.
 //
 // This leg trusts that call-in. A lane that wires `setLoginStartHandler` by hand stands in
 // for the core's, and the row `FRONT_LEG_CALL_INS` declares (reaches `processLoginStart`)
