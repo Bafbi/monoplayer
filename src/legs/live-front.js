@@ -120,13 +120,77 @@ const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // reconfiguration cannot need more. The bound exists only so a client that
 // never acknowledges cannot grow the leg's memory without limit.
 const MAX_PENDING_RECONFIGURATION_FRAMES = 1024
-// #722: the sentence the library ends a client with when its own sessionserver check
-// refuses the login. It is one fixed string in `minecraft-protocol`'s login handler,
-// written before `options.beforeLogin`, so it is text and not a code: no hook of
-// this leg ran, and nothing but the string reaches it. `loginReviewed` is the other
-// half of the match: the sentence is what the library wrote, and that flag is this
-// leg's own statement that it never reviewed the client.
-const LIBRARY_SESSION_REFUSAL = 'Failed to verify username!'
+// #722/#742: the sentences `minecraft-protocol` ends a connection with, before this
+// leg reviews the login. Its login handler refuses for reasons of its own, and its
+// handshake refuses a client of another protocol version. It refuses for reasons of its
+// own — a profile key that is missing, expired, or does not verify, an encryption
+// answer it cannot decrypt, a client that never sent a login start, and the
+// sessionserver's own answer — and every one of them is one fixed string. That string
+// is the whole of what reaches this leg: no hook of this leg ran for the client, so
+// there is no code to read instead of it.
+//
+// The word on the right is what this leg counts the refusal under. It is a word and
+// not the sentence, because a count keyed by a client-facing sentence is a chart keyed
+// by punctuation; the record carries the sentence itself as `text`.
+//
+// The table is read back out of the installed library by
+// test/legs/library-login-refusals.test.js, which fails when a fork bump adds, renames
+// or drops a sentence. A sentence missing here is a refusal the lane does not record.
+// `'socketClosed'` is absent on purpose: it is the library's word for a peer that went
+// away, and it refused nothing.
+export const LIBRARY_LOGIN_REFUSALS = new Map([
+  // The sessionserver's answer. The word is #722's, and the attach check's own word for
+  // a failed `hasJoined`, kept because `monoplayer.session.refused` charts this one
+  // sentence under it.
+  ['Failed to verify username!', DENY_REASONS.HASJOINED_FAILED],
+  // The handshake's own answer, and the one a client on another protocol version gets:
+  // the leg pins a version, so such a client is refused here, before it can send a login
+  // start at all. The library builds this sentence around the two numbers it compared,
+  // so it is matched by its prefix and not as a whole.
+  ['Wrong protocol version, expected: ', 'protocol_version_mismatch'],
+  // A login-start with no profile key, and an encryption answer whose key the client
+  // already has: the two sites that ask for one.
+  ['multiplayer.disconnect.missing_public_key', 'missing_public_key'],
+  // A profile key that is not a key this server can read.
+  ['multiplayer.disconnect.invalid_public_key', 'invalid_public_key'],
+  // A key whose signature is expired, or does not verify under Mojang's.
+  ['multiplayer.disconnect.invalid_public_key_signature', 'invalid_public_key_signature'],
+  // The encryption answer does not decrypt, or carries the wrong verify token.
+  ['DidNotEncryptVerifyTokenProperly', 'did_not_encrypt_verify_token_properly'],
+  // No login start arrived inside the library's own kick timeout. A client that never
+  // spoke, refused in its own words rather than by this leg's pre-auth deadline.
+  ['LoginTimeout', 'login_timeout'],
+  // The handshake's other sentence, for a lane that lets a client choose its version
+  // (`version: false`). It cannot reach the leg's own server, and it is here so the table
+  // is the library's set rather than the lane's reachable subset.
+  ['Protocol version ', 'protocol_version_unsupported']
+])
+
+// Two of those entries are not whole sentences: the library builds them around the
+// protocol numbers it compared, so a text match needs a prefix. They are listed here by
+// word rather than marked in the table, because the table is read as sentences by the
+// doc and by test/legs/library-login-refusals.test.js. The whole sentences are asked
+// first, so an entry that is a prefix of a longer one is still spelled as the library
+// spells it.
+const COMPOSED_REFUSAL_WORDS = new Set(['protocol_version_mismatch', 'protocol_version_unsupported'])
+
+// #435's rule, for this map: the cap is headroom over the closed set. It is this map's
+// own fact, and not `MAX_REFUSAL_REASONS`, because that one bounds the picker's set
+// above: each closed vocabulary owns its bound, and a reader of either number finds the
+// set it belongs to beside it.
+const MAX_LIBRARY_REFUSAL_REASONS = LIBRARY_LOGIN_REFUSALS.size + 3
+
+// The word this leg counts one of the library's sentences under, or undefined for text
+// the library did not refuse a login with.
+export function libraryRefusalWord (text) {
+  if (typeof text !== 'string' || text.length === 0) return undefined
+  const exact = LIBRARY_LOGIN_REFUSALS.get(text)
+  if (exact !== undefined) return exact
+  for (const [sentence, word] of LIBRARY_LOGIN_REFUSALS) {
+    if (COMPOSED_REFUSAL_WORDS.has(word) && text.startsWith(sentence)) return word
+  }
+  return undefined
+}
 
 // Pure configuration-phase interceptor (unit-testable without sockets):
 // wraps a client write so the library's generated configuration resolves to
@@ -766,7 +830,7 @@ function createFrontLeg ({
   // cannot disagree about how many refusals there were. #616: the disconnect's own
   // number is written by that same helper, so a refusing branch has one place to
   // count and not two numbers it must remember.
-  const metrics = { denied: 0, sessionVerificationRefused: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, libraryLoginRefused: 0, libraryLoginRefusedByReason: {}, sessionVerificationRefused: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt, endRequested, ended }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -845,13 +909,17 @@ function createFrontLeg ({
     deadlineMs: preAuthOptions.deadlineMs
   })
   const preAuthOpen = new WeakSet()
-  // #722: whether this leg reviewed the login. The library's session check runs
-  // before `beforeLogin`, so a connection it refuses was never reviewed, and that is
-  // the condition the session-refusal record is written on. The sentence the library
-  // ends with is the other half: it names which of the library's refusals this was.
-  // Read together they cannot count a denial of this leg's, which carries a text of
-  // its own and always has a reviewed login behind it.
+  // #722/#742: whether this leg reviewed the login. Every refusal the library makes in
+  // its login handler happens before `beforeLogin`, so a connection it refuses was
+  // never reviewed, and that is the condition the refusal record is written on. The
+  // sentence the library ends with is the other half: the table names which of its
+  // refusals this was. Read together they cannot count a denial of this leg's, which
+  // carries a text of its own and always has a reviewed login behind it.
   const loginReviewed = new WeakSet()
+  // #742: this connection's refusal is already on its record. The library ends a
+  // connection through the same call more than once — a refusal, and then the kick for a
+  // peer that never finished closing — and only the first call is the refusal.
+  const libraryRefusalRecorded = new WeakSet()
   // The window validated the deadline and owns it; the leg reads the effective
   // value back rather than resolving the default a second time.
   const preAuthDeadlineMs = preAuthWindow.stats().deadlineMs
@@ -874,34 +942,50 @@ function createFrontLeg ({
     preAuthWindow.release()
   }
 
-  // #722: a login the sessionserver refused. The library performs that check inside
-  // its own login handler and ends the connection before `beforeLogin`, so this leg
-  // never reviews the client: `metrics.denied`, the `attachDenied` line and the
+  // #722/#742: a login the library refused. It performs every one of those checks
+  // inside its own handlers and ends the connection before `beforeLogin`, so this
+  // leg never reviews the client: `metrics.denied`, the `attachDenied` line and the
   // service's `monoplayer.denials` sum are all written further down this path, and
-  // none of them is reached. The end reason is the whole of what the refusal leaves,
-  // so the count and the line are written here, together, where that reason is still
-  // in hand (#670).
+  // none of them is reached. The end reason is the whole of what the refusal leaves, so
+  // the count and the line are written here, together, where that reason is still in
+  // hand (#670). One helper, because one seam: the table decides which refusals exist,
+  // and a sentence it does not carry writes nothing.
+  //
+  // The reason is the table's word for the sentence, and the sentence rides beside it: a
+  // reader needs both, because the word is what the count is keyed by and the sentence is
+  // the only thing that client was ever told. Neither is a secret: every sentence is a
+  // fixed string in the library's own source, written for the client to read, and the
+  // translate payload the library passes beside it never reaches this event.
   //
   // The window's own `refused` is a different number and must not move here: that is
   // the connection cap, which turned nothing away, and its `expired` is the deadline,
-  // which destroyed nothing. This connection was admitted, sat in the window, and left
-  // it when the library ended it.
-  //
-  // The reason is the custody check's own word for a failed `hasJoined`
-  // (`DENY_REASONS.HASJOINED_FAILED`), and the sentence the client was told rides
-  // beside it, because a reader needs both: which check refused the login, and the
-  // only words that client will ever have been given.
-  function recordSessionVerificationRefusal (client, text) {
-    metrics.sessionVerificationRefused++
-    log('sessionVerificationRefused', {
+  // which destroyed nothing. These connections were admitted, sat in the window, and
+  // left it when the library ended them.
+  function recordLibraryLoginRefusal (client, sentence) {
+    const reason = libraryRefusalWord(sentence)
+    if (reason === undefined) return false
+    // #742: the window still holds this connection, or the refusal is not the library's
+    // to record. A login the library refuses never reached the attach whitelist, so it
+    // has not left the window; one this window already ended or refused has, and a
+    // sentence arriving for it afterwards is the library answering a socket this leg
+    // closed. Two records for one close is how an operator learns to trust neither.
+    if (!preAuthOpen.has(client)) return false
+    metrics.libraryLoginRefused++
+    bumpBounded(metrics.libraryLoginRefusedByReason, reason, MAX_LIBRARY_REFUSAL_REASONS)
+    // #722: the sessionserver's sentence keeps its own counter. `monoplayer.session.refused`
+    // samples that one under the single word its series carries, so it stays the subset it
+    // always was, and this helper is the only place either number moves.
+    if (reason === DENY_REASONS.HASJOINED_FAILED) metrics.sessionVerificationRefused++
+    record(client, 'libraryLoginRefused', {
       username: client?.username ?? null,
       uuid: client?.uuid ?? null,
-      reason: DENY_REASONS.HASJOINED_FAILED,
-      text,
+      reason,
+      text: sentence,
       // The running total, as the window's two lines carry theirs: a reader greps one
       // line and has the count, without reading the heartbeat beside it.
-      refused: metrics.sessionVerificationRefused
+      refused: metrics.libraryLoginRefused
     })
+    return true
   }
 
   function armPreAuthDeadline (client) {
@@ -937,7 +1021,18 @@ function createFrontLeg ({
   // #205: the deadline fired. The connection did not reach the whitelist's accept
   // in the time a real login needs, so its socket goes. Its 'end' listener still
   // runs and releases the slot.
+  //
+  // #742: unless the library already refused it with a sentence of its own. Both bounds
+  // are 30 s and the library's is armed first, so a silent socket is the library's to
+  // name: its kick half-closes, and this timer is due in the same millisecond. The
+  // socket still goes and the slot still frees; only the count is the refusal's, because
+  // one close that two numbers claim is a chart nobody can add up.
   function expirePreAuthWindow (client) {
+    if (libraryRefusalRecorded.has(client)) {
+      destroyQuietly(client)
+      closePreAuthWindow(client)
+      return
+    }
     const expiry = preAuthWindow.expire()
     // One line per expiry. The window admits at most maxConnections connections
     // at once, so a deadline period cannot write more lines than that, and a
@@ -1033,14 +1128,30 @@ function createFrontLeg ({
         // A socket that ends inside the window leaves it here, which covers every
         // denial before the accept. The library emits this from the socket's own
         // close, so a destroyed socket arrives here too. It carries the reason the
-        // connection ended with, which is the one thing a refusal the library made
-        // for itself leaves behind (#722).
-        client.on('end', reason => {
-          if (!loginReviewed.has(client) && reason === LIBRARY_SESSION_REFUSAL) {
-            recordSessionVerificationRefusal(client, reason)
+        // connection left the window (#722). The refusal itself is not read here: it was
+        // read at the call, three lines down.
+        // #742: one seam, every sentence. The 'end' event would not do: the library keeps
+        // the last reason it was handed and the event reports that one, so a refusal whose
+        // peer never closed its half is overwritten by the library's own kick -- and that
+        // kick is a sentence this table carries, so the event would record the wrong
+        // refusal rather than none. The reason is read where the library gives it, and the
+        // first one wins. A close the library did not refuse (`'socketClosed'`,
+        // `'ServerShutdown'`, this leg's own `front_error: ...`) is on no record at all,
+        // because the table does not carry it.
+        const libraryEnd = client.end
+        client.end = function (reason, ...rest) {
+          try {
+            if (!libraryRefusalRecorded.has(client) && !loginReviewed.has(client)) {
+              if (recordLibraryLoginRefusal(client, reason) === true) libraryRefusalRecorded.add(client)
+            }
+          } catch {
+            // The record is this leg's; ending the client is the caller's. A sink that
+            // threw must not leave a refused connection open, which is the one thing this
+            // wrapper could break.
           }
-          closePreAuthWindow(client)
-        })
+          return libraryEnd.call(this, reason, ...rest)
+        }
+        client.on('end', () => { closePreAuthWindow(client) })
         wireClient(client)
         if (dumpFramed) {
           // Diagnostic: framer output is framed (and compressed) bytes.

@@ -87,7 +87,7 @@ The attach check's whitelist step: the claimed UUID must be on the attach whitel
 _Avoid_: gate one, precheck
 
 **Session verification**:
-The attach check's session step: the Mojang sessionserver confirms that the connecting account's session matches the name and UUID it claims. In a live lane `minecraft-protocol`'s login handler answers `hasJoined` before the leg's `beforeLogin`, and `src/legs/live-front.js` counts and records a refusal as `sessionVerificationRefused`. `src/core/identity.js` keeps no copy of the step.
+The attach check's session step: the Mojang sessionserver confirms that the connecting account's session matches the name and UUID it claims. In a live lane `minecraft-protocol`'s login handler answers `hasJoined` before the leg's `beforeLogin`, and `src/legs/live-front.js` counts that refusal as `sessionVerificationRefused` and records it as `libraryLoginRefused` (#722, #742). `src/core/identity.js` keeps no copy of the step.
 _Avoid_: hasJoined check, auth check
 
 ## The proxy
