@@ -125,6 +125,19 @@ checklist the command generates. Each row is one step: set its `state` to `ok`
 when you saw it hold, and write what you saw in its `evidence`. Then save the
 checklist as `testdata/driver-unmodded-witness.json` with `completed: true`.
 
+The checklist names the lane it was written for, in its `gateLane` field, and
+`testdata/driver-summary.json` names the lane the two runs measured. `--verify-g0`
+refuses the pair when those two names disagree, and prints both. It also refuses a
+witness generated outside the window the reports are read in (`--max-age-hours`),
+or dated after the check that reads it; either refusal prints the dates it compared,
+and the window when the window is what refused it.
+
+So generate the checklist in the window you walk it in, on the lane the two runs
+measured: a witness is evidence about the backend it was walked against, not about
+whichever backend is up today. `generatedAt` is the writer's clock rather than the
+walk's, and it is the only clock the file has, so the check dates the document and
+says so.
+
 `not-seen` records a step you could not see. The check accepts it on one condition:
 the step's entry in `UNMODDED_STEPS` carries `openUntil`, the tickets that close it,
 the way the dev lane's `OPERATOR_STEPS` does. A row cannot make that declaration
@@ -148,6 +161,10 @@ A checklist written before #922 names its rows by `name` and records no step id,
 the check refuses it. Regenerate the checklist and copy your states and evidence into
 the rows by id: the eight steps have not changed.
 
+A checklist written before #939 records no `gateLane`, and the check refuses that
+too: a witness that names no lane is evidence about no run. Regenerate it on the
+lane the two runs measured and copy the rows across the same way.
+
 Capture the steps with `tools/nath.sh shot <path> gate-b-player-262`. Without a
 driver, that path moves the view to the client's workspace for the capture and
 back, after a notification that warns `NATH_SHOT_NOTICE` seconds ahead.
@@ -167,7 +184,14 @@ passed driver-lane reports whose newest run finished within 24 hours**, and the
 every assertion in their reports, and nothing is averaged or carried over. The
 witness half is read row by row, in the lane above.
 
-A pass prints what it accepted. A step the witness recorded `not-seen` on, which
+The two halves are read as one run, by the lane and the window the section above
+describes. A witness from another lane, or from another day, is refused with the
+values that disagreed printed on the line, rather than read as a quiet pass beside
+fresh reports. What it does not prove: nothing offline can date the walk itself, so
+a checklist generated today and walked next week passes as a document written today.
+
+A pass names the lane the witness and the summary share, and prints what it
+accepted. A step the witness recorded `not-seen` on, which
 `UNMODDED_STEPS` declares expected absent, prints one `known gap:` line. A step you
 did see, and which the list still declares expected absent, prints a
 `stale declaration:` line naming the list and the tickets: drop the step's

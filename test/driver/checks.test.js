@@ -192,9 +192,14 @@ const driverReport = (run, startedAt, passed = true) => ({
   lane: 'driver', run, startedAt, passed,
 })
 
+// #939: the summary names the gate lane its runs measured, and that name is what binds the unmodded
+// witness to the report set. A lane here is a fake: no case resolves the worktree's.
+const LANE = 'monoplayer-gate-1a2c3e5'
+
 test('verify g0: a clean one-invocation 2-run summary passes', () => {
   const summary = {
     runsRequested: 2, runsExecuted: 2, runsPassed: 2, allPassed: true,
+    gateLane: LANE,
     generatedAt: '2026-11-06T14:02:00.000Z',
     reports: ['a.json', 'b.json'],
   }
@@ -203,6 +208,18 @@ test('verify g0: a clean one-invocation 2-run summary passes', () => {
     driverReport(2, '2026-11-06T14:01:00.000Z'),
   ]
   assert.equal(verifyG0Evidence(summary, reports).ok, true)
+})
+
+// #939: the summary is the report set's identity, and the lane it names is what the unmodded witness
+// is bound to. A summary from a runner that recorded no lane can bound nothing, so it is refused here
+// rather than compared against a witness that would then pass on any lane.
+test('verify g0: a report set that names no lane is refused', () => {
+  const reports = finishedReports('2026-11-06T14:25:00.000Z')
+  assert.equal(verifyG0Evidence(cleanSummary, reports).ok, true, 'the summary names its lane and the two runs hold')
+  const { gateLane, ...nameless } = cleanSummary
+  const verdict = verifyG0Evidence(nameless, reports)
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /^the report set names no lane:/)
 })
 
 test('verify g0: two separate one-run invocations cannot pass as 2/2', () => {
@@ -215,6 +232,7 @@ test('verify g0: two separate one-run invocations cannot pass as 2/2', () => {
   assert.equal(verifyG0Evidence(summary, reports).ok, false)
   const twoRunOnes = {
     runsRequested: 2, runsExecuted: 2, runsPassed: 2, allPassed: true,
+    gateLane: LANE,
     generatedAt: '2026-11-06T14:02:00.000Z',
     reports: ['a.json', 'b.json'],
   }
@@ -228,6 +246,7 @@ test('verify g0: two separate one-run invocations cannot pass as 2/2', () => {
 test('verify g0: a stale summary cannot outvote a newer report', () => {
   const summary = {
     runsRequested: 2, runsExecuted: 2, runsPassed: 2, allPassed: true,
+    gateLane: LANE,
     generatedAt: '2026-11-06T13:59:00.000Z',
     reports: ['a.json', 'b.json'],
   }
@@ -247,6 +266,7 @@ const finishedReports = (latestFinishedAt) => [
 
 const cleanSummary = {
   runsRequested: 2, runsExecuted: 2, runsPassed: 2, allPassed: true,
+  gateLane: LANE,
   generatedAt: '2026-11-06T14:30:00.000Z',
   reports: ['a.json', 'b.json'],
 }
@@ -278,15 +298,39 @@ test('verify g0: without a window, the age of the evidence is not checked', () =
   assert.equal(verdict.ok, true)
 })
 
-test('verify g0: a report with no finishedAt falls back to its start time', () => {
+test('verify g0: a report whose finishedAt nobody can read is refused, not skipped', () => {
+  // The age rule is one function for both halves of a pass (#939), and it refuses a time that does
+  // not parse: a document whose date cannot be read passes every window there is. Read without a
+  // window too, because an unreadable date is not an age question, and both halves answer the same
+  // way: the witness refuses one whether or not a window was named.
+  const now = Date.parse('2026-11-06T15:00:00.000Z')
+  const reports = finishedReports('2026-11-06T14:25:00.000Z')
+  reports[1].finishedAt = 'whenever the run ended'
+  assert.equal(verifyG0Evidence(cleanSummary, reports, { now, maxAgeMs: 24 * 60 * 60 * 1000 }).reason,
+    'driver evidence carries no readable finishedAt, so its age cannot be read')
+  assert.equal(verifyG0Evidence(cleanSummary, reports).reason,
+    'driver evidence carries no readable finishedAt, so its age cannot be read',
+    'no window is no window question, not no date question')
+})
+
+test('verify g0: a report with no finishedAt is dated by its start, and the refusal says started', () => {
+  // The sentence names the field the report actually held, so a refusal cannot claim a finish nobody
+  // recorded (#939) — the fallback is in the code that dates it, and the wording follows it.
   const now = Date.parse('2026-11-09T15:00:00.000Z')
   const reports = [
     driverReport(1, '2026-11-06T14:00:00.000Z'),
     driverReport(2, '2026-11-06T14:20:00.000Z'),
   ]
   const verdict = verifyG0Evidence(cleanSummary, reports, { now, maxAgeMs: 24 * 60 * 60 * 1000 })
-
-  assert.equal(verdict.ok, false)
-  assert.match(verdict.reason, /stale/)
+  assert.equal(verdict.reason,
+    'driver evidence is stale: the newest run started at 2026-11-06T14:20:00.000Z, outside the 1440-minute window')
 })
 
+test('verify g0: a run dated after the check is refused, because no clock wrote it', () => {
+  const now = Date.parse('2026-11-06T15:00:00.000Z')
+  const verdict = verifyG0Evidence(cleanSummary, finishedReports('2062-11-06T14:25:00.000Z'), {
+    now, maxAgeMs: 24 * 60 * 60 * 1000,
+  })
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /^driver evidence is dated in the future: it says 2062-11-06T14:25:00.000Z, and this check is reading it at 2026-11-06T15:00:00.000Z$/)
+})
