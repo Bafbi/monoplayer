@@ -186,7 +186,7 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   // the frame, because the level a click came from is now one of the board's answers
   // rather than a branch in the leg.
   const sites = countedSites(SOURCE)
-    .map(refusedReason)
+    .map(site => refusedReason(site.body))
     .sort()
   assert.deepEqual(sites, [
     "'disconnect_claimed'",
@@ -261,10 +261,10 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
 // record, so a site cannot count without telling a reader why.
 test('#670 every counted refusal writes its own record, and the record carries the reason and the sentence', () => {
   const sites = countedSites(SOURCE)
-  // #601: the failure names the sites it read, because a count answers which there are and not
-  // which one moved.
+  // #601: the failure names the sites it read, by the byte each starts at, because three of the
+  // ten pass `answer.reason` and a reason alone does not say which one moved.
   assert.ok(sites.length >= 10, 'the leg counts ten refusals, and the guard reads each site. It read: ' +
-    sites.map(refusedReason).join(', '))
+    sites.map(site => 'byte ' + site.at + ': ' + refusedReason(site.body)).join(', '))
   // The scanner looks for the call as it is written today. A site spelled around it, with
   // a space before the argument or an alias, would pass every assertion below unseen, so a red
   // here names every call in the file: the one the scan did not read is the fix.
@@ -278,11 +278,11 @@ test('#670 every counted refusal writes its own record, and the record carries t
   // site (#416), and the pair the helper hands over, the reason and the sentence, can only
   // arrive at the site that writes them. A site may take that pair by name instead of
   // spreading it, which is the same rule.
-  const unnamed = sites.filter(site => {
-    const named = site.match(/(^|[^.\w])record:\s*(\w+|\(\s*\{[^}]*\}\s*\))\s*=>/)
+  const unnamed = sites.filter(({ body }) => {
+    const named = body.match(/(^|[^.\w])record:\s*(\w+|\(\s*\{[^}]*\}\s*\))\s*=>/)
     if (named === null) return true
     if (named[2].startsWith('(')) return false
-    return !site.includes('...' + named[2])
+    return !body.includes('...' + named[2])
   })
   assert.deepEqual(unnamed, [],
     'every counted refusal names the record it writes and spreads the pair the helper hands it: ' +
@@ -298,21 +298,18 @@ test('#670 every counted refusal writes its own record, and the record carries t
   // its own line: a reader who greps the record gets the reason and the sentence the
   // client was given, and needs no second record to learn them.
   for (const event of ['pickerDialogFailed', 'pickerServerDialogFailed']) {
-    assert.ok(sites.some(site => site.includes("log('" + event + "'")),
+    assert.ok(sites.some(site => site.body.includes("log('" + event + "'")),
       event + ' is a counted refusal, and its own record carries the reason')
   }
 
   // #670: the empty offer is the second asymmetry. It counts now, so the word the map is
   // keyed by is the record's `reason`, and the offer's own cause rides beside it: that
   // code, not the sentence's word, is what an operator repairs a file from (#372).
-  const empty = sites.filter(site => site.includes("'empty_offer'"))
+  const empty = sites.filter(site => site.body.includes("'empty_offer'"))
   assert.equal(empty.length, 1, 'the lane with no rows counts once, through the helper')
-  assert.match(empty[0], /reason: 'empty_offer'/, 'and it counts under the word the board composes its sentence from')
-  assert.match(empty[0], /offerReason: offer\.reason/, 'while the offer own cause, which names the file to repair, rides beside it')
+  assert.match(empty[0].body, /reason: 'empty_offer'/, 'and it counts under the word the board composes its sentence from')
+  assert.match(empty[0].body, /offerReason: offer\.reason/, 'while the offer own cause, which names the file to repair, rides beside it')
 })
-
-// #708: the ends this file judges are read as argument lists by test/support/source-scan.js, so
-// the sentence of one is its own argument and not a line (#764).
 
 // The function the call sits in. The leg's own functions are declared at two spaces inside
 // createFrontLeg, so the nearest of those above the call is its own.
@@ -322,8 +319,8 @@ function enclosingFunction (source, at) {
   return declared[declared.length - 1][1]
 }
 
-// #708: the ends the argument scan cannot judge on its own are listed here, with
-// what the guard knows about them and how it knows it.
+// #708: the ends the shared scan cannot judge on its own are listed here, with what the
+// guard knows about them and how it knows it.
 //
 // A picker client is ended in three shapes. Eight of them pass a local the counted
 // helper returned in the same function; two pass the `.text` a function handed back

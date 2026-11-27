@@ -1,20 +1,22 @@
-// The source scans the guard tests share (#764): a counted call site, one function's body, and an
-// end call's arguments. Two guard files read src/legs/live-front.js and src/service/monoplayer.js
-// as text, and each kept its own copy of all four helpers.
+// The source scans the guard tests share (#764): every counted refusal site, one function's body,
+// and every end call's arguments. The splitter those last two need is private to this module. Two
+// guard files read src/legs/live-front.js and src/service/monoplayer.js as text, and each carried
+// its own copy of all four.
 //
 // One copy, because a scan that stops matching the file it reads keeps passing. #710's rule is that
 // a source scan proves a branch is mentioned and never that it runs; a scan whose subject moved
 // proves less than that, and two sets of brace walks over one file disagree the day one of them
 // learns a shape the other does not, with nothing red to say so.
 //
-// Each scan asserts rather than returning a partial read: a case that cannot see the site it
-// judges fails, naming the byte, instead of passing on an empty list.
+// A scan that cannot read what it was asked for throws, naming the byte or the function, rather than
+// returning a partial read: a case that passes on an empty list is the defect these guards exist to
+// catch. test/tooling/manifest-reader.js states the same policy for the manifests it reads.
 //
 // Not a test file: `mise run test` runs `test/*/*.test.js`, so nothing here runs on its own.
-import assert from 'node:assert/strict'
 
-// Every `refuseAndCount({...})` call in the source, as the object literal it passes, by brace
-// matching so a record closure nested in one site is not mistaken for the end of it.
+// Every `refuseAndCount({...})` call in the source, as where it starts and the object literal it
+// passes, by brace matching so a record closure nested in one site is not mistaken for the end of
+// it. The byte is what lets a failure name one site when two of them pass the same reason.
 //
 // A site spelled around the scan (a space before the object, an alias) is not read, so a case that
 // must know every call was read compares this list against the file's own count of the helper.
@@ -31,8 +33,8 @@ export function countedSites (source) {
         if (depth === 0) { end = i; break }
       }
     }
-    assert.notEqual(end, -1, 'the refusal site at byte ' + at + ' closes')
-    sites.push(source.slice(from + 1, end))
+    if (end === -1) throw new Error('source scan: the refusal site at byte ' + at + ' never closes its object')
+    sites.push({ at, body: source.slice(from + 1, end) })
   }
   return sites
 }
@@ -43,12 +45,14 @@ export function countedSites (source) {
 //
 // Both modules a case reads declare their functions at two spaces inside a factory, and that indent
 // is how they are found: a function moved to another indent is not found, and the case fails saying
-// the module has no such function.
+// what the scan looked for.
 export function functionSpan (source, name) {
   const at = source.indexOf('\n  function ' + name + ' (')
-  assert.notEqual(at, -1, 'the module has the function ' + name)
+  if (at === -1) {
+    throw new Error('source scan: no function ' + name + ' declared at two spaces inside a factory')
+  }
   const open = source.indexOf(') {', at) + 2
-  assert.ok(open > 2, name + ' has a body')
+  if (open <= 2) throw new Error('source scan: the function ' + name + ' has no body brace')
   let depth = 0
   for (let i = open; i < source.length; i += 1) {
     if (source[i] === '{') depth += 1
@@ -57,7 +61,7 @@ export function functionSpan (source, name) {
       if (depth === 0) return { from: open + 1, body: source.slice(open + 1, i) }
     }
   }
-  assert.fail(name + ' closes')
+  throw new Error('source scan: the body of ' + name + ' never closes')
 }
 
 // The body alone, for a case that reads no offset.
@@ -85,7 +89,7 @@ export function endSites (source) {
         if (depth === 0) { end = i; break }
       }
     }
-    assert.notEqual(end, -1, 'the end site at byte ' + at + ' closes')
+    if (end === -1) throw new Error('source scan: the end site at byte ' + at + ' never closes its call')
     sites.push({ at, args: splitArguments(source.slice(open + 1, end)) })
   }
   return sites

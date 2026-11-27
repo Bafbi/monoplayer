@@ -230,7 +230,7 @@ const quotedWords = text => [...new Set([...text.matchAll(/'([a-z][a-z0-9_]*)'/g
 function legWords (source) {
   const words = new Set()
   for (const site of countedSites(source)) {
-    const named = site.match(/reason:\s*'([a-z][a-z0-9_]*)'/)
+    const named = site.body.match(/reason:\s*'([a-z][a-z0-9_]*)'/)
     if (named !== null) words.add(named[1])
   }
   const landing = functionBody(source, 'landSpectator')
@@ -405,8 +405,7 @@ test('#722 the doc names the sessionserver refusal, its reason, and the counter 
 // #709: the words `configurationEnded`'s `reason` can hold, read off the leg's own end
 // sites. Every end takes three arguments and the reason is the second: a literal at ten
 // sites, and one string concatenation at the eleventh, which is the guard for a verb no lane
-// carries. The scan that reads them is test/support/source-scan.js's, the same one
-// test/legs/picker-numbers.test.js reads the ends with (#764).
+// carries. The scan that reads them is test/support/source-scan.js's (#764).
 
 // The one end whose word is composed rather than written: the guard for a verb `PICK_VERBS`
 // carries and this leg has no branch for. It is one pattern on the page, because it is one
