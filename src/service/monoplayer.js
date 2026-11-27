@@ -3351,11 +3351,11 @@ export function createMonoplayer ({
     if (started) return
     started = true
 
-    // #592, #605: the call-ins each leg interface carries, in one place per
-    // interface, with each one's payload shape. The core applies both tables
-    // here and nothing else, so no lane registers a call-in by hand and a leg
-    // that lacks one keeps its own default rather than a silent hole. A lane
-    // that wants a different registration wraps one call-in after this runs.
+    // #592, #605: the core applies both tables here and in no other place. What a
+    // row is, and what a lane does when it needs a different registration, are
+    // src/service/wire-leg-to-core.js's. The report carries names and no handler
+    // (#718). The attach cut a lane used to wrap is the core's own `attach` event
+    // (#683).
     legWiring = {
       backend: wireLegToCore({ core: handle, leg: backendLeg, table: BACKEND_LEG_CALL_INS }),
       front: wireLegToCore({ core: handle, leg: frontLeg, table: FRONT_LEG_CALL_INS })
