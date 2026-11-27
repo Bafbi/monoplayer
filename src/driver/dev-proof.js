@@ -25,8 +25,9 @@
 //
 // The two halves. `claimsOf` answers the claims a machine can. The other half —
 // `OPERATOR_STEPS`, what a person must see — is never answered here: `witnessDocument` writes
-// it `pending`, and `verifyWitness` refuses until every step is `seen` and the rows are those
-// steps (#880). The polarity is
+// it `pending`, and `verifyWitness` refuses until every step is recorded and the rows are those
+// steps (#880). One `not-seen` is accepted: the one a step declares expected absent, with the
+// tickets that close it (#920). Every other one is the finding it was. The polarity is
 // `src/driver/run.js`'s unmodded witness, on purpose: one exit code 1 for "the human half is
 // not recorded", in this same directory, rather than a second meaning for 1.
 import { pathToFileURL } from 'node:url'
@@ -50,8 +51,12 @@ pending, and --verify refuses until a person has recorded it.
   --help          this text
 
 Exit 0 when every frame-level claim holds and, with --verify, every witnessed
-step does. Exit 1 for a missing frame or an unrecorded witness. Exit 2 when no
-spectator landed at all: that is a run that never reached its second client.
+step is recorded: seen, or the one gap OPERATOR_STEPS declares. Exit 1 for a
+missing frame or an unrecorded witness. Exit 2 when no spectator landed at all:
+that is a run that never reached its second client.
+
+A step OPERATOR_STEPS declares expected absent may be recorded not-seen: --verify
+accepts that one gap, names the tickets that close it, and refuses any other.
 `
 
 // The records a run is made of, and what each one settles. One list: the runbook's table is
@@ -80,6 +85,20 @@ export const RECORDS = Object.freeze([
   { name: 'heartbeat', what: 'the counters, every 30 seconds: `metrics.virtualPlayers*`, `metrics.skinFramesWritten`, and one row per socket with its role' }
 ])
 
+// The tickets that close the one step a run taken today cannot see. The list's fact is theirs, and
+// the step's failure sentence is built from them, so the runbook's cell for the step — held to that
+// sentence word for word (#882) — follows a ticket edited here instead of naming one that landed.
+const OPEN_UNTIL_OWN_BODY = Object.freeze([647, 645])
+
+// The tickets a declaration names, as the sentence reads them: "#647", or "#647 and #645".
+const ticketList = tickets => tickets.map(ticket => '#' + ticket).join(' and ')
+
+// The verb that agrees with a count, so two refusals do not each spell the choice out.
+const agree = (count, one, many) => (count === 1 ? one : many)
+
+// What a declaration says it takes to close it: "#647 and #645 close it", or one of them.
+const closes = tickets => ticketList(tickets) + ' ' + agree(tickets.length, 'closes', 'close') + ' it'
+
 // The claims only a person can answer, in the order the runbook's table asks for them. The
 // states are the document's: `pending` until somebody looks, then `seen` or `not-seen`.
 //
@@ -92,6 +111,12 @@ export const RECORDS = Object.freeze([
 // (#881). It says what a correct run looks like in the operator's terms, including the cues they
 // would otherwise miss: a step of lag, the tab list, no hands in first person. The page cannot add
 // detail this sentence lacks without becoming a second home for it.
+// `openUntil` is the declaration that a step is expected to be `not-seen` today, and the tickets
+// that would change it (#920). Optional, like `because`: five steps carry none, because five steps
+// a run taken today shows. `verifyWitness` accepts a `not-seen` on a step that carries it and on no
+// other, so the declaration is a list with a reason per entry rather than a relaxed check. A row of
+// the witness cannot carry one: the file is hand-edited, and a step that could declare itself absent
+// would pass by writing a line.
 // `because` is the failure sentence, and it is optional on purpose: what the operator reads when a
 // step fails is the page's prose, except where that sentence states a fact this module computes
 // (#882). Then the sentence is built here — the mode step's count is `spectatorModeFrames().length`,
@@ -104,7 +129,15 @@ export const OPERATOR_STEPS = Object.freeze([
   { id: 'puppet-renders', record: 'puppetSkinSent', claim: 'the puppet renders where the driving client stands, wearing the puppet\'s skin' },
   { id: 'puppet-walks', record: 'heartbeat', claim: 'the puppet walks when the driving client walks, a fraction of a step behind' },
   { id: 'spectator-mode', record: 'spectateView', claim: 'the spectator flies, takes no damage, and cannot break or place', because: 'survival behaviour: `spectateView.modeFrames` was not ' + spectatorModeFrames().length },
-  { id: 'spectator-own-body', record: null, claim: 'the spectator has no body of its own, and no hands in first person (#647: this step fails until it lands)' },
+  {
+    id: 'spectator-own-body',
+    record: null,
+    openUntil: OPEN_UNTIL_OWN_BODY,
+    claim: 'the spectator has no body of its own, and no hands in first person',
+    because: 'a body is drawn, and the client collides with blocks: nothing tells the spectator its own ' +
+      'player-list entry, and a replayed body keeps its own mode frames. ' + closes(OPEN_UNTIL_OWN_BODY) +
+      ', and until then a witness records this step as not-seen'
+  },
   { id: 'drawn-for-driver', record: 'virtualPlayerWritten', claim: 'the spectator appears to the driving client, standing in the world and in the tab list, wearing a default skin' },
   { id: 'drawn-once', record: 'virtualPlayerWritten', claim: 'the driving client is drawn once, not twice: one body, and it is yours' }
 ])
@@ -428,21 +461,51 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
     steps: OPERATOR_STEPS.map(({ id, claim }) => ({ id, claim, state: 'pending', evidence: '[MANUAL: what you saw]' })),
     limitations: [
       'The frames half is read off the lane\'s own log. It says which frame reached which socket and nothing about what a client drew with it.',
-      'A step set to not-seen is a finding, not a pass: the proof is incomplete while one stands.',
-      'A spectator\'s own body is drawn until #647 and #645 land, so that step is expected to be not-seen today.'
+      'A step set to not-seen is a finding, not a pass, unless OPERATOR_STEPS declares that step expected absent for this run.',
+      // #920: built from the declaration, so a ticket added, closed or dropped from the list reaches
+      // this sentence instead of leaving a generated document telling the operator to record a gap
+      // that no longer exists.
+      ...OPERATOR_STEPS.filter(step => step.openUntil !== undefined).map(step =>
+        'The step \'' + step.id + '\' is expected to be not-seen today: ' + closes(step.openUntil) +
+        '. Record it not-seen with what you saw, and the check accepts that one gap.')
     ]
   }
 }
 
 const OPEN_STATES = new Set(['pending'])
 
+// The states a recorded row may be in. Every other string is refused: before #920 the check read
+// `pending` and `not-seen` and passed everything else, so a hand-edited row saying 'deferred' or
+// 'SKIPPED' with evidence beside it verified as a finished proof. The vocabulary is the document's,
+// so it is read here rather than assumed.
+const RECORDED_STATES = new Set(['seen', 'not-seen'])
+
+// A refusal, with the two lists a pass reads kept in the shape: a caller that prints them needs no
+// guard, and a test can assert an empty list rather than an absent key.
+const refuse = reason => ({ ok: false, reason, gaps: [], stale: [] })
+
+// What a declared gap is, on the result: the step, the sentence the operator read, the tickets that
+// close it, and what they recorded. The report and the command build their line from this.
+const gapOf = step => ({ id: step.id, claim: step.claim, tickets: step.openUntil, evidence: step.evidence })
+
+// The one line a declared gap is printed on, wherever this module prints one, so three readers
+// cannot word it differently: the command's pass, the report beside the step, and nothing else.
+const gapLine = (claim, tickets, evidence = null) =>
+  'known gap: ' + claim + ' — not seen' + (evidence === null ? '' : ' (' + evidence + ')') +
+  ', and ' + closes(tickets)
+
+// The line a declaration that outlived its ticket is printed on. #920's answer to a declaration that
+// would otherwise rot: a witness that saw the step still verifies, because a fix landing must not
+// turn an honest record red, and this line names the declaration to drop in the change that closes it.
+const staleLine = (claim, tickets) =>
+  'stale declaration: ' + claim + ' — seen, and OPERATOR_STEPS still expects it not seen until ' +
+  ticketList(tickets) + ' ' + agree(tickets.length, 'lands', 'land') +
+  ': drop the step\'s openUntil in the change that closes it'
+
 const namedIds = ids => ids.map(id => '`' + id + '`').join(', ')
 
 // A list in a sentence: "row 1, row 2 and row 3".
 const commaAnd = items => (items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' and ' + items.at(-1))
-
-// The verb that agrees with a count, so two refusals do not each spell the choice out.
-const agree = (count, one, many) => (count === 1 ? one : many)
 
 // What is wrong with the rows before their states are read: whether they are OPERATOR_STEPS, by
 // id and in its order. A row is named by its `id` and never by its `claim`: the claim is prose a
@@ -487,42 +550,67 @@ function stepRefusal (steps) {
 // gap, each naming what to write.
 export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
   if (document === null || typeof document !== 'object') {
-    return { ok: false, reason: 'no witness file: run the reader on the lane\'s log first, then record what you saw' }
+    return refuse('no witness file: run the reader on the lane\'s log first, then record what you saw')
   }
   if (document.lane !== lane) {
-    return { ok: false, reason: 'the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(lane) }
+    return refuse('the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(lane))
   }
   const steps = Array.isArray(document.steps) ? document.steps : []
   const misplaced = stepRefusal(steps)
-  if (misplaced !== null) return { ok: false, reason: misplaced }
+  if (misplaced !== null) return refuse(misplaced)
   // Past that check the rows are OPERATOR_STEPS in its order, so each step's words are the
   // module's. A row's own `claim` is the operator's label and no refusal reads it: the file is
   // hand-edited, and a claim that drifted from its id would otherwise be quoted back as evidence.
-  const settled = steps.map((step, at) => ({ ...step, claim: OPERATOR_STEPS[at].claim }))
+  //
+  // `openUntil` comes from the module for that reason, and it overwrites whatever the row held:
+  // declaring a gap is this list's fact (#920), and a row that could declare its own step expected
+  // absent would verify by writing one line.
+  const settled = steps.map((step, at) => ({
+    ...step,
+    claim: OPERATOR_STEPS[at].claim,
+    openUntil: OPERATOR_STEPS[at].openUntil ?? null
+  }))
   const unrecorded = settled.filter(step => OPEN_STATES.has(step?.state) || step?.state === undefined)
   if (unrecorded.length > 0) {
-    return {
-      ok: false,
-      reason: unrecorded.length + ' step(s) are still pending: ' + unrecorded.map(step => step.claim).join('; ')
-    }
+    return refuse(unrecorded.length + ' step(s) are still pending: ' + unrecorded.map(step => step.claim).join('; '))
   }
   const silent = settled.filter(step => typeof step.evidence !== 'string' || step.evidence.trim() === '' ||
     step.evidence.startsWith('[MANUAL'))
   if (silent.length > 0) {
-    return { ok: false, reason: 'a recorded step carries no evidence: ' + silent.map(step => step.claim).join('; ') }
+    return refuse('a recorded step carries no evidence: ' + silent.map(step => step.claim).join('; '))
+  }
+  const invented = settled.filter(step => !RECORDED_STATES.has(step.state))
+  if (invented.length > 0) {
+    return refuse('a recorded step is in no state a witness has: ' + invented.map(step =>
+      '`' + step.id + '` says ' + JSON.stringify(step.state) + ', and a step is `seen` or `not-seen`').join('; '))
   }
   if (document.completed !== true) {
-    return { ok: false, reason: 'every step is recorded, and the document is not marked completed: set completed true' }
+    return refuse('every step is recorded, and the document is not marked completed: set completed true')
   }
   const notSeen = settled.filter(step => step.state === 'not-seen')
-  if (notSeen.length > 0) {
-    return { ok: false, reason: 'not seen: ' + notSeen.map(step => step.claim + ' (' + step.evidence + ')').join('; ') }
+  // #920: a `not-seen` is the finding it always was, on every step but the ones this module declares
+  // expected absent today. The declaration is a list with a ticket per entry, not a relaxed check:
+  // the refusal keeps the sentence it always had, and names the one gap this run does expect, so an
+  // operator holding two `not-seen` rows is told which one is the honest one.
+  const unexpected = notSeen.filter(step => step.openUntil === null)
+  if (unexpected.length > 0) {
+    const declared = settled.filter(step => step.openUntil !== null)
+    return refuse('not seen: ' + unexpected.map(step => step.claim + ' (' + step.evidence + ')').join('; ') +
+      (declared.length === 0
+        ? ''
+        : '. The gap this run does expect is ' + commaAnd(declared.map(step =>
+          step.claim + ' (' + closes(step.openUntil) + ')'))))
   }
   const frames = document.frames ?? {}
   if (frames.passed !== true) {
-    return { ok: false, reason: 'the frames half did not pass in the run this witness records: ' + (frames.failed ?? []).join(', ') }
+    return refuse('the frames half did not pass in the run this witness records: ' + (frames.failed ?? []).join(', '))
   }
-  return { ok: true, reason: null }
+  return {
+    ok: true,
+    reason: null,
+    gaps: notSeen.map(gapOf),
+    stale: settled.filter(step => step.state === 'seen' && step.openUntil !== null).map(gapOf)
+  }
 }
 
 export function formatVerdict (report, { witnessPath = null, witness = null } = {}) {
@@ -547,6 +635,15 @@ export function formatVerdict (report, { witnessPath = null, witness = null } = 
     for (const step of witness.steps ?? []) {
       lines.push('  ' + String(step.state).toUpperCase().padEnd(9) + step.claim)
       if (step.state !== 'pending') lines.push('            ' + step.evidence)
+      // #920: the declaration beside the row it belongs to, so a reader of the report sees which gap
+      // is the known one, and which declaration a witness that saw the step outlived.
+      const entry = OPERATOR_STEPS.find(row => row.id === step?.id)
+      if (entry?.openUntil !== undefined && step?.state === 'not-seen') {
+        lines.push('            ' + gapLine(entry.claim, entry.openUntil))
+      }
+      if (entry?.openUntil !== undefined && step?.state === 'seen') {
+        lines.push('            ' + staleLine(entry.claim, entry.openUntil))
+      }
     }
     lines.push('')
   }
@@ -603,6 +700,15 @@ async function main (argv) {
       return 1
     }
     process.stdout.write('#634 VERIFIED: the frames reached their sockets and a person recorded what two clients showed.\n')
+    // #920: the gap the run declares, on the run's own output, so the proof a reader picks up names
+    // what it does not show and the ticket that closes it. The exit stays 0: the record the runbook
+    // asks an operator to make verifies, which is the whole point of declaring the gap.
+    for (const gap of verdictOfWitness.gaps) {
+      process.stdout.write(gapLine(gap.claim, gap.tickets, gap.evidence) + '\n')
+    }
+    for (const step of verdictOfWitness.stale) {
+      process.stdout.write(staleLine(step.claim, step.tickets) + '\n')
+    }
     return 0
   }
 

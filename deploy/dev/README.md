@@ -396,7 +396,7 @@ stale. The rest of their prose is this page's, and nothing compares it.
 | `puppet-renders` | the watching client, the world | the puppet renders where the driving client stands, wearing the puppet's skin | a player with a default skin: `puppetSkinSent` holds the entry and its `signed` flag, and an unsigned texture is one the client cannot verify. That record is written for the driving client's own player too, with `puppet` false, because a client draws the body it controls from the entry naming itself. The reader takes only a `puppet` true line written after the landing as the body's entry. No player at all: `puppetSkinWithheld` or `puppetSkinRefused`, and no `puppetSkinKnown`: no entry was written, and a client drops the spawn that follows |
 | `puppet-walks` | the watching client, while the driver walks | the puppet walks when the driving client walks, a fraction of a step behind | it stands still: the `heartbeat` counted `virtualPlayersMoved` 0, so no move frame reached a spectator |
 | `spectator-mode` | the watching client, movement | the spectator flies, takes no damage, and cannot break or place | survival behaviour: `spectateView.modeFrames` was not 2 |
-| `spectator-own-body` | the watching client, F5 | the spectator has no body of its own, and no hands in first person (#647: this step fails until it lands) | a body is drawn, and the client collides with blocks: that is #647, and the client is not told its own player-list entry, so it does not treat itself as a spectator |
+| `spectator-own-body` | the watching client, F5 | the spectator has no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: nothing tells the spectator its own player-list entry, and a replayed body keeps its own mode frames. #647 and #645 close it, and until then a witness records this step as not-seen |
 | `drawn-for-driver` | the driving client, the world beside it | the spectator appears to the driving client, standing in the world and in the tab list, wearing a default skin | nothing beside it: no `virtualPlayerWritten` carried `player_info` or `spawn_entity` to the driver's channel |
 | `drawn-once` | the driving client, the player you control | the driving client is drawn once, not twice: one body, and it is yours | a duplicate of yourself: a `virtualPlayerWritten` told the driver's channel about its own player |
 
@@ -490,13 +490,19 @@ node src/driver/dev-proof.js --verify
 ```
 
 It exits 1 and names the step that stops it: a step still `pending`, a step with no evidence,
-or a step you recorded as `not-seen`. Copy the completed document to
-`testdata/dev-two-client-witness.json` and the proof has a record in the repo, the way
-`testdata/driver-unmodded-witness.json` does for the driver lane.
+or a step you recorded as `not-seen` that nothing declares expected to be absent. Copy the
+completed document to `testdata/dev-two-client-witness.json` and the proof has a record in the
+repo, the way `testdata/driver-unmodded-witness.json` does for the driver lane.
 
-**Today one step is expected to be `not-seen`**: the spectator has no body of its own until
-#647 and #645 land. Record that, and the verification names it: a proof with a known gap is
-worth more than a proof nobody took.
+**A `not-seen` is a finding, unless the step's own row declares it expected.** The last cell of a
+row is `OPERATOR_STEPS`'s sentence for that step, and where the step carries a declaration the
+sentence names the tickets that close the gap. Record that step `not-seen` with what you saw, and
+the check accepts that one gap, printing a `known gap:` line beside the tickets. Any other
+`not-seen` stops the run, and the refusal names the gap it does expect. A proof with a known gap
+is worth more than a proof nobody took.
+
+The day those tickets land, record the step `seen`. The check accepts that too, and prints a
+`stale declaration:` line: drop that step's `openUntil` in the change that closes the ticket.
 
 A green reader is not that report. It is the frame-level half, and the ticket that started
 this one was filed because somebody read a counter as a proof.
