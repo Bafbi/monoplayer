@@ -500,7 +500,8 @@ first dial and its target warms in five seconds.
 - `O27` the N13 frame cut is aligned on a real client: the first-attach replay's
   parity frame names equal the first K parity frames the bot decoded, in order.
   N13 on the online rung compares one side of that cut, so a misaligned cut would
-  fail a correct cache.
+  fail a correct cache. The cut is the core's `attach` event (#683), so both sides
+  of it are the replay's own values.
 - `O28` the replay lands a moved entity where the backend put it. The fake
   spawns entity 99 at x=0, moves it three blocks with delta frames, then corrects
   it to x=10. The bot must decode x=10; a replay that puts every absolute before
@@ -616,7 +617,8 @@ first dial and its target warms in five seconds.
   reports `entities.withoutSpawn` 1, the same body count, and one more entity
   frame in `domains.entities`. Every field the record calls a count is an
   integer, and `domains` adds up to `replayed`, the number the attach stream
-  wrote on that snapshot.
+  wrote on that snapshot. The cut beside this record is the core's `attach` event,
+  not this record (#683, see N13).
 - `O51` the entity domain is bounded by entity, not by frame arrival (#213). A
   rig of its own, because the assertion needs a small bound, and the main rig's
   default is 2048 entities. The bound is four entities and the churn is five
@@ -1491,6 +1493,15 @@ live there.
   both sides. N13 fails when those K frames never arrive (30 s bound), when the
   decoded names differ from the replay's names in order, or when any compared
   domain differs. The loopback's O27 checks the same cut on a real protocol bot.
+  The cut is the core's own, published by `replaySnapshot` as the `attach` event
+  (#683, `src/service/monoplayer.js`), so the rung records the values the replay
+  used instead of taking a copy around the call. A replay the core defers until
+  the backend is warm is cut against the replay that then happened, which is the
+  stream the client decoded; before #683 the rung recorded the state at the call
+  and no frames. Neither rung attaches a client before its backend is warm, so
+  neither reaches that case: the online rung waits for readiness before it builds
+  its bot, and every loopback rig a client can attach a body to waits for readiness
+  in `createRig` before the rung builds its client.
 - `N14` the client information the bot reported reached the backend leg at the
   cap. The bot sends its own Client Information in the configuration phase. The
   packet the backend leg is handed at attach carries the reported `locale`,

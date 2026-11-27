@@ -424,9 +424,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       throw new Error('the loopback journal did not open: ' + journal.stats().disabledReason)
     }
 
-    // Every successful attach records the cache as it stood when its replay was
-    // built, so O27 below can check the N13 frame cut against the real client's
-    // decode.
+    // #683: every replay the core performs is published with the cache as it stood
+    // when it was built, so O27 below can check the N13 frame cut against the real
+    // client's decode without this rung taking a copy of its own.
     const attachCuts = []
     // #21: the gate is answered before the dial resolves, because the fake
     // backend withholds finish_configuration until the accept arrives. It is read
@@ -467,17 +467,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       // dialog: the dialog waits for the human instead of being clicked (#20).
       backend: { dialogAction: 'last' },
       core: { journal },
-      // #607: the cut is taken around the handler the rig's core installed, so this
-      // hook records and nothing else: the handler's argument is the table's.
-      attach: ({ rig, player, attachPlayer }) => {
-        const attachSnapshot = rig.core.cache.snapshot()
-        const attachPose = rig.core.session.currentPose
-        const outcome = attachPlayer(player)
-        if (outcome.attached) {
-          attachCuts.push({ snapshot: { ...attachSnapshot, pose: attachPose }, replayFrames: outcome.frames ?? [] })
-        }
-        return outcome
-      },
       reconnect: async ({ rig, delayMs, target } = {}) => {
         if (stopping || reconnecting) return
         reconnecting = true
@@ -520,6 +509,11 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         evidence.gate = gateAtConnect
       }
     })
+    // #683: the cut of every attach this lane performed, from the core's own publish:
+    // the snapshot the replay was built from, the pose it was built with, and the
+    // frames it wrote. Registered before the first client exists, because a listener
+    // that arrives after an attach has missed it.
+    main.core.on('attach', event => attachCuts.push(event))
     fake = main.base
     front = main.front
     backend = main.backend
@@ -817,7 +811,7 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // that the client decodes exactly the replay, in replay order; a real
     // protocol bot is the only place to observe it.
     const firstCut = attachCuts[0] ?? null
-    const replayedParityNames = firstCut ? parityReplayNames(firstCut.replayFrames) : []
+    const replayedParityNames = firstCut ? parityReplayNames(firstCut.frames) : []
     const capturedParityNamesSoFar = () => bot1.playNames()
       .filter(name => PARITY_FRAME_NAMES.has(name))
       .slice(0, replayedParityNames.length)
@@ -846,17 +840,21 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // replay that puts every absolute before every delta applies the deltas on
     // top of the correction and lands at 13 (issue #35).
     const firstAttach = attachCuts[0] ?? null
-    const replayedNames = firstAttach ? parityReplayNames(firstAttach.replayFrames) : []
+    const replayedNames = firstAttach ? parityReplayNames(firstAttach.frames) : []
     if (replayedNames.length > 0) {
       await bot1.waitFor(
         () => parityFrames.length >= replayedNames.length,
         'the replayed parity frames for the entity check'
       )
     }
+    // #683: the cut is the core's published event, so its snapshot and its pose are
+    // two fields of it. attachParity reads the synthesized position off the snapshot
+    // (src/ladder/state-parity.js, "carries that pose on the snapshot"), so the two
+    // published facts join here rather than being re-read around the call.
     const attachEvidence = firstAttach
       ? attachParity({
-        attachSnapshot: firstAttach.snapshot,
-        replayFrames: firstAttach.replayFrames,
+        attachSnapshot: { ...firstAttach.snapshot, pose: firstAttach.pose },
+        replayFrames: firstAttach.frames,
         clientFrames: parityFrames,
         settled: replayedNames.length > 0 && parityFrames.length >= replayedNames.length
       })
@@ -2500,15 +2498,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         }),
         whitelist: entityWhitelist,
         wire: createWireChecker({ version: VERSION }),
-        attach: ({ player, attachPlayer }) => {
-          const outcome = attachPlayer(player)
-          if (outcome.attached) entityAttaches.push(outcome.frames ?? [])
-          return outcome
-        },
         // This rig listened before it dialled, and still does: the port is what
         // its one client needs, and no assertion here reads the warm marker.
         order: ['listen', 'connect', 'ready']
       })
+      // #683: the replay's own frames, published by the core that wrote them.
+      entityRig.core.on('attach', event => entityAttaches.push(event.frames))
       entityFake = entityRig.base
       entityFront = entityRig.front
       entityBackend = entityRig.backend

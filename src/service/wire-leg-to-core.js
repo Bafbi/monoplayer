@@ -18,13 +18,14 @@
 // The core applies both tables once, in its start(), so no lane can forget a
 // call-in on the leg it hands the core, and the payload shapes live in one file. A
 // lane that wires a leg it built for something else — src/ladder/loopback.js's two
-// body legs (O59) — says so at the line. A lane that wants a different
-// registration wraps one call-in after start(), and both lanes that do say so at
-// the line: the rig reads the attach record, and the online rung cuts its
-// evidence. #607: a wrapper calls the handler this file built, reported as
-// `handlers`, so neither of them writes a payload shape a second time. A leg that
-// carries none of them is a leg with no core in front of it, which the two pre-auth
-// rungs build on purpose. They never come here.
+// body legs (O59) — says so at the line. #607: a lane that wants a different
+// registration wraps one call-in after start(), and calls the handler this file
+// built, reported as `handlers`, so it writes no payload shape a second time.
+// #683: no lane wraps one today, and the report site says what reads the handlers
+// now.
+//
+// A leg that carries none of them is a leg with no core in front of it, which the
+// two pre-auth rungs build on purpose. They never come here.
 //
 // The report is what a reader checks. `missing` names every declared call-in the
 // leg does not carry, and `requiredMissing` names the subset the leg's own
@@ -262,6 +263,11 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
 // after start() calls the handler the leg was handed and adds its record around it,
 // rather than writing the payload a second time. The core puts the whole report on
 // `legWiring`, one per interface, which is where a caller reads it from.
+//
+// #683: no lane wraps one today. The two that did took the attach cut, and the core
+// publishes that cut itself now, so `handlers` is what each leg was handed, read by
+// the tests that hold the wiring to it (test/service/wire-leg-to-core.test.js) and by
+// no lane.
 export function wireLegToCore ({ core, leg, table } = {}) {
   if (core === null || typeof core !== 'object') {
     throw new TypeError('wireLegToCore needs the core its call-ins reach: wireLegToCore({ core, leg, table })')

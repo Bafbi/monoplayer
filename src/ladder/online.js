@@ -619,13 +619,13 @@ export async function runOnline (argv = process.argv.slice(2)) {
     })
     // N13 needs the cache as it stood when the replay was built, not the cache
     // later: the rings are bounded FIFOs, and live traffic can evict a frame
-    // this client already received. The snapshot, the pose, and the attach run
-    // in one synchronous turn, so they describe exactly the stream replayed.
-    let attachCut = null
-    core.start()
-    // #592: start() wires the core's own attach call-in, so this lane wraps it
-    // after start() rather than in place of it. The wrapper carries N13's cut and
-    // returns what the core's attach returned.
+    // this client already received.
+    //
+    // #683: the core publishes that cut where the replay returns, so this lane
+    // subscribes to it instead of taking its own copy of the snapshot and the pose
+    // around the attach call-in. The subscription is registered after start(), which
+    // wires the call-ins, and before the front listens, so no client can attach
+    // before the listener exists.
     //
     // #610: start() also wires the human's client-information call-in, and this
     // rung leaves it wired, as every lane with a core in front of a leg does. The
@@ -635,27 +635,13 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // client decoded with the replay, and a serverbound settings frame is on
     // neither side of that cut. What the leg is sent for a real backend is N14's
     // subject, read off the leg's own write above.
-    //
-    // #607: the cut is taken around the handler start() installed, which is the
-    // report's `handlers.setCoreAttach`, so the payload the core is handed stays the
-    // table's and this wrapper adds nothing to it.
-    const attachPlayer = core.legWiring.front.handlers.setCoreAttach
-    if (attachPlayer === undefined) {
-      throw new Error('online: the front leg carries no setCoreAttach, so N13 has no attach to cut')
-    }
-    front.setCoreAttach(player => {
-      const attachSnapshot = core.cache.snapshot()
-      const attachPose = core.session.currentPose
-      const outcome = attachPlayer(player)
-      // N13 checks the first attach. A later reattach must not replace the cut:
-      // the captured frames it would compare against belong to the first.
-      if (outcome.attached && attachCut === null) {
-        attachCut = {
-          snapshot: { ...attachSnapshot, pose: attachPose },
-          replayFrames: outcome.frames ?? []
-        }
-      }
-      return outcome
+    let attachCut = null
+    core.start()
+    // N13 checks the first replay this lane wrote. A later reattach (N12) must not
+    // replace the cut: the captured frames it would compare against belong to the
+    // first.
+    core.on('attach', event => {
+      if (attachCut === null) attachCut = event
     })
 
     // --- run: backend connect, readiness, front listen ---
@@ -738,7 +724,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // from before ready(), and the replay happens inside the attach, so the
     // first K captured frames are the replay's. Anything after them is live
     // traffic, and the cut ignores it.
-    const expectedParityFrames = attachCut ? parityReplayNames(attachCut.replayFrames).length : 0
+    const expectedParityFrames = attachCut ? parityReplayNames(attachCut.frames).length : 0
     const replayDeadline = Date.now() + PARITY_REPLAY_TIMEOUT_MS
     while (parityFrames.length < expectedParityFrames && Date.now() < replayDeadline) {
       await new Promise(resolve => setTimeout(resolve, 25))
@@ -758,9 +744,13 @@ export async function runOnline (argv = process.argv.slice(2)) {
         error: 'no attach replay was recorded'
       }
     } else {
+      // #683: the cut is the event the core published, so its snapshot and pose are
+      // two of its fields. attachParity reads the synthesized position off the
+      // snapshot (src/ladder/state-parity.js, "carries that pose on the snapshot"),
+      // so the two published facts join here rather than being re-read around the call.
       parity = attachParity({
-        attachSnapshot: attachCut.snapshot,
-        replayFrames: attachCut.replayFrames,
+        attachSnapshot: { ...attachCut.snapshot, pose: attachCut.pose },
+        replayFrames: attachCut.frames,
         clientFrames: parityFrames,
         settled: paritySettled
       })
