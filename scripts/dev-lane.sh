@@ -11,7 +11,8 @@
 #   scripts/dev-lane.sh set-image TAG
 #                                 put that image on the dev proxy (#43)
 #   scripts/dev-lane.sh join      report whether the dev proxy's puppet is on the
-#                                 dev Paper (#43)
+#                                 dev Paper, or that nothing has claimed yet (#43,
+#                                 #676)
 #   scripts/dev-lane.sh pull-secret
 #                                 create the dev ghcr-pull Secret if it is missing
 #
@@ -34,7 +35,9 @@
 #   MONOPLAYER_DEV_READY_TIMEOUT  wait for Paper         (default 600s)
 #   MONOPLAYER_DEV_JOIN_TIMEOUT   wait for the join      (default 60s)
 #
-# Exit codes: 0 done, 1 the lane did not come up or the join failed, 2 setup refused.
+# Exit codes: 0 the command finished: for "join", the account is on the dev Paper or the
+#             lane is a picker nothing has claimed (the report's "state" says which);
+#             1 the lane did not come up, or a claim's body did not land; 2 setup refused.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -334,17 +337,116 @@ set_image() {
     || die "the dev proxy did not become ready on $ref" 1
 }
 
+# What the running lane says about its own boot, and about its claims (#676). A picker
+# lane dials no body at boot: `dialBodyAtBoot` logs `backendBootSkipped` with reason
+# `picker` and the first claim is what dials one (src/service/start-live.js), so a lane
+# nothing has claimed holds no body and is working as designed. This reads the pod's own
+# records, rather than deciding the question from the timeout below.
+#
+# One `state:record` on stdout, and the caller owns the sentence. A read that failed is
+# not a state: `scripts/gate-lane.sh` refuses to read a Forbidden as an absence for the
+# same reason, and `unknown` here keeps a failed read away from `idle`.
+#
+#   idle          a picker lane no claim record at all, so nothing was ever connected
+#   claim-failed  a claim did not land: `claimDialFailed`, or a `claimDialRefused`
+#                 that never reached a dial
+#   claimed       a claim dialled a body and no landing followed it yet
+#   landed        a claim's body landed (`claimBodyWarm`) and is not connected now
+#   boot          the lane's own record says the picker is off, so it dials at boot
+#   unknown       the log said nothing about the boot, so this says nothing either
+lane_state() {
+  # The whole log, never a tail: the boot record is near the top of it, a claim can be
+  # anywhere after, and this is the window since the container started. The Deployment is
+  # one replica with the Recreate strategy, so one container serves one claim at a time.
+  # "No claim in this window" is therefore "no claim since the container started".
+  #
+  # The container is named because this pod carries init containers too: kubectl picks
+  # one and warns about it on stderr, and a warning is not a record.
+  kubectl -n "$DEV_NAMESPACE" logs deploy/monoplayer -c monoplayer 2>/dev/null | node -e '
+let raw = ""
+process.stdin.on("data", chunk => { raw += chunk })
+process.stdin.on("end", () => {
+  let records = 0
+  // The running process own boot decision, from startLive (which carries picker) and
+  // the skip record beside it. Null means the log no longer holds either, and that is
+  // not the same as a lane that dials at boot: a rotated log must not become a state.
+  let picker = null
+  let claim = null
+  let why = ""
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue
+    let record
+    // A line that is not a record is not a finding: kubectl interleaves its own output
+    // on a bad day, and src/driver/dev-proof.js skips one for the same reason.
+    try { record = JSON.parse(line) } catch { continue }
+    // `null` and a bare number parse, and neither carries an event.
+    if (record === null || typeof record !== "object") continue
+    records++
+    if (record.event === "startLive") picker = record.picker === true
+    if (record.event === "backendBootSkipped" && record.reason === "picker") picker = true
+    // A claim writes its records in order: claimDial before the connect, then
+    // claimBodyWarm when the body landed, or claimDialFailed when it did not
+    // (src/service/monoplayer.js:2715, :2731, :2749, :2764). So the last of these is
+    // what is true now, and the first is not.
+    if (record.event === "claimDial") { claim = "claimed"; why = "" }
+    if (record.event === "claimDialFailed") { claim = "claim-failed"; why = "claimDialFailed" }
+    if (record.event === "claimBodyWarm" && claim === "claimed") claim = "landed"
+    // A refusal that never reached a dial: no target on the row, or a leg that refused
+    // it. `one_body` and `session_busy` follow a claimDial, so those are `claimed`
+    // already, and the refusal is not the last word.
+    if (record.event === "claimDialRefused" && (record.reason === "no_target" || record.reason === "target_refused")) {
+      claim = "claim-failed"
+      why = "claimDialRefused"
+    }
+  }
+  const state = claim ?? (picker === true ? "idle" : picker === false ? "boot" : "unknown")
+  if (state === "unknown" && why === "") why = records === 0 ? "no-records" : "no-boot-record"
+  process.stdout.write(state + ":" + why + "\n")
+})
+'
+}
+
+# One report for every answer. `state` is the lane's own word for what it saw and
+# `joined` is whether the Paper listed the account, because exit 0 covers an idle lane
+# as well as a join: a script reads this file rather than the status (#676).
+#
+# The player list and its evidence are written only when a read answered. They are left
+# out otherwise, for the reason `status` gives above: a read that never returned is not a
+# report about the Paper, and "players: []" would say the Paper named nobody.
+join_report() { # $1 account, $2 state, $3 joined, [$4 player list, $5 the RCON line]
+  local rcon=1
+  [ $# -ge 5 ] || rcon=0
+  mkdir -p "$(dirname "$JOIN_REPORT")"
+  RCON="$rcon" JOINED="$3" STATE="$2" ACCOUNT="$1" PLAYERS="${4:-}" EVIDENCE="${5:-}" \
+  NAMESPACE="$DEV_NAMESPACE" REPORT="$JOIN_REPORT" node -e '
+const fs = require("node:fs")
+const report = { namespace: process.env.NAMESPACE, account: process.env.ACCOUNT }
+if (process.env.RCON === "1") {
+  report.players = process.env.PLAYERS === "" ? [] : process.env.PLAYERS.split(",")
+  report.evidence = process.env.EVIDENCE
+}
+report.joined = process.env.JOINED === "1"
+report.state = process.env.STATE
+fs.writeFileSync(process.env.REPORT, JSON.stringify(report, null, 2) + "\n")
+'
+}
+
 # A join through the standing deployment (#43). The dev proxy's puppet is the dev
-# account (#44) and it joins the dev Paper when the proxy starts, so a join is a
-# fact about the lane. The dev Paper's own player list is the evidence: the server
-# is the thing that has to see the account, and RCON reads it without a client.
+# account (#44), and it joins the dev Paper when a body is dialled: at boot on a lane
+# with the picker off, and on the first claim on a picker lane. The dev Paper's own
+# player list is the evidence: the server is the thing that has to see the account, and
+# RCON reads it without a client.
 #
 # This replaced a throwaway pod that borrowed the live account. That pod was safe
 # (it could not refresh) but it made the live token part of a dev run, which is
 # what the dev account exists to stop.
 join() {
   guard
-  local proxy=deploy/monoplayer name listed players lower_players lower_name joined=0 waited=0
+  local proxy=deploy/monoplayer name listed players lower_players lower_name joined=0 waited=0 lane state why
+  # The report is what a script reads, so a run that refuses before it writes one must
+  # not leave the last run's answer behind: a stale "joined": true is the one wrong yes
+  # this command could give.
+  rm -f "$JOIN_REPORT"
   kubectl -n "$DEV_NAMESPACE" rollout status "$proxy" --timeout="$READY_TIMEOUT" >/dev/null \
     || die "the dev proxy is not ready in $DEV_NAMESPACE; mise run dev:status" 1
   # The account the proxy is signed in as, read from its own volume.
@@ -359,8 +461,32 @@ if (dirs.length !== 1) {
 process.stdout.write(String(JSON.parse(fs.readFileSync(root + "/" + dirs[0] + "/profile.json", "utf8")).name ?? ""))
 ') || die 'cannot read the dev account profile from the dev volume' 2
   [ -n "$name" ] || die 'the dev account profile names nobody' 2
+  # What the lane itself says, before the Paper is asked: `state:record`. A read that
+  # failed answers `unknown` rather than nothing, and `unknown` never becomes `idle`.
+  lane=$(lane_state) || lane='unknown:log-unreadable'
+  state=${lane%%:*}
+  why=${lane#*:}
+  # The two answers a picker lane gives without the Paper, and neither is a join: a
+  # lane nothing has claimed holds no body on purpose, and a claim whose body did not
+  # land holds none by fault. Both are answered here rather than after a wait, so
+  # neither can read as a timeout.
+  case "$state" in
+    idle)
+      join_report "$name" "$state" 0
+      say "this lane is a picker, so nothing has claimed a body since its container started (backendBootSkipped reason picker)"
+      say "$name is not on the dev Paper: claim a row, then run this again ($JOIN_REPORT)"
+      return 0 ;;
+    claim-failed)
+      join_report "$name" "$state" 0
+      die "a claim did not land ($why in the lane's log says why), so $name is not on the dev Paper: read it with kubectl -n $DEV_NAMESPACE logs deploy/monoplayer ($JOIN_REPORT)" 1 ;;
+  esac
+  local answered=0
   while : ; do
-    listed=$(kubectl -n "$DEV_NAMESPACE" exec deploy/paper -c paper -- rcon-cli list 2>/dev/null || true)
+    if listed=$(kubectl -n "$DEV_NAMESPACE" exec deploy/paper -c paper -- rcon-cli list 2>/dev/null); then
+      answered=1
+    else
+      listed=''
+    fi
     players=$(printf '%s' "${listed#*:}" | tr -d ' ')
     lower_players=$(printf '%s' "$players" | tr '[:upper:]' '[:lower:]')
     lower_name=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
@@ -371,20 +497,31 @@ process.stdout.write(String(JSON.parse(fs.readFileSync(root + "/" + dirs[0] + "/
     sleep 2
     waited=$((waited + 2))
   done
-  mkdir -p "$(dirname "$JOIN_REPORT")"
-  JOINED="$joined" ACCOUNT="$name" PLAYERS="$players" NAMESPACE="$DEV_NAMESPACE" \
-  EVIDENCE="$listed" REPORT="$JOIN_REPORT" node -e '
-const fs = require("node:fs")
-fs.writeFileSync(process.env.REPORT, JSON.stringify({
-  namespace: process.env.NAMESPACE,
-  account: process.env.ACCOUNT,
-  players: process.env.PLAYERS === "" ? [] : process.env.PLAYERS.split(","),
-  evidence: process.env.EVIDENCE,
-  joined: process.env.JOINED === "1"
-}, null, 2) + "\n")
-'
-  [ "$joined" = 1 ] || die "$name is not on the dev Paper; the proxy is up but the backend login did not land ($JOIN_REPORT)" 1
-  say "$name is on the dev Paper ($JOIN_REPORT)"
+  # A read that never answered is not a report about the Paper, so the list and its
+  # evidence are left out of the report rather than written empty.
+  if [ "$answered" = 1 ]; then
+    join_report "$name" "$state" "$joined" "$players" "$listed"
+  else
+    join_report "$name" "$state" "$joined"
+  fi
+  if [ "$joined" = 1 ]; then
+    say "$name is on the dev Paper ($JOIN_REPORT)"
+    return 0
+  fi
+  case "$state" in
+    # A body was dialled and no landing followed: the login is still on its way, or it
+    # never landed. Both are the claim's failure and neither is the lane's.
+    claimed) die "a claim dialled a body and no landing followed (no claimBodyWarm in the lane's log), so the login has not landed: wait, then run this again ($JOIN_REPORT)" 1 ;;
+    # The body landed and is not connected now, so the claim is over rather than broken.
+    landed) die "$name is not on the dev Paper; a claim's body landed and has since disconnected, so claim again ($JOIN_REPORT)" 1 ;;
+    # The log could not be read, or said nothing about the boot (`why` says which), so
+    # this cannot tell a picker lane from one that dials at boot. That is the failure,
+    # and it is named rather than blamed on the login.
+    unknown) die "the dev proxy's log says nothing about this lane's boot ($why), so this cannot tell whether $DEV_NAMESPACE is a picker lane; $name is not on the dev Paper ($JOIN_REPORT)" 1 ;;
+    # `boot` only: the lane's own record says the picker is off, so its login happens at
+    # boot, and this is the failure that never got there.
+    *) die "$name is not on the dev Paper; the proxy is up but the backend login did not land ($JOIN_REPORT)" 1 ;;
+  esac
 }
 
 case "${1:-}" in

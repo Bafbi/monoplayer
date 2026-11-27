@@ -262,7 +262,7 @@ description = "Run a branch image on the dev lane: mise run dev:image <sha-tag> 
 run = "scripts/dev-lane.sh set-image"
 
 [tasks."dev:join"]
-description = "Report whether the dev proxy's own account is on the dev Paper (#43 AC3)."
+description = "Report the dev proxy's own account on the dev Paper, or that nothing has claimed yet (#43 AC3, #676)."
 run = "scripts/dev-lane.sh join"
 
 [tasks."dev:custody:up"]
