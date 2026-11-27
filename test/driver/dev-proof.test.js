@@ -312,7 +312,7 @@ test('the witness is written pending, with the frames it read and one row per st
   assert.equal(document.lane, WITNESS_LANE)
   assert.equal(document.completed, false, 'a generated witness is not a completed one')
   assert.equal(document.generatedAt, at(40))
-  assert.deepEqual(document.steps.map(step => step.claim), [...OPERATOR_STEPS])
+  assert.deepEqual(document.steps.map(step => step.claim), OPERATOR_STEPS.map(step => step.claim))
   for (const step of document.steps) {
     assert.equal(step.state, 'pending')
     assert.match(step.evidence, /^\[MANUAL/, 'the placeholder is obviously not evidence')
@@ -626,6 +626,193 @@ test('every record a picker dialog writes is named by the list, as a row or in a
       assert.ok(named.has(name), 'RECORDS names ' + name + ', which ' + sender + ' writes')
     }
   }
+})
+
+// The runbook's "What you should see" table and the module's operator steps, held together both
+// ways (#831). The table above is what a reader of records checks; this one is what a person
+// checks while standing in the world, and nothing compared it to `OPERATOR_STEPS`: a step added
+// to the module became a witness row the runbook never told the operator to look at, and a step
+// removed left the page asking for an observation nothing records. Six rows against six steps
+// agreed, which is exactly the state that hides the next drift.
+//
+// Read as rows, inside its own section, keyed by the id each row carries — never as the page,
+// because the runbook names these steps in the prose around the table too. A row says where to
+// look, what to see there, and the record that says otherwise when it is missing, so the guard
+// asks for all three; and where a step names a `record`, the last cell has to name it. Two tables
+// on one page are read by one extraction — `section` and `cells` above — so a row means one thing
+// in the record table and in this one.
+const STEP_SECTION = 'What you should see'
+
+test('the runbook\'s step table is OPERATOR_STEPS, a name and a record for every step, both ways', () => {
+  const rows = stepRows(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'))
+
+  // Both sides have to be read, or a table rewritten as prose would leave the comparison holding
+  // two empty lists and passing.
+  assert.ok(rows.length > 0, 'the "' + STEP_SECTION + '" section carries the table an operator reads')
+  assert.ok(OPERATOR_STEPS.length > 0, 'the module names the steps only a person can answer')
+
+  assert.deepEqual(stepDisagreement(stepDrift(rows)), [],
+    'the runbook\'s step table and OPERATOR_STEPS disagree')
+})
+
+// The table's rows, as the step id in the "Step" cell and the three cells beside it. The columns
+// are looked up by their header names, so a table whose cells moved is a finding rather than a
+// row read wrong, and the next table in the runbook is not this one.
+function stepRows (readme) {
+  const lines = section(readme, STEP_SECTION).split('\n')
+  const header = lines.findIndex(line => line.trimStart().startsWith('|'))
+  assert.notEqual(header, -1, 'the "' + STEP_SECTION + '" section carries the step table')
+  const columns = cells(lines[header])
+  const columnOf = Object.fromEntries([
+    ['id', 'Step'], ['look', 'Look at'], ['see', 'You should see'], ['because', 'If you do not']
+  ].map(([key, name]) => {
+    const at = columns.indexOf(name)
+    assert.notEqual(at, -1, 'the step table has a "' + name + '" column: ' + lines[header])
+    return [key, at]
+  }))
+
+  const rows = []
+  for (let index = header + 2; index < lines.length && lines[index].startsWith('|'); index += 1) {
+    const row = cells(lines[index])
+    assert.equal(row.length, columns.length,
+      'every row of the step table has one cell per column: ' + lines[index])
+    const id = row[columnOf.id].match(/^`([a-z0-9-]+)`$/)
+    assert.ok(id !== null, 'every row of the step table opens with one step id in the Step cell: ' + lines[index])
+    rows.push({ id: id[1], look: row[columnOf.look], see: row[columnOf.see], because: row[columnOf.because] })
+  }
+  return rows
+}
+
+// What the two sides disagree about, one list per repair, because they are different edits in two
+// files. Order is asked only when both sides hold the same names: a missing name moves everything
+// after it, and a list of moved rows beside it would report one edit twice.
+const duplicated = ids => ids.filter((id, at) => ids.indexOf(id) !== at)
+
+function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
+  const rowOf = new Map(rows.map(row => [row.id, row]))
+  const stepOf = new Map(steps.map(step => [step.id, step]))
+  const missingRow = steps.map(step => step.id).filter(id => !rowOf.has(id))
+  const missingStep = rows.map(row => row.id).filter(id => !stepOf.has(id))
+  const thin = rows
+    .filter(row => [row.look, row.see, row.because].some(cell => cell === ''))
+    .map(row => row.id)
+  const unnamedRecord = steps
+    .filter(step => step.record !== null && rowOf.has(step.id) && !namesRecord(rowOf.get(step.id), step.record))
+    .map(step => ({ id: step.id, record: step.record }))
+  const unlistedRecord = steps
+    .filter(step => step.record !== null && !records.some(record => record.name === step.record))
+    .map(step => ({ id: step.id, record: step.record }))
+  const repeated = [...new Set([...duplicated(rows.map(row => row.id)), ...duplicated(steps.map(step => step.id))])]
+  const sameNames = missingRow.length === 0 && missingStep.length === 0 && rows.length === steps.length
+  const moved = sameNames ? rows.map(row => row.id).filter((id, at) => id !== steps[at].id) : []
+  return { missingRow, missingStep, thin, unnamedRecord, unlistedRecord, repeated, moved }
+}
+
+// A row names its record in backticks in the last cell, alone or at the head of a field path: the
+// page writes `spectateView.modeFrames`, which is the record's name with the number to read inside
+// it. The last cell only, because that is the cell the page says names the record, and a name in
+// "You should see" is a row whose diagnostic column disagrees with its instruction.
+function namesRecord (row, record) {
+  return new RegExp('`' + record + '(?:\\.[A-Za-z0-9_]+)*`').test(row.because)
+}
+
+// The edit each disagreement asks for, one sentence each, naming the row and the side it is on. A
+// message that said only "the table and the steps disagree" would leave the reader to work out
+// which of the seven edits is theirs, and which row.
+function stepDisagreement ({ missingRow, missingStep, thin, unnamedRecord, unlistedRecord, repeated, moved }) {
+  return [
+    ...missingRow.map(id => 'deploy/dev/README.md\'s "' + STEP_SECTION + '" table has no row for step ' + id +
+      ', which OPERATOR_STEPS carries: add a row with `' + id + '` in the Step cell, or remove the step'),
+    ...missingStep.map(id => 'OPERATOR_STEPS defines no step named ' + id +
+      ', which the runbook\'s table documents: add the step and its id to the list, or remove the row'),
+    ...thin.map(id => 'the runbook\'s row for ' + id + ' leaves a cell empty: a row says where to look, ' +
+      'what you should see there, and the record that says otherwise'),
+    ...unnamedRecord.map(({ id, record }) => 'the runbook\'s row for ' + id + ' does not name `' + record +
+      '`, the record that goes into the log when the step fails: name it in the last cell, where the operator reads it'),
+    ...unlistedRecord.map(({ id, record }) => 'OPERATOR_STEPS gives step ' + id + ' the record `' + record +
+      '`, and RECORDS lists no such record: it is a record a run writes, or nothing at all'),
+    ...repeated.map(id => 'the step ' + id + ' is named twice, on the runbook\'s side or the module\'s: ' +
+      'the witness writes one row per step, so a repeat is two steps nobody can tell apart'),
+    ...moved.map(id => 'the runbook\'s step table is not in OPERATOR_STEPS\'s order at ' + id +
+      ': the witness is written in the module\'s order, and the operator records it in the page\'s order')
+  ]
+}
+
+// Fixtures, not the tree: the comparison is held by a page built here, so a drift in the runbook
+// cannot make this case about the drift instead of the guard.
+test('the step comparison reports a row on one side only, a thin row, and a row naming no record', () => {
+  const steps = [
+    { id: 'first-step', claim: 'one', record: 'alphaRecord' },
+    { id: 'second-step', claim: 'two', record: null }
+  ]
+  const records = [{ name: 'alphaRecord', what: 'a sentence' }]
+  const rows = [
+    { id: 'first-step', look: 'here', see: 'this', because: 'no `alphaRecord` in the log' },
+    { id: 'second-step', look: 'there', see: 'that', because: 'nothing writes it' }
+  ]
+  const page = listed => [
+    '## ' + STEP_SECTION,
+    '',
+    'The step `first-step` is named before the table, and `third-step` after it.',
+    '',
+    '| Step | Look at | You should see | If you do not |',
+    '|---|---|---|---|',
+    ...listed.map(row => '| `' + row.id + '` | ' + row.look + ' | ' + row.see + ' | ' + row.because + ' |'),
+    '',
+    'A paragraph naming `third-step` is not a row for it.',
+    '',
+    '## After the table',
+    ''
+  ].join('\n')
+
+  assert.deepEqual(stepDisagreement(stepDrift(stepRows(page(rows)), steps, records)), [],
+    'the fixture agrees with itself, so each case below is about its own edit')
+  assert.deepEqual(stepRows(page(rows)), rows,
+    'the reader returns this table\'s rows and no other: the paragraphs either side name steps, and the next section has none')
+
+  const missingRow = stepDrift(stepRows(page(rows.slice(0, 1))), steps, records)
+  assert.deepEqual(missingRow.missingRow, ['second-step'], 'a paragraph naming it is not a row for it')
+  assert.match(stepDisagreement(missingRow)[0],
+    /^deploy\/dev\/README\.md's "What you should see" table has no row for step second-step/)
+
+  const missingStep = stepDrift(stepRows(page([...rows, { id: 'third-step', look: 'a', see: 'b', because: 'c' }])), steps, records)
+  assert.deepEqual(missingStep.missingStep, ['third-step'])
+  assert.match(stepDisagreement(missingStep)[0],
+    /^OPERATOR_STEPS defines no step named third-step/)
+
+  const thin = stepDrift(stepRows(page([{ ...rows[0], because: '' }, rows[1]])), steps, records)
+  assert.deepEqual(thin.thin, ['first-step'])
+  assert.match(stepDisagreement(thin)[0], /^the runbook's row for first-step leaves a cell empty/)
+
+  const unnamed = stepDrift(stepRows(page([{ ...rows[0], because: 'nothing was written' }, rows[1]])), steps, records)
+  assert.deepEqual(unnamed.unnamedRecord, [{ id: 'first-step', record: 'alphaRecord' }])
+  assert.match(stepDisagreement(unnamed)[0], /does not name `alphaRecord`, the record that goes into the log/)
+
+  // The row names it, so the only finding is that RECORDS has no such record.
+  const unlisted = stepDrift(stepRows(page([{ ...rows[0], because: 'no `no-such-record` in the log' }, rows[1]])),
+    [{ ...steps[0], record: 'no-such-record' }, steps[1]], records)
+  assert.deepEqual(unlisted.unlistedRecord, [{ id: 'first-step', record: 'no-such-record' }])
+  assert.match(stepDisagreement(unlisted)[0], /^OPERATOR_STEPS gives step first-step the record `no-such-record`/)
+
+  const repeated = stepDrift(stepRows(page([rows[0], rows[1], rows[1]])), steps, records)
+  assert.deepEqual(repeated.repeated, ['second-step'])
+  assert.match(stepDisagreement(repeated)[0], /^the step second-step is named twice/)
+
+  const moved = stepDrift(stepRows(page([rows[1], rows[0]])), steps, records)
+  assert.deepEqual(moved.moved, ['second-step', 'first-step'])
+  assert.match(stepDisagreement(moved)[0], /^the runbook's step table is not in OPERATOR_STEPS's order at second-step/)
+
+  assert.equal(namesRecord({ because: '`spectateView.modeFrames` was not 2' }, 'spectateView'),
+    true, 'a record named with the field to read inside it is named')
+  assert.equal(namesRecord({ because: '`spawn_entity` reached it' }, 'virtualPlayerWritten'),
+    false, 'a frame is not the record that carries it')
+  assert.equal(namesRecord({ see: '`puppetSkinSent` went out', because: 'a default skin' }, 'puppetSkinSent'),
+    false, 'a record named outside the last cell is not the diagnostic the page promises')
+
+  assert.throws(() => stepRows(page(rows).replace('\n\n| Step |', '\n\n| Name |')),
+    /"Step" column/, 'a table that lost the Step column is a finding, not rows of empty names')
+  assert.throws(() => stepRows(page(rows).replace('| `first-step` |', '| first-step |')),
+    /opens with one step id/, 'a row whose first cell is not the id in code is a finding')
 })
 
 // ---------------------------------------------------------------------------
