@@ -994,13 +994,12 @@ finishConfigurationFrame
 preAuthStats
 ```
 
-Each of these is one slot on the leg, and its setter fills that slot once. The core fills
-every slot its tables declare when it starts, so a registration a lane makes before that
-start is refused rather than replaced, and one made after it is refused too. The leg's
-setter block is where the refusal lives; `src/service/wire-leg-to-core.js` says which of the
-three registrations reaches a slot and what each one costs (#824). A lane that builds a leg
-no core is handed registers on it directly, and that registration is the only one its slot
-takes.
+A call-in holds one handler, and its setter refuses the second registration. The core
+registers every call-in its tables declare when it starts. A lane's registration made before
+that start therefore fails the start instead of being replaced. One made after it is refused
+at the lane's line. `src/service/wire-leg-to-core.js` says which registration reaches a
+call-in and what each one costs (#824). A lane that builds a leg no core is handed registers
+on it directly.
 
 Three members are left for the blocks below, and a row cannot name any of them. A
 reading is a value rather than a method: `channels` is the board of connections a body

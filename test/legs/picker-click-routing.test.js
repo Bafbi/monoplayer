@@ -137,9 +137,9 @@ async function withPickerLane (run, { rows = [{ name: SERVER }], callIns = {}, .
     // names is up, and the landing is the lane's own.
     //
     // A test that needs a different answer for one of them states it in `callIns` rather
-    // than registering a second time: a call-in is one slot on the leg and the setter
-    // refuses the second registration (#824), so one answer per slot is the rule this
-    // harness keeps for the leg it builds.
+    // than registering a second time: a call-in on the leg holds one handler, and the
+    // setter refuses the second registration (#824), so one answer per call-in is the rule
+    // this harness keeps for the leg it builds.
     const answers = {
       setLoginStartHandler: () => ({ allowed: true, picker: true }),
       // The body is the one the request names, which is the row's body: a core answers
@@ -152,7 +152,11 @@ async function withPickerLane (run, { rows = [{ name: SERVER }], callIns = {}, .
       setCoreAttach: () => ({ attached: true, replayed: 0 }),
       ...callIns
     }
-    for (const [name, answer] of Object.entries(answers)) leg[name](answer)
+    for (const [name, answer] of Object.entries(answers)) {
+      assert.equal(typeof leg[name], 'function',
+        name + ' is a call-in of the front leg this harness drives, so a mistyped answer fails here and not at the join')
+      leg[name](answer)
+    }
     bot = mc.createClient({
       host: '127.0.0.1', port, username: NAME, version: VERSION, auth: 'offline', keepAlive: false
     })
@@ -295,7 +299,7 @@ test("#618 a landing is handed the textures the client's account sent, and nothi
   // The property an account's hasJoined answer carries, as the account's own.
   const OWN_SKIN = { name: 'textures', value: 'd2F0Y2hlciBza2lu', signature: 'd2F0Y2hlciBzaWc=' }
   const handovers = []
-  // The core's answer is this test's, stated once: a call-in is one slot on the leg, so a
+  // The core's answer is this test's, stated once: a call-in on the leg holds one handler, so a
   // second registration would be refused rather than replace the harness's (#824). What
   // this test reads is the argument that answer is handed.
   const attach = payload => {
