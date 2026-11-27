@@ -742,6 +742,12 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // removed left the page asking for an observation nothing records. Six rows against six steps
 // agreed, which is exactly the state that hides the next drift.
 //
+// The sentence was the next seam (#881). #831 held the id and the record name; the "You should
+// see" cell was a second writing of `claim`, and a step reworded there passed, so the operator
+// recorded a witness row asking for something the page never told them to look at. The cell is now
+// held to the claim word for word, both ways: the comparison reads both texts, so neither is
+// derived from the other, and it strips nothing. Emphasis in a cell is a different sentence.
+//
 // Read as rows, inside its own section, keyed by the id each row carries — never as the page,
 // because the runbook names these steps in the prose around the table too. A row says where to
 // look, what to see there, and the record that says otherwise when it is missing, so the guard
@@ -750,7 +756,7 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // in the record table and in this one.
 const STEP_SECTION = 'What you should see'
 
-test('the runbook\'s step table is OPERATOR_STEPS, a name and a record for every step, both ways', () => {
+test('the runbook\'s step table is OPERATOR_STEPS, a name, a sentence, and a record where a step has one, both ways', () => {
   const rows = stepRows(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'))
 
   // Both sides have to be read, or a table rewritten as prose would leave the comparison holding
@@ -803,6 +809,17 @@ function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
   const thin = rows
     .filter(row => [row.look, row.see, row.because].some(cell => cell === ''))
     .map(row => row.id)
+  // The cell against the step's own sentence (#881), compared exactly: no case fold, no stripped
+  // markdown, no prefix match. A comparison loose enough to allow those passes a cell worded
+  // differently enough to matter, which is the drift it exists to catch. The step's side is read
+  // too, so a claim reworded in the module fails here with the page untouched.
+  // An empty cell is `thin`'s finding and not this one: one defect, one edit, and a row with no
+  // sentence at all is the emptier repair to ask for first.
+  const reworded = steps.flatMap(step => {
+    const row = rowOf.get(step.id)
+    if (row === undefined || row.see === '' || row.see === step.claim) return []
+    return [{ id: step.id, table: row.see, module: step.claim }]
+  })
   const unnamedRecord = steps
     .filter(step => step.record !== null && rowOf.has(step.id) && !namesRecord(rowOf.get(step.id), step.record))
     .map(step => ({ id: step.id, record: step.record }))
@@ -812,7 +829,7 @@ function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
   const repeated = [...new Set([...duplicated(rows.map(row => row.id)), ...duplicated(steps.map(step => step.id))])]
   const sameNames = missingRow.length === 0 && missingStep.length === 0 && rows.length === steps.length
   const moved = sameNames ? rows.map(row => row.id).filter((id, at) => id !== steps[at].id) : []
-  return { missingRow, missingStep, thin, unnamedRecord, unlistedRecord, repeated, moved }
+  return { missingRow, missingStep, thin, reworded, unnamedRecord, unlistedRecord, repeated, moved }
 }
 
 // A row names its record in backticks in the last cell, alone or at the head of a field path: the
@@ -826,7 +843,7 @@ function namesRecord (row, record) {
 // The edit each disagreement asks for, one sentence each, naming the row and the side it is on. A
 // message that said only "the table and the steps disagree" would leave the reader to work out
 // which of the seven edits is theirs, and which row.
-function stepDisagreement ({ missingRow, missingStep, thin, unnamedRecord, unlistedRecord, repeated, moved }) {
+function stepDisagreement ({ missingRow, missingStep, thin, reworded, unnamedRecord, unlistedRecord, repeated, moved }) {
   return [
     ...missingRow.map(id => 'deploy/dev/README.md\'s "' + STEP_SECTION + '" table has no row for step ' + id +
       ', which OPERATOR_STEPS carries: add a row with `' + id + '` in the Step cell, or remove the step'),
@@ -834,6 +851,10 @@ function stepDisagreement ({ missingRow, missingStep, thin, unnamedRecord, unlis
       ', which the runbook\'s table documents: add the step and its id to the list, or remove the row'),
     ...thin.map(id => 'the runbook\'s row for ' + id + ' leaves a cell empty: a row says where to look, ' +
       'what you should see there, and the record that says otherwise'),
+    // Both texts, because the sentence is the edit and neither side is the one to keep by default:
+    // the claim is what the witness writes and quotes back, and the cell is what the operator reads.
+    ...reworded.map(({ id, table, module }) => 'deploy/dev/README.md\'s "You should see" cell for ' + id +
+      ' is not the step\'s claim\n  the table says: ' + table + '\n  OPERATOR_STEPS says: ' + module),
     ...unnamedRecord.map(({ id, record }) => 'the runbook\'s row for ' + id + ' does not name `' + record +
       '`, the record that goes into the log when the step fails: name it in the last cell, where the operator reads it'),
     ...unlistedRecord.map(({ id, record }) => 'OPERATOR_STEPS gives step ' + id + ' the record `' + record +
@@ -847,10 +868,12 @@ function stepDisagreement ({ missingRow, missingStep, thin, unnamedRecord, unlis
 
 // Fixtures, not the tree: the comparison is held by a page built here, so a drift in the runbook
 // cannot make this case about the drift instead of the guard.
-test('the step comparison reports a row on one side only, a thin row, and a row naming no record', () => {
+test('the step comparison reports a row on one side only, a thin row, a reworded sentence, and a row naming no record', () => {
+  // The claim and the cell are the same words in the fixture, because that is the state the tree
+  // has to hold: a fixture that started apart from itself would report a drift on every case below.
   const steps = [
-    { id: 'first-step', claim: 'one', record: 'alphaRecord' },
-    { id: 'second-step', claim: 'two', record: null }
+    { id: 'first-step', claim: 'this', record: 'alphaRecord' },
+    { id: 'second-step', claim: 'that', record: null }
   ]
   const records = [{ name: 'alphaRecord', what: 'a sentence' }]
   const rows = [
@@ -890,6 +913,31 @@ test('the step comparison reports a row on one side only, a thin row, and a row 
   const thin = stepDrift(stepRows(page([{ ...rows[0], because: '' }, rows[1]])), steps, records)
   assert.deepEqual(thin.thin, ['first-step'])
   assert.match(stepDisagreement(thin)[0], /^the runbook's row for first-step leaves a cell empty/)
+
+  // One defect is one finding: a "You should see" cell with no sentence is thin, and the sentence
+  // comparison keeps quiet about it rather than asking for a second edit to the same row.
+  const emptySee = stepDrift(stepRows(page([{ ...rows[0], see: '' }, rows[1]])), steps, records)
+  assert.deepEqual(emptySee.thin, ['first-step'])
+  assert.deepEqual(emptySee.reworded, [], 'an empty cell is the empty-cell finding, and not two')
+
+  // #881: the cell and the step's claim, one message quoting both. The page's side first, then the
+  // module's, because the same finding is reported whichever of the two was edited.
+  const rewordedCell = stepDrift(stepRows(page([{ ...rows[0], see: 'the page\'s words' }, rows[1]])), steps, records)
+  assert.deepEqual(rewordedCell.reworded.map(({ id }) => id), ['first-step'])
+  assert.match(stepDisagreement(rewordedCell)[0],
+    /^deploy\/dev\/README\.md's "You should see" cell for first-step is not the step's claim\n  the table says: the page's words\n  OPERATOR_STEPS says: this$/)
+
+  const rewordedClaim = stepDrift(stepRows(page(rows)), [{ ...steps[0], claim: 'the module\'s words' }, steps[1]], records)
+  assert.deepEqual(rewordedClaim.reworded.map(({ id }) => id), ['first-step'],
+    'the module side is read too: a claim reworded there is the same finding, so neither text is derived from the other')
+  assert.match(stepDisagreement(rewordedClaim)[0],
+    /the table says: this\n  OPERATOR_STEPS says: the module's words$/)
+
+  // How loose the comparison is: not at all. Emphasis a reader would see as styling is a different
+  // string, because a comparison that stripped it would also pass a cell worded differently enough
+  // to matter.
+  assert.deepEqual(stepDrift(stepRows(page([{ ...rows[0], see: '**this**' }, rows[1]])), steps, records).reworded.map(({ id }) => id),
+    ['first-step'], 'the comparison is exact, so a cell is the claim and not the claim plus markdown')
 
   const unnamed = stepDrift(stepRows(page([{ ...rows[0], because: 'nothing was written' }, rows[1]])), steps, records)
   assert.deepEqual(unnamed.unnamedRecord, [{ id: 'first-step', record: 'alphaRecord' }])
