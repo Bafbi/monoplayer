@@ -2539,7 +2539,7 @@ export function createMonoplayer ({
         pose
       })
     }
-    return { attached: true, replayed, refused, frames: synthesized.frames }
+    return { attached: true, replayed, frames: synthesized.frames }
   }
 
 // --- #258: the landing, from the claim to the body ---
