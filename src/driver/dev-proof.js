@@ -15,7 +15,7 @@
 // to that socket, and the counters after it). `journal.mjs heartbeat` reads a JSONL log and so
 // does this; neither subsumes the other, and teaching the journal about spectator claims would
 // put a product question in the observability tool. What this reads is the JSONL log on the
-// pod's stdout, one `kubectl logs` away (`deploy/dev/README.md`, "The two-client proof"), not a
+// pod's stdout, one `kubectl logs` away ("The two-client proof" in `deploy/dev/README.md`), not a
 // journal shard: a shard is not this lane's input, because a picker lane writes no journal at
 // all and the journal's policy drops the move frame this proof needs.
 //
@@ -78,6 +78,13 @@ run's word and not a check.
 // The records a run is made of, and what each one settles. One list: the runbook's table is
 // held to this one by the guard, so a record renamed in the service fails there instead of
 // leaving a reader hunting a line that is no longer written.
+//
+// The `spectateView` sentence names the mode frames `src/core/spectator-mode.js` writes, built from
+// `spectatorModeFrames()` rather than written as a count: it said "the pair", which is that
+// function's length in a word, and a third frame would have left it saying two (#932).
+// `spectateModeRefused` counts nothing either, and so does the bullet in `docs/product-core.md` that
+// states the same frames: no module reaches a page, so the sentence that states no number is the
+// one that cannot go stale.
 export const RECORDS = Object.freeze([
   { name: 'pickerServed', what: 'a client reached the picker. A run with none never joined the lane' },
   { name: 'pickerDialog', what: 'the picker\'s list was offered to a client: one `actions` entry per row, and the `bytes` it cost when the frame went out. It is written even when the write failed, so a client with `pickerServed` and no `pickerDialog` was never offered a list at all, and `pickerDialogFailed` beside it says why the write did not go' },
@@ -85,10 +92,10 @@ export const RECORDS = Object.freeze([
   { name: 'pickerServerDialog', what: 'the chosen server\'s own dialog was offered, with the `verbs` a client may answer it with. It is written even when the write failed, so `pickerPick` with no `pickerVerb` is a client that was never shown this dialog, or never answered it, and `pickerServerDialogFailed` beside it says why the write did not go' },
   { name: 'pickerVerb', what: 'a client answered the chosen server\'s own dialog, carrying the `verb` (`claim`, `spectate` or `disconnect`) and the `server`. This is the click that dials a body or starts a landing. A verb the lane cannot act on writes `pickerVerbRefused` instead' },
   { name: 'claimDial', what: 'a client claimed a body, so a body was dialled. This is where the puppet reaches the Paper' },
-  { name: 'spectateView', what: 'a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet\'s body, and `modeFrames` is the spectator game mode pair' },
+  { name: 'spectateView', what: 'a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet\'s body, and `modeFrames` is the spectator game mode frames the core writes, ' + spectatorModeFrames().map(frame => '`' + frame.name + '`').join(' then ') },
   { name: 'spectateRefused', what: 'the Spectate click was refused, with the core\'s own reason' },
   { name: 'spectateViewRefused', what: 'the landing itself was refused, with the reason' },
-  { name: 'spectateModeRefused', what: 'the spectator game mode pair could not be written to that socket' },
+  { name: 'spectateModeRefused', what: 'the spectator game mode frames could not be written to that socket' },
   { name: 'puppetSkinSent', what: '#614\'s `player_info` went out: the body\'s entry, naming the puppet, or the driving client\'s own entry. `puppet` says which entry it is, `true` for the body\'s and `false` for the driver\'s own. `name` is the player it named, `signed` whether the puppet\'s textures property carried a signature, and `reason` what asked for it. It is one frame for the whole body, with no channel, so this record is the entry for every socket at once' },
   { name: 'puppetSkinKnown', what: 'the backend\'s own `player_info` carried a textures property for the puppet. Without it there is no entry to write, and a client drops the spawn that follows' },
   { name: 'puppetSkinWithheld', what: 'an entry the proxy would not write, because the profile it names has no UUID or no name' },
@@ -131,6 +138,8 @@ const OWN_BODY_TICKETS = Object.freeze([647, 645])
 // page's cell is this string word for word, the same way it is `claim`'s. A step with no derived fact
 // in its failure cell has no `because` at all rather than a null standing in for one: the absence
 // is the signal that the page's wording is the only home for that cell, and it stays the page's.
+// A cell with no `because` still has its record names read: the guard's `FAILURE_READS` declares the
+// ones it writes beyond the step's own and says why the rest is the page's prose (#931).
 // `test/driver/dev-proof.test.js` holds the runbook's table to every field, both ways.
 export const OPERATOR_STEPS = Object.freeze([
   { id: 'puppet-renders', record: 'puppetSkinSent', claim: 'the puppet renders where the driving client stands, wearing the puppet\'s skin' },
@@ -161,7 +170,7 @@ export const CLAIMS = Object.freeze([
   { id: 'body', text: 'the puppet had a body there: a spawn_entity for its UUID' },
   { id: 'move', text: 'a move frame was written after the landing, so the puppet was not standing still on every socket' },
   { id: 'seen-by-driver', text: 'the spectator was announced and spawned on the driver\'s own socket' },
-  // The pair's two frames, in the order the module writes them: the hand copy #882 found on the
+  // The mode frames, in the order the module writes them: the hand copy #882 found on the
   // runbook's page, one file over, with the same repair — built here, so a third frame reaches this
   // sentence instead of leaving it naming the two it always has.
   { id: 'mode', text: 'the spectator was told it is a spectator: ' + spectatorModeFrames().map(frame => frame.name).join(', then ') }
@@ -301,9 +310,9 @@ export function claimsOf (reading) {
   const driverFrames = names(onDriver)
   const moved = Number.isFinite(metrics.virtualPlayersMoved) && metrics.virtualPlayersMoved > 0
   const entry = landingEntry(reading)
-  // The pair `src/core/spectator-mode.js` writes, counted rather than assumed: a third frame
+  // The frames `src/core/spectator-mode.js` writes, counted rather than assumed: a third frame
   // there is a change this row follows instead of reading as a failure.
-  const modePair = spectatorModeFrames().length
+  const modeCount = spectatorModeFrames().length
 
   const row = (id, holds, evidence, because) => ({
     id,
@@ -356,13 +365,13 @@ export function claimsOf (reading) {
               'told about the puppet (#636); nothing here means the driver sees an empty world beside itself'
             : 'the entry was written to the driver socket and no spawn followed it: the order is entry ' +
               'then spawn, so this is a write the leg dropped or a roster that lost the player between them')),
-    row('mode', spectate !== null && spectate.modeFrames === modePair,
+    row('mode', spectate !== null && spectate.modeFrames === modeCount,
       spectate === null
         ? 'no landing to put in spectator mode'
-        : 'spectateView.modeFrames = ' + (spectate.modeFrames ?? 'not in this log') + ', of ' + modePair,
-      spectate !== null && spectate.modeFrames === modePair
+        : 'spectateView.modeFrames = ' + (spectate.modeFrames ?? 'not in this log') + ', of ' + modeCount,
+      spectate !== null && spectate.modeFrames === modeCount
         ? null
-        : 'a spectator\'s mode is the pair src/core/spectator-mode.js writes on its own socket (#633); ' +
+        : 'a spectator\'s mode is the frames src/core/spectator-mode.js writes on its own socket (#633); ' +
           'flight and invulnerability come from the first of them')
   ]
 }
@@ -467,7 +476,10 @@ export function witnessDocument (report, { now = new Date().toISOString(), sourc
     completed: false,
     status: 'NOT COMPLETE — exits nonzero until the operator records what two clients showed',
     how: [
-      'Stage the lane and drive two clients: deploy/dev/README.md, "The two-client proof".',
+      // #957: this one is the tool's output, so no sweep reads it. `surface-pointers` reads whole-line
+      // comment runs, and a string literal is not one; the page and its section are named title first
+      // so a reader follows the shape the rest of the tree writes.
+      'Stage the lane and drive two clients: "The two-client proof" in deploy/dev/README.md.',
       'Read the run: kubectl -n monoplayer-dev logs deploy/monoplayer | node src/driver/dev-proof.js',
       'For each step, keep its id and set state to seen or not-seen, then write what you saw in evidence.',
       // #923: the command names the log this reading came from, and never a path nobody wrote. A

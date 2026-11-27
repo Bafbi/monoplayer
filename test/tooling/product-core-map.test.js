@@ -70,6 +70,12 @@
 //         is. A member the core calls and the page names in a block is a row now, and the
 //         case that refuses a restated call-in holds the page to that.
 //
+//   #932  the bullet that states what a spectator's socket is owed listed the two frames by hand,
+//         and said "two frames" beside the list. That number is `spectatorModeFrames().length` in
+//         a word, and a third frame in src/core/spectator-mode.js would have left the page saying
+//         two. The count is gone and the module is the list now: the case below asks the bullet for
+//         every frame the core writes. A sentence that states no number is one no test has to read.
+//
 // What is compared is names. No sentence is parsed, because a guard that read English
 // would be a guard that lies about what it checked. The interface section's prose is
 // scanned for two name shapes, a `set…` call-in and a `core.…` method (#691), and
@@ -88,6 +94,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { spectatorModeFrames } from '../../src/core/spectator-mode.js'
 import { loadConfig } from '../../src/service/monoplayer.js'
 import { envOverlay } from '../../src/service/start-live.js'
 import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS, wireLegToCore } from '../../src/service/wire-leg-to-core.js'
@@ -216,6 +223,31 @@ test('the picker bullet does not say a lane with no allowed-server key offers no
     'the picker bullet still says a lane with no such key offers nothing. #356 rebuilt the precedence in ' +
     '`allowedServerSources` in src/service/control.js: the live file answers, else the copy Git commits, else ' +
     'nothing. Only a lane that names neither switch offers nothing.')
+})
+
+// The bullet that states what a spectator's socket is owed, found by its own first sentence so a
+// reworded bullet is this case's finding rather than another bullet's reading.
+function spectatorBullet () {
+  const bullet = bullets(PAGE).find(block => block.includes("A spectator's client is told what it is"))
+  assert.ok(bullet, 'docs/product-core.md carries the #259 bullet, which is where the frames a spectator is owed are stated')
+  return bullet
+}
+
+test('#932 the spectator bullet names every mode frame the core writes', () => {
+  const bullet = spectatorBullet()
+  // The sentence that lists them, not the bullet: the bullet says "game mode and abilities" a
+  // paragraph earlier, and a name read there would hold a list that lost it (#830's lesson).
+  const OWED = 'go to that channel after the replay'
+  assert.notEqual(bullet.indexOf(OWED), -1,
+    'the spectator bullet states what is written after the replay in one sentence, and this case reads the ' +
+    'list from it: name the list again, or move this case to the sentence that replaced it')
+  const owed = bullet.slice(bullet.indexOf(OWED))
+  const frames = spectatorModeFrames().map(frame => frame.name)
+  assert.ok(frames.length > 0, 'spectatorModeFrames() names the frames a spectator socket is owed')
+  const missing = frames.filter(name => !owed.includes(name))
+  assert.deepEqual(missing, [], 'the spectator bullet never names ' + missing.join(', ') + ', which ' +
+    'spectatorModeFrames() in src/core/spectator-mode.js writes. The bullet states no count, so the list ' +
+    'is what a reader follows: name every frame the module writes, and let a fourth one fail here')
 })
 
 // --- the leg interfaces (#606) ---

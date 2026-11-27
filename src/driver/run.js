@@ -126,7 +126,7 @@ const DEFAULTS = {
   rconDeployment: process.env.GATEB_RCON_DEPLOYMENT || 'paper',
   maxAgeHours: 24,
   // The dev lane as the display host reaches it: two loopback ports the operator
-  // forwards (docs/driver-lane.md, "Reaching the dev lane"). They are not cluster
+  // forwards ("Reaching the dev lane" in `docs/driver-lane.md`). They are not cluster
   // addresses on purpose; the client runs on the display host, not in the cluster.
   direct: '127.0.0.1:25565',
   proxied: '127.0.0.1:25566',

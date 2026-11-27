@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spectatorModeFrames } from '../../src/core/spectator-mode.js'
 import { tempRoot } from '../support/temp.js'
 import { functionBody } from '../support/source-scan.js'
 
@@ -63,7 +64,7 @@ function run () {
       frames: 30,
       replayed: 30,
       virtualFrames: 3,
-      modeFrames: 2,
+      modeFrames: spectatorModeFrames().length,
       packsOffered: 0,
       body: BODY,
       state: 'attached',
@@ -144,6 +145,36 @@ test('the puppet\'s entry is the landing pass\'s own frame, not a per-channel wr
     'and the spawn is still written, which is why the world is empty with the frames in it')
 })
 
+// #931: the page's `puppet-renders` cell states the rule this reader selects a body's entry by — a
+// `puppet` true line written after the landing — and no case asked either half of it. The sentence
+// stays the page's, and `FAILURE_READS` says so; the behaviour it describes is pinned here, so a
+// change to the selection fails in the module instead of leaving the page the only account of the
+// old rule. What no case can do is notice the page wording it differently, which is the decision
+// that table records.
+test('the body entry is a `puppet` true line written after the landing, not the driver\'s own and not an earlier one', () => {
+  const records = run()
+  const skinned = records.find(record => record.event === 'puppetSkinSent')
+  const withLine = line => records.map(record => record === skinned ? line : record)
+
+  // The same record with `puppet` false is the driving client's own entry, which the cell's second
+  // sentence names. A run whose only line names the driver has no body entry at all.
+  const drivers = withLine({ ...skinned, name: 'Attach', reason: 'landing', puppet: false })
+  assert.equal(row('entry', drivers).holds, false,
+    'a `puppet` false line is the driver\'s own entry, and the body has none')
+
+  // A line stamped before the landing belongs to an earlier one: the entry is written by the landing
+  // pass, so "after the landing" is the selection and not decoration.
+  const earlier = drivers.map(record =>
+    record.event === 'puppetSkinSent' ? { ...record, t: at(4) } : record)
+  assert.equal(row('entry', earlier).holds, false,
+    'a line written before the landing is not this body\'s entry')
+
+  // Both lines, the body's after the landing: the body's is the one taken, and the driver's own does
+  // not shadow it.
+  const both = records.concat([{ ...skinned, name: 'Attach', reason: 'landing', puppet: false, t: at(6) }])
+  assert.equal(row('entry', both).holds, true, 'the body\'s line is the entry, and a later driver line does not replace it')
+})
+
 test('an entry the proxy withheld is quoted with the profile it could not name', () => {
   const records = run()
     .filter(record => record.event !== 'puppetSkinSent')
@@ -211,7 +242,7 @@ test('one of the two mode frames is not a spectator, and the row says which half
 
   const mode = row('mode', records)
   assert.equal(mode.holds, false)
-  assert.equal(mode.evidence, 'spectateView.modeFrames = 1, of 2')
+  assert.equal(mode.evidence, 'spectateView.modeFrames = 1, of ' + spectatorModeFrames().length)
   assert.match(mode.because, /flight and invulnerability come from the first of them/)
 })
 
@@ -982,6 +1013,15 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // cell stays the page's, which is why the field is optional: every other step carries no `because`,
 // and no empty string stands in for one.
 //
+// The rest of the last cell was the next seam (#931). A step whose cell states no fact the module
+// computes carries no `because`, so its wording is the page's, and the guard read one name in it:
+// the step's own record. A cell could send an operator to `puppetSkinKnown` and stay green the day
+// that record was renamed. What is left to compare is the names, so `FAILURE_READS` below declares
+// the records each cell reads beyond its own, the guard holds the declaration to the cell both ways,
+// and each row writes the sentence #931 asks for: the rest of the cell is what a person sees, and
+// that is why nothing compares it. A row for a cell the module owns, or for no step at all, is the
+// same table one step stale.
+//
 // Read as rows, inside its own section, keyed by the id each row carries — never as the page,
 // because the runbook names these steps in the prose around the table too. A row says where to
 // look, what to see there, and the record that says otherwise when it is missing, so the guard
@@ -1008,6 +1048,14 @@ test('the runbook\'s step table is OPERATOR_STEPS: a name, a sentence, a record 
 
   assert.deepEqual(stepDisagreement(stepDrift(rows)), [],
     'the runbook\'s step table and OPERATOR_STEPS disagree')
+})
+
+test('every failure cell that states no derived fact declares the records it reads, and why the rest is prose', () => {
+  const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
+  assert.deepEqual(failureDisagreement(failureDrift(stepRows(readme))), [],
+    'the runbook\'s failure cells and FAILURE_READS disagree')
+  assert.match(section(readme, STEP_SECTION), /FAILURE_READS/,
+    'the page names the table a reader looks a cell up in, so they can tell which half is compared')
 })
 
 // The table's rows, as the step id in the "Step" cell and the three cells beside it. The columns
@@ -1098,6 +1146,102 @@ function stepDrift (rows, steps = OPERATOR_STEPS, records = RECORDS) {
 // "You should see" is a row whose diagnostic column disagrees with its instruction.
 function namesRecord (row, record) {
   return new RegExp('`' + record + '(?:\\.[A-Za-z0-9_]+)*`').test(row.because)
+}
+
+// Which records each failure cell names beyond the step's own, and why the rest of the cell is the
+// page's (#931). #882 made a cell that states a fact the module computes a `because` sentence, and
+// that cell is compared word for word; every other cell is the page's wording, and the guard read
+// one thing in it, the name of the step's own record. So a cell could send an operator to
+// `puppetSkinKnown` and stay green the day that record was renamed. What is left to compare is the
+// names: `reads` is the records a cell names besides its step's own, and `why` is #931's sentence
+// for the half no record can answer, because a default skin and a puppet that walks are what a
+// person sees. A row with no `reads` says the cell names only its step's record, which `namesRecord`
+// already holds. The table is here rather than in the module for the reason `NOT_PATHS` and `UNREAD`
+// are: it is a decision about what a guard reads, and the module's own comment says the absence of a
+// `because` is what marks a cell as the page's.
+const FAILURE_READS = {
+  'puppet-renders': {
+    reads: ['puppetSkinKnown', 'puppetSkinWithheld', 'puppetSkinRefused'],
+    why: 'the rule the cell states is `landingEntry`\'s, and the module\'s case pins it: what a client ' +
+      'draws from the entry is the screen, and only the operator sees it'
+  },
+  'puppet-walks': {
+    reads: [],
+    why: 'the lag a watching client sees is the screen, and `virtualPlayersMoved` is the process\'s ' +
+      'counter: it says a move was written, never that the puppet walked'
+  },
+  'drawn-for-driver': {
+    reads: [],
+    why: 'the frames are the record\'s, and a body standing beside the driver is the screen: no record ' +
+      'says what either client drew with what reached its socket'
+  },
+  'drawn-once': {
+    reads: [],
+    why: 'one body or two is the screen: `virtualPlayerWritten` says the driver\'s channel was told about ' +
+      'its own player, and the operator sees the duplicate'
+  }
+}
+
+// The backticked record names a cell writes. `RECORDS` is the only thing that can tell a record from
+// the field, counter or frame written beside it, so a token it does not list is not asked about. A
+// token written `record.field` is that record with the number to read inside it, so the head is the
+// name.
+function cellRecords (cell, listed) {
+  return [...new Set([...cell.matchAll(/`([^`]+)`/g)]
+    .map(match => match[1].split('.')[0])
+    .filter(name => listed.has(name)))]
+}
+
+// One list per repair, the way `stepDrift` is, because each is a different edit: a cell with no row,
+// a row for a cell the guard already compares, a row for no step at all, a name `RECORDS` does not
+// write, a declared name the cell does not write, a name the cell writes and no row declares, and a
+// reason too short to be one.
+function failureDrift (rows, steps = OPERATOR_STEPS, records = RECORDS, reads = FAILURE_READS) {
+  const rowOf = new Map(rows.map(row => [row.id, row]))
+  const stepOf = new Map(steps.map(step => [step.id, step]))
+  const listed = new Set(records.map(record => record.name))
+  const cellOf = id => rowOf.get(id)?.because ?? ''
+  // A cell the module owns is compared word for word by `stepDrift`, so a row here is a decision
+  // nothing consults: the table and the field are two answers to one step.
+  const unrecorded = steps
+    .filter(step => typeof step.because !== 'string' && !Object.hasOwn(reads, step.id))
+    .map(step => step.id)
+  const orphans = Object.keys(reads)
+    .filter(id => stepOf.get(id) === undefined || typeof stepOf.get(id).because === 'string')
+  const unlisted = Object.entries(reads).flatMap(([id, row]) => row.reads
+    .filter(name => !listed.has(name)).map(name => ({ id, name })))
+  // One defect is one finding: a declared name `RECORDS` has dropped is `unlisted`'s, and the cell
+  // that still writes it is the same edit, so this arm does not also ask for it.
+  const missing = Object.entries(reads).flatMap(([id, row]) => row.reads
+    .filter(name => listed.has(name) && !cellRecords(cellOf(id), listed).includes(name))
+    .map(name => ({ id, name })))
+  const undeclared = Object.entries(reads).flatMap(([id, row]) => {
+    const own = stepOf.get(id)?.record ?? null
+    return cellRecords(cellOf(id), listed)
+      .filter(name => name !== own && !row.reads.includes(name)).map(name => ({ id, name }))
+  })
+  // `thin` is `stepDrift`'s empty cell, so this arm is named for what it measures: a reason too
+  // short to say why. The floor is the one `NOT_PATHS` and `UNREAD` hold a reason to.
+  const thinWhy = Object.keys(reads).filter(id => reads[id].why.length <= 40)
+  return { unrecorded, orphans, unlisted, missing, undeclared, thinWhy }
+}
+
+function failureDisagreement ({ unrecorded, orphans, unlisted, missing, undeclared, thinWhy }) {
+  return [
+    ...unrecorded.map(id => 'the runbook\'s failure cell for ' + id + ' is the page\'s prose, and FAILURE_READS ' +
+      'says which records it reads and why the rest is prose: no row is here, so nothing tells a reader ' +
+      'which half of that cell is compared'),
+    ...orphans.map(id => 'FAILURE_READS holds a row for ' + id + ', and its cell is OPERATOR_STEPS\' sentence ' +
+      'word for word: the row is a decision nothing consults, so drop it, or drop the step\'s `because`'),
+    ...unlisted.map(({ id, name }) => 'FAILURE_READS says the failure cell for ' + id + ' reads `' + name +
+      '`, and RECORDS lists no such record: name the record the service writes, in the module and in the row'),
+    ...missing.map(({ id, name }) => 'the runbook\'s failure cell for ' + id + ' does not write `' + name +
+      '`, which FAILURE_READS declares for it: write the name in the cell, or drop it from the row'),
+    ...undeclared.map(({ id, name }) => 'the failure cell for ' + id + ' names `' + name + '`, and ' +
+      'FAILURE_READS declares no such record for it: add the name to the row, or take it out of the sentence'),
+    ...thinWhy.map(id => 'FAILURE_READS gives ' + id + ' a reason too short to say why the rest of its cell is ' +
+      'the page\'s prose: a row without its reason is the omission this table replaced')
+  ]
 }
 
 // The edit each disagreement asks for, one sentence each, naming the row and the side it is on. A
@@ -1258,6 +1402,64 @@ test('the step comparison reports a row on one side only, a thin row, a reworded
     /"Step" column/, 'a table that lost the Step column is a finding, not rows of empty names')
   assert.throws(() => stepRows(page(rows).replace('| `first-step` |', '| first-step |')),
     /opens with one step id/, 'a row whose first cell is not the id in code is a finding')
+})
+
+// The arms the table above needs to keep it honest: a cell with no row, a row nothing consults, a row
+// for no step, a name RECORDS dropped, a declared name the cell does not write, a name the cell writes
+// and no row declares, and a reason too short to be one. Fixtures, not the tree: a drift in the runbook
+// cannot make this case about the drift instead of the guard.
+test('the failure-cell comparison reports an undeclared cell, a row for a compared cell, a stale row, an unlisted name, a name the cell does not write, a name the cell never declared, and a thin reason', () => {
+  const steps = [
+    { id: 'first-step', claim: 'this', record: 'alphaRecord', because: 'was not 2' },
+    { id: 'second-step', claim: 'that', record: 'betaRecord' }
+  ]
+  const records = ['alphaRecord', 'betaRecord', 'gammaRecord', 'epsilonRecord']
+    .map(name => ({ name, what: 'a sentence' }))
+  const rows = [
+    { id: 'first-step', look: 'here', see: 'this', because: 'was not 2' },
+    { id: 'second-step', look: 'there', see: 'that', because: 'no `betaRecord` and no `gammaRecord`' }
+  ]
+  const why = 'what a client draws is the screen, and no record says it was drawn'
+  const reads = { 'second-step': { reads: ['gammaRecord'], why } }
+  const drift = (over = {}, cells = rows) => failureDrift(cells, steps, records, { ...reads, ...over })
+
+  assert.deepEqual(failureDisagreement(drift()), [],
+    'the fixture agrees with itself, so each case below is about its own edit')
+
+  // #931's empty table: the arm a new step lands on, and the one that names what a reader is told.
+  const unrecorded = failureDrift(rows, steps, records, {})
+  assert.deepEqual(unrecorded.unrecorded, ['second-step'])
+  assert.match(failureDisagreement(unrecorded)[0],
+    /^the runbook's failure cell for second-step is the page's prose, and FAILURE_READS/)
+
+  // A row for a cell the guard already compares word for word is a decision nothing consults, and a
+  // row for no step at all is one that outlived its step.
+  assert.deepEqual(drift({ 'first-step': { reads: [], why } }).orphans, ['first-step'])
+  assert.deepEqual(drift({ 'gone-step': { reads: [], why } }).orphans, ['gone-step'])
+  assert.match(failureDisagreement(drift({ 'gone-step': { reads: [], why } }))[0],
+    /^FAILURE_READS holds a row for gone-step/)
+
+  // The name half, which is what #931 could derive: a name the module dropped, a declared name the
+  // cell does not write, and a name the cell writes and the row does not declare.
+  const unlisted = drift({ 'second-step': { reads: ['deltaRecord'], why } })
+  assert.deepEqual(unlisted.unlisted, [{ id: 'second-step', name: 'deltaRecord' }])
+  assert.deepEqual(unlisted.missing, [], 'a name RECORDS dropped is one finding, not two')
+  assert.match(failureDisagreement(unlisted)[0], /reads `deltaRecord`, and RECORDS lists no such record/)
+
+  const missing = drift({ 'second-step': { reads: ['gammaRecord', 'epsilonRecord'], why } })
+  assert.deepEqual(missing.missing, [{ id: 'second-step', name: 'epsilonRecord' }])
+  assert.match(failureDisagreement(missing)[0], /does not write `epsilonRecord`, which FAILURE_READS declares/)
+
+  const undeclared = drift({}, rows.map(row => row.id === 'second-step'
+    ? { ...row, because: 'no `betaRecord`, `gammaRecord` or `epsilonRecord`' }
+    : row))
+  assert.deepEqual(undeclared.undeclared, [{ id: 'second-step', name: 'epsilonRecord' }])
+  assert.equal(undeclared.missing.length, 0, 'the cell writes both declared names, so only the extra one is a finding')
+  assert.match(failureDisagreement(undeclared)[0], /names `epsilonRecord`, and FAILURE_READS declares no such record/)
+
+  const thin = drift({ 'second-step': { reads: ['gammaRecord'], why: 'the screen' } })
+  assert.deepEqual(thin.thinWhy, ['second-step'])
+  assert.match(failureDisagreement(thin)[0], /a reason too short to say why the rest of its cell is the page's prose/)
 })
 
 // ---------------------------------------------------------------------------
