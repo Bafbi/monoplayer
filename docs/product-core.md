@@ -979,8 +979,8 @@ setSpectatorPose
 preAuthStats
 ```
 
-The rest of each interface is what those tables cannot name: members the core calls
-on the leg directly, and no row declares.
+The rest of each interface is what those tables cannot name: members the core or a
+teardown calls on the leg directly, and no row declares.
 
 ```js
 backendLeg = {                    // = the GlowSquidye puppet session
@@ -989,6 +989,9 @@ backendLeg = {                    // = the GlowSquidye puppet session
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
   writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
   end(reason)                     // deliberate close (stop backendDown reinvention)
+  close()                         // resolves once the socket the leg ended has reported its
+                                  // own end, bounded by the leg's own wait: the wait rig.close()
+                                  // and the shutdown after a failed start await (#662)
 }
 
 frontLeg = {                      // a body's channels: its driver and its spectators (#269)

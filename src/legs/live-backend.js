@@ -66,9 +66,9 @@ const DIALOG_ATTEMPT_LIMIT = 5
 // a shutdown, and the library's own close timeout bounds the same wait at 30 s,
 // which is a shutdown an operator ends by hand.
 //
-// The number repeats the bot's bound (src/ladder/bot.js:239-243) and the lane's
-// (src/ladder/loopback-lane.js:71) rather than importing it, because the legs sit
-// below the ladder: a rung imports a leg, never the reverse.
+// The number repeats the bot's bound (src/ladder/bot.js:239-243) rather than
+// importing it, because the legs sit below the ladder: a rung imports a leg, never
+// the reverse.
 const END_TIMEOUT_MS = 2000
 
 // How long a close waits, after destroying the socket it gave up on, for the end
@@ -756,9 +756,11 @@ function createBackendLeg ({
         // `end()` asked already: a second ask re-runs a close that is in flight, so
         // this close waits for the socket and asks for nothing.
         if (ended) return
+        // No `_end` branch (#713): the library assigns `_end` only to a client its
+        // own server accepted (minecraft-protocol/src/server.js), and this leg only
+        // ever holds one from `mc.createClient`, where it is undefined.
         try {
-          if (typeof current._end === 'function') current._end('proxy_stopped')
-          else current.end('proxy_stopped')
+          current.end('proxy_stopped')
         } catch {
           settle()
         }

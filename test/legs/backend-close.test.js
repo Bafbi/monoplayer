@@ -5,8 +5,9 @@
 // comes back from the kernel, and the handler the leg installed for it is what
 // reports the fault the core turns into a scheduled reconnect
 // (src/core/session.js:232). So a caller that awaited `close()` and then read a
-// ledger was reading a socket that could still be open: #661 had to reach through
-// `leg.client` for that event (src/ladder/loopback-lane.js endOfLeg).
+// ledger was reading a socket that could still be open. #661 reached through
+// `leg.client` for that event from the ladder's lane; #711 deleted that second wait,
+// and this file is the contract it now rests on.
 //
 // Seam: a loopback listener that ends its side on a turn this file chooses, and the
 // offline backend leg dialling it. The listener owns the moment the socket ends, so

@@ -15,9 +15,9 @@
 //                  teardown list stops growing one name per client. O55's picker
 //                  assertions record their picks and verbs by hand today; they read
 //                  `lane.picks` and `lane.verbs` instead once they convert.
-//   close()        bots, then the core, then the rig, then the end of the socket
-//                  the rig ended, then a dial at every port the lane held, then
-//                  the timers. It reports what it closed,
+//   close()        bots, then the core, then the rig (whose own close answers
+//                  for the socket it ended), then a dial at every port the lane
+//                  held, then the timers. It reports what it closed,
 //                  because "nothing is left" is a claim, not a comment: the ports
 //                  are the kernel's answer, the client's end is the client's, and
 //                  the timers are the lane's own clock.
@@ -59,16 +59,6 @@ import { offlineUuid } from '../legs/offline-identity.js'
 const HOST = '127.0.0.1'
 const PUPPET = 'GlowSquidye'
 const PUPPET_UUID = offlineUuid(PUPPET)
-
-// How long a close waits for the backend leg's socket to end. A close ends that
-// socket with a call, and the event comes back from the kernel, so a turn of the
-// event loop is a bet on having been read, not a wait for it. O68 reported the
-// lane's own reconnect as left running at 893ecb3, on a public runner whose only
-// difference from this machine was how late that read came back (#661). The bound
-// is the bot's close (src/ladder/bot.js:238), and it is unref'd for the bot's
-// reason: a wedged peer must not hold the rung, and a timer this file arms is not
-// one the ledger can see.
-const LEG_END_MS = 2000
 
 // How many turns a close spends draining what a socket armed behind it. A turn is
 // one 0 ms timer, so the whole drain costs microseconds and waits for nothing. A
@@ -145,39 +135,6 @@ function dial (port) {
       resolve('connected')
     })
     socket.once('error', error => resolve(error.code ?? 'error'))
-  })
-}
-
-// The end of the socket a close ended, as a promise that always settles. The leg's
-// own close() resolves without this event once the leg is ended
-// (src/legs/live-backend.js:679), and the handler that arms the reconnect the
-// record reports runs on it (src/legs/live-backend.js:502, then
-// src/service/monoplayer.js:3093, then src/core/session.js:232). This is the wait
-// the leg cannot make on the lane's behalf.
-//
-// Three answers, and the caller continues on all of them. 'none' is no socket left
-// to end, which is a lane with no fake backend or one whose leg faulted earlier.
-// 'end' is the socket's own end, and the arm that follows it has landed by then.
-// 'bound' is a socket that never ended: the close still dials and still drains, so
-// what a wedged socket leaves is a reading the drain could not outrun, never a throw.
-//
-// `ms` is the case's (test/ladder/loopback-lane.test.js), which shortens the bound
-// rather than wait it out.
-export function endOfLeg (leg, { ms = LEG_END_MS } = {}) {
-  const client = leg?.client ?? null
-  // The client's own flag: a socket whose 'end' has already fired has nothing left
-  // to wait for, and a listener added now would wait for the bound instead.
-  if (client === null || client.ended === true) return Promise.resolve('none')
-  return new Promise(resolve => {
-    const settle = answer => {
-      clearTimeout(bound)
-      client.removeListener('end', ended)
-      resolve(answer)
-    }
-    const ended = () => settle('end')
-    const bound = setTimeout(() => settle('bound'), ms)
-    bound.unref?.()
-    client.once('end', ended)
   })
 }
 
@@ -352,21 +309,22 @@ export async function createLoopbackLane ({
           record.bots.push({ username, ended: client.received.ended !== null })
         }
         // The core before the legs, which is the live lane's order
-        // (src/service/start-live.js:1197): the stop is what detaches the client
-        // and ends the backend leg, so the legs close behind a core that has
-        // already said what it was doing.
+        // (src/service/start-live.js:1469-1471): the stop is what detaches the
+        // client and ends the backend leg, so the legs close behind a core that
+        // has already said what it was doing.
         //
-        // The socket is taken before the stop, because the stop is what ends it:
-        // ending the backend leg is a backend fault, and a fault arms a retry
-        // nobody will answer (src/core/session.js:232). Reading the ledger before
-        // that arm has landed would report no leftover and leave one, and the arm
-        // sits behind the socket's own end, which comes back from the kernel. A
-        // turn of the event loop is not enough to know it has landed: that is the
-        // reading O68 got wrong at 893ecb3 (#661).
-        const ending = endOfLeg(rig.backend)
+        // The stop ends the backend socket, and the arm that follows it is what the
+        // record reports: ending the backend leg is a backend fault, and a fault
+        // arms a retry nobody will answer (src/core/session.js:232). Reading the
+        // ledger before that arm has landed would report no leftover and leave one,
+        // which is the reading O68 got wrong at 893ecb3 (#661). The rig's close is
+        // where that wait is kept now: it awaits the leg's own close(), which
+        // resolves once the socket reported its end (#662), and the arm sits behind
+        // the handler connect() installed, so it has landed by then. A second wait
+        // here was the same fact in two homes, and this file's copy is the one that
+        // drifted (#711).
         try { await rig.core.stop({ reason: 'lane_close' }) } catch { /* best effort */ }
         await rig.close()
-        await ending
         for (const entry of ports) {
           record.sockets.push({ ...entry, code: await dial(entry.port) })
         }
