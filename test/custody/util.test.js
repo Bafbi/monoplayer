@@ -1,11 +1,12 @@
-// The one home for "is this a UUID Mojang issues" (#703, and #704's interim home while
-// that ticket is open). The rule the panel's write route and the dev lane's report both
-// need: Mojang issues version 4, and a version-3 uuid is Java's nameUUIDFromBytes over
+// The one home for "can a Mojang session ever answer for this uuid" (#703, and #704's
+// interim home while that ticket is open). The panel's write route asks it, and the dev
+// lane's report and its guard spell the same rule by hand until #703 brings them here.
+// Mojang issues version 4, and a version-3 uuid is Java's nameUUIDFromBytes over
 // `OfflinePlayer:<name>`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { normalizeUuid, uuidRefusal, uuidVersion } from '../../src/custody/util.js'
+import { normalizeUuid, uuidRefusalReason, uuidVersion } from '../../src/custody/util.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 
 // A uuid Mojang issued, the value the loopback rig calls Pilot's owner.
@@ -29,9 +30,9 @@ test('the version is the thirteenth hex digit, read from either spelling', () =>
 })
 
 test('a uuid Mojang issued is admitted, and every version it does not issue is refused', () => {
-  assert.equal(uuidRefusal(REAL), null, 'a version-4 uuid is one Mojang issues')
+  assert.equal(uuidRefusalReason(REAL), null, 'a version-4 uuid is one Mojang issues')
   for (const [uuid, version] of [[DERIVED, 3], [V1, 1], [V5, 5], [V7, 7]]) {
-    const refusal = uuidRefusal(uuid)
+    const refusal = uuidRefusalReason(uuid)
     assert.ok(refusal, 'refused: ' + uuid)
     assert.match(refusal, new RegExp('version-' + version + ' uuid'))
     assert.match(refusal, /no Mojang session answers for it/)
@@ -39,25 +40,25 @@ test('a uuid Mojang issued is admitted, and every version it does not issue is r
 })
 
 test('the undashed spelling of a derived uuid is refused the same way', () => {
-  assert.equal(uuidRefusal(DERIVED.replace(/-/g, '')), uuidRefusal(DERIVED))
+  assert.equal(uuidRefusalReason(DERIVED.replace(/-/g, '')), uuidRefusalReason(DERIVED))
   assert.equal(normalizeUuid(DERIVED.replace(/-/g, '')), normalizeUuid(DERIVED),
     'the two spellings are one value, so one rule answers both')
 })
 
 test('a name that hashes to its own uuid is refused by the string that was hashed', () => {
   assert.equal(offlineUuid('Pilot'), DERIVED, 'the fixture is what Java derives from the name')
-  const refusal = uuidRefusal(DERIVED, 'Pilot')
+  const refusal = uuidRefusalReason(DERIVED, 'Pilot')
   assert.match(refusal, /OfflinePlayer:Pilot/, 'the answer names the string, not only the version')
   // The version is refused too, so an entry whose name was edited after it was made is
   // still refused: the two rules are separate and both apply.
-  assert.match(uuidRefusal(DERIVED, 'Someone else'), /version-3/)
+  assert.match(uuidRefusalReason(DERIVED, 'Someone else'), /version-3/)
   // A name is optional, and an empty one is no name at all.
-  assert.equal(uuidRefusal(REAL, ''), null)
-  assert.equal(uuidRefusal(REAL, 'Bafbi'), null)
+  assert.equal(uuidRefusalReason(REAL, ''), null)
+  assert.equal(uuidRefusalReason(REAL, 'Bafbi'), null)
 })
 
 test('a string that is not a uuid is refused rather than answered as usable', () => {
   for (const notAUuid of ['', 'nope', '6eb73524-ff88-4a62-a8d0', null, undefined, 42]) {
-    assert.match(uuidRefusal(notAUuid), /not a uuid/, JSON.stringify(notAUuid))
+    assert.match(uuidRefusalReason(notAUuid), /not a uuid/, JSON.stringify(notAUuid))
   }
 })

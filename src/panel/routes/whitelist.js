@@ -46,19 +46,17 @@
 //     A supplied uuid skipped that resolver entirely, so any 32 hex digits of the
 //     right shape were written, and a uuid Java derived from a name
 //     (`md5("OfflinePlayer:<name>")`, which the dev lane carried, #677) admits
-//     nobody while reading like a controller. The same question is asked of both
-//     now, through `uuidRefusal` in `src/custody/util.js`. The version is necessary
-//     and not sufficient: the panel does not ask Mojang about a supplied uuid, so a
-//     mistyped version-4 uuid is still admitted, and only the login tells the two
-//     apart. An entry already in a document is left where it is: this route refuses
-//     new ones and rewrites nothing it did not author, so removing one is a DELETE.
+//     nobody while reading like a controller. Both paths ask `uuidRefusalReason` in
+//     `src/custody/util.js` now, and it is where the rule and its two limits live.
+//     `docs/panel.md` says what the limits leave in a document that already holds an
+//     entry no Mojang session can answer for.
 //
 // This module holds no cluster knowledge. The client arrives injected, the same one
 // `src/panel/routes/info.js` reads pods through and `routes/allowed.js` patches a
 // ConfigMap through, so a test hands in a fake and the route cannot tell it from the
 // cluster (#231, #233, #262).
 import { createNameLookup, WHITELIST_VERSION } from '../../custody/store.js'
-import { normalizeUuid, uuidRefusal } from '../../custody/util.js'
+import { normalizeUuid, uuidRefusalReason } from '../../custody/util.js'
 import { containerEnv } from '../kube.js'
 import { BODY_TOO_LARGE, readBody } from './body.js'
 
@@ -412,12 +410,19 @@ export function createWhitelistRoute ({
     // (#704). It runs after the puppet's own uuid has been refused, so the uuid this
     // branch prints is never the account identifier the rule above keeps out of the
     // answer and the log.
-    const refusal = uuidRefusal(uuid, name)
-    if (refusal !== null) {
-      log('panelWhitelistFabricatedUuid', { puppet: puppet.name, uuid, name: name ?? null, reason: refusal })
-      return send(res, 400, TEXT, 'the attach whitelist admits players who log in, and ' + refusal +
-        '. Send the account name instead: the panel asks Mojang for the uuid a name resolves to, and it ' +
-        'cannot vouch for a uuid it is handed\n')
+    const refusalReason = uuidRefusalReason(uuid, name)
+    if (refusalReason !== null) {
+      log('panelWhitelistUuidRefused', { puppet: puppet.name, uuid, name: name ?? null, reason: refusalReason })
+      // Each path has its own next step, because the two failures are different. A
+      // supplied uuid can be replaced by the name. A resolver's answer cannot be
+      // replaced by anything the caller sends, and advice that does not work is worse
+      // than none.
+      const next = name === null
+        ? ' Send the account name instead: the panel asks Mojang for the uuid a name resolves to, and it ' +
+          'cannot vouch for a uuid it is handed.'
+        : ' Nothing this request could have sent would fix it: the resolver answered a uuid no Mojang ' +
+          'session can answer for, which is a fault in the panel.'
+      return send(res, 400, TEXT, 'the attach whitelist is what admits a login, and ' + refusalReason + '.' + next + '\n')
     }
 
     return write(req, res, { send }, puppet, { action: 'add', uuid, name })

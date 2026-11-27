@@ -236,7 +236,7 @@ test('a name the resolver cannot answer is a 400 that asks for a uuid', async ()
   }
 })
 
-test('a uuid derived from a name is refused, so a fabricated entry cannot be written', async () => {
+test('a uuid no Mojang session can answer for is refused, in either spelling', async () => {
   // #704: the uuid path skipped the resolver, so any 32 hex digits of the right shape
   // reached the attach whitelist, the live lane's included. This one is
   // md5("OfflinePlayer:Pilot"): the dev lane's ConfigMap carried it (#677) and no Mojang
@@ -253,7 +253,7 @@ test('a uuid derived from a name is refused, so a fabricated entry cannot be wri
       assert.match(said, /Mojang/, 'and why that means no login arrives')
     }
     assert.equal(rig.state.patches.length, 0, 'nothing fabricated is written')
-    const refusal = rig.lines().find(line => line.event === 'panelWhitelistFabricatedUuid')
+    const refusal = rig.lines().find(line => line.event === 'panelWhitelistUuidRefused')
     assert.ok(refusal, 'the refusal is recorded like every other')
     assert.equal(refusal.puppet, 'glowsquidye')
     assert.equal(refusal.uuid, DERIVED_UUID)
@@ -288,7 +288,35 @@ test('a resolver that answers a uuid derived from the name it was asked is refus
     assert.equal(response.status, 400)
     const said = await response.text()
     assert.match(said, /OfflinePlayer:Pilot/, 'the refusal names the string that was hashed')
+    assert.match(said, /fault in the panel/, 'and it does not tell the caller to send a name, which they sent')
     assert.equal(rig.state.patches.length, 0)
+  } finally {
+    await rig.close()
+  }
+})
+
+test('an entry already in the document is left where it is, and a DELETE still takes it', async () => {
+  // #704 refuses new entries and rewrites nothing it did not author, so what is already
+  // written stays. That is the decision, and this is the case that holds it: the add
+  // below rewrites the document and keeps the entry, and the DELETE removes it by uuid
+  // whatever version it carries.
+  const rig = await panel({
+    cluster: cluster({
+      doc: document([
+        ...onePlayer.players,
+        { uuid: DERIVED_UUID, name: 'Pilot', addedAt: '2026-11-01T09:00:00.000Z' }
+      ])
+    })
+  })
+  try {
+    const add = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: OTHER_UUID })
+    assert.equal(add.status, 200)
+    assert.deepEqual(rig.puppetReads().map(player => player.uuid), [PLAYER_UUID, DERIVED_UUID, OTHER_UUID],
+      'the entry the panel did not author survives a rewrite')
+
+    const removed = await fetch(rig.url + '/api/puppets/glowsquidye/whitelist/' + DERIVED_UUID, { method: 'DELETE' })
+    assert.equal(removed.status, 200, 'a DELETE takes the uuid it is given, whatever version it carries')
+    assert.deepEqual(rig.puppetReads().map(player => player.uuid), [PLAYER_UUID, OTHER_UUID])
   } finally {
     await rig.close()
   }

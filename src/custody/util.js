@@ -1,9 +1,10 @@
 // Pure shared helpers for the custody slice (src/custody/).
 // No I/O, no env, no network — safe to unit test directly.
 
-// The name-derived uuid Java mints, so "its own name hashes to it" is one function
-// rather than a second md5 in this file. src/legs/offline-identity.js owns it and
-// imports nothing but node:crypto, so custody takes no runtime edge from this.
+// The name-derived uuid Java mints, so "its own name hashes to it" reads one function
+// instead of a second md5 here. `src/legs/offline-identity.js` owns that fact, and
+// `src/legs/live-front.js` already takes this module, so the two trees are neighbours
+// either way. Both files are pure. Neither opens a socket.
 import { offlineUuid } from '../legs/offline-identity.js'
 
 // Normalize a Mojang UUID to the canonical lowercase hyphenated form.
@@ -33,16 +34,21 @@ export function uuidVersion (raw) {
 }
 
 // Why no Mojang session can ever answer for this uuid, or null when nothing about its
-// shape stops one. This is the rule the panel's write route and the dev lane's report
-// both ask, in one place: the version is necessary and not sufficient, so a version-4
-// uuid a caller mistyped is still admitted, and only a login tells the two apart.
+// shape stops one. It is the rule the panel's write route asks of every add. The dev
+// lane's report and its guard spell the same rule by hand (`scripts/dev-lane.sh`,
+// `test/tooling/dev-lane.test.js`), and #703 is where those come to call this.
 //
-// The name is optional and is only used when the caller has one. A uuid a request
-// supplied arrives with no name, so the version is the whole check there; an entry in
+// The version is necessary and not sufficient. Mojang issues version 4 and nothing
+// else, and version 3 is Java's UUID.nameUUIDFromBytes over `OfflinePlayer:<name>`, so
+// a derived uuid is refused here. A version-4 uuid a caller mistyped is still
+// admitted, because nothing here asks Mojang. Only a login tells the two apart.
+//
+// The name is optional and is used only when the caller has one. A uuid a request
+// supplied arrives with no name, so the version is the whole check there. An entry in
 // a document, or a pair a resolver answered, arrives with both, and then a name that
-// hashes to its own uuid is refused first, because that names the string that was
-// hashed instead of the version it happens to carry.
-export function uuidRefusal (raw, name = null) {
+// hashes to its own uuid is refused by the string that was hashed instead of by the
+// version it happens to carry.
+export function uuidRefusalReason (raw, name = null) {
   const uuid = normalizeUuid(raw)
   if (uuid === null) return 'it is not a uuid, so no login can match it'
   if (typeof name === 'string' && name !== '') {

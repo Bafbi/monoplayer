@@ -327,16 +327,15 @@ Five refusals are deliberate, and each one is a refusal rather than a repair:
   Deployment that names no uuid gets a 503 instead, because the check cannot run and
   the panel does not skip a rule it cannot apply.
 - **A uuid no Mojang session can answer for is refused** with a 400 (#704). A name is
-  resolved through Mojang, so a name that is not an account is refused already; a uuid
-  used to skip that resolver, and any 32 hex digits of the right shape were written. A
-  uuid Java derived from a name — `md5("OfflinePlayer:<name>")`, which the dev lane
-  carried until #677 removed it — is exactly that shape, and it admits nobody while it
-  reads like a controller. Both paths now ask the same question, through `uuidRefusal`
-  in `src/custody/util.js`. **The version is necessary and not sufficient**: the panel
-  does not ask Mojang about a supplied uuid, so a mistyped version-4 uuid is still
-  written, and only the login tells the two apart. An entry already in the document is
-  left where it is, because this route rewrites nothing it did not author: remove it
-  with a DELETE.
+  resolved through Mojang, so a name that is not an account is refused already. A uuid
+  skipped that resolver, so any 32 hex digits of the right shape were written. A uuid
+  Java derived from a name, which is `md5("OfflinePlayer:<name>")`, is exactly that
+  shape. The dev lane carried one until #677 removed it, and it admits nobody while it
+  reads like a controller. Both paths ask `uuidRefusalReason` in `src/custody/util.js`
+  now. **The version is necessary and not sufficient.** The panel does not ask Mojang
+  about a supplied uuid, so a mistyped version-4 uuid is still written, and only the
+  login tells the two apart. An entry already in the document is left where it is,
+  because this route rewrites nothing it did not author. Remove one with a DELETE.
 - **Removal takes a uuid**, so renaming an account cannot remove a different one. A
   uuid that is not in the list is a 404, and nothing is written.
 
