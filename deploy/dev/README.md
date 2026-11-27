@@ -424,6 +424,8 @@ list these come from, and a guard holds this table to it:
 | Record | What it says |
 |---|---|
 | `pickerServed` | a client reached the picker. A run with none never joined the lane |
+| `pickerPick` | a client clicked a row on the picker and the click was read. It names that row's `slug` and, when the offer still held the row, its `server`. `known` is false when it did not. A run with `pickerServed` and no `pickerPick` is a client that never clicked one |
+| `pickerVerb` | a client answered the chosen server's own dialog, carrying the `verb` (`claim`, `spectate` or `disconnect`) and the `server`. This is the click that dials a body or starts a landing. A verb the lane cannot act on writes `pickerVerbRefused` instead |
 | `claimDial` | a client claimed a body, so a body was dialled. This is where the puppet reaches the Paper |
 | `spectateView` | a spectator landed on a body. Its `channel` is the socket, `virtualFrames` is what it was told about the puppet's body, and `modeFrames` is the spectator game mode pair |
 | `spectateRefused` | the Spectate click was refused, with the core's own reason |
