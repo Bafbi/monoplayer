@@ -2438,7 +2438,8 @@ export function createMonoplayer ({
     // count follows the answer. A frame it refused is not a replay: it is the refusal,
     // counted on its own and named on one line, because a client missing a frame
     // mid-replay holds a hole and nothing else in the record says so. The spectator's
-    // landing already counts its own writes this way (`spectateView`).
+    // landing already counts what a socket took (`spectateView`'s `written`), though
+    // its `replayed` is still the count it built.
     let replayed = 0
     let refused = 0
     for (const frame of synthesized.frames) {
@@ -2447,8 +2448,10 @@ export function createMonoplayer ({
         log('replayFrameRefused', { name, reason, frame: frame.name })
         continue
       }
-      // The invented position is not one of the frames `replayed` counts: it was never
-      // in the cache, and `positionsSynthesized` counts it as invented.
+      // The invented position is the one frame here `replayed` does not count: it was
+      // never in the cache, and `positionsSynthesized` counts it as invented. The test
+      // is `writeSynthFrame`'s own, because `synthAttach` decides the kind and answers
+      // only the totals.
       if (frame.synth !== 'position') replayed++
     }
     metrics.framesReplayed += replayed
@@ -2491,8 +2494,8 @@ export function createMonoplayer ({
     log('attach', {
       name,
       reason,
-      // #717: the frames a socket took, and the frames the leg refused. The two are
-      // disjoint, and their sum is the replay `synthAttach` built less the position.
+      // #717: the cached frames a socket took, and every frame the leg refused. The
+      // two are disjoint; `positionsSynthesized` says what was invented either way.
       replayed,
       refused,
       synthesizedPositions: synthesized.counts.synthesized,
@@ -2521,7 +2524,7 @@ export function createMonoplayer ({
     // attach was built from, refusals included (#717): a parity rung derives what the
     // client should have decoded from it, so filtering it would make a client with a
     // hole match every rung that compares the two. `replayed` and `refused` say which
-    // of those frames left, and they sum to everything but the synthesized position.
+    // of those frames left.
     // `snapshot` is a value and not a view of the cache: it stays the state this
     // replay was built from as later traffic arrives (#597 keeps the cache's own
     // reading on `laneState`).

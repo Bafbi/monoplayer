@@ -16,8 +16,9 @@
 // it refused is counted zero times as written and once as refused, in the record, on the
 // event, and in the metrics a heartbeat copies. The two branches of `writeSynthFrame` are
 // two cases, because a cached frame is a raw write and the synthesized position is a
-// library packet, and a count that subtracts both from one number would pass one and fail
-// the other.
+// library packet, and a count that subtracted one number from the other would pass one
+// case and fail the other: `replayed` is the cached frames a socket took, and `refused`
+// is every frame the leg refused, the position included.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -66,9 +67,8 @@ test('#717 a cached replay frame the leg refused is counted as refused, and not 
   assert.equal(taken.rig.core.metrics.replayFramesRefused, 0, 'nothing was refused')
 
   const refused = warmRig()
-  // The leg drops one frame instead of writing it: the real one answers false for a
-  // connection that holds no socket, a frame its clientbound policy withholds, and a
-  // state the client cannot parse (src/legs/live-front.js, `writeRawTo`).
+  // The leg drops one frame instead of writing it, which is the answer
+  // `src/legs/live-front.js` gives when it refuses a raw frame (`writeRawTo`).
   const writeRaw = refused.rig.frontLeg.writeRaw.bind(refused.rig.frontLeg)
   refused.rig.frontLeg.writeRaw = (buffer, meta, options = {}) => {
     if (meta?.name === 'map_chunk') return false
@@ -82,7 +82,7 @@ test('#717 a cached replay frame the leg refused is counted as refused, and not 
   assert.equal(record.refused, 1, 'the record says the leg refused one frame')
   assert.equal(record.replayed, replayed - 1, 'and does not count it as written')
   assert.equal(record.replayed + record.refused, replayed,
-    'what the leg took plus what it refused is the replay the control case wrote')
+    'what the leg took plus what it refused is the cached frames the control case wrote')
 
   // The event, which is the cut a parity rung compares.
   const [event] = refused.events
