@@ -5,7 +5,7 @@
 //   node src/driver/run.js --runs 1 --force  # keep going after a failing run
 //   node src/driver/run.js --tunnel          # spawn/clean the SSH driver tunnel for you
 //   node src/driver/run.js --lane unmodded   # write the manual witness checklist (exits 1)
-//   node src/driver/run.js --verify-g0       # verify a fresh 2/2 + the completed witness
+//   node src/driver/run.js --verify-g0       # verify a fresh 2/2 + a recorded witness
 //   node src/driver/run.js --help
 //
 // Writes testdata/driver-run<N>-<timestamp>.json per run plus
@@ -27,7 +27,9 @@ import { formatSkinReport, runSkinLane, SKIN_CASES } from './skin.js'
 import { laneTargets, resolveGateLane } from './lane.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
-import { verifyG0Evidence, versionRefusal } from './checks.js'
+import {
+  verifyG0Evidence, verifyUnmoddedWitness, versionRefusal, unmoddedWitness, UNMODDED_WITNESS_FILE,
+} from './checks.js'
 import { redactSecrets } from '../observability/secrets.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -81,8 +83,8 @@ Options:
                      for the driver socket and clean it up on exit. Unit tests
                      never need this; the default is an operator-managed tunnel.
   --verify-g0        Do not run anything: verify this checkout holds two
-                     consecutive PASSED driver reports and a completed unmodded
-                     witness; exits 0 only when both hold.
+                     consecutive PASSED driver reports and an unmodded witness
+                     whose every step is recorded; exits 0 only when both hold.
   --max-age-hours N  Reject driver evidence whose newest run finished more than
                      N hours ago, so a copied report set cannot pass (default 24).
   --host             Display host for relaunch/screenshot/tunnel
@@ -387,42 +389,13 @@ function createScpFetch ({ host }) {
   }
 }
 
-const WITNESS_FILE = 'driver-unmodded-witness.json'
-
 // The unmodded Prism witness cannot be automated by this lane; it is the
 // anti-masking check (council correction: the driver is a mod and can mask
-// vanilla bugs). Produce an honest checklist with manual placeholders.
+// vanilla bugs). The checklist, its whole and pending, is src/driver/checks.js's
+// `unmoddedWitness`: the steps it writes and the steps `--verify-g0` reads are one list (#922).
 async function writeUnmoddedChecklist ({ laneReportPath, server }) {
-  const nowIso = new Date().toISOString()
-  const checklist = {
-    gate: 'B', row: 'B5-unmodded-witness (G0 manual lane)', lane: 'unmodded',
-    clientLane: 'unmodded',
-    generatedAt: nowIso,
-    completed: false,
-    status: 'NOT COMPLETE — exits nonzero until the operator records the manual run',
-    how: [
-      'Launch the UNMODDED Prism 26.2 instance (no monoplayer-driver mod installed) where you normally play Minecraft.',
-      'Join the G0 Paper backend directly (' + server + ').',
-      'For each step below, do the action by hand, capture a grim screenshot, and record ok/pending.',
-    ],
-    steps: [
-      { name: 'join: official unmodded client reaches the world in <= 120 s', state: 'pending', evidence: '[MANUAL: grim screenshot + notes]' },
-      { name: 'render: chunks visible (not stuck on Loading terrain)', state: 'pending', evidence: '[MANUAL]' },
-      { name: 'move: walk a few blocks; server-side position changed (RCON data get entity Pos)', state: 'pending', evidence: '[MANUAL: RCON output]' },
-      { name: 'break: mine a block at an explicit coordinate; server-side air (execute if block)', state: 'pending', evidence: '[MANUAL: RCON output]' },
-      { name: 'place: place a block on a support; server-side non-air', state: 'pending', evidence: '[MANUAL: RCON output]' },
-      { name: 'screenshot: at least one artifact preserved alongside this checklist', state: 'pending', evidence: '[MANUAL: file path]' },
-      { name: 'disconnect: leave the world; RCON list no longer shows the player', state: 'pending', evidence: '[MANUAL]' },
-      { name: 'rejoin: relaunch the instance, reattach at the current position', state: 'pending', evidence: '[MANUAL]' },
-    ],
-    limitations: [
-      'Manual lane: no driver. Evidence quality relies on coupled client observation + RCON checks, honestly labelled.',
-      'When every step is recorded, copy this file to testdata/driver-unmodded-witness.json with completed: true.',
-    ],
-  }
-  const { text } = writeJsonRedacted(checklist)
+  const { text } = writeJsonRedacted(unmoddedWitness({ server }))
   await writeFile(laneReportPath, text)
-  return checklist
 }
 
 async function verifyG0 (opts) {
@@ -444,16 +417,21 @@ async function verifyG0 (opts) {
   }
   console.log(`driver reports: ${reports.length} from one 2-run invocation, both passed`)
 
-  const witnessPath = path.join(TESTDATA, WITNESS_FILE)
+  const witnessPath = path.join(TESTDATA, UNMODDED_WITNESS_FILE)
   let witness = null
   try { witness = JSON.parse(await readFile(witnessPath, 'utf8')) } catch {}
-  if (!witness || witness.completed !== true || witness.lane !== 'unmodded') {
-    console.error('NOT COMPLETE: the unmodded witness file is missing or not marked completed.')
-    console.error(`Expected ${TESTDATA}/${WITNESS_FILE} with lane '"unmodded"' and completed true.`)
+  // The human half, read as a document and not as a flag over one: every step recorded, with
+  // evidence, and `completed` set (#922). A witness marked completed over eight pending steps
+  // is refused by the name of the step that is not recorded.
+  const witnessVerdict = verifyUnmoddedWitness(witness)
+  if (!witnessVerdict.ok) {
+    console.error(`NOT COMPLETE: ${witnessVerdict.reason}`)
+    console.error(`Expected ${TESTDATA}/${UNMODDED_WITNESS_FILE} with lane '"unmodded"', one row per step recorded ` +
+      '`ok`, and completed true.')
     console.error('Generate a checklist first: node src/driver/run.js --lane unmodded')
     return 1
   }
-  console.log('G0 VERIFIED: 2/2 consecutive driver-lane reports passed and the unmodded witness is completed.')
+  console.log('G0 VERIFIED: 2/2 consecutive driver-lane reports passed and the unmodded witness records every step.')
   return 0
 }
 
@@ -516,7 +494,7 @@ async function main () {
     await writeUnmoddedChecklist({ laneReportPath, server: opts.server })
     console.log(`unmodded witness checklist written: ${path.relative(root, laneReportPath)}`)
     console.log('Complete the manual steps there, then record the result as')
-    console.log(`testdata/${WITNESS_FILE} (completed: true). Exiting 1 until the witness is done.`)
+    console.log(`testdata/${UNMODDED_WITNESS_FILE} (completed: true). Exiting 1 until the witness is done.`)
     process.exitCode = 1
     return
   }

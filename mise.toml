@@ -208,7 +208,7 @@ node src/driver/run.js --runs 2 "$@" || node src/ladder/next-rung.js driver:scen
 '''
 
 [tasks."driver:g0"]
-description = "Driver-lane G0 verdict: run the two-run scenario, then verify both fresh reports plus the completed unmodded witness."
+description = "Driver-lane G0 verdict: run the two-run scenario, then verify both fresh reports plus an unmodded witness whose every step is recorded."
 depends = ["check", "driver:build", "driver:scenario"]
 run = '''
 #!/usr/bin/env bash

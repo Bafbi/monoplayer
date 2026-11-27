@@ -122,9 +122,13 @@ test('the proof says which half no counter can answer, and never claims it', () 
   assert.match(PROOF, /verifyWitness/, 'and the check that refuses an unrecorded one')
   assert.match(PROOF, /NOT COMPLETE/, 'whose message says what is missing')
   // The polarity is the driver lane's unmodded witness: one exit code 1 for "not recorded".
+  // #922 moved that lane's witness rule into src/driver/checks.js, so the sentence a missing
+  // witness is refused with lives there and the prefix that says what it is stays in run.js.
   const run = read('src/driver/run.js')
-  assert.match(run, /NOT COMPLETE: the unmodded witness file is missing or not marked completed/,
+  assert.match(run, /NOT COMPLETE: \$\{witnessVerdict\.reason\}/,
     'src/driver/run.js keeps the same message shape')
+  assert.match(read('src/driver/checks.js'), /'the unmodded witness file is missing or is not a document/,
+    'src/driver/checks.js carries the sentence a missing witness is refused with')
 })
 
 test('a login is verified and whitelisted before the picker, which is what makes the account list the gate', () => {

@@ -68,7 +68,7 @@ op as setup/assertion/probe, screenshots via `scp`, and writes per-run reports
 plus a summary under `testdata/`. `node src/driver/run.js --lane unmodded`
 generates the manual anti-masking witness checklist. `mise run driver:g0` runs
 the two runs and then verifies them, so it exits 0 only for a fresh 2/2 plus a
-completed witness, and it refuses evidence older than 24 hours
+witness whose every step is recorded, and it refuses evidence older than 24 hours
 (`--max-age-hours`). The runbook with commands, evidence rules,
 and failure modes is [docs/driver-lane.md](docs/driver-lane.md).
 

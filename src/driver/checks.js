@@ -1,6 +1,7 @@
 // Pure evidence helpers for the driver lane: RCON output parsing,
-// numeric comparisons with tolerances, client-status predicates, and block-test
-// parsing. No I/O and no env access of any kind, so the unit tests stay fully
+// numeric comparisons with tolerances, client-status predicates, block-test
+// parsing, and the unmodded witness's steps and the check that reads them
+// (#922). No I/O and no env access of any kind, so the unit tests stay fully
 // offline.
 //
 // The secret scanner that used to live here is src/observability/secrets.js:
@@ -192,4 +193,175 @@ export function verifyG0Evidence (summary, reports, { now = Date.now(), maxAgeMs
     }
   }
   return { ok: true, reason: '2/2 consecutive driver runs' }
+}
+
+// ---------------------------------------------------------------------------
+// The unmodded witness (#922)
+// ---------------------------------------------------------------------------
+
+// The unmodded lane's human half is recorded in a document a person fills in by
+// hand. Its file name is here because the writer names it and the check reads it.
+export const UNMODDED_WITNESS_FILE = 'driver-unmodded-witness.json'
+export const UNMODDED_WITNESS_LANE = 'unmodded'
+
+// The steps the unmodded witness records, in the order an operator does them. One
+// list, read at both ends: `unmoddedWitness` writes a row per step and
+// `verifyUnmoddedWitness` reads those rows back, so the checklist and the check
+// cannot drift (#922). `id` is the name a refusal carries and the name a row
+// records, by the rule `OPERATOR_STEPS` states one file over for the dev lane's
+// witness: a row is named by an id, never by prose a rewrite rewords. `claim` is
+// the sentence the checklist prints and the operator answers, and it names the
+// reading that settles the step, because that sentence is all an operator has to
+// go on when they come back to it.
+export const UNMODDED_STEPS = Object.freeze([
+  { id: 'join', claim: 'join: official unmodded client reaches the world in <= 120 s' },
+  { id: 'render', claim: 'render: chunks visible (not stuck on Loading terrain)' },
+  { id: 'move', claim: 'move: walk a few blocks; server-side position changed (RCON data get entity Pos)' },
+  { id: 'break', claim: 'break: mine a block at an explicit coordinate; server-side air (execute if block)' },
+  { id: 'place', claim: 'place: place a block on a support; server-side non-air' },
+  { id: 'screenshot', claim: 'screenshot: at least one artifact preserved alongside this checklist' },
+  { id: 'disconnect', claim: 'disconnect: leave the world; RCON list no longer shows the player' },
+  { id: 'rejoin', claim: 'rejoin: relaunch the instance, reattach at the current position' }
+])
+
+// The placeholder evidence every row starts with. A row that still carries it
+// records nothing: it says the operator meant to come back. The prefix is what the
+// check reads, so a record written in the operator's own words is evidence and a
+// template is not.
+export const UNMODDED_PLACEHOLDER = '[MANUAL'
+
+// The one state that records a step the operator saw, and it held. Every other
+// state is a refusal, which is why there is no list of failing states: `ok` is the
+// only pass, so a word nobody defined cannot be read as one.
+export const UNMODDED_STATE_OK = 'ok'
+
+// The document `--lane unmodded` writes: every step pending, every row carrying the
+// placeholder, and `completed` false. Nothing in it is a pass. The operator's own
+// edits are the record, and the check reads those, not this file's prose.
+export function unmoddedWitness ({ server = '', now = new Date().toISOString() } = {}) {
+  return {
+    gate: 'B', row: 'B5-unmodded-witness (G0 manual lane)',
+    lane: UNMODDED_WITNESS_LANE,
+    clientLane: 'unmodded',
+    generatedAt: now,
+    completed: false,
+    status: 'NOT COMPLETE — exits nonzero until the operator records the manual run',
+    how: [
+      'Launch the UNMODDED Prism 26.2 instance (no monoplayer-driver mod installed) where you normally play Minecraft.',
+      'Join the G0 Paper backend directly (' + server + ').',
+      'For each step below, do the action by hand, capture a grim screenshot, and set the row to `' + UNMODDED_STATE_OK + '` or leave it `pending`.',
+      'Write what you saw in the row\'s `evidence`. A `' + UNMODDED_PLACEHOLDER + '` placeholder is not evidence, and the check refuses it.'
+    ],
+    steps: UNMODDED_STEPS.map(({ id, claim }) => ({
+      id, claim, state: 'pending', evidence: UNMODDED_PLACEHOLDER + ': what you saw]'
+    })),
+    limitations: [
+      'Manual lane: no driver. Evidence quality relies on coupled client observation + RCON checks, honestly labelled.',
+      'When every step is `' + UNMODDED_STATE_OK + '`, set completed true and copy this file to testdata/' + UNMODDED_WITNESS_FILE + '.'
+    ]
+  }
+}
+
+// A list in a sentence: "`a`, `b` and `c`". The two helpers below and this one
+// are src/driver/dev-proof.js's, copied so the two witnesses are refused in one
+// voice; that file answers the other hand-filled witness and is not this one's to
+// change.
+const namedIds = ids => ids.map(id => '`' + id + '`').join(', ')
+const commaAnd = items => (items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' and ' + items.at(-1))
+const agree = (count, one, many) => (count === 1 ? one : many)
+
+// What is wrong with the rows before any state is read: whether one row records
+// each step of the run, once, by id. No total is checked and no order is checked.
+// A document that repeats one step and drops another keeps the count it started
+// with, and the rows are looked up by id, so their order in the file carries no
+// fact this check needs.
+function witnessRowRefusal (steps) {
+  const stepsAre = 'the steps are ' + namedIds(UNMODDED_STEPS.map(step => step.id))
+  const rows = steps.map((step, at) => ({
+    at, id: typeof step?.id === 'string' && step.id !== '' ? step.id : null
+  }))
+  const unnamed = rows.filter(row => row.id === null)
+  if (unnamed.length > 0) {
+    return 'the witness\'s ' + commaAnd(unnamed.map(row => 'row ' + (row.at + 1))) +
+      agree(unnamed.length, ' carries', ' carry') + ' no step id: a row records one step of this run, and ' + stepsAre
+  }
+  const known = new Set(UNMODDED_STEPS.map(step => step.id))
+  const unknown = rows.filter(row => !known.has(row.id))
+  if (unknown.length > 0) {
+    return 'the witness\'s ' + commaAnd(unknown.map(row => 'row ' + (row.at + 1) + ' (`' + row.id + '`)')) +
+      agree(unknown.length, ' is', ' are') + ' no step of this run: ' + stepsAre
+  }
+  const ids = rows.map(row => row.id)
+  const recorded = new Set(ids)
+  const missing = UNMODDED_STEPS.map(step => step.id).filter(id => !recorded.has(id))
+  const repeated = [...new Set(ids.filter((id, at) => ids.indexOf(id) !== at))]
+  if (missing.length > 0 || repeated.length > 0) {
+    return [
+      missing.length === 0 ? null : 'unwitnessed: ' + namedIds(missing),
+      repeated.length === 0 ? null : 'recorded twice: ' + namedIds(repeated)
+    ].filter(clause => clause !== null).join('; ')
+  }
+  return null
+}
+
+// Whether the unmodded witness records a run. It reads what the document says
+// instead of a flag over it: a step still pending, a step carrying the placeholder
+// evidence, and a step recorded as anything but ok are each refused by name
+// (#922). `completed` stays as the operator's own signature, so a document whose
+// steps are all recorded and which nobody marked done is refused too.
+//
+// What it does not read: whether the evidence is true. A screenshot path, an RCON
+// transcript and a sentence about what a screen showed are a person's word, and no
+// check here can hold them.
+export function verifyUnmoddedWitness (document) {
+  if (document === null || typeof document !== 'object') {
+    return {
+      ok: false,
+      reason: 'the unmodded witness file is missing or is not a document: run --lane unmodded first'
+    }
+  }
+  if (document.lane !== UNMODDED_WITNESS_LANE) {
+    return {
+      ok: false,
+      reason: 'the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(UNMODDED_WITNESS_LANE)
+    }
+  }
+  const steps = Array.isArray(document.steps) ? document.steps : []
+  const misplaced = witnessRowRefusal(steps)
+  if (misplaced !== null) return { ok: false, reason: misplaced }
+  const byId = new Map(steps.map(step => [step.id, step]))
+  // Past the identity check every step is present once, and the row is read
+  // against the module's step: the claim is the module's, because a row's own claim
+  // is a label the operator may have reworded, and whatever else a step declares
+  // (#920's expectedly-open ticket, when it lands) travels with it instead of being
+  // dropped here.
+  const settled = UNMODDED_STEPS.map(({ id, claim, ...declared }) => ({ ...byId.get(id), id, claim, ...declared }))
+  const open = settled.filter(step => step.state === undefined || step.state === 'pending')
+  if (open.length > 0) {
+    return { ok: false, reason: 'still pending: ' + namedIds(open.map(step => step.id)) }
+  }
+  const silent = settled.filter(step => typeof step.evidence !== 'string' || step.evidence.trim() === '')
+  if (silent.length > 0) {
+    return { ok: false, reason: 'no evidence recorded: ' + namedIds(silent.map(step => step.id)) }
+  }
+  // Trimmed before the prefix is read: the file is hand-edited, and a placeholder
+  // an operator indented records exactly as little as the one the writer emits.
+  const placeholder = settled.filter(step => step.evidence.trim().startsWith(UNMODDED_PLACEHOLDER))
+  if (placeholder.length > 0) {
+    return {
+      ok: false,
+      reason: 'the placeholder `' + UNMODDED_PLACEHOLDER + '` is not evidence: ' + namedIds(placeholder.map(step => step.id))
+    }
+  }
+  const notOk = settled.filter(step => step.state !== UNMODDED_STATE_OK)
+  if (notOk.length > 0) {
+    return {
+      ok: false,
+      reason: 'not ok: ' + notOk.map(step => '`' + step.id + '` is `' + String(step.state) + '` (' + step.evidence + ')').join('; ')
+    }
+  }
+  if (document.completed !== true) {
+    return { ok: false, reason: 'every step is recorded and the witness is not marked completed: set completed true' }
+  }
+  return { ok: true, reason: null }
 }
