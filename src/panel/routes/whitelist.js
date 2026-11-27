@@ -96,7 +96,7 @@ const reason = error => String(error?.message ?? error).slice(0, 300)
 // This sits beside `document`, never inside an entry. `document.players` is what the
 // next patch writes back to the ConfigMap, so a field stamped on an entry would travel
 // to the puppet's own reader as if the panel owned it.
-export function judgedEntries (players) {
+function judgedEntries (players) {
   return (Array.isArray(players) ? players : []).map(entry => ({
     uuid: normalizeUuid(entry?.uuid),
     name: typeof entry?.name === 'string' && entry.name !== '' ? entry.name : null,
@@ -545,9 +545,9 @@ export function createWhitelistRoute ({
       key: WHITELIST_KEY,
       resourceVersion: current.resourceVersion ?? null,
       count: players.length,
-      // #705: the count names nobody. Two entries read as "2" whether they are two
-      // controllers or one controller and one uuid Java derived from a name, and a
-      // lane like that admits one while reading like a whitelist (#677).
+      // #705: the count names nobody. Two entries read as "2" whether they are both
+      // usable or one is a uuid Java derived from a name, and a lane like that admits
+      // one while reading like a whitelist (#677).
       entries: judgedEntries(players),
       document: { ...current.document, version: WHITELIST_VERSION, players }
     }

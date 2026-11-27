@@ -23,6 +23,10 @@ import { uuidRefusalReason } from '../../custody/util.js'
 // where one uuid Java derived from a name reads as healthy otherwise, which is the
 // state #677 found in the dev lane's document.
 //
+// "can authenticate" is that script's word, and it means what the rule can answer:
+// nothing about the entry's shape stops a Mojang session answering. A uuid of the
+// right shape that nobody owns still fails its login, and no read can tell that.
+//
 // The answer to a removal is not printed in the row: a tick would take it away with the
 // row it belongs to. It goes to the block's answer area, outside the list.
 function renderEntry (puppet, entry, refusalReason) {
@@ -74,8 +78,10 @@ export function renderEntries ({ puppet, list }) {
   const refusals = players.map(entry => uuidRefusalReason(entry?.uuid, entry?.name))
   const usable = refusals.filter(why => why === null).length
   // A list where some entry cannot authenticate is a fault, and it is stated above the
-  // rows: a row of eight with one derived uuid is easy to read past. The words are the
-  // ones `mise run dev:status` settled, so one vocabulary covers the lane and the page.
+  // rows: a row of eight with one derived uuid is easy to read past. The sentence is
+  // `mise run dev:status`'s, so an operator who reads one reads the other without
+  // translating. The two are copies, and no test ties them: the script's sentence lives
+  // in a shell heredoc.
   if (usable < players.length) {
     const plural = players.length === 1 ? 'entry' : 'entries'
     lines.push('    <p class="refused">attach whitelist names ' + players.length + ' ' + plural +

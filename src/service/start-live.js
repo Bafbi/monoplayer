@@ -157,22 +157,22 @@ export function journalVolumeFull ({ disabledReason = null, dir = null, freeByte
 
 // #705: the start record counted the attach whitelist and named nobody on it, which
 // is the defect #601 fixed in five loopback payloads and #677 fixed in the dev lane's
-// report. A count cannot tell a lane with two usable controllers from a lane with one
-// usable controller and one uuid Java derived from a name, and the second state is the
-// one #677 found in a live document.
+// report. A count cannot tell a lane with two usable entries from a lane with one usable
+// entry and one uuid Java derived from a name, and the second state is the one #677
+// found in a live document.
 //
 // One entry per uuid, with the reason no Mojang session can answer for it, or null when
 // nothing about its shape stops one. The rule is `uuidRefusalReason`'s and is spelled
 // nowhere else (#703).
 //
 // The name half of that rule is not asked here, and the honest reason is that this
-// record has no names: the control document's reader answers uuids only
-// (src/service/control.js, `attachWhitelist`), and the config guard refuses a list that
-// is not uuids. A name whose md5 carries version 4 therefore reads as usable here and
-// only a login tells the two apart; the panel holds the names and asks the whole rule.
+// record has no names: `attachWhitelist` in src/service/control.js answers uuids only,
+// and the config guard refuses a list that is not uuids. A name whose md5 carries
+// version 4 therefore reads as usable here, and only a login tells the two apart. The
+// panel holds the names and asks the whole rule.
 export function attachWhitelistEntries (uuids) {
   return (Array.isArray(uuids) ? uuids : []).map(raw => ({
-    uuid: normalizeUuid(raw) ?? String(raw ?? ''),
+    uuid: normalizeUuid(raw),
     refusalReason: uuidRefusalReason(raw)
   }))
 }
@@ -1245,8 +1245,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // event cannot name different backends.
   const backendAddress = `${configuredTarget.host}:${configuredTarget.port}`
   // #705: one list, so the count a reader greps for and the entries beside it are the
-  // same read of the same document. `cfg.attachWhitelist` is the list the front legs
-  // admit from at this instant; a second read here could name an entry nobody admits.
+  // same read. `cfg.attachWhitelist` is the list this lane starts with, which is what
+  // `whitelistCount` has always counted; a second read of the file here could name an
+  // entry that count never counted.
   const entriesAtStart = attachWhitelistEntries(cfg.attachWhitelist)
   log('startLive', {
     version: cfg.version,

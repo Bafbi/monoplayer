@@ -502,10 +502,10 @@ test('#540 a reconnect after a followed transfer keeps the dialect and the serve
 })
 
 // #705: a whitelist count names nothing an operator can act on. A lane with two
-// usable controllers and a lane with one usable controller and one name-derived uuid
-// both read as "2", and #677 found the second state in a live document. So the start
-// record carries the entries beside the count, each with the verdict #703 put in one
-// home, and the count is that list's length so the two cannot disagree.
+// usable entries and a lane with one usable entry and one name-derived uuid both read
+// as "2", and #677 found the second state in a live document. So the start record
+// carries the entries beside the count, each with the verdict #703 put in one home, and
+// the count is that list's length so the two cannot disagree.
 //
 // The startup list is an array of uuids: src/service/control.js:134-137 drops the
 // names, and the config guard refuses a list that is not uuids. So this record asks
@@ -525,24 +525,37 @@ test('#705 the start record names each attach whitelist entry and whether Minecr
     }
   ], 'one entry per uuid, both spellings normalised, and the verdict beside each')
   assert.equal(attachWhitelistEntries([]).length, 0, 'a lane with no list has no entries, not a missing field')
-  assert.match(attachWhitelistEntries(['not-a-uuid'])[0].refusalReason, /not a uuid/,
-    'a value that is not a uuid says so rather than reading as usable')
+  assert.deepEqual(attachWhitelistEntries(['not-a-uuid'])[0],
+    { uuid: null, refusalReason: 'it is not a uuid, so no login can match it' },
+    'a value that is not a uuid is answered as one, not printed as if it were')
 })
 
-test('#705 both startLive records carry the entries beside the count, and neither counts alone', () => {
+test('#705 the journal record carries the entries beside the count, and does not count alone', () => {
+  // The log half of the pair is already pinned, and behaviourally: docs/telemetry.md
+  // names `whitelistEntries`, and test/observability/telemetry-doc.test.js fails when the
+  // table names a label `log('startLive', …)` does not write. The journal event has no
+  // such guard, and #331 is the shape this pair already got wrong once, naming two
+  // different backends. The call is read by brace matching, the way that guard reads it,
+  // because no test drives startLive() itself: it opens sockets and a custody volume.
   const source = fs.readFileSync(new URL('../../src/service/start-live.js', import.meta.url), 'utf8')
-  // The doc guard in test/observability/telemetry-doc.test.js reads the log call only,
-  // so the journal event beside it is pinned here: #331 is the same shape, and the two
-  // records named different backends once.
-  for (const call of ["log('startLive', {", "journal.event('startLive', {"]) {
-    const from = source.indexOf(call)
-    assert.notEqual(from, -1, 'src/service/start-live.js writes ' + call)
-    const body = source.slice(from, source.indexOf('\n  })', from) + 4)
-    assert.match(body, /whitelistEntries: entriesAtStart/, call + ' carries the entry list')
-    assert.match(body, /whitelistCount: entriesAtStart\.length/, call + ' counts the list it carries')
-    assert.doesNotMatch(body, /whitelistCount: cfg\.attachWhitelist\.length/,
-      call + ' counts a list it does not carry, which is the defect #705 is about')
+  const open = source.indexOf("journal.event('startLive', {")
+  assert.notEqual(open, -1, 'src/service/start-live.js writes the startLive journal event')
+  const start = source.indexOf('{', open)
+  let depth = 0
+  let end = -1
+  for (let i = start; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) { end = i; break }
+    }
   }
+  assert.notEqual(end, -1, 'the startLive journal event closes')
+  const body = source.slice(start, end)
+  assert.match(body, /whitelistEntries: entriesAtStart/, 'the event carries the entry list')
+  assert.match(body, /whitelistCount: entriesAtStart\.length/, 'and counts the list it carries')
+  assert.doesNotMatch(body, /whitelistCount: cfg\.attachWhitelist\.length/,
+    'it counts a list it does not carry, which is the defect #705 is about')
 })
 
 test('#540 a followed target the leg rejects reverts to the server the session settled on', async () => {
