@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { createTelemetry } from '../../src/observability/telemetry.js'
 import { RECORD_IDENTITY_FIELDS } from '../../src/core/channels.js'
 import { MAX_REFUSAL_REASONS } from '../../src/legs/live-front.js'
+import { DENY_REASONS } from '../../src/custody/attach.js'
 import { pickerClaimOutcome } from '../../src/service/start-live.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -209,6 +210,40 @@ test('#670 the refusal bound clears every reason the refusal row names', () => {
   assert.ok(MAX_REFUSAL_REASONS >= words.length,
     'MAX_REFUSAL_REASONS is ' + MAX_REFUSAL_REASONS + ' and the row names ' + words.length +
       ' words, so the bound no longer clears the set: raise it, or say in the row why a word is not a key')
+})
+
+// #722: the sessionserver's refusal is the one front refusal no denial counts, so the
+// page owes it a row of its own, in the reason word the code writes. The three places
+// that have to agree are read here: the doc's two rows, the leg that names the record,
+// and the sampler that turns the leg's count into a sum. A rename in any one of them is
+// a lane whose number an operator cannot find.
+test('#722 the doc names the sessionserver refusal, its reason, and the counter behind it', () => {
+  const row = prefix => TELEMETRY.split('\n').find(line => line.startsWith(prefix))
+  const series = row('| `monoplayer.session.refused`')
+  const counter = row('| `front.sessionVerificationRefused`')
+  assert.ok(series, 'docs/telemetry.md documents monoplayer.session.refused')
+  assert.ok(counter, 'and the leg counter the sum is sampled from')
+  assert.match(series, /\|\s*sum\s*\|/, 'the row says the series is a sum')
+  assert.ok(series.includes('`' + DENY_REASONS.HASJOINED_FAILED + '`'),
+    'the row names the reason the code sends, which is the attach check\'s own word for a failed hasJoined')
+  assert.ok(counter.includes('front.denied'),
+    'the row says this is not the denial count, because no review ran for such a client')
+
+  // The denial row is where a reader used to learn that this case had no path. It says
+  // where the number went instead, and does not name it twice.
+  const denials = row('| `monoplayer.denials`')
+  assert.ok(denials, 'the page documents the denial sum')
+  assert.ok(denials.includes('monoplayer.session.refused'),
+    'the denial row points at the sum that does count a session the sessionserver refused')
+
+  // The record and the sum are the same fact in two places: the leg counts one and
+  // writes it, and the service samples that count.
+  assert.match(LIVE_FRONT, /log\('sessionVerificationRefused', \{[\s\S]{0,200}reason: DENY_REASONS\.HASJOINED_FAILED/,
+    'the leg still records the refusal under that reason')
+  assert.match(START_LIVE, /front\.metrics\.sessionVerificationRefused/,
+    'the service still samples the leg counter the doc names')
+  assert.match(START_LIVE, /monoplayer\.session\.refused[\s\S]{0,200}DENY_REASONS\.HASJOINED_FAILED/,
+    'and the series it writes carries the reason the doc names')
 })
 
 test('docs/ quote the value once, so a reader has one place to check it', () => {

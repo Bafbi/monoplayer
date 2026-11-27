@@ -152,6 +152,9 @@ const PRE_CHANNEL_RECORDS = new Set([
   'wireReject',
   // A login under review, and a connection refused before it held a channel.
   'frontLoginReview', 'attachDenied', 'attachAllowed', 'channelRefused',
+  // #722: a login the sessionserver refused. The library ends the connection before
+  // the leg reviews it, so no channel was ever opened for the client.
+  'sessionVerificationRefused',
   // A picker client holds no channel: it watches no body until its claim or its
   // Spectate lands, so its records name the account and the connection's own facts.
   'pickerServed', 'pickerEmpty', 'pickerDialog', 'pickerDialogFailed', 'pickerPick',
