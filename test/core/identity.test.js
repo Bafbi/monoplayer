@@ -1,10 +1,12 @@
-// B1 target: identity gates with an injected verifier (pure decisions).
+// B1 target: the front-leg identity gate (pure decisions), and the one decision it
+// offers. The attach check's session-verification step is the front leg's (#721).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createFrontIdentity, DENY_REASONS, ALLOW_REASONS } from '../../src/core/identity.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44' // "Bafbi" shape; placeholder
 const PUPPET = '1e135e26-fed1-4a2c-8989-5a3bb7f9d3a4' // "GlowSquidye" shape
+const STRANGER = '3f7f2c60-5fd1-4b3c-94b7-000000000042' // on no list, for the review to refuse
 
 const identity = createFrontIdentity({
   attachWhitelist: [PLAYER],
@@ -40,46 +42,6 @@ test('malformed/absent UUID cannot sneak past the whitelist review, denied with 
   assert.equal(bad.name, 'X')
 })
 
-test('injected verifier: exact profile match allows', async () => {
-  const strict = createFrontIdentity({
-    attachWhitelist: [PLAYER],
-    verifyProfile: async ({ uuid, name }) => ({ id: uuid, name })
-  })
-  const decision = await strict.verifySession({ uuid: PLAYER, name: 'Bafbi', serverId: 'hash' })
-  assert.equal(decision.allowed, true)
-  assert.equal(decision.reason, ALLOW_REASONS.VERIFIED)
-})
-
-test('injected verifier: identity mismatch denies (spoofed name/uuid), before Login Success', async () => {
-  const strict = createFrontIdentity({
-    attachWhitelist: [PLAYER],
-    verifyProfile: async () => ({ id: PUPPET, name: 'GlowSquidye' })
-  })
-  const decision = await strict.verifySession({ uuid: PLAYER, name: 'Bafbi', serverId: 'hash' })
-  assert.equal(decision.allowed, false)
-  assert.equal(decision.reason, DENY_REASONS.VERIFY_FAILED)
-})
-
-test('injected verifier: offline (null profile) or thrown lookup denies, no crash', async () => {
-  const absent = createFrontIdentity({
-    attachWhitelist: [PLAYER],
-    verifyProfile: async () => null
-  })
-  assert.equal((await absent.verifySession({ uuid: PLAYER, name: 'Bafbi' })).allowed, false)
-
-  const broken = createFrontIdentity({
-    attachWhitelist: [PLAYER],
-    verifyProfile: async () => { throw new Error('mojang down') }
-  })
-  assert.equal((await broken.verifySession({ uuid: PLAYER, name: 'Bafbi' })).allowed, false)
-})
-
-test('no verifier injected: session verification explicitly passes through (offline/dev mode, documented)', async () => {
-  const decision = await identity.verifySession({ uuid: PLAYER, name: 'Bafbi' })
-  assert.equal(decision.allowed, true)
-  assert.equal(decision.reason, ALLOW_REASONS.NO_VERIFIER)
-})
-
 test('whitelist is case-insensitive on UUID', () => {
   assert.equal(identity.reviewLoginStart({ uuid: PLAYER.toUpperCase(), name: 'Bafbi' }).allowed, true)
 })
@@ -88,14 +50,53 @@ test('whoAmI exposes configuration without secrets', () => {
   const me = identity.whoAmI()
   assert.deepEqual(me.puppet, { username: 'GlowSquidye', uuid: PUPPET })
   assert.equal(me.whitelist.length, 1)
-  assert.equal(me.hasLiveVerifier, false)
+})
+
+// The reasons the module's one reachable decision returns, over every input it can be
+// asked: a listed UUID, an unlisted one, a login with no UUID, and a malformed one.
+function reasonsReturned () {
+  return new Set([
+    { uuid: PLAYER, name: 'Bafbi' },
+    { uuid: STRANGER, name: 'Stranger' },
+    {},
+    { uuid: 'not-a-uuid', name: 'X' }
+  ].map(input => identity.reviewLoginStart(input).reason))
+}
+
+// #721: one gate the module can be asked, and no reason a caller cannot reach.
+//
+// The attach check's second step is the front leg's, not this module's:
+// minecraft-protocol's login handler answers the sessionserver's hasJoined before
+// `options.beforeLogin`, and src/custody/attach.js `checkVerified` holds that answer to
+// the whitelist there. A verifier this module was built without could only ever answer
+// `allowed`, so a step that cannot refuse is not a gate, and a reason no input reaches
+// is a word a reader looks for and cannot find.
+test('#721 the module offers the whitelist review and no second gate that nothing calls', () => {
+  const surface = Object.keys(createFrontIdentity({ attachWhitelist: [PLAYER], puppetProfile: {} })).sort()
+  assert.deepEqual(surface, ['includes', 'reviewLoginStart', 'whoAmI'],
+    'createFrontIdentity offers the Login Start review and the identity it was built from. A fourth ' +
+    'entry point is a gate, and the only session verifier this repo injects is the front leg\'s own ' +
+    '(src/legs/live-front.js, via src/custody/attach.js).')
+})
+
+test('#721 every reason the module publishes is one the whitelist review returns', () => {
+  const returned = reasonsReturned()
+  const unreachable = [...Object.values(ALLOW_REASONS), ...Object.values(DENY_REASONS)]
+    .filter(reason => !returned.has(reason))
+  assert.deepEqual(unreachable, [],
+    'the module publishes a reason the whitelist review never returns. Every reason is one a caller ' +
+    'can act on, so one nothing reaches is a word a reader looks for and cannot find (#721).')
+})
+
+test('#721 whoAmI reports what the module was built with, and no field about a step nobody runs', () => {
+  assert.deepEqual(Object.keys(identity.whoAmI()).sort(), ['puppet', 'whitelist'],
+    'whoAmI reports the whitelist and the puppet it was built with. A field answering "is a verifier ' +
+    'injected" says false in every lane (#721).')
 })
 
 // #229: the attach whitelist can be a provider so a file edited between two
 // logins takes effect on the next one. The array stays the default and stays
 // frozen, so no existing lane changes behaviour by accident.
-const STRANGER = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
-
 test('#229 a provider whitelist is read at each login, so a UUID added between two logins is allowed', () => {
   let players = [PLAYER]
   const live = createFrontIdentity({ attachWhitelist: () => players })

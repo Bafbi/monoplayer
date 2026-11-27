@@ -79,15 +79,15 @@ The game server's own whitelist, which names the puppet and does not name the at
 _Avoid_: server whitelist, whitelist
 
 **Attach check**:
-The two steps an attaching player passes before they drive a body: the whitelist review, then session verification.
+The two steps an attaching player passes before they drive a body. An online lane runs session verification first and the whitelist review second, because the front leg's library answers the sessionserver before the leg reviews the login. A test-double lane has no session to verify, so it runs the whitelist review alone.
 _Avoid_: attach gate, auth gate, login gate
 
 **Whitelist review**:
-The first step of the attach check: the claimed UUID must be on the attach whitelist. A denial here lands before any login success.
+The attach check's whitelist step: the claimed UUID must be on the attach whitelist, and a denial lands before Login Success. `reviewLoginStart` in `src/core/identity.js` is the decision, reached through `setLoginStartHandler`. `checkVerified` in `src/custody/attach.js` holds the same UUID to the leg's whitelist file at `beforeLogin`. An online login asks both.
 _Avoid_: gate one, precheck
 
 **Session verification**:
-The second step of the attach check: the Mojang sessionserver confirms that the connecting account's session matches the name and UUID it claims.
+The attach check's session step: the Mojang sessionserver confirms that the connecting account's session matches the name and UUID it claims. In a live lane `minecraft-protocol`'s login handler answers `hasJoined` before the leg's `beforeLogin`, and `src/legs/live-front.js` counts and records a refusal as `sessionVerificationRefused`. `src/core/identity.js` keeps no copy of the step.
 _Avoid_: hasJoined check, auth check
 
 ## The proxy
