@@ -378,20 +378,31 @@ Join with a 26.2 client: the lane serves that version and refuses another.
 
 ### What you should see
 
-One row per step. Read the last column only when the middle one is not what you see. The Step
-cell names that step, and the last column names the record that goes into the log when it fails.
+One row per step. Read the last column only when the "You should see" cell for that step is not
+what you see. The Step cell names that step, and the last column names the record that goes into
+the log when it fails.
+
+Every "You should see" cell is `OPERATOR_STEPS`'s `claim` for its step, word for word
+(`src/driver/dev-proof.js`). `test/driver/dev-proof.test.js` reads the cell and the claim against
+each other in both directions, so a row here cannot ask for something the witness does not record.
+Of the other two cells the guard reads one thing: that the last one names the step's record. The
+rest of their prose is this page's, and nothing compares it.
 
 | Step | Look at | You should see | If you do not |
 |---|---|---|---|
-| `puppet-renders` | the watching client, the world | a player standing where the driving client stands, wearing the puppet's skin | a player with a default skin: `puppetSkinSent` holds the entry and its `signed` flag, and an unsigned texture is one the client cannot verify. That record is written for the driving client's own player too, with `puppet` false, because a client draws the body it controls from the entry naming itself. The reader takes only a `puppet` true line written after the landing as the body's entry. No player at all: `puppetSkinWithheld` or `puppetSkinRefused`, and no `puppetSkinKnown`: no entry was written, and a client drops the spawn that follows |
-| `puppet-walks` | the watching client, while the driver walks | that player walks after it, a fraction of a step behind | it stands still: the `heartbeat` counted `virtualPlayersMoved` 0, so no move frame reached a spectator |
-| `spectator-mode` | the watching client, movement | flight, no damage, no block break, no block place: a spectator is a camera | survival behaviour: `spectateView.modeFrames` was not 2 |
-| `spectator-own-body` | the watching client, F5 | no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: that is #647. **Expected to fail until #647 lands**, because the client is not told its own player-list entry and so does not treat itself as a spectator |
-| `drawn-for-driver` | the driving client, the world beside it | the spectator, standing in the world, in the tab list, **wearing a default skin**: the entry that tells one channel about another client's body carries no texture, so a third party draws a default (#618 is about the spectator's own body, not this one) | nothing beside it: no `virtualPlayerWritten` carried `player_info` or `spawn_entity` to the driver's channel |
-| `drawn-once` | the driving client, the player you control | one body, yours. No second copy of yourself anywhere | a duplicate of yourself: a `virtualPlayerWritten` told the driver's channel about its own player |
+| `puppet-renders` | the watching client, the world | the puppet renders where the driving client stands, wearing the puppet's skin | a player with a default skin: `puppetSkinSent` holds the entry and its `signed` flag, and an unsigned texture is one the client cannot verify. That record is written for the driving client's own player too, with `puppet` false, because a client draws the body it controls from the entry naming itself. The reader takes only a `puppet` true line written after the landing as the body's entry. No player at all: `puppetSkinWithheld` or `puppetSkinRefused`, and no `puppetSkinKnown`: no entry was written, and a client drops the spawn that follows |
+| `puppet-walks` | the watching client, while the driver walks | the puppet walks when the driving client walks, a fraction of a step behind | it stands still: the `heartbeat` counted `virtualPlayersMoved` 0, so no move frame reached a spectator |
+| `spectator-mode` | the watching client, movement | the spectator flies, takes no damage, and cannot break or place | survival behaviour: `spectateView.modeFrames` was not 2 |
+| `spectator-own-body` | the watching client, F5 | the spectator has no body of its own, and no hands in first person (#647: this step fails until it lands) | a body is drawn, and the client collides with blocks: that is #647, and the client is not told its own player-list entry, so it does not treat itself as a spectator |
+| `drawn-for-driver` | the driving client, the world beside it | the spectator appears to the driving client, standing in the world and in the tab list, wearing a default skin | nothing beside it: no `virtualPlayerWritten` carried `player_info` or `spawn_entity` to the driver's channel |
+| `drawn-once` | the driving client, the player you control | the driving client is drawn once, not twice: one body, and it is yours | a duplicate of yourself: a `virtualPlayerWritten` told the driver's channel about its own player |
 
 A bot can assert the frames behind the last two rows, and `O71` does. What no bot can do is see
 them drawn, which is why this table is a person's.
+
+`drawn-for-driver` expects a default skin, and the reason is not on the row: the entry that tells
+one channel about another client's body carries no texture, so a third party draws a default. #618
+is about the spectator's own body, not this one.
 
 `#645` is the other open half and it is invisible here: a spectator's replay carries the body's
 own game mode frames, and the spectator's own pair is written last, so the client ends correct.
@@ -423,9 +434,8 @@ The records behind it, and what each one rules out. `RECORDS` in `src/driver/dev
 list these come from, and `test/driver/dev-proof.test.js` holds every row of this table to it, name
 and sentence both ways, so a cell here is the module's sentence word for word. No other line of this
 section is compared to anything, so a record's fact written in the prose is the copy that drifts.
-Where the module's sentence cannot say what an operator needs, the step table above carries it. The
-counter names below are the exception, and `test/tooling/dev-lane-proof.test.js` asks rather than
-compares: it wants them here, and the service to count each one.
+The counter names below are the exception, and `test/tooling/dev-lane-proof.test.js` asks rather
+than compares: it wants them here, and the service to count each one.
 
 | Record | What it says |
 |---|---|

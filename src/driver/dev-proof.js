@@ -87,14 +87,19 @@ export const RECORDS = Object.freeze([
 // records, so the two are one list read at two places rather than two lists that happen to agree.
 // `record` is the log record the step's own row names as the thing to read when the step fails,
 // and null where nothing is written, because a screen is the whole of the evidence.
-// `test/driver/dev-proof.test.js` holds the runbook's table to both fields, both ways.
+// `claim` is the sentence, and it is the only one: the runbook's cell for the step is this string,
+// word for word, so the operator reading the page and the witness they sign ask for the same thing
+// (#881). It says what a correct run looks like in the operator's terms, including the cues they
+// would otherwise miss: a step of lag, the tab list, no hands in first person. The page cannot add
+// detail this sentence lacks without becoming a second home for it.
+// `test/driver/dev-proof.test.js` holds the runbook's table to all three fields, both ways.
 export const OPERATOR_STEPS = Object.freeze([
   { id: 'puppet-renders', record: 'puppetSkinSent', claim: 'the puppet renders where the driving client stands, wearing the puppet\'s skin' },
-  { id: 'puppet-walks', record: 'heartbeat', claim: 'the puppet walks when the driving client walks' },
+  { id: 'puppet-walks', record: 'heartbeat', claim: 'the puppet walks when the driving client walks, a fraction of a step behind' },
   { id: 'spectator-mode', record: 'spectateView', claim: 'the spectator flies, takes no damage, and cannot break or place' },
-  { id: 'spectator-own-body', record: null, claim: 'the spectator has no body of its own (#647: this line fails until it lands)' },
-  { id: 'drawn-for-driver', record: 'virtualPlayerWritten', claim: 'the spectator appears to the driving client, wearing a default skin' },
-  { id: 'drawn-once', record: 'virtualPlayerWritten', claim: 'the driving client is drawn once, not twice' }
+  { id: 'spectator-own-body', record: null, claim: 'the spectator has no body of its own, and no hands in first person (#647: this step fails until it lands)' },
+  { id: 'drawn-for-driver', record: 'virtualPlayerWritten', claim: 'the spectator appears to the driving client, standing in the world and in the tab list, wearing a default skin' },
+  { id: 'drawn-once', record: 'virtualPlayerWritten', claim: 'the driving client is drawn once, not twice: one body, and it is yours' }
 ])
 
 export const WITNESS_LANE = 'dev-two-client'
