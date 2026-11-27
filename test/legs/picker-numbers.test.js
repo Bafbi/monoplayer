@@ -254,8 +254,12 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   const landing = SOURCE.slice(SOURCE.indexOf('function landSpectator'), SOURCE.indexOf('function sendBodyConfiguration'))
   assert.ok(landing.length > 0, 'the seam this guard reads is still the leg\'s own')
   assert.match(landing, /const refused = reason => \{/, 'the refusals return through one closure')
-  assert.match(landing, /refuseAndCount\(\{\s*reason,\s*verb: 'spectate',\s*server: named,\s*record: refusal => record\(client, 'spectateRefused', \{/,
-    'and the counted helper composes their sentence and hands it to the record they are read by')
+  // The parts, not one exact call: a field added to the request is a normal change and
+  // must not red this guard.
+  assert.match(landing, /refuseAndCount\(\{/, 'and the counted helper composes their sentence')
+  assert.match(landing, /verb: 'spectate',/, 'for the Spectate verb')
+  assert.match(landing, /record: \w+ => record\(client, 'spectateRefused', \{/,
+    'which hands it to the record they are read by, and that record stamps the channel')
   assert.equal((landing.match(/watching: false/g) ?? []).length, 2,
     'the two shape literals are the answer the leg builds when it has no core, and the closure, and no branch builds a third')
 
@@ -279,17 +283,20 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
 test('#670 every counted refusal writes its own record, and the record carries the reason and the sentence', () => {
   const sites = refusalSites(SOURCE)
   assert.ok(sites.length >= 9, 'the leg counts nine refusals, and the guard reads each site: ' + sites.length)
-  // The scanner looks for the call as it is written today, so a site spelled around it —
-  // a space before the argument, an alias — would pass every assertion below unseen.
+  // The scanner looks for the call as it is written today. A site spelled around it, with
+  // a space before the argument or an alias, would pass every assertion below unseen.
   assert.equal((SOURCE.match(/refuseAndCount\s*\(/g) ?? []).length, sites.length + 1,
     'every call to the helper is one the scan reads, beside the one that defines it')
 
   // The record is a closure the helper calls, so the event name stays a literal at the
-  // site (#416) and the fields the helper hands it — the reason and the sentence — can
-  // only arrive at the site that writes them.
+  // site (#416), and the pair the helper hands over, the reason and the sentence, can only
+  // arrive at the site that writes them. A site may take that pair by name instead of
+  // spreading it, which is the same rule.
   const unnamed = sites.filter(site => {
-    const named = site.match(/(^|[^.\w])record:\s*(\w+)\s*=>/)
-    return named === null || !site.includes('...' + named[2])
+    const named = site.match(/(^|[^.\w])record:\s*(\w+|\(\s*\{[^}]*\}\s*\))\s*=>/)
+    if (named === null) return true
+    if (named[2].startsWith('(')) return false
+    return !site.includes('...' + named[2])
   })
   assert.deepEqual(unnamed, [],
     'every counted refusal names the record it writes and spreads the pair the helper hands it: ' +

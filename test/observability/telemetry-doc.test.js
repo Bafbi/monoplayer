@@ -197,7 +197,8 @@ test('#670 the page counts a lane with no rows as a refusal, and says where the 
 // #670: the cap is headroom over the closed set, and the set is that row. A word added to
 // the row without raising the bound is a word `bumpBounded` folds into `other` the moment the
 // map is full, which reads as a reason nobody named (#435). So the two move together or this
-// fails: the row names every word the map can be keyed by, and the bound clears them.
+// fails. The row names one word that counts nowhere, `no_client`, which is why clearing every
+// word leaves the keys one slot of headroom, as #435's rule asks.
 test('#670 the refusal bound clears every reason the refusal row names', () => {
   const row = TELEMETRY.split('\n').find(line => line.startsWith('| `front.pickerRefusals`'))
   assert.ok(row, 'the page documents the refusal map')

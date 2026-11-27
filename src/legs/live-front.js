@@ -1417,10 +1417,10 @@ function createFrontLeg ({
       // because `reason` is the word this map is keyed by.
       const text = refuseAndCount({
         reason: 'empty_offer',
-        record: fields => log('pickerEmpty', {
+        record: refusal => log('pickerEmpty', {
           username: client.username ?? null,
           offerReason: offer.reason,
-          ...fields
+          ...refusal
         })
       })
       endConfiguration(client, 'picker_empty', text)
@@ -1461,10 +1461,10 @@ function createFrontLeg ({
         reason: 'picker_unavailable',
         // #263 D2: a frame the funnel refused with no error to report leaves the key out,
         // because a null would read as a failure with nothing to say.
-        record: fields => log('pickerDialogFailed', {
+        record: refusal => log('pickerDialogFailed', {
           username: client.username ?? null,
           ...(error === null ? {} : { error }),
-          ...fields
+          ...refusal
         })
       })
     log('pickerDialog', {
@@ -1552,12 +1552,12 @@ function createFrontLeg ({
       : refuseAndCount({
         reason: 'picker_unavailable',
         server: server.name,
-        record: fields => log('pickerServerDialogFailed', {
+        record: refusal => log('pickerServerDialogFailed', {
           username: client.username ?? null,
           server: server.name,
           slug: server.slug,
           ...(error === null ? {} : { error }),
-          ...fields
+          ...refusal
         })
       })
     if (written) metrics.pickerServerDialogs++
