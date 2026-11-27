@@ -443,6 +443,20 @@ test('the declaration is the module\'s, and a row that declares itself expected-
   assert.match(check.reason, /^not seen: the spectator appears to the driving client/)
 })
 
+// The state vocabulary is the document's, and before #920 the check passed any string it did not
+// read: a row saying 'deferred' with evidence beside it verified as a finished proof. That was the
+// obvious way to declare a gap from inside the witness, which is the one place the declaration must
+// not live, so the two states a witness has are read here rather than assumed.
+test('a step in a state no witness has is refused, so a hand-edited row cannot invent its own', () => {
+  const document = witnessed()
+  document.steps = withStep(document, 'drawn-once', { state: 'deferred', evidence: 'will look on the next run' })
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false, 'a state nothing reads is a step nothing recorded')
+  assert.match(check.reason,
+    /^a recorded step is in no state a witness has: `drawn-once` says "deferred", and a step is `seen` or `not-seen`/)
+})
+
 // A row's own `claim` is the operator's label, and the file is hand-edited: a refusal quotes the
 // module's words for the step an id names, so a claim left over from another row cannot be read
 // back as evidence of what the operator saw.
