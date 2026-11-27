@@ -1,67 +1,115 @@
-// The two waits inside `createLoopbackLane`'s close (#661), and the record the
-// close writes that O68 reads (#663).
+// The waits inside `createLoopbackLane`'s close, and the record the close writes
+// that O68 reads.
 //
 // `close()` reports the timers a lane left armed, and the lane arms the last one
 // behind the backend leg's own socket end: ending the backend leg is a fault, and a
 // fault schedules a reconnect (`src/core/session.js:232`). So the close answers two
-// questions before it reads, and neither is a wait on the clock:
+// questions before it reads, and the first one is not its own:
 //
-//   endOfLeg     has the socket the close ended ended? The leg's close() resolves
-//                before that event once the leg is ended
-//                (`src/legs/live-backend.js:679`), so one turn of the event loop is a
-//                bet that the kernel has been read. On a public runner at
-//                `893ecb3` it had not been, and O68 failed on a commit that passed
-//                here (#661).
+//   the leg's close()  has the socket the close ended ended? The leg answers that
+//                itself since #662: its close() resolves once the socket reported its
+//                own end, bound and destroy included, and `rig.close()` awaits it
+//                (`src/ladder/rig.js:148`). The lane takes that answer and holds no
+//                wait of its own (#711). Its copy was invisible from outside — a
+//                listener answers the same event the leg's promise does — so the
+//                first case below reads the shape rather than the timing.
 //   drainTimers  what is still armed after that? Dropping once and reading once
 //                reports an arm that lands behind the drop as a timer the lane left
-//                running, which is the same failure one window later.
+//                running, which is the same failure one window later (#661).
 //
-// No case here opens a socket. The leg is an emitter, and the ledger is
-// `laneClock`, the object `close()` reads. The socket-level claim is O68 in
-// `src/ladder/loopback.js`, and it costs the rung a fake backend, a real client
-// and a journal.
+// No case here opens a socket. One case reads the lane's source, because the fact it
+// holds is the shape of the close; the rest read `laneClock`, the ledger `close()`
+// drains. The socket-level claim is O68 in `src/ladder/loopback.js`, and it costs the
+// rung a fake backend, a real client and a journal.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import { endOfLeg, drainTimers, laneClock, droppedReconnect } from '../../src/ladder/loopback-lane.js'
+import { createLoopbackLane, drainTimers, laneClock, droppedReconnect } from '../../src/ladder/loopback-lane.js'
+import { offlineUuid } from '../../src/legs/offline-identity.js'
+
+const VERSION = '26.1'
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const LANE = 'src/ladder/loopback-lane.js'
+const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
+
+// A comment is not a read: a module that explains why it holds no listener wires
+// nothing. Only whole-line comments are dropped, as test/ladder/rig.test.js and
+// test/tooling/env-var-pages.test.js drop them.
+const code = source => source.split('\n')
+  .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+  .join('\n')
 
 // One turn of the event loop, as the close takes them.
 const turn = () => new Promise(resolve => setTimeout(resolve, 0))
 
-test('the close waits for the backend leg to end, not for a number of turns', async () => {
-  const client = new EventEmitter()
-  let waited = null
-  const waiting = endOfLeg({ client })
-  const ending = waiting.then(value => { waited = value })
+// The front leg refuses to build with no whitelist, so a lane that serves nobody still
+// names one entry: the client the cases below never open.
+const WHITELIST = [offlineUuid('Attach')]
 
-  // Two turns in, the wait has given up on nothing: a turn count is not what it
-  // waits for, which is the whole of #661.
-  await turn()
-  await turn()
-  assert.equal(waited, null, 'the close is still waiting for the socket it ended')
-  assert.equal(client.listenerCount('end'), 1, 'one listener waits for the socket end')
+// #711: the lane's close takes the socket end from the leg's own close(), and holds
+// no wait of its own. The second copy was not a behaviour a case could catch: a
+// listener on `leg.client` answers the same event the leg's promise answers, so
+// every close this repo drives passes either way, and the two homes drift apart with
+// nothing red. The shape is what is left to hold, and the shape is two lines: a
+// handler registered for the event, and the reach through `leg.client` that finds the
+// socket to register it on.
+test('the lane close takes the leg answer and keeps no listener of its own (#711)', () => {
+  const source = code(read(LANE))
 
-  client.emit('end', 'proxy_stopped')
-  assert.equal(await waiting, 'end')
-  assert.equal(await ending, undefined)
-  assert.equal(waited, 'end', 'the close learned the socket ended')
-  assert.equal(client.listenerCount('end'), 0, 'the listener is gone once the socket ended')
+  const listeners = [...source.matchAll(/\.(on|once|addListener|prependListener|prependOnceListener)\(\s*['"]end['"]/g)]
+    .map(match => match[0])
+  assert.deepEqual(listeners, [],
+    LANE + ' registers ' + listeners.join(', ') + ' for a socket end. Its two sockets ' +
+    "are answered elsewhere: the bot's by client.close(), and the backend leg's by the " +
+    'leg\'s own close(), which rig.close() awaits (src/ladder/rig.js:148). A handler ' +
+    'here is the second home of one fact, and this file\'s copy is the one that ' +
+    "drifted (#662, #711). The lane's own wait is on the record, and it is drainTimers.")
+
+  const reaches = [...source.matchAll(/\bleg\??\.client\b/g)].map(match => match[0])
+  assert.deepEqual(reaches, [],
+    LANE + ' reaches ' + reaches.join(', ') + ". A leg's socket is the leg's to end " +
+    'and to answer; a lane that holds the client ' +
+    'is a lane that can read a socket the leg has already replaced with its next one, ' +
+    'which is the reconnect #662 measured.')
 })
 
-test('a leg with no socket has no end to wait for', async () => {
-  // A lane with no fake backend, or a leg that faulted earlier and dropped its
-  // client: the event this waits for has already fired.
-  assert.equal(await endOfLeg({ client: null }), 'none')
-  assert.equal(await endOfLeg(null), 'none')
-})
+// The other half of #711, and the line the whole wait rests on: the lane's close is the
+// leg's answer because `rig.close()` awaits it (`src/ladder/rig.js:148`). Nothing else
+// fails when that await goes: the leg's close never resolves in a case, so a lane that
+// stopped waiting for it answers first and writes a record the dials have not filled.
+// This case holds the answer open and reads the record on either side of it.
+test('the lane close waits for the answer rig.close() takes from the leg (#711)', async (t) => {
+  const lane = await createLoopbackLane({ name: 'laneRigClose', version: VERSION, whitelist: WHITELIST })
+  let answer = null
+  lane.backend.close = () => new Promise(resolve => { answer = resolve })
+  t.after(async () => {
+    answer?.()
+    await lane.close()
+  })
 
-test('a socket that never ends still reaches the record', async () => {
-  // The bound, not the event: a wedged peer must not hold the rung. The record is
-  // still written, and the reading names whatever is armed.
-  const client = new EventEmitter()
-  assert.equal(await endOfLeg({ client }, { ms: 10 }), 'bound')
-  assert.equal(client.listenerCount('end'), 0, 'the listener is gone once the bound passed')
+  let record = null
+  const closing = lane.close().then(value => { record = value })
+  // The bound is this case's own, not a wait: a lane that answers while the leg close
+  // is pending has answered in milliseconds, and 500 ms is far past that.
+  const early = await Promise.race([
+    closing.then(() => 'closed'),
+    new Promise(resolve => setTimeout(() => resolve('waiting'), 500))
+  ])
+  assert.equal(early, 'waiting',
+    'the lane close answered while the leg close it asked for was still pending. ' +
+    'src/ladder/rig.js:148 is the await the wait rests on, and without it the lane ' +
+    'dials ports the rig has not closed and drains a ledger nothing has armed (#711).')
+  assert.equal(record, null, 'and it wrote no record while the leg had not answered')
+
+  answer()
+  await closing
+  assert.equal(record.closed, true, 'and wrote its record once the leg answered')
+  assert.deepEqual(record.sockets.map(entry => entry.code), ['ECONNREFUSED', 'ECONNREFUSED'],
+    'with both ports dialled after the rig closed, which is the order O68 reads')
 })
 
 test('a timer armed after the first drop is dropped by the next pass, and counted', async () => {

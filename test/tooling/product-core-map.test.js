@@ -336,6 +336,47 @@ for (const { table, leg, rows } of INTERFACES) {
   })
 }
 
+// The members no table names, pinned to the leg that answers them (#712). #606 held
+// the two call-in tables; the fenced block beside them is the page's list of the rest,
+// and until #712 nothing compared it to anything. A block that names `end()` and stops
+// leaves out the one member that is a wait: `end()` returns, `close()` resolves, and a
+// caller that awaits the wrong one reads a socket that is still open. So the leg is the
+// authority, the same way the tables are, and it is built here rather than described.
+//
+// One direction only: the block says it names the rest of the interface, and a leg
+// answers members a reader does not need (the counters, the target). A name the block
+// carries and the leg does not is the drift; an omission is what this case's first
+// assertion is for, one member at a time.
+test('the backendLeg block names close(), and every member it names the leg answers (#712)', async () => {
+  const { createOfflineBackendLeg } = await import('../../src/legs/live-backend.js')
+  // Built and never dialled: connect() is what opens a socket, and this case reads the
+  // interface a caller holds. The live constructor wants custody on disk; the offline
+  // one builds the same object from the same body (src/legs/live-backend.js).
+  const leg = createOfflineBackendLeg({ host: '127.0.0.1', port: 25565 })
+  const members = Object.keys(leg)
+  const named = interfaceBlock('backendLeg').split('\n')
+    .filter(line => !/^backendLeg\s*=\s*\{/.test(line))
+    .map(line => /^\s*([A-Za-z][A-Za-z0-9_]*)/.exec(line))
+    .filter(Boolean)
+    .map(match => match[1])
+
+  assert.ok(named.includes('close'),
+    'the backendLeg block in docs/product-core.md does not name close(). Since #662 the ' +
+    'method resolves once the socket the leg ended has reported its own end, and the ' +
+    'teardowns that read a ledger await it (src/ladder/rig.js:148, ' +
+    'src/service/start-live.js:1225, src/ladder/client-parity.js:651), so a table that ' +
+    'names end() and stops sends a reader to the call that returns rather than the one ' +
+    'that waits (#712).')
+
+  const unknown = named.filter(name => !members.includes(name))
+  assert.deepEqual(unknown, [],
+    'the backendLeg block names ' + unknown.join(', ') + ', and the leg ' +
+    (unknown.length === 1 ? 'answers no such member' : 'answers no such members') +
+    '. The leg is built by createBackendLeg in src/legs/live-backend.js, and this case ' +
+    'reads that object: a name the page keeps for a member the leg dropped is one a ' +
+    'reader writes a leg from and cannot (#712).')
+})
+
 // The module map's section, read to its next heading so a `src/...js` row in another
 // table of the page cannot answer for a module the map never names. It is the bound
 // test/ladder/loopback-contract.test.js makes of its own claim, for the same reason.
