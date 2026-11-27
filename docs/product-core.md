@@ -944,9 +944,12 @@ The allowed-server list is its own key with its own fallback: see
 real legs plug in here; the fake legs (`src/legs/fake-legs.js`) are the
 executable spec.
 
-The call-ins each leg carries are declared in `src/service/wire-leg-to-core.js`:
-one table per interface, one row per call-in. This page names those rows and
-states no shape; a row's shape, and the method a registration reaches, are the table's.
+Every member the core calls on a leg is declared in `src/service/wire-leg-to-core.js`:
+one table per interface, one row per member. A row is a call-in the core registers on the
+leg, the delivery a frame goes through, or a call the core makes when the leg carries one,
+and `required` says whether a leg without it hides a client. This page names those rows
+and states no shape; a row's shape, and the method a registration reaches, are the
+table's (#726).
 
 `BACKEND_LEG_CALL_INS`:
 
@@ -954,6 +957,11 @@ states no shape; a row's shape, and the method a registration reaches, are the t
 setFrameHandler
 setEndHandler
 setErrorHandler
+connect
+write
+writeRaw
+end
+setTarget
 answerHeldGate
 chat
 ```
@@ -968,6 +976,9 @@ setClientSettingsHandler
 setLoginStartHandler
 setServerboundHandler
 setDetachHandler
+write
+writeRaw
+end
 setReconfiguredHandler
 setConnectClaimedBody
 setSpectateBody
@@ -976,31 +987,24 @@ setDisconnectBody
 setBodyServed
 setSpectatorLeft
 setSpectatorPose
+claimOn
+startReconfiguration
+finishConfigurationFrame
 preAuthStats
 ```
 
-The rest of each interface is what those tables cannot name: members the core or a
-teardown calls on the leg directly, and no row declares. Two files own those names, and
-neither is this page. `src/service/monoplayer.js` is where the core reaches a leg, and its
-own calls are the list `test/tooling/product-core-map.test.js` reads.
-`src/legs/live-front.js` and `src/legs/live-backend.js` build the object that answers
-them, so a member the core starts calling and a block omits fails there, and so does a name
-a leg no longer answers (#690, #712). `close()` is the one member outside that list:
-no core code calls it, every teardown awaits it, and each block is asked for it by name.
+Three members are left for the blocks below, and a row cannot name any of them. A
+reading is a value rather than a method: `channels` is the board of connections a body
+holds, and `target` is the address a leg keeps open. `close()` is a method no core code
+calls: the rig's teardown and the shutdown after a failed start await it, and the signal
+handler calls it and exits, so each block names it and the guard asks for it by name. `test/tooling/product-core-map.test.js` holds
+both blocks to the calls `src/service/monoplayer.js` makes, so a member the core starts
+calling and a block omits fails there, and so does a name a leg no longer answers (#690,
+#712).
 
 ```js
 backendLeg = {                    // = the GlowSquidye puppet session
   target                          // { host, port }: the address the leg is dialled at, as a copy
-  setTarget(next, { keepCookies, transfer })
-                                  // point the next connect at another backend, once the caller
-                                  // has ended the current connection. `keepCookies` carries the
-                                  // session cookie across a transfer chain, and `transfer` asks
-                                  // for intent 3 on the next handshake. A claim dials with neither
-  connect()                       // prismarine-auth + minecraft-protocol client (G1 kid)
-  write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
-                                  // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
-  writeRaw(buffer, meta)          // forwarded serverbound frames, play or configuration
-  end(reason)                     // deliberate close (stop backendDown reinvention)
   close()                         // resolves once the socket the leg ended has reported its
                                   // own end, bounded by the leg's own wait: the wait rig.close()
                                   // and the shutdown after a failed start await (#662)
@@ -1011,19 +1015,6 @@ frontLeg = {                      // a body's channels: its driver and its spect
                                   // delivered a body: { id, body, role, ... }. The core reads the
                                   // driver's channel id here and holds no roster of its own
                                   // (#636, #525)
-  claimOn(body)                   // (#261) the claim on one body, or null:
-                                  //    the session's claimHeld oracle reads it
-  write(name, packet, { synth, channel })
-                                  // clientbound, packet level. A write with no `channel` reaches
-                                  // every channel the body holds. A write with one reaches that
-                                  // connection alone.
-  writeRaw(buffer, meta, { channel })
-                                  // clientbound, frame level, to the same channels
-  end(reason)                     // deny/kick/close, to every channel
-  startReconfiguration({ reason })  // optional (#22): start a configuration round on the
-                                  // driver's own connection, and answer { started, reason }
-  finishConfigurationFrame()      // optional: the bytes that end a configuration round, for a
-                                  // restore that has no cached finish
   close()                         // destroys every client socket and closes the listener.
                                   // It resolves on the close callback and holds no bound, unlike
                                   // the backend's (#690)
@@ -1032,11 +1023,17 @@ frontLeg = {                      // a body's channels: its driver and its spect
 
 A write without `channel` goes to every channel on the body: its driver, and the
 spectators watching it. A write with one goes to that connection alone, which is
-how a spectator is handed its body's replay without the driver receiving it twice.
+how a spectator is handed its body's replay without the driver receiving it twice. A
+write that reached no channel is a dropped frame, and the caller can tell it from a delivered
+one. `end` ends every channel of the body, for a kick or a denial;
+`close` ends the socket and the listener and resolves once it has.
 The leg keeps one channel per connection: its role, what it has been sent, and its
 own client information (`src/core/channels.js`). The claim decides who drives
 (`src/core/claims.js`); a channel is what each connection is handed, and a
-spectator's frames never reach the core's pipeline.
+spectator's frames never reach the core's pipeline. The claim on a body belongs to the
+leg, so the core asks it rather than keeping a copy of the board. A move asks the leg to
+open one more configuration round on the driver's own connection, and the leg answers
+whether it started and why not.
 
 The front leg calls, in order, `core.processLoginStart` (the whitelist review), then
 `core.attachPlayer`, after the leg sends the forged puppet Login Success. The leg

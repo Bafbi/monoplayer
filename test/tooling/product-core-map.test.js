@@ -1,4 +1,4 @@
-// #340, #371, #606, #690, #763: the cells of docs/product-core.md and its leg interface,
+// #340, #371, #606, #668, #690, #726, #763: the cells of docs/product-core.md and its leg interface,
 // each pinned to the module that owns the fact it states.
 //
 // The page is a map of where a decision lives. A cell that names half a list sends a
@@ -42,6 +42,20 @@
 //         sentence that names a call is not a call. The header points now, at the section
 //         and at this file, and the two cases at the end of this section ask it for that
 //         pointer and for the absence of the block.
+//
+//   #668  the section was a third home of the leg interfaces, restated by hand, and nothing
+//         read it. #606 and #690 made it the page's view of what a row cannot name; this entry
+//         records that it is no longer a copy of anything, and the cases below are the guard
+//         #668 asked for, reading the page against the composition root and the built legs,
+//         in both directions.
+//
+//   #726  a row is every member the core calls on a leg. The delivery it sends through, the
+//         dial, and the calls it makes when the leg carries one moved out of the blocks and
+//         into the tables, so the blocks keep only the two readings and `close()`, which no
+//         core code calls. What the page keeps is what a row cannot state: which channel a
+//         write reaches, that end() returns while close() resolves, and what the claim board
+//         is. A member the core calls and the page names in a block is a row now, and the
+//         case that refuses a restated call-in holds the page to that.
 //
 // What is compared is names. No sentence is parsed, because a guard that read English
 // would be a guard that lies about what it checked. The interface section's prose is
@@ -298,8 +312,8 @@ test('the interface section points at the module that declares the call-in table
 // The scan is bounded to the section, to its prose, and to the setter convention, because
 // a `call` row (chat, preAuthStats) is named with an ordinary word that a sentence may
 // use for its own purpose. The fenced blocks are cut before the scan: they hold the
-// members no table names, and `setTarget` is one. A member whose name opens with `set`
-// is not a registration, and a block is not prose (#690).
+// members no table names, so a `set`-shaped name there is not a registration. A block is
+// not prose (#690, #726).
 test('the interface section names no call-in the two tables do not declare', () => {
   const declared = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS].map(row => row.name)
   const prose = interfaceSection().replace(/```[\s\S]*?```/g, '')
@@ -322,9 +336,9 @@ test('the interface section names no call-in the two tables do not declare', () 
 //
 // What this case does not read: a method written without the `core.` prefix. The section
 // names a core method bare too (`backendFrame`, `chat`, one paragraph down), and a bare
-// name is the same shape as a leg's own member (`claimOn`, `write`, `end`, in the fenced
-// blocks below), so no rule here can tell the two apart. The prefix is what says "this is
-// the core's", and a sentence that claims a call without it is the review's to catch.
+// name is the same shape as a leg's own member, which the fenced blocks below hold, so no
+// rule here can tell the two apart. The prefix is what says "this is the core's", and a
+// sentence that claims a call without it is the review's to catch.
 test('the interface section names no core method the two tables do not reach', () => {
   const reached = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]
     .map(row => row.reaches)
@@ -456,7 +470,9 @@ for (const { table, leg, rows, source, build } of INTERFACES) {
       'docs/product-core.md does not name ' + (missing.length === 1 ? 'it' : 'them') + '. That block is the ' +
       'page\'s list of the rest of the interface, the members no row of ' + table + ' declares, and a reader ' +
       'who writes a leg from it writes one the core calls into and cannot reach. Add ' +
-      (missing.length === 1 ? 'it' : 'them') + ' to the block (#690).')
+      (missing.length === 1 ? 'it' : 'them') + ' to the block, or make ' +
+      (missing.length === 1 ? 'it' : 'them') + ' a row of ' + table + ', which is where a member ' +
+      'the core calls belongs since #726 (#690).')
 
     assert.ok(named.includes('close'),
       'the ' + leg + ' block in docs/product-core.md does not name close(). It is the member that waits: ' +

@@ -11,9 +11,10 @@
 // its payload shape are declared in src/service/wire-leg-to-core.js: one table per
 // interface, one row per call-in.
 //
-// The rest of each interface is the members no row names, which the core or a
-// teardown calls on the leg directly. Those are the two blocks under the section
-// "Interface for the live legs" in docs/product-core.md.
+// The rest of each interface is what a row cannot name: the readings the core takes
+// off a leg, and `close()`, which no code here calls and the teardowns await. Those
+// are the two blocks under the section "Interface for the live legs" in
+// docs/product-core.md.
 // test/tooling/product-core-map.test.js holds the blocks to the calls this module
 // makes, to the legs that answer them, and asks each one for `close()`, which no code
 // in this file calls. A list in this comment would be a second home, and the shorter
@@ -26,8 +27,8 @@
 // the first drops the human's chat and counts it, and a leg without the second
 // leaves a configuration gate held when its last client detaches.
 //
-// A hand-built harness may omit the two optional members the page marks; the core
-// then degrades to a state replay at the target's login and logs
+// A hand-built harness may omit the front table's two optional reconfiguration rows;
+// the core then degrades to a state replay at the target's login and logs
 // reconfigurationRestoreNoFinish.
 //
 // The one call the core makes on this leg that way is a row of
