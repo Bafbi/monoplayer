@@ -191,14 +191,34 @@ nobody claimed has no claim age, and a spectator holds none. A connection the la
 admitted itself names no body. Those rows say so in words instead of printing a zero
 or a blank (#263 D2).
 
-**The `Last attach` card draws the attach stream's two numbers side by side.** `replayed`
-is the frames a socket took, and `refused` is the frames the front leg refused or threw
-on. [telemetry.md](telemetry.md) defines both (#717, #735). Neither number is the total,
-and the card never adds them. A refusal is not a fault: the card says what the gap is
-instead of letting a reader take it for a lane to repair
-([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before the
-field existed says it carries no refusal count. A record that carries neither count
-draws no row.
+**The `Last attach` card draws the attach stream's delivery, then the counts the record
+carries beside it.** `replayed` is the frames a socket took, `refused` is the frames the
+front leg refused or threw on, and `positions synthesized` is the join position the replay
+invented: `replayed` never counts it, and `refused` counts it when the leg refused it.
+[telemetry.md](telemetry.md) defines all three (#717, #735, #834). None of them is the
+total, and the card never adds or divides them. A refusal is not a fault: the card says
+what the gap is instead of letting a reader take it for a lane to repair
+([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before `refused`
+existed says which half of the delivery it cannot answer. A record that carries none of the
+three draws no such row.
+
+Under them come the record's own groups, because those are the numbers a reader sets
+against the delivery: the bodies the stream gave a spawn beside the bodies it named in a
+metadata frame with no spawn before it, which is #213's defect measured; the tab list the
+client is handed beside the count of those players that got a body, which is the shape
+[#218](https://github.com/Bafbi/monoplayer/issues/218) describes; and what the dialog
+holder and the pack holder kept and re-sent, which the record calls held and resent. A
+group the record does not carry draws no heading, so a lane older than the group says
+nothing about it rather than drawing zeros.
+
+**Four fields of that record are declared, not drawn.** The position the replay was built
+from, the configuration-prefix flag that `domains.config` already answers as a number, the
+backend login count the heartbeat already draws, and the frames a leg writes itself, which
+the replay skips rather than loses. The declaration sits beside the projection in
+`src/panel/activity.js` with the reason for each (#834). A documented field that is
+neither a row here nor a line there fails the gate, and so does a row the record's doc
+never names, so the next documented field cannot be one this card silently drops, which is
+what [#735](https://github.com/Bafbi/monoplayer/issues/735) was.
 
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning

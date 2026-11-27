@@ -389,7 +389,8 @@ test('an entry whose uuid the record could not normalise is named, not dropped',
 test('the last attach names the bodies that never spawned', () => {
   const card = facts()
   assert.equal(card.attach.tookMs, 42)
-  assert.equal(card.attach.withoutSpawn, 2)
+  // #834: the group as the record nests it, which is the doc's own spelling.
+  assert.equal(card.attach.entities.withoutSpawn, 2)
   assert.equal(card.attach.domains.chunks, 40)
 })
 

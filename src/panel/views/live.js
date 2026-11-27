@@ -365,6 +365,13 @@ function renderAttach (attach) {
   const domains = attach.domains === null
     ? null
     : Object.keys(attach.domains).map(key => key + ' ' + attach.domains[key]).join(', ')
+  // #834: the counts the attach stream carries beside its delivery numbers, read off the
+  // record's own groups. #213's defect is measured on the first of them, and a count of
+  // bodies without a spawn with no count of bodies beside it is a fault of unknown size,
+  // which is why the pair is one row set. A group the record does not carry is null, and
+  // the row set then draws no heading rather than a row of zeros: a lane older than #218
+  // writes neither of the next two.
+  const entities = attach.entities
   const lines = [heading('Last attach', attach.at)]
   lines.push(group('Attach', [
     row('player', attach.name),
@@ -389,12 +396,35 @@ function renderAttach (attach) {
       : attach.refused + (attach.refused === 0
           ? ''
           : ' (a frame the front leg refused or threw on, and the attach stream is written once, so the client keeps the gap until it attaches again)')),
-    row('domains', domains),
-    // Non-zero is #213's defect, measured, so it is named as such rather than
-    // left as a number a reader has to interpret.
-    row('bodies without a spawn', count(attach.withoutSpawn) === null
+    // #834: the third number of the delivery. `replayed` never counts the position the
+    // replay invents and `refused` counts one the leg refused, so without this row the two
+    // numbers above cannot be placed against each other. The label carries "join" because
+    // the Core group draws the process's cumulative `positionsSynthesized` under the words
+    // this row would otherwise repeat, and one card is one vocabulary.
+    row('join positions synthesized', count(attach.synthesizedPositions)),
+    row('domains', domains)
+  ]))
+  lines.push(group('Entities', [
+    row('bodies given a spawn', count(entities?.replayed)),
+    row('bodies without a spawn', count(entities?.withoutSpawn) === null
       ? null
-      : attach.withoutSpawn + (attach.withoutSpawn === 0 ? '' : ' (a client was told about a body it never saw appear)'))
+      : entities.withoutSpawn + (entities.withoutSpawn === 0 ? '' : ' (a client was told about a body it never saw appear)'))
+  ]))
+  // #218's shape is the pair: the tab list this client is handed, and the bodies the stream
+  // gave one of its players. A listed player the stream gave no body is a player the client
+  // cannot see, which is the question the attach record exists to answer.
+  lines.push(group('Players', [
+    row('players listed', count(attach.players?.info)),
+    row('listed players with a body', count(attach.players?.bodies))
+  ]))
+  // What the two holders offered beside the stream. A dialog holder keeps one dialog at a
+  // time, so its pair is 0 or 1, and a pack the holder kept is written to a client that
+  // arrived later.
+  lines.push(group('Held and resent', [
+    row('dialogs held', count(attach.dialogs?.held)),
+    row('dialogs resent', count(attach.dialogs?.resent)),
+    row('packs held', count(attach.packs?.held)),
+    row('packs resent', count(attach.packs?.resent))
   ]))
   return lines.join('')
 }
