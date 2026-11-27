@@ -22,6 +22,9 @@ import {
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const RUN = readFileSync(path.join(ROOT, 'src', 'driver', 'run.js'), 'utf8')
+const CHECKS = readFileSync(path.join(ROOT, 'src', 'driver', 'checks.js'), 'utf8')
+const DEV_PROOF = readFileSync(path.join(ROOT, 'src', 'driver', 'dev-proof.js'), 'utf8')
+const PAGE = readFileSync(path.join(ROOT, 'docs', 'driver-lane.md'), 'utf8')
 const SERVER = 'monoplayer-gate-b-paper.tail41e568.ts.net:25565'
 
 // What an operator's finished witness looks like: the writer's document with every row recorded
@@ -160,6 +163,88 @@ test('a step recorded twice counts once, and the step it displaced is unwitnesse
 
 test('a witness whose every step is ok, with evidence, and signed, passes', () => {
   assert.deepEqual(verifyUnmoddedWitness(recorded()), { ok: true, reason: null })
+})
+
+// #943: the dev lane's witness accepts a `not-seen` on a step its list declares expected absent
+// (#920), and this lane refused every one, so the day a G0 step is expected absent an honest
+// operator cannot record it and the only way to pass is to write `ok` over something they did not
+// see. The rule is #920's, read from one place — `gapSplit` in src/driver/checks.js — which the dev
+// lane's witness calls too.
+//
+// No step of UNMODDED_STEPS is declared absent today, so the declaration these cases read is a copy
+// of the list with one entry declared. The day a real step needs one it is the same rule, and the
+// case that reads the list without a declaration is the one below it.
+const DECLARED_STEP = 'rejoin'
+const declaredList = () => UNMODDED_STEPS.map(step => (step.id === DECLARED_STEP
+  ? { ...step, openUntil: Object.freeze([647]) }
+  : step))
+const notSeen = (witness, over = {}) => witness.steps.map(step => (step.id === DECLARED_STEP
+  ? { ...step, state: 'not-seen', evidence: 'relaunched, and the client reattached at the spawn point', ...over }
+  : step))
+
+test('a step its list declares expected absent verifies when it is recorded not-seen, and the checklist names the step', () => {
+  const witness = recorded()
+  witness.steps = notSeen(witness)
+  const verdict = verifyUnmoddedWitness(witness, { steps: declaredList() })
+  // The writer reads the same list: the checklist an operator is handed names the step it expects
+  // them to record as a gap, out of the declaration rather than out of prose that could drift.
+  const checklist = unmoddedWitness({ server: SERVER, steps: declaredList() })
+  assert.ok(checklist.limitations.some(line => line.includes('The step \'' + DECLARED_STEP + '\' is expected to be not-seen today: #647 closes it')),
+    'the generated checklist names the declared step and the ticket that closes it: ' + checklist.limitations.join(' | '))
+  assert.equal(checklist.steps.length, declaredList().length, 'and still writes one row per step')
+  assert.deepEqual(verdict, { ok: true, reason: null },
+    'an honest run with the declared gap is a record, not a finding: ' + verdict.reason)
+  // The other half of the declaration: a fix landing must not turn an honest record red. The step is
+  // seen, the list still declares it, and the record passes — the dev lane prints a `stale
+  // declaration:` line for the operator, and the G0 command has no line to print yet (#963).
+  assert.deepEqual(verifyUnmoddedWitness(recorded(), { steps: declaredList() }),
+    { ok: true, reason: null }, 'a declared step the operator did see is still a record')
+})
+
+test('a not-seen on a step nothing declares is refused, in a sentence naming the step', () => {
+  const witness = recorded()
+  witness.steps = notSeen(witness)
+  assert.deepEqual(verifyUnmoddedWitness(witness), {
+    ok: false,
+    reason: 'not seen: `rejoin` (relaunched, and the client reattached at the spawn point): ' +
+      'no step this run reads is declared expected absent, so every step is recorded `ok`. ' +
+      'A step recorded `not-seen` passes only when the step list declares it expected absent with `openUntil`, naming the tickets that close it'
+  }, 'a not-seen is the finding it always was unless the list\'s own entry accounts for it')
+})
+
+test('a not-seen the list does declare is named against the gap this run expects when another step is refused', () => {
+  const witness = recorded()
+  witness.steps = notSeen(witness, { evidence: 'the row says so' })
+    .map(step => (step.id === 'break' ? { ...step, state: 'not-seen' } : step))
+  const verdict = verifyUnmoddedWitness(witness, { steps: declaredList() })
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /^not seen: `break` \(what I saw: break\)/, 'the undeclared one is named first')
+  assert.match(verdict.reason, /`rejoin` \(#647 closes it\)/, 'and the gap this run does expect is named with its ticket')
+})
+
+test('a row that declares its own step expected absent is refused: the declaration is the list\'s', () => {
+  const witness = recorded()
+  witness.steps = notSeen(witness, { openUntil: [647], evidence: 'the row says so' })
+  const verdict = verifyUnmoddedWitness(witness)
+  assert.equal(verdict.ok, false, 'the file is hand-edited, and a step that could declare itself absent would pass by writing a line')
+  assert.match(verdict.reason, /^not seen: `rejoin` \(the row says so\):/)
+})
+
+test('both witnesses read one rule: the gap split is checks.js\'s, and the dev lane imports it', () => {
+  assert.match(CHECKS, /export function gapSplit/, 'src/driver/checks.js holds the rule')
+  assert.match(DEV_PROOF, /import \{[^}]*\bgapSplit\b[^}]*\} from '\.\/checks\.js'/,
+    'src/driver/dev-proof.js reads the rule from there rather than spelling a second one')
+  assert.doesNotMatch(DEV_PROOF, /openUntil === null/, 'and no longer decides a gap for itself')
+})
+
+test('the runbook states the rule for a step expected absent, in the section an operator reads', () => {
+  const from = PAGE.indexOf('## The unmodded witness lane')
+  const section = PAGE.slice(from, PAGE.indexOf('## The G0 verdict'))
+  assert.ok(from !== -1 && section.length > 0, 'the runbook has the unmodded witness section')
+  assert.match(section, /not-seen/, 'the page names the state a gap is recorded in')
+  assert.match(section, /openUntil/, 'and the declaration the check reads')
+  assert.match(section, /UNMODDED_STEPS/, 'and the one list an operator declares one in')
+  assert.match(section, /hand-edited/, 'and why the declaration cannot live in the row')
 })
 
 test('the witness is read as a document: no file, another lane, no rows', () => {

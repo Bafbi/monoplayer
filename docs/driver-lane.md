@@ -125,6 +125,18 @@ checklist the command generates. Each row is one step: set its `state` to `ok`
 when you saw it hold, and write what you saw in its `evidence`. Then save the
 checklist as `testdata/driver-unmodded-witness.json` with `completed: true`.
 
+`not-seen` records a step you could not see. The check accepts it on one condition:
+the step's entry in `UNMODDED_STEPS` carries `openUntil`, the tickets that close it,
+the way the dev lane's `OPERATOR_STEPS` does. A row cannot make that declaration
+itself. The witness is hand-edited, and a step that could declare itself absent would
+pass by writing a line.
+
+So when a G0 step becomes one an operator cannot see, add its `openUntil` to the list
+in the change that finds the gap, and name the tickets that close it. Drop the field
+in the commit that lands them. The checklist the lane writes then says which step it
+is. Record `not-seen` on any other step and the check refuses the document, naming the
+step.
+
 `--verify-g0` reads those rows, not the flag over them, and the refusal names the
 row it stops on. What a row has to record is the checklist's own `how` list, which
 `--lane unmodded` writes beside the rows. The steps are one list,
@@ -150,7 +162,8 @@ node src/driver/run.js --verify-g0    # verify only, run nothing
 `mise run driver:g0` composes the gate, the driver build, and `driver:scenario`,
 so a red gate or a stale driver jar stops it before anything runs. Both commands exit 0 **only** when this checkout holds **two consecutive
 passed driver-lane reports whose newest run finished within 24 hours**, and the
-**unmodded witness records every step**. "2/2" means both consecutive runs passed
+**unmodded witness records every step** — `ok`, or `not-seen` on a step
+`UNMODDED_STEPS` declares expected absent. "2/2" means both consecutive runs passed
 every assertion in their reports, and nothing is averaged or carried over. The
 witness half is read row by row, in the lane above.
 
