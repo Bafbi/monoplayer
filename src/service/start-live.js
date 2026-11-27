@@ -882,6 +882,91 @@ export function createReconnectHandler ({
   return { onReconnectDue, revertToSettled }
 }
 
+// A leg's close() that threw, as the record can hold it: one line, no stack.
+const errorText = error => String(error?.message ?? error).slice(0, 200)
+
+// #773: the teardown both shutdown paths run, in one place.
+//
+// #662 gave a leg's close() a bounded wait: it resolves once the socket it ended has
+// reported its own end. Two of the three callers awaited that wait, the rig's teardown
+// and the shutdown after a failed start, and the third, the signal handler, called
+// both closes and exited. Here the two shutdowns this file owns share one sequence, so
+// they cannot drift apart again; the rig keeps its own, because it closes a third leg
+// (its base) that this teardown never sees.
+//
+// The bound is the backend's own (#662): END_TIMEOUT_MS, plus AFTER_DESTROY_MS when
+// it had to destroy the socket it gave up on. The front's close holds no bound
+// (#690): it resolves on its own server's callback, so what ends a front that never
+// calls back is the pod's terminationGracePeriodSeconds, and a stop that waited past
+// it is a SIGKILL rather than a shutdown. No timer here adds a second bound to either
+// leg. A leg that throws is named on the record and the other leg still closes.
+async function runTeardown ({
+  core,
+  front,
+  backend,
+  telemetry,
+  journal,
+  sink,
+  stdout,
+  log,
+  reason
+}) {
+  try { await core.stop({ reason }) } catch { /* best effort */ }
+  const closing = Date.now()
+  let frontCloseError = null
+  let backendCloseError = null
+  try { await front.close() } catch (error) { frontCloseError = errorText(error) }
+  try { await backend.close() } catch (error) { backendCloseError = errorText(error) }
+  // What the closes reported, before the records are closed: the ms a rollout spent
+  // here, and the leg that threw. Nothing else says either. One reading, so the log
+  // line and the journal event cannot name different waits (#331).
+  const closed = { reason, closeMs: Date.now() - closing, frontCloseError, backendCloseError }
+  log('legsClosed', closed)
+  journal.event('legsClosed', closed)
+  try { await telemetry.flush() } catch { /* telemetry never blocks shutdown */ }
+  journal.close()
+  // The sink this process opened, and never the stream it was handed: stdout belongs
+  // to the process, so ending it is not the lane's to do. Both shutdown paths read
+  // one rule, because a path that restates it drifts.
+  if (sink !== stdout) sink?.end?.()
+}
+
+// #773: the signal shutdown, out of startLive so a case can drive it, the way #540
+// lifted the reconnect handler: no rung in this gate executes a started process, so a
+// handler that lives only inside one is a handler nothing checks. exit is a parameter
+// for the same reason, and it is the last thing this does.
+export function createShutdownHandler ({
+  core,
+  front,
+  backend,
+  telemetry,
+  journal,
+  sink,
+  stdout,
+  log = () => {},
+  exit = code => process.exit(code)
+} = {}) {
+  // One shutdown. A second SIGTERM during a stop, which a kubelet sends when the
+  // grace period is nearly spent, finds this flag and returns rather than closing
+  // both legs a second time.
+  let stopping = false
+  const stop = async (signal) => {
+    if (stopping) return
+    stopping = true
+    log('shutdown', { signal })
+    journal.event('shutdown', { signal })
+    await runTeardown({ core, front, backend, telemetry, journal, sink, stdout, log, reason: `signal:${signal}` })
+    // After the wait and its record, never before (#773). The journal holds it for
+    // certain, because that writer is synchronous. The sink is asked to end and not
+    // awaited, so a pipe nobody reads cannot hold the pod, and the price is that a
+    // record written to stdout may be cut by this exit. The process still exits rather
+    // than letting the loop drain, because an exporter timer or a custody lock would
+    // then hold the pod to the kubelet's SIGKILL.
+    exit(0)
+  }
+  return { stop }
+}
+
 export async function startLive ({ argv = [], io = process } = {}) {
   const stdout = io.stdout ?? process.stdout
   const stderr = io.stderr ?? process.stderr
@@ -1220,12 +1305,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
   async function stopAfterFailure (stage, fields = {}) {
     log('startLiveFailed', { stage, ...fields })
     journal.event('startLiveFailed', { stage, ...fields })
-    try { await core.stop({ reason: `startup_failed:${stage}` }) } catch { /* best effort */ }
-    try { await front.close() } catch { /* best effort */ }
-    try { await backend.close() } catch { /* best effort */ }
-    try { await telemetry.flush() } catch { /* best effort */ }
-    journal.close()
-    if (sink !== stdout) sink.end?.()
+    // #773: the same teardown the signal path runs, so the two cannot disagree about
+    // what a leg's close() is owed.
+    await runTeardown({ core, front, backend, telemetry, journal, sink, stdout, log, reason: `startup_failed:${stage}` })
   }
 
   const accountLogFields = resolved
@@ -1388,6 +1470,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     front,
     log,
     sink,
+    stdout,
     telemetry,
     journal,
     account
@@ -1401,11 +1484,11 @@ async function runForever ({
   front,
   log,
   sink,
+  stdout,
   telemetry,
   journal,
   account = { alias: null, expiresAt: () => null },
 }) {
-  let stopping = false
   let lastRejected = front.wireStats.rejected
   let lastPreAuthRefused = front.metrics.preAuthRefused
   let lastPreAuthExpired = front.metrics.preAuthExpired
@@ -1461,22 +1544,11 @@ async function runForever ({
     }
   }
 
-  const stop = async (signal) => {
-    if (stopping) return
-    stopping = true
-    log('shutdown', { signal })
-    journal.event('shutdown', { signal })
-    try { await core.stop({ reason: `signal:${signal}` }) } catch { /* ignore */ }
-    front.close()
-    backend.close()
-    try { await telemetry.flush() } catch { /* telemetry never blocks shutdown */ }
-    journal.close()
-    sink.end?.()
-    process.exit(0)
-  }
+  // #773: the signal path's shutdown lives in createShutdownHandler, so a test can
+  // drive it and read that it exits after both legs closed, not before.
+  const { stop } = createShutdownHandler({ core, front, backend, telemetry, journal, sink, stdout, log })
   for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.off(signal, stop)
-    process.on(signal, () => { stop(signal).catch(() => {}) })
+    process.on(signal, () => { stop(signal).catch(() => { /* the record is in the journal */ }) })
   }
   emitGauges()
   const heartbeat = setInterval(() => {

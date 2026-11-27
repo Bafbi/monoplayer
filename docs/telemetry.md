@@ -516,7 +516,7 @@ A lifecycle event record:
 
 Every event carries `account`. An event about a body carries `body` too, and the heartbeat's `channels` rows carry `body` and `channel`. The table under "The identity on a record" says which key each record carries.
 
-The service writes `startLive`, `liveReady`, `startLiveFailed`, `shutdown`, and the heartbeat's `channels` event from `src/service/start-live.js`. The core writes none.
+The service writes `startLive`, `liveReady`, `startLiveFailed`, `shutdown`, `legsClosed`, and the heartbeat's `channels` event from `src/service/start-live.js`. The core writes none. `legsClosed` is the teardown's own record: `reason` is what `core.stop` was given, `signal:<signal>` or `startup_failed:<stage>`; `closeMs` how long the two closes took; and `frontCloseError` and `backendCloseError` the message of a `close()` that threw, else `null`.
 
 A picker lane dials no body before the front listens, because a claim is what dials a body. Its JSONL log carries `{"event":"backendBootSkipped","reason":"picker"}`, and its `liveReady` says `"boot":"skipped"`. That `liveReady` also reads `"backendConnected":null`, and `null` for `warm`, `configFrames` and `prefixFrames`: no body was dialled, so there is no cache to describe. A lane that dialled says `"boot":"dialled"` and the numbers of the body it dialled.
 
