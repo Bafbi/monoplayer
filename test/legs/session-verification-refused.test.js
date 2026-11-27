@@ -15,6 +15,12 @@
 //
 // The three checks are told apart here: a session the sessionserver refused, a
 // login the whitelist refused, and a client that walked away before either.
+//
+// #742 grew the one sentence into the library's whole set, so the line this file
+// reads is `libraryLoginRefused`: the record names the refusal, and the sessionserver's
+// sentence keeps its own word and its own counter, `sessionVerificationRefused`, which
+// `monoplayer.session.refused` samples. test/legs/library-login-refusals.test.js holds
+// the rest of the set.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -120,8 +126,11 @@ test('#722 a session the sessionserver refuses is counted and recorded, and is n
     const bot = joinLane(port)
     try {
       await settleUntil(() => leg.metrics.sessionVerificationRefused === 1, 'the count of a refused session')
-      const refused = recordsOf(lines, 'sessionVerificationRefused')
+      const refused = recordsOf(lines, 'libraryLoginRefused')
       assert.equal(refused.length, 1, 'one refused login, one line')
+      assert.equal(leg.metrics.libraryLoginRefused, 1, 'and the library-wide count moved with it')
+      assert.equal(leg.metrics.libraryLoginRefusedByReason[DENY_REASONS.HASJOINED_FAILED], 1,
+        'the map is keyed by the word the line carries')
       assert.equal(refused[0].username, NAME, 'the line names the account that was refused')
       assert.equal(refused[0].uuid, null, 'the library never set a uuid: the profile never arrived')
       assert.equal(refused[0].reason, DENY_REASONS.HASJOINED_FAILED,
@@ -140,6 +149,10 @@ test('#722 a session the sessionserver refuses is counted and recorded, and is n
       // admitted, sat in the window, and left it when the library ended it.
       assert.equal(leg.preAuthStats().refused, 0, 'the connection cap refused nothing')
       assert.equal(leg.preAuthStats().expired, 0, 'the deadline destroyed nothing')
+      // #742: the line is written at the library's own end call, which is before the
+      // socket closes, so the window still holds the connection when the record lands.
+      // The slot is released on the close, and the wait is that close.
+      await settleUntil(() => leg.preAuthStats().inWindow === 0, 'the slot the socket released')
       assert.equal(leg.preAuthStats().inWindow, 0, 'and the connection left the window')
     } finally {
       bot.socket?.destroy()
@@ -161,7 +174,8 @@ test('#722 a session the sessionserver accepts, on a name the whitelist refuses,
       assert.ok(recordsOf(lines, 'frontLoginReview').length === 1, 'the login review ran')
       assert.equal(leg.metrics.sessionVerificationRefused, 0,
         'a session the sessionserver accepted is never counted as refused by it')
-      assert.deepEqual(recordsOf(lines, 'sessionVerificationRefused'), [])
+      assert.equal(leg.metrics.libraryLoginRefused, 0, 'and the library refused nothing here either')
+      assert.deepEqual(recordsOf(lines, 'libraryLoginRefused'), [])
     } finally {
       bot.socket?.destroy()
       await leg.close()
@@ -180,7 +194,9 @@ test('#722 a client that walks away before login writes no record', async () => 
       socket.destroy()
       await settleUntil(() => leg.metrics.preAuthInWindow === 0, 'the slot the socket freed')
       assert.equal(leg.metrics.sessionVerificationRefused, 0, 'a client that left was not refused')
-      assert.deepEqual(recordsOf(lines, 'sessionVerificationRefused'), [])
+      assert.equal(leg.metrics.libraryLoginRefused, 0,
+        'the library calls a plain close `socketClosed`, which is no refusal of its login handler')
+      assert.deepEqual(recordsOf(lines, 'libraryLoginRefused'), [])
     } finally {
       socket.destroy()
       await leg.close()

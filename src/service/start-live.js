@@ -1493,6 +1493,7 @@ async function runForever ({
   let lastPreAuthRefused = front.metrics.preAuthRefused
   let lastPreAuthExpired = front.metrics.preAuthExpired
   let lastSessionVerificationRefused = front.metrics.sessionVerificationRefused
+  let lastLibraryLoginRefused = { ...front.metrics.libraryLoginRefusedByReason }
 
   // Heartbeat gauges: the same values the JSONL heartbeat logs, as OTLP gauges.
   // `bodies` is the sample the tick already took, so a gauge and the record beside
@@ -1542,6 +1543,16 @@ async function runForever ({
         { reason: DENY_REASONS.HASJOINED_FAILED })
       lastSessionVerificationRefused = sessionVerificationRefused
     }
+    // #742: every refusal the protocol library makes for itself, by the word the leg
+    // counts it under. Sampled per key rather than as one total, because the words are a
+    // closed set and the split is what tells a profile key from a client that never
+    // spoke. A word that did not move writes no point, as the three sums above do.
+    const libraryLoginRefused = front.metrics.libraryLoginRefusedByReason
+    for (const [reason, count] of Object.entries(libraryLoginRefused)) {
+      const before = lastLibraryLoginRefused[reason] ?? 0
+      if (count > before) telemetry.metric('monoplayer.library.refused', count - before, { reason })
+    }
+    lastLibraryLoginRefused = { ...libraryLoginRefused }
   }
 
   // #773: the signal path's shutdown lives in createShutdownHandler, so a test can

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createTelemetry } from '../../src/observability/telemetry.js'
 import { RECORD_IDENTITY_FIELDS } from '../../src/core/channels.js'
-import { MAX_REFUSAL_REASONS, PICKER_REFUSAL_REASONS } from '../../src/legs/live-front.js'
+import { LIBRARY_LOGIN_REFUSALS, MAX_REFUSAL_REASONS, PICKER_REFUSAL_REASONS } from '../../src/legs/live-front.js'
 import { CLAIM_REFUSAL } from '../../src/core/claims.js'
 import { OVERFLOW_KEY, UNKNOWN_KEY } from '../../src/core/bounded-counter.js'
 import { PICK_VERBS } from '../../src/core/picker.js'
@@ -397,9 +397,10 @@ test('#671 the refusal row names every reason the code writes, and no other', ()
 
 // #722: the sessionserver's refusal is the one front refusal no denial counts, so the
 // page owes it a row of its own, in the reason word the code writes. The three places
-// that have to agree are read here: the doc's two rows, the leg that names the record,
-// and the sampler that turns the leg's count into a sum. A rename in any one of them is
-// a lane whose number an operator cannot find.
+// that have to agree are read here: the doc's three rows (the series, the leg's counter,
+// and the library-wide total it is a subset of, #742), the leg's table entry that names
+// the word, and the sampler that turns that counter into a sum. A rename in any one of
+// them is a lane whose number an operator cannot find.
 test('#722 the doc names the sessionserver refusal, its reason, and the counter behind it', () => {
   const row = prefix => TELEMETRY.split('\n').find(line => line.startsWith(prefix))
   const series = row('| `monoplayer.session.refused`')
@@ -420,13 +421,25 @@ test('#722 the doc names the sessionserver refusal, its reason, and the counter 
     'the denial row points at the sum that does count a session the sessionserver refused')
 
   // The record and the sum are the same fact in two places: the leg counts one and
-  // writes it, and the service samples that count.
-  assert.match(LIVE_FRONT, /log\('sessionVerificationRefused', \{[\s\S]{0,200}reason: DENY_REASONS\.HASJOINED_FAILED/,
-    'the leg still records the refusal under that reason')
+  // writes it, and the service samples that count. #742 turned the single sentence into
+  // the library's whole set, so the leg's half of this is the table's entry for the
+  // sessionserver: one sentence, one word, and that word is the one this series carries.
+  assert.equal(LIBRARY_LOGIN_REFUSALS.get('Failed to verify username!'), DENY_REASONS.HASJOINED_FAILED,
+    'the leg still records the sessionserver\'s refusal under that reason')
   assert.match(START_LIVE, /front\.metrics\.sessionVerificationRefused/,
     'the service still samples the leg counter the doc names')
   assert.match(START_LIVE, /monoplayer\.session\.refused[\s\S]{0,200}DENY_REASONS\.HASJOINED_FAILED/,
     'and the series it writes carries the reason the doc names')
+
+  // #742: the library's other refusals are a sum of their own, sampled per word off the
+  // leg's map. The page and the sampler are read as the pair above is: a series an
+  // operator cannot find is the same defect whether the leg or the service is the side
+  // that moved.
+  const library = row('| `monoplayer.library.refused`')
+  assert.ok(library, 'docs/telemetry.md documents the library-wide sum')
+  assert.match(library, /\|\s*sum\s*\|/, 'the row says the series is a sum')
+  assert.match(START_LIVE, /monoplayer\.library\.refused[\s\S]{0,200}\{ reason \}/,
+    'and the sampler writes it with the word the leg counted the refusal under')
 })
 
 // #709: the words `configurationEnded`'s `reason` can hold, read off the leg's own end

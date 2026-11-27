@@ -83,7 +83,7 @@ A key is written where the thing it names exists, and left out where it does not
 
 The backend leg names the body its target derives, `pickSlug(host:port)` (`src/legs/live-backend.js`, `bodySlugFor`). A connection captures the target it dials, so every record about that socket — its session, its join, its dialogs, and the end that closes it — names the body the socket dialled, even when a claim has already moved the leg to another. A record with no connection behind it, such as a constructor's, names the target it was given. A target that names no address writes no `body` key.
 
-The core names the body it holds and never a channel. A channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry. The records a closing connection writes name the channel that closed, which `closeChannel` hands back for them. A picker client holds no channel until its claim or its Spectate lands, so its records carry the account and its own facts, and no channel. Neither does a login this leg refused before it opened one: `frontLoginReview`, `attachDenied`, and the `sessionVerificationRefused` line (#722) name the account and the connection's own facts, because a channel is opened only for a client the leg admitted.
+The core names the body it holds and never a channel. A channel is the front leg's record (`src/core/channels.js`), and the core holds none. A front-leg record names the channel its connection holds at the moment of the call, read from the registry. The records a closing connection writes name the channel that closed, which `closeChannel` hands back for them. A picker client holds no channel until its claim or its Spectate lands, so its records carry the account and its own facts, and no channel. Neither does a login this leg refused before it opened one: `frontLoginReview`, `attachDenied`, and the `libraryLoginRefused` line (#722, #742) name the account and the connection's own facts, because a channel is opened only for a client the leg admitted.
 
 A record carries `channel` in the log and the journal, and never as a metric attribute. The allowed-server list bounds how many bodies there are. A channel is one connection, so a channel attribute would be one series per socket (#415, #263 D1). No metric carries a channel.
 
@@ -146,13 +146,14 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | --- | --- | --- | --- |
 | `monoplayer.frames` | sum | `direction` (`s2c`/`c2s`), `state`, `name`, `result` | Backend frames received and front frames delivered. `result` is `forwarded` or `dropped` on `c2s`, and `forwarded` or `ignored` on `s2c`. |
 | `monoplayer.attaches` | sum | `player` | Successful attach attempts. |
-| `monoplayer.denials` | sum | `reason`, `phase` | Login-start denials, the ones this lane decided. `phase` is `login_start` and no other value: a session the sessionserver refuses never reaches this sum, because the protocol library ends that connection before the leg reviews it (#691). That refusal is `monoplayer.session.refused`. |
+| `monoplayer.denials` | sum | `reason`, `phase` | Login-start denials, the ones this lane decided. `phase` is `login_start` and no other value: a login the protocol library refuses never reaches this sum, because the library ends that connection before the leg reviews it (#691, #742). The sessionserver's refusal is `monoplayer.session.refused`, and every refusal the library makes is counted by `front.libraryLoginRefused` and charted as `monoplayer.library.refused`. |
 | `monoplayer.replay.frames` | sum | `player` | Frames the front leg took from the join replay per attach. A frame it refused is not here: the heartbeat's `replayFramesRefused` counts those, and the attach record carries the same pair. |
 | `monoplayer.skin.frames` | sum | `player` | `player_info` skin entries written, and `player` names the player each entry names. Three kinds (#614, #618): the body's entry names the puppet and is written to every channel of the body on every pass, the driver's own entry names the driving player once per play state, and a spectator's own entry names that spectator and is written once, on its own channel, carrying the skin its account's answer carried. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
 | `monoplayer.preauth.refused` | sum | `reason` | Increase of `front.preAuthRefused`, sampled at each heartbeat: a front connection refused because the pre-auth window was full (#201). The only reason today is `preauth_connection_cap`, and the front leg's JSONL `preAuthRefused` line is the same refusal with the cap and the count in it. A leg's log does not go through the core, so this sum and that line are the two records of one decision. |
 | `monoplayer.preauth.expired` | sum | `reason` | Increase of `front.preAuthExpired`, sampled at each heartbeat: a front connection the pre-auth deadline destroyed because it had not left the window in time (#205). The only reason today is `preauth_deadline`, and the leg's `preAuthExpired` line is the same close, one line per expiry. It is a separate sum from `preauth.refused` because the two answer different questions: a refusal means the window was full, and an expiry means a socket sat in it and never left. |
-| `monoplayer.session.refused` | sum | `reason` | Increase of `front.sessionVerificationRefused`, sampled at each heartbeat: a login the sessionserver refused (#722). The reason today is `hasjoined_failed`, the attach check's own word for a `hasJoined` call that answered with an error. That word is borrowed rather than minted: `checkVerified` is the check this lane runs, and it never produces the word, which `src/custody/attach.js` writes only on its async path with a verifier no deployed lane injects. So the word arrives here and nowhere else on this lane, and a query by `reason` alone still reads apart from the denials, whose words are their own. It is a separate sum from `monoplayer.denials` because the two are decisions by different hands: that one is a check this lane ran, and this one is taken inside `minecraft-protocol`'s login handler, on a socket the core never sees, before any call-in of this leg. The leg's `sessionVerificationRefused` line is the same refusal, one line per refused login, carrying the sentence the client was told and the running count. A 204 and an unreachable sessionserver are one number here: `yggdrasil` parses the body of whatever came back, so an empty body throws and so does a failed request, and the login handler turns any error into the one sentence. |
+| `monoplayer.session.refused` | sum | `reason` | Increase of `front.sessionVerificationRefused`, sampled at each heartbeat: a login the sessionserver refused (#722). The reason is always `hasjoined_failed`, the attach check's own word for a `hasJoined` call that answered with an error, and the only word this series carries. That word is borrowed rather than minted: `checkVerified` is the check this lane runs, and it never produces the word, which `src/custody/attach.js` writes only on its async path with a verifier no deployed lane injects. So the word arrives here and nowhere else on this lane, and a query by `reason` alone still reads apart from the denials, whose words are their own. It is a separate sum from `monoplayer.denials` because the two are decisions by different hands: that one is a check this lane ran, and this one is taken inside `minecraft-protocol`'s login handler, on a socket the core never sees, before any call-in of this leg. The sessionserver's sentence is one of the refusals the library makes for itself (#742). This series carries that one word and no other, and the rest are `monoplayer.library.refused`; a chart that already reads this series reads that one for the others rather than adding the two together. A 204 and an unreachable sessionserver are one number here: `yggdrasil` parses the body of whatever came back, so an empty body throws and so does a failed request, and the login handler turns any error into the one sentence. |
+| `monoplayer.library.refused` | sum | `reason` | Increase of `front.libraryLoginRefusedByReason`, sampled at each heartbeat: one series per word a login the protocol library refused was counted under, and the words are the ones the section below lists. Every one of those refusals is decided inside the library's own handlers, on a socket this leg never reviewed, so `monoplayer.denials` counts none of them. It repeats `monoplayer.session.refused`'s count under the word `hasjoined_failed`: that series shipped first, so it keeps its own name, its own reason and its history, and a dashboard reads one of the two rather than their sum. |
 | `monoplayer.picker_picks` | sum | `server` | One pick a picker recorded, written at the click (#257). `server` is the picked row's `host:port`, which the allowed-server list bounds. The service's `pickerPickRecorded` line is the same pick as product state. |
 | `monoplayer.picker_verbs` | sum | `verb`, `server` | One answer to a chosen server's own dialog (#266): `claim`, `spectate` or `disconnect`. `server` is the server the answer named, as `host:port` from the allowed-server list. The front's `pickerVerb` line is the same answer as a frame event. |
 | `monoplayer.picker_claims` | sum | `outcome` | One claim click's outcome (#290), written only for a `claim` verb. `outcome` is `granted`, `repeated` or `refused`: a repeat granted a claim the holder already had, so it is its own word and not a second grant. The player, the holder and a refusal's reason go on the `pickerVerbRecorded` record and never on this series (#415); the refusal reasons are summed under `front.pickerRefusalsByReason` in the heartbeat (#417). A release is not here, because no front-leg callback reports one to the service. |
@@ -213,7 +214,8 @@ Every cumulative field counts from the start of the process except the top-level
 | `front.preAuthRefused` | cumulative | Connections refused because the pre-auth window was full. |
 | `front.preAuthExpired` | cumulative | Connections the pre-auth deadline destroyed. |
 | `front.preAuthInWindow` | gauge | The one gauge in that group: connections accepted and not yet past the attach whitelist. |
-| `front.sessionVerificationRefused` | cumulative | Logins the sessionserver refused (#722). It is not `front.denied`, because no review ran for the client, and it is not the pre-auth window's `refused`: the cap turned nothing away, the connection was admitted, and it left the window when the library ended it, so the window's `refused` and `expired` do not move. Written with the leg's `sessionVerificationRefused` line, which carries `reason`, the sentence the client was told as `text`, and the running total as `refused`. |
+| `front.sessionVerificationRefused` | cumulative | Logins the sessionserver refused (#722), which is the `hasjoined_failed` subset of `front.libraryLoginRefused` below: the subset moves only when the total does, and the total moves for seven other words without it. It is not `front.denied`, because no review ran for the client, and it is not the pre-auth window's `refused`: the cap turned nothing away, the connection was admitted, and it left the window when the library ended it, so the window's `refused` and `expired` do not move. The leg's `libraryLoginRefused` line carries this refusal too, with `reason`, the sentence the client was told as `text`, and `refused`, which is the library-wide running total and not this subset's. |
+| `front.libraryLoginRefused`, `front.libraryLoginRefusedByReason.*` | cumulative | Logins the protocol library refused (#742): the total, and the same count keyed by the word each refusal is recorded under, one of the words the section below lists. Every one of them is decided inside `minecraft-protocol`'s own handlers — its login handler for the six, its handshake for the two it builds — and ends the connection before this leg reviews the client, so neither `front.denied` nor the window's `refused` and `expired` moves for one. The word is a closed set `LIBRARY_LOGIN_REFUSALS` (`src/legs/live-front.js`) holds, counted through `bumpBounded` under this map's own cap, the rule the picker's refusals use. `test/legs/library-login-refusals.test.js` reads that set back out of the installed library's login and handshake handlers, so a fork bump that adds or renames a sentence fails the gate. |
 | `wire.checked`, `wire.rejected`, `wire.byState.*` | cumulative | Frames the wire checker inspected, the ones it rejected, and the split by protocol state. |
 | `wire.lastFailure` | gauge | The most recent rejection, or `null`. |
 | `backendFrames.frames`, `.swallowed`, `.bundledFramesRelayed`, `.bundledDelimiters`, `.names.*` | cumulative | The backend forwarder's frame counts and its per-`state/name` totals, for one connection. It restarts at 0 on each reconnect, so a difference across one is not a rate. It is `null` until the first connection of the process, and it keeps the last connection's figures after that connection closes. |
@@ -321,13 +323,59 @@ own `preAuthExpired` line, because the window admits at most
 `preAuth.maxConnections` connections at once and so cannot produce more lines
 than that in one deadline period.
 
-A third kind of front refusal is in the heartbeat and in neither of those two numbers. `front.sessionVerificationRefused` counts the logins the sessionserver refused (#722): the protocol library performs that check and ends the connection itself, before this leg reviews the client, so no denial and no expiry of the window's is written for one. Its own `sessionVerificationRefused` line carries the reason and the sentence the client was told, and `monoplayer.session.refused` is the same count as a sum.
+A third kind of front refusal is in the heartbeat and in neither of those two numbers. The protocol library refuses a login itself, for reasons of its own, and it ends the connection before this leg reviews the client, so no denial and no expiry of the window's is written for one. `front.libraryLoginRefused` is their total and `front.libraryLoginRefusedByReason` splits it. Two sums carry them: `monoplayer.session.refused` for the sessionserver's sentence alone, whose counter is `front.sessionVerificationRefused`, and `monoplayer.library.refused` for the map, one series per word.
 
 Neither cap is in the heartbeat. The `preAuthRefused` line carries `reason`,
 `maxConnections`, `inWindow`, and `refused`; the `preAuthExpired` line carries
 `reason`, `deadlineMs`, and `expired`. Those two lines are the only place the
 window's size and deadline are stated, and the panel shows each with the
 timestamp of the last line that stated it.
+
+### The library's login refusals
+
+The library ends a connection with one sentence of its own, and that sentence is the
+whole of what reaches this leg: no hook of this leg ran for that client, so there is no
+code to read instead of it. `LIBRARY_LOGIN_REFUSALS` (`src/legs/live-front.js`) is the
+one place a sentence becomes a word, and `libraryLoginRefused` is the one line each
+refusal writes.
+
+| Word | The library's sentence | What happened |
+| --- | --- | --- |
+| `hasjoined_failed` | `Failed to verify username!` | The sessionserver refused the session, or could not be reached at all. #722's own count, and the one sum above. |
+| `invalid_public_key_signature` | `multiplayer.disconnect.invalid_public_key_signature` | The client's profile key is expired, or its signature does not verify under Mojang's. |
+| `missing_public_key` | `multiplayer.disconnect.missing_public_key` | The client sent no profile key at a point where the server asked for one. |
+| `invalid_public_key` | `multiplayer.disconnect.invalid_public_key` | The client's profile key is not a key this server can read. |
+| `did_not_encrypt_verify_token_properly` | `DidNotEncryptVerifyTokenProperly` | The encryption answer did not decrypt, or carried the wrong verify token. |
+| `login_timeout` | `LoginTimeout` | No login start arrived inside the library's own kick timeout, so the library ended the connection. Its kick and this leg's pre-auth deadline bound one silence, and one silence writes one of the two. |
+| `protocol_version_mismatch` | `Wrong protocol version, expected: ` | The client's handshake named a protocol version the lane does not speak, so it was refused before it could send a login start. The sentence carries both numbers, and the line's `text` carries them too. |
+| `protocol_version_unsupported` | `Protocol version ` | The same, for a lane that lets a client choose its version (`version: false`): that sentence names one number and says the data for it is missing. No lane this repo deploys reaches it. |
+
+A sentence the table does not carry writes nothing, and the two that matter are
+deliberately absent. `socketClosed` is the library's own word for a peer that went away,
+and it refused nothing. A front error's `front_error: ...` sentence is this leg's, and it
+has its `frontError` record and no count.
+
+The record carries the sentence as `text` and no field that could hold a secret: every
+sentence is the library's own text, written for the client to read — a literal in its
+source, or one of the two composed rows above with the protocol numbers it compared
+appended — and the translate payload the library passes beside it never reaches the leg.
+
+Four of the words are the library's set rather than this lane's traffic. The three
+`public_key` rows need a login start that carries a signature field, and no protocol
+version this repo serves has one. `protocol_version_unsupported` needs a lane that lets a
+client choose its version, which no lane here does. They stay because a version that
+brings the field back must not need this table edited before it is recorded, and because
+the guard below is what says the table is the library's.
+
+One silence writes one number. The library's kick and this leg's pre-auth deadline bound
+the same silence, the library's timer is armed first, and this leg's deadline yields to a
+connection the library already refused: a silent socket is `login_timeout` or
+`front.preAuthExpired`, never both.
+
+`test/legs/library-login-refusals.test.js` reads `client.end('...')` and `raise('...')` out
+of the installed `src/server/login.js` and `src/server/handshake.js`, tells the whole
+sentences from the composed ones, and fails when either side of the table disagrees with
+them, or when a row here names a word the leg does not count.
 
 ### The start and dial records
 
