@@ -43,8 +43,8 @@ const quote = value => JSON.stringify(value ?? null)
 // It is not the rule an allowed server's host is judged by, and it has not been since #890. That
 // host is dialled by the proxy at runtime from a list an operator edits on a page, so it takes the
 // service's own rule (`hostRefusal`, #891): a name or an IP address, bare, IPv6 included. One
-// reader decides one document, because a field judged by a rule about another document is how the
-// fourth spelling of a host rule happens.
+// reader decides one document, because a field judged by a rule meant for another document is how
+// one rule ends up spelled twice.
 //
 // An octet is checked for its range, not only its length. `999.999.999.999` matches
 // the four-group shape, and it is also a legal hostname to the rule below, so without

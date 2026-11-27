@@ -18,8 +18,8 @@
 //                               document: a name this cluster resolves, judged by isTargetHost,
 //                               not a server an operator adds on a page.
 //
-// Every other file is walked rather than listed, so a view added tomorrow that joins an address
-// itself fails here instead of in a log line nobody reads.
+// Every other file is read from one listing of the directory, so a view added tomorrow that joins
+// an address itself fails here instead of in a log line nobody reads.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -63,7 +63,7 @@ test('#890 no panel module joins a host and a port into an address itself', () =
 
 test('#890 the two files that still split an address are the two that must', () => {
   const found = modules()
-  assert.ok(found.some(module => module.name === REGISTRY), 'the registry is in the walk')
+  assert.ok(found.some(module => module.name === REGISTRY), 'the listing reached the registry')
   for (const { name, source } of found) {
     if (name === REGISTRY) continue
     assert.equal(source.split(SPLIT).length - 1, 0,

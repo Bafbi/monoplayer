@@ -552,8 +552,8 @@ remove a different server. The document is:
 }
 ```
 
-A host is a DNS name or an IP address, bare: no scheme, no path, no surrounding space, no
-port inside it. An IPv6 host is stored without brackets and printed with them, so
+A host is a name or an address as a socket takes one: `paper.example.net`, `127.0.0.1`,
+`2001:db8::1`. An IPv6 host is stored without brackets and printed with them, so
 `2001:db8::1` and `[2001:db8::1]` are the same host, and the bare one is what the document
 field holds. A port is an integer from 1 to 65535. A body that sends `"25565"` as text is
 refused rather than coerced, so the file the lane reads never holds a port as a
@@ -561,10 +561,10 @@ string.
 
 The rule itself is `hostRefusal` and `portRefusal` in `src/service/monoplayer.js`, which
 is what the panel calls: where this paragraph and that function disagree, the function is
-right and this paragraph is old. So the route accepts a host a `--start` accepts and
-refuses one it refuses, including a single label such as `paper`, which the pod's search
-domains can resolve. It also accepts an IPv4 shape with an octet out of range, which
-`hostRefusal` cannot tell from a numeric hostname.
+right and this paragraph is old. So the route accepts a host a `--start` accepts. That
+includes a single label such as `paper`, which the pod's search domains can resolve, and
+an IPv4 shape with an octet out of range, which `hostRefusal` cannot tell from a numeric
+hostname.
 
 Those rules are what the route accepts on a **write**. A document already in the
 ConfigMap is read as written: the lane dials what the operator put there, so a host no

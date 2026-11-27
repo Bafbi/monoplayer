@@ -97,10 +97,12 @@ export function refusalText ({ reason: code, at = null }) {
   // #890: the lane's own parser refuses an entry for naming no host at all, and for nothing
   // else. This used to say a host had to be a hostname or an IPv4 address, which was never true
   // of the file a lane reads: a bare IPv6 host is one it dials.
-  if (code === 'host') return where + '.host must name a host, and it is empty'
-  // One rule, one sentence: `portRefusal` says the same thing about a port a caller sent, and an
-  // operator reading both on one page should not have to check whether they are two rules.
-  if (code === 'port') return where + '.port must be an integer from 1 to 65535'
+  // The sentence is the rule's, not a second copy of it: `hostRefusal` and `portRefusal` are how the
+  // service says what a host and a port must be, and an operator who reads one sentence here and
+  // another in a form's refusal would be reading two rules. Each is handed a value that cannot pass,
+  // because what is wanted here is its reason and not its verdict.
+  if (code === 'host') return where + '.host ' + hostRefusal('')
+  if (code === 'port') return where + '.port ' + portRefusal(undefined)
   if (code === 'duplicate') return where + ' names an address an earlier entry already names'
   return where + ' cannot be read: ' + String(code)
 }
@@ -112,16 +114,6 @@ export function refusalText ({ reason: code, at = null }) {
 // (#339).
 export function addressOf (server) {
   return addressName(server.host, server.port)
-}
-
-// The bracket a printed address carries, taken off the host. #891 refuses a bracket in a config
-// host because it belongs to the `host:port` a record prints, and this route is handed both
-// spellings of that record: the page's split of `[2001:db8::1]:25565` hands the bracket over
-// with the host, and an operator pasting from a log sends the same. Both are one address, so
-// both are one row.
-const unbracketed = value => {
-  const text = String(value ?? '')
-  return text.length > 2 && text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text
 }
 
 // `host:port` as a dial target, or the sentence that refused it. One rule for the two places an
@@ -374,7 +366,13 @@ export function createAllowedRoute ({
     //
     // The types the document carries, not a coercion of them: a port sent as `"25565"` is
     // refused, so the file the lane reads never holds a port as text.
-    const host = unbracketed(typeof wanted?.host === 'string' ? wanted.host : '')
+    //
+    // The bracket a printed address carries is not the host's (#891), and the rules that know which
+    // is which are the spelling and its reader: the pair is written as an address and read back with
+    // a port the rule can always take, because only the host is being asked about here. So an
+    // operator may send `[2001:db8::1]` or `2001:db8::1`, and both are the one host, bare.
+    const written = typeof wanted?.host === 'string' ? wanted.host : ''
+    const host = pickTarget(addressName(written, 1))?.host ?? written
     const port = wanted?.port
     const hostReason = hostRefusal(host)
     if (hostReason !== null) {

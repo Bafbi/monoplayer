@@ -717,7 +717,7 @@ test('#890 a refusal says which half of the address broke', async () => {
 // learns which line of the file to open.
 test('#890 a document that names no host, or a port that is not one, is refused by the field', async () => {
   for (const [broken, said] of [
-    ['{"version": 1, "servers": [{"host": "", "port": 25565}]}', /servers\[0\]\.host must name a host, and it is empty/],
+    ['{"version": 1, "servers": [{"host": "", "port": 25565}]}', /servers\[0\]\.host must be a host: a DNS name or an IP address, with no scheme and no path/],
     ['{"version": 1, "servers": [{"host": "paper.example.net", "port": "25565"}]}', /servers\[0\]\.port must be an integer from 1 to 65535/]
   ]) {
     const rig = await panel({ cluster: cluster({ live: broken }) })
