@@ -638,7 +638,7 @@ function evaluateCoreDecision (coreDecision) {
     picker: decision.picker === true,
     phase: decision.phase ?? null,
     uuid: decision.uuid ?? null,
-    username: decision.name ?? decision.username ?? null
+    username: decision.name ?? null
   }
 }
 
@@ -662,9 +662,8 @@ function evaluateCoreDecision (coreDecision) {
 // is what holds a real lane to it.
 //
 // `check` stays the gate for a lane whose core wired no `setLoginStartHandler`: the
-// socket-free rigs, and test/legs/session-verification-refused.test.js, which builds the
-// deployed leg with no core. There the leg's own check is the only review there is, so
-// the fallback is a gate and not a copy of one.
+// socket-free rigs, which build the leg with no core at all. There the leg's own check is
+// the only review there is, so the fallback is a gate and not a copy of one.
 function decideViaCheck ({ client, store = null, check, coreDecision = null } = {}) {
   const core = evaluateCoreDecision(coreDecision)
   if (!core.ok) return core

@@ -2847,8 +2847,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         backend: { host: '127.0.0.1', port: base.port },
         puppet: { username: 'GlowSquidye', uuid: offlineUuid('GlowSquidye') }
       }),
-      // The store, not an array: the file is what reloads at each login, and that
-      // reload is what O53 proves.
+      // One store, two readings. The front takes it because an offline leg refuses to
+      // build without a whitelist at all, and the core takes the provider: that read is
+      // the per-login reload O53 proves (#756).
       front: { whitelistStore: controlDocument.whitelistStore },
       wire: createWireChecker({ version: VERSION }),
       core: { whitelistSource: controlDocument.attachWhitelist }

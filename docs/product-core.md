@@ -1039,10 +1039,11 @@ whether it started and why not.
 The front leg calls, in order, `core.processLoginStart` (the whitelist review), then
 `core.attachPlayer`, after the leg sends the forged puppet Login Success. The leg
 verifies the session before either call: `online-mode` makes its library answer the
-sessionserver's `hasJoined`. The whitelist review that holds that answer is the core's.
-`checkVerified` (`src/custody/attach.js`) is the leg's own review, and it answers only
-a lane whose core wired no `setLoginStartHandler`. The core is handed a name and a uuid
-that are already verified, and offers no call-in for a second pass (#691).
+sessionserver's `hasJoined`. The whitelist review is the core's, and it reads the uuid
+and the name that answer produced. `checkVerified` (`src/custody/attach.js`) is the
+leg's own review, and it answers only a lane whose core wired no `setLoginStartHandler`.
+The core is handed a name and a uuid that are already verified, and offers no call-in for
+a second pass (#691).
 The forged profile comes from `config.puppet`; profile capture is leg work.
 
 Everything else (`backendFrame` routing, chat blocking, pose, keep-alive

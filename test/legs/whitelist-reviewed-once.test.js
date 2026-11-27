@@ -14,9 +14,9 @@
 //
 //   1. `decideOnlineAttach`, socket-free: the leg's attach check is not called at all
 //      once the core has reviewed the login.
-//   2. a real connection through the real library and the real leg, with the core's login
-//      call-in wired the way src/service/wire-leg-to-core.js wires it. One login is one
-//      review and one read of the document, allowed or refused.
+//   2. a real connection through the real library and the real leg, with the identity
+//      review wired where the core's login call-in reaches it. One login is one review and
+//      one read of the document, allowed or refused.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -68,8 +68,8 @@ async function withLane (whitelist, run) {
     attachWhitelist: () => store.list().map(player => player.uuid)
   })
   // The subject: a spy on the identity module that fails the count when one login is
-  // reviewed twice. The composition root reaches the core through setLoginStartHandler,
-  // so the leg is handed the same call-in it hands a started core.
+  // reviewed twice. This stands in for the review the core's login call-in reaches first,
+  // which is the one identity.js owns.
   const reviewLoginStart = payload => {
     counts.reviews += 1
     return identity.reviewLoginStart(payload)
