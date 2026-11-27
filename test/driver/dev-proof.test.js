@@ -295,6 +295,15 @@ test('the report prints every claim, and says the human half is pending until it
 
   const failed = formatVerdict(verdict(readingOf(run().filter(record => record.frame !== 'spawn_entity'))))
   assert.match(failed, /the run did not reach every socket it needed: body/)
+
+  // #920: a witness that records the one expected gap is recorded, not pending, and the report says
+  // which gap and which ticket, beside the row it belongs to.
+  const gapped = witnessed()
+  gapped.steps = withStep(gapped, 'spectator-own-body', { state: 'not-seen', evidence: 'a body was drawn in third person' })
+  const gapReport = formatVerdict(report, { witnessPath: '.reports/dev-two-client-witness.json', witness: gapped })
+  assert.match(gapReport, /the half only eyes can answer is recorded/)
+  assert.match(gapReport, /NOT-SEEN the spectator has no body of its own/)
+  assert.match(gapReport, /#647 and #645 close it/)
 })
 
 function escapeRe (text) {
@@ -339,14 +348,144 @@ test('a recorded step with no evidence behind it is not recorded', () => {
   assert.match(check.reason, /carries no evidence: the spectator flies/)
 })
 
-test('a step the operator did not see fails the proof, and the report names it', () => {
+// #920: the runbook tells the operator that one step is expected to be `not-seen` today, because
+// #647 and #645 are open. Every `not-seen` was refused, so the one honest document a run taken
+// today can produce exited 1 forever, and the only way to satisfy the check was to write `seen` on
+// a step nobody saw. The declaration is the module's, and the check accepts that step alone.
+test('the step a ticket says is open verifies when it is recorded not-seen, and the pass names the ticket', () => {
   const document = witnessed()
-  document.steps = withStep(document, 'spectator-own-body', { state: 'not-seen', evidence: 'the body was drawn in third person' })
+  document.steps = withStep(document, 'spectator-own-body', {
+    state: 'not-seen',
+    evidence: 'a body was drawn in third person, and the client collided with blocks'
+  })
+
+  const check = verifyWitness(document)
+  assert.deepEqual({ ok: check.ok, reason: check.reason }, { ok: true, reason: null },
+    'an honest run with the gap the runbook asks for is a proof, not a finding: ' + check.reason)
+  assert.deepEqual(check.gaps.map(gap => gap.id), ['spectator-own-body'])
+  assert.deepEqual(check.gaps[0].openUntil, [647, 645], 'the declaration carries the tickets that close it')
+  assert.deepEqual(check.stale, [], 'nothing was seen that was declared absent')
+})
+
+// The refusal half of #920, and the reason the declaration is a list with one entry rather than a
+// relaxed check: a `not-seen` on any other step is still the finding it always was.
+test('a step nothing declares open still refuses a not-seen, in today\'s words, and names the gap this run does expect', () => {
+  const document = witnessed()
+  document.steps = withStep(document, 'drawn-once', {
+    state: 'not-seen',
+    evidence: 'two bodies, and one of them was mine'
+  })
 
   const check = verifyWitness(document)
   assert.equal(check.ok, false, 'a not-seen step is a finding, not a pass')
-  assert.match(check.reason, /^not seen: the spectator has no body of its own/)
-  assert.match(check.reason, /the body was drawn in third person/)
+  assert.match(check.reason,
+    /^not seen: the driving client is drawn once, not twice: one body, and it is yours \(two bodies, and one of them was mine\)/)
+  assert.match(check.reason, /the spectator has no body of its own/, 'and the one gap this run expects is named')
+  assert.match(check.reason, /#647 and #645/, 'with the tickets that close it, so two not-seen rows are told apart')
+})
+
+// #920's other half, and the ticket the declaration has to fail loudly for rather than rot on: when
+// #647 and #645 land, the operator sees the step and records it. A fix landing must not turn an
+// honest witness red, so this passes, and the report names the declaration it outlived.
+test('a witness that saw the declared step passes, and names the declaration it outlived', () => {
+  const check = verifyWitness(witnessed())
+  assert.equal(check.ok, true, check.reason)
+  assert.deepEqual(check.gaps, [])
+  assert.deepEqual(check.stale.map(step => step.id), ['spectator-own-body'])
+  assert.deepEqual(check.stale[0].openUntil, [647, 645])
+})
+
+// What the declaration has to be for the cases above to mean anything: a ticket a reader can open,
+// and a reason in the failure sentence the runbook holds word for word. The ticket is named once,
+// in `openUntil`; a claim that restated it was the second home #920 found, and it said something
+// that stopped being true the day this check accepted the gap.
+test('a step declared expected absent carries its tickets and its reason, and no claim restates a ticket', () => {
+  const declared = OPERATOR_STEPS.filter(step => step.openUntil !== undefined)
+  assert.ok(declared.length > 0, 'the tree declares the one gap a run taken today has')
+  for (const step of declared) {
+    assert.ok(Array.isArray(step.openUntil) && step.openUntil.length > 0,
+      'the step ' + step.id + ' names the ticket that closes it')
+    for (const ticket of step.openUntil) {
+      assert.ok(Number.isInteger(ticket) && ticket > 0, 'a ticket is a number: ' + JSON.stringify(ticket))
+    }
+    assert.equal(typeof step.because, 'string',
+      'the declared step ' + step.id + ' states why in its failure cell, which is the cell the runbook holds to this module')
+  }
+  // The declaration and the sentence that names it are one fact in two fields, and the runbook guard
+  // holds only the sentence. Dropping `openUntil` alone would leave a cell telling the operator to
+  // record a gap the check then refuses, and nothing failed, so the two are held to each other here.
+  for (const step of OPERATOR_STEPS) {
+    const declaredHere = step.openUntil !== undefined
+    assert.equal(declaredHere, typeof step.because === 'string' && step.because.includes('not-seen'),
+      'step ' + step.id + ': the declaration and the cell that names it are one fact, so a step whose cell tells the ' +
+      'operator to record it not-seen carries `openUntil`, and a step carrying `openUntil` says so in that cell')
+    if (!declaredHere) continue
+    const named = [...new Set([...step.because.matchAll(/#(\d+)/g)].map(match => Number(match[1])))]
+    assert.deepEqual(named.sort(), [...step.openUntil].sort(),
+      'step ' + step.id + ' names its tickets once: `openUntil` and the sentence it is built into agree')
+  }
+  for (const { id, claim } of OPERATOR_STEPS) {
+    assert.doesNotMatch(claim, /#\d+/,
+      'the claim for ' + id + ' is what the operator must see, and nothing else: a ticket in it is a second home for a ' +
+      'declaration that `openUntil` already carries, and it goes stale the day the check accepts the gap')
+  }
+})
+
+test('the witness it generates names the expected gap out of the module, so the operator knows which row is the gap', () => {
+  const document = witnessDocument(verdict(readingOf(run())))
+  const declared = OPERATOR_STEPS.filter(step => step.openUntil !== undefined)
+  const lines = document.limitations.filter(line => line.includes(declared[0].id))
+
+  assert.equal(lines.length, 1, 'the document names the step a run taken today cannot see, once')
+  assert.match(lines[0], /#647 and #645/, 'and the tickets that close it')
+  assert.match(lines[0], /not-seen/, 'and the state to record it in')
+})
+
+// The labels the page tells the operator to look for are this module's, and it is the module that
+// prints them: renaming a line would leave the page describing output nobody sees. The table guard
+// reads cells, not paragraphs, so nothing compared the prose that describes these two lines.
+test('the runbook names the lines a gapped proof prints, and the labels come from this module', () => {
+  const page = section(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'), 'Record what you saw')
+  const report = verdict(readingOf(run()))
+
+  const gapped = witnessed()
+  gapped.steps = withStep(gapped, 'spectator-own-body', { state: 'not-seen', evidence: 'a body was drawn in third person' })
+  assert.match(formatVerdict(report, { witnessPath: 'w', witness: gapped }), /^\s+known gap: /m)
+  assert.match(formatVerdict(report, { witnessPath: 'w', witness: witnessed() }), /^\s+stale declaration: /m,
+    'the same report names a declaration the witness outlived')
+
+  for (const label of ['known gap:', 'stale declaration:']) {
+    assert.ok(page.includes(label), 'the runbook tells the operator the line to look for: ' + label)
+  }
+})
+
+// The declaration is `OPERATOR_STEPS`'s fact, so it cannot come from the document: the file is
+// hand-edited, and a row that could declare itself expected-absent would pass by writing a line.
+test('the declaration is the module\'s, and a row that declares itself expected-absent changes nothing', () => {
+  const document = witnessed()
+  document.steps = withStep(document, 'drawn-for-driver', {
+    state: 'not-seen',
+    evidence: 'nothing stood beside me',
+    openUntil: [647, 645]
+  })
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false, 'a hand-edited row is not a declaration')
+  assert.match(check.reason, /^not seen: the spectator appears to the driving client/)
+})
+
+// The state vocabulary is the document's, and before #920 the check passed any string it did not
+// read: a row saying 'deferred' with evidence beside it verified as a finished proof. That was the
+// obvious way to declare a gap from inside the witness, which is the one place the declaration must
+// not live, so the two states a witness has are read here rather than assumed.
+test('a step in a state no witness has is refused, so a hand-edited row cannot invent its own', () => {
+  const document = witnessed()
+  document.steps = withStep(document, 'drawn-once', { state: 'deferred', evidence: 'will look on the next run' })
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false, 'a state nothing reads is a step nothing recorded')
+  assert.match(check.reason,
+    /^a recorded step is in no state a witness has: `drawn-once` says "deferred", and a step is `seen` or `not-seen`/)
 })
 
 // A row's own `claim` is the operator's label, and the file is hand-edited: a refusal quotes the
@@ -354,16 +493,16 @@ test('a step the operator did not see fails the proof, and the report names it',
 // back as evidence of what the operator saw.
 test('a refusal quotes the module\'s words for the step, not the row\'s', () => {
   const document = witnessed()
-  document.steps = withStep(document, 'spectator-own-body', {
+  document.steps = withStep(document, 'drawn-once', {
     state: 'not-seen',
     claim: 'the puppet waves at the spectator',
-    evidence: 'the body was drawn in third person'
+    evidence: 'two bodies, and one of them was mine'
   })
 
   const check = verifyWitness(document)
   assert.equal(check.ok, false)
-  assert.match(check.reason, /^not seen: the spectator has no body of its own/)
-  assert.match(check.reason, /\(the body was drawn in third person\)$/)
+  assert.match(check.reason, /^not seen: the driving client is drawn once, not twice/)
+  assert.match(check.reason, /\(two bodies, and one of them was mine\)/)
   assert.doesNotMatch(check.reason, /the puppet waves at the spectator/, 'the row\'s label is not the proof\'s words')
 })
 
@@ -379,7 +518,7 @@ test('a completed witness for a run whose frames failed is refused', () => {
 
 test('a witness is accepted only when every step is recorded and every frame held', () => {
   const check = verifyWitness(witnessed())
-  assert.deepEqual(check, { ok: true, reason: null })
+  assert.deepEqual({ ok: check.ok, reason: check.reason }, { ok: true, reason: null })
 
   assert.equal(verifyWitness(null).ok, false, 'no document is no proof')
   assert.match(verifyWitness({ ...witnessed(), lane: 'unmodded' }).reason, /names lane "unmodded"/)
@@ -754,8 +893,8 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // module would have left the page saying two while every spectator row went red. That cell is now the
 // step's own `because` sentence, built in the module with the count inside it, and compared word for
 // word like the claim. A step whose failure cell states no derived fact carries no `because`, and its
-// cell stays the page's, which is why the field is optional: five steps carry no `because`, and no
-// empty string standing in for one.
+// cell stays the page's, which is why the field is optional: every other step carries no `because`,
+// and no empty string stands in for one.
 //
 // Read as rows, inside its own section, keyed by the id each row carries — never as the page,
 // because the runbook names these steps in the prose around the table too. A row says where to
@@ -1103,6 +1242,34 @@ test('--verify refuses an unrecorded witness and accepts a recorded one', () => 
   const recorded = cli('--verify', '--witness', witness)
   assert.equal(recorded.status, 0, recorded.stderr)
   assert.match(recorded.stdout, /#634 VERIFIED/)
+})
+
+// #920's whole point, at the command: the document the runbook asks for exits 0, and the reader of
+// the proof sees the gap and the ticket that closes it on the run's own output.
+test('--verify accepts the one honest gap, and the pass names the ticket beside it', () => {
+  const { witness, run: cli } = space()
+  cli('--path', space().log(run()), '--witness', witness)
+  const document = recorded(JSON.parse(fs.readFileSync(witness, 'utf8')))
+  const file = steps => JSON.stringify({ ...document, steps }, null, 2)
+
+  fs.writeFileSync(witness, file(withStep(document, 'spectator-own-body', {
+    state: 'not-seen',
+    evidence: 'a body was drawn in third person, and the client collided with blocks'
+  })))
+  const honest = cli('--verify', '--witness', witness)
+  assert.equal(honest.status, 0, 'the document the runbook asks for is a proof: ' + honest.stderr)
+  assert.match(honest.stdout, /#634 VERIFIED/)
+  assert.match(honest.stdout, /^known gap: the spectator has no body of its own, and no hands in first person — not seen/m)
+  assert.match(honest.stdout, /#647 and #645 close it$/m)
+
+  fs.writeFileSync(witness, file(withStep(document, 'puppet-walks', {
+    state: 'not-seen',
+    evidence: 'it stood still while the driver walked'
+  })))
+  const other = cli('--verify', '--witness', witness)
+  assert.equal(other.status, 1, 'the gap is that step, and only that step')
+  assert.match(other.stderr, /^NOT COMPLETE: not seen: the puppet walks when the driving client walks/)
+  assert.match(other.stderr, /#647 and #645/, 'and the refusal names the gap the run does expect')
 })
 
 test('--verify names the step a completed witness never recorded, not the count it kept', () => {
