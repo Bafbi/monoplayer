@@ -21,7 +21,7 @@ import { addressName } from '../../src/service/start-live.js'
 
 // A document that is right everywhere but the key a case moves, so a throw names the
 // case and not a neighbour.
-const lane = doc => loadConfig({
+const config = doc => loadConfig({
   front: { host: '127.0.0.1', port: 25565 },
   backend: { host: '127.0.0.1', port: 25565 },
   ...doc
@@ -54,18 +54,18 @@ test('#891 loadConfig refuses a host that is not a host', () => {
       ['play2.excalia.fr:', /no port/],
       ['2001:db8::1:25565:', /no port/]
     ]) {
-      refuses(() => lane({ [section]: { host: bad } }),
+      refuses(() => config({ [section]: { host: bad } }),
         new RegExp('config\\.' + section + '\\.host'), section + ' host ' + JSON.stringify(bad))
-      refuses(() => lane({ [section]: { host: bad } }),
+      refuses(() => config({ [section]: { host: bad } }),
         reason, section + ' host ' + JSON.stringify(bad) + ' is refused for its shape')
     }
   }
 })
 
 test('#891 loadConfig names the value it refused, so an operator reads the typo', () => {
-  refuses(() => lane({ backend: { host: 'play2.excalia.fr:25565' } }),
+  refuses(() => config({ backend: { host: 'play2.excalia.fr:25565' } }),
     /got "play2\.excalia\.fr:25565"/, 'the message carries the value that was set')
-  refuses(() => lane({ front: { port: '2556O' } }), /got "2556O"/,
+  refuses(() => config({ front: { port: '2556O' } }), /got "2556O"/,
     'and a port that is not a number reads as the text that produced it')
 })
 
@@ -75,12 +75,12 @@ test('#891 loadConfig refuses a port that is not an integer in its range', () =>
   for (const section of ['front', 'backend']) {
     const floor = section === 'front' ? 0 : 1
     for (const bad of [undefined, NaN, '25565', 25565.5, null, -1, 70000, -0.5]) {
-      refuses(() => lane({ [section]: { port: bad } }),
+      refuses(() => config({ [section]: { port: bad } }),
         new RegExp('config\\.' + section + '\\.port must be an integer from ' + floor + ' to 65535'),
         section + ' port ' + String(bad))
     }
   }
-  refuses(() => lane({ backend: { port: 0 } }),
+  refuses(() => config({ backend: { port: 0 } }),
     /config\.backend\.port must be an integer from 1 to 65535/,
     'a dial to port 0 reaches nothing, whatever the OS makes of a bind to it')
 })

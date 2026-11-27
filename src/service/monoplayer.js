@@ -291,9 +291,14 @@ export function portRefusal (port, floor = 1) {
   return 'must be an integer from ' + floor + ' to 65535'
 }
 
-// The value as the operator wrote it: a string keeps its quotes, so a port that is not a
-// number reads as the text that produced it rather than as the NaN it became.
-const written = value => typeof value === 'string' ? JSON.stringify(value) : String(value)
+// The sentence a refusal becomes: the label the operator wrote — a config key, or the
+// variable that set it — the rule it broke, and the value as they wrote it. A string keeps
+// its quotes, so a port that is not a number reads as the text that produced it rather
+// than as the NaN it became. One function, because the same typo can arrive as a document
+// key and as a variable, and the two messages are what an operator compares.
+export function addressSentence (label, reason, value) {
+  return label + ' ' + reason + ', got ' + (typeof value === 'string' ? JSON.stringify(value) : String(value))
+}
 
 export function loadConfig (doc = {}) {
   const merged = {
@@ -318,13 +323,13 @@ export function loadConfig (doc = {}) {
   // reached the bind and the dial: the lane started, could not connect, and said nothing
   // until a client tried. The front's port may be 0, a bind asking the OS for one.
   for (const [section, floor] of [['front', 0], ['backend', 1]]) {
-    const reason = hostRefusal(merged[section].host)
-    if (reason !== null) {
-      throw new TypeError('config.' + section + '.host ' + reason + ', got ' + written(merged[section].host))
+    const hostReason = hostRefusal(merged[section].host)
+    if (hostReason !== null) {
+      throw new TypeError(addressSentence('config.' + section + '.host', hostReason, merged[section].host))
     }
     const portReason = portRefusal(merged[section].port, floor)
     if (portReason !== null) {
-      throw new TypeError('config.' + section + '.port ' + portReason + ', got ' + written(merged[section].port))
+      throw new TypeError(addressSentence('config.' + section + '.port', portReason, merged[section].port))
     }
   }
   // #262: the allowed-server list's two paths, resolved once, so a value that

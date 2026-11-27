@@ -299,7 +299,9 @@ Common:
   integers: the backend's from 1 to 65535, and the front's from 0, where 0 asks
   the OS for a free port. Leave both unset unless the deployment moves one. A
   value that is not an integer in its range refuses to start, naming the
-  variable.
+  variable. A deployed lane must not ask for a free port: the Service targets
+  the port a manifest names, so a front the OS moved is a front nothing routes
+  to. 0 is for a lane on this machine.
 - `MONOPLAYER_RECONNECT_ATTEMPTS` (`0` = unlimited; unset keeps a config
   file's `reconnect.attempts`, which is unlimited when the file sets none) and
   `MONOPLAYER_RECONNECT_MAX_DELAY_MS`, the cap on the delay between attempts

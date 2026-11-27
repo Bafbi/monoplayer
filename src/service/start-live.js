@@ -75,7 +75,7 @@
 //   5. front leg listen, readiness log (no secrets), process stays alive
 import fs from 'node:fs'
 
-import { createMonoplayer, hostRefusal, loadConfig, portRefusal } from './monoplayer.js'
+import { addressSentence, createMonoplayer, hostRefusal, loadConfig, portRefusal } from './monoplayer.js'
 import { createControlDocument, dialIntent, revertAfterRestore } from './control.js'
 import { candidateLines, flag, withTimeout } from './cli.js'
 import { redact } from '../observability/redact.js'
@@ -397,7 +397,7 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   // has none: the compiled front is loopback, and a front left there serves nobody outside
   // the pod, which is the silent misconfiguration this ticket is about.
   const refuseAddress = (variable, raw, reason) => {
-    if (reason !== null) throw new TypeError(variable + ' ' + reason + ', got ' + JSON.stringify(raw))
+    if (reason !== null) throw new TypeError(addressSentence(variable, reason, raw))
   }
   // A variable that holds only space is an unset one, the way a blank path is in
   // src/service/control.js: a deployment template that interpolates an empty value writes
