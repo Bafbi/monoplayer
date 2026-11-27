@@ -245,6 +245,27 @@ instance `gate-b-player-262-fabric` for G0: it is the one
 `node src/driver/run.js` launches, and the one `tools/nath.sh` acts on when a
 command names no instance.
 
+## Reading one client's world (#675)
+
+No rung in `mise run check` reaches a client: the gate is offline, and the client the
+driver drives runs on the display host. So `entities` is proved by a person at a live
+client, with the tunnel [tools/driver/README.md](../../tools/driver/README.md) opens:
+
+```bash
+node tools/driver/driver-client.mjs entities        # the mod's own radius
+node tools/driver/driver-client.mjs entities 16     # 16 blocks around the player
+```
+
+The answer is one row per body that client holds. The row to look for is the puppet's
+UUID with `"type": "minecraft:player"` and `"local": false`: a body in the world, which
+the `skin` op cannot show, because it reads the tab list. The payload shape and what
+it cannot say are in [tools/driver/README.md](../../tools/driver/README.md).
+
+`mise run driver:scenario` is the rung that reaches a client, and it carries no step
+for this op: it drives the installed jar on the display host, and `install.sh` refuses
+to overwrite an instance, so a new op would red the G0 lane until somebody rebuilt and
+reinstalled the mod by hand. The two-client run that needs this reading is #634's.
+
 ## Notes
 
 - `EULA=TRUE` is the operator's acceptance of the Minecraft EULA for this

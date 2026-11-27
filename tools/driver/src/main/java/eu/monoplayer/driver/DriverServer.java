@@ -1,6 +1,7 @@
 package eu.monoplayer.driver;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.pipeline.RenderTarget;
@@ -9,6 +10,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.ConnectScreen;
@@ -20,9 +22,11 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.PlayerSkin;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
@@ -44,6 +48,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
@@ -58,6 +63,11 @@ import java.util.concurrent.TimeUnit;
  */
 public final class DriverServer {
     private static final int TIMEOUT_SECONDS = 10;
+    // The entities op reads this far around the player it controls unless the
+    // caller names a radius, and reports no more rows than this however large the
+    // radius is, so one answer stays a payload a caller can read.
+    private static final double DEFAULT_ENTITY_RADIUS = 64.0;
+    private static final int MAX_ENTITY_ROWS = 1000;
 
     private final Minecraft mc = Minecraft.getInstance();
     private final ServerSocket server;
@@ -183,6 +193,13 @@ public final class DriverServer {
             // switch itself.
             case "skin":
                 return ok(mc.submit(this::skinInfo).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            // #675: what the client's own level holds, read on the client thread.
+            // skin reads the tab list, which is a listing; this reads the world,
+            // which is a body. Neither answers for the other.
+            case "entities": {
+                double radius = entityRadius(request);
+                return ok(mc.submit(() -> entityInfo(radius)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            }
             case "perspective": {
                 String mode = request.has("mode") ? request.get("mode").getAsString() : "third_back";
                 return ok(mc.submit(() -> setPerspective(mode)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
@@ -564,6 +581,105 @@ public final class DriverServer {
             rows.add(row);
         }
         return rows;
+    }
+
+    // --- the client's world, read on the client thread (#675) ---
+
+    /**
+     * One row per entity the client holds in its level, within {@code radius}
+     * blocks of the player it controls: the client's own entity id, the registry
+     * type, the UUID, the name the client draws, the position, whether it is the
+     * local player, and for a player the skin the client resolved for that body.
+     *
+     * <p>This is the world, not the listing. {@link #skinInfo()} reads
+     * {@code ClientPacketListener.getOnlinePlayers()}, so it can report a
+     * {@code player_info} entry for a UUID whose body the client never draws. This
+     * answers the other question: is a body standing in that client's world. A skin
+     * row still says nothing about which textures property produced it, and neither
+     * op says a person saw anything.
+     *
+     * <p>Read-only: it iterates the level's entity collection and touches no socket,
+     * no packet handler, and no render target.
+     */
+    private JsonObject entityInfo(double radius) {
+        requireWorld();
+        Vec3 center = mc.player.position();
+        double limit = radius * radius;
+        int held = 0;
+        List<Entity> near = new ArrayList<>();
+        for (Entity entity : mc.level.entitiesForRendering()) {
+            held++;
+            if (entity.distanceToSqr(center) <= limit) {
+                near.add(entity);
+            }
+        }
+        // Nearest first, so a reader sees the bodies this client holds beside it
+        // before the ones across the chunk.
+        near.sort(Comparator.comparingDouble(entity -> entity.distanceToSqr(center)));
+        boolean truncated = near.size() > MAX_ENTITY_ROWS;
+        if (truncated) {
+            near = near.subList(0, MAX_ENTITY_ROWS);
+        }
+
+        JsonObject out = new JsonObject();
+        // The dimension's registry name, the form every other row here uses
+        // ("minecraft:overworld"), not ResourceKey's debug rendering.
+        out.addProperty("dimension", mc.level.dimension().identifier().toString());
+        out.addProperty("radius", radius);
+        JsonObject centerRow = new JsonObject();
+        centerRow.addProperty("x", center.x);
+        centerRow.addProperty("y", center.y);
+        centerRow.addProperty("z", center.z);
+        out.add("center", centerRow);
+        // How many the client held in this level before the radius filtered it: an
+        // entity read of a world with a player in it is never empty of itself, so
+        // zero says the read is wrong. Named for the level rather than "held",
+        // which the status payload already uses for the held item. The local player
+        // is the row with "local": true, so the payload carries it once.
+        out.addProperty("inLevel", held);
+        out.addProperty("truncated", truncated);
+        JsonArray rows = new JsonArray();
+        for (Entity entity : near) {
+            rows.add(entityRow(entity, center));
+        }
+        out.add("entities", rows);
+        return out;
+    }
+
+    // The radius a caller asked for, refused rather than clamped: a radius the mod
+    // silently rewrote would answer about a different region than the one asked for.
+    private static double entityRadius(JsonObject request) {
+        if (!request.has("radius") || request.get("radius").isJsonNull()) {
+            return DEFAULT_ENTITY_RADIUS;
+        }
+        JsonElement value = request.get("radius");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException("radius must be a number of blocks, got " + value);
+        }
+        double radius = value.getAsDouble();
+        if (radius < 0.0) {
+            throw new IllegalArgumentException("radius must be zero or more, got " + radius);
+        }
+        return radius;
+    }
+
+    private JsonObject entityRow(Entity entity, Vec3 center) {
+        JsonObject row = new JsonObject();
+        row.addProperty("id", entity.getId());
+        row.addProperty("type", BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString());
+        row.addProperty("uuid", entity.getUUID().toString());
+        row.addProperty("name", entity.getName().getString());
+        JsonObject pos = new JsonObject();
+        pos.addProperty("x", entity.getX());
+        pos.addProperty("y", entity.getY());
+        pos.addProperty("z", entity.getZ());
+        row.add("pos", pos);
+        row.addProperty("distance", Math.sqrt(entity.distanceToSqr(center)));
+        row.addProperty("local", entity == mc.player);
+        boolean player = entity instanceof AbstractClientPlayer;
+        row.addProperty("player", player);
+        row.add("skin", player ? describeSkin(((AbstractClientPlayer) entity).getSkin()) : null);
+        return row;
     }
 
     private JsonObject setPerspective(String mode) {

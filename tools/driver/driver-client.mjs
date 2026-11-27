@@ -23,6 +23,9 @@ if ((op === 'break' || op === 'place') && args.length >= 3) {
   request.z = Number(args[2])
 }
 if ((op === 'break' || op === 'place') && args.length >= 4) request.ms = Number(args[3])
+// The mod owns the default radius and refuses one it cannot use, so a caller names a
+// number only to change it.
+if (op === 'entities' && args.length >= 1) request.radius = Number(args[0])
 if (process.env.GATEB_DRIVER_TOKEN) request.token = process.env.GATEB_DRIVER_TOKEN
 
 const socket = net.createConnection({ host, port }, () => {
