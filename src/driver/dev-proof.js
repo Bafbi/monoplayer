@@ -23,9 +23,10 @@
 // runbook is held to it by `test/driver/dev-proof.test.js`, in the case named "every record the
 // reader relies on is one the runbook names and a leg writes", so the two cannot drift.
 //
-// The two halves. `claimsOf` answers six claims from the records. The seventh —
+// The two halves. `claimsOf` answers the claims a machine can. The other half —
 // `OPERATOR_STEPS`, what a person must see — is never answered here: `witnessDocument` writes
-// it `pending`, and `verifyWitness` refuses until every step is `seen`. The polarity is
+// it `pending`, and `verifyWitness` refuses until every step is `seen` and the rows are those
+// steps (#880). The polarity is
 // `src/driver/run.js`'s unmodded witness, on purpose: one exit code 1 for "the human half is
 // not recorded", in this same directory, rather than a second meaning for 1.
 import { pathToFileURL } from 'node:url'
@@ -82,12 +83,11 @@ export const RECORDS = Object.freeze([
 // The claims only a person can answer, in the order the runbook's table asks for them. The
 // states are the document's: `pending` until somebody looks, then `seen` or `not-seen`.
 //
-// `id` is the name the runbook's "What you should see" row carries, so the two are one list read
-// at two places instead of two lists that happen to have six lines. `record` is the log record the
-// step's own row names as the thing to read when the step fails, and null where nothing is
-// written, because a screen is the whole of the evidence. Neither field reaches a run: no code
-// reads this list except to write the witness, and `test/driver/dev-proof.test.js` holds the
-// runbook's table to both fields, both ways.
+// `id` is the name the runbook's "What you should see" row carries, and the name a witness row
+// records, so the two are one list read at two places rather than two lists that happen to agree.
+// `record` is the log record the step's own row names as the thing to read when the step fails,
+// and null where nothing is written, because a screen is the whole of the evidence.
+// `test/driver/dev-proof.test.js` holds the runbook's table to both fields, both ways.
 export const OPERATOR_STEPS = Object.freeze([
   { id: 'puppet-renders', record: 'puppetSkinSent', claim: 'the puppet renders where the driving client stands, wearing the puppet\'s skin' },
   { id: 'puppet-walks', record: 'heartbeat', claim: 'the puppet walks when the driving client walks' },
@@ -396,7 +396,7 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
     how: [
       'Stage the lane and drive two clients: deploy/dev/README.md, "The two-client proof".',
       'Read the run: kubectl -n monoplayer-dev logs deploy/monoplayer | node src/driver/dev-proof.js',
-      'For each step, set state to seen or not-seen, and write what you saw in evidence.',
+      'For each step, keep its id and set state to seen or not-seen, then write what you saw in evidence.',
       'Set completed true, then: node src/driver/dev-proof.js --verify'
     ],
     frames: {
@@ -408,7 +408,9 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
       failed: report.failed,
       rows: report.rows.map(row => ({ id: row.id, holds: row.holds, evidence: row.evidence }))
     },
-    steps: OPERATOR_STEPS.map(({ claim }) => ({ claim, state: 'pending', evidence: '[MANUAL: what you saw]' })),
+    // One row per step, named by `id`: the row says which step it records, so a document that
+    // repeats one step and leaves another unrecorded is refused by name rather than counted (#880).
+    steps: OPERATOR_STEPS.map(({ id, claim }) => ({ id, claim, state: 'pending', evidence: '[MANUAL: what you saw]' })),
     limitations: [
       'The frames half is read off the lane\'s own log. It says which frame reached which socket and nothing about what a client drew with it.',
       'A step set to not-seen is a finding, not a pass: the proof is incomplete while one stands.',
@@ -418,6 +420,53 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
 }
 
 const OPEN_STATES = new Set(['pending'])
+
+const namedIds = ids => ids.map(id => '`' + id + '`').join(', ')
+
+// A list in a sentence: "row 1, row 2 and row 3".
+const commaAnd = items => (items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' and ' + items.at(-1))
+
+// The verb that agrees with a count, so two refusals do not each spell the choice out.
+const agree = (count, one, many) => (count === 1 ? one : many)
+
+// What is wrong with the rows before their states are read: whether they are OPERATOR_STEPS, by
+// id and in its order. A row is named by its `id` and never by its `claim`: the claim is prose a
+// runbook rewrite rewords, the id is the name both sides already carry, and comparing the prose
+// would pass a document whose sentences match and whose steps do not (#880).
+//
+// No refusal counts rows. A total says what an operator already knows and not which row to open,
+// and a document that repeats one step and drops another keeps the count it started with.
+function stepRefusal (steps) {
+  const stepsAre = 'the steps are, in order: ' + namedIds(OPERATOR_STEPS.map(step => step.id))
+  const rows = steps.map((step, at) => ({ at, id: typeof step?.id === 'string' && step.id !== '' ? step.id : null }))
+  const unnamed = rows.filter(row => row.id === null)
+  if (unnamed.length > 0) {
+    return 'the witness\'s ' + commaAnd(unnamed.map(row => 'row ' + (row.at + 1))) +
+      agree(unnamed.length, ' carries', ' carry') + ' no step id: a row records one step of this run, and ' + stepsAre
+  }
+  const known = new Set(OPERATOR_STEPS.map(step => step.id))
+  const unknown = rows.filter(row => !known.has(row.id))
+  if (unknown.length > 0) {
+    return 'the witness\'s ' + commaAnd(unknown.map(row => 'row ' + (row.at + 1) + ' (`' + row.id + '`)')) +
+      agree(unknown.length, ' is', ' are') + ' no step of this run: ' + stepsAre
+  }
+  const ids = rows.map(row => row.id)
+  const recorded = new Set(ids)
+  const missing = OPERATOR_STEPS.map(step => step.id).filter(id => !recorded.has(id))
+  const repeated = [...new Set(ids.filter((id, at) => ids.indexOf(id) !== at))]
+  if (missing.length > 0 || repeated.length > 0) {
+    return [
+      missing.length === 0 ? null : 'unwitnessed: ' + namedIds(missing),
+      repeated.length === 0 ? null : 'recorded twice: ' + namedIds(repeated)
+    ].filter(clause => clause !== null).join('; ')
+  }
+  const moved = rows.find(row => row.id !== OPERATOR_STEPS[row.at].id)
+  if (moved !== undefined) {
+    return 'the witness\'s row ' + (moved.at + 1) + ' records `' + moved.id + '`, and the run\'s step ' +
+      (moved.at + 1) + ' is `' + OPERATOR_STEPS[moved.at].id + '`: the rows are OPERATOR_STEPS in its order'
+  }
+  return null
+}
 
 // What a witness has to say before it counts, and which step stops it. One message per kind of
 // gap, each naming what to write.
@@ -429,17 +478,20 @@ export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
     return { ok: false, reason: 'the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(lane) }
   }
   const steps = Array.isArray(document.steps) ? document.steps : []
-  if (steps.length !== OPERATOR_STEPS.length) {
-    return { ok: false, reason: 'the witness carries ' + steps.length + ' steps, and this run has ' + OPERATOR_STEPS.length }
-  }
-  const unrecorded = steps.filter(step => OPEN_STATES.has(step?.state) || step?.state === undefined)
+  const misplaced = stepRefusal(steps)
+  if (misplaced !== null) return { ok: false, reason: misplaced }
+  // Past that check the rows are OPERATOR_STEPS in its order, so each step's words are the
+  // module's. A row's own `claim` is the operator's label and no refusal reads it: the file is
+  // hand-edited, and a claim that drifted from its id would otherwise be quoted back as evidence.
+  const settled = steps.map((step, at) => ({ ...step, claim: OPERATOR_STEPS[at].claim }))
+  const unrecorded = settled.filter(step => OPEN_STATES.has(step?.state) || step?.state === undefined)
   if (unrecorded.length > 0) {
     return {
       ok: false,
       reason: unrecorded.length + ' step(s) are still pending: ' + unrecorded.map(step => step.claim).join('; ')
     }
   }
-  const silent = steps.filter(step => typeof step.evidence !== 'string' || step.evidence.trim() === '' ||
+  const silent = settled.filter(step => typeof step.evidence !== 'string' || step.evidence.trim() === '' ||
     step.evidence.startsWith('[MANUAL'))
   if (silent.length > 0) {
     return { ok: false, reason: 'a recorded step carries no evidence: ' + silent.map(step => step.claim).join('; ') }
@@ -447,7 +499,7 @@ export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
   if (document.completed !== true) {
     return { ok: false, reason: 'every step is recorded, and the document is not marked completed: set completed true' }
   }
-  const notSeen = steps.filter(step => step.state === 'not-seen')
+  const notSeen = settled.filter(step => step.state === 'not-seen')
   if (notSeen.length > 0) {
     return { ok: false, reason: 'not seen: ' + notSeen.map(step => step.claim + ' (' + step.evidence + ')').join('; ') }
   }

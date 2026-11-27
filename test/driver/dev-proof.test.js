@@ -332,7 +332,7 @@ test('a pending witness is refused, and the refusal names the steps still open',
 
 test('a recorded step with no evidence behind it is not recorded', () => {
   const document = witnessed()
-  document.steps[2] = { ...document.steps[2], evidence: '[MANUAL: what you saw]' }
+  document.steps = withStep(document, 'spectator-mode', { evidence: '[MANUAL: what you saw]' })
 
   const check = verifyWitness(document)
   assert.equal(check.ok, false)
@@ -341,12 +341,30 @@ test('a recorded step with no evidence behind it is not recorded', () => {
 
 test('a step the operator did not see fails the proof, and the report names it', () => {
   const document = witnessed()
-  document.steps[3] = { ...document.steps[3], state: 'not-seen', evidence: 'the body was drawn in third person' }
+  document.steps = withStep(document, 'spectator-own-body', { state: 'not-seen', evidence: 'the body was drawn in third person' })
 
   const check = verifyWitness(document)
   assert.equal(check.ok, false, 'a not-seen step is a finding, not a pass')
   assert.match(check.reason, /^not seen: the spectator has no body of its own/)
   assert.match(check.reason, /the body was drawn in third person/)
+})
+
+// A row's own `claim` is the operator's label, and the file is hand-edited: a refusal quotes the
+// module's words for the step an id names, so a claim left over from another row cannot be read
+// back as evidence of what the operator saw.
+test('a refusal quotes the module\'s words for the step, not the row\'s', () => {
+  const document = witnessed()
+  document.steps = withStep(document, 'spectator-own-body', {
+    state: 'not-seen',
+    claim: 'the puppet waves at the spectator',
+    evidence: 'the body was drawn in third person'
+  })
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false)
+  assert.match(check.reason, /^not seen: the spectator has no body of its own/)
+  assert.match(check.reason, /\(the body was drawn in third person\)$/)
+  assert.doesNotMatch(check.reason, /the puppet waves at the spectator/, 'the row\'s label is not the proof\'s words')
 })
 
 test('a completed witness for a run whose frames failed is refused', () => {
@@ -365,12 +383,89 @@ test('a witness is accepted only when every step is recorded and every frame hel
 
   assert.equal(verifyWitness(null).ok, false, 'no document is no proof')
   assert.match(verifyWitness({ ...witnessed(), lane: 'unmodded' }).reason, /names lane "unmodded"/)
-  assert.match(verifyWitness({ ...witnessed(), steps: [] }).reason, /carries 0 steps/)
+  assert.match(verifyWitness({ ...witnessed(), steps: [] }).reason,
+    /^unwitnessed: `puppet-renders`, `puppet-walks`/, 'an empty document names the steps it is missing')
   assert.match(verifyWitness({ ...witnessed(), completed: false }).reason, /not marked completed/)
 })
 
+// #880: the check was the count. A document with the right number of rows, every one recorded and
+// evidenced, passed no matter which steps those rows were, so one that recorded a step twice and
+// never recorded another verified as a finished proof. These cases vary the names and hold the
+// count, because a case that varies the count is the case the old check already caught.
+test('a witness that keeps the count and loses a step is refused, naming the step nobody recorded', () => {
+  const document = witnessed()
+  const rows = document.steps
+  document.steps = [
+    ...rows.filter(step => step.id !== 'spectator-mode'),
+    { ...rows.find(step => step.id === 'puppet-walks'), evidence: 'saw it again, on client two' }
+  ]
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false, 'the right number of rows is not the right steps')
+  assert.match(check.reason, /^unwitnessed: `spectator-mode`/)
+  assert.match(check.reason, /; recorded twice: `puppet-walks`/, 'and names the row that took its place')
+})
+
+// The other direction of the same bug: a document one row short, which the count check caught and
+// refused with a total. The operator's repair is the row the step was lost from, so it is named.
+test('a witness with a row deleted names the step it lost, not the count it kept', () => {
+  const document = witnessed()
+  document.steps = document.steps.filter(step => step.id !== 'puppet-walks')
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false)
+  assert.match(check.reason, /^unwitnessed: `puppet-walks`$/, 'one step, named, and no total to work it out from')
+})
+
+test('a witness whose rows are the right steps in another order is refused, row by row', () => {
+  const document = witnessed()
+  const [first, second] = document.steps
+  document.steps = [second, first, ...document.steps.slice(2)]
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false, 'the set of names is not the list')
+  assert.match(check.reason,
+    /^the witness's row 1 records `puppet-walks`, and the run's step 1 is `puppet-renders`/)
+})
+
+test('a row that names no step is refused, and the row is the repair', () => {
+  const document = witnessed()
+  document.steps = document.steps.map(step => ({ claim: step.claim, state: step.state, evidence: step.evidence }))
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false, 'rows with no names are rows the check cannot place')
+  assert.match(check.reason, /carry no step id/)
+  assert.match(check.reason, /`puppet-renders`/, 'the repair names the steps a row may record')
+
+  const one = witnessed()
+  one.steps = withStep(one, 'spectator-mode', { id: undefined })
+  const named = verifyWitness(one)
+  assert.equal(named.ok, false, 'one unnamed row is one step nobody can find')
+  assert.match(named.reason, /^the witness's row \d+ carries no step id/)
+})
+
+test('a row that names a step this run does not have is refused, naming the row', () => {
+  const document = witnessed()
+  document.steps = withStep(document, 'drawn-once', { id: 'drawn-thrice' })
+
+  const check = verifyWitness(document)
+  assert.equal(check.ok, false)
+  assert.match(check.reason, /^the witness's row \d+ \(`drawn-thrice`\) is no step of this run/)
+})
+
 function witnessed (report = verdict(readingOf(run()))) {
-  const document = witnessDocument(report)
+  return recorded(witnessDocument(report))
+}
+
+// One row replaced, found by the step it records rather than its position: an index in this file
+// would start asserting about a different step the day OPERATOR_STEPS is reordered.
+function withStep (document, id, change) {
+  return document.steps.map(step => (step.id === id ? { ...step, ...change } : step))
+}
+
+// A document an operator finished: every row seen, with evidence, and the completion flag set.
+// The rows are the ones `witness` wrote, so a case can reorder them or drop one.
+function recorded (document) {
   return {
     ...document,
     completed: true,
@@ -883,6 +978,22 @@ test('--verify refuses an unrecorded witness and accepts a recorded one', () => 
   const recorded = cli('--verify', '--witness', witness)
   assert.equal(recorded.status, 0, recorded.stderr)
   assert.match(recorded.stdout, /#634 VERIFIED/)
+})
+
+test('--verify names the step a completed witness never recorded, not the count it kept', () => {
+  const { witness, run: cli } = space()
+  cli('--path', space().log(run()), '--witness', witness)
+  const document = recorded(JSON.parse(fs.readFileSync(witness, 'utf8')))
+  // The run's own document, finished, then edited the way #880 found it: one step recorded twice
+  // and one never recorded, which leaves the count at six.
+  fs.writeFileSync(witness, JSON.stringify({
+    ...document,
+    steps: [document.steps[0], document.steps[1], document.steps[1], ...document.steps.slice(3)]
+  }, null, 2))
+
+  const check = cli('--verify', '--witness', witness)
+  assert.equal(check.status, 1, 'five steps recorded as six rows is not a completed proof')
+  assert.match(check.stderr, /^NOT COMPLETE: unwitnessed: `spectator-mode`/)
 })
 
 test('an unknown argument and a missing value are usage errors, and help is not', () => {
