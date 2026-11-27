@@ -743,9 +743,23 @@ function createFrontLeg ({
   // Disconnect verb doing the same. A branch that composes one without this call is that
   // defect again, and the guard in test/legs/picker-numbers.test.js names every sentence
   // that is not counted here.
-  function refuseAndCount (request) {
-    bumpPickerRefusal(request.reason)
-    return pickerBoard.refuse(request)
+  //
+  // #670: the record is written here too, because a count with no line saying why is the
+  // same defect read backwards. A caller hands over the reason, the sentence's own facts
+  // and the record to write; the helper composes the sentence, counts the reason and
+  // writes that record with both on it, so the word the map is keyed by and the word an
+  // operator greps are one word. A site that writes its refusal record by hand beside a
+  // count can make them differ, and #670 found the mirror of #435 and #616: a dialog the
+  // leg could not write counted with only an `error` on its line, so the word the map is
+  // keyed by was on no refusal record at all.
+  function refuseAndCount ({ reason, record: write, ...request }) {
+    bumpPickerRefusal(reason)
+    const text = pickerBoard.refuse({ reason, ...request })
+    // The record is the site's, and it is handed the pair this call just counted and
+    // composed, so it cannot say a word the map does not hold. The event name stays at
+    // the site, because #416 keeps every written name a literal there.
+    write({ reason, text })
+    return text
   }
 
   // #267: the claims this leg holds, one per body. A claim is recorded where a
@@ -1407,18 +1421,32 @@ function createFrontLeg ({
     // client this leg can answer would be lost instead of told why.
     const encoded = encodeDialogFrame(client, pickerDialogParams({ rows, title }))
     let written = false
+    let error = null
     if (!encoded.ok) {
-      log('pickerDialogFailed', { error: encoded.error })
+      error = encoded.error
     } else {
       // #602: the dialog is a configuration frame this leg authored, and the funnel is
       // where a clientbound raw frame is written. It answers whether the frame went
       // (the wire check, the state check) instead of throwing at the socket.
       try {
         written = writeRawTo(client, encoded.buffer, { state: 'configuration', name: 'show_dialog' })
-      } catch (error) {
-        log('pickerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      } catch (thrown) {
+        error = String(thrown?.message ?? thrown).slice(0, 200)
       }
     }
+    // #670: a dialog the leg could not write is a refusal it counts (#616), so the call
+    // that counts it writes the record as well, and `pickerDialogFailed` is the line that
+    // carries why: the reason the map is keyed by and the sentence the client was told.
+    // Before this, the reason was only on `configurationEnded`, the line every ended
+    // client gets, so grepping the dialog's own record answered nothing.
+    const text = written
+      ? null
+      : refuseAndCount({
+        reason: 'picker_unavailable',
+        // #263 D2: a frame the funnel refused with no error to report leaves the key out,
+        // because a null would read as a failure with nothing to say.
+        record: fields => log('pickerDialogFailed', { ...(error === null ? {} : { error }), ...fields })
+      })
     log('pickerDialog', {
       username: client.username ?? null,
       servers: rows.length,
@@ -1429,11 +1457,7 @@ function createFrontLeg ({
       // a size for a dialog that never went out would read as one that did.
       ...(written ? { bytes: encoded.buffer.length } : {})
     })
-    if (!written) {
-      // A dialog that could not be written is a refusal like any other: the client
-      // is ended with the same sentence, so the count says so too.
-      endConfiguration(client, 'picker_unavailable', refuseAndCount({ reason: 'picker_unavailable' }))
-    }
+    if (!written) endConfiguration(client, 'picker_unavailable', text)
   }
 
   // #266: one click on a dialog this leg authored, at either level. The level is
@@ -1460,15 +1484,18 @@ function createFrontLeg ({
     // Ours to read and it did not read. The click is refused with the sentence
     // that says what was wrong, and the client is answered. A client left in a
     // dialog nobody will read is worse off than one that is told why.
-    const text = refuseAndCount({ reason: answer.reason, verb: answer.verb, id: answer.id })
-    log('pickerVerbRefused', {
-      username: client.username ?? null,
-      uuid: client.uuid ?? null,
-      id: answer.id,
-      verb: answer.verb,
-      slug: answer.slug,
+    const text = refuseAndCount({
       reason: answer.reason,
-      text
+      verb: answer.verb,
+      id: answer.id,
+      record: refusal => log('pickerVerbRefused', {
+        username: client.username ?? null,
+        uuid: client.uuid ?? null,
+        id: answer.id,
+        verb: answer.verb,
+        slug: answer.slug,
+        ...refusal
+      })
     })
     endConfiguration(client, 'picker_refused', text)
   }
@@ -1487,16 +1514,26 @@ function createFrontLeg ({
   // the funnel's is, and that is where the count and the line for a refused frame live.
   function sendServerDialog (client, server) {
     let written = false
+    let error = null
     const encoded = encodeDialogFrame(client, serverDialogParams({ server }))
     if (!encoded.ok) {
-      log('pickerServerDialogFailed', { error: encoded.error })
+      error = encoded.error
     } else {
       try {
         written = writeRawTo(client, encoded.buffer, { state: 'configuration', name: 'show_dialog' })
-      } catch (error) {
-        log('pickerServerDialogFailed', { error: String(error?.message ?? error).slice(0, 200) })
+      } catch (thrown) {
+        error = String(thrown?.message ?? thrown).slice(0, 200)
       }
     }
+    // #670: as in sendPickerDialog, the counted refusal writes the record that says why,
+    // so `pickerServerDialogFailed` carries the reason and the sentence itself.
+    const text = written
+      ? null
+      : refuseAndCount({
+        reason: 'picker_unavailable',
+        server: server.name,
+        record: fields => log('pickerServerDialogFailed', { ...(error === null ? {} : { error }), ...fields })
+      })
     if (written) metrics.pickerServerDialogs++
     log('pickerServerDialog', {
       username: client.username ?? null,
@@ -1505,10 +1542,7 @@ function createFrontLeg ({
       slug: server.slug,
       verbs: PICK_VERBS.map(verb => verbIdFor(verb, server.name))
     })
-    if (!written) {
-      endConfiguration(client, 'picker_unavailable',
-        refuseAndCount({ reason: 'picker_unavailable', server: server.name }))
-    }
+    if (!written) endConfiguration(client, 'picker_unavailable', text)
   }
 
   // #266: the answer to a server's own dialog. The verb and the server both ride in
@@ -1528,8 +1562,12 @@ function createFrontLeg ({
       // A verb answer this lane cannot act on: the frame named a server the offer
       // does not carry. The sentence is the board's (#595) and the count rides it,
       // because the one helper every counted refusal goes through composes both.
-      const text = refuseAndCount({ reason: answer.reason, verb: answer.verb, id: answer.id })
-      log('pickerVerbRefused', { ...fields, reason: answer.reason, text })
+      const text = refuseAndCount({
+        reason: answer.reason,
+        verb: answer.verb,
+        id: answer.id,
+        record: refusal => log('pickerVerbRefused', { ...fields, ...refusal })
+      })
       endConfiguration(client, 'verb_refused', text)
       return
     }
@@ -1570,17 +1608,16 @@ function createFrontLeg ({
         // also moves this refusal's own number (#261), so this branch moves one thing
         // and not two counters it must remember.
         const text = refuseAndCount({
+          reason: 'disconnect_claimed',
           verb: 'disconnect',
-          reason: 'disconnect_claimed',
           server: server.name,
-          driver: answer.held.name
-        })
-        log('pickerDisconnectRefused', {
-          ...fields,
-          reason: 'disconnect_claimed',
           driver: answer.held.name,
-          holder: answer.held.holder,
-          text
+          record: refusal => log('pickerDisconnectRefused', {
+            ...fields,
+            driver: answer.held.name,
+            holder: answer.held.holder,
+            ...refusal
+          })
         })
         endConfiguration(client, 'disconnect_refused', text)
         return
@@ -1803,14 +1840,18 @@ function createFrontLeg ({
     // still holds when the phase-end write is the thing that failed.
     const refused = reason => {
       // #616: the sentence and the count are the one helper's, so a branch here cannot
-      // refuse without counting.
-      const text = refuseAndCount({ verb: 'spectate', reason, server: named })
-      record(client, 'spectateRefused', {
-        username: client.username ?? null,
-        body,
-        server: named,
+      // refuse without counting. #670: and the record is the helper's too, so the reason
+      // the map is keyed by is the reason on the line a reader greps.
+      const text = refuseAndCount({
         reason,
-        text
+        verb: 'spectate',
+        server: named,
+        record: refusal => record(client, 'spectateRefused', {
+          username: client.username ?? null,
+          body,
+          server: named,
+          ...refusal
+        })
       })
       return { watching: false, reason, text }
     }
@@ -1908,13 +1949,13 @@ function createFrontLeg ({
       return { ...outcome, text: null }
     }
     const text = refuseAndCount({
-      verb: 'claim',
       reason: outcome.reason,
+      verb: 'claim',
       server: server.name,
       holder: outcome.claim?.name ?? null,
-      claimed: outcome.reason === CLAIM_REFUSAL.HELD ? outcome.claim?.server ?? null : null
+      claimed: outcome.reason === CLAIM_REFUSAL.HELD ? outcome.claim?.server ?? null : null,
+      record: refusal => log('pickerClaimRefused', { ...fields, ...refusal })
     })
-    log('pickerClaimRefused', { ...fields, text })
     return { ...outcome, text }
   }
 
@@ -1953,8 +1994,16 @@ function createFrontLeg ({
       // The dialog on screen is older than the list it came from, which is the same
       // refusal a verb on an unknown server gets: the frame named a server this lane
       // does not offer.
-      const text = refuseAndCount({ reason: answer.reason, id: answer.id })
-      log('pickerPickRefused', { username: client.username ?? null, id: answer.id, slug: answer.slug, reason: answer.reason, text })
+      const text = refuseAndCount({
+        reason: answer.reason,
+        id: answer.id,
+        record: refusal => log('pickerPickRefused', {
+          username: client.username ?? null,
+          id: answer.id,
+          slug: answer.slug,
+          ...refusal
+        })
+      })
       endConfiguration(client, 'pick_refused', text)
       return
     }
