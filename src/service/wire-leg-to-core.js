@@ -383,8 +383,10 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
 // register every call-in against nothing. The table is required too, so a leg is
 // never measured against the other interface's rows.
 //
-// The core puts the whole report on `legWiring`, one per interface, which is where
-// its readers reach it.
+// The core keeps the report in `legWiring`, one per interface, in start(): the start
+// record carries each interface's `missing`, and `backendCarries` reads the backend's
+// `called`. The core publishes no report on its handle, because every reader of one was a
+// test (#817).
 //
 // #718: no field carries a handler. #607 reported every one it installed, so a lane
 // wrapping a call-in after start() could call the function the leg was handed instead

@@ -439,6 +439,34 @@ test('#757 every field of the report has a production reader, named at the line'
   }
 })
 
+// #817: the report is a value the core reads at start(), not a surface the core
+// publishes. `get legWiring()` had four readers and every one was a test: the core's own
+// two reads use the closure variable, and a lane operator reads the start record. A
+// getter whose only caller is a test describes a caller the tests build for themselves,
+// which is the reason #718 removed `handlers` and #757 removed `wired` one level down.
+//
+// The seam a test uses is the artifact a lane reads: the start record's `legMissing`.
+// The cases around this one read it, and test/legs/adapters.test.js holds every real leg
+// to the tables through it.
+test('#817 the core publishes no wiring report, because its only readers were tests', () => {
+  const lines = []
+  const core = createMonoplayer({
+    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
+    backendLeg: createFakeBackendLeg(),
+    frontLeg: createFakeFrontLeg(),
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout },
+    logStream: { write: line => lines.push(JSON.parse(line)) }
+  })
+  core.start()
+
+  assert.equal(Object.hasOwn(core, 'legWiring'), false,
+    'the core handle carries no wiring report: the getter exists so a test can read a value the core already holds, and a value with no production reader is the field #718 and #757 removed')
+
+  const start = lines.find(entry => entry.event === 'start')
+  assert.deepEqual(start.legMissing, { front: DOUBLE_HOLES.front.missing, backend: [] },
+    'and the report a reader reads is the start record, which names every row this leg did not carry')
+})
+
 // #607: the acceptance criterion, as a count. A caller that writes the literal has
 // a second copy of the table's row, and a change to the table leaves it on the old
 // value in silence. Comments are stripped: a module explaining why it spells no
@@ -550,8 +578,6 @@ test('#592 a leg with a hole is named on the start record', () => {
   const start = lines.find(entry => entry.event === 'start')
   assert.deepEqual(start.legMissing, { front: ['setBodyServed'], backend: [] },
     'the start record names the call-in this leg did not carry, which is the one place a lane would see it')
-  assert.deepEqual(core.legWiring.front.missing, ['setBodyServed'],
-    'and the report the record is built from says the same')
 })
 
 // #726: the delivery half is a row now, so its absence is a name on the start line
@@ -579,10 +605,8 @@ test('#726 a leg with no delivery is named on the start record', () => {
     logStream: { write: line => lines.push(JSON.parse(line)) }
   })
   core.start()
-  assert.deepEqual(core.legWiring.front.missing, ['write'],
-    'the report names the delivery this leg does not carry')
   assert.deepEqual(lines.find(entry => entry.event === 'start').legMissing, { front: ['write'], backend: [] },
-    'and the start record carries the name, which is the line a lane operator reads')
+    'the start record names the delivery this leg does not carry, which is the line a lane operator reads')
 })
 
 // #605: a backend leg with a hole is named by the same report, and the call that
@@ -607,8 +631,6 @@ test('#605 a backend leg missing a call-in is named on the start record, and cha
   const start = lines.find(entry => entry.event === 'start')
   assert.deepEqual(start.legMissing, { front: DOUBLE_HOLES.front.missing, backend: ['chat'] },
     'the start record names the backend call-in this leg did not carry, beside the front list this double is known to have')
-  assert.deepEqual(core.legWiring.backend.missing, ['chat'],
-    'and the report the record is built from says the same about the backend leg')
 
   // The call the hole would have served: the human's chat. It is dropped with the
   // leg's reason, which is what the guard used to say and the report now knows.

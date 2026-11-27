@@ -44,10 +44,10 @@
 // channel on the body; a write with one reaches that connection alone, which is how
 // a spectator is handed its body's replay.
 //
-// #592, #605: the core applies both tables in start() and reports what each leg
-// carried as `legWiring`, one report per interface, with the names it did not
-// carry on the start record. A lane adds no row to them: it builds a leg and
-// starts a core.
+// #592, #605: the core applies both tables in start() and keeps what each leg carried
+// in `legWiring`, one report per interface. A lane reads the holes on the start record,
+// because the core publishes no report (#817), and a lane adds no row to the tables: it
+// builds a leg and starts a core.
 //
 // #824: a call-in holds one handler, and a lane's hand registration on a leg it hands the
 // core is refused at this start() rather than replaced in silence. The rule is
@@ -612,9 +612,9 @@ export function createMonoplayer ({
   const unclassifiedLogged = new Set()
   let started = false
   // #592, #605: what each leg carried when the core wired it, or null before
-  // start(). It is the report wireLegToCore gives, one per interface, which the
-  // start record carries the missing names from and which the tests read back off
-  // a started core.
+  // start(). It is the report wireLegToCore gives, one per interface: the start record
+  // carries the missing names from it, and `backendCarries` reads a call from it. No
+  // getter publishes it, because every reader of one was a test (#817).
   let legWiring = null
   // #269: a driver is delivered a body. Delivery is the front leg's channels now, so
   // this is only what the session knows: one driver, one body, one attach.
@@ -4055,11 +4055,6 @@ export function createMonoplayer ({
     start,
     stop,
     get started () { return started },
-    // #592, #605: which call-ins each leg carried, and which it did not, one
-    // report per interface. An empty `missing` is a leg that answers every call-in
-    // its table declares. The tests read it back off a started core, and `start`
-    // carries the missing names.
-    get legWiring () { return legWiring },
     get attached () { return isAttached() },
     get backendViewDistance () { return backendViewDistance },
     get backendConfiguring () { return backendConfiguring },

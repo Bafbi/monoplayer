@@ -424,14 +424,19 @@ test('the live front leg accepts every chat mode the config accepts', () => {
 // body. The doubles' holes are declared in test/service/wire-leg-to-core.test.js,
 // which is the tables' own test.
 function startedOn (frontLeg, backendLeg = createFakeBackendLeg()) {
+  const lines = []
   const core = createMonoplayer({
     config: { ...DEFAULT_CONFIG, attachWhitelist: [PLAYER] },
     backendLeg,
     frontLeg,
-    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout }
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout },
+    logStream: { write: line => lines.push(JSON.parse(line)) }
   })
   core.start()
-  return core
+  // #817: the start record is the report a reader reads, and it is the line a lane
+  // operator reads. The core publishes no report of its own: every reader of the getter
+  // that used to publish one was a test, and this file was one of them.
+  return { core, start: lines.find(entry => entry.event === 'start') }
 }
 
 const offlineFront = () => createOfflineFrontLeg({
@@ -444,7 +449,7 @@ const offlineFront = () => createOfflineFrontLeg({
 })
 
 test('every front leg a lane builds carries the call-ins the core declares', () => {
-  const live = startedOn(createLiveFrontLeg({
+  const { start: live } = startedOn(createLiveFrontLeg({
     host: '127.0.0.1',
     port: 0,
     version: '26.1',
@@ -452,11 +457,11 @@ test('every front leg a lane builds carries the call-ins the core declares', () 
     getSnapshotConfig: () => [],
     wireMode: 'off'
   }))
-  assert.deepEqual(live.legWiring.front.missing, [],
+  assert.deepEqual(live.legMissing.front, [],
     'the live front leg carries every call-in: an absent one is a lane that refuses a client and logs nothing')
 
-  const offline = startedOn(offlineFront())
-  assert.deepEqual(offline.legWiring.front.missing, [],
+  const { core: offlineCore, start: offline } = startedOn(offlineFront())
+  assert.deepEqual(offline.legMissing.front, [],
     'and so does the offline front leg every rig builds')
 
   // The other half of the contract: a row that names a method the core does not
@@ -465,7 +470,7 @@ test('every front leg a lane builds carries the call-ins the core declares', () 
   // frame arriving, not by the gate.
   for (const { reaches } of [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]) {
     if (reaches === undefined) continue
-    assert.equal(typeof offline[reaches], 'function',
+    assert.equal(typeof offlineCore[reaches], 'function',
       'the core the table is applied to carries ' + reaches)
   }
 })
@@ -485,7 +490,7 @@ test('#627 the live front leg answers its own pre-auth window, in the window\'s 
     wireMode: 'off',
     preAuth: { maxConnections: 5, deadlineMs: 4000 }
   })
-  const core = startedOn(leg)
+  const { core } = startedOn(leg)
 
   assert.deepEqual(leg.preAuthStats(),
     createPreAuthWindow({ maxConnections: 5, deadlineMs: 4000 }).stats(),
@@ -497,12 +502,12 @@ test('#627 the live front leg answers its own pre-auth window, in the window\'s 
 // #605: the backend leg's contract is measured the same way. The offline leg is
 // the real one with auth 'offline', the factory every gate lane builds.
 test('#605 every backend leg a lane builds carries the call-ins the core declares', () => {
-  const real = startedOn(offlineFront(), createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' }))
-  assert.deepEqual(real.legWiring.backend.missing, [],
+  const { start: real } = startedOn(offlineFront(), createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' }))
+  assert.deepEqual(real.legMissing.backend, [],
     'the real backend leg carries every call-in and both calls: a missing frame handler serves no client at all')
 
-  const fake = startedOn(createFakeFrontLeg())
-  assert.deepEqual(fake.legWiring.backend.missing, [],
+  const { start: fake } = startedOn(createFakeFrontLeg())
+  assert.deepEqual(fake.legMissing.backend, [],
     'and the backend double every service test builds carries them too, so a rig cannot meet a hole here')
 })
 
