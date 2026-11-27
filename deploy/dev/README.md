@@ -385,8 +385,11 @@ the log when it fails.
 Every "You should see" cell is `OPERATOR_STEPS`'s `claim` for its step, word for word
 (`src/driver/dev-proof.js`). `test/driver/dev-proof.test.js` reads the cell and the claim against
 each other in both directions, so a row here cannot ask for something the witness does not record.
-Of the other two cells the guard reads one thing: that the last one names the step's record. The
-rest of their prose is this page's, and nothing compares it.
+Of the other two cells the guard reads two things: that the last one names the step's record, and,
+where `OPERATOR_STEPS` carries a `because` for the step, that the last cell is that sentence word
+for word. The `spectator-mode` sentence is built with `spectatorModeFrames().length` in it, so a
+third frame in `src/core/spectator-mode.js` fails the guard rather than leaving this page quietly
+stale. The rest of their prose is this page's, and nothing compares it.
 
 | Step | Look at | You should see | If you do not |
 |---|---|---|---|
