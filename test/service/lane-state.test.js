@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 
 import { createMonoplayer, loadConfig } from '../../src/service/monoplayer.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 import { fakeClock } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -85,6 +86,9 @@ test('#627 the read is a row of the front table, so a leg without it is named', 
   // and what test/legs/adapters.test.js holds every real front leg to. A leg that carries
   // the read is the snapshot the cases above read; a leg that does not is a name on the
   // record, which is the line a lane operator reads (#817).
+  assert.ok(FRONT_LEG_CALL_INS.some(row => row.name === 'preAuthStats' && row.kind === 'call'),
+    'the read is a row of the front table, so the record has a name for the hole this case reads')
+
   const { start: carrying } = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...WINDOW }) }))
 
   assert.ok(!carrying.legMissing.front.includes('preAuthStats'),

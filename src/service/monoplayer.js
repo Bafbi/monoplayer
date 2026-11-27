@@ -44,8 +44,8 @@
 // channel on the body; a write with one reaches that connection alone, which is how
 // a spectator is handed its body's replay.
 //
-// #592, #605: the core applies both tables in start() and keeps what each leg carried
-// in `legWiring`, one report per interface. A lane reads the holes on the start record,
+// #592, #605: the core applies both tables in start() and keeps what each leg did not
+// carry in `legWiring`, one report per interface. A lane reads the holes on the start record,
 // because the core publishes no report (#817), and a lane adds no row to the tables: it
 // builds a leg and starts a core.
 //
@@ -3349,9 +3349,8 @@ export function createMonoplayer ({
   // second time.
   //
   // #818: the report holds one list, so a call row the leg answered is a name `missing`
-  // does not carry. The row is looked up in the table first, because a name that is no
-  // call row of BACKEND_LEG_CALL_INS is a question this cannot answer, and `missing`
-  // would answer it as carried.
+  // does not carry. The row is looked up in the table first: `missing` alone would answer
+  // "carried" for a name that is no call row at all.
   function backendCarries (name) {
     const row = BACKEND_LEG_CALL_INS.find(entry => entry.name === name)
     return row?.kind === 'call' && legWiring !== null && !legWiring.backend.missing.includes(name)

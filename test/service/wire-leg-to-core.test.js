@@ -191,7 +191,7 @@ test('#605 a backend leg missing a call is named like any other hole', () => {
   const absent = recordingLeg(BACKEND_LEG_CALL_INS, { omit: OMITTED })
   const wiring = wireLegToCore({ core, leg: absent.leg, table: BACKEND_LEG_CALL_INS })
   assert.deepEqual(wiring.missing, ['setErrorHandler', 'answerHeldGate', 'chat'],
-    'the report names the missing registration and both missing calls, in table order: the two calls this leg omits are holes like the registration it omits, and #818 made that the report\'s whole vocabulary, so a report that counted an omitted call as carried fails here')
+    'the report names the missing registration and both missing calls in table order: #818 made a hole the report\'s whole vocabulary, so a call row this leg omits is a hole like the registration it omits')
 })
 
 // #605: the freeze is a claim, so a case reads it: a table a reader can rewrite is a
@@ -411,6 +411,18 @@ test('#818 every `call` row is a member the core calls on the leg its table decl
       ' declares. A row the core stops calling is a member every leg is still measured against and nothing reaches (#721, #818)')
   }
 
+  // The other half of #818's hole. A backend call row is answered by the report
+  // (`backendCarries`), so a `typeof` test on one is the second home #605 removed: the
+  // core would ask the leg's shape where the table already answered. The front's three
+  // optional calls are `typeof`-tested on purpose — the header says why, and `laneState`
+  // asks the leg at each read because the report is null until start() — so this half
+  // names the backend's rows only.
+  for (const { name, kind } of BACKEND_LEG_CALL_INS) {
+    if (kind !== 'call') continue
+    assert.equal(count(CORE, 'typeof backendLeg.' + name) + count(CORE, 'typeof backendLeg?.' + name), 0,
+      'src/service/monoplayer.js must not test backendLeg.' + name + ' with typeof: `backendCarries` answers whether the leg carried the row, and a shape test is a second home for the same fact (#605, #818)')
+  }
+
   // The walk bites, and it reads a call rather than a shape test. Both halves are fed a
   // string here, because the tree's call sites are the claim above and a case that only
   // watched them pass would pass on a walk that counted nothing.
@@ -476,10 +488,10 @@ test('#757 every field of the report has a production reader, named at the line'
 })
 
 // #817: the report is a value the core reads at start(), not a surface the core
-// publishes. `get legWiring()` had four readers and every one was a test: the core's own
-// two reads use the closure variable, and a lane operator reads the start record. A
-// getter whose only caller is a test describes a caller the tests build for themselves,
-// which is the reason #718 removed `handlers` and #757 removed `wired` one level down.
+// publishes. Every reader of `get legWiring()` was a test: the core reads the closure
+// variable, and a lane operator reads the start record. A getter whose only caller is a
+// test describes a caller the tests build for themselves, which is the reason #718
+// removed `handlers` and #757 removed `wired` one level down.
 //
 // The seam a test uses is the artifact a lane reads: the start record's `legMissing`.
 // The cases around this one read it, and test/legs/adapters.test.js holds every real leg
@@ -495,7 +507,7 @@ test('#817 the core publishes no wiring report, because its only readers were te
   })
   core.start()
 
-  assert.equal(Object.hasOwn(core, 'legWiring'), false,
+  assert.equal('legWiring' in core, false,
     'the core handle carries no wiring report: the getter exists so a test can read a value the core already holds, and a value with no production reader is the field #718 and #757 removed')
 
   const start = lines.find(entry => entry.event === 'start')

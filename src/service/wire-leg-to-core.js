@@ -78,12 +78,14 @@
 //
 // #818: `called` went for the reason `wired` did, one field along. It named the call rows
 // the leg answered, which is the table's call rows minus `missing`, so it carried no fact
-// of its own. Only the backend's half had a production reader — `backendCarries` in
-// src/service/monoplayer.js, the question whether a call the core makes is a hole the leg
-// has — so that reader asks `missing` now, and the front's half, which no module read,
-// went with it. The front's three optional calls are still tested by `typeof` where they
-// are used (#726): that is the leg's shape at the call, not a row it carried, and
-// `laneState` asks the leg at each read because this report is null until start().
+// of its own.
+//
+// One half of it had a production reader. `backendCarries` in src/service/monoplayer.js
+// asks whether a call the core makes is a hole the leg has, and it asks `missing` now.
+// The front's half was read by no module, so it went with the field. The front's three
+// optional calls are still tested by `typeof` where they are used (#726): that is the
+// leg's shape at the call, not a row it carried. `laneState` asks the leg at each read,
+// because this report is null until start().
 //
 // The field that remains is read in src/service/monoplayer.js, and the case
 // "#757 every field of the report has a production reader" holds this list to it.
