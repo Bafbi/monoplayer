@@ -594,6 +594,14 @@ test('#595 every refusal reason reaches one sentence, chosen in one place (#542)
     /sky is already claimed by Bafbi/)
   assert.match(board.refuse({ verb: 'claim', reason: 'claim_held', server: 'sky', claimed: 'nether' }),
     /already hold a claim on nether/)
+  // #708: a claim the lane granted and whose landing lost the phase-end write is the
+  // claim family's, and its sentence is the one the claim landing used to compose —
+  // `claimFailureText` — character for character, because the client is told it (#258).
+  for (const server of ['sky:25565', null]) {
+    assert.equal(board.refuse({ verb: 'claim', reason: 'finish_failed', server }),
+      claimFailureText({ server }),
+      'the claim family answers a lost landing with the landing\'s own sentence')
+  }
   assert.match(board.refuse({ verb: 'disconnect', reason: 'disconnect_claimed', server: 'sky', driver: 'Bafbi' }),
     /sky is claimed by Bafbi, so it cannot be disconnected/)
   assert.match(board.refuse({ verb: 'spectate', reason: 'no_body', server: 'sky' }), /nobody is on sky/)

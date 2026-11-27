@@ -106,7 +106,6 @@ import { isPoseFrame } from '../core/relay.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
   PICK_VERBS,
-  claimFailureText,
   claimRestoreTitle,
   createPickerBoard,
   pickTarget,
@@ -754,9 +753,10 @@ function createFrontLeg ({
   // the count the map keeps, in one call, because they are one fact. The board composes
   // that sentence, so this is the only place a counted refusal is composed. #435 found
   // the Spectate landing composing a sentence and leaving the map short; #616 found the
-  // Disconnect verb doing the same. A branch that composes one without this call is that
-  // defect again, and the guard in test/legs/picker-numbers.test.js names every sentence
-  // that is not counted here.
+  // Disconnect verb doing the same; #708 found the claim landing composing its own and
+  // counting nothing at all. A branch that composes one without this call is that defect
+  // again, and the guards in test/legs/picker-numbers.test.js name every sentence that is
+  // not counted here, including the sentence argument of every `endConfiguration` call.
   //
   // #670: the record is written here too, because a count with no line saying why is the
   // same defect read backwards. A caller hands over the reason, the sentence's own facts
@@ -1869,6 +1869,41 @@ function createFrontLeg ({
     }
     const written = sent.written
     leavePicker(client)
+    // The landing's finish stays on the library's writer, and the checks it does not take
+    // are the ones that cannot apply: it is not a relayed frame, so there is no policy
+    // question (the table replays a `finish_configuration`), and the interceptor's
+    // `finishSent` machinery is what sends it once and drops the library's own copy.
+    try {
+      client.write('finish_configuration', {})
+    } catch (error) {
+      // #708: the claim was granted and the write ending its phase threw, which is the
+      // one way a granted claim ends a client. The Spectate twin refuses this same
+      // failure through the one helper (`landSpectator`'s `finish_failed`), so this arm
+      // does too: the word the map is keyed by and the sentence the client is told arrive
+      // in one call, and the record that says which frame failed carries both.
+      //
+      // The map's word is `finish_failed` and the end line's reason stays `claim_failed`,
+      // which is the pair the Spectate landing already has (`spectate_refused` on the line,
+      // `finish_failed` in the map). The failure is the same write, so it is the same key:
+      // a verb-shaped word for it would be a second key for one number. The sentence is
+      // the claim family's own and is unchanged, byte for byte (`src/core/picker.js`).
+      const text = refuseAndCount({
+        reason: 'finish_failed',
+        verb: 'claim',
+        server: claim.server,
+        record: refusal => record(client, 'pickerClaimFinishFailed', {
+          server: claim.server,
+          error: String(error?.message ?? error).slice(0, 200),
+          ...refusal
+        })
+      })
+      endConfiguration(client, 'claim_failed', text)
+      return
+    }
+    // #435's rule, which this landing broke the same way until #708: the landing is
+    // counted after the write that ends the client's phase, because a phase the leg
+    // could not end is a client this lane refused. Counted before the write, one claim
+    // read as a landing and a refusal at once.
     metrics.claimLanded++
     record(client, 'pickerClaimLanded', {
       username: client.username ?? null,
@@ -1878,19 +1913,6 @@ function createFrontLeg ({
       frames: written,
       warm: outcome.warm ?? null
     })
-    // The landing's finish stays on the library's writer, and the checks it does not take
-    // are the ones that cannot apply: it is not a relayed frame, so there is no policy
-    // question (the table replays a `finish_configuration`), and the interceptor's
-    // `finishSent` machinery is what sends it once and drops the library's own copy.
-    try {
-      client.write('finish_configuration', {})
-    } catch (error) {
-      record(client, 'pickerClaimFinishFailed', {
-        server: claim.server,
-        error: String(error?.message ?? error).slice(0, 200)
-      })
-      endConfiguration(client, 'claim_failed', claimFailureText({ server: claim.server }))
-    }
   }
 
   // #269: the dialog is over. Once a client is landed in a body it is a channel on
