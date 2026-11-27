@@ -482,17 +482,33 @@ node src/driver/dev-proof.js --path .reports/dev-log.jsonl
 ```
 
 That writes `.reports/dev-two-client-witness.json`. Its steps are the table above, in its order,
-each `pending`. For each one, write what you saw and set the state to `seen` or `not-seen`. Then
-mark it complete and read it back:
+each `pending`. The check reads a row's `id` before anything else, then its `state` and `evidence`:
+
+- `id`, the step's name and the name `--verify` reads first. Keep it as written.
+- `state`, either `seen` or `not-seen`.
+- `evidence`, what you saw, in place of the `[MANUAL: …]` placeholder it ships with.
+
+Then set `completed` to `true`, copy the document to `testdata/dev-two-client-witness.json`, and
+read the copy back:
 
 ```bash
+cp .reports/dev-two-client-witness.json testdata/dev-two-client-witness.json
 node src/driver/dev-proof.js --verify
 ```
 
-It exits 1 and names the step that stops it: a step still `pending`, a step with no evidence,
-or a step you recorded as `not-seen` that nothing declares expected to be absent. Copy the
-completed document to `testdata/dev-two-client-witness.json` and the proof has a record in the
-repo, the way `testdata/driver-unmodded-witness.json` does for the driver lane.
+`--verify` reads `testdata/dev-two-client-witness.json`, which is why the copy comes first. With
+`--verify --witness .reports/dev-two-client-witness.json` it reads the document you edited instead.
+`testdata/driver-unmodded-witness.json` is the driver lane's record of the same kind. Run evidence
+stays out of git, and `.gitignore` is where that rule lives.
+
+It exits 1 and names what stops it. On the rows: a row that lost its `id`, a row whose `id` is no
+step of this run, and a row that sits in another step's place. On the steps: a step still `pending`,
+a step whose `evidence` is still the placeholder, and a step you recorded as `not-seen` that nothing
+declares expected to be absent.
+
+A wrong `id` fails by name, not by a count. A row that lost one is refused with
+`carries no step id`, and the message names the steps the rows must carry: `puppet-renders`,
+`puppet-walks`, and the rest of the steps above. A reworded `id` is quoted back with the same list.
 
 **A `not-seen` is a finding, unless that step is declared expected to be absent.** The
 declarations are `OPERATOR_STEPS`'s, and the row whose last cell names the tickets that close a gap
