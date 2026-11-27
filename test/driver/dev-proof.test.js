@@ -32,6 +32,9 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const CLI = path.join(ROOT, 'src', 'driver', 'dev-proof.js')
 
 const BODY = 'paper.monoplayer-dev.svc.cluster.local_25565'
+// The row the picker offers, as the front logs it: `server` is the address, `slug` is
+// `pickSlug` of it, and both levels' ids are the slug under their namespace (src/core/picker.js).
+const SERVER = 'paper.monoplayer-dev.svc.cluster.local:25565'
 const DRIVER = 'channel-driver'
 const SPECTATOR = 'channel-spectator'
 const AT = Date.parse('2026-11-26T20:00:00.000Z')
@@ -43,9 +46,13 @@ const at = seconds => new Date(AT + seconds * 1000).toISOString()
 function run () {
   return [
     { t: at(0), event: 'pickerServed', username: 'Attach', uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', frames: 28, servers: 1 },
+    { t: at(0), event: 'pickerPick', username: 'Attach', uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', id: 'monoplayer:pick/' + BODY, slug: BODY, server: SERVER, known: true, loginToPickMs: 12 },
+    { t: at(0), event: 'pickerVerb', username: 'Attach', uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', id: 'monoplayer:claim/' + BODY, verb: 'claim', slug: BODY, server: SERVER },
     { t: at(1), event: 'claimDial', body: BODY, server: 'paper', host: 'paper.monoplayer-dev.svc.cluster.local', port: 25565, name: 'Attach' },
     { t: at(2), event: 'attach', name: 'Attach', reason: 'claim', replayed: 30 },
     { t: at(3), event: 'pickerServed', username: 'Spectator', uuid: '512f9708-59a5-3d00-99bf-c3c0b5271822', frames: 28, servers: 1 },
+    { t: at(3), event: 'pickerPick', username: 'Spectator', uuid: '512f9708-59a5-3d00-99bf-c3c0b5271822', id: 'monoplayer:pick/' + BODY, slug: BODY, server: SERVER, known: true, loginToPickMs: 9 },
+    { t: at(3), event: 'pickerVerb', username: 'Spectator', uuid: '512f9708-59a5-3d00-99bf-c3c0b5271822', id: 'monoplayer:spectate/' + BODY, verb: 'spectate', slug: BODY, server: SERVER },
     { t: at(4), event: 'spectateAsked', body: BODY, server: 'paper', name: 'Spectator', state: 'attached', attached: true },
     {
       t: at(5),
@@ -195,7 +202,11 @@ test('the driver sees the spectator, or the row says the driver sees nobody', ()
 
 test('one of the two mode frames is not a spectator, and the row says which half is missing', () => {
   const records = run()
-  records[5] = { ...records[5], modeFrames: 1 }
+  // Found by event, not by position: the run's record list gains lines as the lane does,
+  // and an index here would silently start doctoring a picker record instead of the landing.
+  const landing = records.findIndex(record => record.event === 'spectateView')
+  assert.notEqual(landing, -1, 'the run holds a spectateView to doctor')
+  records[landing] = { ...records[landing], modeFrames: 1 }
 
   const mode = row('mode', records)
   assert.equal(mode.holds, false)
@@ -376,22 +387,23 @@ function witnessed (report = verdict(readingOf(run()))) {
 
 test('every record the reader relies on is one the runbook names and a leg writes', () => {
   const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
-  const service = fs.readFileSync(path.join(ROOT, 'src', 'service', 'monoplayer.js'), 'utf8')
-  const front = fs.readFileSync(path.join(ROOT, 'src', 'legs', 'live-front.js'), 'utf8')
-  const start = fs.readFileSync(path.join(ROOT, 'src', 'service', 'start-live.js'), 'utf8')
-  const owners = {
-    pickerServed: front,
-    pickerEmpty: front,
-    heartbeat: start,
-    claimDial: service,
-    attachDenied: front
-  }
+  // The three files a run's records are written from, and no fourth list. A hand map of which
+  // file writes which name is a third copy of that fact, and a name added to RECORDS without a
+  // row in it failed once with "a leg writes pickerPick" about a line live-front.js holds. A
+  // name is written by one of these or it is not written.
+  const writers = Object.fromEntries(
+    ['src/service/monoplayer.js', 'src/legs/live-front.js', 'src/service/start-live.js']
+      .map(file => [file, fs.readFileSync(path.join(ROOT, file), 'utf8')])
+  )
 
   assert.equal(new Set(RECORDS.map(record => record.name)).size, RECORDS.length, 'no record is listed twice')
   for (const { name } of RECORDS) {
     assert.match(readme, new RegExp('`' + name + '`'), 'the runbook names the ' + name + ' record')
-    const file = owners[name] ?? service
-    assert.match(file, new RegExp("log\\('" + name + "'"), 'a leg writes ' + name)
+    const wrote = Object.entries(writers)
+      .filter(([, text]) => text.includes("log('" + name + "'"))
+      .map(([file]) => file)
+    assert.ok(wrote.length > 0,
+      'a leg writes ' + name + ': no log(\'' + name + '\') in ' + Object.keys(writers).join(', '))
   }
 })
 
