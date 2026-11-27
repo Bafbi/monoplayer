@@ -16,9 +16,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  UNMODDED_PLACEHOLDER, UNMODDED_STATE_OK, UNMODDED_STEPS, UNMODDED_WITNESS_LANE, unmoddedWitness,
-  verifyUnmoddedWitness,
+  UNMODDED_LIST_NAME, UNMODDED_PLACEHOLDER, UNMODDED_STATE_OK, UNMODDED_STEPS, UNMODDED_WITNESS_LANE,
+  formatUnmoddedPass, gapLine, staleLine, unmoddedWitness, verifyUnmoddedWitness,
 } from '../../src/driver/checks.js'
+import { OPERATOR_LIST_NAME } from '../../src/driver/dev-proof.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const RUN = readFileSync(path.join(ROOT, 'src', 'driver', 'run.js'), 'utf8')
@@ -84,7 +85,8 @@ test('a witness marked completed over a step that is missing is refused, and nam
 test('a witness marked completed over a step still pending is refused, and names the step', () => {
   const witness = recorded()
   witness.steps = witness.steps.map(step => (step.id === 'move' ? { ...step, state: 'pending' } : step))
-  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'still pending: `move`' })
+  assert.deepEqual(verifyUnmoddedWitness(witness),
+    { ok: false, reason: 'still pending: `move`', gaps: [], stale: [] })
 })
 
 test('a step left on the placeholder evidence is refused, and named', () => {
@@ -103,13 +105,13 @@ test('an indented placeholder is still a placeholder, and is refused', () => {
     ? { ...step, evidence: '  ' + UNMODDED_PLACEHOLDER + ': notes]' }
     : step))
   assert.deepEqual(verifyUnmoddedWitness(witness),
-    { ok: false, reason: 'the placeholder `[MANUAL` is not evidence: `render`' })
+    { ok: false, reason: 'the placeholder `[MANUAL` is not evidence: `render`', gaps: [], stale: [] })
 })
 
 test('a step left with no evidence at all is refused, and named', () => {
   const witness = recorded()
   witness.steps = witness.steps.map(step => (step.id === 'rejoin' ? { ...step, evidence: '  ' } : step))
-  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'no evidence recorded: `rejoin`' })
+  assert.deepEqual(verifyUnmoddedWitness(witness), { ok: false, reason: 'no evidence recorded: `rejoin`', gaps: [], stale: [] })
 })
 
 test('a step recorded as anything but ok is refused, and named, whatever word the operator wrote', () => {
@@ -126,7 +128,7 @@ test('a step recorded as anything but ok is refused, and named, whatever word th
 test('a witness whose every step is recorded but which nobody marked completed is refused', () => {
   const witness = { ...recorded(), completed: false }
   assert.deepEqual(verifyUnmoddedWitness(witness),
-    { ok: false, reason: 'every step is recorded and the witness is not marked completed: set completed true' })
+    { ok: false, reason: 'every step is recorded and the witness is not marked completed: set completed true', gaps: [], stale: [] })
 })
 
 test('a row that records no step id is refused: the eight steps are named, not counted', () => {
@@ -157,12 +159,13 @@ test('a step recorded twice counts once, and the step it displaced is unwitnesse
     .map(step => (step.id === 'join' ? [...[step], { ...step }] : [step]))
     .flat()
   assert.deepEqual(verifyUnmoddedWitness(witness), {
-    ok: false, reason: 'unwitnessed: `rejoin`; recorded twice: `join`'
-  })
+    ok: false, reason: 'unwitnessed: `rejoin`; recorded twice: `join`', gaps: [], stale: [] })
 })
 
-test('a witness whose every step is ok, with evidence, and signed, passes', () => {
-  assert.deepEqual(verifyUnmoddedWitness(recorded()), { ok: true, reason: null })
+test('a witness whose every step is ok, with evidence, and signed, passes, with no gap and nothing stale', () => {
+  // #963: the pass carries the two lists the G0 command prints. Empty here, because the list
+  // declares no step expected absent and the operator recorded every one.
+  assert.deepEqual(verifyUnmoddedWitness(recorded()), { ok: true, reason: null, gaps: [], stale: [] })
 })
 
 // #943: the dev lane's witness accepts a `not-seen` on a step its list declares expected absent
@@ -178,6 +181,14 @@ const DECLARED_STEP = 'rejoin'
 const declaredList = () => UNMODDED_STEPS.map(step => (step.id === DECLARED_STEP
   ? { ...step, openUntil: Object.freeze([647]) }
   : step))
+// The declaration as a verdict carries it: the step's own words, the tickets the declared list
+// names, and what this witness recorded beside the step. Read from the list and the witness, so no
+// case types the sentence the command prints (#963).
+const gapOf = (witness, id) => {
+  const step = declaredList().find(entry => entry.id === id)
+  const row = witness.steps.find(entry => entry.id === id)
+  return { id, claim: step.claim, openUntil: step.openUntil, evidence: row.evidence }
+}
 const notSeen = (witness, over = {}) => witness.steps.map(step => (step.id === DECLARED_STEP
   ? { ...step, state: 'not-seen', evidence: 'relaunched, and the client reattached at the spawn point', ...over }
   : step))
@@ -192,13 +203,16 @@ test('a step its list declares expected absent verifies when it is recorded not-
   assert.ok(checklist.limitations.some(line => line.includes('The step \'' + DECLARED_STEP + '\' is expected to be not-seen today: #647 closes it')),
     'the generated checklist names the declared step and the ticket that closes it: ' + checklist.limitations.join(' | '))
   assert.equal(checklist.steps.length, declaredList().length, 'and still writes one row per step')
-  assert.deepEqual(verdict, { ok: true, reason: null },
-    'an honest run with the declared gap is a record, not a finding: ' + verdict.reason)
+  assert.deepEqual(verdict, {
+    ok: true, reason: null, gaps: [gapOf(witness, DECLARED_STEP)], stale: []
+  }, 'an honest run with the declared gap is a record, not a finding: ' + verdict.reason)
   // The other half of the declaration: a fix landing must not turn an honest record red. The step is
-  // seen, the list still declares it, and the record passes — the dev lane prints a `stale
-  // declaration:` line for the operator, and the G0 command has no line to print yet (#963).
-  assert.deepEqual(verifyUnmoddedWitness(recorded(), { steps: declaredList() }),
-    { ok: true, reason: null }, 'a declared step the operator did see is still a record')
+  // seen, the list still declares it, and the record passes — carrying the declaration it outlived,
+  // which #963 prints as the dev lane's `stale declaration:` line.
+  const seen = recorded()
+  assert.deepEqual(verifyUnmoddedWitness(seen, { steps: declaredList() }),
+    { ok: true, reason: null, gaps: [], stale: [gapOf(seen, DECLARED_STEP)] },
+    'a declared step the operator did see is still a record')
 })
 
 test('a not-seen on a step nothing declares is refused, in a sentence naming the step', () => {
@@ -208,7 +222,8 @@ test('a not-seen on a step nothing declares is refused, in a sentence naming the
     ok: false,
     reason: 'not seen: `rejoin` (relaunched, and the client reattached at the spawn point): ' +
       'no step this run reads is declared expected absent, so every step is recorded `ok`. ' +
-      'A step recorded `not-seen` passes only when the step list declares it expected absent with `openUntil`, naming the tickets that close it'
+      'A step recorded `not-seen` passes only when the step list declares it expected absent with `openUntil`, naming the tickets that close it',
+    gaps: [], stale: []
   }, 'a not-seen is the finding it always was unless the list\'s own entry accounts for it')
 })
 
@@ -249,7 +264,7 @@ test('the runbook states the rule for a step expected absent, in the section an 
 
 test('the witness is read as a document: no file, another lane, no rows', () => {
   assert.deepEqual(verifyUnmoddedWitness(null),
-    { ok: false, reason: 'the unmodded witness file is missing or is not a document: run --lane unmodded first' })
+    { ok: false, reason: 'the unmodded witness file is missing or is not a document: run --lane unmodded first', gaps: [], stale: [] })
   assert.match(verifyUnmoddedWitness({ ...recorded(), lane: 'driver' }).reason,
     /^the witness names lane "driver", not "unmodded"$/)
   assert.match(verifyUnmoddedWitness({ ...recorded(), steps: undefined }).reason,
@@ -262,4 +277,120 @@ test('\`--verify-g0\` refuses with this rule, and no longer on the flag alone', 
   assert.doesNotMatch(RUN, /witness\.completed !== true/,
     'the one-line flag check #922 found is gone: a completed flag is no longer the whole of the human half')
   assert.match(RUN, /unmoddedWitness\(\{ server \}\)/, 'the checklist the lane writes is the checker\'s own document')
+})
+
+// #963: the G0 pass printed one sentence and named nothing about the gap it accepted, so a pass over
+// a declared hole read exactly like a pass where every step held — and a declaration its witness had
+// outlived was invisible to everybody. The verdict now carries the two lists and src/driver/checks.js
+// words them; src/driver/run.js prints what `formatUnmoddedPass` returns and types no sentence of
+// its own.
+const printed = verdict => formatUnmoddedPass(verdict).split('\n')
+
+test('a pass accepting two declared gaps words both, and says "declared gaps"', () => {
+  // The sentence carries an article, so the count reaches it: "a declared gap" cannot stand for two.
+  const two = UNMODDED_STEPS.map(step => (['move', 'rejoin'].includes(step.id)
+    ? { ...step, openUntil: Object.freeze([647]) }
+    : step))
+  const witness = recorded()
+  witness.steps = witness.steps.map(step => (step.id === 'move' || step.id === 'rejoin'
+    ? { ...step, state: 'not-seen', evidence: 'what I saw: ' + step.id }
+    : step))
+  const verdict = verifyUnmoddedWitness(witness, { steps: two })
+  assert.equal(verdict.ok, true, verdict.reason)
+  assert.equal(verdict.gaps.length, 2)
+  const lines = printed(verdict)
+  assert.equal(lines.length, 3, 'the sentence and one line per gap')
+  assert.ok(lines[0].includes('`move`, `rejoin` are `not-seen`'), 'both gaps are named: ' + lines[0])
+  assert.ok(lines[0].includes('declared gaps'), 'and the plural is worded: ' + lines[0])
+  assert.doesNotMatch(lines[0], /a declared gaps/)
+})
+
+test('a pass prints one line per declared gap, naming the step, what the operator saw, and the tickets', () => {
+  const witness = recorded()
+  witness.steps = notSeen(witness)
+  const verdict = verifyUnmoddedWitness(witness, { steps: declaredList() })
+  const lines = printed(verdict)
+  assert.equal(lines.length, 1 + verdict.gaps.length, 'the sentence, then one line per gap, and nothing else')
+  // The words are the dev lane's, out of one builder: the line `--verify` prints for the same gap.
+  assert.equal(lines[1], gapLine(verdict.gaps[0], { withEvidence: true }),
+    'the gap line is the dev lane’s own, so the two commands cannot word one gap differently')
+  assert.ok(lines[1].startsWith('known gap: ' + verdict.gaps[0].claim), 'the step’s own sentence leads it')
+  assert.ok(lines[1].includes('and #647 closes it'), 'and the ticket that closes it is named: ' + lines[1])
+  assert.ok(lines[1].includes(verdict.gaps[0].evidence), 'and what the operator recorded')
+})
+
+test('a pass over a declared gap does not claim every step was seen, and does not claim one was skipped', () => {
+  const gapped = recorded()
+  gapped.steps = notSeen(gapped)
+  const sentence = printed(verifyUnmoddedWitness(gapped, { steps: declaredList() }))[0]
+  assert.ok(sentence.includes('records every step'), 'the witness did record one: as `not-seen`')
+  assert.ok(sentence.includes('`' + DECLARED_STEP + '` is `not-seen`'), 'and the gap is named: ' + sentence)
+  assert.ok(sentence.includes('declared gap'), 'and it is named as the gap this pass accepts')
+  assert.match(printed(verifyUnmoddedWitness(recorded()))[0], /records every step `ok`\.$/,
+    'a witness that saw every step says so, in the state it recorded')
+})
+
+test('a declaration its witness outlived is printed, names the list to edit, and the pass still stands', () => {
+  const verdict = verifyUnmoddedWitness(recorded(), { steps: declaredList() })
+  assert.equal(verdict.ok, true, 'a fix landing must not turn an honest record red')
+  const lines = printed(verdict)
+  assert.equal(lines.length, 1 + verdict.stale.length)
+  assert.match(lines[1], /^stale declaration: /, 'the dev lane’s own word for it, so a reader meets one sentence')
+  assert.ok(lines[1].includes(verdict.stale[0].claim), 'the step it outlived is named')
+  assert.ok(lines[1].includes(UNMODDED_STATE_OK + ', though ' + UNMODDED_LIST_NAME),
+    'the row\'s own word, and the list this lane edits rather than the dev lane\'s: ' + lines[1])
+  assert.ok(lines[1].includes(UNMODDED_LIST_NAME + ' still declares it expected absent'))
+  assert.ok(lines[1].includes('#647 closes it'), 'and the tickets the declaration names')
+  assert.ok(lines[1].includes('drop the step'), 'and what to do about it')
+  // Nothing here reads a ticket's state: the gate is offline and no command can. So the line claims
+  // what a run can see — the step held — and names the ticket a reviewer checks, which is the answer
+  // #963 allows when the state is out of reach.
+  assert.doesNotMatch(lines[1], /#647 lands/, 'and it claims nothing about a ticket it cannot read')
+})
+
+test('`--verify-g0` prints the formatter’s lines, words nothing itself, and still exits 0', () => {
+  assert.match(RUN, /formatUnmoddedPass\(witnessVerdict\)/, 'the command prints what the module words')
+  assert.match(RUN, /formatUnmoddedPass\(witnessVerdict\)\)\n\s*return 0/,
+    'and a pass, gap or stale declaration included, is still a pass: the exit stays 0')
+  assert.doesNotMatch(RUN, /records every step/,
+    'and the sentence that claimed every step was seen is gone from the command')
+  assert.equal((RUN.match(/witnessVerdict\.(gaps|stale)/g) ?? []).length, 0,
+    'the command decides nothing about a gap: the formatter reads the verdict')
+})
+
+test('the gap and stale lines live in checks.js, and the dev lane reads them from there', () => {
+  // Each printed list name is the name of an export in the module that owns it, so a rename cannot
+  // leave a stale declaration line telling a reader to edit a constant that no longer exists.
+  assert.match(CHECKS, new RegExp('export const ' + UNMODDED_LIST_NAME + '\\b'),
+    'the G0 lane\'s list name names an export in checks.js')
+  assert.match(DEV_PROOF, new RegExp('export const ' + OPERATOR_LIST_NAME + '\\b'),
+    'and the dev lane\'s names an export in dev-proof.js')
+  assert.match(CHECKS, /export const gapLine/, 'src/driver/checks.js holds the gap line')
+  assert.match(CHECKS, /export const staleLine/, 'and the stale line beside it')
+  assert.match(CHECKS, /export function formatUnmoddedPass/, 'and the G0 pass that prints both')
+  assert.doesNotMatch(DEV_PROOF, /^const gapLine/m, 'the dev lane no longer words its own copy')
+  assert.doesNotMatch(DEV_PROOF, /^const staleLine/m, 'nor the stale one')
+  assert.match(DEV_PROOF, /import \{[^}]*\bgapLine\b[^}]*\} from '\.\/checks\.js'/,
+    'it imports both, so one gap is one sentence across the two lanes')
+  assert.match(DEV_PROOF, /import \{[^}]*\bstaleLine\b[^}]*\} from '\.\/checks\.js'/)
+})
+
+test('the runbook tells a reviewer the two lines a G0 pass prints, by the labels the builders word', () => {
+  const from = PAGE.indexOf('## The G0 verdict')
+  const section = PAGE.slice(from, PAGE.indexOf('## Client parity lane'))
+  assert.ok(from !== -1 && section.length > 0, 'the runbook has the G0 verdict section')
+  const witness = recorded()
+  witness.steps = notSeen(witness)
+  const verdict = verifyUnmoddedWitness(witness, { steps: declaredList() })
+  const seen = verifyUnmoddedWitness(recorded(), { steps: declaredList() })
+  // The label out of each builder, not out of a literal here: a builder that reworded its line would
+  // send the reader to a page naming a line that no longer exists.
+  const labels = [
+    gapLine(verdict.gaps[0], { withEvidence: true }),
+    staleLine(seen.stale[0], { list: UNMODDED_LIST_NAME, state: UNMODDED_STATE_OK })
+  ].map(line => line.slice(0, line.indexOf(':') + 1))
+  for (const label of labels) {
+    assert.ok(section.includes(label), 'the page tells the reader the line to look for: ' + label)
+  }
+  assert.match(section, /not-seen/, 'and which record the gap line is about')
 })
