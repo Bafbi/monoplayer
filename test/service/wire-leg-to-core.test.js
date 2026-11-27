@@ -188,14 +188,17 @@ test('#592 a leg missing a call-in is named, and the required ones are named apa
 test('#605 a backend leg missing a call is named, and only a required row hides a client', () => {
   const { core } = recordingCore(BACKEND_LEG_CALL_INS)
 
-  const absent = recordingLeg(BACKEND_LEG_CALL_INS, { omit: ['chat', 'answerHeldGate', 'setErrorHandler'] })
+  const OMITTED = ['chat', 'answerHeldGate', 'setErrorHandler']
+  const absent = recordingLeg(BACKEND_LEG_CALL_INS, { omit: OMITTED })
   const wiring = wireLegToCore({ core, leg: absent.leg, table: BACKEND_LEG_CALL_INS })
   assert.deepEqual(wiring.missing, ['setErrorHandler', 'answerHeldGate', 'chat'],
     'the report names the missing registration and both missing calls, in table order')
   assert.deepEqual(wiring.requiredMissing, [],
     'and none of them is a row a client cannot be served without: the frame and end registrations are')
+  // The expectation names the rows this case keeps, rather than asking the leg what it
+  // carries: a report that counted an omitted call as carried fails here.
   assert.deepEqual(wiring.called,
-    BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call' && typeof absent.leg[row.name] === 'function').map(row => row.name),
+    BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call' && !OMITTED.includes(row.name)).map(row => row.name),
     'the carried calls are the call rows this leg answers: the delivery and the dial, and not the two it omits')
 })
 
@@ -234,10 +237,14 @@ test('#605 a leg is measured against the table it was handed, and against no oth
   const front = recordingLeg(FRONT_LEG_CALL_INS).leg
   const measuredAsBackend = wireLegToCore({ core, leg: front, table: BACKEND_LEG_CALL_INS })
   // #726: the two interfaces share the delivery (`write`, `writeRaw`, `end`), so a front
-  // leg answers those rows and lacks the rest. The expectation is derived from the leg,
-  // so a row the two tables come to share moves this case with them.
+  // leg answers those rows and lacks the rest. The expectation is the backend table minus
+  // the rows both tables declare, which is a fact about the two interfaces and not about
+  // this leg: a leg that answered a backend row of its own would fail here.
+  const shared = BACKEND_LEG_CALL_INS
+    .filter(row => FRONT_LEG_CALL_INS.some(declared => declared.name === row.name))
+    .map(row => row.name)
   assert.deepEqual(measuredAsBackend.missing,
-    BACKEND_LEG_CALL_INS.filter(row => typeof front[row.name] !== 'function').map(row => row.name),
+    BACKEND_LEG_CALL_INS.map(row => row.name).filter(name => !shared.includes(name)),
     'a front leg measured against the backend table carries the delivery both interfaces declare and nothing else of it')
   assert.ok(measuredAsBackend.missing.includes('setFrameHandler') && measuredAsBackend.missing.includes('connect'),
     'so the registrations and the dial it does not carry are the holes a wiring mistake reads')

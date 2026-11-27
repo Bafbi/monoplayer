@@ -993,11 +993,11 @@ finishConfigurationFrame
 preAuthStats
 ```
 
-Two members are left for the blocks below, because a row cannot name either. A reading
-is a value rather than a method: `channels` is the board of connections a body holds, and
-`target` is the address a leg keeps open. `close()` is a method no core code calls: every
-teardown in `src/ladder/rig.js` and `src/service/start-live.js` awaits it, so each block
-names it and the guard asks for it by name. `test/tooling/product-core-map.test.js` holds
+Three members are left for the blocks below, and a row cannot name any of them. A
+reading is a value rather than a method: `channels` is the board of connections a body
+holds, and `target` is the address a leg keeps open. `close()` is a method no core code
+calls: the rig's teardown and the shutdown after a failed start await it, and the signal
+handler calls it and exits, so each block names it and the guard asks for it by name. `test/tooling/product-core-map.test.js` holds
 both blocks to the calls `src/service/monoplayer.js` makes, so a member the core starts
 calling and a block omits fails there, and so does a name a leg no longer answers (#690,
 #712).
@@ -1024,9 +1024,9 @@ frontLeg = {                      // a body's channels: its driver and its spect
 A write without `channel` goes to every channel on the body: its driver, and the
 spectators watching it. A write with one goes to that connection alone, which is
 how a spectator is handed its body's replay without the driver receiving it twice. A
-write that reached no channel answers false, and the core counts the frame it did not
-deliver. `end` ends every channel of the body, for a kick or a denial; `close` ends the
-socket and the listener and resolves once it has.
+write that reached no channel is a dropped frame, and the caller can tell it from a delivered
+one. `end` ends every channel of the body, for a kick or a denial;
+`close` ends the socket and the listener and resolves once it has.
 The leg keeps one channel per connection: its role, what it has been sent, and its
 own client information (`src/core/channels.js`). The claim decides who drives
 (`src/core/claims.js`); a channel is what each connection is handed, and a

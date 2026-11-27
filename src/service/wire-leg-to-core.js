@@ -5,9 +5,9 @@
 // leg (`kind: 'register'`, with the method it reaches and the function it hands
 // over), or a member the core calls on the leg itself (`kind: 'call'`: the delivery
 // a frame goes through, the dial a body opens with, and the reads the core makes).
-// `required` says whether a leg without the row hides a client: no default inside the
-// leg stands behind a required row, and an optional one keeps a fallback the core's
-// own code names.
+// `required` says whether a leg without the row hides a client. A leg keeps a default
+// behind every call-in, and the required ones answer a refusal: the leg takes every
+// client and serves none of them, without saying so.
 //
 // A row names a member and states no shape. What the core hands over belongs to the
 // call site in src/service/monoplayer.js, and what it reads back belongs where the
@@ -47,9 +47,10 @@
 // one is named here. `missing` names every declared call-in the leg does not carry,
 // and the core puts those names on its start line, one list per interface.
 // `called` names every row the core calls on the leg rather than registers: the
-// delivery, the dial and the reads alike. The core learns which optional ones it
-// carries from that list instead of a `typeof` guard in its own body (backendCarries,
-// src/service/monoplayer.js).
+// delivery, the dial and the reads alike. The backend's two optional calls are read from
+// that list rather than a `typeof` guard in the core's body (backendCarries,
+// src/service/monoplayer.js); the front's three are still tested by `typeof` where they
+// are used, so for those the row's work is the name on the report.
 // `requiredMissing` and `wired` have one reader each, and both are
 // test/service/wire-leg-to-core.test.js: the subset the leg's own default hides, and
 // the rows it installed, held to the table rather than to a lane. A missing one is
@@ -143,16 +144,16 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   // each of the three is required. The shape of a call is its call site's, and the rule
   // a shape cannot state — which channel a write reaches — is the page's.
   {
-    // #269: clientbound at packet level. A write with no `channel` reaches every channel
-    // of the body, and one with `channel` reaches that connection alone. A write that
-    // reached nowhere answers false, and the core counts what it did not deliver.
+    // #269: clientbound delivery at packet level. A leg that cannot send one serves a
+    // client nothing. Which channels a write reaches, and what a caller reads off its
+    // answer, are the page's rule and the answer's own declaration, not a row's.
     kind: 'call',
     name: 'write',
     required: true
   },
   {
     // The frame-level half of the same delivery: a cached or relayed frame, sent as the
-    // bytes that arrived rather than re-encoded. It answers false the same way.
+    // bytes that arrived rather than re-encoded.
     kind: 'call',
     name: 'writeRaw',
     required: true

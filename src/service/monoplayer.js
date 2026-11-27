@@ -12,7 +12,7 @@
 // interface, one row per call-in.
 //
 // The rest of each interface is what a row cannot name: the readings the core takes
-// off a leg, and `close()`, which no code here calls and every teardown awaits. Those
+// off a leg, and `close()`, which no code here calls and the teardowns await. Those
 // are the two blocks under the section "Interface for the live legs" in
 // docs/product-core.md.
 // test/tooling/product-core-map.test.js holds the blocks to the calls this module

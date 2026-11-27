@@ -312,8 +312,8 @@ test('the interface section points at the module that declares the call-in table
 // The scan is bounded to the section, to its prose, and to the setter convention, because
 // a `call` row (chat, preAuthStats) is named with an ordinary word that a sentence may
 // use for its own purpose. The fenced blocks are cut before the scan: they hold the
-// members no table names, and `setTarget` is one. A member whose name opens with `set`
-// is not a registration, and a block is not prose (#690).
+// members no table names, so a `set`-shaped name there is not a registration. A block is
+// not prose (#690, #726).
 test('the interface section names no call-in the two tables do not declare', () => {
   const declared = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS].map(row => row.name)
   const prose = interfaceSection().replace(/```[\s\S]*?```/g, '')
@@ -336,9 +336,9 @@ test('the interface section names no call-in the two tables do not declare', () 
 //
 // What this case does not read: a method written without the `core.` prefix. The section
 // names a core method bare too (`backendFrame`, `chat`, one paragraph down), and a bare
-// name is the same shape as a leg's own member (`claimOn`, `write`, `end`, in the fenced
-// blocks below), so no rule here can tell the two apart. The prefix is what says "this is
-// the core's", and a sentence that claims a call without it is the review's to catch.
+// name is the same shape as a leg's own member, which the fenced blocks below hold, so no
+// rule here can tell the two apart. The prefix is what says "this is the core's", and a
+// sentence that claims a call without it is the review's to catch.
 test('the interface section names no core method the two tables do not reach', () => {
   const reached = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]
     .map(row => row.reaches)
