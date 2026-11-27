@@ -582,9 +582,9 @@ export function createPickerBoard ({ claims = null, channels = null } = {}) {
     }
     switch (reason) {
       // #315: the client clicked nothing, so a lane with nothing to offer speaks
-      // about itself. `empty_offer` is this module's own word for that sentence and
-      // is not a counted reason: nothing failed, so the leg logs it and counts no
-      // refusal.
+      // about itself. #670: the leg counts this one, because a client it ends is a
+      // client the refusal map answers for, whether the lane turned a request down or
+      // had nothing to give. This module names the sentence and counts nothing.
       case 'empty_offer':
         return pickEmptyText()
       case 'picker_unavailable':

@@ -132,6 +132,46 @@ test("#417 a connection's login-to-pick age is its own, and absent when it never
   assert.equal(elapsedSince(1000, 1000), 0, 'and a pick in the same millisecond is 0, which is real')
 })
 
+// Every `refuseAndCount({...})` call in the leg, read by brace matching so a record
+// object nested in one site is not mistaken for the end of it.
+function refusalSites (source) {
+  const sites = []
+  for (let at = source.indexOf('refuseAndCount({'); at !== -1; at = source.indexOf('refuseAndCount({', at + 1)) {
+    const from = source.indexOf('{', at)
+    let depth = 0
+    let end = -1
+    for (let i = from; i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1
+      else if (source[i] === '}') {
+        depth -= 1
+        if (depth === 0) { end = i; break }
+      }
+    }
+    assert.notEqual(end, -1, 'the refusal site at byte ' + at + ' closes')
+    sites.push(source.slice(from + 1, end))
+  }
+  return sites
+}
+
+// The helper's own body: what it writes is the rule, so the guard reads it rather than
+// trusting a comment.
+function helperBody (source) {
+  const at = source.indexOf('function refuseAndCount (')
+  assert.notEqual(at, -1, 'the helper exists')
+  // The body's brace, not the one the parameters are destructured in.
+  const from = source.indexOf(') {', at) + 2
+  assert.ok(from > 2, 'the helper has a body')
+  let depth = 0
+  for (let i = from; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(from + 1, i)
+    }
+  }
+  assert.fail('the helper closes')
+}
+
 // The word one counted refusal passes, read out of its own object literal, so the site
 // list below names reasons and not line numbers.
 function refusedReason (body) {
@@ -155,23 +195,24 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   const helper = SOURCE.slice(start, start + 500)
   assert.match(helper, /bumpReason\(/, 'the helper is what bumps the map')
 
-  // Eight refusal sites, each named by the word its own record carries: the two
-  // dialogs the leg could not write, the three a click's own answer refuses (a frame
-  // that did not read, and a server the offer does not carry at either level), the
-  // claim the core answers, the Spectate landing's own refusals, and the Disconnect
-  // verb (#616) refused because a claim holds the body. The key each one passes is
-  // asserted too, because a site swapped to the wrong word still counts and still
-  // lies about why.
+  // Nine refusal sites, each named by the word its own record carries: the two
+  // dialogs the leg could not write, the lane with no rows to offer (#670), the three a
+  // click's own answer refuses (a frame that did not read, and a server the offer does
+  // not carry at either level), the claim the core answers, the Spectate landing's own
+  // refusals, and the Disconnect verb (#616) refused because a claim holds the body.
+  // The key each one passes is asserted too, because a site swapped to the wrong word
+  // still counts and still lies about why.
   //
   // #595 moved the choice of reason into src/core/picker.js (click): the three a
   // click's answer refuses pass the reason the board decided instead of one read from
   // the frame, because the level a click came from is now one of the board's answers
   // rather than a branch in the leg.
-  const sites = [...SOURCE.matchAll(/refuseAndCount\(\{([^}]*)\}\)/g)]
-    .map(match => refusedReason(match[1]))
+  const sites = refusalSites(SOURCE)
+    .map(refusedReason)
     .sort()
   assert.deepEqual(sites, [
     "'disconnect_claimed'",
+    "'empty_offer'",
     "'picker_unavailable'",
     "'picker_unavailable'",
     'answer.reason',
@@ -181,16 +222,15 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
     'reason'
   ].sort(), 'every refusal site counts, and each passes the reason its own record carries')
 
-  // Three sentences are composed without a count, and each is here with its reason:
-  // a lane that offers no rows tells the client so and refused no request (#315);
-  // the verb guard answers a verb no lane carries, which is unreachable today; and
-  // the leg's own spectate() seam answers no_client for a name no connection holds,
-  // and that sentence reaches no client. A fourth has to pick a side: count it
-  // through the helper, or say here why it counts nothing.
-  assert.equal((SOURCE.match(/pickerBoard\.refuse\(/g) ?? []).length, 4,
-    'the counted refusal the helper composes, and the three sentences that count nothing')
-  assert.match(SOURCE, /pickerBoard\.refuse\(\{ reason: 'empty_offer' \}\)/,
-    'the empty offer speaks and counts nothing')
+  // Two sentences are composed without a count, and each is here with its reason: the
+  // verb guard answers a verb no lane carries, which is unreachable today; and the leg's
+  // own spectate() seam answers no_client for a name no connection holds, and that
+  // sentence reaches no client, because the lookup that would have received it found no
+  // connection. #670 settled the third: a lane with no rows to offer used to speak here,
+  // and it counts through the helper now, because a client the picker ends is a client
+  // the map answers for whether the lane turned a request down or had nothing to give.
+  assert.equal((SOURCE.match(/pickerBoard\.refuse\(/g) ?? []).length, 3,
+    'the counted refusal the helper composes, and the two sentences that count nothing')
   assert.match(SOURCE, /pickerBoard\.refuse\(\{ verb: answer\.verb, server: server\.name \}\)/,
     'the unbuilt-verb guard speaks and counts nothing')
   assert.match(SOURCE, /pickerBoard\.refuse\(\{ verb: 'spectate', reason: 'no_client', server: server \?\? body \}\)/,
@@ -214,9 +254,12 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   const landing = SOURCE.slice(SOURCE.indexOf('function landSpectator'), SOURCE.indexOf('function sendBodyConfiguration'))
   assert.ok(landing.length > 0, 'the seam this guard reads is still the leg\'s own')
   assert.match(landing, /const refused = reason => \{/, 'the refusals return through one closure')
-  assert.match(landing, /refuseAndCount\(\{ verb: 'spectate', reason, server: named \}\)/,
-    'and it is the counted helper that composes their sentence')
-  assert.match(landing, /record\(client, 'spectateRefused', \{/, 'and what records them')
+  // The parts, not one exact call: a field added to the request is a normal change and
+  // must not red this guard.
+  assert.match(landing, /refuseAndCount\(\{/, 'and the counted helper composes their sentence')
+  assert.match(landing, /verb: 'spectate',/, 'for the Spectate verb')
+  assert.match(landing, /record: \w+ => record\(client, 'spectateRefused', \{/,
+    'which hands it to the record they are read by, and that record stamps the channel')
   assert.equal((landing.match(/watching: false/g) ?? []).length, 2,
     'the two shape literals are the answer the leg builds when it has no core, and the closure, and no branch builds a third')
 
@@ -229,4 +272,55 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   assert.ok(landingWrite > 0, 'the write that ends the phase is still in this function')
   assert.ok(landingCount > landingWrite,
     'the landing is counted after the phase-end write, so a write that threw is not a landing')
+})
+
+// #670: the count and the record that explains it are one call, in both directions.
+// #417 and #616 each found a sentence composed and not counted. These are the mirror:
+// a dialog the leg could not write was counted (#616), and its own line carried only
+// the error, so the reason an operator greps for lived on `configurationEnded` and on
+// no refusal record at all. The fix is not a field on two lines: the helper writes the
+// record, so a site cannot count without telling a reader why.
+test('#670 every counted refusal writes its own record, and the record carries the reason and the sentence', () => {
+  const sites = refusalSites(SOURCE)
+  assert.ok(sites.length >= 9, 'the leg counts nine refusals, and the guard reads each site: ' + sites.length)
+  // The scanner looks for the call as it is written today. A site spelled around it, with
+  // a space before the argument or an alias, would pass every assertion below unseen.
+  assert.equal((SOURCE.match(/refuseAndCount\s*\(/g) ?? []).length, sites.length + 1,
+    'every call to the helper is one the scan reads, beside the one that defines it')
+
+  // The record is a closure the helper calls, so the event name stays a literal at the
+  // site (#416), and the pair the helper hands over, the reason and the sentence, can only
+  // arrive at the site that writes them. A site may take that pair by name instead of
+  // spreading it, which is the same rule.
+  const unnamed = sites.filter(site => {
+    const named = site.match(/(^|[^.\w])record:\s*(\w+|\(\s*\{[^}]*\}\s*\))\s*=>/)
+    if (named === null) return true
+    if (named[2].startsWith('(')) return false
+    return !site.includes('...' + named[2])
+  })
+  assert.deepEqual(unnamed, [],
+    'every counted refusal names the record it writes and spreads the pair the helper hands it: ' +
+      unnamed.length + ' do not')
+
+  const helper = helperBody(SOURCE)
+  assert.match(helper, /\(\{\s*reason,\s*text\s*\}\)/,
+    'the helper hands that record the reason the map was keyed by and the sentence the client was told')
+  assert.equal((helper.match(/\blog\(/g) ?? []).length, 0,
+    'and the helper names no event itself, so a comment cannot stand in for the line a reader greps')
+
+  // The two dialogs the leg could not write are counted refusals (#616), so each names
+  // its own line: a reader who greps the record gets the reason and the sentence the
+  // client was given, and needs no second record to learn them.
+  for (const event of ['pickerDialogFailed', 'pickerServerDialogFailed']) {
+    assert.ok(sites.some(site => site.includes("log('" + event + "'")),
+      event + ' is a counted refusal, and its own record carries the reason')
+  }
+
+  // #670: the empty offer is the second asymmetry. It counts now, so the word the map is
+  // keyed by is the record's `reason`, and the offer's own cause rides beside it: that
+  // code, not the sentence's word, is what an operator repairs a file from (#372).
+  const empty = sites.filter(site => site.includes("'empty_offer'"))
+  assert.equal(empty.length, 1, 'the lane with no rows counts once, through the helper')
+  assert.match(empty[0], /reason: 'empty_offer'/, 'and it counts under the word the board composes its sentence from')
+  assert.match(empty[0], /offerReason: offer\.reason/, 'while the offer own cause, which names the file to repair, rides beside it')
 })

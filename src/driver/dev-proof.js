@@ -314,6 +314,9 @@ function refusalBecause (reading) {
   }
   return refusals.map(record =>
     eventOf(record) + ': ' + (record.reason ?? 'no reason recorded') +
+    // #670: a pickerEmpty keeps the offer's own cause beside the word the refusal map is
+    // keyed by, and that code is what an operator repairs the list from (#372).
+    (typeof record.offerReason === 'string' ? ' (' + record.offerReason + ')' : '') +
     (typeof record.text === 'string' ? ' — ' + record.text : '')).join('; ')
 }
 
