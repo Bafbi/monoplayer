@@ -376,12 +376,14 @@ export function createAllowedRoute ({
     const port = wanted?.port
     const hostReason = hostRefusal(host)
     if (hostReason !== null) {
-      log('panelAllowedInvalid', { puppet: puppet.name, field: 'host', value: host === '' ? null : host })
+      // The record keeps the two fields it has always carried, so a reader of an older line and a
+      // reader of this one grep the same names, and `field` is the new fact: which half to fix.
+      log('panelAllowedInvalid', { puppet: puppet.name, field: 'host', host: host === '' ? null : host, port: Number.isInteger(port) ? port : null })
       return send(res, 400, TEXT, addressSentence('host', hostReason, wanted?.host ?? null) + '\n')
     }
     const portReason = portRefusal(port)
     if (portReason !== null) {
-      log('panelAllowedInvalid', { puppet: puppet.name, field: 'port', value: port ?? null })
+      log('panelAllowedInvalid', { puppet: puppet.name, field: 'port', host: host === '' ? null : host, port: Number.isInteger(port) ? port : null })
       return send(res, 400, TEXT, addressSentence('port', portReason, port ?? null) + '\n')
     }
 

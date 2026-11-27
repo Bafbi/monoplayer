@@ -677,6 +677,9 @@ test('#890 the bracketed and the unbracketed IPv6 host are one address, so one r
     assert.equal(second.status, 200, 'the bare spelling is a host a dial can take')
     const body = await second.json()
     assert.equal(body.changed, false, 'one address, one row, in either spelling')
+    // The print case for the bare spelling: what the operator typed back is the address the
+    // picker writes, not the string they sent.
+    assert.equal(body.server, IPV6_WRITTEN, 'the bare spelling is named back in brackets')
     assert.equal(body.count, 2)
     assert.equal(rig.state.patches.length, 1, 'the second add wrote nothing')
   } finally {
