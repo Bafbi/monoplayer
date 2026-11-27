@@ -157,6 +157,19 @@ function record (id, name, status, info = null) {
   }
 }
 
+// #934: the cut N13 compares belongs to the first join. N10's reattach publishes a
+// second event, and the frames that replay wrote are not the ones the first client
+// decoded, so the first wins and a later attach never replaces it. The rule is a
+// function because no case can reach runOnline()'s body: test/ladder/online.test.js
+// drives two attach events through this one.
+export function recordAttachCut (core) {
+  let cut = null
+  core.on('attach', event => {
+    if (cut === null) cut = event
+  })
+  return () => cut
+}
+
 // Trim the captured-versus-replayed name comparison for the run report. A
 // mismatch keeps where it starts and the first names of each side; a match
 // keeps only the counts.
@@ -635,14 +648,10 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // client decoded with the replay, and a serverbound settings frame is on
     // neither side of that cut. What the leg is sent for a real backend is N14's
     // subject, read off the leg's own write above.
-    let attachCut = null
     core.start()
-    // N13 checks the first replay this lane wrote. A later reattach (N12) must not
-    // replace the cut: the captured frames it would compare against belong to the
-    // first.
-    core.on('attach', event => {
-      if (attachCut === null) attachCut = event
-    })
+    // N13 checks the first replay this lane wrote, and recordAttachCut is what holds
+    // that to the first attach (#934).
+    const attachCutOf = recordAttachCut(core)
 
     // --- run: backend connect, readiness, front listen ---
     // Reconnect is another stream's slice. A backend drop here fails the run;
@@ -724,6 +733,7 @@ export async function runOnline (argv = process.argv.slice(2)) {
     // from before ready(), and the replay happens inside the attach, so the
     // first K captured frames are the replay's. Anything after them is live
     // traffic, and the cut ignores it.
+    const attachCut = attachCutOf()
     const expectedParityFrames = attachCut ? parityReplayNames(attachCut.frames).length : 0
     const replayDeadline = Date.now() + PARITY_REPLAY_TIMEOUT_MS
     while (parityFrames.length < expectedParityFrames && Date.now() < replayDeadline) {

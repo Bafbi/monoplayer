@@ -1,13 +1,17 @@
 // Socket-free tests for the online rung's pure pieces: the bot client-option
-// builder, account resolution, and the N1-N14 assertion contract.
+// builder, account resolution, the attach cut the rung keeps, and the N1-N14
+// assertion contract.
 //
-// No sockets, no auth, no .secrets read. Fixture accounts live in a temp tree.
+// No sockets, no auth, no .secrets read. Fixture accounts live in a temp tree, and
+// the cut is driven on a core over the fake legs (test/support/harness.js).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { makeCore } from '../support/harness.js'
+import { callSpans } from '../support/source-scan.js'
 import { tempRoot } from '../support/temp.js'
 
 import { buildClientOptions } from '../../src/ladder/bot.js'
@@ -16,12 +20,15 @@ import {
   RUNG_CLIENT_SETTINGS,
   buildOnlineBotOptions,
   evaluateOnlineAssertions,
+  recordAttachCut,
   resolveOnlineAccounts,
   summarizeAssertions
 } from '../../src/ladder/online.js'
 
 const PUPPET_UUID = '73e0e19b-d4e4-4cc1-a553-a3952f0c1aed'
 const ATTACH_UUID = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
+// The reattach's client, so a cut that moved is a different name and not a coin flip.
+const SECOND_UUID = '3f7f2c60-5fd1-4b3c-94b7-000000000042'
 
 function tempAccounts () {
   const dir = tempRoot('monoplayer-online-')
@@ -296,6 +303,73 @@ test('resolveOnlineAccounts reports both missing accounts from an empty tree', (
   assert.deepEqual(resolved.missing.map(entry => entry.role), ['puppet', 'attach'])
   assert.match(resolved.reason, /puppet:no_accounts/)
   assert.match(resolved.reason, /attach:no_accounts/)
+})
+
+// The join prefix this case delivers to the fake backend, so the attach below has a
+// replay to cut. The warm marker is chunk_batch_finished.
+function warmRig () {
+  const rig = makeCore()
+  rig.backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
+  for (const frame of [
+    { name: 'login', data: { entityId: 42, viewDistance: 10 } },
+    { name: 'game_state_change', data: { reason: 13, gameMode: 0 } },
+    { name: 'position', data: { teleportId: 9, x: 0.5, y: 1.62, z: 0.5, yaw: 0, pitch: 0 } },
+    { name: 'chunk_batch_start', data: {} },
+    { name: 'map_chunk', data: { x: 0, z: 0 } },
+    { name: 'chunk_batch_finished', data: {} }
+  ]) rig.backendLeg.deliver({ state: 'play', ...frame })
+  assert.equal(rig.core.cache.warm, true, 'the prefix warmed the cache, so the attach has a replay')
+  return rig
+}
+
+// #934: N13 compares the replay the first join produced. N10's reattach is a second
+// attach on the same core, and the frames that replay wrote are not the ones the
+// first client decoded, so the cut the rung keeps is the first event.
+test('#934 a later attach does not replace the cut N13 compares', () => {
+  const rig = warmRig()
+  const events = []
+  rig.core.on('attach', event => events.push(event))
+  const cut = recordAttachCut(rig.core)
+  assert.equal(cut(), null, 'no attach yet is no cut, not an empty one')
+
+  assert.equal(rig.core.attachPlayer({ name: 'Bafbi', uuid: ATTACH_UUID }).attached, true,
+    'the first client attached, so the core published a cut to keep')
+  const first = cut()
+  assert.equal(first.name, 'Bafbi', 'the first attach is the cut')
+
+  // N10's shape: the bot detaches, and a second client attaches to the same core.
+  rig.core.detachPlayer({ reason: 'client_disconnect' })
+  assert.equal(rig.core.attachPlayer({ name: 'Second', uuid: SECOND_UUID }).attached, true,
+    'the second client attached where the first detached, so a second cut landed')
+
+  assert.equal(events.length, 2,
+    'a reattach the core permits publishes a cut of its own, so the rule has an event to keep out')
+  assert.equal(cut(), first,
+    'the first attach is the cut: a later reattach must not replace the frames N13 compares')
+  assert.notDeepEqual(events[1].frames, first.frames,
+    'the second replay is different frames, so the rule has something to keep out')
+})
+
+// #934's other half: the case above holds what the reader does, and nothing a case can run
+// holds the rung to the reader. runOnline() is reached only by its own self-invocation, so a
+// rung that went back to a `let` beside the subscription would leave every case and every
+// rung green, which is the state #934 was filed about. The shape is what is left to hold,
+// and the shape is one call. The subscription count in
+// test/service/wire-leg-to-core.test.js says how many listeners the file has, not which
+// reader they feed. Same licence as the close's shape case, test/ladder/loopback-lane.test.js.
+const RUNG_SOURCE = 'src/ladder/online.js'
+const readRung = () => fs.readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', RUNG_SOURCE), 'utf8')
+
+test('#934 the rung reads its cut through recordAttachCut', () => {
+  const source = readRung().split('\n')
+    .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join('\n')
+  const calls = callSpans(source, 'recordAttachCut')
+  assert.equal(calls.length, 1,
+    RUNG_SOURCE + ' reads its cut through recordAttachCut ' + calls.length + ' times, and once is ' +
+    'the number: the reader is the home of the first-wins rule, and a rung that kept its own ' +
+    'copy beside the subscription would put the rule back where no case reaches it (#934)')
 })
 
 test('evaluateOnlineAssertions returns every id exactly once', () => {

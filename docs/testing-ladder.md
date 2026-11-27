@@ -1552,13 +1552,15 @@ live there.
   domain differs. The loopback's O27 checks the same cut on a real protocol bot.
   The cut is the core's own, published by `replaySnapshot` as the `attach` event
   (#683, `src/service/monoplayer.js`), so the rung records the values the replay
-  used instead of taking a copy around the call. A replay the core defers until
-  the backend is warm is cut against the replay that then happened, which is the
-  stream the client decoded; before #683 the rung recorded the state at the call
-  and no frames. Neither rung attaches a client before its backend is warm, so
-  neither reaches that case: the online rung waits for readiness before it builds
-  its bot, and every loopback rig a client can attach a body to waits for readiness
-  in `createRig` before the rung builds its client.
+  used instead of taking a copy around the call. The rung reads that cut before
+  N10's reattach, and `recordAttachCut` keeps it to the first event if a second
+  ever lands (#934). A replay the core defers until the backend is warm is cut
+  against the replay that then happened, which is the stream the client decoded;
+  before #683 the rung recorded the state at the call and no frames. Neither rung
+  attaches a client before its backend is warm, so neither reaches that case: the
+  online rung waits for readiness before it builds its bot, and every loopback rig
+  a client can attach a body to waits for readiness in `createRig` before the rung
+  builds its client.
 - `N14` the client information the bot reported reached the backend leg at the
   cap. The bot sends its own Client Information in the configuration phase. The
   packet the backend leg is handed at attach carries the reported `locale`,
