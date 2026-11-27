@@ -166,10 +166,10 @@ export function journalVolumeFull ({ disabledReason = null, dir = null, freeByte
 // nowhere else (#703).
 //
 // The name half of that rule is not asked here, and the honest reason is that this
-// record has no names: `attachWhitelist` in src/service/control.js answers uuids only,
-// and the config guard refuses a list that is not uuids. A name whose md5 carries
-// version 4 therefore reads as usable here, and only a login tells the two apart. The
-// panel holds the names and asks the whole rule.
+// record has no names: `attachWhitelist` in src/service/control.js maps the document to
+// its uuids and drops the names. So a name whose md5 carries version 4 reads as usable
+// here, and only a login tells the two apart. The panel holds the names and asks the
+// whole rule.
 export function attachWhitelistEntries (uuids) {
   return (Array.isArray(uuids) ? uuids : []).map(raw => ({
     uuid: normalizeUuid(raw),

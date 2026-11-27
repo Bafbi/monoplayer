@@ -183,8 +183,9 @@ test('GET names every entry beside the count, and which of them a login can use'
       'a lane with one unusable entry does not read as healthy')
     assert.match(body.entries[1].refusalReason, /md5\("OfflinePlayer:Pilot"\)/,
       'and the sentence is the one src/custody/util.js writes, named back with the entry\'s own name')
-    assert.deepEqual(Object.keys(body.document.players[0]).sort(), ['addedAt', 'name', 'uuid'],
-      'the verdict is beside the document, and no entry carries a field the patch would write back')
+    assert.deepEqual([...new Set(body.document.players.flatMap(entry => Object.keys(entry)))].sort(),
+      ['addedAt', 'name', 'uuid'],
+      'the answer is beside the document, and no entry carries a field the next patch would write back')
     assert.equal(rig.state.patches.length, 0, 'a read writes nothing')
   } finally {
     await rig.close()

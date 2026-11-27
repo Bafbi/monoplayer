@@ -83,11 +83,15 @@ export function renderEntries ({ puppet, list }) {
   // rows: a row of eight with one derived uuid is easy to read past. The sentence is
   // `mise run dev:status`'s, so an operator who reads one reads the other without
   // translating. The two are copies, and no test ties them: the script's sentence lives
-  // in a shell heredoc.
+  // in a shell heredoc. One entry is the one place this says it differently, because
+  // "none of them" is wrong for a list of one.
   if (usable < players.length) {
-    const plural = players.length === 1 ? 'entry' : 'entries'
-    lines.push('    <p class="refused">attach whitelist names ' + players.length + ' ' + plural +
-      (usable === 0 ? ', and none of them can authenticate' : ', ' + usable + ' of which can authenticate') +
+    const single = players.length === 1
+    lines.push('    <p class="refused">attach whitelist names ' + players.length +
+      (single ? ' entry' : ' entries') +
+      (usable === 0
+        ? (single ? ', and it cannot authenticate' : ', and none of them can authenticate')
+        : ', ' + usable + ' of which can authenticate') +
       '</p>\n')
   }
   lines.push('    <ul class="entries">\n')

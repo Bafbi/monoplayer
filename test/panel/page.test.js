@@ -154,7 +154,7 @@ test('the whitelist block says which entries a login can use, and which it canno
   assert.match(mixed, /attach whitelist names 2 entries, 1 of which can authenticate/,
     'a lane with one unusable entry does not read as healthy')
   assert.match(mixed, /<span class="verdict unusable">cannot authenticate: its uuid is md5\(&quot;OfflinePlayer:Pilot&quot;\), so no Mojang session answers for it<\/span>/,
-    'the reason is the sentence the one home wrote, in the ink the stylesheet gives a fault')
+    'the reason is the sentence the one home wrote, in the class the stylesheet draws a fault with')
   assert.match(mixed, /can authenticate/, 'the usable entry is still named as one')
 
   const none = renderCard(puppet, facts(), listOf([
@@ -162,6 +162,10 @@ test('the whitelist block says which entries a login can use, and which it canno
     { uuid: 'f81d4fae-7dec-11d0-a765-00a0c91e6bf6', name: 'Watcher', addedAt: null }
   ]))
   assert.match(none, /attach whitelist names 2 entries, and none of them can authenticate/)
+
+  // One entry is the case the plural sentence reads wrong for, so it says "it".
+  const alone = renderCard(puppet, facts(), listOf([{ uuid: DERIVED, name: 'Pilot', addedAt: null }]))
+  assert.match(alone, /attach whitelist names 1 entry, and it cannot authenticate/)
 })
 
 test('the whitelist block tells an empty list apart from a list it could not read', () => {

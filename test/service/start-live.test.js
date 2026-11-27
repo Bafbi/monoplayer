@@ -508,14 +508,14 @@ test('#540 a reconnect after a followed transfer keeps the dialect and the serve
 // the count is that list's length so the two cannot disagree.
 //
 // The startup list is an array of uuids: `attachWhitelist` in src/service/control.js
-// drops the names, and the config guard refuses a list that is not uuids. So this record asks
+// maps the document to its uuids and drops the names. So this record asks
 // the version half of the rule, which is the half that refuses a name-derived uuid
 // (md5("OfflinePlayer:<name>") carries version 3). The panel holds the names, and its
 // answer is the whole rule.
 const WHITELIST_V4 = '6EB73524-FF88-4A62-A8D0-C63905E7AFBA'
 const WHITELIST_DERIVED = '62e2a85673423096b19f938454443a11'
 
-test('#705 the start record names each attach whitelist entry and whether Minecraft can answer for it', () => {
+test('#705 the start record names each attach whitelist entry, and whether its shape stops a login', () => {
   const entries = attachWhitelistEntries([WHITELIST_V4, WHITELIST_DERIVED])
   assert.deepEqual(entries, [
     { uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', refusalReason: null },
