@@ -94,6 +94,7 @@
 import mc from 'minecraft-protocol'
 
 import { createAttachCheck, DENY_REASONS } from '../custody/attach.js'
+import { createCallInHandlers } from './call-in-handler.js'
 import { createWhitelistStore } from '../custody/store.js'
 import { normalizeUuid } from '../custody/util.js'
 import { pickTextures } from '../core/skin.js'
@@ -883,6 +884,10 @@ function createFrontLeg ({
   if (onPickerVerb !== null && typeof onPickerVerb !== 'function') {
     throw new TypeError('onPickerVerb must be null or a function')
   }
+
+  // #824: each call-in below holds one handler, and a second registration is refused rather
+  // than replacing the first in silence. src/legs/call-in-handler.js says why.
+  const fillCallIn = createCallInHandlers()
 
   let loginStartHandler = null // core check 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
@@ -2495,8 +2500,8 @@ function createFrontLeg ({
   // replay. \`coreAttachConfiguring\` runs at beforeLogin, for a client that
   // attaches while the puppet is still in configuration (#16).
   let coreAttachConfiguring = () => ({ attached: false, reason: 'no_core_attached' })
-  function setCoreAttach (fn) { coreAttach = fn }
-  function setCoreAttachConfiguring (fn) { coreAttachConfiguring = fn }
+  function setCoreAttach (fn) { coreAttach = fillCallIn('setCoreAttach', fn) }
+  function setCoreAttachConfiguring (fn) { coreAttachConfiguring = fillCallIn('setCoreAttachConfiguring', fn) }
 
   function wireServerbound (client) {
     const decoded = { state: null, byName: {} }
@@ -2943,13 +2948,13 @@ function createFrontLeg ({
     listen,
 
     // --- frontLeg interface (docs/product-core.md) ---
-    setLoginStartHandler (fn) { loginStartHandler = fn },
-    setServerboundHandler (fn) { serverboundHandler = fn },
-    setDetachHandler (fn) { detachHandler = fn },
-    setErrorHandler (fn) { errorHandler = fn },
-    setClientSettingsHandler (fn) { clientSettingsHandler = fn },
-    setConfiguringHandler (fn) { configuringHandler = fn },
-    setReconfiguredHandler (fn) { reconfiguredHandler = fn },
+    setLoginStartHandler (fn) { loginStartHandler = fillCallIn('setLoginStartHandler', fn) },
+    setServerboundHandler (fn) { serverboundHandler = fillCallIn('setServerboundHandler', fn) },
+    setDetachHandler (fn) { detachHandler = fillCallIn('setDetachHandler', fn) },
+    setErrorHandler (fn) { errorHandler = fillCallIn('setErrorHandler', fn) },
+    setClientSettingsHandler (fn) { clientSettingsHandler = fillCallIn('setClientSettingsHandler', fn) },
+    setConfiguringHandler (fn) { configuringHandler = fillCallIn('setConfiguringHandler', fn) },
+    setReconfiguredHandler (fn) { reconfiguredHandler = fillCallIn('setReconfiguredHandler', fn) },
     startReconfiguration,
     // #87: the frame bytes that end a configuration round, for a restore whose
     // snapshot carries no cached finish frame.
@@ -2959,21 +2964,21 @@ function createFrontLeg ({
     // #258: the body a claim dials. The core wires this when it starts, so a leg
     // built without a core refuses every landing instead of waiting for an answer
     // nobody sends.
-    setConnectClaimedBody (fn) { connectClaimedBody = typeof fn === 'function' ? fn : null },
+    setConnectClaimedBody (fn) { connectClaimedBody = fillCallIn('setConnectClaimedBody', fn) },
     // #269: the spectator's two call-ins. The core wires them in its own start(), so
     // a leg built without a core refuses the Spectate verb in words instead of
     // waiting for an answer nobody sends.
-    setSpectateBody (fn) { spectateBodyHandler = typeof fn === 'function' ? fn : null },
-    setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
-    setSpectatorPose (fn) { spectatorPoseHandler = typeof fn === 'function' ? fn : null },
+    setSpectateBody (fn) { spectateBodyHandler = fillCallIn('setSpectateBody', fn) },
+    setSpectatorAttach (fn) { spectatorAttachHandler = fillCallIn('setSpectatorAttach', fn) },
+    setSpectatorPose (fn) { spectatorPoseHandler = fillCallIn('setSpectatorPose', fn) },
     // #259: the body this lane serves and whether it is up, for the picker's rows.
-    setBodyServed (fn) { bodyServedHandler = typeof fn === 'function' ? fn : null },
+    setBodyServed (fn) { bodyServedHandler = fillCallIn('setBodyServed', fn) },
     // #261: the Disconnect verb's answer. The core ends the session, and a lane
     // with no core records the click and ends no body.
-    setDisconnectBody (fn) { disconnectBodyHandler = typeof fn === 'function' ? fn : null },
+    setDisconnectBody (fn) { disconnectBodyHandler = fillCallIn('setDisconnectBody', fn) },
     // #259: a spectator's channel ended, so the core can stop relaying a body that
     // nobody is in play on.
-    setSpectatorLeft (fn) { spectatorLeftHandler = typeof fn === 'function' ? fn : null },
+    setSpectatorLeft (fn) { spectatorLeftHandler = fillCallIn('setSpectatorLeft', fn) },
     // #269: land one of this leg's connections in a body as its spectator, and answer
     // with what happened. The player is named rather than the socket because the
     // caller is the lane's, not the socket's: #259 wires the picker's Spectate to

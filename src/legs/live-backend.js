@@ -51,6 +51,7 @@ import { stampIdentity } from '../core/channels.js'
 import { pickSlug } from '../core/picker.js'
 import { createTokenCustody } from '../custody/cache.js'
 import { isLoopbackHost } from './offline-identity.js'
+import { createCallInHandlers } from './call-in-handler.js'
 
 // Frames consumed by the library keep-alive plugin, never delivered to the
 // core (the core router would answer them a second time).
@@ -402,6 +403,10 @@ function createBackendLeg ({
   connectLogFields,
   validateTarget = () => true
 }) {
+  // #824: each of the three call-ins below holds one handler, and a second registration is
+  // refused rather than replacing the first in silence. src/legs/call-in-handler.js says why.
+  const fillCallIn = createCallInHandlers()
+
   let frameHandler = null
   let endHandler = null
   let errorHandler = null
@@ -617,9 +622,9 @@ function createBackendLeg ({
   return {
     kind,
     connect,
-    setFrameHandler (fn) { frameHandler = fn },
-    setEndHandler (fn) { endHandler = fn },
-    setErrorHandler (fn) { errorHandler = fn },
+    setFrameHandler (fn) { frameHandler = fillCallIn('setFrameHandler', fn) },
+    setEndHandler (fn) { endHandler = fillCallIn('setEndHandler', fn) },
+    setErrorHandler (fn) { errorHandler = fillCallIn('setErrorHandler', fn) },
     write (name, packet) {
       if (!client) throw new Error('backend leg not connected')
       client.write(name, packet)
