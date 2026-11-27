@@ -184,17 +184,16 @@ async function freePort () {
 // to identify. The five payloads #601 names report the count beside the entries
 // this builds, the way O35 does. The rest still report the count alone.
 //
-// #969: the same receive holds two faults, and the count alone told them apart
-// only to a reader who knew that a numeric `name` is not a name. An entry with a
-// name is a frame the state's table could not consume whole, which is a writer's
-// bytes; an entry with an id is one whose id that table does not define, which is
-// a reader in the wrong state. Both classes are printed here, so every payload
-// that names its frames names the class too.
+// #969: the receive carries a second list, and it is the one the count alone
+// cannot show: a frame whose id the table it was read with does not define. What
+// separates the two is written where the record is, in src/ladder/bot.js; both are
+// printed here so every payload that names its frames names the class too.
 function leftoverPayload (received) {
   return {
     leftovers: received.leftovers.length,
     leftoverDetails: received.leftovers.slice(),
-    unreadable: received.unreadable.slice()
+    unreadable: received.unreadable.length,
+    unreadableDetails: received.unreadable.slice()
   }
 }
 
@@ -2070,11 +2069,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // leftover anywhere on the connection is a frame it could not parse.
         // #541: `leftoversBeforeHop` below says which round it came from.
         b5.leftovers.length === 0 &&
-        // #969: and none of them is a frame the table it was read in does not
-        // define. A leftover with a name is a frame the table could not consume
-        // whole; a frame with an id and no name is one the client read in a state
-        // it was not in, which is what a writer inside the round's opening window
-        // produces. The two classes want different fixes, so they are two clauses.
+        // #969: and no frame whose id the table it was read with does not define.
+        // The clause is not the leftover count in another form: a one-byte frame of
+        // an undefined id consumes its whole length, so it leaves no leftover, and
+        // this is the only clause that sees it. For the frame that started this the
+        // payload names the whole fault either way, and that is the other thing the
+        // clause buys.
         b5.unreadable.length === 0 &&
         b5.errors.length === 0,
       {

@@ -87,13 +87,14 @@ export function createBot ({
     names: [], // every clientbound frame: { state, name }
     byState: {}, // state -> [name]
     leftovers: [], // frames whose fullBuffer exceeded the parsed frame
-    // #969: the same receive read as a phase fault rather than a byte fault. When
-    // the id a frame carries is not in the table that frame was read with, the
-    // mapper falls back to the number and this handler sees no name. So an entry
-    // with a `name` is a frame the table could not consume whole; an entry with an
-    // `id` is one whose id that table does not define. The first is a writer's
-    // bytes, the second is a reader in the wrong state, and they want different
-    // fixes.
+    // #969: the receive read as a second class. When the id a frame carries is not
+    // in the table it was read with, the mapper falls back to the number, so this
+    // handler sees an `id` in place of a `name`. That is the class the leftover
+    // count cannot name, and it is not the same fault as the other list: a named
+    // frame with trailing bytes says the table took a prefix, which a corrupt relay
+    // and a wrong-table read both produce (#541 read 9 bytes as
+    // acknowledge_player_digging), while an undefined id says the id is absent from
+    // the table. Only the second is a fact about the state the frame was read in.
     unreadable: [],
     success: null, // login success packet, if one arrived
     login: null, // play login packet
@@ -164,9 +165,8 @@ export function createBot ({
     received.byState[state].push(name)
     if (name === 'disconnect') received.disconnects.push({ state, packet: data ?? null })
     if (leftover !== 0) received.leftovers.push({ state, name, total, leftover })
-    // #969: an id this state's table has no name for. Recorded whether or not
-    // bytes were left over: a one-byte frame of an id the table does not define
-    // consumes its whole length and is still a frame whose id was undefined.
+    // #969: an id this state's table has no name for, recorded whether or not bytes
+    // were left over (a one-byte frame of such an id consumes its whole length).
     if (typeof name !== 'string') received.unreadable.push({ state, id: name, total, leftover })
   })
 

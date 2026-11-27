@@ -243,8 +243,9 @@ export function createConfigPathInterceptor ({
   // and the client has not answered it yet. The client flips its table when it
   // parses that frame, and this leg learns of the flip one round trip later, so a
   // play frame written inside the window is one the client may read in
-  // configuration.
-  roundOpen = null,
+  // configuration. It is set after the write that opens the round, which is what
+  // keeps that frame out of this rule's reach.
+  isRoundOpen = null,
   // #969: a play-state frame this writer dropped because the round was opening.
   onRoundOpening = null
 }) {
@@ -256,8 +257,8 @@ export function createConfigPathInterceptor ({
   if (onBaselineFrames !== null && typeof onBaselineFrames !== 'function') {
     throw new TypeError('onBaselineFrames must be null or a function')
   }
-  if (roundOpen !== null && typeof roundOpen !== 'function') {
-    throw new TypeError('roundOpen must be null or a function')
+  if (isRoundOpen !== null && typeof isRoundOpen !== 'function') {
+    throw new TypeError('isRoundOpen must be null or a function')
   }
 
   let resolved = false
@@ -338,30 +339,32 @@ export function createConfigPathInterceptor ({
     return finishSent === true && state === 'configuration'
   }
 
+  // #969: the mirror of #541, in the round's other half. A configuration frame
+  // written after the phase's finish reaches a client reading play (#541); a play
+  // frame written while the round is opening reaches a client reading
+  // configuration, because the client flips its table when it parses
+  // start_configuration and this leg learns of that flip only when the
+  // acknowledgment arrives. The library's own keep-alive fires inside that window,
+  // on the interval it runs: 9 bytes, the 8 of them a long the configuration table
+  // has no id for, which the client records as an outstanding frame (the offline
+  // rung read it as the bare number 44).
+  //
+  // The rule is the state a frame would be read in, and it is stated here for the
+  // same reason #599 states #541's: both write paths ask it, so the funnel and the
+  // library's writer cannot answer differently.
+  function refusesWhileRoundOpening ({ state = null } = {}) {
+    return state === 'play' && isRoundOpen !== null && isRoundOpen() === true
+  }
+
   function wrappedWrite (name, params) {
     if (!isConfigurationState()) {
-      // #969: the mirror of #541, in the round's other half. A configuration frame
-      // written after the phase's finish reaches a client reading play (#541); a
-      // play frame written while the round is opening reaches a client reading
-      // configuration, because the client flips its table when it parses
-      // start_configuration and this leg learns of that flip only when the
-      // acknowledgment arrives. The library's own keep-alive fires inside the
-      // window, on the interval it runs: 9 bytes, the 8 of them a long the
-      // configuration table has no id for, which the client records as an
-      // outstanding frame (the offline rung read it as the bare number 44). So a
-      // keep-alive waits for the answer: it is per-leg, and the next tick reaches a
-      // client that is in play again.
-      //
-      // A frame that tells the client why it is leaving is the one exception. It
-      // goes out whatever table this leg thinks the client reads, because the
-      // socket ends behind it: a client left without the sentence is the hang
-      // endConfiguration exists to avoid, and a frame it may misread is not.
-      //
-      // This is the library's writer. A frame that arrives through writeRawTo takes
-      // the funnel's own rules instead: the configuration ones are held until the
-      // answer, and the play ones are #972's.
+      // #969: a keep-alive waits for the answer: it is per-leg, and the next tick
+      // reaches a client that is in play again. A frame that tells the client why it
+      // is leaving is the one exception, because the socket ends behind it: a client
+      // left without the sentence is the hang endConfiguration exists to avoid, and
+      // a frame it may misread is not.
       const closing = name === 'disconnect' || name === 'kick_disconnect'
-      if (!closing && roundOpen !== null && roundOpen() === true) {
+      if (!closing && refusesWhileRoundOpening({ state: 'play' })) {
         onRoundOpening?.({ name })
         return false
       }
@@ -429,6 +432,9 @@ export function createConfigPathInterceptor ({
     write: wrappedWrite,
     finishFromCore,
     reopenConfiguration,
+    // #969: the round-opening rule, stated once, above. The funnel asks this the way
+    // it asks refusesAfterFinish (#599).
+    refusesWhileRoundOpening,
     get live () { return live },
     get resolved () { return resolved },
     // #599: exported so the leg's raw funnel asks the rule instead of restating it. The
@@ -1665,7 +1671,7 @@ function createFrontLeg ({
         recordAfterFinishDrop(client, { name: dropped, state: 'configuration' })
       },
       // #969: the round this leg opened and the client has not answered.
-      roundOpen: () => clients.get(client)?.pendingReconfiguration != null,
+      isRoundOpen: () => clients.get(client)?.pendingReconfiguration != null,
       onRoundOpening: ({ name } = {}) => recordRoundOpeningDrop(client, { name })
     })
     client.write = interceptor.write
@@ -2841,7 +2847,7 @@ function createFrontLeg ({
   // not the policy's, and its name is the one fact the next reader needs.
   function recordRoundOpeningDrop (client, { name = null } = {}) {
     metrics.playFramesDuringRoundOpening++
-    record(client, 'playFrameDuringRoundOpening', { name })
+    record(client, 'playFrameDuringRoundOpening', { name, state: 'play' })
   }
 
   // #16 and #600: one frame must reach the client in a state it can parse. A frame written
@@ -2964,6 +2970,15 @@ function createFrontLeg ({
     // this way; this is the same rule for every writer that comes here.
     if (clients.get(client)?.interceptor?.refusesAfterFinish?.({ state: meta?.state ?? null }) === true) {
       recordAfterFinishDrop(client, { name: meta?.name ?? null, state: meta?.state ?? null })
+      return false
+    }
+    // #969: and the same rule for the round's other half, asked here rather than stated
+    // again. A play frame offered while the round is opening is one the client reads in
+    // configuration. The configuration frames above were held, not refused: they are the
+    // round's own and go out when the answer arrives. The core already holds its play
+    // relay through the round (canRelayPlay), so this is the backstop and not the path.
+    if (clients.get(client)?.interceptor?.refusesWhileRoundOpening?.({ state: meta?.state ?? null }) === true) {
+      recordRoundOpeningDrop(client, { name: meta?.name ?? null })
       return false
     }
     // #820: the socket itself, before the frame is handed to a writer that answers nothing

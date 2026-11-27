@@ -24,7 +24,7 @@ function rig ({ live = true, cached = [] } = {}) {
   const interceptor = createConfigPathInterceptor({
     onConfiguring: () => configuring.push('configuring'),
     onSuppressed: ({ name }) => suppressed.push({ name }),
-    roundOpen: () => opening,
+    isRoundOpen: () => opening,
     onRoundOpening: ({ name }) => openingSuppressed.push({ name }),
     write: (name, params) => writes.push({ name, params }),
     writeRaw: (buffer, meta) => raws.push({ buffer, meta }),
@@ -198,6 +198,19 @@ test('#969 a play frame written while the round is opening never reaches the cli
   assert.deepEqual(r.writes.map(write => write.name), ['start_configuration'],
     'the keep-alive does not follow the frame that opened the round')
   assert.deepEqual(r.openingSuppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
+})
+
+test('#969 the round-opening rule is a state rule, stated once', () => {
+  const r = rig()
+  r.openRound()
+  assert.equal(r.interceptor.refusesWhileRoundOpening({ state: 'play' }), true,
+    'a play frame offered while the round is opening is one the client reads in configuration')
+  assert.equal(r.interceptor.refusesWhileRoundOpening({ state: 'configuration' }), false,
+    'a configuration frame is the round\'s own, and the hold is where it waits')
+  assert.equal(r.interceptor.refusesWhileRoundOpening({}), false, 'and a frame with no state is not this rule\'s')
+  r.answerRound()
+  assert.equal(r.interceptor.refusesWhileRoundOpening({ state: 'play' }), false,
+    'the client answered, so play is the state it reads again')
 })
 
 test('#969 a round opening does not swallow the sentence that tells the client why it is leaving', () => {
