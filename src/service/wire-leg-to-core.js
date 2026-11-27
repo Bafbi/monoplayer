@@ -1,11 +1,19 @@
-// The core-to-leg wiring (#592, #605): the one home of what each leg interface
-// carries.
+// The core-to-leg wiring (#592, #605, #726): the one home of what each leg
+// interface carries.
 //
-// One table per interface, one row per call-in, each with the method it reaches
-// and its payload shape. A row is either one the core registers on the leg
-// (`kind: 'register'`, with the function it hands over), or one the core calls
-// on a leg that carries it (`kind: 'call'`). Either kind is one the core cannot
-// work without, or one it uses when the leg carries it.
+// One table per interface, one row per member: a call-in the core registers on the
+// leg (`kind: 'register'`, with the method it reaches and the function it hands
+// over), or a member the core calls on the leg itself (`kind: 'call'`: the delivery
+// a frame goes through, the dial a body opens with, and the reads the core makes).
+// `required` says whether a leg without the row hides a client: no default inside the
+// leg stands behind a required row, and an optional one keeps a fallback the core's
+// own code names.
+//
+// A row names a member and states no shape. What the core hands over belongs to the
+// call site in src/service/monoplayer.js, and what it reads back belongs where the
+// read is (test/legs/adapters.test.js). What a row cannot state at all — which channel
+// a write reaches, what the claim board is, that end() returns while close() resolves —
+// is the page's: "Interface for the live legs" in docs/product-core.md.
 //
 // A `call` row carries the call's name and no answer shape, and #672 decided that on
 // purpose. A list of names here would be a second home, and a row cannot say which of
@@ -38,8 +46,10 @@
 // The report is what a reader checks: four lists of names, and the reader of each
 // one is named here. `missing` names every declared call-in the leg does not carry,
 // and the core puts those names on its start line, one list per interface.
-// `called` names the rows the core calls on the leg rather than registers, which is
-// how the core learns it carries one (backendCarries, src/service/monoplayer.js).
+// `called` names every row the core calls on the leg rather than registers: the
+// delivery, the dial and the reads alike. The core learns which optional ones it
+// carries from that list instead of a `typeof` guard in its own body (backendCarries,
+// src/service/monoplayer.js).
 // `requiredMissing` and `wired` have one reader each, and both are
 // test/service/wire-leg-to-core.test.js: the subset the leg's own default hides, and
 // the rows it installed, held to the table rather than to a lane. A missing one is
@@ -127,6 +137,34 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     handler: core => ({ reason = 'player_quit' } = {}) => core.detachPlayer({ reason })
   },
 
+  // The delivery half (#726): the methods the core calls on the leg rather than
+  // registering through it. No leg default stands behind one of these, so a leg that
+  // omits one throws on the member the next time the core sends a frame, which is why
+  // each of the three is required. The shape of a call is its call site's, and the rule
+  // a shape cannot state — which channel a write reaches — is the page's.
+  {
+    // #269: clientbound at packet level. A write with no `channel` reaches every channel
+    // of the body, and one with `channel` reaches that connection alone. A write that
+    // reached nowhere answers false, and the core counts what it did not deliver.
+    kind: 'call',
+    name: 'write',
+    required: true
+  },
+  {
+    // The frame-level half of the same delivery: a cached or relayed frame, sent as the
+    // bytes that arrived rather than re-encoded. It answers false the same way.
+    kind: 'call',
+    name: 'writeRaw',
+    required: true
+  },
+  {
+    // How the core ends every channel of the body: a denial, a kick, or a body that went
+    // away. Without it a refusal reaches no client, and the session it refused stays.
+    kind: 'call',
+    name: 'end',
+    required: true
+  },
+
   // The rows a lane uses when its leg carries them. A leg without one keeps its
   // own fallback, and the core counts the difference.
   {
@@ -202,6 +240,34 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     handler: core => payload => core.spectatorPose(payload)
   },
 
+  // The calls the core makes on this leg when it carries one (#726). Each is a member
+  // the core reads the presence of rather than a registration, and a leg without one
+  // keeps a fallback the core's own code names.
+  {
+    // #261, #631: the claim on one body, or null. The leg owns the claims, so the
+    // snapshot passes the record on whole instead of keeping a copy, and the session's
+    // oracle answers a body with no claim as held. A leg without it refuses every claim
+    // and says nothing.
+    kind: 'call',
+    name: 'claimOn',
+    required: false
+  },
+  {
+    // #22: ask the sampling client to re-enter configuration on its own connection, and
+    // answer { started, reason }. A leg without it keeps the client in play and the move
+    // rebuilds the world from the state replay instead of a loading screen.
+    kind: 'call',
+    name: 'startReconfiguration',
+    required: false
+  },
+  {
+    // #87: the bytes that end a configuration round, for a restore that has no cached
+    // finish. A leg without it falls back to the finish frame it cached.
+    kind: 'call',
+    name: 'finishConfigurationFrame',
+    required: false
+  },
+
   // #627: a read the core makes on this leg, in the backend table's form. The
   // pre-auth window is created inside the leg, so `laneState` asks for its numbers
   // rather than a copy. A leg without this row is named in `missing`, and its
@@ -249,8 +315,47 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
     handler: core => ({ error } = {}) => core.backendError({ error })
   },
 
+  // The delivery half (#726), in the front table's form: the methods the core calls
+  // on the backend leg rather than registering through it. Each is required, because a
+  // leg without one throws at the next frame, or opens no session at all.
+  {
+    // The dial. The core calls it once a target is set, and the session a claim opens
+    // begins here; a leg without it serves no client.
+    kind: 'call',
+    name: 'connect',
+    required: true
+  },
+  {
+    // A decoded packet the core sends the backend: teleport_confirm, keep_alive, pong,
+    // the batch-received ack, settings, and the resource-pack answers.
+    kind: 'call',
+    name: 'write',
+    required: true
+  },
+  {
+    // A serverbound frame, play or configuration, relayed to the backend as it arrived.
+    kind: 'call',
+    name: 'writeRaw',
+    required: true
+  },
+  {
+    // The session's own ending, which the core calls before a redial or a stop.
+    kind: 'call',
+    name: 'end',
+    required: true
+  },
+
   // The calls the core makes on the leg, so a leg that does not carry one is named
   // in the same report as a missing registration.
+  {
+    // #258: a dial and not a registration. The core hands the leg the body to dial, once
+    // the caller has ended the current connection, and a claim dials with neither the
+    // cookie nor the transfer intent of a followed move. The core catches a refusal and
+    // logs target_refused, so a leg without this one refuses every claim.
+    kind: 'call',
+    name: 'setTarget',
+    required: false
+  },
   {
     kind: 'call',
     name: 'answerHeldGate',

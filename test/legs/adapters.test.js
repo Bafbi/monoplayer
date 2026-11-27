@@ -11,8 +11,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { createBackendFrameForwarder, createOfflineBackendLeg, MAX_BACKEND_FRAME_NAMES } from '../../src/legs/live-backend.js'
+import { createBackendFrameForwarder, createLiveBackendLeg, createOfflineBackendLeg, MAX_BACKEND_FRAME_NAMES } from '../../src/legs/live-backend.js'
 import minecraftData from 'minecraft-data'
 
 import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
@@ -25,6 +26,7 @@ import { createStateCache } from '../../src/core/state-cache.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
 import { createAttachCheck } from '../../src/custody/attach.js'
 import { createWhitelistStore } from '../../src/custody/store.js'
+import { tempRoot } from '../support/temp.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 
@@ -541,58 +543,123 @@ function memberDrift (label, leg, table) {
   }
 }
 
-// Every leg a lane builds or a test hands a core, each with the table its interface is
-// declared in. One list, so the cases below walk one surface.
-function legsCarryingTheTables () {
-  return [
-    ['live front leg', createLiveFrontLeg({
+// Every leg a lane builds or a test hands a core, each with the factory that makes it,
+// the table its interface is declared in, and the arguments that factory demands. One
+// table, so the cases below walk one surface.
+//
+// #727: the names are the directory's, not a list here. `legFactoryNames` reads what
+// src/legs/ exports and the coverage case holds this table to it in both directions, so a
+// seventh factory fails until it has a row, and a row whose export is gone fails too. The
+// arguments are the one fact a row has to keep by hand, because a factory that wants
+// custody on disk cannot be built without them.
+const LEGS = [
+  {
+    factory: 'createLiveFrontLeg',
+    label: 'live front leg',
+    table: FRONT_LEG_CALL_INS,
+    build: () => createLiveFrontLeg({
       host: '127.0.0.1',
       port: 0,
       version: '26.1',
       attachWhitelistFile: path.join(os.tmpdir(), 'monoplayer-leg-setters-whitelist.json'),
       getSnapshotConfig: () => [],
       wireMode: 'off'
-    }), FRONT_LEG_CALL_INS],
-    ['offline front leg', offlineFront(), FRONT_LEG_CALL_INS],
-    ['fake front leg', createFakeFrontLeg(), FRONT_LEG_CALL_INS],
-    ['real backend leg', createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' }), BACKEND_LEG_CALL_INS],
-    ['fake backend leg', createFakeBackendLeg(), BACKEND_LEG_CALL_INS]
-  ]
+    })
+  },
+  { factory: 'createOfflineFrontLeg', label: 'offline front leg', table: FRONT_LEG_CALL_INS, build: offlineFront },
+  { factory: 'createFakeFrontLeg', label: 'fake front leg', table: FRONT_LEG_CALL_INS, build: createFakeFrontLeg },
+  {
+    // The one factory no guard built before #727. It takes an account directory and reads
+    // none of it here: custody is acquired in `prepareConnection`, which only `connect()`
+    // calls, so a path that does not exist holds the interface and opens no socket.
+    factory: 'createLiveBackendLeg',
+    label: 'live backend leg',
+    table: BACKEND_LEG_CALL_INS,
+    build: () => createLiveBackendLeg({ host: '127.0.0.1', port: 25565, accountDir: '/nonexistent/monoplayer-custody' })
+  },
+  {
+    factory: 'createOfflineBackendLeg',
+    label: 'real backend leg',
+    table: BACKEND_LEG_CALL_INS,
+    build: () => createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' })
+  },
+  { factory: 'createFakeBackendLeg', label: 'fake backend leg', table: BACKEND_LEG_CALL_INS, build: createFakeBackendLeg }
+]
+
+function legsCarryingTheTables () {
+  return LEGS.map(row => [row.label, row.build(), row.table])
 }
+
+// The `create…Leg` names one directory of modules exports, read from the files (#727).
+// A name is a factory that builds one of the interface's objects and not one of its
+// parts: `createFakeBackend` is the Paper the driver lane runs, and
+// `createBackendFrameForwarder` builds a piece of a leg.
+async function legFactoryNames (directory = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'legs')) {
+  const found = []
+  for (const file of fs.readdirSync(directory).filter(name => name.endsWith('.js')).sort()) {
+    const module = await import(pathToFileURL(path.join(directory, file)).href)
+    for (const name of Object.keys(module)) {
+      if (/^create[A-Za-z]*Leg$/.test(name)) found.push(name)
+    }
+  }
+  return found.sort()
+}
+
+// The two directions of the coverage claim, as names: a factory no row builds, and a row
+// whose factory the directory does not export. Both are lists, so a case can feed the
+// function a directory of its own and watch it bite (#727).
+function unbuiltFactories (factories, rows = LEGS) {
+  const declared = rows.map(row => row.factory)
+  return {
+    missing: factories.filter(name => !declared.includes(name)),
+    gone: declared.filter(name => !factories.includes(name))
+  }
+}
+
+// #727: the guard measured five legs a hand-kept list named, so a sixth factory in
+// src/legs/ was invisible to both the table guard and the whole-surface guard: nothing
+// built it, so nothing failed. The list is the directory's now, and this case is the
+// claim: every factory src/legs/ exports is a leg the cases below build.
+test('#727 every leg factory src/legs/ exports is a leg the guards measure', async () => {
+  const factories = await legFactoryNames()
+  assert.ok(factories.includes('createLiveFrontLeg') && factories.includes('createOfflineBackendLeg'),
+    'the walk found factories the cases below build, so a moved or emptied directory fails here rather than passing')
+  const { missing, gone } = unbuiltFactories(factories)
+  assert.deepEqual(missing, [],
+    'src/legs/ exports ' + missing.join(', ') + ', and no row of the table above builds ' +
+    (missing.length === 1 ? 'it' : 'them') + '. A leg no case builds is a leg no guard measures, which is the ' +
+    'hole #727 found. Add a row, with the arguments that factory demands.')
+  assert.deepEqual(gone, [],
+    'the table above names ' + gone.join(', ') + ', and src/legs/ exports no such factory. A row for a factory ' +
+    'that is gone is a claim a reader cannot check, and the leg it measured is unmeasured now.')
+})
+
+// #727: a claim about a directory is proved against one this file writes, because the
+// other way to watch the guard find a sixth leg is to put a file in the tree and take it
+// back out. The walk reads the modules it is handed, so a fixture is enough: the names
+// come from the file, never from a list here.
+test('#727 the walk finds a factory no row names, and a row whose factory is gone', async () => {
+  const root = tempRoot('monoplayer-leg-walk-')
+  fs.writeFileSync(path.join(root, 'sixth-leg.js'), 'export function createSixthLeg () { return {} }\n')
+  const factories = await legFactoryNames(root)
+  assert.deepEqual(factories, ['createSixthLeg'],
+    'the walk reads the modules in the directory it is given, so a file added there is a name it finds')
+  assert.deepEqual(unbuiltFactories(factories).missing, ['createSixthLeg'],
+    'a factory the table has no row for is the missing leg, which is the case #727 opened with')
+  assert.deepEqual(unbuiltFactories([], LEGS).gone, LEGS.map(row => row.factory),
+    'and a row whose factory the directory does not export is reported the other way')
+})
 
 // #672: what each leg carries that its table does not name, one line per member with
 // the reason it is outside. The two real front legs build through one factory
 // (src/legs/live-front.js) and each double stands in for the same interface, so what
 // they share is declared once and each list reads as what that leg adds.
 
-// The half of a front leg the core reaches on the leg itself: the delivery it calls
-// rather than registering, and the claim board it reads instead of copying. The delivery
-// is declared in the frontLeg block at the top of src/service/monoplayer.js. The board is
-// the leg's own (#261, #631).
-const FRONT_DELIVERY = {
-  write: 'a clientbound packet to every channel of the body, or to the one `channel` names. The frontLeg block of src/service/monoplayer.js declares it',
-  writeRaw: 'the frame-level half of that delivery, from the same block',
-  end: 'how the core ends every channel of a body, a kick or a denial, from the same block',
-  startReconfiguration: '#22: the core asks the sampling client to re-enter configuration on its own connection, from the same block',
-  finishConfigurationFrame: '#87: the bytes that end a configuration round, for a restore with no cached finish, from the same block',
-  claimOn: '#261: the claim on one body, which the core reads instead of keeping a copy of the board (#631). The leg owns the claims, so the snapshot and the retry path ask it'
-}
-
 // The lane's own surface: the socket it opens and the picker verb. No core calls one.
 const FRONT_LANE = {
   listen: 'the lane starts and stops this leg\'s own socket. The core is handed a leg that accepts its clients',
   spectate: '#269: the picker\'s Spectate verb, which a lane calls (src/ladder/loopback.js, src/driver/dev-proof.js) and the core never does',
   close: 'the socket\'s own ending, which a lane and the rungs that stop it call (src/ladder/*). The core ends a session through `end`'
-}
-
-// The backend leg's half of the same: the delivery the core calls, and the one dial it
-// asks for. The backendLeg block at the top of src/service/monoplayer.js declares them.
-const BACKEND_DELIVERY = {
-  connect: 'the core dials a body through this leg, from the backendLeg block of src/service/monoplayer.js',
-  write: 'a decoded packet the core sends the backend, from the same block',
-  writeRaw: 'the frame-level half of that delivery, from the same block',
-  end: 'the session\'s own ending, from the same block',
-  setTarget: '#258: the core hands it the body to dial, which is a dial and not a registration'
 }
 
 // A reading is a getter that runs when a caller asks for it. Every leg carries some, and
@@ -620,20 +687,27 @@ const BACKEND_READINGS = readings(
 )
 
 // Both real front legs build through one factory (src/legs/live-front.js), so one
-// declaration covers what both carry.
+// declaration covers what both carry. #727 added the live backend factory to the walk,
+// and it builds through src/legs/live-backend.js's other factory the same way, which is
+// why the two backend legs share one declaration too.
 const REAL_FRONT_LEG = {
-  ...FRONT_DELIVERY,
   ...FRONT_LANE,
   ...FRONT_READINGS,
   channels: 'the channels this leg holds, one record per connection delivered a body. The core reads it (#636), and no table names a reading, because a row names a function the core registers or calls',
   setErrorHandler: 'the front leg logs its own socket errors through this hook, which the core registers nowhere. The row of this name on the backend leg is that leg\'s (#667)'
 }
 
+const REAL_BACKEND_LEG = {
+  ...BACKEND_READINGS,
+  target: 'the body this leg dialled, which the core reads to bind a frame to a body (syncDialledBody, src/service/monoplayer.js)',
+  close: 'the socket\'s own ending, which a lane and the rungs that stop it call (src/ladder/*, test/legs/backend-close.test.js). The core ends a session through `end`',
+  forwarderStats: 'the leg\'s own frame counters, which src/service/start-live.js prints on its heartbeat line and no core reads'
+}
+
 const MEMBERS_OUTSIDE_THE_TABLES = {
   'live front leg': REAL_FRONT_LEG,
   'offline front leg': REAL_FRONT_LEG,
   'fake front leg': {
-    ...FRONT_DELIVERY,
     ...readings([
       'channelRecord', 'forgetChannelRecord', 'setClient', 'frames', 'namesOf', 'endReasons',
       'loginStart', 'spectatorMoved', 'serverbound', 'clientConfiguring', 'clientSettings',
@@ -642,15 +716,9 @@ const MEMBERS_OUTSIDE_THE_TABLES = {
     channels: 'the channels a test planted. The core makes the same read on a real leg (#636)',
     client: 'the client the double pretends to serve, which a test names'
   },
-  'real backend leg': {
-    ...BACKEND_DELIVERY,
-    ...BACKEND_READINGS,
-    target: 'the body this leg dialled, which the core reads to bind a frame to a body (syncDialledBody, src/service/monoplayer.js)',
-    close: 'the socket\'s own ending, which a lane and the rungs that stop it call (src/ladder/*, test/legs/backend-close.test.js). The core ends a session through `end`',
-    forwarderStats: 'the leg\'s own frame counters, which src/service/start-live.js prints on its heartbeat line and no core reads'
-  },
+  'live backend leg': REAL_BACKEND_LEG,
+  'real backend leg': REAL_BACKEND_LEG,
   'fake backend leg': {
-    ...BACKEND_DELIVERY,
     ...readings([
       'dialledTargets', 'rawWrites', 'packetWrites', 'spoken', 'heldGateAnswers',
       'deliver', 'deliverEnd', 'deliverError'
@@ -686,10 +754,11 @@ test('#672 the walk reports a member nothing declares, and a line the leg has lo
   assert.deepEqual(memberDrift('fake front leg', withAnExtraHook, FRONT_LEG_CALL_INS).undeclared, ['aHookNoRowNames'],
     'a member added to a real double and named nowhere is what the case above fails on. The walk reads past the setters')
 
-  const withoutClaimOn = createFakeFrontLeg()
-  delete withoutClaimOn.claimOn
-  assert.deepEqual(memberDrift('fake front leg', withoutClaimOn, FRONT_LEG_CALL_INS).stale, ['claimOn'],
-    'and a line whose member the leg no longer carries is reported rather than read as settled')
+  const withoutChannels = createFakeFrontLeg()
+  delete withoutChannels.channels
+  assert.deepEqual(memberDrift('fake front leg', withoutChannels, FRONT_LEG_CALL_INS).stale, ['channels'],
+    'and a line whose member the leg no longer carries is reported rather than read as settled. The ' +
+    'member is one the tables cannot name, because a member they name is their row and not a line here')
 })
 
 // #672: a `call` row carries no answer shape, and the table's header gives the reason: the
@@ -736,7 +805,22 @@ const CALL_ROW_FIELDS = {
   // connection's click budget, which are the leg's own record and not the core's read.
   answerHeldGate: () => ['answered', 'reason'],
   // The human's sentence goes out as the puppet and nothing comes back.
-  chat: () => []
+  chat: () => [],
+  // #22: the core tests `started !== true` and logs `reason`, so both fields are the
+  // contract of a leg that carries the row.
+  startReconfiguration: () => ['started', 'reason'],
+  // The rest answer a value the core reads whole: `write` and `writeRaw` a boolean it
+  // compares to false, `claimOn` a claim or null, `finishConfigurationFrame` the bytes,
+  // and `connect`, `end` and `setTarget` nothing. No field is read off any of them, and
+  // the case below does not call one: a leg it ended or dialled would be a socket the
+  // guard opened, and this file opens none.
+  write: () => [],
+  writeRaw: () => [],
+  end: () => [],
+  claimOn: () => [],
+  finishConfigurationFrame: () => [],
+  connect: () => [],
+  setTarget: () => []
 }
 
 // The fields a leg left out of one answer, against the fields the core reads off it.
@@ -748,7 +832,8 @@ test('#672 every leg answers a `call` row with the fields the core reads off it'
   const ASKED = {
     preAuthStats: [],
     answerHeldGate: [{ state: 'configuration', name: 'code_of_conduct' }],
-    chat: ['list']
+    chat: ['list'],
+    startReconfiguration: [{ reason: 'transfer' }]
   }
   let checked = 0
   for (const [label, leg, table] of legsCarryingTheTables()) {

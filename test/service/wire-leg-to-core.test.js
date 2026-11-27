@@ -76,11 +76,11 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
     'a leg that carries every setter is wired whole')
   assert.deepEqual(wiring.requiredMissing, [],
     'and none of the call-ins the core cannot work without is missing')
-  // #627: the front table has a `call` row of its own now, the backend table's form:
-  // the pre-auth window's numbers are read off the leg and nothing is registered for
-  // them, so a registered row and a carried one are counted apart.
-  assert.deepEqual(wiring.called, ['preAuthStats'],
-    'the call the core makes on the leg is carried, not registered')
+  // #627, #726: the rows the core calls rather than registers are the table's, not a
+  // list here: the delivery a frame goes through, the calls it makes when the leg
+  // carries one, and the pre-auth read. This leg carries every one of them.
+  assert.deepEqual(wiring.called, FRONT_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
+    'every call row of the front table is carried, and none of them is registered')
   assert.equal(wiring.wired.length + wiring.called.length, FRONT_LEG_CALL_INS.length,
     'and every declared call-in was either registered or carried')
 
@@ -141,8 +141,8 @@ test('#605 the core hands every backend call-in to a leg that carries them', () 
 
   assert.deepEqual(wiring.missing, [],
     'a backend leg that carries every row is wired whole')
-  assert.deepEqual(wiring.called, ['answerHeldGate', 'chat'],
-    'the two calls the core makes on the leg are carried, not registered')
+  assert.deepEqual(wiring.called, BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
+    'every call row of the backend table is carried: the delivery, the dial and the two optional calls')
 
   handlers.get('setFrameHandler')({ state: 'play', name: 'login', buffer: Buffer.from('x'), data: { entityId: 42 } })
   assert.deepEqual(calls.at(-1), {
@@ -194,8 +194,9 @@ test('#605 a backend leg missing a call is named, and only a required row hides 
     'the report names the missing registration and both missing calls, in table order')
   assert.deepEqual(wiring.requiredMissing, [],
     'and none of them is a row a client cannot be served without: the frame and end registrations are')
-  assert.deepEqual(wiring.called, [],
-    'a call this leg does not carry is not reported as carried')
+  assert.deepEqual(wiring.called,
+    BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call' && typeof absent.leg[row.name] === 'function').map(row => row.name),
+    'the carried calls are the call rows this leg answers: the delivery and the dial, and not the two it omits')
 })
 
 // #605: the freeze is a claim, so a case reads it: a table a reader can rewrite is a
@@ -232,8 +233,14 @@ test('#605 a leg is measured against the table it was handed, and against no oth
 
   const front = recordingLeg(FRONT_LEG_CALL_INS).leg
   const measuredAsBackend = wireLegToCore({ core, leg: front, table: BACKEND_LEG_CALL_INS })
-  assert.deepEqual(measuredAsBackend.missing, BACKEND_LEG_CALL_INS.map(entry => entry.name),
-    'a front leg measured against the backend table carries none of it, which is how a wiring mistake reads')
+  // #726: the two interfaces share the delivery (`write`, `writeRaw`, `end`), so a front
+  // leg answers those rows and lacks the rest. The expectation is derived from the leg,
+  // so a row the two tables come to share moves this case with them.
+  assert.deepEqual(measuredAsBackend.missing,
+    BACKEND_LEG_CALL_INS.filter(row => typeof front[row.name] !== 'function').map(row => row.name),
+    'a front leg measured against the backend table carries the delivery both interfaces declare and nothing else of it')
+  assert.ok(measuredAsBackend.missing.includes('setFrameHandler') && measuredAsBackend.missing.includes('connect'),
+    'so the registrations and the dial it does not carry are the holes a wiring mistake reads')
 })
 
 test('#592 the ritual has one home: no lane registers the core\'s call-ins by hand', () => {
@@ -245,13 +252,23 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
     'src/ladder/loopback.js': read('src/ladder/loopback.js')
   }
 
-  // The module is the one home, so each row of either table is declared there
-  // exactly once. The quotes are what tell setCoreAttach from
+  // The module is the one home, so each row of either table is declared there once per
+  // table that names it. The quotes are what tell setCoreAttach from
   // setCoreAttachConfiguring.
-  for (const table of [FRONT_LEG_CALL_INS, BACKEND_LEG_CALL_INS]) {
+  //
+  // #726: the two interfaces share the delivery, so `write`, `writeRaw` and `end` are a
+  // row of each and are declared twice. The count is derived from the tables rather
+  // than relaxed, so a third copy in the module still fails, and a table that names a
+  // row it does not declare fails here too.
+  const tables = [FRONT_LEG_CALL_INS, BACKEND_LEG_CALL_INS]
+  for (const table of tables) {
+    const names = table.map(row => row.name)
+    assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [],
+      'a table declares each row name once, so a member is one row and not two')
     for (const { name } of table) {
-      assert.equal(count(MODULE, "'" + name + "'"), 1,
-        'src/service/wire-leg-to-core.js declares ' + name + ' once, for every lane')
+      const declaring = tables.filter(candidate => candidate.some(row => row.name === name)).length
+      assert.equal(count(MODULE, "'" + name + "'"), declaring,
+        'src/service/wire-leg-to-core.js declares ' + name + ' once per table that names it: ' + declaring)
     }
   }
 
@@ -486,6 +503,39 @@ test('#592 a leg with a hole is named on the start record', () => {
     'the start record names the call-in this leg did not carry, which is the one place a lane would see it')
   assert.deepEqual(core.legWiring.front.missing, ['setBodyServed'],
     'and the report the record is built from says the same')
+})
+
+// #726: the delivery half is a row now, so its absence is a name on the start line
+// rather than a TypeError on the member the first frame reaches. This is the ticket's
+// first acceptance criterion, as a case: before the row existed, `write` was not in
+// either list, and a leg without it failed at the first relay and said nothing before.
+test('#726 a leg with no delivery is named, and named apart as required', () => {
+  const leg = createOfflineFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    offlineWhitelist: [PLAYER],
+    getSnapshotConfig: () => [],
+    wireMode: 'off'
+  })
+  const holey = new Proxy(leg, {
+    get (target, name) { return name === 'write' ? undefined : target[name] }
+  })
+  const lines = []
+  const core = createMonoplayer({
+    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
+    backendLeg: createFakeBackendLeg(),
+    frontLeg: holey,
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout },
+    logStream: { write: line => lines.push(JSON.parse(line)) }
+  })
+  core.start()
+  assert.deepEqual(core.legWiring.front.missing, ['write'],
+    'the report names the delivery this leg does not carry')
+  assert.deepEqual(core.legWiring.front.requiredMissing, ['write'],
+    'and it is a required row: no default inside the leg stands behind it, so the client it would serve is lost')
+  assert.deepEqual(lines.find(entry => entry.event === 'start').legMissing, { front: ['write'], backend: [] },
+    'and the start record carries the name, which is the line a lane operator reads')
 })
 
 // #605: a backend leg with a hole is named by the same report, and the call that
