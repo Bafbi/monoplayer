@@ -11,7 +11,9 @@ import path from 'node:path'
 import { tempRoot } from '../support/temp.js'
 
 import {
+  allowedServerAddresses,
   attachWhitelistEntries,
+  startControlRecord,
   createPickerServerReader,
   createReconnectHandler,
   createShutdownHandler,
@@ -558,6 +560,96 @@ test('#705 the journal record carries the entries beside the count, and does not
   assert.match(body, /whitelistCount: entriesAtStart\.length/, 'and counts the list it carries')
   assert.doesNotMatch(body, /whitelistCount: cfg\.attachWhitelist\.length/,
     'it counts a list it does not carry, which is the defect #705 is about')
+})
+
+// --- #746: the start record names the allowed servers it offers ---
+//
+// The same defect #601, #677 and #705 fixed one field over in this record: a count
+// names nothing an operator can hold against the file, and two servers offered read
+// exactly like one server and a host that resolves to nothing.
+//
+// An entry is the `host:port` a picker row is named for (src/core/picker.js). No name
+// of its own is available: `parseAllowedServers` keeps a host, a port and a stamp, and
+// drops every field it has no use for. The address is also the fact a reader wants. It
+// is the target a claim dials, and not whoever holds it.
+const ALLOWED_SERVERS = [
+  { host: 'play2.excalia.fr', port: 25565 },
+  { host: 'sky.excalia.fr', port: 25566 }
+]
+
+function allowedServersFile (servers) {
+  const file = path.join(tempRoot('monoplayer-start-allowed-'), 'allowed-servers.json')
+  fs.writeFileSync(file, JSON.stringify({ version: 1, servers }) + '\n')
+  return file
+}
+
+test('#746 the start record names each allowed server it offers, not only how many', () => {
+  const read = createControlDocument({ allowedServersFile: allowedServersFile(ALLOWED_SERVERS) }).allowedServers()
+  assert.equal(read.source, 'control', 'the case reads the file an operator edits')
+
+  // The block the record writes, over a real file. `count` is the list's own length, so no
+  // reader can hold a count and a list that disagree.
+  assert.deepEqual(
+    startControlRecord({ file: '/control/allowed-servers.json', whitelistReload: true, read }),
+    {
+      whitelistReload: true,
+      allowedServers: {
+        file: '/control/allowed-servers.json',
+        seed: null,
+        source: 'control',
+        count: 2,
+        servers: ['play2.excalia.fr:25565', 'sky.excalia.fr:25566']
+      }
+    },
+    'one address per server, in the order the file holds them, as the address a claim dials')
+
+  // A host holding a colon is the case that tells "the address the dialog draws" from
+  // "the host and port joined with a colon": one server offered under two names is one
+  // body with two caches (src/core/picker.js, canonicalPickName).
+  assert.deepEqual(
+    allowedServerAddresses({ servers: [{ host: '2001:db8::1', port: 25565 }], source: 'control', file: null, reason: null, at: null }),
+    ['[2001:db8::1]:25565'],
+    'and an address reads here exactly as the picker draws it')
+
+  assert.deepEqual(allowedServerAddresses({ servers: [], source: 'none', file: null, reason: 'no_key', at: null }), [],
+    'a lane that offers nothing has an empty list, not a missing field')
+  assert.deepEqual(allowedServerAddresses(null), [], 'and a read that answered nothing is the same fact')
+})
+
+// The object literal opened after `marker`, by brace matching. No case drives
+// startLive(): it opens sockets and a custody volume, so what the record carries is read
+// off the source, the way #705's journal half is (#705 is the pair this one copies).
+function objectBody (source, marker) {
+  const at = source.indexOf(marker)
+  assert.notEqual(at, -1, 'src/service/start-live.js holds ' + marker)
+  const from = source.indexOf('{', at)
+  let depth = 0
+  for (let i = from; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(from, i)
+    }
+  }
+  assert.fail(marker + ' closes')
+}
+
+test('#746 both start records carry the addresses beside the count, and the page names the list', () => {
+  // Both records carry one literal between them, so a journal reader learns the servers
+  // the log line names. That is what #331 made true for `backend` after it named two.
+  const source = fs.readFileSync(new URL('../../src/service/start-live.js', import.meta.url), 'utf8')
+  for (const marker of ["log('startLive', {", "journal.event('startLive', {"]) {
+    assert.match(objectBody(source, marker), /control: controlRecord,/,
+      marker + ' carries the one block the other record carries')
+  }
+
+  // The doc guard in test/observability/ reads a dotted field's first segment, so it
+  // cannot see this key: it would pass with the row naming a list the record stopped
+  // writing. This is the case that reads the two together.
+  const doc = fs.readFileSync(new URL('../../docs/telemetry.md', import.meta.url), 'utf8')
+  const row = doc.split('\n').find(line => line.startsWith('| `startLive`') && line.includes('`control.allowedServers.servers`'))
+  assert.ok(row, 'docs/telemetry.md\'s startLive table names control.allowedServers.servers')
+  assert.ok(row.includes('`host:port`'), 'and says an entry is the address: ' + row)
 })
 
 test('#540 a followed target the leg rejects reverts to the server the session settled on', async () => {

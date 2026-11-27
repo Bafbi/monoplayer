@@ -90,7 +90,7 @@ import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { accountIdentifier, bodyKey, stampIdentity } from '../core/channels.js'
-import { pickerOfferedRows } from '../core/picker.js'
+import { pickerOfferedRows, pickerRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
@@ -175,6 +175,52 @@ export function attachWhitelistEntries (uuids) {
     uuid: normalizeUuid(raw),
     refusalReason: uuidRefusalReason(raw)
   }))
+}
+
+// #746: the start record counted the allowed servers it offers and named none. It is the
+// defect #601 fixed in the loopback payloads, #677 in the dev lane's report, and #705 one
+// field over in this same record. A count names neither server, so a lane offering two
+// reads the same as a lane offering one. Only the entries let an operator see a host they
+// mistyped.
+//
+// An entry is the address a picker row is named for, which is what its claim dials
+// (src/core/picker.js). `pickerRows` canonicalises that name, so a host holding a colon
+// reads here as the picker writes it.
+//
+// The address is the whole of an entry. `parseAllowedServers` in src/service/control.js
+// keeps a host, a port and a stamp, and drops every field it has no use for, so no name
+// is on this path to print. None is wanted: an address names the target a claim dials,
+// not the tenant, the account or the person behind it. The same record already prints
+// `backend` as one.
+//
+// Whether a server answers is not asked: the fact is which servers the lane offers.
+export function allowedServerAddresses (read) {
+  return pickerRows(pickerOfferedRows(() => read).rows).map(row => row.name)
+}
+
+// The `control` block of the start record (#229, #262, #746). One literal, read by the log
+// line and the journal event both, so the two cannot name different servers or disagree
+// about the whitelist switch. That is #331's rule for `backend`, applied here.
+//
+// This is a function and not an inline literal so a case can read the block. No case
+// drives `startLive()`: it opens sockets and a custody volume.
+export function startControlRecord ({
+  file = null,
+  seed = null,
+  whitelistReload = false,
+  read = null
+} = {}) {
+  const servers = allowedServerAddresses(read)
+  return {
+    whitelistReload,
+    allowedServers: {
+      file,
+      seed,
+      source: read?.source ?? 'none',
+      count: servers.length,
+      servers
+    }
+  }
 }
 
 export function unidentifiedSkinWarning ({ skin, puppet } = {}) {
@@ -1141,11 +1187,18 @@ export async function startLive ({ argv = [], io = process } = {}) {
   }
 
   // #262: the allowed-server list, read once. The start record says which file
-  // answered and how many servers it holds, so an operator can see a seed standing
-  // in for an unedited list without opening a file. The picker reads the list again
-  // at each offer (#265). This read is the lane's own report, and it is the same
-  // call.
+  // answered and which servers it holds, so an operator can see a seed standing in
+  // for an unedited list without opening a file. The picker reads the list again at
+  // each offer (#265). This read is the lane's own report, and it is the same call.
   const allowedServersAtStart = control.allowedServers()
+  // #746: one read, so the count and the addresses beside it are the same read.
+  // `allowedServers()` re-reads the file on every call by design (#265).
+  const controlRecord = startControlRecord({
+    file: cfg.control.allowedServers ?? null,
+    seed: cfg.control.allowedServersSeed ?? null,
+    whitelistReload: whitelistSource !== null,
+    read: allowedServersAtStart
+  })
 
   // The target the process dials first, and treats as its base: the one the
   // deployment configured. #229 let a control document override it before the first
@@ -1349,18 +1402,10 @@ export async function startLive ({ argv = [], io = process } = {}) {
     // the one the config document asks for. A reader that wants the configured
     // target after a transfer reads this record, not a second field beside it.
     backend: backendAddress,
-    control: {
-      whitelistReload: whitelistSource !== null,
-      // #262: the two paths, which file answered, and how many servers it offers.
-      // #265: the picker reads this key at each offer, so these numbers are the read
-      // at start. A lane with no list says `none` here rather than looking wired.
-      allowedServers: {
-        file: cfg.control.allowedServers ?? null,
-        seed: cfg.control.allowedServersSeed ?? null,
-        source: allowedServersAtStart.source,
-        count: allowedServersAtStart.servers.length
-      }
-    },
+    // #262: the two paths, which file answered, and which servers it offers.
+    // #265: the picker reads this key at each offer, so these are the read at start.
+    // A lane with no list says `none` here rather than looking wired.
+    control: controlRecord,
     ...accountLogFields,
     attachWhitelist: cfg.attachWhitelistFile,
     whitelistCount: entriesAtStart.length,
@@ -1376,6 +1421,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
     ...accountLogFields,
     whitelistCount: entriesAtStart.length,
     whitelistEntries: entriesAtStart,
+    // #746: the journal reader learns which servers the lane offers, because it carries
+    // the one `control` block the log line carries.
+    control: controlRecord,
     reconnect: {
       // A config document's 0 is how an operator writes "unlimited", so the
       // record says what the lane will do, not what the document wrote. The
