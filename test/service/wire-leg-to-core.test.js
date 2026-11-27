@@ -81,8 +81,13 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
   // carries one, and the pre-auth read. This leg carries every one of them.
   assert.deepEqual(wiring.called, FRONT_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
     'every call row of the front table is carried, and none of them is registered')
-  assert.equal(wiring.wired.length + wiring.called.length, FRONT_LEG_CALL_INS.length,
-    'and every declared call-in was either registered or carried')
+  // #757: the report no longer counts what it installed, so the count is read from two
+  // sides instead of one field: the leg recorded which registration reached it, and the
+  // report names the calls it carried. Every row of the table is one of the two.
+  assert.deepEqual(
+    [...new Set([...handlers.keys(), ...wiring.called])].sort(),
+    FRONT_LEG_CALL_INS.map(row => row.name).sort(),
+    'and every declared call-in was either registered on the leg or carried by it')
 
   // The payload shapes a caller must not have to know. `attachPlayer` takes
   // includeConfig, and a lane's attach never re-sends the configuration phase:
@@ -171,8 +176,6 @@ test('#592 a leg missing a call-in is named, and the required ones are named apa
   const named = wireLegToCore({ core, leg: partial.leg, table: FRONT_LEG_CALL_INS })
   assert.ok(named.missing.includes('setBodyServed'),
     'a leg without setBodyServed is named: its own fallback reads null and nothing else says so')
-  assert.ok(!named.wired.includes('setBodyServed'),
-    'and it is not reported as wired')
 
   const absent = recordingLeg(FRONT_LEG_CALL_INS, { omit: ['setCoreAttach', 'setSpectateBody'] })
   const answered = wireLegToCore({ core, leg: absent.leg, table: FRONT_LEG_CALL_INS })
@@ -397,6 +400,7 @@ test('#718 the report carries no handler, because no lane wraps a call-in any mo
     'the report names rows: #607 carried a handler for a lane that wrapped a call-in after start(), and no lane does')
 })
 
+
 // #607: the acceptance criterion, as a count. A caller that writes the literal has
 // a second copy of the table's row, and a change to the table leaves it on the old
 // value in silence. Comments are stripped: a module explaining why it spells no
@@ -474,8 +478,8 @@ test('#605 each double carries every row of its interface, or a hole declared he
       'the ' + leg + ' double carries every row but the ones declared here: a row added to the table and not to src/legs/fake-legs.js fails this line')
     assert.deepEqual(report.requiredMissing, DOUBLE_HOLES[leg].requiredMissing,
       'and its required holes are the declared ones')
-    assert.equal(report.wired.length + report.called.length + report.missing.length, table.length,
-      'so every row of the table is reported as wired, carried or missing')
+    // #757: the report carries no list of the rows it installed. A row added to a table
+    // and not to its double is still named here, by the `missing` assertion above.
   }
 })
 

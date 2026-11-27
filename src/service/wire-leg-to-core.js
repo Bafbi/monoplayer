@@ -43,7 +43,7 @@
 // A leg that carries none of them is a leg with no core in front of it, which the
 // two pre-auth rungs build on purpose. They never come here.
 //
-// The report is what a reader checks: four lists of names, and the reader of each
+// The report is what a reader checks: three lists of names, and the reader of each
 // one is named here. `missing` names every declared call-in the leg does not carry,
 // and the core puts those names on its start line, one list per interface.
 // `called` names every row the core calls on the leg rather than registers: the
@@ -51,9 +51,13 @@
 // that list rather than a `typeof` guard in the core's body (backendCarries,
 // src/service/monoplayer.js); the front's three are still tested by `typeof` where they
 // are used, so for those the row's work is the name on the report.
-// `requiredMissing` and `wired` have one reader each, and both are
-// test/service/wire-leg-to-core.test.js: the subset the leg's own default hides, and
-// the rows it installed, held to the table rather than to a lane. A missing one is
+// #757: `wired` is gone. It named the rows the leg installed, which is the table
+// minus `called` minus `missing`, so it carried no fact of its own, and its only
+// readers were tests counting it. What a reader asked it — that every row of the
+// table was applied to the leg — is a claim about the table, and
+// test/service/wire-leg-to-core.test.js makes it where it builds a leg row by row.
+// `requiredMissing` has one reader, and it is that file too: the subset the leg's own
+// default hides, held to the table rather than to a lane. A missing one is
 // not thrown on: src/legs/fake-legs.js carries neither setCoreAttach nor
 // setCoreAttachConfiguring, and the tests that build a core on it attach through
 // the core instead.
@@ -397,7 +401,6 @@ export function wireLegToCore ({ core, leg, table } = {}) {
   if (!Array.isArray(table)) {
     throw new TypeError('wireLegToCore needs the table of the interface it wires: FRONT_LEG_CALL_INS or BACKEND_LEG_CALL_INS')
   }
-  const wired = []
   const called = []
   const missing = []
   const requiredMissing = []
@@ -417,7 +420,6 @@ export function wireLegToCore ({ core, leg, table } = {}) {
     // #718: built here and handed over, not kept. The doc comment on the function
     // says why no field carries one.
     method.call(leg, entry.handler(core))
-    wired.push(entry.name)
   }
-  return { wired, called, missing, requiredMissing }
+  return { called, missing, requiredMissing }
 }
