@@ -180,7 +180,7 @@ whitelist_is_empty() {
 # nobody, and a count of entries cannot see it (#677).
 #
 # One program, because reading this document has one home and three callers. `report`
-# prints a verdict per entry, which is what `status` shows. `prune` writes the document
+# prints a UUID decision per entry, which is what `status` shows. `prune` writes the document
 # back without the entries that cannot attach, naming each one it dropped on stderr, and
 # hands back the document it was given when nothing had to go, so an entry keeps the
 # shape it was written with. `names` lists who a document carries, for the message that
@@ -262,7 +262,7 @@ whitelist_judge() {
   ROOT="$ROOT" node --input-type=module -e "$(whitelist_judgement)" "$@"
 }
 
-# The verdicts, in the prefix every other line of the report carries, so the block reads
+# The UUID decisions, in the prefix every other line of the report carries, so the block reads
 # as one report and the caller needs no second quoting layer.
 whitelist_report() {
   whitelist_judge report "$1" | sed 's/^/dev-lane: /'

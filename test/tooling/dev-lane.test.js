@@ -501,7 +501,7 @@ test('status names each attach whitelist entry, and which of them can authentica
 })
 
 test('status says every entry can authenticate when every uuid is one Mojang issues', () => {
-  // The other side of the verdict: a lane whose list is all real accounts is not a lane
+  // The other side of it: a lane whose list is all real accounts is not a lane
   // with a warning on it, and the line has to be able to say so.
   const space = workspace()
   fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), LIVE_WHITELIST + '\n')
