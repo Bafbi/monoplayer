@@ -902,7 +902,9 @@ export function createMonoplayer ({
   // the core is handed a name and a uuid the leg has already verified. A second pass in
   // here had no verifier injected by any lane and no caller in this repo, which is why it
   // is gone rather than declared: a row would put a call on the login path that can only
-  // allow while no lane injects a verifier. #721 decides whether G1 injects one.
+  // allow while no lane injects a verifier. #721 settled the rest of it: the core keeps no
+  // session verification of its own, so this module offers one gate, the login review
+  // below, and the session step stays the leg's.
 
   // #98: the pack is the puppet's installation and the human's answer.
   //
