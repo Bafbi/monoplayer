@@ -430,11 +430,12 @@ test('#722 the doc names the sessionserver refusal, its reason, and the counter 
 })
 
 // #709: the words `configurationEnded`'s `reason` can hold, read off the leg's own end
-// sites. Every end takes three arguments and the reason is the second: a literal at nine
-// sites, and one string concatenation at the tenth, which is the guard for a verb no lane
-// carries. The paren walk is the one `countedSites` above uses, and
-// test/legs/picker-numbers.test.js scans the same sites to pin their order (#764 tracks why
-// the two walks are copies).
+// sites. Every end takes three arguments and the reason is the second: a literal at ten
+// sites, and one string concatenation at the eleventh, which is the guard for a verb no lane
+// carries. These two helpers are a third copy of a scanner: endSites is endConfigurationSites
+// in test/legs/picker-numbers.test.js, and argumentsOf is its splitArguments, character for
+// character. #764 names the two this file already shared with that one (countedSites and
+// sourceBody) and not these two, which a comment on it now names.
 function endSites (source) {
   const sites = []
   for (let at = source.indexOf('endConfiguration('); at !== -1; at = source.indexOf('endConfiguration(', at + 1)) {
@@ -497,7 +498,8 @@ function endWords (source) {
     }
     const literal = reason.match(/^'([a-z][a-z0-9_]*)'$/)
     assert.notEqual(literal, null,
-      'the end site at byte ' + site.at + ' passes a reason this case can read, and it passes: ' + reason)
+      'the end site at byte ' + site.at + ' passes a reason this case cannot read: ' + reason +
+        '. Give it a quoted word, or teach this case the shape it writes')
     words.add(literal[1])
   }
   return [...words].sort()
@@ -560,13 +562,15 @@ test('#709 the page names every word an ended client is recorded under, and no o
     pageWords.slice().sort().filter((word, index, all) => all.indexOf(word) === index),
     'the table names a word twice')
 
-  // The pattern's verbs, off the module that owns them, so a verb added to the dialogs is a
-  // section that no longer names what the pattern can receive.
+  // The pattern's verbs, off the module that owns them, in both directions: a verb the dialogs
+  // gained, or a verb they dropped, is a section that no longer names what the pattern can take.
   const section = endSection()
-  for (const verb of PICK_VERBS) {
-    assert.ok(section.includes('`' + verb + '`'),
-      'the section names ' + verb + ', which PICK_VERBS carries and the unbuilt pattern takes')
-  }
+  const named = section.match(/member of `PICK_VERBS` \(([^)]*)\)/)
+  assert.notEqual(named, null, 'the section names the verbs the pattern takes, in a parenthetical after PICK_VERBS')
+  const pageVerbs = [...named[1].matchAll(/`([a-z][a-z0-9_]*)`/g)].map(match => match[1]).sort()
+  assert.deepEqual(pageVerbs, [...PICK_VERBS].sort(),
+    'the section names ' + pageVerbs.join(', ') + ' as the verbs PICK_VERBS carries, and PICK_VERBS is ' +
+      [...PICK_VERBS].join(', ') + ': name them all, and no other, in the parenthetical after PICK_VERBS')
 
   // The page says the failed disconnect carries the same reason, so the two records are one
   // word set here rather than a second one a reader has to find.
@@ -579,7 +583,9 @@ test('#709 the page names every word an ended client is recorded under, and no o
 // second reader on another word is a word the page calls documentation and no longer is. A line
 // that names the record and quotes no word is a comment, so it is skipped; and a branch that
 // compares the reason to a variable rather than to a literal is not seen here, because what the
-// page claims is which words a reader names, and a word a reader names is a literal.
+// page claims is which words a reader names, and a word a reader names is a literal. The scan
+// is one line wide: a filter that names the record on one line and compares `reason` on the
+// next is invisible, and nothing in src/ reads that way today.
 test('#709 only spectate_refused is branched on, and the page says which word it is', () => {
   const LEG = path.join('src', 'legs', 'live-front.js')
   const LOOPBACK = path.join('src', 'ladder', 'loopback.js')

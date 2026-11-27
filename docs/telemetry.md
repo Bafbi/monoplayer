@@ -406,33 +406,35 @@ reads as `null` and never as a missing key. That object is what
 
 ### The picker end record
 
-One `configurationEnded` line is written for every picker client the front leg ends, and
-it is the only record that says why the client went. Its fields are `reason` and
-`username`, which is `null` when the client never gave one, beside the identity keys
-the sinks stamp. A picker client holds no channel until its claim or its Spectate lands,
-so most of these lines carry `account` and no `channel`, and a Spectate whose
-phase-end write threw carries both. A `disconnect` the leg could not write is reported
-beside the end line: `configurationDisconnectFailed` carries the same `reason` and the
-`error` the write threw, and the client is ended either way.
+One `configurationEnded` line is written for every picker client the front leg ends. Its
+fields are `reason` and `username`, which is `null` when the client never gave one, beside
+the identity keys the sinks stamp. A picker client holds no channel until its claim or its
+Spectate lands, so most of these lines carry `account` and no `channel`. A claim or a
+Spectate landing whose phase-end write threw carries both. A `disconnect` the leg could not
+write is reported beside the end line: `configurationDisconnectFailed` carries the same
+`reason` and the `error` the write threw, and the client is ended either way. No heartbeat
+carries this record: the front leg writes it, so it is read from the JSONL log.
 
 That `reason` is the end phase's own word, and not the key of the refusal map. The two
 vocabularies name one client from two sides, and they rarely spell the same word:
 
 - For "why was this client ended", read `configurationEnded` and its `reason`.
 - For "what did the refusal map count", read `front.pickerRefusalsByReason` in the
-  heartbeat, and the refusal's own line, which carries the word the map is keyed by:
-  `pickerEmpty`, `pickerDialogFailed`, `pickerServerDialogFailed`, `pickerVerbRefused`,
-  `pickerPickRefused`, `pickerClaimRefused`, `pickerDisconnectRefused`,
-  `pickerClaimFinishFailed`, or `spectateRefused`.
+  heartbeat, and the refusal's own line: `pickerEmpty`, `pickerDialogFailed`,
+  `pickerServerDialogFailed`, `pickerVerbRefused`, `pickerPickRefused`,
+  `pickerClaimRefused`, `pickerDisconnectRefused`, `pickerClaimFinishFailed`, or
+  `spectateRefused`. Every one of those carries the word the map is keyed by.
 
 A lane with no rows to offer ends `picker_empty` and counts `empty_offer`. A claim
 landing that lost its phase-end write ends `claim_failed`, a Spectate landing that lost
-the same write ends `spectate_refused`, and both count the one key `finish_failed`. So a
-line that answers one of those questions never answers the other.
+the same write ends `spectate_refused`, and both count the one key `finish_failed`. Where
+the two words differ, a line that answers one question does not answer the other. One
+word is the same on both sides: a dialog the leg could not write ends
+`picker_unavailable`, and the map counts it under `picker_unavailable`.
 
-Ten words reach that `reason`, and `src/legs/live-front.js` mints all ten. No library
-word reaches this field: an unfamiliar string here is this repo's own, and a `grep` of
-`src/` finds the site that wrote it. The set is closed, and
+Nine words and one pattern reach that `reason`, and `src/legs/live-front.js` mints every
+one of them. No library word reaches this field: an unfamiliar string here is this repo's
+own, and a `grep` of `src/` finds the site that wrote it. The set is closed, and
 `test/observability/telemetry-doc.test.js` reads it against this table in both
 directions (#709).
 
@@ -445,7 +447,7 @@ directions (#709).
 | `verb_refused` | A verb naming a server the offer does not carry (`pickerVerbRefused`). | no |
 | `disconnect_refused` | A Disconnect verb on a body a claim holds (`pickerDisconnectRefused`). | no |
 | `claim_refused` | A claim another connection holds, or a second claim on this one (`pickerClaimRefused`). | no |
-| `spectate_refused` | The Spectate landing refused the body, or lost its phase-end write (`spectateRefused`). | `src/ladder/loopback.js` |
+| `spectate_refused` | The Spectate landing refused to land the client: the answer declined, the channel would not open, the body had no cached configuration, or the phase-end write threw (`spectateRefused`). | `src/ladder/loopback.js` |
 | `claim_failed` | A granted claim whose `finish_configuration` write threw (`pickerClaimFinishFailed`). | no |
 | `verb_<verb>_unbuilt` | A verb in `PICK_VERBS` with no branch in `handlePickerVerb`. | no |
 
