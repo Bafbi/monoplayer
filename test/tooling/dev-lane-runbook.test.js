@@ -2,20 +2,19 @@
 // before it touches a cluster: the rule in AGENTS.md, the lane each run belongs
 // on in docs/testing-ladder.md, and the dev account in deploy/dev/README.md.
 //
-// The sweep at the end of this file reads every page git owns, not those three and
-// not a fourth somebody remembered (#842).
+// The sweep over every Markdown page git owns moved to
+// test/tooling/pages-mise-tasks.test.js in #875, which says why. What this file holds is
+// the three docs above.
 //
 // Nothing here reaches a cluster: every case reads a file.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseLadder } from '../../src/ladder/next-rung.js'
 import { STATES } from '../../src/core/session.js'
-import { readMiseTasks } from './mise-toml.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -332,159 +331,3 @@ test('the glossary names the lanes the docs use', () => {
   }
 })
 
-// A task named in prose, as a page spells it: `mise run <task>`. A word starting
-// with "-" is a flag of `mise run` itself and not a task, and docs/testing-ladder.md
-// spells one out ("runs its rungs through `mise run --continue-on-error`"). A colon
-// after the name is punctuation, as in "`mise run gate:up`: it wakes the rows".
-const MENTION = /`?mise run ([a-z0-9][a-z0-9:-]*)/g
-
-function mentions (text) {
-  return [...new Set([...text.matchAll(MENTION)].map(match => match[1].replace(/:$/, '')))]
-}
-
-// The name one page gets wrong, as the sentence a reader acts on: the page, the
-// task, and the file that would define it. The sweep below and the fixture case at
-// the end of this file both print this text, so a failing gate shows the sentence
-// the case asserts.
-function wrongName (page, task) {
-  return page + ' names "mise run ' + task + '", and mise.toml defines no such task: it holds one [tasks.<name>] block per task'
-}
-
-// Every page git owns, resolved with the flags the lint stage resolves its files
-// with since #846: the tracked files, plus the ones not committed yet, without the
-// ignored ones. The glob is this guard's own, because that stage parses `*.js` and
-// this one reads `*.md`. A page added in the commit that breaks it fails here, and
-// no page is invisible because nobody remembered to put it on a list (#727, #743).
-// What one page reports, from its own text and the tasks the tree defines: the names it
-// gets wrong, and the entries in UNDEFINED_BY_DESIGN it no longer needs. A fixture page
-// can be handed to it, so the failure itself is held and not only the sentence it prints.
-function sweepPage (page, text, tasks) {
-  const names = mentions(text)
-  const gone = names.filter(task => !tasks.has(task))
-  const exempt = UNDEFINED_BY_DESIGN.get(page)?.tasks ?? []
-  return {
-    names,
-    wrong: gone.filter(task => !exempt.includes(task)).map(task => wrongName(page, task)),
-    stale: exempt.filter(task => !gone.includes(task)).map(task => staleName(page, task, tasks.has(task)))
-  }
-}
-
-// An entry in UNDEFINED_BY_DESIGN that no longer describes its page. Two things cause
-// it and there is one entry, so the message names the cause instead of guessing: the
-// tree gained the task, or the page dropped the name.
-function staleName (page, task, defined) {
-  return page + ' is exempt for "mise run ' + task + '", and ' + (defined
-    ? 'mise.toml defines it now: drop the entry'
-    : 'the page no longer names it: drop the entry')
-}
-
-function ownedPages () {
-  const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.md'],
-    { cwd: ROOT, encoding: 'utf8' })
-  assert.equal(listed.status, 0, 'git lists the pages it owns: ' + listed.stderr)
-  return listed.stdout.split('\0').filter(Boolean).sort()
-}
-
-// A page that names a task the tree does not define, and why the name is right
-// anyway. The exempt names are spelled out one by one, so an exception covers the
-// sentences written for it and never the whole page: a new `mise run` name on an
-// exempt page still fails, and an exempt name the page dropped fails too.
-const UNDEFINED_BY_DESIGN = new Map([
-  ['docs/architecture.md', {
-    reason: 'the architecture proposal is "proposed, not built": its command block lists the tasks the proposal would add',
-    tasks: ['auth:status', 'ci', 'deploy', 'down', 'images:build', 'logs', 'metrics', 'secret:apply', 'secret:rotate', 'smoke', 'test:l2', 'whitelist:add']
-  }],
-  ['docs/driver-lane-plan.md', {
-    reason: 'the driver lane plan is a dated record ("Historical plan, written for 26.1.2"), and keeps the bootstrap task it was written under',
-    tasks: ['auth:device-code']
-  }],
-  ['testdata/driver-verdict.md', {
-    reason: 'a verdict page is dated evidence, so it keeps the name the run was taken under, and says where it says the rename',
-    tasks: ['gate-b:g0']
-  }]
-])
-
-// 48 pages and 60 distinct task names in this tree when #842 landed.
-// `git ls-files '*.md' | wc -l` prints the first. Both floors sit below, because
-// deleting a page or trimming a doc is legitimate: a sweep narrowed back to a
-// hand-kept list of three lands under both, and so does a mention pattern that
-// stopped finding names.
-const PAGES_FLOOR = 40
-const NAMES_FLOOR = 50
-
-test('every page in the tree names only tasks mise.toml defines (#842)', () => {
-  const tasks = readMiseTasks()
-  assert.ok(tasks.has('check'), 'mise.toml parsed: it defines the gate')
-
-  const pages = ownedPages()
-  assert.ok(pages.length >= PAGES_FLOOR,
-    'the sweep reads ' + pages.length + ' pages and every page git owns is one of them: a sweep under ' +
-    PAGES_FLOOR + ' has narrowed back to a hand-kept list, which is the defect #727 and #743 closed')
-  assert.ok(pages.includes('GLOSSARY.md'),
-    'GLOSSARY.md is a page the sweep reads: it names the gate lane\'s two tasks, and a task renamed in mise.toml left it pointing at a command nobody can run (#842)')
-
-  const wrong = []
-  const stale = []
-  const seen = new Set()
-  for (const page of pages) {
-    const swept = sweepPage(page, read(page), tasks)
-    for (const task of swept.names) seen.add(task)
-    wrong.push(...swept.wrong)
-    stale.push(...swept.stale)
-  }
-  // An entry naming a page the tree dropped reads as coverage it no longer is.
-  for (const page of UNDEFINED_BY_DESIGN.keys()) {
-    if (!pages.includes(page)) stale.push(page + ' is exempt from the sweep, and the tree holds no such page')
-  }
-
-  assert.deepEqual(wrong, [],
-    'a page names a task mise.toml does not define. A task renamed in mise.toml leaves that page ' +
-    'pointing at a command nobody can run, and nothing else notices. Rename the line to the task that ' +
-    'exists, or define the task')
-  assert.deepEqual(stale, [],
-    'an entry in UNDEFINED_BY_DESIGN no longer describes the tree. An exception that outlives its ' +
-    'reason hides the next task renamed on that page: drop the entry, or name the task the page holds now')
-  assert.ok(seen.size >= NAMES_FLOOR,
-    'the sweep finds ' + seen.size + ' distinct task names across those pages: a pattern under ' +
-    NAMES_FLOOR + ' has stopped finding names, and every case above would pass on a tree it never read')
-})
-
-test('the sweep reports the page and the task mise.toml does not define (#842)', () => {
-  // Fixtures, not the tree: this case is about the report, so a page drifting for
-  // real cannot make it about the drift instead.
-  assert.deepEqual(mentions('Run `mise run check`, then `mise run gone:task`.'), ['check', 'gone:task'],
-    'a mention is the task name, not the punctuation around it')
-  assert.deepEqual(mentions('through `mise run --continue-on-error`'), [],
-    'a flag of mise run itself is not a task')
-  assert.deepEqual(mentions('`mise run gate:up`: it wakes the rows'), ['gate:up'],
-    'punctuation after the name is not part of it')
-  assert.equal(wrongName('docs/panel.md', 'gone:task'),
-    'docs/panel.md names "mise run gone:task", and mise.toml defines no such task: it holds one [tasks.<name>] block per task',
-    'the report names the page, the task, and the file that defines tasks')
-  assert.equal(staleName('docs/architecture.md', 'ci', true),
-    'docs/architecture.md is exempt for "mise run ci", and mise.toml defines it now: drop the entry',
-    'a stale entry whose task the tree gained says so, rather than blaming the page')
-  assert.equal(staleName('docs/architecture.md', 'ci', false),
-    'docs/architecture.md is exempt for "mise run ci", and the page no longer names it: drop the entry',
-    'a stale entry the page dropped says so, so the reader is sent to the file that changed')
-
-  // The failure itself, on a page handed to the sweep: the sweep reports the name,
-  // and nothing else in this case would notice if it stopped reporting one.
-  const defined = readMiseTasks()
-  assert.deepEqual(sweepPage('docs/panel.md', 'Run `mise run check`, then `mise run gone:task`.', defined), {
-    names: ['check', 'gone:task'],
-    wrong: ['docs/panel.md names "mise run gone:task", and mise.toml defines no such task: it holds one [tasks.<name>] block per task'],
-    stale: []
-  },
-  'a page naming a task the tree does not define fails, and the failure names the page and the task')
-  assert.deepEqual(sweepPage('docs/panel.md', 'Run `mise run check`.', defined).wrong, [],
-    'a page naming only tasks the tree defines reports nothing')
-
-  // An exempt page, on the same fixture footing: the exception covers the names it was
-  // written for and no others, and every name it covers is checked in both directions.
-  const exemptPage = sweepPage('docs/architecture.md', 'Run `mise run ci`, then `mise run gone:task`.', defined)
-  assert.deepEqual(exemptPage.wrong.map(entry => entry.split(' names ')[0]), ['docs/architecture.md'],
-    'the exemption covers its own names, and an unlisted name on that page still fails')
-  assert.equal(exemptPage.stale.length, UNDEFINED_BY_DESIGN.get('docs/architecture.md').tasks.length - 1,
-    'a name the fixture page does not carry reads as an entry the page dropped')
-})
