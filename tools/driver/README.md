@@ -170,7 +170,8 @@ the shape it writes.
 }
 ```
 
-`inLevel` is how many the client held in its level before the radius filtered it,
+`dimension` is the registry name of the level the read was taken in. `inLevel` is how
+many the client held in its level before the radius filtered it,
 `truncated` says the mod capped the rows this answer carries, and `radius` is the
 number it filtered by, reported back rather than assumed by a caller. `local` marks
 the row this client controls, so the payload carries the player it drives once.

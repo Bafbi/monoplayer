@@ -622,7 +622,9 @@ public final class DriverServer {
         }
 
         JsonObject out = new JsonObject();
-        out.addProperty("dimension", mc.level.dimension().toString());
+        // The dimension's registry name, the form every other row here uses
+        // ("minecraft:overworld"), not ResourceKey's debug rendering.
+        out.addProperty("dimension", mc.level.dimension().identifier().toString());
         out.addProperty("radius", radius);
         JsonObject centerRow = new JsonObject();
         centerRow.addProperty("x", center.x);
