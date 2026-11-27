@@ -13,9 +13,10 @@
 //   405  a verb this route does not take
 //   400  a path segment that is not valid percent-encoding, a body that is not
 //        JSON or does not declare itself JSON, neither a uuid nor a name, both of
-//        them, a uuid that is not a Minecraft one, or a name the resolver could
-//        not turn into one, because the panel asks for the uuid rather than
-//        failing on a name it could not resolve
+//        them, a uuid that is not a Minecraft one, a uuid no Mojang session can
+//        answer for (the fourth rule below), or a name the resolver could not turn
+//        into one, because the panel asks for the uuid rather than failing on a
+//        name it could not resolve
 //   404  no puppet by that name in the registry, or no such uuid in its attach
 //        whitelist
 //   409  the uuid is the puppet's own account, or the patch lost three races
@@ -24,7 +25,7 @@
 //   503  there is no cluster client, the cluster refused a read or the patch, or
 //        the puppet's Deployment names no uuid to check the document against
 //
-// Three rules decide the write, and each is a refusal rather than a repair:
+// Four rules decide the write, and each is a refusal rather than a repair:
 //
 //   - **a document that does not parse is never rewritten.** This module parses
 //     strictly where `src/custody/store.js` parses leniently. That reader drops an
@@ -40,13 +41,22 @@
 //     puppet's own Deployment sets in MONOPLAYER_PUPPET_UUID, which is the object
 //     that already asserts the account, and it appears in neither an answer nor a
 //     log line. The caller sent a uuid, and that is the one worth printing.
+//   - **a uuid no Mojang session can answer for is refused (#704).** A name is
+//     resolved through Mojang, so a name that is not an account is already refused.
+//     A supplied uuid skipped that resolver entirely, so any 32 hex digits of the
+//     right shape were written, and a uuid Java derived from a name
+//     (`md5("OfflinePlayer:<name>")`, which the dev lane carried, #677) admits
+//     nobody while reading like a controller. Both paths ask `uuidRefusalReason` in
+//     `src/custody/util.js` now, and it is where the rule and its two limits live.
+//     `docs/panel.md` says what the limits leave in a document that already holds an
+//     entry no Mojang session can answer for.
 //
 // This module holds no cluster knowledge. The client arrives injected, the same one
 // `src/panel/routes/info.js` reads pods through and `routes/allowed.js` patches a
 // ConfigMap through, so a test hands in a fake and the route cannot tell it from the
 // cluster (#231, #233, #262).
 import { createNameLookup, WHITELIST_VERSION } from '../../custody/store.js'
-import { normalizeUuid } from '../../custody/util.js'
+import { normalizeUuid, uuidRefusalReason } from '../../custody/util.js'
 import { containerEnv } from '../kube.js'
 import { BODY_TOO_LARGE, readBody } from './body.js'
 
@@ -394,6 +404,25 @@ export function createWhitelistRoute ({
       log('panelWhitelistOwnUuid', { puppet: puppet.name, reason: 'puppet_uuid' })
       return send(res, 409, TEXT, 'that uuid is the puppet\'s own account, and the attach whitelist it gates ' +
         'must never admit the puppet itself\n')
+    }
+
+    // The same question the name path asks of the resolver, asked of the uuid itself
+    // (#704). It runs after the puppet's own uuid has been refused, so the uuid this
+    // branch prints is never the account identifier the rule above keeps out of the
+    // answer and the log.
+    const refusalReason = uuidRefusalReason(uuid, name)
+    if (refusalReason !== null) {
+      log('panelWhitelistUuidRefused', { puppet: puppet.name, uuid, name: name ?? null, reason: refusalReason })
+      // Each path has its own next step, because the two failures are different. A
+      // supplied uuid can be replaced by the name. A resolver's answer cannot be
+      // replaced by anything the caller sends, and advice that does not work is worse
+      // than none.
+      const next = name === null
+        ? ' Send the account name instead: the panel asks Mojang for the uuid a name resolves to, and it ' +
+          'cannot vouch for a uuid it is handed.'
+        : ' Nothing this request could have sent would fix it: the resolver answered a uuid no Mojang ' +
+          'session can answer for, which is a fault in the panel.'
+      return send(res, 400, TEXT, 'the attach whitelist is what admits a login, and ' + refusalReason + '.' + next + '\n')
     }
 
     return write(req, res, { send }, puppet, { action: 'add', uuid, name })

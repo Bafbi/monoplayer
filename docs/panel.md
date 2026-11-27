@@ -248,7 +248,8 @@ lane admits with the uuid and the time each was added, then the form that adds o
 - **one field, two shapes.** A uuid is sent as `{"uuid": "..."}` and anything else as
   `{"name": "..."}`. A name the panel cannot resolve comes back as a 400 asking for the
   uuid, and the block prints that as an instruction rather than as a failure: it is
-  something to do next, not a rejection.
+  something to do next, not a rejection. A uuid comes back as a 400 when no Mojang
+  session could answer for it, which is any version but 4.
 - **removing asks twice.** The first press arms the button and sends nothing. The second
   sends the `DELETE`. An arm nobody uses disarms itself after ten seconds, because a
   control that deletes on a stray tap is not one to put on a page a phone opens. The arm
@@ -296,7 +297,7 @@ preflight. A form body is refused rather than parsed.
 | Answer | Meaning |
 |---|---|
 | 200 | written, or already the document you asked for |
-| 400 | a body that is not JSON, neither a uuid nor a name, both at once, a uuid that is not one, a name the resolver could not answer, or a path segment that is not valid percent-encoding |
+| 400 | a body that is not JSON, neither a uuid nor a name, both at once, a uuid that is not one, a uuid no Mojang session can answer for, a name the resolver could not answer, or a path segment that is not valid percent-encoding |
 | 404 | no such puppet in the registry, or no such uuid in the attach whitelist |
 | 405 | a verb this route does not take, with `allow` naming the ones it does |
 | 409 | the uuid is the puppet's own account, or the write lost three races |
@@ -308,7 +309,7 @@ preflight. A form body is refused rather than parsed.
 puppet re-reads the file at each login (#229), so it is one file read away. A client
 already mid-login may be picked up on the following attempt.
 
-Four refusals are deliberate, and each one is a refusal rather than a repair:
+Five refusals are deliberate, and each one is a refusal rather than a repair:
 
 - **A document that does not parse is never rewritten.** The answer is a 500 with the
   parse error, and the key is left byte for byte. The same holds for a document of
@@ -325,6 +326,16 @@ Four refusals are deliberate, and each one is a refusal rather than a repair:
   nor the log line: it is the puppet's account identifier, not the caller's. A
   Deployment that names no uuid gets a 503 instead, because the check cannot run and
   the panel does not skip a rule it cannot apply.
+- **A uuid no Mojang session can answer for is refused** with a 400 (#704). A name is
+  resolved through Mojang, so a name that is not an account is refused already. A uuid
+  skipped that resolver, so any 32 hex digits of the right shape were written. A uuid
+  Java derived from a name, which is `md5("OfflinePlayer:<name>")`, is exactly that
+  shape. The dev lane carried one until #677 removed it, and it admits nobody while it
+  reads like a controller. Both paths ask `uuidRefusalReason` in `src/custody/util.js`
+  now. **The version is necessary and not sufficient.** The panel does not ask Mojang
+  about a supplied uuid, so a mistyped version-4 uuid is still written, and only the
+  login tells the two apart. An entry already in the document is left where it is,
+  because this route rewrites nothing it did not author. Remove one with a DELETE.
 - **Removal takes a uuid**, so renaming an account cannot remove a different one. A
   uuid that is not in the list is a 404, and nothing is written.
 

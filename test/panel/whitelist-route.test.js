@@ -14,6 +14,7 @@ import http from 'node:http'
 import { createPanelHandler } from '../../src/panel/server.js'
 import { mergePatchBody, ReadRefused, WriteRefused } from '../../src/panel/kube.js'
 import { createWhitelistStore } from '../../src/custody/store.js'
+import { offlineUuid } from '../../src/legs/offline-identity.js'
 
 const KEY = 'attach-whitelist.json'
 const CONTROL = 'monoplayer-control'
@@ -22,6 +23,12 @@ const PLAYER_UUID = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
 const OTHER_UUID = '4b1e0d8a-5c6f-4c31-9d2e-2b8a0f7c6d51'
 // The entry a second writer lands between the panel's read and its patch.
 const RACER_UUID = '9c2f6a41-0b3d-4e58-8a77-1d5e9c0b2f36'
+// Two uuids no Mojang session can answer for. DERIVED_UUID is md5("OfflinePlayer:Pilot")
+// with Java's version-3 nibble, the value the dev lane's ConfigMap carried and #677
+// removed; the name it was derived from is the string the route has to name back. The
+// v1 one is a timestamp uuid, which is a shape Mojang never issues either.
+const DERIVED_UUID = '62e2a856-7342-3096-b19f-938454443a11'
+const V1_UUID = 'f81d4fae-7dec-11d0-a765-00a0c91e6bf6'
 const NOW = Date.parse('2026-11-18T10:00:00.000Z')
 
 const puppet = (overrides = {}) => ({
@@ -226,6 +233,92 @@ test('a name the resolver cannot answer is a 400 that asks for a uuid', async ()
     assert.equal(unknown.state.patches.length, 0)
   } finally {
     await unknown.close()
+  }
+})
+
+test('a uuid no Mojang session can answer for is refused, in either spelling', async () => {
+  // #704: the uuid path skipped the resolver, so any 32 hex digits of the right shape
+  // reached the attach whitelist, the live lane's included. This one is
+  // md5("OfflinePlayer:Pilot"): the dev lane's ConfigMap carried it (#677) and no Mojang
+  // session can ever answer for it, so the line reads like a controller and admits nobody.
+  assert.equal(offlineUuid('Pilot'), DERIVED_UUID, 'the fixture is the value Java derives from a name')
+  const rig = await panel()
+  try {
+    for (const spelling of [DERIVED_UUID, DERIVED_UUID.replace(/-/g, '')]) {
+      const response = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: spelling })
+      assert.equal(response.status, 400, 'refused in either spelling: ' + spelling)
+      const said = await response.text()
+      assert.match(said, /version-3 uuid/, 'the answer names the version the uuid carries')
+      assert.match(said, /name/, 'and that the version is Java\'s name-derived one')
+      assert.match(said, /Mojang/, 'and why that means no login arrives')
+    }
+    assert.equal(rig.state.patches.length, 0, 'nothing fabricated is written')
+    const refusal = rig.lines().find(line => line.event === 'panelWhitelistUuidRefused')
+    assert.ok(refusal, 'the refusal is recorded like every other')
+    assert.equal(refusal.puppet, 'glowsquidye')
+    assert.equal(refusal.uuid, DERIVED_UUID)
+    assert.match(refusal.reason, /version-3/)
+  } finally {
+    await rig.close()
+  }
+})
+
+test('the version decides: a v1 uuid is refused, and a v4 one is written', async () => {
+  const rig = await panel()
+  try {
+    const refused = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: V1_UUID })
+    assert.equal(refused.status, 400)
+    assert.match(await refused.text(), /version-1 uuid/)
+    assert.equal(rig.state.patches.length, 0)
+
+    const admitted = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: OTHER_UUID })
+    assert.equal(admitted.status, 200, 'a version-4 uuid is admitted')
+    assert.deepEqual(rig.puppetReads().map(player => player.uuid), [PLAYER_UUID, OTHER_UUID])
+  } finally {
+    await rig.close()
+  }
+})
+
+test('a resolver that answers a uuid derived from the name it was asked is refused too', async () => {
+  // The name path passes the same gate: the panel asks Mojang for a uuid, and a
+  // resolver that answers a derived one is a bug this route does not write down.
+  const rig = await panel({ lookup: async () => ({ uuid: DERIVED_UUID, name: 'Pilot' }) })
+  try {
+    const response = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { name: 'Pilot' })
+    assert.equal(response.status, 400)
+    const said = await response.text()
+    assert.match(said, /OfflinePlayer:Pilot/, 'the refusal names the string that was hashed')
+    assert.match(said, /fault in the panel/, 'and it does not tell the caller to send a name, which they sent')
+    assert.equal(rig.state.patches.length, 0)
+  } finally {
+    await rig.close()
+  }
+})
+
+test('an entry already in the document is left where it is, and a DELETE still takes it', async () => {
+  // #704 refuses new entries and rewrites nothing it did not author, so what is already
+  // written stays. That is the decision, and this is the case that holds it: the add
+  // below rewrites the document and keeps the entry, and the DELETE removes it by uuid
+  // whatever version it carries.
+  const rig = await panel({
+    cluster: cluster({
+      doc: document([
+        ...onePlayer.players,
+        { uuid: DERIVED_UUID, name: 'Pilot', addedAt: '2026-11-01T09:00:00.000Z' }
+      ])
+    })
+  })
+  try {
+    const add = await post(rig.url + '/api/puppets/glowsquidye/whitelist', { uuid: OTHER_UUID })
+    assert.equal(add.status, 200)
+    assert.deepEqual(rig.puppetReads().map(player => player.uuid), [PLAYER_UUID, DERIVED_UUID, OTHER_UUID],
+      'the entry the panel did not author survives a rewrite')
+
+    const removed = await fetch(rig.url + '/api/puppets/glowsquidye/whitelist/' + DERIVED_UUID, { method: 'DELETE' })
+    assert.equal(removed.status, 200, 'a DELETE takes the uuid it is given, whatever version it carries')
+    assert.deepEqual(rig.puppetReads().map(player => player.uuid), [PLAYER_UUID, OTHER_UUID])
+  } finally {
+    await rig.close()
   }
 })
 
