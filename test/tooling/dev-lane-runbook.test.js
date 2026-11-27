@@ -350,10 +350,34 @@ function wrongName (page, task) {
   return page + ' names "mise run ' + task + '", and mise.toml defines no such task: it holds one [tasks.<name>] block per task'
 }
 
-// Every page git owns, from the list the lint stage takes (#846): the tracked files
-// plus the ones not committed yet, without the ignored ones. A page added in the
-// commit that breaks it fails here, and no page is invisible because nobody
-// remembered to put it on a list (#727, #743).
+// Every page git owns, resolved with the flags the lint stage resolves its files
+// with since #846: the tracked files, plus the ones not committed yet, without the
+// ignored ones. The glob is this guard's own, because that stage parses `*.js` and
+// this one reads `*.md`. A page added in the commit that breaks it fails here, and
+// no page is invisible because nobody remembered to put it on a list (#727, #743).
+// What one page reports, from its own text and the tasks the tree defines: the names it
+// gets wrong, and the entries in UNDEFINED_BY_DESIGN it no longer needs. A fixture page
+// can be handed to it, so the failure itself is held and not only the sentence it prints.
+function sweepPage (page, text, tasks) {
+  const names = mentions(text)
+  const gone = names.filter(task => !tasks.has(task))
+  const exempt = UNDEFINED_BY_DESIGN.get(page)?.tasks ?? []
+  return {
+    names,
+    wrong: gone.filter(task => !exempt.includes(task)).map(task => wrongName(page, task)),
+    stale: exempt.filter(task => !gone.includes(task)).map(task => staleName(page, task, tasks.has(task)))
+  }
+}
+
+// An entry in UNDEFINED_BY_DESIGN that no longer describes its page. Two things cause
+// it and there is one entry, so the message names the cause instead of guessing: the
+// tree gained the task, or the page dropped the name.
+function staleName (page, task, defined) {
+  return page + ' is exempt for "mise run ' + task + '", and ' + (defined
+    ? 'mise.toml defines it now: drop the entry'
+    : 'the page no longer names it: drop the entry')
+}
+
 function ownedPages () {
   const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.md'],
     { cwd: ROOT, encoding: 'utf8' })
@@ -403,12 +427,10 @@ test('every page in the tree names only tasks mise.toml defines (#842)', () => {
   const stale = []
   const seen = new Set()
   for (const page of pages) {
-    const taken = mentions(read(page))
-    for (const task of taken) seen.add(task)
-    const gone = taken.filter(task => !tasks.has(task))
-    const exempt = UNDEFINED_BY_DESIGN.get(page)?.tasks ?? []
-    for (const task of gone) if (!exempt.includes(task)) wrong.push(wrongName(page, task))
-    for (const task of exempt) if (!gone.includes(task)) stale.push(page + ' is exempt for "mise run ' + task + '", and the page no longer names it')
+    const swept = sweepPage(page, read(page), tasks)
+    for (const task of swept.names) seen.add(task)
+    wrong.push(...swept.wrong)
+    stale.push(...swept.stale)
   }
   // An entry naming a page the tree dropped reads as coverage it no longer is.
   for (const page of UNDEFINED_BY_DESIGN.keys()) {
@@ -420,7 +442,7 @@ test('every page in the tree names only tasks mise.toml defines (#842)', () => {
     'pointing at a command nobody can run, and nothing else notices. Rename the line to the task that ' +
     'exists, or define the task')
   assert.deepEqual(stale, [],
-    'an entry in UNDEFINED_BY_DESIGN no longer describes its page. An exception that outlives its ' +
+    'an entry in UNDEFINED_BY_DESIGN no longer describes the tree. An exception that outlives its ' +
     'reason hides the next task renamed on that page: drop the entry, or name the task the page holds now')
   assert.ok(seen.size >= NAMES_FLOOR,
     'the sweep finds ' + seen.size + ' distinct task names across those pages: a pattern under ' +
@@ -439,4 +461,30 @@ test('the sweep reports the page and the task mise.toml does not define (#842)',
   assert.equal(wrongName('docs/panel.md', 'gone:task'),
     'docs/panel.md names "mise run gone:task", and mise.toml defines no such task: it holds one [tasks.<name>] block per task',
     'the report names the page, the task, and the file that defines tasks')
+  assert.equal(staleName('docs/architecture.md', 'ci', true),
+    'docs/architecture.md is exempt for "mise run ci", and mise.toml defines it now: drop the entry',
+    'a stale entry whose task the tree gained says so, rather than blaming the page')
+  assert.equal(staleName('docs/architecture.md', 'ci', false),
+    'docs/architecture.md is exempt for "mise run ci", and the page no longer names it: drop the entry',
+    'a stale entry the page dropped says so, so the reader is sent to the file that changed')
+
+  // The failure itself, on a page handed to the sweep: the sweep reports the name,
+  // and nothing else in this case would notice if it stopped reporting one.
+  const defined = readMiseTasks()
+  assert.deepEqual(sweepPage('docs/panel.md', 'Run `mise run check`, then `mise run gone:task`.', defined), {
+    names: ['check', 'gone:task'],
+    wrong: ['docs/panel.md names "mise run gone:task", and mise.toml defines no such task: it holds one [tasks.<name>] block per task'],
+    stale: []
+  },
+  'a page naming a task the tree does not define fails, and the failure names the page and the task')
+  assert.deepEqual(sweepPage('docs/panel.md', 'Run `mise run check`.', defined).wrong, [],
+    'a page naming only tasks the tree defines reports nothing')
+
+  // An exempt page, on the same fixture footing: the exception covers the names it was
+  // written for and no others, and every name it covers is checked in both directions.
+  const exemptPage = sweepPage('docs/architecture.md', 'Run `mise run ci`, then `mise run gone:task`.', defined)
+  assert.deepEqual(exemptPage.wrong.map(entry => entry.split(' names ')[0]), ['docs/architecture.md'],
+    'the exemption covers its own names, and an unlisted name on that page still fails')
+  assert.equal(exemptPage.stale.length, UNDEFINED_BY_DESIGN.get('docs/architecture.md').tasks.length - 1,
+    'a name the fixture page does not carry reads as an entry the page dropped')
 })
