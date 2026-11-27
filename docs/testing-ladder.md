@@ -164,11 +164,50 @@ nth id, so a finished run fails when a position disagrees (#623). It fails too w
 the list declares an id no check made, or a check names an id the list does not
 declare. That guard reads the declaration rather than the call, so a `check` call
 outside this file is not drift (#593). Two rows that each add an assertion take
-the same next number, the one above the highest the file already declares, and
-edit the same bullet list. No lane helps here: the sequence belongs to the
-repository, not to a worktree. Add assertions one row at a time. A row that adds
-no assertion runs beside any other. Four consecutive rows on the board that wrote
-this section serialised for this reason alone, with no code in common.
+the same next number, the one above `LOOPBACK_ASSERTION_HIGH_WATER` in
+`src/ladder/loopback.js`, and edit the same bullet list. The mark is the highest
+number any id has ever used, so a row that adds an assertion takes the number above
+it and raises the mark in the same commit (#681).
+
+It is a number rather than a reading of the array. The array is the run order:
+`O11b` follows `O12`, and `O36`, `O46`, `O27` and `O28` sit before `O10`. A number
+a retirement took is in neither the array nor the bullets: `O54` is off both, so
+nothing beside the ids says 54 is burned.
+
+Retiring an assertion is allowed, and the number is burned. The id lands in
+`RETIRED` in `test/ladder/loopback-contract.test.js`, beside `EVER`, a record of
+every id the repository has ever declared. Each failure names its edit:
+
+- an id is numbered above the mark: take it and raise the mark in the same commit;
+- the mark is not the highest number `EVER` holds: it moves with an id, never on its
+  own;
+- a number under the mark has no id in `EVER`: the id that used it comes back with
+  its row, or the new assertion takes it if no retirement burned it, because a
+  retirement keeps its row;
+- an id at a burned number is declared again, the retired id or a new lettered
+  sibling of it: the number stays burned, and the new assertion takes the number
+  above the mark;
+- an id leaves the list with no retirement: `EVER` keeps it, so restore the check or
+  retire the id, because the number is burned either way;
+- an id `EVER` never held is declared, or retired: add its row in the same commit as
+  the check, the bullet and the mark, because a retirement names a row `EVER`
+  already holds;
+- an id the guard cannot read: an id is one capital letter, one number, and a
+  lowercase suffix at most.
+
+An id sits under the mark only as a lettered sibling of a live id, which is how
+`O11b`, `O24b` and five more arrived. The guard reads numbers, so the family letter
+is the convention and not a rule.
+
+The guard reads the tree, not its history. It cannot see the highest id deleted with
+its `EVER` row and the mark lowered to match. It cannot see a retirement deleted with
+its `EVER` row either, which is the same deletion twice. So the mark never moves down
+and a retirement is never removed, and the diff is what says so.
+
+No lane helps here: the sequence belongs to the repository, not to a worktree. Add
+assertions one row at a time. A row that adds no assertion runs beside any other.
+Four consecutive rows on the board that wrote this section serialised for this
+reason alone, with no code in common.
 
 **The display host carries one client.** Rung 4 relaunches one Prism instance over
 SSH, `gate-b-player-262-fabric` unless `--instance` names another, and drives its

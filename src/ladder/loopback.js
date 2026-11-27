@@ -105,6 +105,15 @@ export const LOOPBACK_ASSERTION_IDS = Object.freeze([
   'O63', 'O69', 'O64', 'O65', 'O73', 'O76', 'O66'
 ])
 
+// #681: the highest number an assertion id has ever used. A new assertion takes the
+// number above this one and raises the mark here in the same commit. An id that leaves
+// the list is retired, and its number is burned: the claim its bullet described is in
+// the retired list, and no id may describe a second claim at that number.
+// test/ladder/loopback-contract.test.js keeps the record of every id ever declared and
+// reads both rules against it; docs/testing-ladder.md says which edit each failure asks
+// for.
+export const LOOPBACK_ASSERTION_HIGH_WATER = 76
+
 // #623: the list is the run order, and this is the rule that holds the run to it. The
 // run asks once, with the ids it recorded in the order it recorded them, so the
 // comparison runs after every check and a run that ends out of order still reports
