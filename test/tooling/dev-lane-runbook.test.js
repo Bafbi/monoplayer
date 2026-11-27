@@ -2,15 +2,20 @@
 // before it touches a cluster: the rule in AGENTS.md, the lane each run belongs
 // on in docs/testing-ladder.md, and the dev account in deploy/dev/README.md.
 //
+// The sweep at the end of this file reads every page git owns, not those three and
+// not a fourth somebody remembered (#842).
+//
 // Nothing here reaches a cluster: every case reads a file.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseLadder } from '../../src/ladder/next-rung.js'
 import { STATES } from '../../src/core/session.js'
+import { readMiseTasks } from './mise-toml.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -18,7 +23,6 @@ const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
 const AGENTS = read('AGENTS.md')
 const LADDER = read('docs/testing-ladder.md')
 const DEV_README = read('deploy/dev/README.md')
-const TOML = read('mise.toml')
 
 // One section, from its heading to the next heading of the same or a higher
 // level, so an assertion about the lanes cannot be satisfied by a stray line
@@ -328,15 +332,111 @@ test('the glossary names the lanes the docs use', () => {
   }
 })
 
-test('every mise task these docs name exists', () => {
-  const tasks = new Set([...TOML.matchAll(/^\[tasks\.(?:"([^"]+)"|([A-Za-z0-9:_-]+))\]$/gm)]
-    .map(match => match[1] ?? match[2]))
-  assert.ok(tasks.has('check'), 'mise.toml parsed')
+// A task named in prose, as a page spells it: `mise run <task>`. A word starting
+// with "-" is a flag of `mise run` itself and not a task, and docs/testing-ladder.md
+// spells one out ("runs its rungs through `mise run --continue-on-error`"). A colon
+// after the name is punctuation, as in "`mise run gate:up`: it wakes the rows".
+const MENTION = /`?mise run ([a-z0-9][a-z0-9:-]*)/g
 
-  for (const [name, text] of [['AGENTS.md', AGENTS], ['docs/testing-ladder.md', LADDER], ['deploy/dev/README.md', DEV_README]]) {
-    const named = new Set([...text.matchAll(/`?mise run ([a-z0-9][a-z0-9:-]*)/g)].map(match => match[1].replace(/:$/, '')))
-    for (const task of named) {
-      assert.ok(tasks.has(task), name + ' names "mise run ' + task + '", which mise.toml does not define')
-    }
+function mentions (text) {
+  return [...new Set([...text.matchAll(MENTION)].map(match => match[1].replace(/:$/, '')))]
+}
+
+// The name one page gets wrong, as the sentence a reader acts on: the page, the
+// task, and the file that would define it. The sweep below and the fixture case at
+// the end of this file both print this text, so a failing gate shows the sentence
+// the case asserts.
+function wrongName (page, task) {
+  return page + ' names "mise run ' + task + '", and mise.toml defines no such task: it holds one [tasks.<name>] block per task'
+}
+
+// Every page git owns, from the list the lint stage takes (#846): the tracked files
+// plus the ones not committed yet, without the ignored ones. A page added in the
+// commit that breaks it fails here, and no page is invisible because nobody
+// remembered to put it on a list (#727, #743).
+function ownedPages () {
+  const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.md'],
+    { cwd: ROOT, encoding: 'utf8' })
+  assert.equal(listed.status, 0, 'git lists the pages it owns: ' + listed.stderr)
+  return listed.stdout.split('\0').filter(Boolean).sort()
+}
+
+// A page that names a task the tree does not define, and why the name is right
+// anyway. The exempt names are spelled out one by one, so an exception covers the
+// sentences written for it and never the whole page: a new `mise run` name on an
+// exempt page still fails, and an exempt name the page dropped fails too.
+const UNDEFINED_BY_DESIGN = new Map([
+  ['docs/architecture.md', {
+    reason: 'the architecture proposal is "proposed, not built": its command block lists the tasks the proposal would add',
+    tasks: ['auth:status', 'ci', 'deploy', 'down', 'images:build', 'logs', 'metrics', 'secret:apply', 'secret:rotate', 'smoke', 'test:l2', 'whitelist:add']
+  }],
+  ['docs/driver-lane-plan.md', {
+    reason: 'the driver lane plan is a dated record ("Historical plan, written for 26.1.2"), and keeps the bootstrap task it was written under',
+    tasks: ['auth:device-code']
+  }],
+  ['testdata/driver-verdict.md', {
+    reason: 'a verdict page is dated evidence, so it keeps the name the run was taken under, and says where it says the rename',
+    tasks: ['gate-b:g0']
+  }]
+])
+
+// 48 pages and 60 distinct task names in this tree when #842 landed.
+// `git ls-files '*.md' | wc -l` prints the first. Both floors sit below, because
+// deleting a page or trimming a doc is legitimate: a sweep narrowed back to a
+// hand-kept list of three lands under both, and so does a mention pattern that
+// stopped finding names.
+const PAGES_FLOOR = 40
+const NAMES_FLOOR = 50
+
+test('every page in the tree names only tasks mise.toml defines (#842)', () => {
+  const tasks = readMiseTasks()
+  assert.ok(tasks.has('check'), 'mise.toml parsed: it defines the gate')
+
+  const pages = ownedPages()
+  assert.ok(pages.length >= PAGES_FLOOR,
+    'the sweep reads ' + pages.length + ' pages and every page git owns is one of them: a sweep under ' +
+    PAGES_FLOOR + ' has narrowed back to a hand-kept list, which is the defect #727 and #743 closed')
+  assert.ok(pages.includes('GLOSSARY.md'),
+    'GLOSSARY.md is a page the sweep reads: it names the gate lane\'s two tasks, and a task renamed in mise.toml left it pointing at a command nobody can run (#842)')
+
+  const wrong = []
+  const stale = []
+  const seen = new Set()
+  for (const page of pages) {
+    const taken = mentions(read(page))
+    for (const task of taken) seen.add(task)
+    const gone = taken.filter(task => !tasks.has(task))
+    const exempt = UNDEFINED_BY_DESIGN.get(page)?.tasks ?? []
+    for (const task of gone) if (!exempt.includes(task)) wrong.push(wrongName(page, task))
+    for (const task of exempt) if (!gone.includes(task)) stale.push(page + ' is exempt for "mise run ' + task + '", and the page no longer names it')
   }
+  // An entry naming a page the tree dropped reads as coverage it no longer is.
+  for (const page of UNDEFINED_BY_DESIGN.keys()) {
+    if (!pages.includes(page)) stale.push(page + ' is exempt from the sweep, and the tree holds no such page')
+  }
+
+  assert.deepEqual(wrong, [],
+    'a page names a task mise.toml does not define. A task renamed in mise.toml leaves that page ' +
+    'pointing at a command nobody can run, and nothing else notices. Rename the line to the task that ' +
+    'exists, or define the task')
+  assert.deepEqual(stale, [],
+    'an entry in UNDEFINED_BY_DESIGN no longer describes its page. An exception that outlives its ' +
+    'reason hides the next task renamed on that page: drop the entry, or name the task the page holds now')
+  assert.ok(seen.size >= NAMES_FLOOR,
+    'the sweep finds ' + seen.size + ' distinct task names across those pages: a pattern under ' +
+    NAMES_FLOOR + ' has stopped finding names, and every case above would pass on a tree it never read')
+})
+
+test('the sweep reports the page and the task mise.toml does not define (#842)', () => {
+  // Fixtures, not the tree: this case is about the report, so a page drifting for
+  // real cannot make it about the drift instead.
+  assert.deepEqual(mentions('Run `mise run check`, then `mise run gone:task`.'), ['check', 'gone:task'],
+    'a mention is the task name, not the punctuation around it')
+  assert.deepEqual(mentions('through `mise run --continue-on-error`'), [],
+    'a flag of mise run itself is not a task')
+  assert.deepEqual(mentions('`mise run gate:up`: it wakes the rows'), ['gate:up'],
+    'punctuation after the name is not part of it')
+  assert.equal(wrongName('docs/panel.md', 'gone:task'),
+    'docs/panel.md names "mise run gone:task", and mise.toml defines no such task: it holds one [tasks.<name>] block per task',
+    'the report names the page, the task, and the file that defines tasks')
 })
