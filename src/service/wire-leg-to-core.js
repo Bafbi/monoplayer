@@ -5,9 +5,9 @@
 // leg (`kind: 'register'`, with the method it reaches and the function it hands
 // over), or a member the core calls on the leg itself (`kind: 'call'`: the delivery
 // a frame goes through, the dial a body opens with, and the reads the core makes).
-// `required` says whether a leg without the row hides a client. A leg keeps a default
-// behind every call-in, and the required ones answer a refusal: the leg takes every
-// client and serves none of them, without saying so.
+// Each row's comment says what a leg without it costs. A leg keeps a default behind every
+// call-in, and the rows a client cannot be served without answer a refusal: the leg takes
+// every client and serves none of them, without saying so.
 //
 // A row names a member and states no shape. What the core hands over belongs to the
 // call site in src/service/monoplayer.js, and what it reads back belongs where the
@@ -43,23 +43,28 @@
 // A leg that carries none of them is a leg with no core in front of it, which the
 // two pre-auth rungs build on purpose. They never come here.
 //
-// The report is what a reader checks: three lists of names, and the reader of each
-// one is named here. `missing` names every declared call-in the leg does not carry,
+// The report is what a reader checks: two lists of names, and the reader of each one
+// is named here. `missing` names every declared call-in the leg does not carry,
 // and the core puts those names on its start line, one list per interface.
 // `called` names every row the core calls on the leg rather than registers: the
 // delivery, the dial and the reads alike. The backend's two optional calls are read from
 // that list rather than a `typeof` guard in the core's body (backendCarries,
 // src/service/monoplayer.js); the front's three are still tested by `typeof` where they
 // are used, so for those the row's work is the name on the report.
-// #757: `wired` is gone. It named the rows the leg installed, which is the table
-// minus `called` minus `missing`, so it carried no fact of its own, and its only
-// readers were tests counting it. What a reader asked it — that every row of the
-// table was applied to the leg — is a claim about the table, and
+// #757: `wired` and `requiredMissing` are gone, each for the reason #718 removed
+// `handlers`: no module read them, and a field whose only reader is a test describes a
+// caller the tests build for themselves. `wired` named the rows the leg installed, which
+// is the table minus `called` minus `missing`, so it carried no fact of its own; what a
+// reader asked it — that every row reached the leg — is a claim about the table, and
 // test/service/wire-leg-to-core.test.js makes it where it builds a leg row by row.
-// `requiredMissing` has one reader, and it is that file too: the subset the leg's own
-// default hides, held to the table rather than to a lane. A missing one is
-// not thrown on: src/legs/fake-legs.js carries neither setCoreAttach nor
-// setCoreAttachConfiguring, and the tests that build a core on it attach through
+// `requiredMissing` named the subset of the holes the leg's own default hides, and the
+// `required` flag on each row had no reader but it. The flag went with it: each row's
+// comment already says what a leg without that row costs.
+//
+// The two fields that remain are read in src/service/monoplayer.js, and the case
+// "#757 every field of the report has a production reader" holds this list to them.
+// A missing row is not thrown on: src/legs/fake-legs.js carries neither setCoreAttach
+// nor setCoreAttachConfiguring, and the tests that build a core on it attach through
 // the core instead.
 // test/service/wire-leg-to-core.test.js reads the report, and
 // test/legs/adapters.test.js holds the real legs to these tables, `reaches` and
@@ -74,7 +79,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setCoreAttach',
-    required: true,
     reaches: 'attachPlayer',
     // The leg calls this at the client's play login. includeConfig is false
     // because a lane's attach never re-sends the configuration phase: the client
@@ -84,7 +88,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setCoreAttachConfiguring',
-    required: true,
     reaches: 'attachConfiguringPlayer',
     // #16: the client reached its login while the puppet was still configuring,
     // so the attach happens before the configuration phase is cached.
@@ -93,7 +96,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setConfiguringHandler',
-    required: true,
     reaches: 'configuringReady',
     // #16: the client entered its own configuration phase, which is the one
     // moment a configuration gate the backend asked can reach it.
@@ -102,7 +104,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setClientSettingsHandler',
-    required: true,
     reaches: 'noteClientSettings',
     // #18: the human's client information is the source of the fields the server
     // sees, and the core merges it with the backend's view distance cap.
@@ -116,7 +117,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setLoginStartHandler',
-    required: true,
     reaches: 'processLoginStart',
     // The core decides and the leg acts: the core cannot send Login Success, so
     // a denial returns to the adapter before any Login Success packet.
@@ -125,7 +125,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setServerboundHandler',
-    required: true,
     reaches: 'frontServerbound',
     // The client's own frames, in the state they were sent in: the chat speech,
     // the client information rewrite, the configuration answers, and the relay
@@ -135,7 +134,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setDetachHandler',
-    required: true,
     reaches: 'detachPlayer',
     // A client going away. The reason is the leg's to name, and player_quit is
     // the one it names when it names none.
@@ -153,21 +151,18 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     // answer, are the page's rule and the answer's own declaration, not a row's.
     kind: 'call',
     name: 'write',
-    required: true
   },
   {
     // The frame-level half of the same delivery: a cached or relayed frame, sent as the
     // bytes that arrived rather than re-encoded.
     kind: 'call',
     name: 'writeRaw',
-    required: true
   },
   {
     // How the core ends every channel of the body: a denial, a kick, or a body that went
     // away. Without it a refusal reaches no client, and the session it refused stays.
     kind: 'call',
     name: 'end',
-    required: true
   },
 
   // The rows a lane uses when its leg carries them. A leg without one keeps its
@@ -175,7 +170,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setReconfiguredHandler',
-    required: false,
     reaches: 'frontReconfigured',
     // #22: the client answered the reconfiguration's finish frame and is in play
     // again on its own connection.
@@ -184,7 +178,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setConnectClaimedBody',
-    required: false,
     reaches: 'connectClaimedBody',
     // #258: a granted claim is what dials a body, so the front asks the core for
     // one and the core owns the dial and the warm wait.
@@ -193,7 +186,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setSpectateBody',
-    required: false,
     reaches: 'spectateBody',
     // #269: whether a row names the body this session serves.
     handler: core => payload => core.spectateBody(payload)
@@ -201,7 +193,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setSpectatorAttach',
-    required: false,
     reaches: 'spectateView',
     // #269: replay that body to the one channel that asked.
     handler: core => payload => core.spectateView(payload)
@@ -209,7 +200,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setDisconnectBody',
-    required: false,
     reaches: 'disconnectBody',
     // #261: the picker's Disconnect verb. The core ends the session, and a lane
     // with no core records the click and ends no body.
@@ -218,7 +208,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setBodyServed',
-    required: false,
     reaches: 'bodyServed',
     // #259: what a picker row says about a body. The leg's fallback is a null
     // reading, so a row written by a lane that never wired this says down.
@@ -227,7 +216,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setSpectatorLeft',
-    required: false,
     reaches: 'spectatorLeft',
     // #269: a spectator's channel ended, so the core can stop relaying a body
     // nobody is in play on.
@@ -236,7 +224,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setSpectatorPose',
-    required: false,
     reaches: 'spectatorPose',
     // #636: where a spectator's own client says it is. The frame itself is dropped, as
     // #269 drops every spectator frame: this carries a pose and nothing else, so nothing a
@@ -255,7 +242,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     // and says nothing.
     kind: 'call',
     name: 'claimOn',
-    required: false
   },
   {
     // #22: ask the sampling client to re-enter configuration on its own connection, and
@@ -263,14 +249,12 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
     // rebuilds the world from the state replay instead of a loading screen.
     kind: 'call',
     name: 'startReconfiguration',
-    required: false
   },
   {
     // #87: the bytes that end a configuration round, for a restore that has no cached
     // finish. A leg without it falls back to the finish frame it cached.
     kind: 'call',
     name: 'finishConfigurationFrame',
-    required: false
   },
 
   // #627: a read the core makes on this leg, in the backend table's form. The
@@ -283,7 +267,6 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   {
     kind: 'call',
     name: 'preAuthStats',
-    required: false
   }
 ].map(Object.freeze))
 
@@ -297,14 +280,12 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setFrameHandler',
-    required: true,
     reaches: 'backendFrame',
     handler: core => frame => core.backendFrame(frame)
   },
   {
     kind: 'register',
     name: 'setEndHandler',
-    required: true,
     reaches: 'backendEnd',
     // #22: the session ended, one way or another. A leg that keeps that to itself
     // leaves the core attached to a session that is gone.
@@ -313,7 +294,6 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
   {
     kind: 'register',
     name: 'setErrorHandler',
-    required: false,
     reaches: 'backendError',
     // The leg's own socket errors, which the core records and nothing else. A leg
     // that reports none still serves every client; what is lost is the log line.
@@ -328,26 +308,22 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
     // begins here; a leg without it serves no client.
     kind: 'call',
     name: 'connect',
-    required: true
   },
   {
     // A decoded packet the core sends the backend: teleport_confirm, keep_alive, pong,
     // the batch-received ack, settings, and the resource-pack answers.
     kind: 'call',
     name: 'write',
-    required: true
   },
   {
     // A serverbound frame, play or configuration, relayed to the backend as it arrived.
     kind: 'call',
     name: 'writeRaw',
-    required: true
   },
   {
     // The session's own ending, which the core calls before a redial or a stop.
     kind: 'call',
     name: 'end',
-    required: true
   },
 
   // The calls the core makes on the leg, so a leg that does not carry one is named
@@ -359,12 +335,10 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
     // logs target_refused, so a leg without this one refuses every claim.
     kind: 'call',
     name: 'setTarget',
-    required: false
   },
   {
     kind: 'call',
     name: 'answerHeldGate',
-    required: false,
     // #73: answerHeldGateOnDetach asks the leg for the answer a configuration gate
     // its last client left would have had from a headless session; without this the
     // gate stays held and the core logs leg_cannot_answer.
@@ -372,7 +346,6 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
   {
     kind: 'call',
     name: 'chat',
-    required: false,
     // #19: frontServerbound has this leg speak the human's text as the puppet,
     // because the signature needs the puppet's profile keys. Without it the core
     // drops the text as leg_has_no_chat and counts it.
@@ -403,12 +376,10 @@ export function wireLegToCore ({ core, leg, table } = {}) {
   }
   const called = []
   const missing = []
-  const requiredMissing = []
   for (const entry of table) {
     const method = leg === null || leg === undefined ? undefined : leg[entry.name]
     if (typeof method !== 'function') {
       missing.push(entry.name)
-      if (entry.required === true) requiredMissing.push(entry.name)
       continue
     }
     // A call-in the core calls needs nothing registered; its presence is the whole
@@ -421,5 +392,5 @@ export function wireLegToCore ({ core, leg, table } = {}) {
     // says why no field carries one.
     method.call(leg, entry.handler(core))
   }
-  return { called, missing, requiredMissing }
+  return { called, missing }
 }
