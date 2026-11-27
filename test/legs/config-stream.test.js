@@ -17,10 +17,15 @@ function rig ({ live = true, cached = [] } = {}) {
   const raws = []
   const configuring = []
   const suppressed = []
+  const openingSuppressed = []
   let configuration = true
+  // #969: whether the leg has start_configuration on the wire and no answer yet.
+  let opening = false
   const interceptor = createConfigPathInterceptor({
     onConfiguring: () => configuring.push('configuring'),
     onSuppressed: ({ name }) => suppressed.push({ name }),
+    roundOpen: () => opening,
+    onRoundOpening: ({ name }) => openingSuppressed.push({ name }),
     write: (name, params) => writes.push({ name, params }),
     writeRaw: (buffer, meta) => raws.push({ buffer, meta }),
     isConfigurationState: () => configuration,
@@ -35,8 +40,11 @@ function rig ({ live = true, cached = [] } = {}) {
     raws,
     configuring,
     suppressed,
+    openingSuppressed,
     endConfiguration: () => { configuration = false },
-    startConfiguration: () => { configuration = true }
+    startConfiguration: () => { configuration = true },
+    openRound: () => { opening = true },
+    answerRound: () => { opening = false; configuration = true }
   }
 }
 
@@ -169,6 +177,43 @@ test('#541 the next round opens the phase again, so its keep-alives are sent', (
   r.interceptor.write('keep_alive', { keepAliveId: 8n })
   assert.deepEqual(r.writes.map(write => write.name), ['start_configuration', 'keep_alive'])
   assert.deepEqual(r.suppressed, [])
+})
+
+// #969: the mirror of #541, in the same window. From the write of start_configuration
+// until the client answers it, the client's table is whichever one it flipped to when
+// it parsed that frame, and this leg learns of the flip only when the answer arrives.
+// A play frame written inside the window is one the client reads in configuration: the
+// library's own keep-alive did, and the offline rung recorded 9 bytes read as 1 with 8
+// left over. 0x2c is play's keep_alive, and the configuration table defines no such id,
+// so the client decoded it as the bare number 44 with the long's bytes unconsumed.
+test('#969 a play frame written while the round is opening never reaches the client', () => {
+  const r = rig()
+  r.interceptor.finishFromCore()
+  r.endConfiguration()
+  r.interceptor.reopenConfiguration()
+  r.interceptor.write('start_configuration', {})
+  r.openRound()
+  assert.equal(r.interceptor.write('keep_alive', { keepAliveId: 7n }), false,
+    'and the caller is told nothing was written')
+  assert.deepEqual(r.writes.map(write => write.name), ['start_configuration'],
+    'the keep-alive does not follow the frame that opened the round')
+  assert.deepEqual(r.openingSuppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
+})
+
+test('#969 the round drops one tick, it does not stop the keep-alive', () => {
+  const r = rig()
+  r.interceptor.finishFromCore()
+  r.endConfiguration()
+  r.interceptor.reopenConfiguration()
+  r.interceptor.write('start_configuration', {})
+  r.openRound()
+  r.interceptor.write('keep_alive', { keepAliveId: 7n })
+  r.answerRound()
+  r.interceptor.write('keep_alive', { keepAliveId: 8n })
+  assert.deepEqual(r.writes.map(write => write.name), ['start_configuration', 'keep_alive'],
+    'the next tick reaches a client that reads play again')
+  assert.equal(String(r.writes.at(-1).params.keepAliveId), '8')
+  assert.deepEqual(r.openingSuppressed, [{ name: 'keep_alive' }], 'and only the opening one was dropped')
 })
 
 test('#541 a later round in cached mode closes the phase as well', () => {

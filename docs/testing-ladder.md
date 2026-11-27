@@ -485,7 +485,8 @@ says why, and it is the reason to add assertions one row at a time.
   its `finish_configuration`) and its play login, and the session is `attached`.
 - `O35` the client that followed the move is in the target server state: it
   receives the target's block change, keeps the one attach (no rejoin), and
-  records no leftover bytes or errors.
+  records no leftover bytes, no frame whose id the table it was read in does not
+  define, and no errors (#969).
 - `O38` the transfer intent starts the client's configuration round before the
   target is reached: one round counted, the client in configuration, the
   session `transferring`, and the cold target has accepted no login yet (#87).

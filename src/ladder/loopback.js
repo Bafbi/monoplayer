@@ -2059,12 +2059,19 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // leftover anywhere on the connection is a frame it could not parse.
         // #541: `leftoversBeforeHop` below says which round it came from.
         b5.leftovers.length === 0 &&
+        // #969: and none of them is a frame the table it was read in does not
+        // define. A leftover with a name is a frame the table could not consume
+        // whole; a frame with an id and no name is one the client read in a state
+        // it was not in, which is what a writer inside the round's opening window
+        // produces. The two classes want different fixes, so they are two clauses.
+        b5.unreadable.length === 0 &&
         b5.errors.length === 0,
       {
         entityId: b5.login?.entityId ?? null,
         attaches: seamlessCore.metrics.attaches,
         blocks: b5.blockChanges.map(change => change.location),
         ...leftoverPayload(b5),
+        unreadable: b5.unreadable.slice(),
         // #541: `leftoversBeforeHop` says whether the frames arrived on this hop
         // or on an earlier round the same connection went through.
         leftoversBeforeHop: seamlessLeftoverMark,
