@@ -994,8 +994,8 @@ finishConfigurationFrame
 preAuthStats
 ```
 
-A call-in holds one handler, and its setter refuses the second registration. The core
-registers every call-in its tables declare when it starts. A lane's registration made before
+A row the core registers is a call-in, and a call-in holds one handler. Its setter refuses
+the second registration. The core registers every call-in its tables declare when it starts. A lane's registration made before
 that start therefore fails the start instead of being replaced. One made after it is refused
 at the lane's line. `src/service/wire-leg-to-core.js` says which registration reaches a
 call-in and what each one costs (#824). A lane that builds a leg no core is handed registers
