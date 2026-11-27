@@ -42,7 +42,7 @@
 // the token resolving nowhere, so the sentence fails here and the fix is the path a reader
 // can follow.
 //
-// The expensive half is a name inside a file that exists, and two shapes of it are cheap to
+// The expensive half is a name inside a file that exists, and three shapes of it are cheap to
 // read. One is a backticked identifier with a path beside it, as 'x in path' or 'x (path)':
 // the file has to declare the identifier. The other is a quoted section title beside a page,
 // as '"title" in page': the page has to hold a heading with the title in it, which is the
@@ -53,24 +53,54 @@
 // not a parse. What is compared is names: a row that points at a file which exists and no
 // longer holds the fact is stale in a way nothing here can see.
 //
+// The third shape is a case title, quoted in a comment under src/. Two comments write one:
+// src/service/wire-leg-to-core.js quotes the #757 case, and src/ladder/loopback.js quotes a phrase
+// of a case in test/service/monoplayer.test.js. A test file the block names has to hold a case
+// whose title holds the words quoted (#951), and the counts below say how many there are rather
+// than this paragraph. That is the shape that broke: a comment in src/driver/dev-proof.js named a
+// case, #830 split and renamed it, and fourteen commits went green with the sentence pointing at
+// a title no file held. The comparison is a phrase rather than an equality, because a case title
+// carries a ticket number and a clause on either end, and a comment quotes the words a reader
+// greps for.
+//
+// Where a quotation stands is what makes it a case title, and the two cheaper rules were measured
+// and narrowed. A corpus rule, a quoted string that matches a test('…') anywhere, recognises
+// nothing: of the 288 quoted strings in the src/ comments, none equals a title, and a rename is
+// exactly what takes a title out of the corpus, so the rule goes quiet on the drift it was built
+// for. Reading every quotation in a block that names a test file reads 8 of them and 2 are case
+// titles: the other 6 are three page headings, the heading over a runbook row and two sentences of
+// prose, and each would need an exemption row, which is the table UNREAD exists to avoid because
+// it rots (#937, #958). So a quotation is read where a case word introduces it, and where it
+// stands before the test path in the page grammar. A page is read either way round (#965); a test
+// path first is read by nothing here, because no comment writes one, and a sentence reworded out
+// of both arms is a word. The floor in the coverage case holds the count of pointers, and a case
+// below holds the arms a rewrite would leave unread.
+//
+// The title reader is a line-anchored `test(` or `it(` head, in single quotes, double quotes or a
+// template literal, with a backslash escape undone. `git grep -cE '^\s*test\(' -- test` counts
+// 2,317 over the tree's 199 scripts, 32 of them in double quotes and 29 of those because the title
+// holds an apostrophe, and 99 holding an escape. `it` is test's alias in node:test and the tree
+// writes none. What the reader cannot read is a title built by concatenation, where it takes the
+// first fragment, and 11 openings continue with a +. No comment under src/ quotes a computed title.
+//
 // A name with no extension is neither a path nor a bare name to this file: `Dockerfile` in a
 // sentence is a word, and a rename of it stays green. So does a path inside a package the
 // tree installs, a directory the tree argues against having, and a file a run writes and git
 // ignores: NOT_PATHS carries each with the reason no file answers for it, and a row whose path
 // appears in the tree fails, so a counterfactual is dropped the day it is built.
 //
-// What no surface is read for at all, in the order the counts print it: a pointer to a
-// concept rather than a symbol; a bare name in a source comment; a path at an absolute
-// address, which is a URL or a served route rather than a file here; a token with a line
-// number whose head is not rooted at a repo directory; a token holding a placeholder, an
-// alternation or an ellipsis, because a shape is not a name; a name with no extension; and
-// every file outside these three surfaces, because no guard reads a comment in one. That is a
-// decision rather than a gap in the walk: #937 measured a test/ surface and declined it. Most of
-// what a test/ surface lands names no file in this tree, because a test comment quotes a shape, a
-// library's module or a route. The drift it does find is real, and that is the price the decision
-// accepts: a test file a rename deleted is named in one header as a path the sweep follows, and in
-// the next as a bare name it reads as a word. The UNREAD table below holds a row per tree that
-// holds prose.
+// What no surface is read for at all: a pointer to a concept rather than a symbol; a bare name in
+// a source comment; a path at an absolute address, which is a URL or a served route rather than a
+// file here; a token with a line number whose head is not rooted at a repo directory; a token
+// holding a placeholder, an alternation or an ellipsis, because a shape is not a name; a name with
+// no extension; a quoted case title that no introducer leads directly and no test path follows
+// directly; and every file outside these three surfaces, because no guard reads a comment in one.
+// That is a decision rather than a gap in the walk: #937 measured a test/ surface and declined it.
+// Most of what a test/ surface lands names no file in this tree, because a test comment quotes a
+// shape, a library's module or a route. The drift it does find is real, and that is the price the
+// decision accepts: a test file a rename deleted is named in one header as a path the sweep
+// follows, and in the next as a bare name it reads as a word. The UNREAD table below holds a row
+// per tree that holds prose.
 //
 // The counts are the coverage this file has. Run it with POINTER_COUNTS=1 to print them: the
 // comments swept, the pointers it follows, the pointer-shaped tokens it does not, and the
@@ -407,6 +437,62 @@ const titlesOf = run => [...run.matchAll(/"([^"]{3,})"/g)].map(match => match[1]
 const headlined = (page, title) => read(page).split('\n')
   .some(line => /^#{1,6}\s/.test(line) && line.includes(title))
 
+// The case shape: a case title quoted in a comment under src/, and the test file that holds it.
+// A quotation is read where one of four introducers leads it (the, a, that, this, an optional word
+// such as a ticket number, then case or test, in any case and with a comma allowed), and where it
+// stands before the test path in the grammar a page title uses (arm two). It looks like SECTION's
+// grammar and is not: the operand is a test path and the reader is a title rather than a heading.
+// Where it stands is what makes it a case title here, because a rule about what the words say
+// fails on a rewording (#951).
+const TEST_FILE = 'test/[\\w./-]+\\.test\\.js'
+const CASE_FILES = new RegExp(TEST_FILE, 'g')
+const CASE_BESIDE = new RegExp('"([^"]{3,})"\\s+(?:in|of|under)\\s+`?(' + TEST_FILE + ')`?', 'g')
+const CASE_INTRO = new RegExp('\\b(?:the|a|that|this)\\s+(?:[\\w#./-]+\\s+)?(?:case|test)' +
+  '(?:\\s+(?:named|titled|called))?\\s*,?\\s*(?:"([^"]{3,})"|`([^`]{3,})`)', 'gi')
+// A case title as the test file writes it: a line-anchored test( or it( head, in any of the three
+// quote styles, with an escape undone. The head is anchored to a line so a mention in code is not
+// a title, and whitespace is allowed after the paren so a wrapped call reads the same.
+const TITLE_HEAD = /^\s*(?:test|it)\s*\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)/gm
+const titleCache = new Map()
+function testTitles (file) {
+  if (!titleCache.has(file)) {
+    titleCache.set(file, [...read(file).matchAll(TITLE_HEAD)]
+      .map(([, single, double, template]) => (single ?? double ?? template).replace(/\\(.)/g, '$1')))
+  }
+  return titleCache.get(file)
+}
+
+// One block's case pointers: what it quotes, and which file it asks. A block that names no test
+// file is not a case pointer, because the quotation is then a sentence about a case and this file
+// has nothing to ask. A quotation both arms read is one claim. A block may name two test files,
+// and a title in either answers the claim, because the sentence says the case is in one of them.
+function casesOf (block) {
+  const out = { followed: 0, wrong: [] }
+  // The src/ comments are 3,481 blocks and 52 of them name a test path, so the arms do not run on a
+  // block that holds no such path: the two regexes and the set below are the whole cost of this shape.
+  if (!block.text.includes('test/')) return out
+  const named = [...new Set([...block.text.matchAll(CASE_FILES)].map(([file]) => file))]
+    .filter(file => fs.existsSync(path.join(ROOT, file)))
+  const claims = new Map()
+  const claim = (title, files, at) => { if (!claims.has(title)) claims.set(title, { files, at }) }
+  // A failure lands on the line the quotation is on, not the line its introducing word is on: a
+  // wrapped sentence puts them on different lines, and the title is what a reader greps for.
+  const quotedAt = match => match.index + match[0].search(/["`]/)
+  for (const match of block.text.matchAll(CASE_BESIDE)) claim(match[1], [match[2]], quotedAt(match))
+  for (const match of block.text.matchAll(CASE_INTRO)) {
+    claim(match[1] ?? match[2], named, quotedAt(match))
+  }
+  for (const [title, { files, at }] of claims) {
+    if (files.length === 0) continue
+    out.followed += 1
+    if (!files.some(file => testTitles(file).some(name => name.includes(title)))) {
+      out.wrong.push(where(block, at) + ' quotes the case "' + title + '", and ' + files.join(', ') +
+        ' holds no title with those words')
+    }
+  }
+  return out
+}
+
 // One block's page pointers: how many titles it asks a page for, and the ones the page does not
 // hold. The case below drives this with a block it builds, because the tree writes one page-first
 // pointer and one instance cannot hold the arm.
@@ -426,7 +512,7 @@ function sectionsOf (block) {
 
 function scan () {
   const counts = {
-    path: 0, prose: 0, beside: 0, key: 0, symbol: 0, section: 0, nearby: 0,
+    path: 0, prose: 0, beside: 0, key: 0, symbol: 0, section: 0, case: 0, nearby: 0,
     pattern: 0, absolute: 0, generated: 0, qualified: 0, notPath: 0, word: 0
   }
   const swept = { document: 0, manifest: 0, comment: 0 }
@@ -436,6 +522,7 @@ function scan () {
   const unclassified = []
   const undeclared = []
   const sections = []
+  const cases = []
   const seen = new Set()
   for (const surface of surfaces()) {
     files[surface.kind] += 1
@@ -462,6 +549,9 @@ function scan () {
       const held = sectionsOf(block)
       counts.section += held.followed
       sections.push(...held.wrong)
+      const quoted = casesOf(block)
+      counts.case += quoted.followed
+      cases.push(...quoted.wrong)
       for (const match of block.text.matchAll(SYMBOL)) {
         const name = match[1]
         const at = resolve(match[2] ?? match[3], block)
@@ -471,7 +561,7 @@ function scan () {
       }
     }
   }
-  return { counts, swept, files, missing, unresolved, unclassified, undeclared, sections, seen }
+  return { counts, swept, files, missing, unresolved, unclassified, undeclared, sections, cases, seen }
 }
 
 
@@ -512,6 +602,14 @@ test('a section a surface names is a heading in the page it names', () => {
   assert.deepEqual(sections, [], 'a surface sends a reader to a section a page does not have:\n- ' +
     sections.join('\n- ') +
     '\nName the heading that is there, or point at the file and let the page hold its own headings')
+})
+
+test('a case a surface quotes is a title the test file it names holds', () => {
+  const { cases } = scan()
+  assert.deepEqual(cases, [], 'a surface quotes a case no test file holds:\n- ' +
+    cases.join('\n- ') +
+    '\nQuote the words the title has now, or point at the file and let the case hold its own name. ' +
+    'A title is a phrase of the case, so a rename is what this reads (#951)')
 })
 
 // A comment this file builds rather than reads. `headlined` opens the page itself, so the page is
@@ -558,6 +656,76 @@ test('a page named first is read for its heading, in a parenthesis or after a co
   const aside = says(page + ', and the note "that number is not a measurement" is beside it')
   assert.equal(aside.followed, 0, 'a comma and prose before a quotation is not a separator either, ' +
     'unless that prose is the connector in, of or under: ' + JSON.stringify(aside))
+})
+// The two arms are held with blocks this file builds as well as by the tree's two sentences, for the
+// reason the page-first arm is: rewrite src/service/wire-leg-to-core.js or src/ladder/loopback.js and
+// an arm with no other instance is dead code that passes.
+test('a case title is read where a case word introduces it and beside the test path, and nowhere else', () => {
+  const says = text => casesOf(blockOf('src/service/wire-leg-to-core.js', text))
+  // The words a built block quotes are read from a test file rather than written here, because a
+  // title copied into this case is a second home for it, and this case would go red for a rename
+  // that is another file's business. The words no file holds are invented, which is the claim.
+  const file = 'test/service/monoplayer.test.js'
+  const holds = testTitles(file)[0]
+  const absent = 'a sentence no test file in this tree holds'
+
+  const introduced = says('and the case "' + holds + '" holds it, as ' + file + ' says')
+  assert.equal(introduced.followed, 1, 'a case word and a test file in the block is one case pointer: ' +
+    JSON.stringify(introduced))
+  assert.deepEqual(introduced.wrong, [], 'that file holds the title, so the pointer is not a failure')
+
+  const beside = says('("' + holds + '" in ' + file + ')')
+  assert.equal(beside.followed, 1, 'a quotation beside a test path is the second arm: ' + JSON.stringify(beside))
+  assert.deepEqual(beside.wrong, [], 'that file holds the title, so the pointer is not a failure')
+
+  const renamed = says('and the case "' + absent + '" is ' + file)
+  assert.equal(renamed.wrong.length, 1, 'a case word is read whether or not the file holds the title, ' +
+    'so a rename fails here: ' + JSON.stringify(renamed))
+  assert.match(renamed.wrong[0], new RegExp('quotes the case "' + absent + '"'),
+    'the failure names the words quoted, so its reader greps for the title it should be')
+
+
+  // The introducer is read in any case and with a comma after it, and the quotation may be
+  // backticked: three shapes the first draft read as a word, which the spec review found.
+  const numbered = says('the #951 case "' + holds + '" is in ' + file)
+  assert.equal(numbered.followed, 1, 'a ticket number between the introducer and the case word is ' +
+    'how a comment here writes a case, and the arm reads one word there: ' + JSON.stringify(numbered))
+
+  const capital = says('The case "' + holds + '" is where it lands, as ' + file + ' says')
+  assert.equal(capital.followed, 1, 'a sentence that opens with the introducer is the same claim, and ' +
+    'the arm reads the four in any case: ' + JSON.stringify(capital))
+  const comma = says('and the case, "' + holds + '", holds it, as ' + file + ' says')
+  assert.equal(comma.followed, 1, 'a comma between the introducer and the quotation is not a different ' +
+    'shape: ' + JSON.stringify(comma))
+  const quoted = says('and the case `' + holds + '` holds it, as ' + file + ' says')
+  assert.equal(quoted.followed, 1, 'a title quoted with a backtick is the same claim, and the file is ' +
+    'asked for it: ' + JSON.stringify(quoted))
+
+  // A failure lands where the quotation is, not where the introducer is: a wrapped sentence puts
+  // them on two lines, and the title is the part a reader greps for.
+  const first = 'and the case'
+  const rest = ' "' + absent + '" is what ' + file + ' does not hold'
+  const wrapped = {
+    file: 'src/legs/live-front.js',
+    kind: 'comment',
+    text: first + rest,
+    lineOf: [...new Array(first.length).fill(7), ...new Array(rest.length).fill(8)]
+  }
+  const twoLines = casesOf(wrapped)
+  assert.match(twoLines.wrong[0], /^src\/legs\/live-front\.js:8 /, 'the failure names the line the ' +
+    'quotation is on, not the line its introducer is on: ' + JSON.stringify(twoLines))
+
+  const prose = says('the sentence "' + holds + '" is the case, and ' + file + ' holds it')
+  assert.equal(prose.followed, 0, 'a quotation with no case word before it and no path beside it is a ' +
+    'word, and that is what the narrowing costs: ' + JSON.stringify(prose))
+
+  const nowhere = says('the case "' + holds + '" holds it')
+  assert.equal(nowhere.followed, 0, 'a block that names no test file has nothing to ask, so it is not a ' +
+    'case pointer: ' + JSON.stringify(nowhere))
+
+  const page = says('"' + holds + '" in `docs/telemetry.md`')
+  assert.equal(page.followed, 0, 'a quotation before a page is the section arm, and the case that ' +
+    'reads sections asks the page for it: ' + JSON.stringify(page))
 })
 
 // An entry that outlives the token it explains is the same stale pointer one table over, so the
@@ -698,9 +866,12 @@ test('the guard reads all three surfaces, a path, a bare name, a nearby path and
   assert.ok(counts.section >= 5, 'the surfaces name ' + counts.section + ' sections beside a page, and this ' +
     'file reads them in either order: "title" in a page is the shape a section rename breaks, and so is ' +
     'a page with the title after it. Quote the heading, and raise this floor when you add one')
+  assert.ok(counts.case >= 2, 'the surfaces quote ' + counts.case + ' case titles, and src/ writes two: one a ' +
+    'case word introduces, and one standing beside a test path. A rewrite that reads neither turns both ' +
+    'back into words, and a title a rename broke stays green (#951)')
   if (process.env.POINTER_COUNTS) {
     console.log('pointers: ' + JSON.stringify(counts))
-    console.log('followed: ' + (counts.path + counts.beside + counts.key + counts.symbol + counts.section) +
+    console.log('followed: ' + (counts.path + counts.beside + counts.key + counts.symbol + counts.section + counts.case) +
       ', pointer-shaped and not followed: ' +
       (counts.pattern + counts.absolute + counts.generated + counts.qualified + counts.notPath))
     console.log('surfaces: ' + JSON.stringify(files) + ', comment runs swept: ' + JSON.stringify(swept))
