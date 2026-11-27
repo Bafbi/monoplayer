@@ -34,6 +34,13 @@ const ONE_CONFIG_FRAME = [{
     .createPacketBuffer({ name: 'feature_flags', params: { features: ['minecraft:test'] } })
 }]
 
+// The phase a picker lane serves before the dialog, in this version. An empty list is
+// not a lane with nothing to say: `resolveConfigPath` has no frame to write, the leg's
+// fallback is off on this lane, and the client is closed at login (`configUnavailable`).
+// The landing below then wrote into a chain the lane had already ended, and #820 read that
+// as a delivery, which is why this fixture used to pass.
+const PICKER_BASELINE = { version: VERSION, replayFrames: ONE_CONFIG_FRAME }
+
 async function settleUntil (read, label, timeoutMs = 10_000) {
   const started = Date.now()
   while (!read()) {
@@ -53,8 +60,8 @@ async function withWatchingClient (config, run) {
     version: VERSION,
     offlineWhitelist: [offlineUuid(NAME)],
     // A picker client: it holds no channel until its Spectate lands, which is the
-    // state the picker's own verb runs from.
-    configurationBaseline: { version: VERSION, replayFrames: [] },
+    // state the picker's own verb runs from, on a lane whose phase is on the wire.
+    configurationBaseline: PICKER_BASELINE,
     pickerServers: () => ({ source: 'allowed', reason: null, rows: [{ name: 'sky:25565' }] }),
     getSnapshotConfig: () => config,
     wireMode: 'off',

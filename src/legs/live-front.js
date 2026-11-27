@@ -441,9 +441,63 @@ export function configurationFinishFrame ({ version = '26.1' } = {}) {
   return serializer.createPacketBuffer({ name: 'finish_configuration', params: {} })
 }
 
+// #820: the socket's own answer to "can you take this frame", asked before the leg
+// counts one as delivered.
+//
+// The installed library answers nothing for a frame it drops: `Client.write` and
+// `Client.writeRaw` (`minecraft-protocol`'s `src/client.js`) both bare-`return` when the
+// stream under them is not writable, so the `=== false` test on the packet path can never
+// fire for this cause and the raw path read no answer at all. The frame was counted as
+// delivered and reached nobody (#820). What is left to read is the socket's state at the
+// moment of the write, which is this function: null when nothing about the socket refuses
+// the frame, or the word for the fact that did. It answers about the socket and never about
+// the client: a frame it allows is one the library will write, not one the client decoded.
+//
+// `=== false`, never `!== true`: only evidence of a socket that cannot take bytes may
+// refuse, because an object that reports no socket at all is a test double and not a
+// connection this leg wrote to.
+//
+// The three facts, read off the installed fork at both protocol trees the repo runs
+// (26.1 and 26.2, measured 2026-11-27; test/legs/closing-socket.test.js holds them as cases
+// and drives the one a socket can be put in deterministically from a test):
+//   - `client.ended` is the library's own "this connection is over", set on the socket's
+//     close, end or timeout and by its fatal-error handler. A peer that drops its socket
+//     shows up here and nowhere else first.
+//   - `client.socket.writable` is the half the stream flags cannot reach: a socket this
+//     process destroys is unwritable in that same turn, while `ended` waits for the close
+//     event a turn later. A peer's close does not need it, because the library's own 'end'
+//     listener sets `ended` before the leg's handler runs.
+//   - the stream the path will write to: the serializer for a packet object, and the
+//     compressor over the framer for raw bytes, which is the pair the library's raw writer
+//     chooses. In the turn the leg ends a client itself only the serializer has flipped and
+//     a raw frame still reaches the wire, so the raw path must not refuse there.
+export const CLOSED_SOCKET_REASONS = Object.freeze([
+  // The library gave the connection up: its own 'end' handler has run, or a peer's close
+  // reached it.
+  'socket_ended',
+  // This process destroyed the socket, in the turn before the library's 'end' handler runs.
+  'socket_not_writable',
+  // The stream this path writes to has ended, which is the library's own gate.
+  'stream_not_writable'
+])
+
+export function closedSocketReason (client, path) {
+  if (path !== 'raw' && path !== 'packet') {
+    throw new TypeError('path must be raw or packet, got ' + JSON.stringify(path))
+  }
+  if (client?.ended === true) return 'socket_ended'
+  if (client?.socket?.writable === false) return 'socket_not_writable'
+  // The library's own test is `compressor === null`, and `??` reads the same for a client
+  // that sets it while a double that names no compressor still names its framer.
+  const stream = path === 'packet' ? client?.serializer : client?.compressor ?? client?.framer
+  if (stream?.writable === false) return 'stream_not_writable'
+  return null
+}
+
 // One client-facing raw frame, with the optional strict wire check applied.
 // `wireCheck` is ({ state, name, buffer }) => { ok, code, ... }. Returns true
-// when the frame reached writeRaw, false when mode 'throw' suppressed it.
+// when the frame reached writeRaw, false when mode 'throw' suppressed it. A socket
+// that can take no frame is refused by the funnel before it gets here (#820).
 // `stats` is the front leg's wireStats body: checked/rejected/lastFailure.
 export function emitCheckedRaw ({
   client,
@@ -869,7 +923,7 @@ function createFrontLeg ({
   // cannot disagree about how many refusals there were. #616: the disconnect's own
   // number is written by that same helper, so a refusing branch has one place to
   // count and not two numbers it must remember.
-  const metrics = { denied: 0, libraryLoginRefused: 0, libraryLoginRefusedByReason: {}, sessionVerificationRefused: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, libraryLoginRefused: 0, libraryLoginRefusedByReason: {}, sessionVerificationRefused: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, clientboundSocketClosed: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt, endRequested, ended }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -2744,6 +2798,19 @@ function createFrontLeg ({
     return true
   }
 
+  // #820: the same rule for a socket that can take no frame. Both of the leg's write paths
+  // ask it, so a frame refused on one is refused on the other, and the count and the line
+  // are written here and nowhere else. The reason is the word `closedSocketReason`
+  // answered with, which is one of `CLOSED_SOCKET_REASONS`, so the record says which fact
+  // refused the frame and cannot say a fourth.
+  function refuseClosedSocket (client, { path = 'raw', name = null, state = null } = {}) {
+    const reason = closedSocketReason(client, path)
+    if (reason === null) return false
+    metrics.clientboundSocketClosed++
+    record(client, 'clientboundSocketClosed', { name, state, path, reason })
+    return true
+  }
+
   // The library-serialized packet path (the synthesized position, the skin, a notice). A
   // packet object has no bytes for the wire check to read, so the check it can take is the
   // one about state.
@@ -2760,6 +2827,10 @@ function createFrontLeg ({
     // The state the client would read this frame in, before the library picks a table for
     // it. A refusal here is a frame that never reaches the wire, counted and named.
     if (refuseStateMismatch(client, { state: PACKET_PATH_STATE, name })) return false
+    // #820: and the socket it would go to. The library answers nothing when it drops the
+    // frame, so this is the only moment the leg can learn that it did. The synthesized
+    // position is the replay frame this path carries, and #717's `refused` counts it.
+    if (refuseClosedSocket(client, { path: 'packet', name, state: PACKET_PATH_STATE })) return false
     // #541: the interceptor answers false for a frame it dropped, and a frame
     // that never reached the wire is not a frame the channel was delivered.
     if (client.write(name, packet) === false) return false
@@ -2773,8 +2844,9 @@ function createFrontLeg ({
 
   // One frame, to one client. Everything on this path is per socket: the clientbound
   // policy backstop, the reconfiguration hold, the state check, the rule against a frame
-  // after its phase's finish, and the wire check. A body with two channels does the work
-  // twice, so neither client can be handed a frame in a state it cannot parse.
+  // after its phase's finish, the socket's own answer (#820), and the wire check. A body
+  // with two channels does the work twice, so neither client can be handed a frame in a
+  // state it cannot parse.
   //
   // #602: this is the leg's only raw writer. The config interceptor's replay, a claim
   // landing, a spectator landing, the reconfiguration flush and both of the leg's own
@@ -2835,6 +2907,10 @@ function createFrontLeg ({
       recordAfterFinishDrop(client, { name: meta?.name ?? null, state: meta?.state ?? null })
       return false
     }
+    // #820: the socket itself, before the frame is handed to a writer that answers nothing
+    // when it drops one. A closed socket is not a question the wire check has an opinion
+    // about, so it is asked here with the leg's other per-socket rules.
+    if (refuseClosedSocket(client, { path: 'raw', name: meta?.name ?? null, state: meta?.state ?? null })) return false
     if (dumpRaw) {
       dumpRaw({ kind: 'raw', buffer, state: meta?.state ?? null, name: meta?.name ?? null })
     }
