@@ -2,8 +2,8 @@
 #
 # The live claim (`monoplayer-custody` in the `monoplayer` namespace) is a
 # different object. No pod in this namespace mounts it: the dev account has its own
-# chain, and one account has one writer (docs/custody.md, "Sessions, copies, and
-# refresh").
+# chain, and one account has one writer ("Sessions, copies, and refresh" in
+# `docs/custody.md`).
 #
 # This file is separate from monoplayer.yaml so a custody bootstrap can create the
 # volume without also creating a proxy that races it for the claim
