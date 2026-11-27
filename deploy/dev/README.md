@@ -378,16 +378,17 @@ Join with a 26.2 client: the lane serves that version and refuses another.
 
 ### What you should see
 
-One line per claim. Read the right column only when the middle one is not what you see.
+One row per step. Read the last column only when the middle one is not what you see. The Step
+cell names that step, and the last column names the record that goes into the log when it fails.
 
-| Look at | You should see | If you do not |
-|---|---|---|
-| the watching client, the world | a player standing where the driving client stands, wearing the puppet's skin | a player with a default skin: the entry arrived without its texture. No player at all: no `spawn_entity` reached that socket |
-| the watching client, while the driver walks | that player walks after it, a fraction of a step behind | it stands still: `virtualPlayersMoved` stayed 0, so no move frame reached a spectator |
-| the watching client, movement | flight, no damage, no block break, no block place: a spectator is a camera | survival behaviour: `spectateView.modeFrames` was not 2 |
-| the watching client, F5 | no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: that is #647. **Expected to fail until #647 lands**, because the client is not told its own player-list entry and so does not treat itself as a spectator |
-| the driving client, the world beside it | the spectator, standing in the world, in the tab list, **wearing a default skin**: the entry that tells one channel about another client's body carries no texture, so a third party draws a default (#618 is about the spectator's own body, not this one) | nothing beside it: no `player_info` and no `spawn_entity` reached the driver's channel |
-| the driving client, the player you control | one body, yours. No second copy of yourself anywhere | a duplicate of yourself: the driver's channel was told about its own player |
+| Step | Look at | You should see | If you do not |
+|---|---|---|---|
+| `puppet-renders` | the watching client, the world | a player standing where the driving client stands, wearing the puppet's skin | a player with a default skin: `puppetSkinSent` holds the entry and its `signed` flag, and an unsigned texture is one the client cannot verify. No player at all: `puppetSkinWithheld` or `puppetSkinRefused`, and no `puppetSkinKnown`: no entry was written, and a client drops the spawn that follows |
+| `puppet-walks` | the watching client, while the driver walks | that player walks after it, a fraction of a step behind | it stands still: the `heartbeat` counted `virtualPlayersMoved` 0, so no move frame reached a spectator |
+| `spectator-mode` | the watching client, movement | flight, no damage, no block break, no block place: a spectator is a camera | survival behaviour: `spectateView.modeFrames` was not 2 |
+| `spectator-own-body` | the watching client, F5 | no body of its own, and no hands in first person | a body is drawn, and the client collides with blocks: that is #647. **Expected to fail until #647 lands**, because the client is not told its own player-list entry and so does not treat itself as a spectator |
+| `drawn-for-driver` | the driving client, the world beside it | the spectator, standing in the world, in the tab list, **wearing a default skin**: the entry that tells one channel about another client's body carries no texture, so a third party draws a default (#618 is about the spectator's own body, not this one) | nothing beside it: no `virtualPlayerWritten` carried `player_info` or `spawn_entity` to the driver's channel |
+| `drawn-once` | the driving client, the player you control | one body, yours. No second copy of yourself anywhere | a duplicate of yourself: a `virtualPlayerWritten` told the driver's channel about its own player |
 
 A bot can assert the frames behind the last two rows, and `O71` does. What no bot can do is see
 them drawn, which is why this table is a person's.
@@ -463,8 +464,8 @@ document that holds it, alongside the frames it read:
 node src/driver/dev-proof.js --path .reports/dev-log.jsonl
 ```
 
-That writes `.reports/dev-two-client-witness.json`. Its six steps are the table above, each
-`pending`. For each one, write what you saw and set the state to `seen` or `not-seen`. Then
+That writes `.reports/dev-two-client-witness.json`. Its steps are the table above, in its order,
+each `pending`. For each one, write what you saw and set the state to `seen` or `not-seen`. Then
 mark it complete and read it back:
 
 ```bash

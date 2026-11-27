@@ -81,13 +81,20 @@ export const RECORDS = Object.freeze([
 
 // The claims only a person can answer, in the order the runbook's table asks for them. The
 // states are the document's: `pending` until somebody looks, then `seen` or `not-seen`.
+//
+// `id` is the name the runbook's "What you should see" row carries, so the two are one list read
+// at two places instead of two lists that happen to have six lines. `record` is the log record the
+// step's own row names as the thing to read when the step fails, and null where nothing is
+// written, because a screen is the whole of the evidence. Neither field reaches a run: no code
+// reads this list except to write the witness, and `test/driver/dev-proof.test.js` holds the
+// runbook's table to both fields, both ways.
 export const OPERATOR_STEPS = Object.freeze([
-  'the puppet renders where the driving client stands, wearing the puppet\'s skin',
-  'the puppet walks when the driving client walks',
-  'the spectator flies, takes no damage, and cannot break or place',
-  'the spectator has no body of its own (#647: this line fails until it lands)',
-  'the spectator appears to the driving client, wearing a default skin',
-  'the driving client is drawn once, not twice'
+  { id: 'puppet-renders', record: 'puppetSkinSent', claim: 'the puppet renders where the driving client stands, wearing the puppet\'s skin' },
+  { id: 'puppet-walks', record: 'heartbeat', claim: 'the puppet walks when the driving client walks' },
+  { id: 'spectator-mode', record: 'spectateView', claim: 'the spectator flies, takes no damage, and cannot break or place' },
+  { id: 'spectator-own-body', record: null, claim: 'the spectator has no body of its own (#647: this line fails until it lands)' },
+  { id: 'drawn-for-driver', record: 'virtualPlayerWritten', claim: 'the spectator appears to the driving client, wearing a default skin' },
+  { id: 'drawn-once', record: 'virtualPlayerWritten', claim: 'the driving client is drawn once, not twice' }
 ])
 
 export const WITNESS_LANE = 'dev-two-client'
@@ -401,7 +408,7 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
       failed: report.failed,
       rows: report.rows.map(row => ({ id: row.id, holds: row.holds, evidence: row.evidence }))
     },
-    steps: OPERATOR_STEPS.map(claim => ({ claim, state: 'pending', evidence: '[MANUAL: what you saw]' })),
+    steps: OPERATOR_STEPS.map(({ claim }) => ({ claim, state: 'pending', evidence: '[MANUAL: what you saw]' })),
     limitations: [
       'The frames half is read off the lane\'s own log. It says which frame reached which socket and nothing about what a client drew with it.',
       'A step set to not-seen is a finding, not a pass: the proof is incomplete while one stands.',
