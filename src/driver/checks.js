@@ -156,6 +156,41 @@ export function versionRefusal ({ driverVersion, targetVersion } = {}) {
     'the lane at a target that serves the driver version (issue #62).'
 }
 
+// ---------------------------------------------------------------------------
+// The age rule both halves of a G0 pass are read by (#939)
+// ---------------------------------------------------------------------------
+
+// A document on disk passes whether or not anything ran, so every document in a G0 pass has to
+// record a time inside the window the caller names. The reports and the witness are read by this one
+// function, so the sentence an operator reads names the same window whichever half was too old, and a
+// rule that learns a case learns it for both. That is the argument #943 made for the gap rule, one
+// level up.
+//
+// `subject` is the thing being dated, in the caller's words, and `stamped` is how that document
+// records it. The two documents date different events, and one sentence for both would have to say
+// "the document's time", which names neither.
+//
+// Two of the three refusals are read without a window. An unreadable time is refused rather than
+// skipped, because a value that reaches here and does not parse passes every age test there is. A
+// time after this check is refused for the same reason: a year typed into a date moves it past every
+// window, and no document here is written by a clock ahead of the checkout that reads it. Neither is
+// an age question, so neither waits for the caller to name one; only the stale refusal does, and an
+// `Infinity` window is how a caller says it is not asking that question.
+const ageRefusal = ({ at, now, maxAgeMs, subject, stamped, field }) => {
+  const window = Math.round(maxAgeMs / 60000) + '-minute window'
+  if (!Number.isFinite(at)) return subject + ' carries no readable ' + field + ', so its age cannot be read'
+  // Only the stale branch reads `maxAgeMs`, so `Infinity` leaves the other two in place and says the
+  // window is not the caller's question.
+  if (at > now) {
+    return subject + ' is dated in the future: it says ' + new Date(at).toISOString() +
+      ', and this check is reading it at ' + new Date(now).toISOString()
+  }
+  if (now - at > maxAgeMs) {
+    return subject + ' is stale: ' + stamped + ' ' + new Date(at).toISOString() + ', outside the ' + window
+  }
+  return null
+}
+
 // Pure verifier for the G0 evidence bundle. The summary must describe one
 // invocation that requested and executed exactly two runs; the two report
 // paths it names must be the chronological run 1 and run 2 and both must have
@@ -167,6 +202,16 @@ export function verifyG0Evidence (summary, reports, { now = Date.now(), maxAgeMs
     return {
       ok: false,
       reason: `latest summary is not a clean 2-run invocation (requested=${summary.runsRequested}, executed=${summary.runsExecuted}, passed=${summary.runsPassed})`,
+    }
+  }
+  // #939: the summary is the report set's own identity, and the lane is the value a G0 pass is bound
+  // by. A summary written before the runner recorded one can bound nothing, so it is refused here
+  // rather than read as a witness with no counterpart.
+  if (typeof summary.gateLane !== 'string' || summary.gateLane === '') {
+    return {
+      ok: false,
+      reason: 'the report set names no lane: the summary was written by a runner that did not record which lane the ' +
+        'runs measured, so no witness can be bound to it. Run: mise run driver:scenario',
     }
   }
   if (!Array.isArray(reports) || reports.length !== 2) return { ok: false, reason: 'expected two driver reports' }
@@ -188,14 +233,21 @@ export function verifyG0Evidence (summary, reports, { now = Date.now(), maxAgeMs
   }
   // A committed or hand-copied report set is not evidence of anything: it passes
   // whether or not anything ran today. Bound the age of the newest run, so the
-  // gate can only be green on evidence this checkout produced recently.
-  const finished = Date.parse(sorted[1].finishedAt ?? sorted[1].startedAt)
-  if (Number.isFinite(maxAgeMs) && Number.isFinite(finished) && now - finished > maxAgeMs) {
-    return {
-      ok: false,
-      reason: `driver evidence is stale: the newest run finished at ${new Date(finished).toISOString()}, outside the ${Math.round(maxAgeMs / 60000)}-minute window`,
-    }
-  }
+  // gate can only be green on evidence this checkout produced recently. The rule is
+  // `ageRefusal`'s, which the witness's half of the same pass is read by too (#939),
+  // called the same way by both so neither half can be read differently.
+  const ended = sorted[1].finishedAt === undefined || sorted[1].finishedAt === null
+  const aged = ageRefusal({
+    at: Date.parse(sorted[1].finishedAt ?? sorted[1].startedAt),
+    now,
+    maxAgeMs,
+    subject: 'driver evidence',
+    // What the sentence says is what the report recorded: a report with no `finishedAt` is dated by
+    // its start, and a refusal that said it finished would name a time the document never held.
+    stamped: ended ? 'the newest run started at' : 'the newest run finished at',
+    field: ended ? 'startedAt' : 'finishedAt',
+  })
+  if (aged !== null) return { ok: false, reason: aged }
   return { ok: true, reason: '2/2 consecutive driver runs' }
 }
 
@@ -354,17 +406,30 @@ export const UNMODDED_STATE_OK = 'ok'
 // `steps` is the list the check is asked to read, and it is `UNMODDED_STEPS` for every
 // caller in the tree: the writer and the checker take it the same way, so a test can
 // read what the checklist says about a declaration the way it reads the verdict.
-export function unmoddedWitness ({ server = '', now = new Date().toISOString(), steps = UNMODDED_STEPS } = {}) {
+export function unmoddedWitness ({ server = '', gateLane = '', now = new Date().toISOString(), steps = UNMODDED_STEPS } = {}) {
   return {
     gate: 'B', row: 'B5-unmodded-witness (G0 manual lane)',
     lane: UNMODDED_WITNESS_LANE,
     clientLane: 'unmodded',
+    // The gate lane this witness was written for, and the one value a G0 pass is bound by (#939).
+    // Not named `lane`: that key above is the lane *kind*, which the check reads first, and one key
+    // cannot be both. The lane is the caller's because only it can ask `scripts/gate-lane.sh`, and
+    // an empty string is what a caller that forgot to ask leaves.
+    gateLane,
     generatedAt: now,
     completed: false,
     status: 'NOT COMPLETE — exits nonzero until the operator records the manual run',
     how: [
       'Launch the UNMODDED Prism 26.2 instance (no monoplayer-driver mod installed) where you normally play Minecraft.',
       'Join the G0 Paper backend directly (' + server + ').',
+      // Only when the caller named one: a checklist reading `belongs to lane ""` would look like a
+      // lane name to the operator holding it.
+      ...(gateLane === ''
+        ? []
+        : [
+            'This checklist belongs to lane "' + gateLane + '": `--verify-g0` reads it against the lane the run\'s summary names, and refuses a witness from another lane with both lanes printed (#939).',
+            'Generate this checklist on the day you walk it: its `generatedAt` is the date `--verify-g0` reads, and a witness outside the window the reports are read in is refused.'
+          ]),
       'For each step below, do the action by hand, capture a grim screenshot, and set the row to `' + UNMODDED_STATE_OK + '` when you saw it hold. A step this list declares expected absent may be recorded `' + GAP_STATE + '` instead. Leave a row `pending` until you have looked.',
       'Write what you saw in the row\'s `evidence`. A `' + UNMODDED_PLACEHOLDER + '` placeholder is not evidence, and the check refuses it.'
     ],
@@ -441,13 +506,49 @@ function witnessRowRefusal (rows, list) {
 // rule can be read before the day a step needs it: a rule that first runs on the day
 // somebody declares a gap is a rule nobody has read. A witness row cannot reach it —
 // the declaration is code, and the row's own copy of it is overwritten below.
-export function verifyUnmoddedWitness (document, { steps = UNMODDED_STEPS } = {}) {
+//
+// #939: the document also has to be about the run it certifies. `gateLane` is the lane the report
+// set's summary names, and the caller holding a report set always passes it; `undefined` is the
+// caller reading the document alone, the way `verifyG0Evidence` reads a report set alone. The
+// binding is read before the rows: a document from another lane is not evidence about this run
+// whatever its rows say, and a refusal that began with "still pending" would send the operator to
+// look at a checklist for the wrong backend.
+export function verifyUnmoddedWitness (document, {
+  steps = UNMODDED_STEPS, gateLane, now = Date.now(), maxAgeMs = Infinity,
+} = {}) {
   if (document === null || typeof document !== 'object') {
     return refusal('the unmodded witness file is missing or is not a document: run --lane unmodded first')
   }
   if (document.lane !== UNMODDED_WITNESS_LANE) {
     return refusal('the witness names lane ' + JSON.stringify(document.lane) + ', not ' + JSON.stringify(UNMODDED_WITNESS_LANE))
   }
+  // #939, the value a G0 pass is bound by. A witness is evidence about the lane it was walked
+  // against, and the reports are evidence about theirs; the pair is one run only when the two names
+  // agree. Both values are printed, because an operator holding a witness and a report set from
+  // different lanes needs to see which one is from where.
+  const witnessLane = typeof document.gateLane === 'string' ? document.gateLane : ''
+  if (witnessLane === '') {
+    return refusal('the witness names no lane, so it is evidence about no run: generate the checklist with --lane unmodded, which writes the lane into it')
+  }
+  if (gateLane !== undefined && witnessLane !== gateLane) {
+    // Both values, and what to do about them: a refusal that only said the two disagreed sends the
+    // operator to diff two documents by hand, and the lane that moved is the whole finding.
+    return refusal('the witness is from lane "' + witnessLane + '", and the report set it certifies is from lane "' + gateLane +
+      '": a G0 pass is one run, and these are two. Run --lane unmodded on the lane the reports name')
+  }
+  // #939: the age the reports are held to, from the same function. `generatedAt` is the writer's
+  // clock and not the walk's — the runbook tells the operator to generate the checklist on the day
+  // they walk it, and the rule is stated as what the file can be read as. Nothing offline can date
+  // the walk, and this claims no more than it reads.
+  const age = ageRefusal({
+    at: Date.parse(document.generatedAt),
+    now,
+    maxAgeMs,
+    subject: 'the witness',
+    stamped: 'it was generated at',
+    field: 'generatedAt',
+  })
+  if (age !== null) return refusal(age)
   const rows = Array.isArray(document.steps) ? document.steps : []
   const misplaced = witnessRowRefusal(rows, steps)
   if (misplaced !== null) return refusal(misplaced)
@@ -493,9 +594,10 @@ export function verifyUnmoddedWitness (document, { steps = UNMODDED_STEPS } = {}
         commaAnd(declared.map(step => '`' + step.id + '` (' + closes(step.openUntil) + ')')))
   }
   // The pass carries what it accepted, so `--verify-g0` prints it: a gap the operator recorded stays
-  // on the run's own output, and so does a declaration the operator's record outlived (#963). A
-  // refusal carries neither list: it stops before the split, and its `reason` already names the step.
-  return { ok: true, reason: null, gaps: gaps.map(declaredOf), stale: stale.map(declaredOf) }
+  // on the run's own output, and so does a declaration the operator's record outlived (#963), and the
+  // lane the two halves were bound by (#939). A refusal carries neither list: it stops before the
+  // split, and its `reason` already names the step.
+  return { ok: true, reason: null, gaps: gaps.map(declaredOf), stale: stale.map(declaredOf), gateLane: witnessLane }
 }
 
 // The unmodded half of the G0 command's pass (#963): the sentence, one line per gap it accepted, and
@@ -518,8 +620,11 @@ export function formatUnmoddedPass (witnessVerdict) {
     : 'G0 VERIFIED: the unmodded witness records every step, and ' + namedIds(gaps.map(gap => gap.id)) +
       ' ' + agree(gaps.length, 'is', 'are') + ' `' + GAP_STATE + '`: ' +
       agree(gaps.length, 'a declared gap', 'declared gaps') + ', printed below.'
+  // The lane is the value the pass was bound by (#939), so the terminal that says the proof stands
+  // says which run it stands for. It is read from the verdict, not typed here: a document-only pass
+  // carries the witness's own lane and this sentence stays true either way.
   return [
-    sentence,
+    sentence + ' The witness names lane "' + witnessVerdict.gateLane + '".',
     ...gaps.map(gap => gapLine(gap, { withEvidence: true })),
     ...stale.map(step => staleLine(step, { list: UNMODDED_LIST_NAME, state: UNMODDED_STATE_OK }))
   ].join('\n')

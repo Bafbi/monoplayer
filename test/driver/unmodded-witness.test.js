@@ -28,10 +28,16 @@ const DEV_PROOF = readFileSync(path.join(ROOT, 'src', 'driver', 'dev-proof.js'),
 const PAGE = readFileSync(path.join(ROOT, 'docs', 'driver-lane.md'), 'utf8')
 const SERVER = 'monoplayer-gate-b-paper.tail41e568.ts.net:25565'
 
+// #939: the two halves of a G0 pass were verified apart, so a witness recorded on one day verified
+// beside two reports produced on another and the pair read as one run. A lane is the value both
+// documents can carry, and these are two of them: neither is a lane any worktree derives.
+const LANE = 'monoplayer-gate-1a2c3e5'
+const OTHER_LANE = 'monoplayer-gate-2b8e4d1'
+
 // What an operator's finished witness looks like: the writer's document with every row recorded
 // and the document signed. Each case below breaks exactly one thing in it.
-function recorded () {
-  const witness = unmoddedWitness({ server: SERVER, now: '2026-11-09T01:37:37.000Z' })
+function recorded ({ gateLane = LANE } = {}) {
+  const witness = unmoddedWitness({ server: SERVER, gateLane, now: '2026-11-09T01:37:37.000Z' })
   return {
     ...witness,
     completed: true,
@@ -47,7 +53,7 @@ const rowList = count => commaAnd(Array.from({ length: count }, (_, at) => 'row 
 const commaAnd = items => (items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' and ' + items.at(-1))
 
 test('the checklist the writer emits records no step, and the check refuses it by name', () => {
-  const verdict = verifyUnmoddedWitness(unmoddedWitness({ server: SERVER }))
+  const verdict = verifyUnmoddedWitness(unmoddedWitness({ server: SERVER, gateLane: LANE }))
   assert.equal(verdict.ok, false)
   assert.equal(verdict.reason, 'still pending: ' + stepIds().map(id => '`' + id + '`').join(', '),
     'a fresh checklist is refused, and every step it left open is named')
@@ -69,7 +75,7 @@ test('the writer\'s rows are the declared steps: one row per step, in order, wit
 test('a witness marked completed over eight pending steps is refused: the flag is not the record', () => {
   // The document #922 was filed about: every row still pending, every evidence the
   // placeholder, and the operator set completed true.
-  const verdict = verifyUnmoddedWitness({ ...unmoddedWitness({ server: SERVER }), completed: true })
+  const verdict = verifyUnmoddedWitness({ ...unmoddedWitness({ server: SERVER, gateLane: LANE }), completed: true })
   assert.equal(verdict.ok, false, 'completed: true over eight pending steps is not a pass')
   assert.equal(verdict.reason, 'still pending: ' + stepIds().map(id => '`' + id + '`').join(', '))
 })
@@ -164,8 +170,10 @@ test('a step recorded twice counts once, and the step it displaced is unwitnesse
 
 test('a witness whose every step is ok, with evidence, and signed, passes, with no gap and nothing stale', () => {
   // #963: the pass carries the two lists the G0 command prints. Empty here, because the list
-  // declares no step expected absent and the operator recorded every one.
-  assert.deepEqual(verifyUnmoddedWitness(recorded()), { ok: true, reason: null, gaps: [], stale: [] })
+  // declares no step expected absent and the operator recorded every one. #939: it carries the
+  // lane too, which is the value the pass is bound by.
+  assert.deepEqual(verifyUnmoddedWitness(recorded()),
+    { ok: true, reason: null, gaps: [], stale: [], gateLane: LANE })
 })
 
 // #943: the dev lane's witness accepts a `not-seen` on a step its list declares expected absent
@@ -204,14 +212,14 @@ test('a step its list declares expected absent verifies when it is recorded not-
     'the generated checklist names the declared step and the ticket that closes it: ' + checklist.limitations.join(' | '))
   assert.equal(checklist.steps.length, declaredList().length, 'and still writes one row per step')
   assert.deepEqual(verdict, {
-    ok: true, reason: null, gaps: [gapOf(witness, DECLARED_STEP)], stale: []
+    ok: true, reason: null, gaps: [gapOf(witness, DECLARED_STEP)], stale: [], gateLane: LANE
   }, 'an honest run with the declared gap is a record, not a finding: ' + verdict.reason)
   // The other half of the declaration: a fix landing must not turn an honest record red. The step is
   // seen, the list still declares it, and the record passes — carrying the declaration it outlived,
   // which #963 prints as the dev lane's `stale declaration:` line.
   const seen = recorded()
   assert.deepEqual(verifyUnmoddedWitness(seen, { steps: declaredList() }),
-    { ok: true, reason: null, gaps: [], stale: [gapOf(seen, DECLARED_STEP)] },
+    { ok: true, reason: null, gaps: [], stale: [gapOf(seen, DECLARED_STEP)], gateLane: LANE },
     'a declared step the operator did see is still a record')
 })
 
@@ -272,11 +280,11 @@ test('the witness is read as a document: no file, another lane, no rows', () => 
 })
 
 test('\`--verify-g0\` refuses with this rule, and no longer on the flag alone', () => {
-  assert.match(RUN, /verifyUnmoddedWitness\(witness\)/, 'src/driver/run.js asks the checker about the document')
+  assert.match(RUN, /verifyUnmoddedWitness\(witness, \{/, 'src/driver/run.js asks the checker about the document')
   assert.match(RUN, /NOT COMPLETE: \$\{witnessVerdict\.reason\}/, 'and prints the reason, which names the step')
   assert.doesNotMatch(RUN, /witness\.completed !== true/,
     'the one-line flag check #922 found is gone: a completed flag is no longer the whole of the human half')
-  assert.match(RUN, /unmoddedWitness\(\{ server \}\)/, 'the checklist the lane writes is the checker\'s own document')
+  assert.match(RUN, /unmoddedWitness\(\{ server, gateLane \}\)/, 'the checklist the lane writes is the checker\'s own document')
 })
 
 // #963: the G0 pass printed one sentence and named nothing about the gap it accepted, so a pass over
@@ -326,8 +334,11 @@ test('a pass over a declared gap does not claim every step was seen, and does no
   assert.ok(sentence.includes('records every step'), 'the witness did record one: as `not-seen`')
   assert.ok(sentence.includes('`' + DECLARED_STEP + '` is `not-seen`'), 'and the gap is named: ' + sentence)
   assert.ok(sentence.includes('declared gap'), 'and it is named as the gap this pass accepts')
-  assert.match(printed(verifyUnmoddedWitness(recorded()))[0], /records every step `ok`\.$/,
-    'a witness that saw every step says so, in the state it recorded')
+  // The whole line, both sentences: a pass that saw every step says so, and says which run it is a
+  // pass for (#939). Built from the constants, so a step's own word and the lane are not retyped here.
+  assert.equal(printed(verifyUnmoddedWitness(recorded()))[0],
+    'G0 VERIFIED: the unmodded witness records every step `' + UNMODDED_STATE_OK + '`. ' +
+    'The witness names lane "' + LANE + '".')
 })
 
 test('a declaration its witness outlived is printed, names the list to edit, and the pass still stands', () => {
@@ -373,6 +384,79 @@ test('the gap and stale lines live in checks.js, and the dev lane reads them fro
   assert.match(DEV_PROOF, /import \{[^}]*\bgapLine\b[^}]*\} from '\.\/checks\.js'/,
     'it imports both, so one gap is one sentence across the two lanes')
   assert.match(DEV_PROOF, /import \{[^}]*\bstaleLine\b[^}]*\} from '\.\/checks\.js'/)
+})
+
+// #939: a G0 pass is a claim about one run, and the witness and the report set were read as two
+// independent documents. The witness now names the lane it was written for; the command hands the
+// check the lane the report set names; a document from another lane is refused, both values named.
+test('a witness from one lane beside the report set of another is refused, and the refusal names both', () => {
+  const witness = recorded({ gateLane: OTHER_LANE })
+  // Neither document is wrong on its own. That is the defect: the pair is the unit a G0 pass claims.
+  assert.equal(verifyUnmoddedWitness(witness).ok, true, 'the document is a complete record of a run')
+  const verdict = verifyUnmoddedWitness(witness, { gateLane: LANE })
+  assert.equal(verdict.ok, false, 'a witness from another lane cannot certify this report set')
+  assert.ok(verdict.reason.includes(OTHER_LANE), 'the lane the witness names: ' + verdict.reason)
+  assert.ok(verdict.reason.includes(LANE), 'and the lane the report set names: ' + verdict.reason)
+})
+
+test('a witness and a report set of one lane pass, and the pass names the lane they share', () => {
+  const verdict = verifyUnmoddedWitness(recorded(), { gateLane: LANE })
+  assert.deepEqual(verdict, { ok: true, reason: null, gaps: [], stale: [], gateLane: LANE },
+    'the fresh pair passes, and a caller can print the lane the two halves name')
+  assert.ok(printed(verdict)[0].includes('lane "' + LANE + '"'), 'the pass sentence names it: ' + printed(verdict)[0])
+})
+
+test('a witness that names no lane is refused: it is evidence about no run', () => {
+  const { gateLane, ...nameless } = recorded()
+  assert.equal(gateLane, LANE, 'the writer wrote the lane this case removes')
+  assert.match(verifyUnmoddedWitness(nameless).reason,
+    /^the witness names no lane, so it is evidence about no run: generate the checklist with --lane unmodded, which writes the lane into it$/)
+})
+
+test('a witness generated outside the window the reports are read in is refused, and says when it was written', () => {
+  const MAX_AGE = 24 * 60 * 60 * 1000
+  const now = Date.parse('2026-11-11T01:37:37.000Z')
+  const verdict = verifyUnmoddedWitness(recorded(), { gateLane: LANE, now, maxAgeMs: MAX_AGE })
+  assert.equal(verdict.ok, false, 'a witness written two days before the reports is not evidence about them')
+  assert.equal(verdict.reason,
+    'the witness is stale: it was generated at 2026-11-09T01:37:37.000Z, outside the 1440-minute window')
+})
+
+test('a witness inside the window passes, and a date nobody can read is refused rather than trusted', () => {
+  const MAX_AGE = 24 * 60 * 60 * 1000
+  const soon = Date.parse('2026-11-09T02:37:37.000Z')
+  assert.equal(verifyUnmoddedWitness(recorded(), { gateLane: LANE, now: soon, maxAgeMs: MAX_AGE }).ok, true,
+    'an hour after the checklist was written is inside a day')
+  assert.match(verifyUnmoddedWitness({ ...recorded(), generatedAt: 'yesterday' }, { gateLane: LANE, now: soon, maxAgeMs: MAX_AGE }).reason,
+    /^the witness carries no readable generatedAt, so its age cannot be read$/,
+    'a generatedAt nobody can parse is not an age anybody can read')
+  // A year typo moves the date past every age test there is, so the window is read both ways.
+  assert.deepEqual(
+    verifyUnmoddedWitness({ ...recorded(), generatedAt: '2062-11-09T01:37:37.000Z' }, { gateLane: LANE, now: soon, maxAgeMs: MAX_AGE }),
+    {
+      ok: false,
+      reason: 'the witness is dated in the future: it says 2062-11-09T01:37:37.000Z, and this check is reading it at 2026-11-09T02:37:37.000Z',
+      gaps: [], stale: []
+    },
+    'a witness no clock can have reached is refused, with both dates printed')
+})
+
+test('the writer records the lane beside the server, and the checklist says which lane it belongs to', () => {
+  const witness = unmoddedWitness({ server: SERVER, gateLane: LANE })
+  assert.equal(witness.gateLane, LANE, 'the lane is a field, not a sentence a reader has to parse')
+  // The operator reads the rule in the checklist rather than in a refusal: a witness certifies the
+  // reports of its own lane, and the window is the one the reports are read in.
+  assert.ok(witness.how.some(line => line.includes('"' + LANE + '"') && line.includes('--verify-g0')),
+    'the how list names the lane and the command that reads it: ' + witness.how.join(' | '))
+})
+
+test('\`--verify-g0\` writes the report set\'s lane and hands it, and the window, to the witness check', () => {
+  // The one caller in the tree. A witness verified without the lane is verified as a document alone,
+  // which is the defect #939 files.
+  assert.match(RUN, /gateLane: gateLaneOf\(opts\)/, 'a driver run writes the lane it measured into its summary')
+  assert.match(RUN, /const gateLaneOf = opts => laneOfAddress\(opts\.server\)/, 'and it is the lane the client joined')
+  assert.match(RUN, /gateLane: summary\.gateLane/, 'the check is handed the summary\'s lane')
+  assert.match(RUN, /verifyUnmoddedWitness\(witness, \{[^}]*maxAgeMs/, 'with the window the reports are read in')
 })
 
 test('the runbook tells a reviewer the two lines a G0 pass prints, by the labels the builders word', () => {

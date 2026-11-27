@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { createDriverClient, DriverError } from './client-driver.js'
 import { formatParityReport, parseParityEndpoint, runParity } from './parity.js'
 import { formatSkinReport, runSkinLane, SKIN_CASES } from './skin.js'
-import { laneTargets, resolveGateLane } from './lane.js'
+import { laneOfAddress, laneTargets, resolveGateLane } from './lane.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
 import {
@@ -85,9 +85,12 @@ Options:
                      never need this; the default is an operator-managed tunnel.
   --verify-g0        Do not run anything: verify this checkout holds two
                      consecutive PASSED driver reports and an unmodded witness
-                     whose every step is recorded; exits 0 only when both hold.
+                     whose every step is recorded; exits 0 only when both hold,
+                     and the witness names the lane the reports name.
   --max-age-hours N  Reject driver evidence whose newest run finished more than
-                     N hours ago, so a copied report set cannot pass (default 24).
+                     N hours ago, and an unmodded witness generated longer ago,
+                     so a copied report set or an old witness cannot pass
+                     (default 24).
   --host             Display host for relaunch/screenshot/tunnel
                      (default: bafbi@nath.tail41e568.ts.net).
   --instance         Prism instance to launch (default: ${DEFAULT_INSTANCE}).
@@ -394,10 +397,24 @@ function createScpFetch ({ host }) {
 // anti-masking check (council correction: the driver is a mod and can mask
 // vanilla bugs). The checklist, its whole and pending, is src/driver/checks.js's
 // `unmoddedWitness`: the steps it writes and the steps `--verify-g0` reads are one list (#922).
-async function writeUnmoddedChecklist ({ laneReportPath, server }) {
-  const { text } = writeJsonRedacted(unmoddedWitness({ server }))
+//
+// #939: the checklist carries the lane it was written for, because a G0 pass is a claim about one
+// run and the summary beside the two reports names the lane they measured.
+async function writeUnmoddedChecklist ({ laneReportPath, server, gateLane }) {
+  const { text } = writeJsonRedacted(unmoddedWitness({ server, gateLane }))
   await writeFile(laneReportPath, text)
 }
+
+// The lane a run is evidence about (#939): the one the client joined, when its address names a lane,
+// and the namespace RCON administered when it does not. A tunnel or a port-forward is an address and
+// not a lane (src/driver/lane.js), and then the namespace is the only lane the run has. Both halves of
+// a G0 pass ask this one function, so the witness and the summary cannot disagree about the lane they
+// were written for.
+//
+// A run handed two lanes is `laneTargets`' own case, and it answers the join lane here: the world the
+// client is in is what the witness saw. That run's RCON assertions read the other lane, so its own
+// scenario fails on the first position it compares, and no pass is bound by this value alone.
+const gateLaneOf = opts => laneOfAddress(opts.server) ?? opts.rconNamespace
 
 async function verifyG0 (opts) {
   const summaryPath = path.join(TESTDATA, 'driver-summary.json')
@@ -410,7 +427,9 @@ async function verifyG0 (opts) {
       try { reports.push(JSON.parse(await readFile(absolute, 'utf8'))) } catch {}
     }
   }
-  const verdict = verifyG0Evidence(summary, reports, { maxAgeMs: opts.maxAgeHours * 60 * 60 * 1000 })
+  // One window for the whole pass, so the two halves cannot be read against two.
+  const maxAgeMs = opts.maxAgeHours * 60 * 60 * 1000
+  const verdict = verifyG0Evidence(summary, reports, { maxAgeMs })
   if (!verdict.ok) {
     console.error(`NOT 2/2: ${verdict.reason}`)
     console.error('Run: mise run driver:scenario  (two fresh runs), then this check again')
@@ -424,11 +443,15 @@ async function verifyG0 (opts) {
   // The human half, read as a document and not as a flag over one: every step recorded, with
   // evidence, and `completed` set (#922). A witness marked completed over eight pending steps
   // is refused by the name of the step that is not recorded.
-  const witnessVerdict = verifyUnmoddedWitness(witness)
+  //
+  // #939: and read as evidence about *this* run. The lane the summary names and the lane the witness
+  // names have to agree, and the witness is held to the same window the reports are, so a witness
+  // from another lane or another day is refused instead of certifying reports it says nothing about.
+  const witnessVerdict = verifyUnmoddedWitness(witness, { gateLane: summary.gateLane, maxAgeMs })
   if (!witnessVerdict.ok) {
     console.error(`NOT COMPLETE: ${witnessVerdict.reason}`)
     console.error(`Expected ${TESTDATA}/${UNMODDED_WITNESS_FILE} with lane '"unmodded"', one row per step recorded ` +
-      '`ok`, and completed true.')
+      '`ok`, completed true, and the lane "' + summary.gateLane + '" the summary names.')
     console.error('Generate a checklist first: node src/driver/run.js --lane unmodded')
     return 1
   }
@@ -495,8 +518,11 @@ async function main () {
     // The checklist sends a reader to this worktree's Paper, so it names the lane too.
     if (!applyLaneToOptions(opts)) return
     const laneReportPath = path.join(TESTDATA, `driver-unmodded-checklist-${stamp}.json`)
-    await writeUnmoddedChecklist({ laneReportPath, server: opts.server })
+    const gateLane = gateLaneOf(opts)
+    await writeUnmoddedChecklist({ laneReportPath, server: opts.server, gateLane })
     console.log(`unmodded witness checklist written: ${path.relative(root, laneReportPath)}`)
+    console.log(`lane: ${gateLane} — the checklist names it, and --verify-g0 refuses a witness whose lane ` +
+      'is not the report set\'s or older than the window the reports are read in')
     console.log('Complete the manual steps there, then record the result as')
     console.log(`testdata/${UNMODDED_WITNESS_FILE} (completed: true). Exiting 1 until the witness is done.`)
     process.exitCode = 1
@@ -586,6 +612,9 @@ async function main () {
   const passedRuns = reports.filter(r => r.passed).length
   const summary = {
     gate: 'B', row: 'G0-host-readiness', lane: 'driver',
+    // The gate lane these two runs measured, and the value `--verify-g0` binds the unmodded witness
+    // by (#939). `lane` above is the lane kind, as it is in a report; this is the namespace.
+    gateLane: gateLaneOf(opts),
     generatedAt: new Date().toISOString(),
     runsRequested: opts.runs, runsExecuted: reports.length,
     runsPassed: passedRuns,
