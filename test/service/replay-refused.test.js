@@ -22,6 +22,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { synthAttach } from '../../src/core/join-synth.js'
 import { makeCore } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -64,6 +65,12 @@ test('#717 a cached replay frame the leg refused is counted as refused, and not 
   assert.equal(written.attached, true, 'the replay ran')
   const replayed = attachRecord(taken.logLines).replayed
   assert.ok(replayed > 0, 'the control replay wrote frames, so the pair compares two numbers')
+  // Every frame the replay built is counted once, and the count is the module's own: not
+  // a total taken around the write, and not a frame counted twice.
+  assert.equal(replayed, synthAttach({
+    snapshot: taken.rig.core.cache.snapshot(),
+    pose: taken.rig.core.session.currentPose
+  }).counts.replayed, 'a frame the leg took is counted once')
   assert.equal(taken.rig.core.metrics.replayFramesRefused, 0, 'nothing was refused')
 
   const refused = warmRig()
