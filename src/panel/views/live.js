@@ -114,6 +114,56 @@ function renderChannels (channels) {
   ]))
 }
 
+// The words the front group's rows are drawn under, where a field's own name is not
+// one a reader reads: "pre-auth refused" is not `preAuthRefused`, and the sessionserver
+// refusal is the one refusal the page must name by the hand that made it (#743).
+//
+// A field with no entry here is still drawn, under its own name spaced out. That is
+// what makes this a lookup and not a whitelist: a lookup that falls back costs a
+// reader words, and a field list that filters costs a number, which is the defect
+// #743 was filed for. So only the words the fallback cannot get right are here: where
+// the hyphen goes, and which hand refused the login.
+const FRONT_LABELS = {
+  preAuthRefused: 'pre-auth refused',
+  preAuthExpired: 'pre-auth expired',
+  preAuthInWindow: 'pre-auth in window',
+  sessionVerificationRefused: 'sessionserver refused the login'
+}
+
+// camelCase as words: `pickerPicks` reads "picker picks". No rule can put the hyphen
+// in "pre-auth", which is why the words a reader must read exactly are in the lookup
+// above and this is only the fallback.
+const spaced = name => name
+  .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+  .toLowerCase()
+
+const frontLabel = name => FRONT_LABELS[name] ?? spaced(name)
+
+// The front leg's counters, whole and in the record's own order (#743). The order is
+// the leg's declaration and the page has no second opinion about it, so a counter the
+// leg adds lands where the leg put it.
+//
+// A counter the group holds as a map of counts — the picker's refusals by reason
+// (#417) — is one row per key under a heading of its own, because the reasons are what
+// the operator is reading for. The keys are drawn as the leg wrote them: a reason is a
+// machine's word and not one this file improves.
+function renderFront (front) {
+  if (front === null || front === undefined) return []
+  const rows = []
+  const maps = []
+  for (const [name, value] of Object.entries(front)) {
+    if (value !== null && typeof value === 'object') {
+      // A keyed group is named by the record's own word for it, and each key is a row.
+      maps.push(group(frontLabel(name), Object.entries(value).map(([key, entry]) => row(key, count(entry)))))
+      continue
+    }
+    rows.push(row(frontLabel(name), count(value)))
+  }
+  // group() answers '' for a group with no rows, and '' is what the caller joins.
+  return [group('Front', rows), ...maps]
+}
+
 function renderHeartbeat (facts) {
   const heartbeat = facts.heartbeat
   if (heartbeat === null) return ''
@@ -126,17 +176,7 @@ function renderHeartbeat (facts) {
     row('backend logins', count(heartbeat.backendLogins))
   ]))
 
-  const front = heartbeat.front ?? {}
-  lines.push(group('Front', [
-    row('allowed', count(front.allowed)),
-    row('attaches', count(front.attaches)),
-    row('denied', count(front.denied)),
-    row('pre-auth refused', count(front.preAuthRefused)),
-    row('pre-auth expired', count(front.preAuthExpired)),
-    row('pre-auth in window', count(front.preAuthInWindow)),
-    row('policy refused', count(front.policyRefused)),
-    row('state refused', count(front.stateRefused))
-  ]))
+  lines.push(...renderFront(heartbeat.front))
 
   const sizes = heartbeat.sizes ?? {}
   const domains = Object.keys(sizes)

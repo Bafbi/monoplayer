@@ -1,4 +1,5 @@
-// The heartbeat's per-body and per-channel groups on the page (#419).
+// The heartbeat's groups on the page: the per-body and per-channel ones (#419), and
+// the front leg's counters (#743).
 //
 // #415 added `bodies` and `channels` to the heartbeat, and docs/telemetry.md, under
 // "The per-body and per-channel groups", defines every field of both. The panel's
@@ -12,6 +13,20 @@
 // The absent and empty cases are here too, because a deployed lane older than #415
 // writes neither group and a lane with nobody connected writes an empty channel
 // list. A page that threw on either would be worse than one that shows nothing.
+//
+// #743 is the same finding one group over. The front leg counts a login the
+// sessionserver refused, and the panel's own list of front fields did not name it, so the
+// count reached the pod log, the journal and OTLP and stopped. The two counter groups are
+// projected by shape now, not by name: a counter is a number, so a counter nobody named
+// is a row the page draws.
+//
+// That last rule is why the front half of this file is not shaped like the bodies half.
+// These tests hold the doc's field list against the page in the one direction the doc can
+// answer, that every field it names is a row here. The other direction, that every row is
+// a field the doc names, is #781's, because the leg writes counters docs/telemetry.md does
+// not name yet. Until it lands, a both-directions comparison would fail on the doc's
+// silence rather than on the page, and a gate that is red for a reason nobody is fixing
+// is a gate somebody silences.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -56,8 +71,11 @@ function facts (heartbeat = {}) {
 // off the page and not listed here: the doc is the field list's home, and a copy of
 // it in this file would be the second one. A table row may name two fields, which is
 // why this collects every backticked name on the line rather than one per row.
-function documented (group) {
-  const marker = group + '[].'
+//
+// `marker` is the group's prefix in the Field column: `bodies[].` for a list of rows,
+// `front.` for a flat group whose row names the field as `front.<field>`. A name the
+// doc writes with a `.*` tail is a map's keys, which the doc states as one row.
+function documented (marker) {
   const found = []
   for (const line of DOC.split('\n')) {
     const cells = line.split('|')
@@ -82,12 +100,123 @@ function valueOf (name) {
 }
 
 function rowOf (group) {
-  return Object.fromEntries(documented(group).map(name => [name, valueOf(name)]))
+  return Object.fromEntries(documented(group + '[].').map(name => [name, valueOf(name)]))
 }
+
+test('#743 the page shows a login the sessionserver refused, beside the front counters', () => {
+  // #722 gave the front leg a counter for the refusal the protocol library makes on
+  // its own, and the records and the doc row came with it. The card is the only place
+  // an operator watches that number, and it never appeared.
+  const page = renderLive(facts({ front: { denied: 1, preAuthRefused: 3, sessionVerificationRefused: 4 } }))
+  const start = page.indexOf('<h4>Front</h4>')
+  assert.notEqual(start, -1, 'the card draws the front group')
+  const front = page.slice(start, page.indexOf('</dl>', start))
+  assert.match(front, /<dt>sessionserver refused the login<\/dt><dd>4<\/dd>/,
+    'the sessionserver refusal is a row in the front group, and its label says which hand refused the login')
+  assert.match(front, /<dt>pre-auth refused<\/dt><dd>3<\/dd>/, 'beside the pre-auth counters a reader compares it to')
+})
+
+test('#743 every field docs/telemetry.md names for the front group is a row on the page', () => {
+  const named = documented('front.')
+  assert.ok(named.length > 0, 'docs/telemetry.md names the front group')
+  // A distinct number per field, so a row the projection drops is a value missing from
+  // the page and not a value another row happens to print too.
+  const record = {}
+  const numbers = []
+  let next = 101
+  for (const name of named) {
+    if (name.endsWith('.*')) {
+      record[name.slice(0, -2)] = { body_claimed: 901, claim_held: 902 }
+      continue
+    }
+    record[name] = next
+    numbers.push([name, next])
+    next += 1
+  }
+  const page = renderLive(facts({ front: record }))
+  const start = page.indexOf('<h4>Front</h4>')
+  const front = page.slice(start, page.indexOf('<h4>', start + 1))
+  for (const [name, value] of numbers) {
+    assert.ok(front.includes('<dd>' + value + '</dd>'),
+      'docs/telemetry.md names front.' + name + ' and the page draws no row for its ' + value)
+  }
+  assert.equal((front.match(/<div>/g) ?? []).length, numbers.length,
+    'one row per counted field: this record carries the doc\'s fields and no others, so a row beside them is a row the doc does not name')
+  assert.match(page, /<h4>picker refusals by reason<\/h4>[\s\S]{0,200}<dt>body_claimed<\/dt><dd>901<\/dd>/,
+    'a field the doc writes as a map is one row per key, and the key is drawn as the leg wrote it')
+})
+
+test('#743 a counter nobody named is a row the page draws, under its own name', () => {
+  // The defect was that a field had to be named in two files before an operator could
+  // see it. A counter is a number, so the page draws it and says what the leg called it.
+  const card = facts({ front: { denied: 2, spectateRefused: 7 } })
+  assert.equal(card.heartbeat.front.spectateRefused, 7,
+    'the projection keeps a counter this file has no field list for')
+  assert.match(renderLive(card), /<dt>spectate refused<\/dt><dd>7<\/dd>/,
+    'a field this file has never heard of is a row, with its own name spaced out as its label')
+})
+
+test('#743 the front rows keep the order the record carries them in', () => {
+  // The order is the leg's declaration and the page has no second opinion about it, so a
+  // counter the leg adds lands where the leg put it instead of at the end of a list.
+  // The record below is the one that decides: the page prints its keys in the order it
+  // receives them, whatever order the leg writes them in.
+  const page = renderLive(facts({ front: { sessionVerificationRefused: 1, denied: 2, allowed: 3 } }))
+  const at = label => page.indexOf('<dt>' + label + '</dt>')
+  assert.ok(at('sessionserver refused the login') < at('denied'),
+    'the page kept the record\'s order: the sessionserver refusal was declared first and is drawn first')
+  assert.ok(at('denied') < at('allowed'))
+})
+
+test('#743 the picker refusals by reason are one row per reason, under their own heading', () => {
+  const page = renderLive(facts({
+    front: { pickerRefusals: 3, pickerRefusalsByReason: { body_claimed: 2, unknown_server: 1 } }
+  }))
+  assert.match(page, /<h4>Front<\/h4>[\s\S]*?<dt>picker refusals<\/dt><dd>3<\/dd>/,
+    'the total is a counter like any other')
+  const heading = page.indexOf('<h4>picker refusals by reason</h4>')
+  assert.notEqual(heading, -1, 'the map is a group of its own, named by the field')
+  const rows = page.slice(heading, page.indexOf('</dl>', heading))
+  assert.match(rows, /<dt>body_claimed<\/dt><dd>2<\/dd>/,
+    'a reason is drawn as the leg wrote it: a machine word is not one this file improves')
+  assert.match(rows, /<dt>unknown_server<\/dt><dd>1<\/dd>/)
+})
+
+test('#743 a front group shows no string and no map that is not counts', () => {
+  // What the field list also guarded, and what the shape rule keeps: a value the page
+  // cannot render never reaches it. A counter group holds numbers and booleans, so a
+  // string — which is where a secret lives — is never a row, whatever its name is.
+  // A boolean is refused too, for a smaller reason: neither group holds a flag, and a
+  // view that read one as a count would print it wrongly rather than drop it.
+  const card = facts({
+    front: {
+      denied: 1,
+      access_token: 'a-token-shaped-secret',
+      note: 'hello',
+      pickerEnabled: true,
+      pickerRefusalsByReason: { body_claimed: 'x' }
+    }
+  })
+  const page = renderLive(card)
+  assert.match(page, /<dt>denied<\/dt><dd>1<\/dd>/, 'the counters beside them still draw')
+  assert.equal(card.heartbeat.front.access_token, undefined, 'a string is not a counter, whatever it is called')
+  assert.equal(card.heartbeat.front.note, undefined)
+  assert.equal(card.heartbeat.front.pickerEnabled, undefined, 'a boolean is not a counter either')
+  assert.equal(card.heartbeat.front.pickerRefusalsByReason, undefined,
+    'a map whose values are not counts is a map the page has no row for, and it is not one the page invents')
+  assert.doesNotMatch(page, /<dt>access_token<\/dt>|a-token-shaped-secret|<dt>note<\/dt>|<dt>picker enabled<\/dt>/)
+})
+
+test('#743 a cache domain nobody named is a number the page still shows', () => {
+  // `sizes` was the same list with the same defect, and the view already drew whatever
+  // the group held: the projection was the thing that dropped a domain.
+  assert.match(renderLive(facts({ sizes: { chunks: 166, structures: 4 } })),
+    /<dt>domains<\/dt><dd>chunks 166, structures 4<\/dd>/)
+})
 
 for (const group of ['bodies', 'channels']) {
   test('#419 the projection of ' + group + ' is the fields docs/telemetry.md names, and no other', () => {
-    const named = documented(group)
+    const named = documented(group + '[].')
     assert.ok(named.length > 0, 'docs/telemetry.md names the fields of ' + group)
 
     // A field the doc does not name rides beside them: a secret-shaped one, because
