@@ -1,6 +1,7 @@
 package eu.monoplayer.driver;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.pipeline.RenderTarget;
@@ -196,9 +197,7 @@ public final class DriverServer {
             // skin reads the tab list, which is a listing; this reads the world,
             // which is a body. Neither answers for the other.
             case "entities": {
-                double radius = request.has("radius")
-                    ? Math.max(0.0, request.get("radius").getAsDouble())
-                    : DEFAULT_ENTITY_RADIUS;
+                double radius = entityRadius(request);
                 return ok(mc.submit(() -> entityInfo(radius)).get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             }
             case "perspective": {
@@ -643,6 +642,23 @@ public final class DriverServer {
         }
         out.add("entities", rows);
         return out;
+    }
+
+    // The radius a caller asked for, refused rather than clamped: a radius the mod
+    // silently rewrote would answer about a different region than the one asked for.
+    private static double entityRadius(JsonObject request) {
+        if (!request.has("radius") || request.get("radius").isJsonNull()) {
+            return DEFAULT_ENTITY_RADIUS;
+        }
+        JsonElement value = request.get("radius");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException("radius must be a number of blocks, got " + value);
+        }
+        double radius = value.getAsDouble();
+        if (radius < 0.0) {
+            throw new IllegalArgumentException("radius must be zero or more, got " + radius);
+        }
+        return radius;
     }
 
     private JsonObject entityRow(Entity entity, Vec3 center) {

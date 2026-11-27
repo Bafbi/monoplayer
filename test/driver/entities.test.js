@@ -1,15 +1,15 @@
 // Pure unit tests for the driver's world read (#675): the payload the entities op
-// answers, and the claims a run builds from it. No client, no socket, no host.
+// answers, and the answers a run builds from it. No client, no socket, no host.
 //
 // The gap this closes: skin reads the client's tab list, so it can report a
 // player_info entry for a UUID whose body the client never draws. These cases pin the
-// reading that answers the other question — is a body standing in that world — and
-// the sentence a report quotes from it.
+// reading that answers the other question: is a body standing in that world. They pin
+// the sentence a report quotes from it too.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  ENTITY_LIMITS, describeEntity, entityClaim, findEntity, isVirtualEntityId, readEntityReading
+  ENTITY_LIMITS, describeEntity, entityPresence, findEntity, isVirtualEntityId, readEntityReading
 } from '../../src/driver/entities.js'
 import { FIRST_VIRTUAL_ENTITY_ID } from '../../src/core/virtual-players.js'
 
@@ -65,8 +65,8 @@ test('the radius is the mod\'s own, read back rather than assumed', () => {
 })
 
 test('a row says what it is: id, registry type, uuid, name, position, and whether it is me', () => {
-  const [self, puppet, cow] = readEntityReading(entitiesPayload()).rows
-  assert.equal(self.local, true)
+  const [me, puppet, cow] = readEntityReading(entitiesPayload()).rows
+  assert.equal(me.local, true)
   assert.equal(puppet.local, false)
   assert.equal(puppet.type, 'minecraft:player')
   assert.equal(puppet.uuid, PUPPET)
@@ -101,7 +101,7 @@ test('the puppet\'s row is the sentence a report quotes: it exists, it is a play
 
 test('a uuid is answered present with its row spread, or absent with the frame it was answered in', () => {
   const reading = readEntityReading(entitiesPayload())
-  const present = entityClaim(reading, { uuid: PUPPET })
+  const present = entityPresence(reading, { uuid: PUPPET })
   assert.equal(present.present, true)
   assert.equal(present.complete, true)
   assert.equal(present.local, false)
@@ -110,7 +110,7 @@ test('a uuid is answered present with its row spread, or absent with the frame i
   assert.equal(present.skinKind, 'property')
   assert.equal(present.sentence, describeEntity(findEntity(reading, PUPPET)))
 
-  const missing = entityClaim(reading, { uuid: MISSING })
+  const missing = entityPresence(reading, { uuid: MISSING })
   assert.equal(missing.present, false)
   assert.equal(missing.id, null)
   assert.equal(
@@ -125,18 +125,19 @@ test('absence is answered in the frame it was read in: the radius, and what the 
   // whole level from a filtered read.
   const payload = entitiesPayload({ radius: 16.0, inLevel: 12 })
   payload.entities = payload.entities.slice(0, 2)
-  const claim = entityClaim(readEntityReading(payload), { uuid: MISSING })
-  assert.equal(claim.present, false)
-  assert.match(claim.sentence, /in the 2 row\(s\) within 16 blocks of the client, 12 in its level/)
+  const absent = entityPresence(readEntityReading(payload), { uuid: MISSING })
+  assert.equal(absent.present, false)
+  assert.equal(absent.complete, true)
+  assert.match(absent.sentence, /in the 2 row\(s\) within 16 blocks of the client, 12 in its level/)
 })
 
 test('a capped read cannot answer absence, and says so instead of answering it', () => {
   const payload = entitiesPayload({ inLevel: 5000, truncated: true })
-  const claim = entityClaim(readEntityReading(payload), { uuid: MISSING })
-  assert.equal(claim.present, false)
-  assert.equal(claim.complete, false)
-  assert.match(claim.sentence, /the mod capped them out of 5000/)
-  assert.match(claim.sentence, /a capped read cannot say a body is absent/)
+  const absent = entityPresence(readEntityReading(payload), { uuid: MISSING })
+  assert.equal(absent.present, false)
+  assert.equal(absent.complete, false)
+  assert.match(absent.sentence, /the mod capped them out of 5000/)
+  assert.match(absent.sentence, /a capped read cannot say a body is absent/)
 })
 
 test('an id the proxy minted reads as virtual, and one the server did is not', () => {
@@ -156,7 +157,7 @@ test('the skin the client resolved for a body is named by kind, and an entity wi
 
   const payload = entitiesPayload()
   payload.entities[1].skin.body = DEFAULT_BODY
-  assert.equal(entityClaim(readEntityReading(payload), { uuid: PUPPET }).skinKind, 'default')
+  assert.equal(entityPresence(readEntityReading(payload), { uuid: PUPPET }).skinKind, 'default')
 })
 
 test('an empty world is a reading of zero rows, and a missing list is refused', () => {
@@ -164,7 +165,7 @@ test('an empty world is a reading of zero rows, and a missing list is refused', 
   empty.entities = []
   const reading = readEntityReading(empty)
   assert.deepEqual(reading.rows, [])
-  assert.match(entityClaim(reading, { uuid: PUPPET }).sentence, /in the 0 row\(s\)/)
+  assert.match(entityPresence(reading, { uuid: PUPPET }).sentence, /in the 0 row\(s\)/)
 
   const broken = entitiesPayload()
   delete broken.entities
@@ -173,8 +174,7 @@ test('an empty world is a reading of zero rows, and a missing list is refused', 
 })
 
 test('the limits name both halves, so one op is never read as the other', () => {
-  assert.ok(ENTITY_LIMITS.length >= 4)
-  for (const limit of ENTITY_LIMITS) assert.equal(typeof limit, 'string')
+  for (const limit of ENTITY_LIMITS) assert.ok(typeof limit === 'string' && limit.length > 0)
   const text = ENTITY_LIMITS.join(' ')
   assert.match(text, /tab list/)
   assert.match(text, /body/)

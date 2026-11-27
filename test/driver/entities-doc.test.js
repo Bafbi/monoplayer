@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { entityClaim, readEntityReading } from '../../src/driver/entities.js'
+import { entityPresence, readEntityReading } from '../../src/driver/entities.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const README = 'tools/driver/README.md'
@@ -52,9 +52,9 @@ test('the documented payload is a payload the reader accepts, and its second row
   const other = payload.entities.find(row => row.local !== true)
   assert.ok(other, 'the example needs a row that is not the local player')
   assert.ok(payload.entities.some(row => row.local === true), 'the example needs the local player too')
-  const claim = entityClaim(reading, { uuid: other.uuid })
-  assert.equal(claim.present, true)
-  assert.equal(claim.local, false)
-  assert.equal(claim.type, 'minecraft:player')
-  assert.match(claim.sentence, /, type minecraft:player, not me$/)
+  const answer = entityPresence(reading, { uuid: other.uuid })
+  assert.equal(answer.present, true)
+  assert.equal(answer.local, false)
+  assert.equal(answer.type, 'minecraft:player')
+  assert.match(answer.sentence, /, type minecraft:player, not me$/)
 })

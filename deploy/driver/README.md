@@ -257,7 +257,7 @@ node tools/driver/driver-client.mjs entities 16     # 16 blocks around the playe
 ```
 
 The answer is one row per body that client holds. The row to look for is the puppet's
-UUID with `"type": "minecraft:player"` and `"self": false`: a body in the world, which
+UUID with `"type": "minecraft:player"` and `"local": false`: a body in the world, which
 the `skin` op cannot show, because it reads the tab list. The payload shape and what
 it cannot say are in [tools/driver/README.md](../../tools/driver/README.md).
 

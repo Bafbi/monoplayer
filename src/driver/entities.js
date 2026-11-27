@@ -9,8 +9,8 @@
 // #598's lesson, where a protocol bot passed a bug a real client died on.
 //
 // The entities op reads the level instead. This module turns that payload into the
-// rows and claims a report quotes. The two ops answer two different questions, and
-// neither answers for the other:
+// rows and the answers a report quotes. The two ops answer two different questions,
+// and neither answers for the other:
 //
 //   skin      the client holds an entry for this UUID, with these textures
 //             properties. It is not a body: a client holds an entry for a player it
@@ -130,11 +130,25 @@ export function describeEntity (row, { name = true } = {}) {
     ', type ' + (row.type ?? 'unknown') + ', ' + (row.local ? 'me' : 'not me')
 }
 
+// The row fields an absent answer carries, so a caller reads one shape either way.
+const ABSENT = Object.freeze({
+  id: null,
+  type: null,
+  name: null,
+  pos: null,
+  distance: null,
+  local: false,
+  player: false,
+  virtual: false,
+  skin: null,
+  skinKind: null
+})
+
 // What a run asserts about one UUID, as data. present: false is the answer that names
 // the gap: an entry in the tab list and no body in the world. complete: false is the
-// other answer — the mod capped the rows, so this read cannot say a body is absent —
-// and a claim that cannot be answered never reads as one that was.
-export function entityClaim (reading, { uuid } = {}) {
+// other answer, that the mod capped the rows, so this read cannot say a body is
+// absent. An answer that could not be given never reads as one that was.
+export function entityPresence (reading, { uuid } = {}) {
   const key = String(uuid ?? '').toLowerCase()
   const row = findEntity(reading, key)
   const rows = Array.isArray(reading?.rows) ? reading.rows.length : 0
@@ -150,20 +164,5 @@ export function entityClaim (reading, { uuid } = {}) {
     : ' in the ' + rows + ' row(s) within ' + (radius === null ? 'the radius' : trimmed(radius) + ' blocks') +
       ' of the client' + (inLevel === null ? '' : ', ' + inLevel + ' in its level') +
       ': an entry in the tab list is not a body here'
-  return {
-    id: null,
-    type: null,
-    uuid: key,
-    name: null,
-    pos: null,
-    distance: null,
-    local: false,
-    player: false,
-    virtual: false,
-    skin: null,
-    skinKind: null,
-    present: false,
-    complete: !truncated,
-    sentence: 'no entity ' + key + because
-  }
+  return { ...ABSENT, uuid: key, present: false, complete: !truncated, sentence: 'no entity ' + key + because }
 }

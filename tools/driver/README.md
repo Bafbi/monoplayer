@@ -82,7 +82,7 @@ node tools/driver/driver-client.mjs status
 | `place [x y z] [ms]` | use the selected hotbar item on top of the support block; defaults to the block in front |
 | `screenshot` | save a PNG under `minecraft/screenshots/` and return its path |
 | `skin` | the body texture the client resolved for the player it controls, the same for every `player_info` entry it holds, those entries' textures properties, and the camera mode |
-| `entities [radius]` | one row per entity the client holds in its level, within `radius` blocks of the player it controls (the mod's own default when you name none, reported back as `radius`): the client's entity id, the registry type, the UUID, the name the client draws, the position, the distance, whether it is the local player, and for a player the skin the client resolved for that body |
+| `entities [radius]` | one row per entity in the client's level within `radius` blocks of the player it controls: id, registry type, UUID, name, position, distance, `local`, and a player's resolved skin. Shape below; the mod reports back the radius it used |
 | `perspective [first\|third_back\|third_front]` | set the camera mode, so a screenshot shows the body rather than a hand |
 | `inject_player_info` | deliver one clientbound `player_info` frame the caller encoded as hex: the driver decodes it with the client's own stream codec and hands it to the client's own packet listener, so the client validates it as it validates a frame from a server |
 | `respawn` | send the client respawn command (use after a death screen) |
@@ -121,18 +121,17 @@ signed` runs one of them. The measurement and its answer are in
 ## Reading the world (#675)
 
 `skin` answers the tab list: which `player_info` entries the client holds and what
-skin each resolves to. `entities` answers the level: which bodies stand in the
-world that client draws, where, and what skin it resolved for each. The pair is
-deliberate, because neither answers the other's question.
+skin each resolves to. `entities` answers the level: which bodies stand in that
+client's world, where, and what skin it resolved for each. The pair is deliberate,
+because neither answers the other's question.
 
-- An entry is not a body. A client holds a `player_info` entry for a player it
-  never spawns, so a run can see a full tab list and an empty world (#632).
-- A row's skin is not the property. The row reports the texture the client
-  resolved for that body, so compare it with the property the proxy wrote before
-  calling the puppet's skin drawn. [src/driver/skin.js](../../src/driver/skin.js)
-  names both kinds.
-- Neither is a witness. Both read one client; what a person sees across two
-  clients is the other half of #634.
+An entry is not a body. A client holds a `player_info` entry for a player it never
+spawns, so a full tab list and an empty world are one state (#632). A row is not the
+property either. It reports the texture the client resolved for that body, so compare
+the path with what the proxy wrote before calling the puppet's skin drawn.
+[src/driver/skin.js](../../src/driver/skin.js) names both kinds. What one read still
+cannot say, and what only a person can, is `ENTITY_LIMITS` in
+[src/driver/entities.js](../../src/driver/entities.js).
 
 The answer, one payload per call. `DriverServer.entityInfo` is the source; this is
 the shape it writes.
@@ -182,13 +181,12 @@ minted.
 
 The reader is [src/driver/entities.js](../../src/driver/entities.js):
 `readEntityReading` normalizes the payload, `findEntity` takes a UUID or a client id,
-`entityClaim` answers one UUID as data, and `describeEntity` writes the sentence a
-report quotes — `entity ea45ba2e-… (Wiriaw) exists at (2.5, -60, -4.5), type
-minecraft:player, not me`. `ENTITY_LIMITS` carries the limits above in the words a
-report can quote.
+`entityPresence` answers one UUID as data, and `describeEntity` writes the sentence a
+report quotes: `entity ea45ba2e-… (Wiriaw) exists at (2.5, -60, -4.5), type
+minecraft:player, not me`.
 
-A claim answers in the frame it was read in. `complete: false` is a capped read, which
-cannot say a body is absent, and its sentence says so instead; absence names the radius
+An answer names the frame it was read in. `complete: false` is a capped read, which
+cannot say a body is absent, and its sentence says so instead. Absence names the radius
 and how many entities the level held, so it never claims a fact about the whole level
 from a filtered read.
 
