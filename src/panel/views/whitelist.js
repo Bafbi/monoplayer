@@ -12,13 +12,20 @@
 // out-of-band swap, so a tick refreshes the entries without touching a half-typed name
 // or a remove button the operator has just armed.
 import { escape, present } from './html.js'
+import { uuidRefusalReason } from '../../custody/util.js'
 
-// One entry: who, which uuid, and when it was added. The uuid is printed because the
-// remove request names it, and because two accounts can share a name over time.
+// One entry: who, which uuid, when it was added, and whether a login can use it. The
+// uuid is printed because the remove request names it, and because two accounts can
+// share a name over time.
+//
+// The verdict is #705's, and its rule is `uuidRefusalReason`'s in src/custody/util.js:
+// the panel judges here rather than printing a count, because a list of two entries
+// where one uuid Java derived from a name reads as healthy otherwise, which is the
+// state #677 found in the dev lane's document.
 //
 // The answer to a removal is not printed in the row: a tick would take it away with the
 // row it belongs to. It goes to the block's answer area, outside the list.
-function renderEntry (puppet, entry) {
+function renderEntry (puppet, entry, refusalReason) {
   const uuid = String(entry.uuid)
   const added = present(entry.addedAt) ? entry.addedAt : 'no added-at recorded'
   const who = present(entry.name) ? entry.name : 'no name recorded'
@@ -26,6 +33,9 @@ function renderEntry (puppet, entry) {
     '      <li class="entry">',
     '        <span class="who"><span class="player">' + escape(who) + '</span> <code>' + escape(uuid) + '</code></span>',
     '        <span class="when">added ' + escape(added) + '</span>',
+    '        <span class="verdict">' + (refusalReason === null
+      ? 'can authenticate'
+      : 'cannot authenticate: ' + escape(refusalReason)) + '</span>',
     // data-key is the key the page holds its armed confirmation under, so a tick that
     // replaces this button paints the confirmation back onto it. data-name is what that
     // confirmation reads back, so the second press asks about a person. The allowed
@@ -59,8 +69,21 @@ export function renderEntries ({ puppet, list }) {
     lines.push("    <p class=\"note\">no entries: only the puppet's own account may attach</p>\n")
     return lines.join('')
   }
+  // One judgement per entry, computed once, so the ratio and the rows cannot be two
+  // answers about one list (scripts/dev-lane.sh does the same, #677).
+  const refusals = players.map(entry => uuidRefusalReason(entry?.uuid, entry?.name))
+  const usable = refusals.filter(why => why === null).length
+  // A list where some entry cannot authenticate is a fault, and it is stated above the
+  // rows: a row of eight with one derived uuid is easy to read past. The words are the
+  // ones `mise run dev:status` settled, so one vocabulary covers the lane and the page.
+  if (usable < players.length) {
+    const plural = players.length === 1 ? 'entry' : 'entries'
+    lines.push('    <p class="refused">attach whitelist names ' + players.length + ' ' + plural +
+      (usable === 0 ? ', and none of them can authenticate' : ', ' + usable + ' of which can authenticate') +
+      '</p>\n')
+  }
   lines.push('    <ul class="entries">\n')
-  for (const entry of players) lines.push(renderEntry(puppet, entry) + '\n')
+  for (const [index, entry] of players.entries()) lines.push(renderEntry(puppet, entry, refusals[index]) + '\n')
   lines.push('    </ul>\n')
   return lines.join('')
 }
