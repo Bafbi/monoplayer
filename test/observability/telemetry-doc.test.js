@@ -542,6 +542,13 @@ test('#709 the page names every word an ended client is recorded under, and no o
   const rows = endRows()
   const pageWords = rows.map(row => row.word)
 
+  // The set is closed only while the record has one write site: a second
+  // record(client, 'configurationEnded', ...) in the leg would write a word no end site
+  // passes, and this case would never see it.
+  assert.equal(LIVE_FRONT.match(/'configurationEnded'/g).length, 1,
+    'src/legs/live-front.js writes the record once, which is what makes its end sites the whole set: ' +
+      "a second write site needs its own reader in this case, and its words in the table")
+
   assert.ok(endSection().includes('closed'),
     'the section claims the set is closed, which this case is what makes true')
 

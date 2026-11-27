@@ -434,9 +434,10 @@ word is the same on both sides: a dialog the leg could not write ends
 
 Nine words and one pattern reach that `reason`, and `src/legs/live-front.js` mints every
 one of them. No library word reaches this field: an unfamiliar string here is this repo's
-own, and a `grep` of `src/` finds the site that wrote it. The set is closed, and
-`test/observability/telemetry-doc.test.js` reads it against this table in both
-directions (#709).
+own, and a `grep` of `src/` finds the site that wrote it, except for the one pattern,
+whose site `grep '_unbuilt' src/legs/live-front.js` finds. The set is closed, and
+`test/observability/telemetry-doc.test.js` reads it against this table in both directions
+(#709).
 
 | Word | What wrote it | Branched on |
 | --- | --- | --- |
@@ -451,13 +452,14 @@ directions (#709).
 | `claim_failed` | A granted claim whose `finish_configuration` write threw (`pickerClaimFinishFailed`). | no |
 | `verb_<verb>_unbuilt` | A verb in `PICK_VERBS` with no branch in `handlePickerVerb`. | no |
 
-Only one of the ten is an interface. `src/ladder/loopback.js` filters
-`configurationEnded` on `spectate_refused`, so renaming that word moves the loopback's
-evidence with it. The other nine are the record of a decision no branch reads, so renaming
-one costs an edit to this table and nothing else. `verb_<verb>_unbuilt` is the one
-pattern: `<verb>` is a member of `PICK_VERBS` (`claim`, `spectate`, `disconnect`), and
-no client reaches it, because the board answers `unknown_verb` for a verb it does not
-carry before the branch that writes it runs.
+Only one of the ten is an interface. `src/ladder/loopback.js` filters `configurationEnded`
+on `spectate_refused`, so renaming that word moves the loopback's evidence with it. The
+other nine are the record of a decision no branch reads, so renaming one costs an edit to
+this table and to the tests that pin the word, and nothing in `src/`.
+
+`verb_<verb>_unbuilt` is the one pattern: `<verb>` is a member of `PICK_VERBS` (`claim`,
+`spectate`, `disconnect`), and no client reaches it, because the board answers
+`unknown_verb` for a verb it does not carry before the branch that writes it runs.
 
 ## Packet journal
 
