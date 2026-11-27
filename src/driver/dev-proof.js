@@ -88,12 +88,12 @@ export const RECORDS = Object.freeze([
 // The tickets that close the one step a run taken today cannot see. The list's fact is theirs, and
 // the step's failure sentence is built from them, so the runbook's cell for the step — held to that
 // sentence word for word (#882) — follows a ticket edited here instead of naming one that landed.
-const OPEN_UNTIL_OWN_BODY = Object.freeze([647, 645])
+const OWN_BODY_TICKETS = Object.freeze([647, 645])
 
 // The tickets a declaration names, as the sentence reads them: "#647", or "#647 and #645".
 const ticketList = tickets => tickets.map(ticket => '#' + ticket).join(' and ')
 
-// The verb that agrees with a count, so two refusals do not each spell the choice out.
+// The verb that agrees with a count, so a sentence built on one does not spell the choice out.
 const agree = (count, one, many) => (count === 1 ? one : many)
 
 // What a declaration says it takes to close it: "#647 and #645 close it", or one of them.
@@ -132,10 +132,10 @@ export const OPERATOR_STEPS = Object.freeze([
   {
     id: 'spectator-own-body',
     record: null,
-    openUntil: OPEN_UNTIL_OWN_BODY,
+    openUntil: OWN_BODY_TICKETS,
     claim: 'the spectator has no body of its own, and no hands in first person',
     because: 'a body is drawn, and the client collides with blocks: nothing tells the spectator its own ' +
-      'player-list entry, and a replayed body keeps its own mode frames. ' + closes(OPEN_UNTIL_OWN_BODY) +
+      'player-list entry, and a replayed body keeps its own mode frames. ' + closes(OWN_BODY_TICKETS) +
       ', and until then a witness records this step as not-seen'
   },
   { id: 'drawn-for-driver', record: 'virtualPlayerWritten', claim: 'the spectator appears to the driving client, standing in the world and in the tab list, wearing a default skin' },
@@ -466,7 +466,7 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
       // this sentence instead of leaving a generated document telling the operator to record a gap
       // that no longer exists.
       ...OPERATOR_STEPS.filter(step => step.openUntil !== undefined).map(step =>
-        'The step \'' + step.id + '\' is expected to be not-seen today: ' + closes(step.openUntil) +
+        'The step \'' + step.id + '\' is expected to be not-seen today: ' + step.because +
         '. Record it not-seen with what you saw, and the check accepts that one gap.')
     ]
   }
@@ -485,21 +485,23 @@ const RECORDED_STATES = new Set(['seen', 'not-seen'])
 const refuse = reason => ({ ok: false, reason, gaps: [], stale: [] })
 
 // What a declared gap is, on the result: the step, the sentence the operator read, the tickets that
-// close it, and what they recorded. The report and the command build their line from this.
-const gapOf = step => ({ id: step.id, claim: step.claim, tickets: step.openUntil, evidence: step.evidence })
+// close it, and what they recorded. `openUntil` keeps the field's name, so the step, the result and
+// the two printed lines call one thing one name.
+const gapOf = step => ({ id: step.id, claim: step.claim, openUntil: step.openUntil, evidence: step.evidence })
 
 // The one line a declared gap is printed on, wherever this module prints one, so three readers
 // cannot word it differently: the command's pass, the report beside the step, and nothing else.
-const gapLine = (claim, tickets, evidence = null) =>
-  'known gap: ' + claim + ' — not seen' + (evidence === null ? '' : ' (' + evidence + ')') +
-  ', and ' + closes(tickets)
+// `withEvidence` is for the caller that has not printed the operator's words on the line above.
+const gapLine = (step, { withEvidence = false } = {}) =>
+  'known gap: ' + step.claim + ' — not seen' +
+  (withEvidence ? ' (' + step.evidence + ')' : '') + ', and ' + closes(step.openUntil)
 
 // The line a declaration that outlived its ticket is printed on. #920's answer to a declaration that
 // would otherwise rot: a witness that saw the step still verifies, because a fix landing must not
 // turn an honest record red, and this line names the declaration to drop in the change that closes it.
-const staleLine = (claim, tickets) =>
-  'stale declaration: ' + claim + ' — seen, and OPERATOR_STEPS still expects it not seen until ' +
-  ticketList(tickets) + ' ' + agree(tickets.length, 'lands', 'land') +
+const staleLine = step =>
+  'stale declaration: ' + step.claim + ' — seen, and OPERATOR_STEPS still expects it not seen until ' +
+  ticketList(step.openUntil) + ' ' + agree(step.openUntil.length, 'lands', 'land') +
   ': drop the step\'s openUntil in the change that closes it'
 
 const namedIds = ids => ids.map(id => '`' + id + '`').join(', ')
@@ -598,7 +600,7 @@ export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
     return refuse('not seen: ' + unexpected.map(step => step.claim + ' (' + step.evidence + ')').join('; ') +
       (declared.length === 0
         ? ''
-        : '. The gap this run does expect is ' + commaAnd(declared.map(step =>
+        : '. The only not-seen this run accepts is a step declared expected absent: ' + commaAnd(declared.map(step =>
           step.claim + ' (' + closes(step.openUntil) + ')'))))
   }
   const frames = document.frames ?? {}
@@ -638,12 +640,8 @@ export function formatVerdict (report, { witnessPath = null, witness = null } = 
       // #920: the declaration beside the row it belongs to, so a reader of the report sees which gap
       // is the known one, and which declaration a witness that saw the step outlived.
       const entry = OPERATOR_STEPS.find(row => row.id === step?.id)
-      if (entry?.openUntil !== undefined && step?.state === 'not-seen') {
-        lines.push('            ' + gapLine(entry.claim, entry.openUntil))
-      }
-      if (entry?.openUntil !== undefined && step?.state === 'seen') {
-        lines.push('            ' + staleLine(entry.claim, entry.openUntil))
-      }
+      if (entry?.openUntil !== undefined && step?.state === 'not-seen') lines.push('            ' + gapLine(entry))
+      if (entry?.openUntil !== undefined && step?.state === 'seen') lines.push('            ' + staleLine(entry))
     }
     lines.push('')
   }
@@ -703,12 +701,8 @@ async function main (argv) {
     // #920: the gap the run declares, on the run's own output, so the proof a reader picks up names
     // what it does not show and the ticket that closes it. The exit stays 0: the record the runbook
     // asks an operator to make verifies, which is the whole point of declaring the gap.
-    for (const gap of verdictOfWitness.gaps) {
-      process.stdout.write(gapLine(gap.claim, gap.tickets, gap.evidence) + '\n')
-    }
-    for (const step of verdictOfWitness.stale) {
-      process.stdout.write(staleLine(step.claim, step.tickets) + '\n')
-    }
+    for (const gap of verdictOfWitness.gaps) process.stdout.write(gapLine(gap, { withEvidence: true }) + '\n')
+    for (const step of verdictOfWitness.stale) process.stdout.write(staleLine(step) + '\n')
     return 0
   }
 

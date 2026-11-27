@@ -494,15 +494,15 @@ or a step you recorded as `not-seen` that nothing declares expected to be absent
 completed document to `testdata/dev-two-client-witness.json` and the proof has a record in the
 repo, the way `testdata/driver-unmodded-witness.json` does for the driver lane.
 
-**A `not-seen` is a finding, unless the step's own row declares it expected.** The last cell of a
-row is `OPERATOR_STEPS`'s sentence for that step, and where the step carries a declaration the
-sentence names the tickets that close the gap. Record that step `not-seen` with what you saw, and
-the check accepts that one gap, printing a `known gap:` line beside the tickets. Any other
-`not-seen` stops the run, and the refusal names the gap it does expect. A proof with a known gap
-is worth more than a proof nobody took.
+**A `not-seen` is a finding, unless that step is declared expected to be absent.** The
+declarations are `OPERATOR_STEPS`'s, and the row whose last cell names the tickets that close a gap
+is where you read one. Record that step `not-seen` with what you saw, and the check accepts that one
+gap, printing a `known gap:` line that names the tickets. Any other `not-seen` stops the run, and
+the refusal names the step it would have accepted, with its tickets. A proof with a known gap is
+worth more than a proof nobody took.
 
 The day those tickets land, record the step `seen`. The check accepts that too, and prints a
-`stale declaration:` line: drop that step's `openUntil` in the change that closes the ticket.
+`stale declaration:` line: drop that step's declaration in the change that closes the ticket.
 
 A green reader is not that report. It is the frame-level half, and the ticket that started
 this one was filed because somebody read a counter as a proof.

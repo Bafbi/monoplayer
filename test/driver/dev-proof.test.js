@@ -363,7 +363,7 @@ test('the step a ticket says is open verifies when it is recorded not-seen, and 
   assert.deepEqual({ ok: check.ok, reason: check.reason }, { ok: true, reason: null },
     'an honest run with the gap the runbook asks for is a proof, not a finding: ' + check.reason)
   assert.deepEqual(check.gaps.map(gap => gap.id), ['spectator-own-body'])
-  assert.deepEqual(check.gaps[0].tickets, [647, 645], 'the declaration carries the tickets that close it')
+  assert.deepEqual(check.gaps[0].openUntil, [647, 645], 'the declaration carries the tickets that close it')
   assert.deepEqual(check.stale, [], 'nothing was seen that was declared absent')
 })
 
@@ -392,7 +392,7 @@ test('a witness that saw the declared step passes, and names the declaration it 
   assert.equal(check.ok, true, check.reason)
   assert.deepEqual(check.gaps, [])
   assert.deepEqual(check.stale.map(step => step.id), ['spectator-own-body'])
-  assert.deepEqual(check.stale[0].tickets, [647, 645])
+  assert.deepEqual(check.stale[0].openUntil, [647, 645])
 })
 
 // What the declaration has to be for the cases above to mean anything: a ticket a reader can open,
@@ -410,6 +410,18 @@ test('a step declared expected absent carries its tickets and its reason, and no
     }
     assert.equal(typeof step.because, 'string',
       'the declared step ' + step.id + ' states why in its failure cell, which is the cell the runbook holds to this module')
+  }
+  // The declaration and the sentence that names it are one fact in two fields, and the runbook guard
+  // holds only the sentence. Dropping `openUntil` alone would leave a cell telling the operator to
+  // record a gap the check then refuses, and nothing failed, so the two are held to each other here.
+  for (const step of OPERATOR_STEPS) {
+    const declaredHere = step.openUntil !== undefined
+    assert.equal(declaredHere, typeof step.because === 'string' && step.because.includes('not-seen'),
+      'step ' + step.id + ' declares a gap if and only if its failure sentence says a witness records it not-seen')
+    if (!declaredHere) continue
+    const named = [...new Set([...step.because.matchAll(/#(\d+)/g)].map(match => Number(match[1])))]
+    assert.deepEqual(named.sort(), [...step.openUntil].sort(),
+      'step ' + step.id + ' names its tickets once: `openUntil` and the sentence it is built into agree')
   }
   for (const { id, claim } of OPERATOR_STEPS) {
     assert.doesNotMatch(claim, /#\d+/,
@@ -862,8 +874,8 @@ test('every record a picker dialog writes is named by the list, as a row or in a
 // module would have left the page saying two while every spectator row went red. That cell is now the
 // step's own `because` sentence, built in the module with the count inside it, and compared word for
 // word like the claim. A step whose failure cell states no derived fact carries no `because`, and its
-// cell stays the page's, which is why the field is optional: five steps carry no `because`, and no
-// empty string standing in for one.
+// cell stays the page's, which is why the field is optional: every other step carries no `because`,
+// and no empty string stands in for one.
 //
 // Read as rows, inside its own section, keyed by the id each row carries — never as the page,
 // because the runbook names these steps in the prose around the table too. A row says where to
