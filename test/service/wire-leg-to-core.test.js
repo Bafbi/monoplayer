@@ -180,10 +180,6 @@ test('#592 a leg missing a call-in is named, and the required ones are named apa
     'the required ones are named separately: a lane without setCoreAttach refuses every attach through the leg\'s own default')
   assert.deepEqual(answered.missing, ['setCoreAttach', 'setSpectateBody'],
     'and both holes are in the one list, in table order: setCoreAttach is a required row and comes first')
-  // #607: the report claims the handlers it installed, and no others. A row this
-  // leg did not carry was given a setter by nobody, so the report cannot offer one.
-  assert.equal(answered.handlers.setCoreAttach, undefined,
-    'a row the leg did not carry has no handler in the report')
 })
 
 // #605: a backend leg's hole is the report's business too. The two calls are the
@@ -364,76 +360,17 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
   }
 })
 
-// #607: the wrapper a lane adds around one call-in needs the handler the table
-// installed, not the payload shape. The report carries it, so a lane calls the
-// function the leg was handed and adds its record around it. A wrapper that
-// rebuilds the payload is a second copy of the row, which is the defect here.
-test('#607 the wiring reports the handlers it installed, so a wrapper adds its side effect around one', () => {
-  const { core, calls } = recordingCore(FRONT_LEG_CALL_INS)
-  const { leg, handlers } = recordingLeg(FRONT_LEG_CALL_INS)
-
+// #718: the report carries what a reader acts on, and nothing else. It used to
+// carry every handler it installed, so a lane could wrap one call-in after start();
+// #683 deleted the lanes that did, because the attach cut is the core's event now.
+// A handler in the report is a fact about a caller no module writes, so the field
+// went with the cases that built that caller.
+test('#718 the report carries no handler, because no lane wraps a call-in any more', () => {
+  const { core } = recordingCore(FRONT_LEG_CALL_INS)
+  const { leg } = recordingLeg(FRONT_LEG_CALL_INS)
   const wiring = wireLegToCore({ core, leg, table: FRONT_LEG_CALL_INS })
-
-  assert.equal(wiring.handlers.setCoreAttach, handlers.get('setCoreAttach'),
-    'the handler the report carries is the one the leg was handed, not a second copy of it')
-
-  // The wrapper #607 is about: a record of its own, then the installed handler
-  // with the leg's payload untouched.
-  const record = []
-  const player = { name: 'Bafbi', uuid: PLAYER }
-  const wrapped = payload => {
-    record.push(payload)
-    return wiring.handlers.setCoreAttach(payload)
-  }
-  const outcome = wrapped(player)
-  assert.deepEqual(record, [{ name: 'Bafbi', uuid: PLAYER }],
-    'the wrapper passes the payload the leg sent, unreshaped and unextended')
-  assert.deepEqual(outcome, {
-    name: 'attachPlayer',
-    args: [{ name: 'Bafbi', uuid: PLAYER, includeConfig: false }]
-  }, 'and the table still builds the shape: includeConfig:false comes from one place')
-  assert.equal(calls.length, 1, 'the wrapper reaches the core once, not twice')
-})
-
-// #607: a caller reaches that handler off the started core, so no module imports a
-// table to wrap one call-in. It is there because this leg carried the setter: the
-// report offers the handlers it installed, and `wired` names them.
-test('#607 a started core carries the installed attach handler, and it attaches as the table says', () => {
-  const frontLeg = createOfflineFrontLeg({
-    host: '127.0.0.1',
-    port: 0,
-    version: '26.1',
-    offlineWhitelist: [PLAYER],
-    getSnapshotConfig: () => [],
-    wireMode: 'off'
-  })
-  const backendLeg = createFakeBackendLeg()
-  const core = createMonoplayer({
-    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
-    backendLeg,
-    frontLeg,
-    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout }
-  })
-  core.start()
-
-  const { handlers, wired } = core.legWiring.front
-  assert.ok(wired.includes('setCoreAttach'),
-    'the core wired this leg\'s attach call-in, so the handler in the report is the one it registered')
-  assert.equal(typeof handlers.setCoreAttach, 'function',
-    'and a caller reads it off the started core, without importing the table')
-
-  // The attach itself: the replay omits the configuration domain, which is the
-  // half of the row a wrapper passing the payload through must not lose.
-  backendLeg.deliver({ state: 'configuration', name: 'registry_data', data: {} })
-  backendLeg.deliver({ state: 'play', name: 'login', data: { entityId: 42 } })
-  backendLeg.deliver({ state: 'play', name: 'map_chunk', data: { x: 0, z: 0 } })
-  core.cache.forceWarm()
-  core.session.warmComplete({ marker: 'warm_fallback_join_settled' })
-
-  const outcome = handlers.setCoreAttach({ name: 'Bafbi', uuid: PLAYER })
-  assert.equal(outcome.attached, true, 'the handler attaches through the core it was built for')
-  assert.equal(outcome.frames.map(frame => frame.name).includes('registry_data'), false,
-    'and the configuration phase is not re-sent: includeConfig:false is the table\'s, not the lane\'s')
+  assert.equal('handlers' in wiring, false,
+    'the report names rows: #607 carried a handler for a lane that wrapped a call-in after start(), and no lane does')
 })
 
 // #607: the acceptance criterion, as a count. A caller that writes the literal has
