@@ -601,8 +601,12 @@ export function encodeFrame ({ serializer = null, name, params = {} } = {}) {
 
 // Core loginStart decisions fail closed: an exception, a missing decision from
 // a handler that ran, or any decision that is not allowed === true denies.
+//
+// `answered` says whether there was a decision to read at all. A lane whose core wired no
+// `setLoginStartHandler` was asked nothing, and the allow this returns for it is not an
+// answer: the caller's own check decides (#756).
 function evaluateCoreDecision (coreDecision) {
-  if (coreDecision === null || coreDecision === undefined) return { ok: true, reason: null }
+  if (coreDecision === null || coreDecision === undefined) return { ok: true, reason: null, answered: false }
 
   let decision = coreDecision
   if (typeof coreDecision === 'function') {
@@ -624,12 +628,46 @@ function evaluateCoreDecision (coreDecision) {
   // #257: the core may allow a login that has no backend to attach to, and say so
   // with `picker: true`. The flag is carried, not inferred: the front serves the
   // picker only where the core decided it may.
-  return { ok: true, reason: null, picker: decision.picker === true, phase: decision.phase ?? null }
+  //
+  // #756: the account the core reviewed travels with the answer, so the leg names
+  // the uuid and the name that were compared rather than reading them a second time.
+  return {
+    ok: true,
+    reason: null,
+    answered: true,
+    picker: decision.picker === true,
+    phase: decision.phase ?? null,
+    uuid: decision.uuid ?? null,
+    username: decision.name ?? null
+  }
 }
 
+// #756: one login, one review of the attach whitelist.
+//
+// The comparison is the core's identity gate's. `identity.reviewLoginStart` reads the
+// document through `whitelistSource`, the per-login reload the control document turns on
+// (#229), and its refusal is the one `monoplayer.denials` counts and `attach_denied`
+// names.
+//
+// One decision, two records: the leg counts and records the same refusal on its own
+// surface, because it is the one that kicks the client. The core's login call-in reaches
+// `identity.reviewLoginStart` before anything else, so an answer from it has already
+// compared the whitelist, and this leg does not hold the same uuid to the same document
+// again. Two comparisons can disagree, and a torn read between them refused a login the
+// core had just allowed under a second reason. Whichever ran first was the sentence an
+// operator read. One login also parsed that document twice for one answer.
+//
+// This leg trusts that call-in. A lane that wires `setLoginStartHandler` by hand stands in
+// for the core's, and the row `FRONT_LEG_CALL_INS` declares (reaches `processLoginStart`)
+// is what holds a real lane to it.
+//
+// `check` stays the gate for a lane whose core wired no `setLoginStartHandler`: the
+// socket-free rigs, which build the leg with no core at all. There the leg's own check is
+// the only review there is, so the fallback is a gate and not a copy of one.
 function decideViaCheck ({ client, store = null, check, coreDecision = null } = {}) {
   const core = evaluateCoreDecision(coreDecision)
   if (!core.ok) return core
+  if (core.answered === true) return core
   if (!check || typeof check.checkVerified !== 'function') {
     return { ok: false, reason: 'check_unavailable' }
   }
@@ -652,8 +690,9 @@ function decideViaCheck ({ client, store = null, check, coreDecision = null } = 
   }
 }
 
-// Pure online attach decision: core loginStart (fail closed), then the real
-// hasJoined-backed whitelist check. Exported for socket-free tests.
+// Pure online attach decision: the core's loginStart review, which fails closed, and
+// the leg's own hasJoined-backed check for a lane whose core answered nothing. Exported
+// for socket-free tests.
 export function decideOnlineAttach (input = {}) {
   return decideViaCheck(input)
 }

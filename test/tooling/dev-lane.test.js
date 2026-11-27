@@ -856,8 +856,9 @@ test('no committed attach whitelist names a uuid derived from its own name', () 
   // the live one is what the dev seed copies.
   //
   // The rule is `uuidRefusalReason` in src/custody/util.js: this front verifies each login
-  // against Mojang (online-mode hasJoined, then src/custody/attach.js `checkVerified`), so
-  // an entry no Mojang session answers for can never attach. The offline legs are the lane
+  // against Mojang (`online-mode` `hasJoined`, then the whitelist review the core runs at
+  // Login Start, #756), so an entry no Mojang session answers for can never attach. The
+  // offline legs are the lane
   // where a name-derived uuid belongs (GLOSSARY.md, "test-double lane"), and no manifest
   // here composes them. This case asks that function rather than spelling any part of the
   // rule a second time (#703).

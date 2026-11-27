@@ -23,7 +23,6 @@
 // the rest of the set.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -32,6 +31,11 @@ import mc from 'minecraft-protocol'
 
 import { DENY_REASONS } from '../../src/custody/attach.js'
 import { createLiveFrontLeg } from '../../src/legs/live-front.js'
+import {
+  acceptsAsASession,
+  refusesAsA204Does,
+  withSessionserver
+} from '../support/sessionserver.js'
 
 const VERSION = '26.1'
 // The sentence the library ends this client with, written here as the library writes
@@ -41,40 +45,9 @@ const SESSION_REFUSAL_TEXT = 'Failed to verify username!'
 const NAME = 'Mistyped'
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
 
-// `yggdrasil` is minecraft-protocol's dependency and not this repo's, so there is no
-// `node_modules/yggdrasil` to import. The login handler resolves it from its own
-// package; this resolves it the same way, so the module patched below is the one
-// that handler holds.
-const repoRequire = createRequire(import.meta.url)
-const protocolRequire = createRequire(repoRequire.resolve('minecraft-protocol'))
-const yggdrasil = protocolRequire('yggdrasil')
-
-// The sessionserver's two answers, as `yggdrasil` delivers them. A 204 carries an
-// empty body, so `JSON.parse('')` throws and `hasJoined` calls back with that error;
-// the login handler cares only that there was one.
-const refusesAsA204Does = callback => {
-  try { JSON.parse('') } catch (error) { callback(error) }
-}
-const acceptsAsASession = callback => callback(null, { id: PLAYER.replace(/-/g, ''), name: NAME })
-
-// One lane with a fake sessionserver answer, and the lines it wrote. The patch is
-// the test's and is undone whether the lane ran or threw.
-async function withSessionserver (answer, run) {
-  const original = yggdrasil.server
-  yggdrasil.server = () => ({
-    // A server never calls this; it is here so the fake is the shape login.js uses.
-    join: (...args) => args[args.length - 1](new Error('a server never joins a session')),
-    hasJoined: (username, serverId, sharedSecret, publicKey, callback) => {
-      // Next tick, as an answer over the network arrives.
-      setTimeout(() => answer(callback), 10)
-    }
-  })
-  try {
-    return await run()
-  } finally {
-    yggdrasil.server = original
-  }
-}
+// The sessionserver this file drives, and the profile it answers a joined session with.
+// Both are test/support/sessionserver.js's, because #756's test needs the same fake.
+const sessionFor = acceptsAsASession({ id: PLAYER.replace(/-/g, ''), name: NAME })
 
 // The live leg a deployed lane builds, on a port the kernel picks, with an attach
 // whitelist file that does not exist: every login is a stranger, and this file's
@@ -162,7 +135,7 @@ test('#722 a session the sessionserver refuses is counted and recorded, and is n
 })
 
 test('#722 a session the sessionserver accepts, on a name the whitelist refuses, is a denial and not this count', async () => {
-  await withSessionserver(acceptsAsASession, async () => {
+  await withSessionserver(sessionFor, async () => {
     const { leg, lines, port } = await openLane()
     const bot = joinLane(port)
     try {
