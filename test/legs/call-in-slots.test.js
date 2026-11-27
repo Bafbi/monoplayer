@@ -14,12 +14,13 @@
 // call-ins a lane fills itself, and one registration on each is the whole rule.
 //
 // The rule itself is src/legs/call-in-handler.js's. What this file holds is that both real
-// legs keep it.
+// legs keep it, and since #886 that both doubles keep it too.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createOfflineFrontLeg } from '../../src/legs/live-front.js'
 import { createOfflineBackendLeg } from '../../src/legs/live-backend.js'
+import { createFakeFrontLeg, createFakeBackendLeg } from '../../src/legs/fake-legs.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS, wireLegToCore } from '../../src/service/wire-leg-to-core.js'
 
@@ -39,8 +40,8 @@ const backendLeg = () => createOfflineBackendLeg({
   host: '127.0.0.1', port: 25565, version: VERSION, username: 'GlowSquidye'
 })
 
-// A handler of the shape the call-in takes, and a second one the leg must never end up
-// holding: the cases below read which of the two a registration left behind.
+// Two functions a registration can hand a call-in, and the cases below read which of the
+// two a leg ended up holding. No case here calls one, so no answer's shape is under test.
 const first = () => ({ attached: true, replayed: 0 })
 const second = () => ({ attached: false, reason: 'a_second_registration' })
 
@@ -100,6 +101,51 @@ test('#824 the backend leg keeps one handler per call-in in the same words', () 
   assert.throws(() => wireLegToCore({ core: {}, leg: fresh, table: BACKEND_LEG_CALL_INS }),
     /setEndHandler already holds a handler/,
     'and a lane\'s end handler on a leg handed to the core is refused at the core\'s start, as the front leg\'s is')
+})
+
+// #886: a double is an oracle, and one that answers a call the product refuses is a test
+// that passes on a lane that would not boot. #824 filled both real legs' call-ins one
+// registration deep and left src/legs/fake-legs.js assigning plainly, so a service test
+// could plant a second registration and read a whole wiring off a leg whose real
+// counterpart throws. That is #631's general form: the fake built a claim by hand.
+//
+// Seam: the doubles' own setters, each on a leg built here. A registration is a call on
+// the leg's own surface, so the refusal is reachable with no core, no socket and no
+// custody.
+//
+// A double keeps its declared holes: it carries neither setCoreAttach nor
+// setCoreAttachConfiguring, and test/service/wire-leg-to-core.test.js names the rest. A row
+// a double does not carry is not this case's to ask about, so the walk is the two tables
+// filtered by what that double answers.
+const DOUBLES = [
+  ['fake front leg', createFakeFrontLeg, FRONT_LEG_CALL_INS],
+  ['fake backend leg', createFakeBackendLeg, BACKEND_LEG_CALL_INS]
+]
+
+test('#886 a double refuses a second registration on every call-in it fills', () => {
+  let callInsWalked = 0
+  for (const [label, build, table] of DOUBLES) {
+    const rows = table.filter(row => row.kind === 'register' && typeof build()[row.name] === 'function')
+    assert.ok(rows.length > 0, label + ' fills at least one call-in, or this case asserts nothing')
+
+    for (const row of rows) {
+      const leg = build()
+      assert.doesNotThrow(() => leg[row.name](first),
+        label + ': ' + row.name + ' takes the first registration, which is the whole rule')
+
+      assert.throws(() => leg[row.name](second), new RegExp(row.name + ' already holds a handler'),
+        label + ': ' + row.name + ' refuses a second registration in the call-in\'s own name. Before #886 the double assigned over the first and said nothing, which is what a real leg stopped doing in #824')
+
+      assert.throws(() => leg[row.name](first), new RegExp(row.name + ' already holds a handler'),
+        label + ': ' + row.name + ' refuses a repeat of the same function too: a registration is a write, not a call')
+
+      assert.throws(() => leg[row.name](null), new RegExp(row.name + ' takes the function'),
+        label + ': ' + row.name + ' refuses a value that is not a function, the other half of the rule')
+      callInsWalked++
+    }
+  }
+  assert.equal(callInsWalked, 10,
+    'ten call-ins across the two doubles answer the rule: the front double\'s seven and the backend double\'s three. A register row one of them stops carrying fails this count, and that is the number #886 turned from a silent overwrite into a refusal. A setter with no row in the tables is outside this walk, and test/legs/adapters.test.js\'s #672 case is what names it')
 })
 
 test('#824 a lane\'s own leg takes one registration per call-in and nothing else', () => {
