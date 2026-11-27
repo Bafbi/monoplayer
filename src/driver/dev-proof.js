@@ -470,6 +470,17 @@ function framesOf (report) {
   }
 }
 
+// The last step of the document, in the order `deploy/dev/README.md` states it: complete the file,
+// copy it where `--verify` reads it, then verify. The copy and the verify are one command line,
+// because the operator reads this step with the finished file in front of them. A copy in a sentence
+// beside the command is a copy they can skip (#944). The reader writes `WITNESS_WRITE` and the
+// default reads `WITNESS_COMMIT`, so the step names both and a renamed path reaches it. `source` is
+// the log the frames rows came from, or null for a reading from a pipe, which has no log to name.
+function finishStep (source) {
+  return 'cp ' + WITNESS_WRITE + ' ' + WITNESS_COMMIT + ' && node src/driver/dev-proof.js --verify' +
+    (source === null ? '' : ' --path ' + source)
+}
+
 // The witness a person completes, in the shape `src/driver/run.js` uses for the unmodded lane:
 // a document that says what is not done, one row per step, and a `completed` only a human sets.
 // `source` is the log the frames rows were read from, or null for a reading from a pipe: the
@@ -492,10 +503,11 @@ export function witnessDocument (report, { now = new Date().toISOString(), sourc
       // #923: the command names the log this reading came from, and never a path nobody wrote. A
       // piped reading has no log to name, and the step says so rather than printing a command that
       // would fail on a file this run never saved.
-      source === null
-        ? 'Set completed true, then run: node src/driver/dev-proof.js --verify. This stream was piped in, so there is no log to re-read: save the next one with --path and the machine half is checkable.'
-        : 'Set completed true, then run: node src/driver/dev-proof.js --verify --path ' + source +
-          '. The machine half is re-read from that file, not taken on this one\'s word.'
+      'Set completed true, then run: ' + finishStep(source) +
+        '. The copy is the file --verify reads when no --witness is given. ' +
+        (source === null
+          ? 'This stream was piped in, so there is no log to re-read: save the next one with --path and the frames half is checkable.'
+          : 'The frames half is re-read from that log, not taken on this one\'s word.')
     ],
     // `source` is the log these rows were read from, and it is what `--verify` re-reads. It is null
     // for a reading piped in, and the verdict says so rather than naming a file nobody saved.

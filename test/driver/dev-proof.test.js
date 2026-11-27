@@ -19,7 +19,9 @@ import {
   CLAIMS,
   OPERATOR_STEPS,
   RECORDS,
+  WITNESS_COMMIT,
   WITNESS_LANE,
+  WITNESS_WRITE,
   claimsOf,
   formatVerdict,
   momentOf,
@@ -630,6 +632,55 @@ test('#923 the generated witness names the log its rows were read from, and says
     'and the step it prints says this run saved none')
   assert.doesNotMatch(piped.how.join(' '), /--verify --path \S/,
     'rather than printing a command that would fail on a path nobody wrote')
+  // #944: a piped reading writes WITNESS_WRITE like any other, so its step carries the copy too.
+  assert.match(piped.how.at(-1), new RegExp('cp ' + escapeRe(WITNESS_WRITE) + ' ' + escapeRe(WITNESS_COMMIT)),
+    'and its step copies the document where a bare --verify reads it')
+})
+
+// #944: the last step is read at the moment the operator finishes the document, so it has to work
+// as written. The reader writes `WITNESS_WRITE` and `--verify` with no `--witness` reads
+// `WITNESS_COMMIT`, so a step that named only the command refused every operator who copied nothing:
+// the copy it needed was in nobody's sentence. This case runs the reader, records the document, and
+// then runs the command the step prints, in a lane nothing has been copied into by hand. It is the
+// path half of the guard #945 asks for, and both read `how` — the document's own words — rather
+// than a copy of them.
+test('#944 the step the witness prints copies the document it wrote, and the copy is what verifies', () => {
+  const { dir } = space()
+  // Every checkout has testdata/: the verdict pages are tracked there. The lane needs the directory
+  // for the copy the step makes, and nothing else about the copy is given to it.
+  fs.mkdirSync(path.join(dir, path.dirname(WITNESS_COMMIT)), { recursive: true })
+  fs.mkdirSync(path.join(dir, path.dirname(LOG)), { recursive: true })
+  fs.writeFileSync(path.join(dir, LOG), lines(run()))
+
+  // The reader writes the document, as it does for the operator. The case hands it nothing.
+  const read = spawnSync(process.execPath, [CLI, '--path', LOG], { cwd: dir, encoding: 'utf8' })
+  assert.equal(read.status, 0, read.stdout + read.stderr)
+
+  // What the operator does next: record the rows, and set the flag.
+  const write = path.join(dir, WITNESS_WRITE)
+  const document = JSON.parse(fs.readFileSync(write, 'utf8'))
+  document.completed = true
+  document.steps = document.steps.map(step => step.id === 'spectator-own-body'
+    ? { ...step, state: 'not-seen', evidence: 'a body was drawn in third person, and the hands were still there' }
+    : { ...step, state: 'seen', evidence: 'saw it on both clients' })
+  fs.writeFileSync(write, JSON.stringify(document, null, 2))
+
+  const step = document.how.at(-1)
+  const printed = step.match(/then run: (.+?)\.(?: |$)/)
+  assert.ok(printed, 'the last step prints the command that finishes the document: ' + step)
+  assert.match(printed[1], /^cp \S+ \S+ && node src\/driver\/dev-proof\.js --verify/,
+    'and the copy is in that command, so a reader who follows the step copies nothing by hand')
+  // The step names the script by its repo-relative path, and this lane is not the repo, so the one
+  // rewrite swaps that path for this checkout's. Every path the step names stays as printed, and
+  // they resolve inside the lane: that is where the document it names was written.
+  const command = printed[1].replace(/node src\/driver\/dev-proof\.js/, '"' + process.execPath + '" "' + CLI + '"')
+  const ran = spawnSync('bash', ['-c', command], { cwd: dir, encoding: 'utf8' })
+
+  assert.equal(ran.status, 0, command + '\n' + ran.stdout + ran.stderr)
+  assert.match(ran.stdout, /#634 VERIFIED/, 'and the copy the step made is the file the command read')
+  assert.match(ran.stdout, /^known gap: /m, 'the one gap the step declared is the one the run accepted')
+  assert.equal(fs.existsSync(path.join(dir, WITNESS_COMMIT)), true,
+    'the step writes the copy itself: a reader who follows it copies nothing by hand')
 })
 
 test('#923 a row\'s evidence and the failed list are copies too, and the log contradicts both by name', () => {
