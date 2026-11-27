@@ -74,16 +74,10 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
 
   assert.deepEqual(wiring.missing, [],
     'a leg that carries every setter is wired whole')
-  // #627, #726: the rows the core calls rather than registers are the table's, not a
-  // list here: the delivery a frame goes through, the calls it makes when the leg
-  // carries one, and the pre-auth read. This leg carries every one of them.
-  assert.deepEqual(wiring.called, FRONT_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
-    'every call row of the front table is carried, and none of them is registered')
-  // #757: the report no longer counts what it installed, so the two sides are read
-  // directly: the leg recorded which registration reached it, and the report names the
-  // calls it carried. Each list is held to its own rows of the table, so a row both
-  // registered and carried fails on the report, and a row that reached neither fails on
-  // the leg's record.
+  // #757: the report no longer counts what it installed, so the leg's own record is
+  // read directly: every register row reached it, and no call row did. #818 removed the
+  // list of carried calls, so "every call row is carried" is the empty `missing` above:
+  // a call row this leg lacked would be its one entry.
   const registrationRows = FRONT_LEG_CALL_INS.filter(row => row.kind === 'register').map(row => row.name)
   assert.deepEqual([...handlers.keys()].sort(), registrationRows.sort(),
     'every register row reached the leg, and no call row did')
@@ -145,10 +139,10 @@ test('#605 the core hands every backend call-in to a leg that carries them', () 
 
   assert.deepEqual(wiring.missing, [],
     'a backend leg that carries every row is wired whole')
-  assert.deepEqual(wiring.called, BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name),
-    'every call row of the backend table is carried: the delivery, the dial and the two optional calls')
-  // #757: the same reading of the leg's own record the front case makes, so neither table
-  // is the one the partition happens to be checked on.
+  // #757, #818: the same reading of the leg's own record the front case makes, so neither
+  // table is the one the partition happens to be checked on, and the empty `missing` above
+  // is every call row of the backend table carried: the delivery, the dial and the two
+  // optional calls.
   const registrationRows = BACKEND_LEG_CALL_INS.filter(row => row.kind === 'register').map(row => row.name)
   assert.deepEqual([...handlers.keys()].sort(), registrationRows.sort(),
     'every register row reached the backend leg, and no call row did')
@@ -190,19 +184,14 @@ test('#592 a leg missing a call-in is named, in the order the table declares the
 // #605: a backend leg's hole is the report's business too. The two calls are the
 // rows a leg answers rather than registers, and a leg without them was a typeof
 // guard in the core's body until the table took them.
-test('#605 a backend leg missing a call is named, and the calls it carries are counted apart', () => {
+test('#605 a backend leg missing a call is named like any other hole', () => {
   const { core } = recordingCore(BACKEND_LEG_CALL_INS)
 
   const OMITTED = ['chat', 'answerHeldGate', 'setErrorHandler']
   const absent = recordingLeg(BACKEND_LEG_CALL_INS, { omit: OMITTED })
   const wiring = wireLegToCore({ core, leg: absent.leg, table: BACKEND_LEG_CALL_INS })
   assert.deepEqual(wiring.missing, ['setErrorHandler', 'answerHeldGate', 'chat'],
-    'the report names the missing registration and both missing calls, in table order')
-  // The expectation names the rows this case keeps, rather than asking the leg what it
-  // carries: a report that counted an omitted call as carried fails here.
-  assert.deepEqual(wiring.called,
-    BACKEND_LEG_CALL_INS.filter(row => row.kind === 'call' && !OMITTED.includes(row.name)).map(row => row.name),
-    'the carried calls are the call rows this leg answers: the delivery and the dial, and not the two it omits')
+    'the report names the missing registration and both missing calls in table order: #818 made a hole the report\'s whole vocabulary, so a call row this leg omits is a hole like the registration it omits')
 })
 
 // #605: the freeze is a claim, so a case reads it: a table a reader can rewrite is a
@@ -386,6 +375,65 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
   }
 })
 
+// #818: a `call` row is a member the core calls on the leg itself, so the row has a call
+// site in the core or it is a name a leg is measured against and nothing reaches. That is
+// the shape #721 found one module over: a declared step whose last caller had been deleted,
+// still read as part of the interface by everyone who opened the page.
+//
+// The register rows have the negative guard above (the core registers no row by hand).
+// This is the positive half, and together they read a row from both sides: a row the core
+// stops calling fails here, and a registration written in the core by hand fails there.
+//
+// The binding is the interface's own. A front row reached through `backendLeg` is a row a
+// leg of the other interface answers, and a shape test is not a call site, which is the
+// hole #818 opened with: `typeof backendLeg.chat === 'function'` asks the leg instead of the
+// report, and this case would not count it.
+const LEG_BINDING = new Map([
+  [FRONT_LEG_CALL_INS, 'frontLeg'],
+  [BACKEND_LEG_CALL_INS, 'backendLeg']
+])
+
+function callSites (source, binding, name) {
+  return count(source, binding + '.' + name + '(') + count(source, binding + '?.' + name + '(')
+}
+
+test('#818 every `call` row is a member the core calls on the leg its table declares', () => {
+  const CORE = code(read('src/service/monoplayer.js'))
+
+  const rows = [...LEG_BINDING].flatMap(([table, binding]) =>
+    table.filter(row => row.kind === 'call').map(row => [binding, row.name]))
+  assert.ok(rows.length > 0,
+    'the tables declare call rows, so this case has a row to walk. An empty walk would pass on an empty table')
+
+  for (const [binding, name] of rows) {
+    assert.ok(callSites(CORE, binding, name) > 0,
+      'src/service/monoplayer.js never calls ' + binding + '.' + name + ', the call row ' + name +
+      ' declares. A row the core stops calling is a member every leg is still measured against and nothing reaches (#721, #818)')
+  }
+
+  // The other half of #818's hole. A backend call row is answered by the report
+  // (`backendCarries`), so a `typeof` test on one is the second home #605 removed: the
+  // core would ask the leg's shape where the table already answered. The front's three
+  // optional calls are `typeof`-tested on purpose — the header says why, and `laneState`
+  // asks the leg at each read because the report is null until start() — so this half
+  // names the backend's rows only.
+  for (const { name, kind } of BACKEND_LEG_CALL_INS) {
+    if (kind !== 'call') continue
+    assert.equal(count(CORE, 'typeof backendLeg.' + name) + count(CORE, 'typeof backendLeg?.' + name), 0,
+      'src/service/monoplayer.js must not test backendLeg.' + name + ' with typeof: `backendCarries` answers whether the leg carried the row, and a shape test is a second home for the same fact (#605, #818)')
+  }
+
+  // The walk bites, and it reads a call rather than a shape test. Both halves are fed a
+  // string here, because the tree's call sites are the claim above and a case that only
+  // watched them pass would pass on a walk that counted nothing.
+  assert.equal(callSites('backendLeg.chat(text)', 'backendLeg', 'chat'), 1,
+    'a call on the interface\'s own binding is the site a row is held to')
+  assert.equal(callSites("typeof backendLeg.chat === 'function'", 'backendLeg', 'chat'), 0,
+    'a shape test is not a call site: #605 makes the core ask the report what the backend leg carries, and a typeof guard is the second home it replaced')
+  assert.equal(callSites('backendLeg.chat(text)', 'frontLeg', 'chat'), 0,
+    'and the other interface\'s binding answers for its own rows: a front row the core reaches through backendLeg is a row the wrong leg answers')
+})
+
 // #718: the report carries what a reader acts on, and nothing else. It used to
 // carry every handler it installed, so a lane could wrap one call-in after start();
 // #683 deleted the lanes that did, because the attach cut is the core's event now.
@@ -405,15 +453,15 @@ test('#718 the report carries no handler, because no lane wraps a call-in any mo
 // without a row here fails, and a row whose literal the module stops reading fails too, so
 // "no production reader" is the build's error rather than a finding a later ticket files.
 const REPORT_READERS = [
-  // `backendCarries` answers whether the backend leg carried a call, so the core asks the
-  // table rather than testing the leg's shape a second time. Only the backend's list is
-  // read: the front's optional calls are still tested by `typeof` where they are used
-  // (#726), so `front.called` is read by no module — #818 decides whether it stays.
-  { field: 'called', file: 'src/service/monoplayer.js', reads: ['legWiring.backend.called'] },
   // The start record names every declared call-in a leg did not carry, both interfaces on
   // one line, which is what a lane operator reads. Both literals are named: a line that
   // dropped one interface would pass a guard that named one, and the report would carry
   // that interface's list for nothing.
+  //
+  // #818: `called` is gone. It named the call rows a leg carries, which is the table's
+  // call rows minus `missing`, so it carried no fact of its own: the reason #757 removed
+  // `wired`, which was the table minus `called` and `missing`. Only the backend's half
+  // had a production reader (`backendCarries`), and it reads `missing` now.
   {
     field: 'missing',
     file: 'src/service/monoplayer.js',
@@ -437,6 +485,34 @@ test('#757 every field of the report has a production reader, named at the line'
         file + ' reads ' + literal + ' for ' + field + ': a field whose reader stops reading it is a field that exists for its own test')
     }
   }
+})
+
+// #817: the report is a value the core reads at start(), not a surface the core
+// publishes. Every reader of `get legWiring()` was a test: the core reads the closure
+// variable, and a lane operator reads the start record. A getter whose only caller is a
+// test describes a caller the tests build for themselves, which is the reason #718
+// removed `handlers` and #757 removed `wired` one level down.
+//
+// The seam a test uses is the artifact a lane reads: the start record's `legMissing`.
+// The cases around this one read it, and test/legs/adapters.test.js holds every real leg
+// to the tables through it.
+test('#817 the core publishes no wiring report, because its only readers were tests', () => {
+  const lines = []
+  const core = createMonoplayer({
+    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
+    backendLeg: createFakeBackendLeg(),
+    frontLeg: createFakeFrontLeg(),
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout },
+    logStream: { write: line => lines.push(JSON.parse(line)) }
+  })
+  core.start()
+
+  assert.equal('legWiring' in core, false,
+    'the core handle carries no wiring report: the getter exists so a test can read a value the core already holds, and a value with no production reader is the field #718 and #757 removed')
+
+  const start = lines.find(entry => entry.event === 'start')
+  assert.deepEqual(start.legMissing, { front: DOUBLE_HOLES.front.missing, backend: [] },
+    'and the report a reader reads is the start record, which names every row this leg did not carry')
 })
 
 // #607: the acceptance criterion, as a count. A caller that writes the literal has
@@ -550,8 +626,6 @@ test('#592 a leg with a hole is named on the start record', () => {
   const start = lines.find(entry => entry.event === 'start')
   assert.deepEqual(start.legMissing, { front: ['setBodyServed'], backend: [] },
     'the start record names the call-in this leg did not carry, which is the one place a lane would see it')
-  assert.deepEqual(core.legWiring.front.missing, ['setBodyServed'],
-    'and the report the record is built from says the same')
 })
 
 // #726: the delivery half is a row now, so its absence is a name on the start line
@@ -579,10 +653,8 @@ test('#726 a leg with no delivery is named on the start record', () => {
     logStream: { write: line => lines.push(JSON.parse(line)) }
   })
   core.start()
-  assert.deepEqual(core.legWiring.front.missing, ['write'],
-    'the report names the delivery this leg does not carry')
   assert.deepEqual(lines.find(entry => entry.event === 'start').legMissing, { front: ['write'], backend: [] },
-    'and the start record carries the name, which is the line a lane operator reads')
+    'the start record names the delivery this leg does not carry, which is the line a lane operator reads')
 })
 
 // #605: a backend leg with a hole is named by the same report, and the call that
@@ -607,8 +679,6 @@ test('#605 a backend leg missing a call-in is named on the start record, and cha
   const start = lines.find(entry => entry.event === 'start')
   assert.deepEqual(start.legMissing, { front: DOUBLE_HOLES.front.missing, backend: ['chat'] },
     'the start record names the backend call-in this leg did not carry, beside the front list this double is known to have')
-  assert.deepEqual(core.legWiring.backend.missing, ['chat'],
-    'and the report the record is built from says the same about the backend leg')
 
   // The call the hole would have served: the human's chat. It is dropped with the
   // leg's reason, which is what the guard used to say and the report now knows.

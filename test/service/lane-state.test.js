@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 
 import { createMonoplayer, loadConfig } from '../../src/service/monoplayer.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 import { fakeClock } from '../support/harness.js'
 
 const PLAYER = '0d8ea4d6-0b44-472b-b0d3-bb3db38c2a44'
@@ -27,18 +28,22 @@ const WINDOW = { inWindow: 2, maxConnections: 16, deadlineMs: 30_000, refused: 1
 // One started core on a front leg the test supplies, so a test can declare the read
 // on the leg before start() and keep a handle on it afterwards.
 function coreOn (frontLeg) {
+  const lines = []
   const core = createMonoplayer({
     config: loadConfig({ attachWhitelist: [PLAYER], puppet: PUPPET }),
     backendLeg: createFakeBackendLeg(),
     frontLeg,
-    clock: fakeClock()
+    clock: fakeClock(),
+    logStream: { write: line => lines.push(JSON.parse(line)) }
   })
   core.start()
-  return core
+  // #817: the start record is where a reader learns what the leg did not carry. The core
+  // publishes no report of its own, because every reader of one was a test.
+  return { core, start: lines.find(entry => entry.event === 'start') }
 }
 
 test('#627 a lane whose leg declares the read carries the window, in the window\'s own names', () => {
-  const core = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...WINDOW }) }))
+  const { core } = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...WINDOW }) }))
 
   const { preAuth } = core.laneState()
 
@@ -50,7 +55,7 @@ test('#627 a lane whose leg declares the read carries the window, in the window\
 
 test('#627 the group is read at the call, so a later snapshot carries later numbers', () => {
   let window = { ...WINDOW }
-  const core = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...window }) }))
+  const { core } = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...window }) }))
 
   assert.equal(core.laneState().preAuth.inWindow, 2, 'two sockets are in the window')
 
@@ -70,31 +75,34 @@ test('#627 the counters come from the window, not from the leg\'s metrics bag', 
     preAuthStats: () => ({ ...WINDOW }),
     metrics: { preAuthInWindow: 99, preAuthExpired: 99, allowed: 0 }
   })
-  const core = coreOn(leg)
+  const { core } = coreOn(leg)
 
   assert.equal(core.laneState().preAuth.inWindow, 2, 'the window\'s count, not the bag\'s')
   assert.equal(core.laneState().preAuth.expired, 1, 'and its expiry count, not the bag\'s')
 })
 
 test('#627 the read is a row of the front table, so a leg without it is named', () => {
-  // The row and the call are two jobs: the row is what the wiring report answers, and
-  // what test/legs/adapters.test.js holds every real front leg to. Without a test that
-  // reads `called`, a leg could keep the method under another name and only the
-  // snapshot would notice.
-  const core = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...WINDOW }) }))
+  // The row and the call are two jobs: the row is what the start record names a hole in,
+  // and what test/legs/adapters.test.js holds every real front leg to. A leg that carries
+  // the read is the snapshot the cases above read; a leg that does not is a name on the
+  // record, which is the line a lane operator reads (#817).
+  assert.ok(FRONT_LEG_CALL_INS.some(row => row.name === 'preAuthStats' && row.kind === 'call'),
+    'the read is a row of the front table, so the record has a name for the hole this case reads')
 
-  assert.ok(core.legWiring.front.called.includes('preAuthStats'),
-    'the report names the read the snapshot takes, so a lane logs a leg that carries it')
+  const { start: carrying } = coreOn(Object.assign(createFakeFrontLeg(), { preAuthStats: () => ({ ...WINDOW }) }))
 
-  const bare = coreOn(createFakeFrontLeg())
-  assert.ok(bare.legWiring.front.missing.includes('preAuthStats'),
-    'and a leg that carries none is a hole in the report rather than a silent null')
+  assert.ok(!carrying.legMissing.front.includes('preAuthStats'),
+    'the record names no hole for the read the snapshot takes, so a lane logs a leg that carries it')
+
+  const { start: bare } = coreOn(createFakeFrontLeg())
+  assert.ok(bare.legMissing.front.includes('preAuthStats'),
+    'and a leg that carries none is a hole on the record rather than a silent null')
 })
 
 test('#627 a lane whose leg declares no read carries null, not zeros', () => {
   // createFakeFrontLeg carries no window and no read: it is src/legs/fake-legs.js,
   // the front every service rig builds, and the shape a body leg has too.
-  const core = coreOn(createFakeFrontLeg())
+  const { core } = coreOn(createFakeFrontLeg())
 
   const state = core.laneState()
 

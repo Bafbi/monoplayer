@@ -199,14 +199,18 @@ test('#73 a leg that cannot answer leaves the gate held, and says so', () => {
   const backendLeg = createFakeBackendLeg()
   delete backendLeg.answerHeldGate
   const frontLeg = createFakeFrontLeg()
+  const lines = []
   const core = createMonoplayer({
     config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
     backendLeg,
     frontLeg,
-    clock: fakeClock()
+    clock: fakeClock(),
+    logStream: { write: line => lines.push(JSON.parse(line)) }
   })
   core.start()
-  assert.deepEqual(core.legWiring.backend.missing, ['answerHeldGate'],
+  // #817: the start record is the report a reader reads, and it is the line a lane
+  // operator reads. The core publishes no report of its own.
+  assert.deepEqual(lines.find(entry => entry.event === 'start').legMissing.backend, ['answerHeldGate'],
     'the leg that cannot answer is named at start, before a gate is ever held')
   const rig = { backendLeg, frontLeg, core }
   attachConfiguring(rig)
