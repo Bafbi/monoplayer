@@ -232,7 +232,9 @@ card's date is at most 30 s old. Inside seven days the card adds a warning
 sentence. `null` means the custody cache does not say, which is not "no expiry".
 
 `GET /api/puppets/<name>` serves the same facts as one JSON object, for an agent
-that would rather not parse the page. A name the registry does not hold is a 404.
+that would rather not parse the page. A name the registry does not hold is a 404. Each group
+of the attach record is nested there under its own name, as the record nests it, so the row
+the card calls `bodies without a spawn` is `attach.entities.withoutSpawn` in that object.
 
 ## The page updates itself, without a reload
 
