@@ -980,21 +980,22 @@ preAuthStats
 ```
 
 The rest of each interface is what those tables cannot name: members the core or a
-teardown calls on the leg directly, and no row declares. Two things own those names, and
-neither is this page. `src/service/monoplayer.js` dereferences the leg at every member the
-core calls on it, so its calls are the list. `src/legs/live-front.js` and
-`src/legs/live-backend.js` build the object that answers them.
-`test/tooling/product-core-map.test.js` reads both against these blocks, so a member the
-core starts calling and a block omits fails the gate, and so does a name a leg no longer
-answers (#690).
+teardown calls on the leg directly, and no row declares. Two files own those names, and
+neither is this page. `src/service/monoplayer.js` is where the core reaches a leg, and its
+own calls are the list `test/tooling/product-core-map.test.js` reads.
+`src/legs/live-front.js` and `src/legs/live-backend.js` build the object that answers
+them, so a member the core starts calling and a block omits fails there, and so does a name
+a leg no longer answers (#690, #712). `close()` is the one member outside that list:
+no core code calls it, every teardown awaits it, and each block is asked for it by name.
 
 ```js
 backendLeg = {                    // = the GlowSquidye puppet session
   target                          // { host, port }: the address the leg is dialled at, as a copy
-  setTarget(next, intent)         // point the next connect at another backend, once the caller
-                                  // has ended the current connection. `intent` keeps the session
-                                  // cookie across a transfer chain and asks for intent 3 on the
-                                  // next handshake; a claim dials with neither
+  setTarget(next, { keepCookies, transfer })
+                                  // point the next connect at another backend, once the caller
+                                  // has ended the current connection. `keepCookies` carries the
+                                  // session cookie across a transfer chain, and `transfer` asks
+                                  // for intent 3 on the next handshake. A claim dials with neither
   connect()                       // prismarine-auth + minecraft-protocol client (G1 kid)
   write(name, packet)             // teleport_confirm / keep_alive / pong / chunk_batch_received (every backend batch finish, warm or not)
                                   // custom_payload (minecraft:brand) and settings (client information, view distance cap) are written by the core
@@ -1013,8 +1014,9 @@ frontLeg = {                      // a body's channels: its driver and its spect
   claimOn(body)                   // (#261) the claim on one body, or null:
                                   //    the session's claimHeld oracle reads it
   write(name, packet, { synth, channel })
-                                  // clientbound, packet level. No channel reaches every channel
-                                  // the body holds; a channel reaches that connection alone
+                                  // clientbound, packet level. A write with no `channel` reaches
+                                  // every channel the body holds. A write with one reaches that
+                                  // connection alone.
   writeRaw(buffer, meta, { channel })
                                   // clientbound, frame level, to the same channels
   end(reason)                     // deny/kick/close, to every channel
@@ -1022,8 +1024,8 @@ frontLeg = {                      // a body's channels: its driver and its spect
                                   // driver's own connection, and answer { started, reason }
   finishConfigurationFrame()      // optional: the bytes that end a configuration round, for a
                                   // restore that has no cached finish
-  close()                         // destroys every client socket and closes the listener; it
-                                  // resolves on the close callback and holds no bound, unlike
+  close()                         // destroys every client socket and closes the listener.
+                                  // It resolves on the close callback and holds no bound, unlike
                                   // the backend's (#690)
 }
 ```

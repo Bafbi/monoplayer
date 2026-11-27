@@ -18,13 +18,6 @@
 //         names a switch is not a read: the header of src/service/start-live.js is
 //         itself a list of the switches.
 //
-//   #690  the interface section is two lists: the call-ins, held to their tables since
-//         #606, and the members no table names, which nothing read. The blocks had drifted
-//         apart from the composition root — the front block had lost `channels`,
-//         `startReconfiguration` and `finishConfigurationFrame`, the backend block `target`
-//         and `setTarget`, and neither named the `close()` a teardown awaits. The calls in
-//         src/service/monoplayer.js are the list now, and both blocks are read against it.
-//
 //   #606  the page is also a way in to the leg interfaces, and #592 moved the call-ins
 //         out of src/service/monoplayer.js into one table per interface in
 //         src/service/wire-leg-to-core.js. The map kept calling the composition root
@@ -35,6 +28,13 @@
 //         that list twice in one night, which is how a copy rots. So the section names
 //         the rows and states no shape, the map has a row for the module, and every
 //         module in src/service/ has a row: the wiring module landed with none.
+//
+//   #690  the interface section is two lists: the call-ins, held to their tables since
+//         #606, and the members no table names, which nothing read. The blocks had drifted
+//         apart from the composition root. The front block had lost `channels`,
+//         `startReconfiguration` and `finishConfigurationFrame`, the backend block `target`
+//         and `setTarget`, and neither named the `close()` a teardown awaits. The calls in
+//         src/service/monoplayer.js are the list now, and both blocks are read against it.
 //
 // What is compared is names. No sentence is parsed, because a guard that read English
 // would be a guard that lies about what it checked. The interface section's prose is
@@ -226,12 +226,42 @@ function interfaceBlock (leg) {
 }
 
 // The two tables the page points at, the leg each one wires, the block that assigns that
-// leg, and the module that builds it. The rows are the module's, never a list kept here:
-// a call-in the table adds or drops has to reach the page, and a list in this file would
-// be the second copy the guard exists to stop.
+// leg, the module that builds it, and the build. The rows are the module's, never a list
+// kept here: a call-in the table adds or drops has to reach the page, and a list in this
+// file would be the second copy the guard exists to stop.
+//
+// Each build is the offline constructor's, because the live ones want custody on disk. They
+// open no socket until `listen()` on the front leg and `connect()` on the backend one, so
+// a build reads the interface a caller holds and nothing else (#690, #712).
+// The one name a leg's constructor demands and this file never uses: the offline front leg
+// refuses to build with no whitelist, and a member list does not depend on whose uuid it is.
+const OFFLINE_UUID = '00000000-0000-0000-0000-000000000000'
+
 const INTERFACES = [
-  { table: 'FRONT_LEG_CALL_INS', leg: 'frontLeg', rows: FRONT_LEG_CALL_INS, source: 'src/legs/live-front.js' },
-  { table: 'BACKEND_LEG_CALL_INS', leg: 'backendLeg', rows: BACKEND_LEG_CALL_INS, source: 'src/legs/live-backend.js' }
+  {
+    table: 'FRONT_LEG_CALL_INS',
+    leg: 'frontLeg',
+    rows: FRONT_LEG_CALL_INS,
+    source: 'src/legs/live-front.js',
+    build: async () => {
+      const { createOfflineFrontLeg } = await import('../../src/legs/live-front.js')
+      return createOfflineFrontLeg({
+        offlineWhitelist: [OFFLINE_UUID],
+        getSnapshotConfig: () => ({}),
+        wireCheck: () => {}
+      })
+    }
+  },
+  {
+    table: 'BACKEND_LEG_CALL_INS',
+    leg: 'backendLeg',
+    rows: BACKEND_LEG_CALL_INS,
+    source: 'src/legs/live-backend.js',
+    build: async () => {
+      const { createOfflineBackendLeg } = await import('../../src/legs/live-backend.js')
+      return createOfflineBackendLeg({ host: '127.0.0.1', port: 25565 })
+    }
+  }
 ]
 
 // The section the two blocks sit in, found by its heading. It names the module, and
@@ -261,8 +291,8 @@ test('the interface section points at the module that declares the call-in table
 // The scan is bounded to the section, to its prose, and to the setter convention, because
 // a `call` row (chat, preAuthStats) is named with an ordinary word that a sentence may
 // use for its own purpose. The fenced blocks are cut before the scan: they hold the
-// members no table names, and `setTarget` is one — a member whose name opens with `set`
-// is not a registration, and the block is not prose (#690).
+// members no table names, and `setTarget` is one. A member whose name opens with `set`
+// is not a registration, and a block is not prose (#690).
 test('the interface section names no call-in the two tables do not declare', () => {
   const declared = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS].map(row => row.name)
   const prose = interfaceSection().replace(/```[\s\S]*?```/g, '')
@@ -353,9 +383,7 @@ for (const { table, leg, rows } of INTERFACES) {
 // fenced block beside them is the page's list of the rest of each interface, the members
 // the core calls on a leg directly and no row declares, and until #712 nothing compared
 // it to anything. #712 pinned the backend block to the leg it describes and left the
-// front block unread. #690 found what that left: the front block had lost `channels`,
-// `startReconfiguration` and `finishConfigurationFrame`, both blocks had lost
-// `close()`, and the backend block had lost `target` and `setTarget`.
+// front block unread, which is how #690 found both blocks short.
 //
 // Two authorities, and neither is a list kept in this file:
 //
@@ -373,10 +401,9 @@ for (const { table, leg, rows } of INTERFACES) {
 // need (the counters, the driver, the port), so the composition root's calls set the
 // list and the leg only answers for the names on it.
 //
-// A block that names `end()` and stops leaves out the one member that is a wait: `end()`
-// returns, `close()` resolves, and a caller that awaits the wrong one reads a socket that
-// is still open. No code in the composition root calls either `close()`, so the scan
-// above cannot see it and each block is asked for it by name (#690, #712).
+// A block that names `end()` and stops leaves out the one member that is a wait, and no
+// code in the composition root calls it: every teardown does, so the scan above cannot
+// see it and each block is asked for `close()` by name (#690, #712).
 
 // The members one block names, one per line. The page writes one member a line with its
 // comment to the right, so the first identifier on a line is the member and a
@@ -405,24 +432,7 @@ function legCalls (leg) {
   return [...new Set([...COMPOSITION_ROOT.matchAll(pattern)].map(match => match[1]))].sort()
 }
 
-// The leg each block describes, built and never started: the offline constructors take no
-// auth and open no socket until `listen()` on the front leg and `connect()` on the
-// backend one, so this reads the interface a caller holds. The live constructors want
-// custody on disk; the offline ones build the same object from the same body (#712).
-async function builtLeg (leg) {
-  if (leg === 'frontLeg') {
-    const { createOfflineFrontLeg } = await import('../../src/legs/live-front.js')
-    return createOfflineFrontLeg({
-      offlineWhitelist: ['00000000-0000-0000-0000-000000000000'],
-      getSnapshotConfig: () => ({}),
-      wireCheck: () => {}
-    })
-  }
-  const { createOfflineBackendLeg } = await import('../../src/legs/live-backend.js')
-  return createOfflineBackendLeg({ host: '127.0.0.1', port: 25565 })
-}
-
-for (const { table, leg, rows, source } of INTERFACES) {
+for (const { table, leg, rows, source, build } of INTERFACES) {
   const rowNames = rows.map(row => row.name)
 
   test('the ' + leg + ' block names every member the core calls on the leg (#690)', () => {
@@ -448,7 +458,7 @@ for (const { table, leg, rows, source } of INTERFACES) {
   })
 
   test('every member the ' + leg + ' block names, the leg answers (#712)', async () => {
-    const members = Object.keys(await builtLeg(leg))
+    const members = Object.keys(await build())
     const unknown = blockMembers(leg).filter(name => !members.includes(name))
     assert.deepEqual(unknown, [],
       'the ' + leg + ' block names ' + unknown.join(', ') + ', and the leg ' +
