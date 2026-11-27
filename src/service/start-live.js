@@ -90,7 +90,7 @@ import { readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { forceWarm, shouldForceWarm, waitForReady } from './readiness.js'
 import { createWireChecker } from '../core/wire-check.js'
 import { accountIdentifier, bodyKey, stampIdentity } from '../core/channels.js'
-import { pickerOfferedRows, pickerRows } from '../core/picker.js'
+import { addressName, pickerOfferedRows, pickerRows } from '../core/picker.js'
 import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
@@ -177,23 +177,11 @@ export function attachWhitelistEntries (uuids) {
   }))
 }
 
-// #815: one spelling for an address a record prints. #746 made the allowed-server list
-// below read as the picker names a row, and the addresses beside it were template strings,
-// so one record wrote one IPv6 address bracketed and unbracketed: `2001:db8::1:25565` has
-// no place a reader can split the host from the port. The rule is the picker's
-// (src/core/picker.js, canonicalPickName), reached through `pickerRows` rather than spelled
-// again here, the way the list below reaches it. A host that holds no colon reads as it
-// always did.
-export function addressName (host, port) {
-  // #891: a config's port may be 0, which is a bind asking the OS for one. The picker
-  // declines a pair whose port is outside 1..65535, and a name it declines is offered as
-  // written, so an IPv6 host on an ephemeral port printed run together again. The bracket
-  // below is the picker's own rule (src/core/picker.js, canonicalPickName) applied to the
-  // half the picker refused to read; for a port it accepts, the result is unchanged, and
-  // test/service/start-live.test.js holds the two spellings to each other.
-  const spelledHost = host.includes(':') && !host.startsWith('[') ? '[' + host + ']' : host
-  return pickerRows([{ name: spelledHost + ':' + port }])[0].name
-}
+// #815, #889: every record below spells an address with the one rule,
+// `addressName` in src/core/picker.js. It lived here, and #889 moved it where a leg could
+// reach it too; the service calls it and defines none of its own. A record that joins a host
+// and a port itself is the second spelling #815 is about, and test/service/start-live.test.js
+// fails on one.
 
 // #746: the start record counted the allowed servers it offers and named none. It is the
 // defect #601 fixed in the loopback payloads, #677 in the dev lane's report, and #705 one

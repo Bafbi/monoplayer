@@ -16,8 +16,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
-import { pickTarget } from '../../src/core/picker.js'
-import { addressName } from '../../src/service/start-live.js'
+import { addressName, pickTarget } from '../../src/core/picker.js'
 
 // A document that is right everywhere but the key a case moves, so a throw names the
 // case and not a neighbour.

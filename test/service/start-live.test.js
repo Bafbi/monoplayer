@@ -12,7 +12,6 @@ import { blockAfter } from '../support/source-scan.js'
 import { tempRoot } from '../support/temp.js'
 
 import {
-  addressName,
   allowedServerAddresses,
   attachWhitelistEntries,
   startControlRecord,
@@ -23,6 +22,7 @@ import {
   journalVolumeFull,
   unidentifiedSkinWarning
 } from '../../src/service/start-live.js'
+import { addressName } from '../../src/core/picker.js'
 import { createTransferFollowController } from '../../src/core/transfer-follow.js'
 import { makeCore } from '../support/harness.js'
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
@@ -751,12 +751,16 @@ test('#815 every address a record joins is spelled by the one rule', () => {
     assert.doesNotMatch(body, /`\$\{[^`]*\.host\}:\$\{[^`]*\.port\}`/,
       marker + ' joins a host and a port itself, which is the second spelling')
   }
-  // A seventh record that joined an address itself must fail here too, so the scan runs over
-  // the file with the rule's own body taken out, not over the six markers above.
-  const rule = blockAfter(source, 'export function addressName', 'the address rule in src/service/start-live.js')
-  const outside = source.slice(0, rule.open) + source.slice(rule.close + 1)
-  assert.doesNotMatch(outside, /\$\{[^`}]*\.host\}:\$\{[^`}]*\.port\}|\.host \+ ':' \+ /,
-    'something outside the rule joins a host and a port itself, in either spelling')
+  // #889 moved the rule to src/core/picker.js, so the service imports the one rule and
+  // defines none: a definition here would be the re-spelling this ticket is about, and the
+  // six markers above read green through either. So the scan is the whole file, not the file
+  // less a block, and it asks for the import that replaces the block.
+  assert.match(source, /import \{[^}]*\baddressName\b[^}]*\} from '\.\.\/core\/picker\.js'/,
+    'the service imports the one address rule (#889), rather than defining a second')
+  assert.doesNotMatch(source, /function addressName \(/,
+    'and keeps no second definition of it')
+  assert.doesNotMatch(source, /\$\{[^`}]*\.host\}:\$\{[^`}]*\.port\}|\.host \+ ':' \+ /,
+    'nothing in the service joins a host and a port itself, in either spelling')
 
   // `backendAddress` is the one address two records share (#331), so it is where the rule
   // is called once for both.

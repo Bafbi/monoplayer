@@ -120,11 +120,15 @@ function spectatorCount (value) {
 export function addressName (host, port) {
   const written = host + ':' + port
   const target = pickTarget(written)
-  // A host and a port the rule cannot read are handed back as they came, because the
-  // caller's own refusal names them and a guess here would invent an address.
-  if (target === null) return written
-  const bracketed = target.host.indexOf(':') === -1 ? target.host : '[' + target.host + ']'
-  return bracketed + ':' + target.port
+  // The bracket is the host's, so the host decides it whether or not the port is one a claim
+  // would dial. #891: a config asking the OS for a port says 0, and its record still has to
+  // split — `2001:db8::1:0` is the run-together shape this rule exists to remove. The host is
+  // read back from the pair when the pair parses, and taken as it was given when it does not;
+  // a port the rule cannot read has no canonical form, so it is written as it came.
+  const named = target === null ? String(host) : target.host
+  const bare = named.startsWith('[') && named.endsWith(']') ? named.slice(1, -1) : named
+  const bracketed = bare.indexOf(':') === -1 ? bare : '[' + bare + ']'
+  return bracketed + ':' + (target === null ? port : target.port)
 }
 
 // #265: the name a row is offered under is the canonical address its claim
