@@ -87,6 +87,15 @@ export function createBot ({
     names: [], // every clientbound frame: { state, name }
     byState: {}, // state -> [name]
     leftovers: [], // frames whose fullBuffer exceeded the parsed frame
+    // #969: the receive read as a second class. When the id a frame carries is not
+    // in the table it was read with, the mapper falls back to the number, so this
+    // handler sees an `id` in place of a `name`. That is the class the leftover
+    // count cannot name, and it is not the same fault as the other list: a named
+    // frame with trailing bytes says the table took a prefix, which a corrupt relay
+    // and a wrong-table read both produce (#541 read 9 bytes as
+    // acknowledge_player_digging), while an undefined id says the id is absent from
+    // the table. Only the second is a fact about the state the frame was read in.
+    unreadable: [],
     success: null, // login success packet, if one arrived
     login: null, // play login packet
     positions: [],
@@ -156,6 +165,9 @@ export function createBot ({
     received.byState[state].push(name)
     if (name === 'disconnect') received.disconnects.push({ state, packet: data ?? null })
     if (leftover !== 0) received.leftovers.push({ state, name, total, leftover })
+    // #969: an id this state's table has no name for, recorded whether or not bytes
+    // were left over (a one-byte frame of such an id consumes its whole length).
+    if (typeof name !== 'string') received.unreadable.push({ state, id: name, total, leftover })
   })
 
   client.on('success', packet => {

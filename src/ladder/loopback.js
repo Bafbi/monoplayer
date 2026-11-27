@@ -183,8 +183,18 @@ async function freePort () {
 // #601: a leftover count names no frame, so a red that prints one costs a re-run
 // to identify. The five payloads #601 names report the count beside the entries
 // this builds, the way O35 does. The rest still report the count alone.
+//
+// #969: the receive carries a second list, and it is the one the count alone
+// cannot show: a frame whose id the table it was read with does not define. What
+// separates the two is written where the record is, in src/ladder/bot.js; both are
+// printed here so every payload that names its frames names the class too.
 function leftoverPayload (received) {
-  return { leftovers: received.leftovers.length, leftoverDetails: received.leftovers.slice() }
+  return {
+    leftovers: received.leftovers.length,
+    leftoverDetails: received.leftovers.slice(),
+    unreadable: received.unreadable.length,
+    unreadableDetails: received.unreadable.slice()
+  }
 }
 
 export async function runLoopback (argv = process.argv.slice(2)) {
@@ -2059,6 +2069,13 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         // leftover anywhere on the connection is a frame it could not parse.
         // #541: `leftoversBeforeHop` below says which round it came from.
         b5.leftovers.length === 0 &&
+        // #969: and no frame whose id the table it was read with does not define.
+        // The clause is not the leftover count in another form: a one-byte frame of
+        // an undefined id consumes its whole length, so it leaves no leftover, and
+        // this is the only clause that sees it. For the frame that started this the
+        // payload names the whole fault either way, and that is the other thing the
+        // clause buys.
+        b5.unreadable.length === 0 &&
         b5.errors.length === 0,
       {
         entityId: b5.login?.entityId ?? null,

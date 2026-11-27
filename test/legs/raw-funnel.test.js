@@ -79,6 +79,33 @@ test('#599 one predicate for the phase finish, and the raw path asks it', () => 
     'and that function is the one both paths call')
 })
 
+// #969: the same shape for the round's other half. #541's rule refuses a
+// configuration frame after the phase's finish; this one refuses a play frame while
+// the round is opening. One predicate, both write paths, one counter.
+test('#969 the round-opening rule is one predicate, and the raw path asks it', () => {
+  const source = fs.readFileSync(LEG, 'utf8')
+
+  assert.equal(count(source, 'function refusesWhileRoundOpening ('), 1,
+    'the rule against a play frame written while the round opens is stated once, in the interceptor')
+
+  const funnel = source.slice(
+    source.indexOf('function writeRawTo ('),
+    source.indexOf('const sent = emitCheckedRaw')
+  )
+  assert.ok(funnel.length > 0, 'the seam this guard reads is still the leg\'s own')
+  assert.equal(count(funnel, 'refusesWhileRoundOpening'), 1, 'the funnel asks the one predicate')
+  assert.equal(count(funnel, 'roundOpen'), 0, 'and reads no flag of its own (#599: that was the second statement)')
+
+  // The wiring is a one-line predicate over the leg's own flag, so a typo in it would
+  // leave every interceptor-level case green while the rule never fired on a connection.
+  assert.equal(count(source, 'isRoundOpen: () => clients.get(client)?.pendingReconfiguration != null'), 1,
+    'the leg arms the rule from the window the funnel already holds configuration frames in')
+
+  assert.equal(count(source, 'metrics.playFramesDuringRoundOpening++'), 1,
+    'the count is bumped in one function, so the count and the line cannot disagree')
+  assert.equal(count(source, 'function recordRoundOpeningDrop ('), 1, 'and that function is the one both paths call')
+})
+
 // #600: the packet path takes the rule a packet object can take, and the one
 // configuration frame the leg authored as a packet object stops being one.
 test('#600 the packet-object path is refused by state, and the server dialog is a raw frame', () => {
