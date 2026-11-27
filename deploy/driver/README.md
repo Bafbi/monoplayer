@@ -350,9 +350,25 @@ change no lane has.
 
 The driver's own half is unbuilt too. The mod reports no game mode and no abilities, so
 "spectator mode, as the client read it" has no reader yet. `status` in
-`tools/driver/src/main/java/eu/monoplayer/driver/DriverServer.java:227` is where that
-reading and the report field it feeds would go. The picker's own buttons are already
-reachable through the driver's `click` op.
+`tools/driver/src/main/java/eu/monoplayer/driver/DriverServer.java` is where that reading
+and the report field it feeds would go.
+
+The picker's own buttons need no new op, though no run has shown it yet. The client
+draws a `minecraft:multi_action` dialog as `MultiButtonDialogScreen`, because
+`DialogScreens` in the 26.2 client maps that type to it. That screen builds one `Button`
+per action. `DialogScreen.init` adds every one of them to the screen's children. So
+`DriverServer.clickButton` reaches them the way it reaches any other button: it matches an
+`AbstractButton` in `mc.gui.screen().children()`. The configuration phase is no exception.
+`ClientCommonPacketListenerImpl.handleShowDialog` hands the dialog to `Gui.setScreen` in
+play or in configuration. `screenInfo` reads the same children list as widgets. A client
+held in the picker therefore reports the dialog and its buttons before any click.
+
+Those classes and methods are the 26.2 client's own, not this repository's.
+`mise run driver:build` leaves the client jar it compiles against in the Gradle cache.
+`net/minecraft/client/gui/screens/dialog/` in that jar is where to read them.
+
+The one-client reading, `screen` on a client held in a picker, is owed still (#720). It
+is what would turn the paragraph above from an argument into an observation.
 
 Two narrower rows were considered and rejected. A protocol bot driving the body would
 measure a bot where the row exists to witness two real clients. Reading the spectator's
