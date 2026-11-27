@@ -5,9 +5,10 @@
 // leg (`kind: 'register'`, with the method it reaches and the function it hands
 // over), or a member the core calls on the leg itself (`kind: 'call'`: the delivery
 // a frame goes through, the dial a body opens with, and the reads the core makes).
-// Each row's comment says what a leg without it costs. A leg keeps a default behind every
-// call-in, and the rows a client cannot be served without answer a refusal: the leg takes
-// every client and serves none of them, without saying so.
+// What a leg without a row costs is in the comment above it, or above the block it sits in.
+// A leg keeps a default behind every call-in, and the rows a client cannot be served
+// without answer a refusal: the leg takes every client and serves none of them, without
+// saying so.
 //
 // A row names a member and states no shape. What the core hands over belongs to the
 // call site in src/service/monoplayer.js, and what it reads back belongs where the

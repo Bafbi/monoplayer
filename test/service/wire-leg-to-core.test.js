@@ -81,11 +81,14 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
     'every call row of the front table is carried, and none of them is registered')
   // #757: the report no longer counts what it installed, so the count is read from two
   // sides instead of one field: the leg recorded which registration reached it, and the
-  // report names the calls it carried. Every row of the table is one of the two.
-  assert.deepEqual(
-    [...new Set([...handlers.keys(), ...wiring.called])].sort(),
-    FRONT_LEG_CALL_INS.map(row => row.name).sort(),
-    'and every declared call-in was either registered on the leg or carried by it')
+  // report names the calls it carried. The two are disjoint and together they are the
+  // table, so a row both registered and carried fails here — a sum of two lengths would
+  // have let it through.
+  const registrationRows = FRONT_LEG_CALL_INS.filter(row => row.kind === 'register').map(row => row.name)
+  assert.deepEqual([...handlers.keys()].sort(), registrationRows.sort(),
+    'every register row reached the leg, and no call row did')
+  assert.equal(wiring.called.length, FRONT_LEG_CALL_INS.length - registrationRows.length,
+    'and the call rows are the rest of the table, so every declared call-in was either registered on the leg or carried by it')
 
   // The payload shapes a caller must not have to know. `attachPlayer` takes
   // includeConfig, and a lane's attach never re-sends the configuration phase:
@@ -178,7 +181,7 @@ test('#592 a leg missing a call-in is named, in the order the table declares the
   const absent = recordingLeg(FRONT_LEG_CALL_INS, { omit: ['setCoreAttach', 'setSpectateBody'] })
   const answered = wireLegToCore({ core, leg: absent.leg, table: FRONT_LEG_CALL_INS })
   assert.deepEqual(answered.missing, ['setCoreAttach', 'setSpectateBody'],
-    'both holes are in the one list, in table order: setCoreAttach is the row a lane cannot serve a client without, and setSpectateBody is not, and the report keeps them in the order the table declares them')
+    'both holes are in the one list, in the order the table declares the rows: setCoreAttach comes before setSpectateBody there, and a report that sorted the names would read the other way')
 })
 
 // #605: a backend leg's hole is the report's business too. The two calls are the
@@ -393,25 +396,21 @@ test('#718 the report carries no handler, because no lane wraps a call-in any mo
     'the report names rows: #607 carried a handler for a lane that wrapped a call-in after start(), and no lane does')
 })
 
-// #757: a field of the report is a fact a production reader acts on, and the reader
-// is named here, on the module that reads it. #718 removed `handlers` because no
-// module read it, and #757 removed `wired` and `requiredMissing` for the same reason:
-// `wired` was the table minus the other two lists, and `requiredMissing`'s severity
-// lives in each row's own comment. This case is the guard. A field added to the report
-// fails here until a production reader is declared for it, and a declared reader that
-// stops reading its field fails too, so "no production reader" is the build's error
-// rather than a finding a later ticket files.
+// #757: a field of the report is a fact a production reader acts on, and the reader is
+// named here, on the module that reads it. The module header says why `wired` and
+// `requiredMissing` went; this case is what keeps the remaining set honest. A field added
+// without a row here fails, and a row whose literal the module stops reading fails too, so
+// "no production reader" is the build's error rather than a finding a later ticket files.
 const REPORT_READERS = [
-  // backendCarries answers what the backend leg carried, so the core reads
-  // answerHeldGate and chat off the table rather than testing the leg's shape a
-  // second time (src/service/monoplayer.js:3341, branched on at :3294 and :3592).
-  // Only the backend's list is read: the front's three calls are tested by `typeof` where
-  // they are used, so `front.called` has no production reader and this row claims none.
+  // `backendCarries` answers whether the backend leg carried a call, so the core asks the
+  // table rather than testing the leg's shape a second time. Only the backend's list is
+  // read: the front's optional calls are still tested by `typeof` where they are used
+  // (#726), so `front.called` is read by no module — #818 decides whether it stays.
   { field: 'called', file: 'src/service/monoplayer.js', reads: ['legWiring.backend.called'] },
   // The start record names every declared call-in a leg did not carry, both interfaces on
-  // one line, which is what a lane operator reads (src/service/monoplayer.js:3365). Both
-  // literals are named: a line that dropped one interface would pass a guard that named
-  // one, and the report would carry it for nothing.
+  // one line, which is what a lane operator reads. Both literals are named: a line that
+  // dropped one interface would pass a guard that named one, and the report would carry
+  // that interface's list for nothing.
   {
     field: 'missing',
     file: 'src/service/monoplayer.js',
