@@ -1,4 +1,4 @@
-// #340, #371, #606, #668, #690, #726, #763: the cells of docs/product-core.md and its leg interface,
+// #340, #371, #606, #668, #690, #726, #763, #825: the cells of docs/product-core.md and its leg interface,
 // each pinned to the module that owns the fact it states.
 //
 // The page is a map of where a decision lives. A cell that names half a list sends a
@@ -43,6 +43,14 @@
 //         and at this file, and the two cases at the end of this section ask it for that
 //         pointer and for the absence of the block.
 //
+//   #825  #763's fence read the file's header and stopped there. The block above the two
+//         wireLegToCore calls in start() was read by no case, and #758 was its second drift:
+//         it is the block a lane learns the report from, so a stale sentence there sends a
+//         reader after a capability the report dropped. #592's case and #718's already hold
+//         two of its four claims; the pointer to the module that owns a row, the two table
+//         names and the event were held by nothing. The section below reads them, and the
+//         block names the tables its own calls apply.
+//
 //   #668  the section was a third home of the leg interfaces, restated by hand, and nothing
 //         read it. #606 and #690 made it the page's view of what a row cannot name; this entry
 //         records that it is no longer a copy of anything, and the cases below are the guard
@@ -77,7 +85,8 @@ import { fileURLToPath } from 'node:url'
 
 import { loadConfig } from '../../src/service/monoplayer.js'
 import { envOverlay } from '../../src/service/start-live.js'
-import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
+import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS, wireLegToCore } from '../../src/service/wire-leg-to-core.js'
+import { functionBody } from '../support/source-scan.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -561,6 +570,168 @@ test('the composition root header keeps no copy of a leg interface (#763)', () =
     'page\'s two blocks, under "Interface for the live legs" in docs/product-core.md, and a second one here ' +
     'is the copy #763 removed. Name the page and ' + GUARD + ' instead.')
 })
+
+// --- the comment above the wiring (#825) ---
+
+// The block above the two wireLegToCore calls in start() is the most-read comment in
+// src/service/monoplayer.js: it is where a lane learns what the report gives it, and where to
+// go when the report gives it nothing. #763 was its first drift and #758 its second, and both
+// were one shape, a capability moving and the sentence staying. Nothing failed either time,
+// because every case above that reads this file cuts its comments on purpose, and #763's
+// section reads the file's header rather than this block.
+//
+// Three of the block's claims are held elsewhere, so this section does not restate them:
+//
+//   the tables are applied here, and in no other place
+//                         test/service/wire-leg-to-core.test.js counts the two calls below and
+//                         refuses a hand registration in the core's body (#592, #605)
+//   the report carries names and no handler
+//                         the same file holds `'handlers' in wiring` false (#718) and keeps
+//                         the report's fields to the ones a production reader reads (#757)
+//   what a row is         the header of src/service/wire-leg-to-core.js
+//
+// The two that no case held are names, so both are read here: the module that owns a row and
+// what a lane does instead, and the two tables the calls below apply with the event that
+// replaced the cut a lane used to wrap. The block names its tables because it has to be
+// checkable: "both tables" sent a reader two lines down to learn which two.
+//
+// The event rule is the one test/tooling/document-pointers.test.js reads in a document: a
+// backticked name a sentence calls an event is a name the code has to carry. Nothing else in
+// a sentence is parsed, for the reason the file's header gives.
+
+// The block, found by the anchor it sits between rather than by its words: `started = true`
+// opens start(), and `legWiring = {` is the assignment the block explains. The body is
+// test/support/source-scan.js's, so a block moved out of start() is not this block, and the lines
+// are stripped of their marker and joined with a space, so a sentence still reads as one
+// sentence after a wrap, which is how the block states its claims.
+function wiringComment () {
+  const body = functionBody(COMPOSITION_ROOT_SOURCE, 'start')
+  const opened = body.indexOf('started = true')
+  assert.notEqual(opened, -1,
+    'src/service/monoplayer.js says `started = true` in start(), and the comment above the wiring ' +
+    'begins on the line after it. No line says it, so this case cannot find the block it reads (#825).')
+  const closed = body.indexOf('legWiring = {', opened)
+  assert.notEqual(closed, -1,
+    'src/service/monoplayer.js assigns `legWiring = {` after `started = true`, and the comment ' +
+    'between them is the block this case reads. No line says it (#825).')
+  const between = body.slice(opened, closed).split('\n').slice(1)
+  const foreign = between.filter(line => line.trim() !== '' && !line.trimStart().startsWith('//'))
+  assert.deepEqual(foreign, [],
+    'the lines between `started = true` and `legWiring = {` in src/service/monoplayer.js are one ' +
+    'comment block and nothing else, and this case found ' + foreign.length + ', the first: ' +
+    (foreign[0] ?? '') + '. A block with code in it is a block this anchor no longer bounds (#825).')
+  assert.ok(between.some(line => line.trimStart().startsWith('//')),
+    'src/service/monoplayer.js keeps no comment between `started = true` and `legWiring = {`. That ' +
+    'block is where a lane learns what the report gives it, and the two calls below are not ' +
+    'self-explanatory: they apply a table the lane never sees (#825).')
+  return between.map(line => line.replace(/^\s*\/\/ ?/, '')).join(' ')
+}
+
+// The tables the two calls below the block apply, read off the call sites rather than kept in a
+// list here. Applying a table is what makes it applied, so a table renamed at its call is a name
+// the block has to follow.
+function appliedTables () {
+  return [...COMPOSITION_ROOT.matchAll(/wireLegToCore\(\{[^}]*\btable:\s*([A-Z][A-Z0-9_]*)/g)]
+    .map(match => match[1])
+}
+
+// The names the block calls an event, in the code's spelling: a backticked name and the word
+// event is `emit('attach'`. A table-shaped name is the other half of the same idea, and no
+// list here holds either.
+const eventNames = block => [...block.matchAll(/`([A-Za-z][A-Za-z0-9_]*)`\s+event\b/g)].map(match => match[1])
+const tableNames = block => [...block.matchAll(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g)].map(match => match[0])
+
+test('the comment above the wiring names the module and the tables its two calls apply (#825)', () => {
+  const block = wiringComment()
+
+  // The pointer: the file that owns what a row is, and the replacement for a different
+  // registration. A module that moves or is renamed leaves this sentence pointing nowhere, which
+  // is the shape test/tooling/document-pointers.test.js sweeps for in the documents.
+  assert.ok(block.includes('src/service/wire-leg-to-core.js'),
+    'the comment above the wiring does not name src/service/wire-leg-to-core.js. That module is the ' +
+    'one home of what a leg interface carries, so it is also the answer to what a lane does when it ' +
+    'needs a different registration. A block that sends that lane nowhere leaves it copying a call-in ' +
+    'into a lane, which is the second home #592 removed (#825).')
+  assert.ok(fs.existsSync(path.join(ROOT, 'src/service/wire-leg-to-core.js')),
+    'the comment above the wiring names src/service/wire-leg-to-core.js, and this tree has no such file. ' +
+    'A pointer a reader cannot follow is the stale pointer #763 and #758 both were (#825).')
+
+  // The tables: the two the calls below apply, and no third.
+  const applied = appliedTables()
+  assert.equal(applied.length, 2,
+    'src/service/monoplayer.js applies one table per leg interface, and this case read ' +
+    applied.length + '. It compares the block to those two names, so a count it cannot read is a block ' +
+    'with nothing to be held to (#592, #825).')
+  const named = tableNames(block)
+  const missing = applied.filter(name => !named.includes(name))
+  assert.deepEqual(missing, [],
+    'the comment above the wiring names no ' + missing.join(', ') + ', and the calls below it apply ' +
+    (missing.length === 1 ? 'it' : 'them') + '. The block said "both tables" and a reader had to look ' +
+    'down to learn which two. Naming them is what makes the sentence checkable, and a table renamed at ' +
+    'its call is a name this block has to follow (#825).')
+  const unknown = named.filter(name => !applied.includes(name))
+  assert.deepEqual(unknown, [],
+    'the comment above the wiring names ' + unknown.join(', ') + ', and neither call below applies ' +
+    (unknown.length === 1 ? 'it' : 'them') + '. A table a reader looks for and no call site applies is ' +
+    'the sentence describing a wiring this file does not have (#825).')
+
+  // The event: the cut a lane used to wrap, as the core publishes it.
+  const events = eventNames(block)
+  assert.ok(events.length > 0,
+    'the comment above the wiring names no event. The attach cut a lane used to wrap is the core\'s own ' +
+    'now (#683), and a block that stops saying so leaves a lane wrapping a call-in the report gives it ' +
+    'no handler for (#825).')
+  const unpublished = events.filter(name => !COMPOSITION_ROOT.includes("emit('" + name + "'"))
+  assert.deepEqual(unpublished, [],
+    'the comment above the wiring calls ' + unpublished.join(', ') + ' an event, and ' +
+    'src/service/monoplayer.js never emits ' + (unpublished.length === 1 ? 'it' : 'them') + '. A lane that ' +
+    'waits on the cut for an event the core does not publish waits forever, and says nothing while it ' +
+    'does (#683, #825). Name the event the core emits.')
+})
+
+// The names the report used to carry. #718 removed `handlers` and #757 removed `wired` and
+// `requiredMissing`, so no module spells one and there is nothing in the tree to derive them from:
+// the list is the record of those three retirements. A whole word match is what reads it, and the
+// block is the only text this case looks at, so a sentence there that used `wired` in the ordinary
+// sense would fail and needs rewording. That costs one word, and the miss it buys is the drift
+// #758 was.
+//
+// The block's own word is the singular, "carries names and no handler", and this list cannot see
+// it: `handlers` is a field name and `handler` is English. The assertion below the list holds
+// that sentence instead, by asking every field of the report to be a list of names rather than
+// a function, so a handler-valued field fails here whatever it is called.
+const RETIRED_FIELDS = ['handlers', 'wired', 'requiredMissing']
+
+test('the comment above the wiring spells no field the report no longer carries (#825)', () => {
+  const block = wiringComment()
+  // The report as its own function builds it, so the field set is the code's and not this file's.
+  const report = wireLegToCore({ core: {}, leg: {}, table: FRONT_LEG_CALL_INS })
+  const fields = Object.keys(report)
+  assert.ok(fields.length > 0,
+    'this case read no field of the report wireLegToCore returns, so it checked nothing (#825).')
+
+  const notNames = Object.entries(report).filter(([, value]) => !Array.isArray(value)).map(([field]) => field)
+  assert.deepEqual(notNames, [],
+    'the report carries ' + notNames.join(', ') + ', and the comment above the wiring says it carries ' +
+    'names and no handler. A field a lane reads and cannot use as a name is the promise #758 removed, ' +
+    'under whatever name it comes back (#718, #825).')
+
+  for (const field of RETIRED_FIELDS) {
+    assert.ok(!fields.includes(field),
+      'the report carries ' + field + ' again. This case names it as retired, and the comment above the ' +
+      'wiring is where a lane reads what the report gives it: decide whether the field stays and write ' +
+      'the sentence that says so, or drop the row from RETIRED_FIELDS (#825).')
+    assert.doesNotMatch(block, new RegExp('\\b' + field + '\\b'),
+      'the comment above the wiring spells ' + field + ', and the report wireLegToCore returns does not ' +
+      'carry it: ' + fields.join(', ') + '. This is the drift #758 fixed, a sentence that keeps promising ' +
+      'a capability the report dropped, and a lane that reads it writes a caller no module has ' +
+      '(#718, #757, #825).')
+  }
+})
+
+// What this section cannot see: a true sentence deleted, and a claim written in words no name
+// marks. The first is a fact lost rather than a fact lied about, and #718's and #757's cases hold
+// the fact itself. The second is a reviewer's, for the reason the file's header gives.
 
 // The module map's section, read to its next heading so a `src/...js` row in another
 // table of the page cannot answer for a module the map never names. It is the bound
