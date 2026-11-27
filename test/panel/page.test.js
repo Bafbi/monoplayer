@@ -125,6 +125,49 @@ test('the whitelist block renders the entries, their added time, and the two wri
   assert.match(card, /data-armed="false"/, 'a removal starts unarmed')
 })
 
+// #705: the block says who may attach. A list of two entries where one is a uuid no
+// Mojang session can answer for reads as healthy unless the block says so, and that is
+// the state #677 found in the dev lane's own document: three entries, one human. The
+// ratio is the sentence `mise run dev:status` settled, so an operator reads one
+// vocabulary in both places, and the reason is the one src/custody/util.js wrote.
+const V4 = '6eb73524-ff88-4a62-a8d0-c63905e7afba'
+const DERIVED = '62e2a856-7342-3096-b19f-938454443a11'
+const listOf = players => ({
+  observedAt: '2026-11-18T10:37:24.906Z',
+  resourceVersion: '41221',
+  document: { version: 1, players }
+})
+
+test('the whitelist block says which entries a login can use, and which it cannot', () => {
+  const healthy = renderCard(puppet, facts(), listOf([
+    { uuid: V4, name: 'Bafbi', addedAt: '2026-11-17T09:12:00.000Z' }
+  ]))
+  assert.match(healthy, /<span class="verdict">can authenticate<\/span>/,
+    'an entry a session can answer for says so, and carries no fault class')
+  assert.doesNotMatch(healthy, /cannot authenticate/, 'and a usable entry is never marked unusable')
+  assert.doesNotMatch(healthy, /attach whitelist names/, 'a lane where every entry can authenticate carries no warning')
+
+  const mixed = renderCard(puppet, facts(), listOf([
+    { uuid: V4, name: 'Bafbi', addedAt: '2026-11-17T09:12:00.000Z' },
+    { uuid: DERIVED, name: 'Pilot', addedAt: null }
+  ]))
+  assert.match(mixed, /attach whitelist names 2 entries, 1 of which can authenticate/,
+    'a lane with one unusable entry does not read as healthy')
+  assert.match(mixed, /<span class="verdict unusable">cannot authenticate: its uuid is md5\(&quot;OfflinePlayer:Pilot&quot;\), so no Mojang session answers for it<\/span>/,
+    'the reason is the sentence the one home wrote, in the class the stylesheet draws a fault with')
+  assert.match(mixed, /can authenticate/, 'the usable entry is still named as one')
+
+  const none = renderCard(puppet, facts(), listOf([
+    { uuid: DERIVED, name: 'Pilot', addedAt: null },
+    { uuid: 'f81d4fae-7dec-11d0-a765-00a0c91e6bf6', name: 'Watcher', addedAt: null }
+  ]))
+  assert.match(none, /attach whitelist names 2 entries, and none of them can authenticate/)
+
+  // One entry is the case the plural sentence reads wrong for, so it says "it".
+  const alone = renderCard(puppet, facts(), listOf([{ uuid: DERIVED, name: 'Pilot', addedAt: null }]))
+  assert.match(alone, /attach whitelist names 1 entry, and it cannot authenticate/)
+})
+
 test('the whitelist block tells an empty list apart from a list it could not read', () => {
   const empty = renderCard(puppet, facts(), { observedAt: '2026-11-18T10:37:24.906Z', resourceVersion: '7', document: { version: 1, players: [] } })
   assert.match(empty, /no entries: only the puppet's own account may attach/)

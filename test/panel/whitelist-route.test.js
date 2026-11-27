@@ -157,6 +157,41 @@ test('GET is the parsed list, with the ConfigMap name and its resourceVersion', 
   }
 })
 
+// #705: the count alone cannot tell a lane with two usable entries from one whose
+// second entry is name-derived, which is the state #677 found in a live document. So
+// the summary names each entry with the answer #703 owns, beside the count it keeps.
+// The verdict sits beside `document`, never inside an entry: the next patch writes those
+// entries back, so a field stamped there would reach the ConfigMap.
+test('GET names every entry beside the count, and which of them a login can use', async () => {
+  const rig = await panel({
+    cluster: cluster({
+      doc: document([
+        { uuid: PLAYER_UUID, name: 'Bafbi', addedAt: '2026-11-07T13:04:51.092Z' },
+        { uuid: DERIVED_UUID, name: 'Pilot', addedAt: null }
+      ])
+    })
+  })
+  try {
+    const response = await fetch(rig.url + '/api/puppets/glowsquidye/whitelist')
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.count, 2, 'the count stays: it is not the count that is wrong')
+    assert.deepEqual(body.entries.map(entry => entry.uuid), [PLAYER_UUID, DERIVED_UUID],
+      'one entry per row of the document, in the order it holds them')
+    assert.deepEqual(body.entries.map(entry => entry.name), ['Bafbi', 'Pilot'])
+    assert.deepEqual(body.entries.map(entry => entry.refusalReason === null), [true, false],
+      'a lane with one unusable entry does not read as healthy')
+    assert.match(body.entries[1].refusalReason, /md5\("OfflinePlayer:Pilot"\)/,
+      'and the sentence is the one src/custody/util.js writes, named back with the entry\'s own name')
+    assert.deepEqual([...new Set(body.document.players.flatMap(entry => Object.keys(entry)))].sort(),
+      ['addedAt', 'name', 'uuid'],
+      'the answer is beside the document, and no entry carries a field the next patch would write back')
+    assert.equal(rig.state.patches.length, 0, 'a read writes nothing')
+  } finally {
+    await rig.close()
+  }
+})
+
 test('POST adds one uuid, and the puppet\'s own reader sees it', async () => {
   const rig = await panel()
   try {
@@ -174,6 +209,8 @@ test('POST adds one uuid, and the puppet\'s own reader sees it', async () => {
     const body = await response.json()
     assert.equal(body.changed, true)
     assert.equal(body.count, 2)
+    assert.deepEqual(body.entries.map(entry => entry.uuid), [PLAYER_UUID, OTHER_UUID],
+      'a write echoes the entries beside the count, the same as the read does')
     assert.equal(body.uuid, OTHER_UUID)
     assert.equal(body.document.players.length, 2)
     // The change lands without a restart, and the route says so rather than

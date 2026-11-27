@@ -255,6 +255,17 @@
   .entry .who { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; }
   .entry .player, .entry .server { color: var(--color-grass); }
   .entry .when { color: var(--color-ink-dim); font-size: 0.9em; }
+  /* #705: an entry no Mojang session can answer for is the fault in the list, so it is
+     the one row that is not in the dim ink the rest of the row is written in. */
+  .entry .verdict { color: var(--color-ink-dim); font-size: 0.9em; }
+  /* The fault takes the ink the .refused block uses and a clay edge, rather than clay
+     text: clay on this background is under the contrast floor at this size. */
+  .entry .verdict.unusable {
+    color: var(--color-ink);
+    font-size: 0.9em;
+    border-left: 3px solid var(--color-clay);
+    padding-left: 0.35rem;
+  }
   .remove { margin: 0.2rem 0 0; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
   .remove button {
     font: inherit;

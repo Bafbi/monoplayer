@@ -10,6 +10,7 @@ import path from 'node:path'
 import { tempRoot } from '../support/temp.js'
 
 import {
+  attachWhitelistEntries,
   createPickerServerReader,
   createReconnectHandler,
   envOverlay,
@@ -498,6 +499,63 @@ test('#540 a reconnect after a followed transfer keeps the dialect and the serve
   assert.equal(rig.calls[settled].intent.transfer, true,
     'and keeps the transfer handshake, because that server is off the base')
   assert.deepEqual(rig.stages.slice(1), ['reconnect'], 'a retry of the same server is a reconnect')
+})
+
+// #705: a whitelist count names nothing an operator can act on. A lane with two
+// usable entries and a lane with one usable entry and one name-derived uuid both read
+// as "2", and #677 found the second state in a live document. So the start record
+// carries the entries beside the count, each with the verdict #703 put in one home, and
+// the count is that list's length so the two cannot disagree.
+//
+// The startup list is an array of uuids: `attachWhitelist` in src/service/control.js
+// maps the document to its uuids and drops the names. So this record asks
+// the version half of the rule, which is the half that refuses a name-derived uuid
+// (md5("OfflinePlayer:<name>") carries version 3). The panel holds the names, and its
+// answer is the whole rule.
+const WHITELIST_V4 = '6EB73524-FF88-4A62-A8D0-C63905E7AFBA'
+const WHITELIST_DERIVED = '62e2a85673423096b19f938454443a11'
+
+test('#705 the start record names each attach whitelist entry, and whether its shape stops a login', () => {
+  const entries = attachWhitelistEntries([WHITELIST_V4, WHITELIST_DERIVED])
+  assert.deepEqual(entries, [
+    { uuid: '6eb73524-ff88-4a62-a8d0-c63905e7afba', refusalReason: null },
+    {
+      uuid: '62e2a856-7342-3096-b19f-938454443a11',
+      refusalReason: 'a version-3 uuid is not one Mojang issues, so no Mojang session answers for it'
+    }
+  ], 'one entry per uuid, both spellings normalised, and the verdict beside each')
+  assert.equal(attachWhitelistEntries([]).length, 0, 'a lane with no list has no entries, not a missing field')
+  assert.deepEqual(attachWhitelistEntries(['not-a-uuid'])[0],
+    { uuid: null, refusalReason: 'it is not a uuid, so no login can match it' },
+    'a value that is not a uuid is answered as one, not printed as if it were')
+})
+
+test('#705 the journal record carries the entries beside the count, and does not count alone', () => {
+  // The log half of the pair is already pinned, and behaviourally: docs/telemetry.md
+  // names `whitelistEntries`, and test/observability/telemetry-doc.test.js fails when the
+  // table names a label `log('startLive', …)` does not write. The journal event has no
+  // such guard, and #331 is the shape this pair already got wrong once, naming two
+  // different backends. The call is read by brace matching, the way that guard reads it,
+  // because no test drives startLive() itself: it opens sockets and a custody volume.
+  const source = fs.readFileSync(new URL('../../src/service/start-live.js', import.meta.url), 'utf8')
+  const open = source.indexOf("journal.event('startLive', {")
+  assert.notEqual(open, -1, 'src/service/start-live.js writes the startLive journal event')
+  const start = source.indexOf('{', open)
+  let depth = 0
+  let end = -1
+  for (let i = start; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) { end = i; break }
+    }
+  }
+  assert.notEqual(end, -1, 'the startLive journal event closes')
+  const body = source.slice(start, end)
+  assert.match(body, /whitelistEntries: entriesAtStart/, 'the event carries the entry list')
+  assert.match(body, /whitelistCount: entriesAtStart\.length/, 'and counts the list it carries')
+  assert.doesNotMatch(body, /whitelistCount: cfg\.attachWhitelist\.length/,
+    'it counts a list it does not carry, which is the defect #705 is about')
 })
 
 test('#540 a followed target the leg rejects reverts to the server the session settled on', async () => {

@@ -88,6 +88,23 @@ const ENTRY = /^\/api\/puppets\/([^/]+)\/whitelist\/([^/]+)$/
 
 const reason = error => String(error?.message ?? error).slice(0, 300)
 
+// One entry as a reader needs it: who, which uuid, and whether a Mojang session can
+// answer for it (#705). `refusalReason` is `uuidRefusalReason`'s own answer, null when
+// nothing about the entry's shape stops a login, so the verdict has one spelling here
+// and no second boolean that could disagree with it (#703).
+//
+// This sits beside `document`, never inside an entry. `document.players` is what the
+// next patch writes back to the ConfigMap, so a field stamped on an entry would travel
+// to the puppet's own reader as if the panel owned it.
+function judgedEntries (players) {
+  return (Array.isArray(players) ? players : []).map(entry => ({
+    uuid: normalizeUuid(entry?.uuid),
+    name: typeof entry?.name === 'string' && entry.name !== '' ? entry.name : null,
+    addedAt: typeof entry?.addedAt === 'string' && entry.addedAt !== '' ? entry.addedAt : null,
+    refusalReason: uuidRefusalReason(entry?.uuid, entry?.name)
+  }))
+}
+
 // The document as a document, or the reason it cannot be acted on. Strict on
 // purpose: see the header. Unknown keys are kept, because the panel rewrites one
 // entry of a file it did not author. Dropping a field it does not recognise would be
@@ -528,6 +545,10 @@ export function createWhitelistRoute ({
       key: WHITELIST_KEY,
       resourceVersion: current.resourceVersion ?? null,
       count: players.length,
+      // #705: the count names nobody. Two entries read as "2" whether they are both
+      // usable or one is a uuid Java derived from a name, and a lane like that admits
+      // one while reading like a whitelist (#677).
+      entries: judgedEntries(players),
       document: { ...current.document, version: WHITELIST_VERSION, players }
     }
   }
