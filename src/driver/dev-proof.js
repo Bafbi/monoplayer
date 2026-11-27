@@ -20,8 +20,7 @@
 // all and the journal's policy drops the move frame this proof needs.
 //
 // What it reads: `RECORDS`, the one list of the records a run is made of. The table in the
-// runbook is held to it by `test/driver/dev-proof.test.js`, in the case named "every record the
-// reader relies on is one the runbook names and a leg writes", so the two cannot drift.
+// runbook is held to it by `test/driver/dev-proof.test.js`, so the two cannot drift.
 //
 // The two halves. `claimsOf` answers the claims a machine can. The other half —
 // `OPERATOR_STEPS`, what a person must see — is never answered here: `witnessDocument` writes
@@ -86,7 +85,7 @@ export const RECORDS = Object.freeze([
   { name: 'spectateRefused', what: 'the Spectate click was refused, with the core\'s own reason' },
   { name: 'spectateViewRefused', what: 'the landing itself was refused, with the reason' },
   { name: 'spectateModeRefused', what: 'the spectator game mode pair could not be written to that socket' },
-  { name: 'puppetSkinSent', what: '#614\'s `player_info` naming the puppet went out, with the reason it was written. It is one frame for the whole body, with no channel, so this record is the entry for every socket at once' },
+  { name: 'puppetSkinSent', what: '#614\'s `player_info` went out: the body\'s entry, naming the puppet, or the driving client\'s own entry. `puppet` says which entry it is, `true` for the body\'s and `false` for the driver\'s own. `name` is the player it named, `signed` whether the puppet\'s textures property carried a signature, and `reason` what asked for it. It is one frame for the whole body, with no channel, so this record is the entry for every socket at once' },
   { name: 'puppetSkinKnown', what: 'the backend\'s own `player_info` carried a textures property for the puppet. Without it there is no entry to write, and a client drops the spawn that follows' },
   { name: 'puppetSkinWithheld', what: 'an entry the proxy would not write, because the profile it names has no UUID or no name' },
   { name: 'puppetSkinRefused', what: 'the entry could not be built, or the leg could not deliver it' },
