@@ -64,8 +64,13 @@
 // address, which is a URL or a served route rather than a file here; a token with a line
 // number whose head is not rooted at a repo directory; a token holding a placeholder, an
 // alternation or an ellipsis, because a shape is not a name; a name with no extension; and
-// every file outside these three surfaces, because the source files under test/, tools/ and
-// scripts/ are other guards' business and a sentence there is read by nothing.
+// every file outside these three surfaces, because no guard reads a comment in one. That is a
+// decision rather than a gap in the walk: #937 measured a test/ surface and declined it. Most of
+// what a test/ surface lands names no file in this tree, because a test comment quotes a shape, a
+// library's module or a route. The drift it does find is real, and that is the price the decision
+// accepts: a test file a rename deleted is named in one header as a path the sweep follows, and in
+// the next as a bare name it reads as a word. The UNREAD table below holds a row per tree that
+// holds prose.
 //
 // The counts are the coverage this file has. Run it with POINTER_COUNTS=1 to print them: the
 // comments swept, the pointers it follows, the pointer-shaped tokens it does not, and the
@@ -221,6 +226,7 @@ const proseTokens = block => [...block.text.replace(SPAN, whole => ' '.repeat(wh
 const GENERATED = {
   '.reports': 'a task run writes it, and git ignores it',
   '.scratch': 'a throwaway script or artifact lives there, and git ignores it',
+  '.git': 'the repository\'s own store, and a reader follows no pointer into it',
   '.secrets': 'the operator links the account custody there, and git never holds it',
   node_modules: 'pnpm resolves a package name there, and a fresh checkout has none'
 }
@@ -240,7 +246,7 @@ const shaped = token => token.includes('/') || BARE_FILE.test(token)
 const PATTERN = /[<>*|[\]\u2026]|\$\(|\.\.\./
 
 // The directories at the repo root a path can start with, read from the tree so a new
-// top-level directory needs no edit here. The generated four are excluded first, because a run
+// top-level directory needs no edit here. The generated trees are excluded first, because a run
 // may leave one behind and none of them is a reader's to follow. hasOwn and not `in`, because
 // `in` reaches Object.prototype: a token named constructor is not a generated path.
 const TOPS = new Set(fs.readdirSync(ROOT)
@@ -498,6 +504,55 @@ test('every entry in NOT_PATHS still names a token a surface writes, says why, a
   assert.deepEqual(built, [], 'NOT_PATHS says ' + built.join(', ') + ' is not a path, and the tree now holds ' +
     'it. This file asks the tree before an entry, so the row hides the pointer: drop the row and the ' +
     'sentence that argued for it, or move the row to the file the path now is')
+})
+
+// Every tree this file walks past that holds prose, and the reason no surface reads a comment in
+// one (#937). It is a table with a case rather than a sentence, because a sentence about an
+// absent reader is what the exclusion was, and it went false within two tickets of being written.
+// A row is a directory the walk stops short of: a comment there is read by the person changing the
+// file, or by the guard that reads that file for the one fact it owns, and by no sweep. The row
+// for test/ carries the decision and the header above carries its reason. The arms below are what
+// the table is for: a row whose tree is gone, a row a surface now walks, and a reason too short to
+// be one.
+const UNREAD = {
+  test: { why: 'measured and declined (#937): most of what a surface there lands names no file in ' +
+    'this tree, and the comment beside a test is read by whoever edits that test' },
+  tools: { why: 'a tool is a program a person runs by hand. A guard that reads one reads a line of ' +
+    'it as text for the fact it owns, and a comment there explains a flag to whoever typed the command' },
+  scripts: { why: 'a shell script is run by a task, and its header is that task\'s runbook. A guard ' +
+    'reads the one line it owns, and no sweep follows a pointer in a comment there' },
+  docs: { why: 'a page is prose a person reads. The pages a guard reads are read whole for the fact ' +
+    'they own (#870), and a pointer inside one is a reader\'s' },
+  testdata: { why: 'a verdict page is dated evidence. The guards that read one read it whole, and ' +
+    'what the page points at is the run that wrote it' },
+  vendor: { why: 'the vendored 26.2 protocol tree belongs to the library, and this repo edits none of ' +
+    'it. A path in its README is that package\'s' },
+  '.github': { why: 'a workflow is asserted by the guard that reads its jobs, and CI reads the YAML. ' +
+    'A comment in one is a note to whoever edits the workflow' }
+}
+
+test('every tree this file walks past says why no surface reads a comment in it', () => {
+  const walked = new Set(surfaces().map(({ file }) => file.split('/')[0]))
+  const rows = Object.keys(UNREAD).sort()
+  const nowRead = rows.filter(dir => walked.has(dir))
+  assert.deepEqual(nowRead, [], 'UNREAD says no surface reads a comment in ' + nowRead.join(', ') +
+    ', and one walks it: the table and the surface set move in one commit (#937)')
+  const gone = rows.filter(dir => !fs.existsSync(path.join(ROOT, dir)))
+  assert.deepEqual(gone, [], 'UNREAD names ' + gone.join(', ') + ', and this tree holds no such ' +
+    'directory. Drop the row, or name the tree that replaced it')
+  // The extensions that carry a prose comment. A tree of .json, .jsonl or .toml holds data, so
+  // .gate-b is a tree with no row: a run wrote its report there, and a reader follows nothing in it.
+  const SILENT = /\.(?:js|mjs|cjs|md|ya?ml|sh)$/
+  const trees = fs.readdirSync(ROOT, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && !Object.hasOwn(GENERATED, entry.name) && !walked.has(entry.name))
+    .filter(entry => tree(entry.name).some(name => SILENT.test(name)))
+    .map(entry => entry.name)
+  const silent = trees.filter(dir => !Object.hasOwn(UNREAD, dir))
+  assert.deepEqual(silent, [], 'this file walks past ' + silent.join(', ') + ', and UNREAD says why for ' +
+    'no such tree: say why no surface reads a comment there, or walk it (#937)')
+  const thin = rows.filter(dir => UNREAD[dir].why.length <= 40)
+  assert.deepEqual(thin, [], 'UNREAD gives ' + thin.join(', ') + ' a reason too short to say why. ' +
+    'A row without its reason is the sentence this table replaced')
 })
 
 // A failure has to land the reader on the pointer's own line, and a block may be a wrapped
