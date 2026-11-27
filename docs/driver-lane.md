@@ -199,6 +199,10 @@ did see, and which the list still declares expected absent, prints a
 record must not turn red because a fix landed, and the pass sentence names the step
 the witness did not see instead of claiming the operator saw every one.
 
+What fails is the change that leaves a declaration behind. `test/tooling/declared-gap.test.js`
+drives the code each `openUntil` is about, on `OPERATOR_STEPS` and on `UNMODDED_STEPS`, and
+refuses a declaration whose gap the code no longer shows.
+
 The age window exists because a report set sitting on disk proves nothing on its
 own: before 2026-11-09 the reports were committed, so the check passed without
 anything having run. Move the window with `--max-age-hours N`.
