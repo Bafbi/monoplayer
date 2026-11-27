@@ -79,7 +79,7 @@ The game server's own whitelist, which names the puppet and does not name the at
 _Avoid_: server whitelist, whitelist
 
 **Attach check**:
-The two steps an attaching player passes before they drive a body. An online lane runs session verification first and the whitelist review second, because the front leg's library answers the sessionserver before the leg reviews the login. A test-double lane has no session to verify, so it runs the whitelist review alone.
+The two steps an attaching player passes before they drive a body: the whitelist review, which `src/core/identity.js` decides, and session verification, which `src/legs/live-front.js` inherits from `minecraft-protocol`. An online lane runs session verification first and the whitelist review second, because the front leg's library answers the sessionserver before the leg reviews the login. A test-double lane has no session to verify, so it runs the whitelist review alone.
 _Avoid_: attach gate, auth gate, login gate
 
 **Whitelist review**:
