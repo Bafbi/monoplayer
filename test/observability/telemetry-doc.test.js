@@ -15,7 +15,7 @@ import { OVERFLOW_KEY, UNKNOWN_KEY } from '../../src/core/bounded-counter.js'
 import { PICK_VERBS } from '../../src/core/picker.js'
 import { DENY_REASONS } from '../../src/custody/attach.js'
 import { pickerClaimOutcome } from '../../src/service/start-live.js'
-import { countedSites, endSites, functionBody } from '../support/source-scan.js'
+import { blockAfter, countedSites, endSites, functionBody, topLevelNames } from '../support/source-scan.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DOC = path.join(ROOT, 'docs', 'telemetry.md')
@@ -96,30 +96,11 @@ test('the doc calls the exporter temporality by its OTLP name', async () => {
 // than the duplicate it removed. The doc would describe a fact nobody reports.
 // One direction only: the table documents the fields a reader needs, and it never
 // claimed to be the whole record.
-// Read the labels the `log('startLive', {...})` call writes, by brace matching and
-// not by line shape. A nested object then contributes its own name and no inner key.
+// Read the labels the `log('startLive', {...})` call writes: the block by brace matching, then
+// the lines at its own depth, so a nested object contributes its own name and no inner key.
 function recordLabels (source) {
-  const open = source.indexOf("log('startLive', {")
-  assert.notEqual(open, -1, 'src/service/start-live.js writes a startLive record')
-  const from = source.indexOf('{', open)
-  let depth = 0
-  let end = -1
-  for (let i = from; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) { end = i; break }
-    }
-  }
-  assert.notEqual(end, -1, 'the startLive record closes')
-  const labels = new Set()
-  let inner = 0
-  for (const line of source.slice(from + 1, end).split('\n')) {
-    const key = inner === 0 ? line.match(/^\s*([A-Za-z_$][\w$]*)\s*:/) : null
-    if (key) labels.add(key[1])
-    inner += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length
-  }
-  return labels
+  return new Set(topLevelNames(blockAfter(source, "log('startLive', {",
+    'the startLive record in src/service/start-live.js').body))
 }
 
 // Read the fields the doc's `startLive` rows name. A dotted name such as

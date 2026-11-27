@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { blockAfter } from '../support/source-scan.js'
 import { tempRoot } from '../support/temp.js'
 
 import {
@@ -542,20 +543,7 @@ test('#705 the journal record carries the entries beside the count, and does not
   // different backends. The call is read by brace matching, the way that guard reads it,
   // because no test drives startLive() itself: it opens sockets and a custody volume.
   const source = fs.readFileSync(new URL('../../src/service/start-live.js', import.meta.url), 'utf8')
-  const open = source.indexOf("journal.event('startLive', {")
-  assert.notEqual(open, -1, 'src/service/start-live.js writes the startLive journal event')
-  const start = source.indexOf('{', open)
-  let depth = 0
-  let end = -1
-  for (let i = start; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) { end = i; break }
-    }
-  }
-  assert.notEqual(end, -1, 'the startLive journal event closes')
-  const body = source.slice(start, end)
+  const body = objectBody(source, "journal.event('startLive', {")
   assert.match(body, /whitelistEntries: entriesAtStart/, 'the event carries the entry list')
   assert.match(body, /whitelistCount: entriesAtStart\.length/, 'and counts the list it carries')
   assert.doesNotMatch(body, /whitelistCount: cfg\.attachWhitelist\.length/,
@@ -620,18 +608,7 @@ test('#746 the start record names each allowed server it offers, not only how ma
 // startLive(): it opens sockets and a custody volume, so what the record carries is read
 // off the source, the way #705's journal half is (#705 is the pair this one copies).
 function objectBody (source, marker) {
-  const at = source.indexOf(marker)
-  assert.notEqual(at, -1, 'src/service/start-live.js holds ' + marker)
-  const from = source.indexOf('{', at)
-  let depth = 0
-  for (let i = from; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(from, i)
-    }
-  }
-  assert.fail(marker + ' closes')
+  return blockAfter(source, marker, marker + ' in src/service/start-live.js').body
 }
 
 test('#746 both start records carry the addresses beside the count, and the page names the list', () => {
