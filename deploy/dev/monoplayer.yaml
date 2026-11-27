@@ -187,7 +187,7 @@ data:
   # `mise run dev:up` is the only command in the tree that writes this key, and it judges
   # every list it writes with `tools/whitelist.mjs`: it leaves out an entry no login can
   # use (a name-derived UUID is the loopback rig's) and names each one it dropped. The
-  # order it decides the list in is deploy/dev/README.md, "The attach whitelist" (#677).
+  # order it decides the list in is "The attach whitelist" in `deploy/dev/README.md` (#677).
   # Every apply writes this document, so an edit here reaches the lane on the next
   # `mise run dev:up`. It is not a secret. `mise run dev:down` deletes this ConfigMap,
   # and the list with it.

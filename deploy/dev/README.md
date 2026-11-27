@@ -566,12 +566,18 @@ An empty whitelist denies every login. It does not stop the lane: `--start` logs
 The whitelist says who may control the proxy, not a token, and the dev lane
 serves the same human.
 
-Every entry has to be a UUID a Mojang session answers for. `uuidRefusalReason` in
-`src/custody/util.js` is that rule, and its docstring says what the answer settles and what
-it cannot. A lane with no authentication mints a
-UUID from a name instead (`offlineUuid`, `src/legs/offline-identity.js`), which is the
-shape the loopback rig's own controller list carries, for the names its bots use. No
-account owns one.
+Every entry has to be a UUID a Mojang session answers for, and only a login settles that: the
+front asks Mojang about each one before it shows a picker (`src/legs/live-front.js`), and the
+core's `reviewLoginStart` (`src/core/identity.js`) compares the uuid a login claims against
+this list. `uuidRefusalReason` in `src/custody/util.js` is a narrower check, and it runs
+before any login: the shape rule an entry is held to. It refuses a uuid whose version Mojang
+never issues, and one whose name hashes to its own value, and it admits a mistyped uuid of
+the right shape because nothing there asks Mojang. Its docstring says what that answer
+settles and what it cannot.
+
+A lane with no authentication mints a UUID from a name instead (`offlineUuid`,
+`src/legs/offline-identity.js`), which is the shape the loopback rig's own controller list
+carries, for the names its bots use. No account owns one.
 
 `mise run dev:up` judges every list it writes: the document in the manifest, the list
 the lane held, and the one it copies from the live lane. It leaves out every entry no
