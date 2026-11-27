@@ -885,10 +885,8 @@ function createFrontLeg ({
     throw new TypeError('onPickerVerb must be null or a function')
   }
 
-  // #824: each call-in below holds one handler, and its setter goes through `fillCallIn`.
-  // A second registration is refused in the call-in's own name rather than replacing the
-  // first in silence. src/legs/call-in-handler.js holds the rule, and
-  // src/service/wire-leg-to-core.js says which registrations reach a leg this core wires.
+  // #824: each call-in below holds one handler, and a second registration is refused rather
+  // than replacing the first in silence. src/legs/call-in-handler.js says why.
   const fillCallIn = createCallInHandlers()
 
   let loginStartHandler = null // core check 1 call-in (processLoginStart)

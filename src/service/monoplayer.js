@@ -51,7 +51,7 @@
 //
 // #824: a call-in holds one handler, and a lane's hand registration on a leg it hands the
 // core is refused at this start() rather than replaced in silence. The rule is
-// src/service/wire-leg-to-core.js's.
+// src/legs/call-in-handler.js's.
 
 import { bumpBounded } from '../core/bounded-counter.js'
 import { WARM_MARKER } from '../core/state-cache.js'

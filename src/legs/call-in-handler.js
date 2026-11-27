@@ -1,10 +1,10 @@
 // #824: a leg's call-in holds one handler, and the second registration is refused.
 //
 // A real leg kept each call-in in a closure variable with a plain setter, so a second
-// registration replaced the first with nothing said. Three registrations can reach one
-// call-in, and src/service/wire-leg-to-core.js says which is which and what each one costs.
-// The middle of the three was the worst: the core's own registration replaced a lane's, and
-// no report could show it.
+// registration replaced the first with nothing said. src/service/wire-leg-to-core.js says
+// which registrations reach one call-in and what each one costs. The worst of them was the
+// core's own, registered in its start() over a lane's. No report could show that: a report
+// measures a leg's shape, and a name present is a name carried.
 //
 // So each leg keeps one handler per call-in, and every setter goes through this. The first
 // registration stands. A second is refused in the call-in's own name, which is what makes a
@@ -12,7 +12,7 @@
 //
 // A repeat of the same function is refused too. A registration is a write, not a call, and
 // a leg that answers the second write with silence is the leg this ticket found. A value
-// that is not a function is refused as well: seven of the front leg's setters used to take
+// that is not a function is refused as well. Seven of the front leg's setters used to take
 // `null` and clear the call-in, and a clear is one more way to move a handler the core
 // owns.
 export function createCallInHandlers () {

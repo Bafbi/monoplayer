@@ -75,7 +75,7 @@ test('#824 a registration made before the core\'s start is refused at that start
 
   assert.throws(() => wireLegToCore({ core: {}, leg, table: FRONT_LEG_CALL_INS }),
     /setServerboundHandler already holds a handler/,
-    'the core\'s registration is the second one, so the core\'s start() is where it is said: before #824 the core assigned over the lane in silence and the lane\'s call-in ran nothing')
+    'the core\'s registration is the second one, so the core\'s start() is where it is said. Before #824 the core assigned over the lane in silence, and the lane\'s call-in ran nothing')
 })
 
 test('#824 a registration made after the start is refused, so a whole wiring is the core\'s handlers', () => {
@@ -85,7 +85,7 @@ test('#824 a registration made after the start is refused, so a whole wiring is 
     'the report reads whole: every call-in the table declares is a name this leg carries')
 
   assert.throws(() => leg.setCoreAttach(second), /setCoreAttach already holds a handler/,
-    'and the handler behind that name is the core\'s, because a lane cannot install its own after the start: #824 is a report that named a whole wiring while the handler was somebody else\'s')
+    'and the handler behind that name is the core\'s, because a lane cannot install its own after the start. #824 is a report that named a whole wiring while the handler was somebody else\'s')
 })
 
 test('#824 the backend leg keeps one handler per call-in in the same words', () => {
