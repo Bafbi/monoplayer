@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 
 import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { envOverlay } from '../../src/service/start-live.js'
-import { blockSpan } from '../support/source-scan.js'
+import { blockAfter } from '../support/source-scan.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8')
@@ -77,9 +77,8 @@ function headerRows (text) {
 // The block is found by its braces, so a nested object inside the call stays inside
 // it and no key falls out of the comparison.
 function wire (text) {
-  const start = text.indexOf('createControlDocument({')
-  assert.notEqual(start, -1, 'src/service/start-live.js composes the control document')
-  return [...blockSpan(text, start, 'the createControlDocument call in src/service/start-live.js').body
+  return [...blockAfter(text, 'createControlDocument({',
+    'the createControlDocument call in src/service/start-live.js').body
     .matchAll(/^\s*([A-Za-z]+):\s*cfg\.([A-Za-z.]+)/gm)]
     .map(([, option, key]) => ({ option, key }))
 }

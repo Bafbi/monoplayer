@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { pickSlug } from '../../src/core/picker.js'
 import { synthAttach } from '../../src/core/join-synth.js'
 import { makeCore } from '../support/harness.js'
-import { blockSpan, topLevelNames } from '../support/source-scan.js'
+import { blockAfter, topLevelNames } from '../support/source-scan.js'
 
 // The body a claim dials: a server that is not the lane's configured backend, so
 // "the body this lane serves" and "the body it was configured with" stay apart.
@@ -852,9 +852,8 @@ test('#737 the attach record and the landing record count the same two things th
 // telemetry row; this run's fence keeps its work in test/service/.
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 function landingLabels (source) {
-  const open = source.indexOf("log('spectateView', {")
-  assert.notEqual(open, -1, 'src/service/monoplayer.js writes the landing record')
-  return topLevelNames(blockSpan(source, open, 'the spectateView record in src/service/monoplayer.js').body)
+  return topLevelNames(blockAfter(source, "log('spectateView', {",
+    'the spectateView record in src/service/monoplayer.js').body)
 }
 
 test('#737 the page names every field the landing record writes, and which count is which', () => {

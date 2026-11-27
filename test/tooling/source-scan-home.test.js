@@ -1,25 +1,32 @@
 // A brace walk under test/ lives in test/support/source-scan.js, and nowhere else (#847).
 //
-// Seven guards found a block the same way: match a brace, walk to its partner. Each carried
-// its own copy. A copy that stops matching the file it reads keeps passing, and two walks
-// over one file disagree the day one of them learns a shape the other does not, with nothing
-// red to say so. #710's rule is one step further back: a source scan proves a branch is
-// mentioned and never that it runs, and a scan whose subject moved proves less than that.
+// Guards across test/ found a block the same way: match a brace, walk to its partner. Each
+// carried its own copy. A copy that stops matching the file it reads keeps passing, and two walks over
+// one file disagree the day one of them learns a shape the other does not, with nothing red to
+// say so. #710's rule is one step further back: a source scan proves a branch is mentioned and
+// never that it runs, and a scan whose subject moved proves less than that.
 //
 // A copy is not greppable by name, which is what makes it cheap to add. So this reads the
-// shape: an opening brace inside a string or a regex literal, and a depth counter moved
-// beside it. Both halves are needed. The counter alone is a loop over a list — test/panel's
-// FakeElement walks a stack of open tags that way — and the literal alone is a regex or a
-// sentence that quotes a brace.
+// shape: a line that spells the brace it compares against, and a name moved by one beside it.
+// The name is deliberately not read — a copy renames its counter first — and half a shape is
+// not enough either way. A counter alone is a loop over a list, and a brace alone is a regex
+// or a sentence that quotes one.
 //
 // The second case reads the shared module's own export list instead: a guard that declares a
 // function the module already exports is the same copy under a name this cannot spell in
 // advance, and a scan the module gains is covered here without an edit.
 //
-// The walk reads text, so it has two blind spots. A comment that explains the shape does not
-// count against it, because the lines are filtered first. A copy that moves a counter this
-// does not name is not read; test/support/source-scan.js is where it belongs anyway, and the
-// case that reads the export list catches the half a name can catch.
+// Its own two helpers, the recursive file walk and the comment filter, are copies of
+// test/tooling/temp-root-teardown.test.js's. They stay for now: hoisting them means editing a
+// guard this ticket does not own, neither is a source scan, and #862 is the ticket that gives
+// them one home.
+//
+// The walk reads text, so it has blind spots, and they are the price of a detector that reads
+// a line at a time. A brace bound to a name before the comparison is read too. A walk is not
+// read when its two halves sit on different lines, when it counts a block's depth some other
+// way (a stack it pushes and pops), or when it reads a language whose braces are not the ones
+// this spells. test/support/source-scan.js is where such a walk belongs anyway; this is the
+// net, not the rule.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -31,9 +38,9 @@ const SELF = fileURLToPath(import.meta.url)
 const TEST_DIR = path.join(ROOT, 'test')
 const HOME = path.join(TEST_DIR, 'support', 'source-scan.js')
 
-// Recursive, so a file added in a new area is covered without editing this one, and every
-// .js rather than only the .test.js ones: a shared helper is exactly where a second walk
-// would hide.
+// Recursive, so a file added in a new area is covered without editing this one, and every .js
+// rather than only the .test.js ones: a shared helper is exactly where a second walk would
+// hide.
 function sources (dir) {
   const found = []
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -46,43 +53,49 @@ function sources (dir) {
 
 // A comment that names the shape is not the shape. test/tooling/temp-root-teardown.test.js
 // filters its lines the same way, and for the same reason: a sentence explaining a rule must
-// not be the thing that fails it. Blanked rather than dropped, so a line number is still the
-// line a reader opens.
+// not be the thing that fails it.
 const isCode = line => !/^\s*(\/\/|\*|\/\*)/.test(line)
 
-// An opening brace inside a string or a regex literal, and a depth counter moved by one. The
-// window crosses the comment a counter usually carries and stays inside one function.
-const BRACE = /(['"`])[^'"`\n]*\{[^'"`\n]*\1|\\\{/
-const COUNTER = /(?:depth|level|inner|nest)\s*(?:\+= 1|-= 1|\+\+|--)/
-const WINDOW = 400
+// The brace a walk compares against, spelled three ways: alone in a string (`'{'`), as the
+// bracket set a mixed walk tests (`'([{'`), and inside a regex (`/\{/g`, for the walk that
+// counts one line's depth).
+const BRACE = /(['"`])\{\1|(['"`])\(\[\{\2|\\\{/
+
+// A name a file binds to an opening brace before it compares against it. A copy that hoists the
+// brace into a constant is the same walk, and its comparison line no longer spells the brace.
+const BINDS = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"`])\{\2/
+
+// Any name moved by an assignment or an increment: the counter, whatever it is called, and
+// however it is spelled — a depth counted per line is added to, not incremented by one.
+const MOVES = /[A-Za-z_$][\w$]*\s*(?:\+=|-=)|\+\+|--/
 
 // Read the tree once, so a case cannot pass on a tree a later case changed.
 const FILES = sources(TEST_DIR)
 
 const relativeOf = file => path.relative(ROOT, file).split(path.sep).join('/')
 
-function walks () {
-  const found = []
-  for (const file of FILES) {
-    // Two exemptions, and both are the rule rather than an exception to it: this file names
-    // the shape it forbids, and the home is where the walk belongs.
-    if (file === SELF || file === HOME) continue
-    const lines = fs.readFileSync(file, 'utf8').split('\n')
-    const code = lines.map(line => isCode(line) ? line : '').join('\n')
-    // A fresh global regex per file: matchAll reads lastIndex off the pattern it is given,
-    // so a shared one would start each file where the last case left it.
-    for (const move of code.matchAll(new RegExp(COUNTER.source, 'g'))) {
-      const near = code.slice(Math.max(0, move.index - WINDOW), move.index + WINDOW)
-      if (!BRACE.test(near)) continue
-      const line = code.slice(0, move.index).split('\n').length
-      found.push(relativeOf(file) + ':' + line + ': ' + lines[line - 1].trim())
-    }
+// The lines of one file that walk a block of their own, or none. Lifted out of the tree walk so
+// a case can hand it a known copy and prove the detector is not vacuous.
+function offendersIn (text) {
+  const lines = text.split('\n')
+  const bound = []
+  for (const line of lines) {
+    const bind = line.match(BINDS)
+    if (bind !== null && !bound.includes(bind[1])) bound.push(bind[1])
   }
+  const found = []
+  lines.forEach((line, index) => {
+    if (!isCode(line) || !MOVES.test(line)) return
+    const compared = bound.some(name =>
+      new RegExp('(?:===|!==|==|!=)\\s*' + name + '\\b|\\b' + name + '\\s*[=!]==?').test(line))
+    if (!BRACE.test(line) && !compared) return
+    found.push(index + 1)
+  })
   return found
 }
 
-// The message is the product: it is what the next author acts on. It is built in one place so
-// a case can render one without a tree that already offends.
+// The message is the product: it is what the next author acts on. It is built in one place so a
+// case can render one without a tree that already offends.
 const refusal = offenders =>
   'a file under test/ walks a block of its own, so two walks over one source file can disagree ' +
   'the day one of them learns a shape the other does not. Read it with test/support/source-scan.js, ' +
@@ -100,13 +113,51 @@ test('the guard found the tree it reads', () => {
 })
 
 test('the home still holds the walk, so its exemption covers a walk and not a file', () => {
-  const home = fs.readFileSync(HOME, 'utf8').split('\n').map(line => isCode(line) ? line : '').join('\n')
-  assert.match(home, COUNTER, 'test/support/source-scan.js holds the depth counter every guard reads')
-  assert.ok(BRACE.test(home), 'and the quoted brace it walks to a partner')
+  assert.deepEqual(offendersIn(fs.readFileSync(HOME, 'utf8')).length > 0, true,
+    'test/support/source-scan.js holds the walk every guard reads, so its exemption covers a walk and not a file')
+})
+
+// The detector is a shape and not a name, so a case proves it fires on a copy that no longer
+// says any of the words the tree used to spell.
+test('the walk reads a brace walk whatever its counter is called', () => {
+  const copy = [
+    'function takeBody (text, at) {',
+    '  let brace = 0',
+    '  for (let i = at; i < text.length; i += 1) {',
+    "    if (text[i] === '{') brace += 1",
+    "    else if (text[i] === '}') { brace -= 1; if (brace === 0) return text.slice(at, i) }",
+    '  }',
+    '}'
+  ].join('\n')
+  assert.deepEqual(offendersIn(copy), [4], 'the counter named brace is read: ' + JSON.stringify(offendersIn(copy)))
+
+  const mixed = "if ('([{'.includes(c)) level += 1"
+  assert.deepEqual(offendersIn(mixed), [1], 'the bracket set a mixed walk tests is read')
+
+  const counted = String.raw`inner += (line.match(/\{/g) ?? []).length`
+  assert.deepEqual(offendersIn(counted), [1], 'a line whose depth comes from a regex is read')
+
+  const hoisted = ["const OPEN = '{'", 'let n = 0', 'for (const c of text) if (c === OPEN) n += 1'].join('\n')
+  assert.deepEqual(offendersIn(hoisted), [3], 'a brace bound to a name first is read at its comparison')
+
+  const loop = 'for (let i = 0; i < 5; i++) out.push({ x: i })'
+  assert.deepEqual(offendersIn(loop), [], 'a loop over a list is not a walk')
+
+  const sentence = "// if (source[i] === '{') depth += 1"
+  assert.deepEqual(offendersIn(sentence), [], 'a comment that explains the shape is not the shape')
 })
 
 test('no file under test/ walks a block of its own', () => {
-  const offenders = walks()
+  const offenders = []
+  for (const file of FILES) {
+    // Two exemptions, and both are the rule rather than an exception to it: this file names the
+    // shape it forbids, and the home is where the walk belongs.
+    if (file === SELF || file === HOME) continue
+    const lines = fs.readFileSync(file, 'utf8').split('\n')
+    for (const line of offendersIn(lines.join('\n'))) {
+      offenders.push(relativeOf(file) + ':' + line + ': ' + lines[line - 1].trim())
+    }
+  }
   assert.deepEqual(offenders, [], refusal(offenders))
 })
 
@@ -117,11 +168,11 @@ test('the message names the file, the line, the counter, and the home to use', (
   assert.match(text, /test\/support\/source-scan\.js/, 'the home to use instead: ' + text)
 })
 
-// The scans the shared module publishes, read from the module rather than written out here,
-// the way test/tooling/product-core-map.test.js reads every name it holds a map for.
+// The scans the shared module publishes, read from the module rather than written out here, the
+// way test/tooling/product-core-map.test.js reads every name it holds a map for.
 const SHARED = Object.keys(await import(pathToFileURL(HOME).href)).sort()
 
-test('no guard declares, or renames, a scan the shared module already exports', () => {
+test('no guard redeclares a scan the shared module exports', () => {
   assert.ok(SHARED.length > 0, 'test/support/source-scan.js exports the scans a guard imports')
 
   const declared = []
@@ -129,7 +180,8 @@ test('no guard declares, or renames, a scan the shared module already exports', 
     if (file === HOME) continue
     const text = fs.readFileSync(file, 'utf8')
     for (const name of SHARED) {
-      const shapes = ['function ' + name + ' \\(', 'const ' + name + ' =']
+      const shapes = ['(?:export\\s+)?(?:async\\s+)?function ' + name + '\\s*\\(',
+        '(?:const|let|var) ' + name + '\\s*=']
       if (!shapes.some(shape => new RegExp('^\\s*' + shape, 'm').test(text))) continue
       declared.push(relativeOf(file) + ' declares ' + name)
     }
@@ -139,4 +191,3 @@ test('no guard declares, or renames, a scan the shared module already exports', 
     '\n' + relativeOf(HOME) + ' already exports these scans (' + SHARED.join(', ') +
     '). Import it, so a shape one copy learns is a shape every guard reads')
 })
-

@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { blockSpan } from '../support/source-scan.js'
+import { blockAfter } from '../support/source-scan.js'
 import { tempRoot } from '../support/temp.js'
 
 import {
@@ -608,9 +608,7 @@ test('#746 the start record names each allowed server it offers, not only how ma
 // startLive(): it opens sockets and a custody volume, so what the record carries is read
 // off the source, the way #705's journal half is (#705 is the pair this one copies).
 function objectBody (source, marker) {
-  const at = source.indexOf(marker)
-  assert.notEqual(at, -1, 'src/service/start-live.js holds ' + marker)
-  return blockSpan(source, at, marker + ' in src/service/start-live.js').body
+  return blockAfter(source, marker, marker + ' in src/service/start-live.js').body
 }
 
 test('#746 both start records carry the addresses beside the count, and the page names the list', () => {

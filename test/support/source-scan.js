@@ -1,7 +1,7 @@
-// The source scans the guard tests share (#764, #847): every counted refusal site, one
-// declaration's body, every end call's arguments, every call of a name, and the names a
-// block's own depth holds. A guard that reads a source file as text imports one of these,
-// and every walk they are built on is private to this module.
+// The source scans the guard tests share (#764, #847): a block, a declaration, a call, and the
+// names a block's own depth holds. A guard that reads a source file as text imports one of
+// these, and every walk they are built on is private to this module. The exports below are the
+// list.
 //
 // One copy, because a scan that stops matching the file it reads keeps passing. #710's
 // rule is that a source scan proves a branch is mentioned and never that it runs; a scan
@@ -11,10 +11,11 @@
 // declared in any other file under test/ fails there, read by its shape rather than by a
 // name it could spell in advance.
 //
-// A scan that cannot read what it was asked for throws, naming the byte or the thing it
-// looked for, rather than returning a partial read: a case that passes on an empty list is
-// the defect these guards exist to catch. test/tooling/manifest-reader.js states the same
-// policy for the manifests it reads.
+// A scan that reads a block or a call throws, naming the byte or the thing it looked for,
+// rather than returning a partial read: a case that passes on an empty list is the defect these
+// guards exist to catch. topLevelNames is the one export that does not throw, because a literal
+// can be partial by nature, and its own comment says what it does not read.
+// test/tooling/manifest-reader.js states the same policy for the manifests it reads.
 //
 // Not a test file: `mise run test` runs `test/*/*.test.js`, so nothing here runs on its own.
 
@@ -34,6 +35,15 @@ export function blockSpan (source, after, what) {
     }
   }
   throw new Error('source scan: the block of ' + what + ' never closes')
+}
+
+// The block a marker opens: the first block whose brace is at or after the marker. A marker the
+// source does not hold throws, naming it, so a case cannot read a file's first brace by
+// accident and then pass.
+export function blockAfter (source, marker, what) {
+  const at = source.indexOf(marker)
+  if (at === -1) throw new Error('source scan: ' + what + ' is not in the source')
+  return blockSpan(source, at, what)
 }
 
 // The names a block's own depth holds, in source order: a line at that depth that opens
@@ -102,6 +112,10 @@ export function functionBody (source, name) {
 // arguments open, where the call closes, and the arguments split at the commas that sit
 // outside brackets, braces and strings. The name is matched as a whole word, so a scan for
 // `log(` does not read `slog(`.
+//
+// The extent is read by parens alone, so a `)` inside a string argument ends the call early and
+// the arguments after it are not read. That is inherited from the scans this replaces, and no
+// case reads a call whose string holds one.
 export function callSpans (source, name) {
   const sites = []
   for (const found of source.matchAll(new RegExp('\\b' + name + '\\(', 'g'))) {
