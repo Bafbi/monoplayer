@@ -18,13 +18,15 @@ import { createPanelHandler } from '../../src/panel/server.js'
 import { mergePatchBody, ReadRefused, WriteRefused } from '../../src/panel/kube.js'
 import { createControlDocument } from '../../src/service/control.js'
 import { ALLOWED_KEY } from '../../src/panel/routes/allowed.js'
+import { pickTarget } from '../../src/core/picker.js'
 
 const CONTROL = 'monoplayer-control'
 const SEED = 'monoplayer-config'
 const PAPER = { host: 'paper.example.net', port: 25565 }
 const SKY = { host: 'sky.example.net', port: 25565 }
 // #339: the same server with the root dot on its host. A row may be written this way by
-// hand; the add form will not produce it, because `isTargetHost` refuses a trailing dot.
+// hand, and since #890 the add form accepts it too: the host rule is the service's own
+// (`hostRefusal`), and a host a dial can take is a host this route takes.
 const DOTTED = { host: PAPER.host + '.', port: PAPER.port }
 const NOW = Date.parse('2026-11-23T12:00:00.000Z')
 
@@ -316,26 +318,57 @@ test('a server that is not in the list is a 404, and nothing is written', async 
   }
 })
 
-test('an address the dialog could not name is refused before it is stored', async () => {
+// #890: the host rule is the service's own (`hostRefusal`, #891), so this case lists what that
+// rule refuses and nothing else. Two shapes this route used to refuse are accepted now, and both
+// are honest. A bare single label (`paper`) is a name the pod's search domains can resolve. And an
+// IPv4 shape with an octet out of range is a host `hostRefusal` cannot tell from a numeric
+// hostname, which DNS allows. The octet guard was this route's own third rule, and a route that
+// validates its own way is what #890 removes: a typo it would have caught now fails at the socket
+// under the row's own name, as a wrong name always has.
+test('an address no dial can take is refused before it is stored, in the words that say which half', async () => {
   const rig = await panel()
   try {
-    for (const body of [
-      { host: 'https://paper.example.net', port: 25565 },
-      { host: 'paper.example.net:25565', port: 25565 },
-      { host: 'paper', port: 25565 },
-      { host: 'paper.example.net', port: '25565' },
-      { host: 'paper.example.net' },
-      { port: 25565 },
-      { host: '', port: 25565 },
-      // Four dot-separated groups is not an address: an octet has a range.
-      { host: '999.999.999.999', port: 25565 },
-      { host: '10.0.0.256', port: 25565 }
+    for (const [body, said] of [
+      [{ host: 'https://paper.example.net', port: 25565 }, /^host must be a host: a DNS name or an IP address, with no scheme and no path, got "https:\/\/paper\.example\.net"/],
+      // A port inside the host: the one colon that separates an address from its port has one
+      // home, and it is this route's split. #891 names the rule the operator broke.
+      [{ host: 'paper.example.net:25565', port: 25565 }, /^host must be a host with no port/],
+      // The page trims what it splits, so this arrives from curl, which is where a paste of two
+      // values lands.
+      [{ host: ' paper.example.net', port: 25565 }, /^host must be a host with no surrounding space/],
+      [{ host: '[2001:db8::1', port: 25565 }, /^host must be a host with no brackets/],
+      // The document carries a port as a number, so text is refused rather than coerced.
+      [{ host: 'paper.example.net', port: '25565' }, /^port must be an integer from 1 to 65535, got "25565"/],
+      [{ host: 'paper.example.net' }, /^port must be an integer from 1 to 65535, got null/],
+      [{ port: 25565 }, /^host must be a host/],
+      [{ host: '', port: 25565 }, /^host must be a host/],
+      // A host that is not text names no host at all, and is not read as the string "5".
+      [{ host: 5, port: 25565 }, /^host must be a host/]
     ]) {
       const response = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', body)
       assert.equal(response.status, 400, JSON.stringify(body) + ' is refused')
-      assert.match(await response.text(), /host must be a hostname or an IPv4 address/)
+      assert.match((await response.text()).trim(), said, JSON.stringify(body) + ' names the half to fix')
     }
     assert.equal(rig.state.patches.length, 0)
+  } finally {
+    await rig.close()
+  }
+})
+
+test('#890 the two shapes this route stopped refusing are stored, and the port rule still holds', async () => {
+  const rig = await panel()
+  try {
+    // A single label is a host a dial can take, and the service's rule says so.
+    const label = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', { host: 'paper', port: 25565 })
+    assert.equal(label.status, 200)
+
+    // Four dot-separated groups is still one colon-free host to `hostRefusal`, and a row a dial
+    // cannot reach fails at the socket under its own name. #891 is where that rule lives.
+    const typo = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', { host: '999.999.999.999', port: 25565 })
+    assert.equal(typo.status, 200)
+
+    const lane = rig.laneReads()
+    assert.deepEqual(lane.servers.map(server => server.host), [PAPER.host, 'paper', '999.999.999.999'])
   } finally {
     await rig.close()
   }
@@ -574,6 +607,103 @@ test('a control ConfigMap key that is not text is refused rather than replaced',
     assert.equal(response.status, 500)
     assert.match(await response.text(), /is not text/)
     assert.equal(made.state.patches.length, 0)
+  } finally {
+    await rig.close()
+  }
+})
+
+// #890: an IPv6 host holds more than one colon. Two defects met here, and IPv4 could see
+// neither, which is why three passes over this family left them standing: the route printed
+// `host + ':' + port`, which runs the port into the last group, and `isTargetHost` refused
+// every IPv6 host the operator sent, so there was no way to register one at all.
+const IPV6 = { host: '2001:db8::1', port: 25565 }
+// The bracketed form the picker writes and the service's records print (#815, #906).
+const IPV6_WRITTEN = '[2001:db8::1]:25565'
+// What the page's split of that address hands the route: the bracket comes with the host.
+const IPV6_SPLIT = '[' + IPV6.host + ']'
+
+test('#890 an IPv6 server is added, printed bracketed, read back by the lane, and removed', async () => {
+  const rig = await panel()
+  try {
+    const added = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers',
+      { host: IPV6_SPLIT, port: IPV6.port })
+    assert.equal(added.status, 200, 'an operator with an IPv6 server can register it')
+    const body = await added.json()
+    assert.equal(body.changed, true)
+    assert.equal(body.count, 2)
+    // The printed address is the bracketed spelling, because it is the one the host and the
+    // port split back out of. `2001:db8::1:25565` has no colon that separates the two.
+    assert.equal(body.server, IPV6_WRITTEN, 'the route prints the address the picker can read back')
+    assert.deepEqual(pickTarget(body.server), { host: IPV6.host, port: IPV6.port },
+      'and what the route prints, the picker reads as the address it dials')
+
+    // The document holds the host bare, which is the shape the service's own host rule takes:
+    // the bracket belongs to the printed address, not to the host (#891).
+    assert.deepEqual(body.servers.at(-1), { host: IPV6.host, port: IPV6.port, addedAt: new Date(NOW).toISOString() })
+    const lane = rig.laneReads()
+    assert.equal(lane.reason, null, 'the lane still reads the list the panel wrote')
+    assert.deepEqual(lane.servers.map(server => server.host), [PAPER.host, IPV6.host])
+
+    const audit = rig.lines().find(line => line.event === 'panelAllowedServerAdd')
+    assert.equal(audit.server, IPV6_WRITTEN, 'the audit line names the row the operator sees')
+
+    // The removal takes the address the row is called, which is the printed one.
+    const removed = await fetch(rig.url + '/api/puppets/glowsquidye/allowed-servers/' +
+      encodeURIComponent(IPV6_WRITTEN), { method: 'DELETE' })
+    assert.equal(removed.status, 200)
+    const gone = await removed.json()
+    assert.equal(gone.server, IPV6_WRITTEN)
+    assert.deepEqual(gone.removed, { host: IPV6.host, port: IPV6.port, addedAt: new Date(NOW).toISOString() },
+      'the removal drops the row the add wrote')
+    assert.deepEqual(rig.laneReads().servers.map(server => server.host), [PAPER.host])
+  } finally {
+    await rig.close()
+  }
+})
+
+test('#890 the bracketed and the unbracketed IPv6 host are one address, so one row', async () => {
+  const rig = await panel()
+  try {
+    const first = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers',
+      { host: IPV6_SPLIT, port: IPV6.port })
+    assert.equal(first.status, 200)
+
+    // A human copying the address out of a log types the bracket; a human reading `ip a`
+    // types the bare host. Both name the same server, so the second add rewrites nothing.
+    const second = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', IPV6)
+    assert.equal(second.status, 200, 'the bare spelling is a host a dial can take')
+    const body = await second.json()
+    assert.equal(body.changed, false, 'one address, one row, in either spelling')
+    assert.equal(body.count, 2)
+    assert.equal(rig.state.patches.length, 1, 'the second add wrote nothing')
+  } finally {
+    await rig.close()
+  }
+})
+
+test('#890 a refusal says which half of the address broke', async () => {
+  const rig = await panel()
+  try {
+    // The host carries a port of its own: the colon is not an IPv6 address, and the port has
+    // its own field. The sentence names the host, because that is the half to fix.
+    const host = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers',
+      { host: 'paper.example.net:25565', port: 25565 })
+    assert.equal(host.status, 400)
+    const hostSaid = (await host.text()).trim()
+    assert.match(hostSaid, /^host /, 'the refusal names the host')
+    assert.match(hostSaid, /no port/, 'and the rule it broke: #891 states it for a colon in a host')
+    assert.match(hostSaid, /"paper\.example\.net:25565"/, 'and the value as the operator wrote it')
+    assert.doesNotMatch(hostSaid, /^port /, 'the port was fine, and is not blamed')
+
+    const port = await post(rig.url + '/api/puppets/glowsquidye/allowed-servers', { host: 'paper.example.net', port: 70000 })
+    assert.equal(port.status, 400)
+    const portSaid = (await port.text()).trim()
+    assert.match(portSaid, /^port /, 'the refusal names the port')
+    assert.match(portSaid, /1 to 65535/)
+    assert.match(portSaid, /70000/, 'and the value that broke it')
+    assert.doesNotMatch(portSaid, /^host /, 'the host was fine, and is not blamed')
+
+    assert.equal(rig.state.patches.length, 0, 'neither refusal wrote a document')
   } finally {
     await rig.close()
   }

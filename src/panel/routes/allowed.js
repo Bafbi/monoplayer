@@ -48,8 +48,9 @@
 // This module holds no cluster knowledge. The client arrives injected, the same one
 // `routes/whitelist.js` patches a ConfigMap through and `routes/info.js` reads pods
 // through, so a test hands in a fake and the route cannot tell it from the cluster.
+import { addressName, pickTarget } from '../../core/picker.js'
 import { ALLOWED_SERVERS_VERSION, addressKey, parseAllowedServers } from '../../service/control.js'
-import { isTargetHost } from '../registry.js'
+import { addressSentence, hostRefusal, portRefusal } from '../../service/monoplayer.js'
 import { BODY_TOO_LARGE, readBody } from './body.js'
 import { configMapYaml } from './whitelist.js'
 
@@ -89,28 +90,56 @@ export function refusalText ({ reason: code, at = null }) {
   if (code === 'version') return 'the document is not version ' + ALLOWED_SERVERS_VERSION
   if (code === 'servers') return 'the document has no servers list'
   if (code === 'server') return where + ' is not an object'
-  if (code === 'host') return where + '.host must be a hostname or an IPv4 address'
+  // #890: the lane's own parser refuses an entry for naming no host at all, and for nothing
+  // else. This used to say a host had to be a hostname or an IPv4 address, which was never true
+  // of the file a lane reads: a bare IPv6 host is one it dials.
+  if (code === 'host') return where + '.host must name a host, and it is empty'
   if (code === 'port') return where + '.port must be an integer between 1 and 65535'
   if (code === 'duplicate') return where + ' names an address an earlier entry already names'
   return where + ' cannot be read: ' + String(code)
 }
 
-// A host and port as one address, which is what a picker row is called (#258). Display
-// only: the answer to "is this the same address as that one" is `addressKey` (#339).
+// A host and port as one address, which is what a picker row is called (#258) and what the
+// removal path takes. The spelling is the one rule (#815, #906): a host holding a colon keeps
+// its brackets, because `2001:db8::1:25565` has no colon that separates the host from the port.
+// Display and path only: the answer to "is this the same address as that one" is `addressKey`
+// (#339).
 export function addressOf (server) {
-  return server.host + ':' + server.port
+  return addressName(server.host, server.port)
 }
 
-// `host:port` as a dial target, or null. One rule for the two places an address
-// arrives from: a request body and a path segment.
+// The bracket a printed address carries, taken off the host. #891 refuses a bracket in a config
+// host because it belongs to the `host:port` a record prints, and this route is handed both
+// spellings of that record: the page's split of `[2001:db8::1]:25565` hands the bracket over
+// with the host, and an operator pasting from a log sends the same. Both are one address, so
+// both are one row.
+const unbracketed = value => {
+  const text = String(value ?? '')
+  return text.length > 2 && text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text
+}
+
+// `host:port` as a dial target, or the sentence that refused it. One rule for the two places an
+// address arrives from, and it is core's and the service's rather than this route's:
+// `pickTarget` reads what `addressName` writes, and `hostRefusal` is what `loadConfig` asks
+// of a host (#891). IPv4 hid both defects this replaces, because it holds one colon and it
+// matched the rule that stood here.
+//
+// `pickTarget` refuses a port outside 1 to 65535 itself, so `portRefusal` has nothing left to
+// add on this shape. The body sends the port on its own and asks it there.
 export function targetOf (raw) {
   const text = String(raw ?? '')
-  const colon = text.lastIndexOf(':')
-  if (colon <= 0 || colon === text.length - 1) return null
-  const host = text.slice(0, colon)
-  const port = Number(text.slice(colon + 1))
-  if (!isTargetHost(host) || !Number.isInteger(port) || port < 1 || port > 65535) return null
-  return { host, port }
+  const target = pickTarget(text)
+  if (target === null) {
+    return {
+      refusal: 'the address in the path must be host:port, with a host a dial can take and a port ' +
+        'from 1 to 65535, got ' + JSON.stringify(text)
+    }
+  }
+  const hostReason = hostRefusal(target.host)
+  if (hostReason !== null) {
+    return { refusal: addressSentence('the host in ' + JSON.stringify(text), hostReason, target.host) }
+  }
+  return { target }
 }
 
 const versionOf = configMap => {
@@ -329,28 +358,36 @@ export function createAllowedRoute ({
     } catch {
       return send(res, 400, TEXT, 'the request body must be JSON: {"host": "paper.example.net", "port": 25565}\n')
     }
-    // The types the document carries, not a coercion of them: a client that sends
-    // `"25565"` gets the refusal that says so, and the file the lane reads never
-    // holds a port as text.
-    const host = typeof wanted?.host === 'string' ? wanted.host.trim() : ''
+    // The two rules the service asks of a host and a port (#891), so a value this route accepts
+    // is a value a lane can dial, and a value it refuses is refused in the words the service
+    // uses. Two branches rather than one, because the answer says which half broke: the shape an
+    // IPv6 host has to be written in is something the operator learns from this sentence.
+    //
+    // The types the document carries, not a coercion of them: a port sent as `"25565"` is
+    // refused, so the file the lane reads never holds a port as text.
+    const host = unbracketed(typeof wanted?.host === 'string' ? wanted.host : '')
     const port = wanted?.port
-    if (!isTargetHost(host) || typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
-      log('panelAllowedInvalid', { puppet: puppet.name, host: host === '' ? null : host, port: Number.isInteger(port) ? port : null })
-      return send(res, 400, TEXT,
-        'host must be a hostname or an IPv4 address with no scheme and no port, and port must be an integer ' +
-        'between 1 and 65535\n')
+    const hostReason = hostRefusal(host)
+    if (hostReason !== null) {
+      log('panelAllowedInvalid', { puppet: puppet.name, field: 'host', value: host === '' ? null : host })
+      return send(res, 400, TEXT, addressSentence('host', hostReason, wanted?.host ?? null) + '\n')
+    }
+    const portReason = portRefusal(port)
+    if (portReason !== null) {
+      log('panelAllowedInvalid', { puppet: puppet.name, field: 'port', value: port ?? null })
+      return send(res, 400, TEXT, addressSentence('port', portReason, port ?? null) + '\n')
     }
 
     return write(req, res, { send }, puppet, { action: 'add', target: { host, port } })
   }
 
   async function remove (req, res, { send }, puppet, rawAddress) {
-    const target = targetOf(rawAddress)
-    if (target === null) {
-      return send(res, 400, TEXT, 'the address in the path must be host:port, with a host a dial can target ' +
-        'and a port between 1 and 65535\n')
+    const read = targetOf(rawAddress)
+    if (read.refusal !== undefined) {
+      log('panelAllowedInvalidAddress', { puppet: puppet.name, address: String(rawAddress ?? '').slice(0, 200) })
+      return send(res, 400, TEXT, read.refusal + '\n')
     }
-    return write(req, res, { send }, puppet, { action: 'remove', target })
+    return write(req, res, { send }, puppet, { action: 'remove', target: read.target })
   }
 
   // The read-modify-write, and the only place a document is replaced. Each attempt

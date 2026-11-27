@@ -53,10 +53,12 @@ const REDRAWS = '. The list redraws on the next change, within 5 s.'
 // and the page says it is one, because every other number on this page carries a time.
 const at = version => ' at ConfigMap resourceVersion ' + version + ', which is a version and not a time'
 
-// The allowed servers' route answer to a host or a port it cannot dial
-// (src/panel/routes/allowed.js). Three cases read it, so it is written once.
-const NOT_AN_ADDRESS = 'host must be a hostname or an IPv4 address with no scheme and no port, ' +
-  'and port must be an integer between 1 and 65535'
+// The allowed servers' route answers a host and a port it cannot dial, one sentence per half,
+// so an operator learns which of the two to fix (src/panel/routes/allowed.js, #890). Three
+// cases read them, so each is written once.
+const NOT_A_HOST = 'host must be a host: a DNS name or an IP address, with no scheme and no path, ' +
+  'got "http://paper.example.net"'
+const NOT_A_PORT = 'port must be an integer from 1 to 65535, got null'
 
 // --- the page the test drives ------------------------------------------------
 
@@ -489,7 +491,7 @@ test('the allowed servers\' add form splits host:port into the route\'s two fiel
 })
 
 test('an address with no port is sent as a null port, and the refused form keeps what was typed', async t => {
-  const page = await open(t, { replies: [plain(400, NOT_AN_ADDRESS + '\n')] })
+  const page = await open(t, { replies: [plain(400, NOT_A_PORT + '\n')] })
   const form = page.form('add-server')
 
   form.fields = { server: '  paper.example.net  ' }
@@ -502,7 +504,7 @@ test('an address with no port is sent as a null port, and the refused form keeps
 
 test('a port that is not a number is sent as a null port, not as text', async t => {
   for (const typed of ['paper.example.net:minecraft', 'paper.example.net:']) {
-    const page = await open(t, { replies: [plain(400, NOT_AN_ADDRESS + '\n')] })
+    const page = await open(t, { replies: [plain(400, NOT_A_PORT + '\n')] })
     const form = page.form('add-server')
 
     form.fields = { server: typed }
@@ -510,6 +512,25 @@ test('a port that is not a number is sent as a null port, not as text', async t 
 
     assert.deepEqual(page.calls[0].body, { host: 'paper.example.net', port: null },
       JSON.stringify(typed) + ' does not split into a numeric port, and the route answers port: null in its own words')
+  }
+})
+
+// #890: an IPv6 host holds more than one colon, and the port is still after the last one. The
+// bracketed spelling hands the bracket over with the host, because the bracket belongs to the
+// printed address the operator pasted; the route takes it off before the host rule sees it.
+test('an IPv6 address splits into the route\'s two fields without losing a group', async t => {
+  for (const [typed, expected] of [
+    ['[2001:db8::1]:25565', { host: '[2001:db8::1]', port: 25565 }],
+    ['2001:db8::1:25565', { host: '2001:db8::1', port: 25565 }]
+  ]) {
+    const page = await open(t, { replies: [json({ changed: true, server: '[2001:db8::1]:25565', resourceVersion: VERSION })] })
+    const form = page.form('add-server')
+
+    form.fields = { server: typed }
+    await page.press(form)
+
+    assert.deepEqual(page.calls[0].body, expected,
+      JSON.stringify(typed) + ' splits at its last colon, and the host keeps every group')
   }
 })
 
@@ -569,7 +590,7 @@ test('the attach whitelist\'s 400 is an instruction, printed as the route wrote 
 })
 
 test('a 400 is an instruction, and the allowed servers\' block says which address it refused', async t => {
-  const page = await open(t, { replies: [plain(400, NOT_AN_ADDRESS + '\n')] })
+  const page = await open(t, { replies: [plain(400, NOT_A_HOST + '\n')] })
   const form = page.form('add-server')
 
   // The route cannot name an address it could not parse, so the value the operator sent
@@ -577,7 +598,7 @@ test('a 400 is an instruction, and the allowed servers\' block says which addres
   form.fields = { server: 'http://paper.example.net:25565/' }
   await page.press(form)
 
-  assert.equal(page.answer(form).textContent, '"http://paper.example.net:25565/" was refused: ' + NOT_AN_ADDRESS)
+  assert.equal(page.answer(form).textContent, '"http://paper.example.net:25565/" was refused: ' + NOT_A_HOST)
   assert.equal(page.answer(form).dataset.outcome, 'instruction', 'an instruction is not drawn as a failure')
   assert.equal(page.button(form).disabled, false)
 })

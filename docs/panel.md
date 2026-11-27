@@ -505,9 +505,16 @@ was added, then the form that adds one.
 
 - **one field, two fields.** The list, the removal's path, and a picker row all name a
   server by its `host:port` address, so the form asks for that one name and the page splits
-  it into the `host` and `port` the route takes. A value the route refuses comes back in
-  the route's own sentence, behind the value that was sent: the sentence names the rules for
-  a host and a port, and an address it could not parse is not one it can name.
+  it at its last colon into the `host` and `port` the route takes. An IPv6 address splits
+  there too, because the port follows it: `[2001:db8::1]:25565` hands the route the host
+  `[2001:db8::1]`, and `2001:db8::1:25565` hands it `2001:db8::1`. The route takes the
+  bracket off before it asks the host rule, so both are one server, and it stores the bare
+  host: a bracket belongs to the printed address.
+- **a refusal names the half that broke.** The route judges the host with the rule the
+  service boots on (`hostRefusal`) and the port with its own (`portRefusal`), so a host or
+  a port the panel refuses is one `--start` refuses too, in the same sentence. The answer
+  opens with `host` or `port`, which is the field to fix, and the page prints the sentence
+  whole behind the value that was sent. The shape an IPv6 host takes is learned there.
 - **removing asks twice.** The first press arms the button and sends nothing, the second
   sends the `DELETE`, and an arm nobody uses disarms after ten seconds. The arm is held by
   the page, keyed by the card and the row, because a tick replaces the row it sits in and one
@@ -526,6 +533,9 @@ curl http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers
 curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers \
   -H 'content-type: application/json' -d '{"host": "paper.example.net", "port": 25565}'
 curl -X DELETE http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers/paper.example.net:25565
+# An IPv6 server, stored bare and named back to you in brackets:
+curl -X POST http://monoplayer.tail41e568.ts.net/api/puppets/glowsquidye/allowed-servers \
+  -H 'content-type: application/json' -d '{"host": "2001:db8::1", "port": 25565}'
 ```
 
 The removal takes the `host:port` address the row is called, so a host rename cannot
@@ -540,11 +550,18 @@ remove a different server. The document is:
 }
 ```
 
-A host is a hostname of at least two labels or an IPv4 address, with every octet
-between 0 and 255: no scheme, no port inside the host, no trailing dot, no bare single
-label. A port is an integer from 1 to 65535. A body that sends `"25565"` as text is
+A host is a DNS name or an IP address, bare: no scheme, no path, no surrounding space, no
+port inside it. An IPv6 host is stored without brackets and printed with them, so
+`2001:db8::1` and `[2001:db8::1]` are the same host, and the bare one is what the document
+field holds. A port is an integer from 1 to 65535. A body that sends `"25565"` as text is
 refused rather than coerced, so the file the lane reads never holds a port as a
 string.
+
+That is the whole of the rule, and it lives in `hostRefusal` and `portRefusal` in
+`src/service/monoplayer.js`: the panel calls them, it does not restate them. So the route
+accepts a host a `--start` accepts and refuses one it refuses, including a single label
+such as `paper`, which the pod's search domains can resolve. It also accepts an IPv4 shape
+with an octet out of range, which `hostRefusal` cannot tell from a numeric hostname.
 
 Those rules are what the route accepts on a **write**. A document already in the
 ConfigMap is read as written: the lane dials what the operator put there, so a host no

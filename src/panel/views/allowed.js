@@ -16,13 +16,17 @@
 // So the list says which file answered when it is not the live key, because the
 // operator about to edit it has to know that the first write is built on that copy
 // (src/panel/routes/allowed.js).
+import { addressName } from '../../core/picker.js'
 import { escape, present } from './html.js'
 
 // One server: the address, and when it was added. The address is the row's name and
 // the removal's path, and the confirmation reads it back, so nobody removes a server
 // by pressing a button that names another one.
 function renderServer (puppet, server) {
-  const address = String(server.host) + ':' + String(server.port)
+  // #890: the one rule spells it (#815, #906). An IPv6 host keeps its brackets, or the row reads
+  // `2001:db8::1:25565` and the removal path it posts to cannot be split back into a host and a
+  // port. An IPv4 row reads as it always did, which is why this went unseen for three passes.
+  const address = addressName(server.host, server.port)
   const added = present(server.addedAt) ? server.addedAt : 'no added-at recorded'
   return [
     '      <li class="entry">',
@@ -90,9 +94,11 @@ export function renderAddForm (puppet) {
     '      <label>host:port <input name="server" required autocomplete="off" spellcheck="false" placeholder="paper.example.net:25565"></label>',
     '      <button type="submit">add an allowed server</button>',
     '      <p class="note">Sent as <code>application/json</code>, which is what the route requires and what a',
-    '      cross-origin form post cannot send. A host is a hostname or an IPv4 address, with no scheme and no',
-    '      port of its own; the port is a number from 1 to 65535. The lane reads this file at each offer, so a',
-    '      server added here is offered at a joining player\'s next attempt. Removing a server asks twice.</p>',
+    '      cross-origin form post cannot send. A host is a name or an IP address, with no scheme and no port',
+    '      of its own. An IPv6 address is printed in brackets here, and typed either way:',
+    '      <code>[2001:db8::1]:25565</code> and <code>2001:db8::1:25565</code> are one server. The port is a',
+    '      number from 1 to 65535. The lane reads this file at each offer, so a server added here is offered at',
+    '      a joining player\'s next attempt. Removing a server asks twice.</p>',
     '    </form>',
     ''
   ].join('\n')
