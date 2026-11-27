@@ -2813,11 +2813,10 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // --- O53: the control document's whitelist reloads at each login (#229) ---
     // The point of the control document is an edit an operator can make without a
     // deploy and without a restart, and the whitelist is the half a refusal can
-    // prove. The core's login review reads that file at each login, and it is the
-    // one review a login gets (#756), so a unit test of the read proves the read
-    // and not that a login reaches it. This rig writes the file, refuses a real
-    // socket, adds that UUID to the file on disk, and joins again on the same
-    // process, with no restart and no reconnect.
+    // prove. The core's login review reads that file at each login, so a unit test
+    // of the read proves the read and not that a login reaches it. This rig writes
+    // the file, refuses a real socket, adds that UUID to the file on disk, and
+    // joins again on the same process, with no restart and no reconnect.
     controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monoplayer-control-'))
     const controlWhitelistFile = path.join(controlDir, 'attach-whitelist.json')
     const firstUuid = offlineUuid('Attach')
@@ -2861,8 +2860,8 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     if (!control.readiness.warm) throw new Error('the control-document rig did not warm')
     const controlPort = control.port
 
-    // The login the whitelist refuses. A real socket: it reaches both gates, and
-    // neither holds this UUID because it is not in the file.
+    // The login the whitelist refuses. A real socket: it reaches the review, and
+    // the file does not hold this UUID.
     const deniedMark = logs.length
     controlBot1 = createBot({ port: controlPort, username: 'Second' })
     await withTimeout(controlBot1.ended, 10_000, 'the refused login ended')

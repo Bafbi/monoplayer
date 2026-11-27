@@ -601,8 +601,12 @@ export function encodeFrame ({ serializer = null, name, params = {} } = {}) {
 
 // Core loginStart decisions fail closed: an exception, a missing decision from
 // a handler that ran, or any decision that is not allowed === true denies.
+//
+// `answered` says whether there was a decision to read at all. A lane whose core wired no
+// `setLoginStartHandler` was asked nothing, and the allow this returns for it is not an
+// answer: the caller's own check decides (#756).
 function evaluateCoreDecision (coreDecision) {
-  if (coreDecision === null || coreDecision === undefined) return { ok: true, reason: null }
+  if (coreDecision === null || coreDecision === undefined) return { ok: true, reason: null, answered: false }
 
   let decision = coreDecision
   if (typeof coreDecision === 'function') {
@@ -630,6 +634,7 @@ function evaluateCoreDecision (coreDecision) {
   return {
     ok: true,
     reason: null,
+    answered: true,
     picker: decision.picker === true,
     phase: decision.phase ?? null,
     uuid: decision.uuid ?? null,
@@ -643,30 +648,19 @@ function evaluateCoreDecision (coreDecision) {
 // document through `whitelistSource`, the per-login reload the control document turns on
 // (#229), and its refusal is the one `monoplayer.denials` counts and `attach_denied`
 // names. A handler that answered has therefore answered the whole question, and this leg
-// does not hold the same uuid to the same document again: two comparisons can disagree,
+// does not hold the same uuid to the same document again. Two comparisons can disagree,
 // and a torn read between them refused a login the core had just allowed under a second
-// reason — whichever ran first was the sentence an operator read. One login also parsed
+// reason. Whichever ran first was the sentence an operator read. One login also parsed
 // that document twice for one answer.
 //
-// `check` stays the gate for a lane whose core wired no login-start handler: the
+// `check` stays the gate for a lane whose core wired no `setLoginStartHandler`: the
 // socket-free rigs, and test/legs/session-verification-refused.test.js, which builds the
 // deployed leg with no core. There the leg's own check is the only review there is, so
 // the fallback is a gate and not a copy of one.
 function decideViaCheck ({ client, store = null, check, coreDecision = null } = {}) {
-  // What the core was asked, which is not the same fact as what it answered: a lane with
-  // no handler hands nothing here, and its answer is not an allow.
-  const reviewed = coreDecision !== null && coreDecision !== undefined
   const core = evaluateCoreDecision(coreDecision)
   if (!core.ok) return core
-  if (reviewed) {
-    return {
-      ok: true,
-      reason: null,
-      uuid: core.uuid ?? null,
-      username: core.username ?? null,
-      picker: core.picker === true
-    }
-  }
+  if (core.answered === true) return core
   if (!check || typeof check.checkVerified !== 'function') {
     return { ok: false, reason: 'check_unavailable' }
   }

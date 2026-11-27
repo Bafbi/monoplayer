@@ -692,10 +692,9 @@ first dial and its target warms in five seconds.
 - `O53` a login the control document's whitelist refuses is allowed on the next
   attempt once the file gains that UUID, with no restart (#229). The reload is
   the whole point of the ticket: an operator adds a player through the panel and
-  the next login sees it. The core's login review reads that file at each login and
-  is the one review a login gets (#756), so a unit test of the read proves the read
-  and not that a login reaches it. The rig is its
-  own, with a temporary control directory, a fake backend, the product core, and
+  the next login sees it. The core's login review reads that file at each login, so a
+  unit test of the read proves the read and not that a login reaches it. The rig is
+  its own, with a temporary control directory, a fake backend, the product core, and
   an `offline-front-leg` holding the control document's store. `Second` logs in
   while the file lists only `Attach`: the core writes one `attachDenied` with
   reason `not_whitelisted`, the front counts one denial, the socket ends, and no

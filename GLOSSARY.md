@@ -83,7 +83,7 @@ The two steps an attaching player passes before they drive a body. An online lan
 _Avoid_: attach gate, auth gate, login gate
 
 **Whitelist review**:
-The attach check's whitelist step: the claimed UUID must be on the attach whitelist, and a denial lands before Login Success. `reviewLoginStart` in `src/core/identity.js` is the decision, reached through `setLoginStartHandler`, and one login asks it once (#756). `checkVerified` in `src/custody/attach.js` is the leg's own review, and it answers only a lane whose core wired no login-start handler.
+The attach check's whitelist step: the claimed UUID must be on the attach whitelist, and a denial lands before Login Success. `reviewLoginStart` in `src/core/identity.js` is the decision, reached through `setLoginStartHandler`. `checkVerified` in `src/custody/attach.js` is the leg's own review, and it answers only a lane whose core wired no `setLoginStartHandler`.
 _Avoid_: gate one, precheck
 
 **Session verification**:
