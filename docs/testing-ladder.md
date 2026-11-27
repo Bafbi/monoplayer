@@ -1134,8 +1134,9 @@ first dial and its target warms in five seconds.
   The operator's half is the offer's line. `pickerOffered` carries `reason`, `file` and
   `at` beside `source` and the count. All three are part of the answer the reader
   deduplicates on, so a cause, or a second entry to fix, is a second line. The refusal's
-  own line carries the same reason and the sentence, so an operator reading the end of a
-  log does not have to scroll back to the join.
+  own line carries the word the refusal map is keyed by (`empty_offer`), the offer's cause
+  beside it in `offerReason`, and the sentence, so an operator reading the end of a log
+  does not have to scroll back to the join.
 
   What it cannot prove: the words an absent or empty file answers with — `no_key`,
   `live_missing`, `empty_list`, `seed_missing` and `unreadable` — because this rig names

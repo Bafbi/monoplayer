@@ -218,6 +218,18 @@ test('no landing is a run that never reached its second client, and the refusal 
   assert.equal(verdict(reading).framesPassed, false)
 })
 
+// #670: an empty offer is counted under the word the refusal map keeps, and the parser code
+// an operator repairs the list from rides beside it. A reader of the report needs both.
+test('#670 an empty offer quotes the refusal word and the offer own cause beside it', () => {
+  const records = [
+    { t: at(0), event: 'pickerServed', username: 'Spectator', uuid: '512f9708-59a5-3d00-99bf-c3c0b5271822', frames: 28, servers: 0 },
+    { t: at(1), event: 'pickerEmpty', username: 'Spectator', reason: 'empty_offer', offerReason: 'not_json', text: 'Monoplayer: this lane is not offering any server to join.' }
+  ]
+
+  assert.match(row('landed', records).because, /pickerEmpty: empty_offer \(not_json\)/,
+    'the refusal word and the offer own cause are both quoted, so the repair is still named')
+})
+
 test('a stream with no picker join at all says the log is not the run', () => {
   const records = [{ t: at(0), event: 'startLive', account: 'devpuppet' }]
   assert.match(row('landed', records).because, /no client reached the picker in this log/)

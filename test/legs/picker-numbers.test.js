@@ -279,6 +279,10 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
 test('#670 every counted refusal writes its own record, and the record carries the reason and the sentence', () => {
   const sites = refusalSites(SOURCE)
   assert.ok(sites.length >= 9, 'the leg counts nine refusals, and the guard reads each site: ' + sites.length)
+  // The scanner looks for the call as it is written today, so a site spelled around it —
+  // a space before the argument, an alias — would pass every assertion below unseen.
+  assert.equal((SOURCE.match(/refuseAndCount\s*\(/g) ?? []).length, sites.length + 1,
+    'every call to the helper is one the scan reads, beside the one that defines it')
 
   // The record is a closure the helper calls, so the event name stays a literal at the
   // site (#416) and the fields the helper hands it — the reason and the sentence — can

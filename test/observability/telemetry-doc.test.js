@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createTelemetry } from '../../src/observability/telemetry.js'
 import { RECORD_IDENTITY_FIELDS } from '../../src/core/channels.js'
+import { MAX_REFUSAL_REASONS } from '../../src/legs/live-front.js'
 import { pickerClaimOutcome } from '../../src/service/start-live.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -191,6 +192,22 @@ test('#670 the page counts a lane with no rows as a refusal, and says where the 
     'and says where the offer own cause went, so a reader does not look for it in `reason`')
   assert.match(pickers, /no row to offer/,
     'the join row says such a join is counted there too, because it was served before it ended')
+})
+
+// #670: the cap is headroom over the closed set, and the set is that row. A word added to
+// the row without raising the bound is a word `bumpBounded` folds into `other` the moment the
+// map is full, which reads as a reason nobody named (#435). So the two move together or this
+// fails: the row names every word the map can be keyed by, and the bound clears them.
+test('#670 the refusal bound clears every reason the refusal row names', () => {
+  const row = TELEMETRY.split('\n').find(line => line.startsWith('| `front.pickerRefusals`'))
+  assert.ok(row, 'the page documents the refusal map')
+  const words = [...new Set([...row.matchAll(/`([^`]+)`/g)].map(match => match[1]))]
+    .filter(word => /^[a-z][a-z0-9_]*$/.test(word))
+
+  assert.ok(words.length > 2, 'the row names its reasons in backticks, not in prose')
+  assert.ok(MAX_REFUSAL_REASONS >= words.length,
+    'MAX_REFUSAL_REASONS is ' + MAX_REFUSAL_REASONS + ' and the row names ' + words.length +
+      ' words, so the bound no longer clears the set: raise it, or say in the row why a word is not a key')
 })
 
 test('docs/ quote the value once, so a reader has one place to check it', () => {

@@ -1461,7 +1461,11 @@ function createFrontLeg ({
         reason: 'picker_unavailable',
         // #263 D2: a frame the funnel refused with no error to report leaves the key out,
         // because a null would read as a failure with nothing to say.
-        record: fields => log('pickerDialogFailed', { ...(error === null ? {} : { error }), ...fields })
+        record: fields => log('pickerDialogFailed', {
+          username: client.username ?? null,
+          ...(error === null ? {} : { error }),
+          ...fields
+        })
       })
     log('pickerDialog', {
       username: client.username ?? null,
@@ -1548,7 +1552,13 @@ function createFrontLeg ({
       : refuseAndCount({
         reason: 'picker_unavailable',
         server: server.name,
-        record: fields => log('pickerServerDialogFailed', { ...(error === null ? {} : { error }), ...fields })
+        record: fields => log('pickerServerDialogFailed', {
+          username: client.username ?? null,
+          server: server.name,
+          slug: server.slug,
+          ...(error === null ? {} : { error }),
+          ...fields
+        })
       })
     if (written) metrics.pickerServerDialogs++
     log('pickerServerDialog', {
@@ -1687,6 +1697,10 @@ function createFrontLeg ({
     }
     // Any other verb is one no lane offers yet. The board refuses a verb it does
     // not carry, so this is a guard rather than a path.
+    //
+    // #670: it counts nothing, and the reason is that no client reaches it: the board
+    // answers `unknown_verb` for a verb it does not carry before this branch can run, so
+    // the sentence here guards `PICK_VERBS` growing a verb with no branch above it.
     endConfiguration(client, 'verb_' + answer.verb + '_unbuilt', pickerBoard.refuse({ verb: answer.verb, server: server.name }))
   }
 
@@ -2589,6 +2603,10 @@ function createFrontLeg ({
         ? [...clients.keys()].find(entry => entry.username === username) ?? null
         : null
       if (client === null) {
+        // #670: this refusal counts nothing, because its sentence reaches no client: the
+        // lookup above found none to give it to. A caller decides how to show it, and a
+        // count here would tell an operator a client was refused by a lane it never
+        // reached.
         return {
           watching: false,
           reason: 'no_client',
