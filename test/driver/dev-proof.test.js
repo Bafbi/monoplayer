@@ -386,11 +386,10 @@ function witnessed (report = verdict(readingOf(run()))) {
 // The record list
 // ---------------------------------------------------------------------------
 
-test('every record the reader relies on is one the runbook names and a leg writes', () => {
-  const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
+test('every record the reader relies on is written by a leg', () => {
   // The three files a run's records are written from, and no fourth list. A hand map of which
-  // file writes which name is a third copy of that fact, and a name added to RECORDS without a
-  // row in it failed once with "a leg writes pickerPick" about a line live-front.js holds. A
+  // file writes which name is a third copy of that fact, and a name added to RECORDS without an
+  // entry in it failed once with "a leg writes pickerPick" about a line live-front.js holds. A
   // name is written by one of these or it is not written.
   const writers = Object.fromEntries(
     ['src/service/monoplayer.js', 'src/legs/live-front.js', 'src/service/start-live.js']
@@ -399,7 +398,6 @@ test('every record the reader relies on is one the runbook names and a leg write
 
   assert.equal(new Set(RECORDS.map(record => record.name)).size, RECORDS.length, 'no record is listed twice')
   for (const { name } of RECORDS) {
-    assert.match(readme, new RegExp('`' + name + '`'), 'the runbook names the ' + name + ' record')
     const wrote = Object.entries(writers)
       .filter(([, text]) => text.includes("log('" + name + "'"))
       .map(([file]) => file)
@@ -408,32 +406,202 @@ test('every record the reader relies on is one the runbook names and a leg write
   }
 })
 
-// The table and the list in one order, both ways. The case above walks RECORDS and asks the
-// runbook for a row, so a row with no entry behind it passed; and neither direction asks
-// whether a record a leg writes is in the list at all, which is how #829's line went missing
-// from both. One comparison, name for name, because the count of two lists that disagree says
-// nothing about which row moved. The order is the list's, not the run's: `pickerEmpty` is
-// documented last and written at the picker.
-test('the runbook\'s record table is the list, name for name and row for row', () => {
-  const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
-  assert.deepEqual(tableRecords(readme), RECORDS.map(record => record.name),
-    'the runbook\'s table is RECORDS in the list\'s own order')
+// The runbook's record table and the module's list, held together both ways (#830). The table is the
+// list written out: one row per record, and the module's own sentence in the second cell.
+//
+// Read as rows, inside the section that documents them, and never as the page. By #867 the names
+// were compared both ways, and the sentence was compared nowhere; above that comparison a search of
+// the whole page still answered for a row the table did not hold, so a runbook could lose a row and
+// keep its record's name alive in the prose around it.
+//
+// One repair per kind, because they are four different edits in two files: a record with no row, a
+// row with no record, a sentence reworded on one side, and a row moved out of the list's order. The
+// order is the list's, not the run's: `pickerEmpty` is documented last and written at the picker. The
+// reworded one quotes both cells, because a cell is 300 characters and its name is not the edit.
+//
+// What is not asked, here or anywhere: whether a record a leg starts writing has a row in RECORDS.
+// The legs write far more names than this list holds, and that is the list's judgement, so the two
+// guards that cover it read the senders (#829's dialogs, and the writers scan above), not the tree.
+const RECORD_SECTION = 'Read what the lane recorded'
+const RECORD_PAGE = 'deploy/dev/README.md'
+
+test('the runbook\'s record table is the list, a name and a sentence for every record, both ways', () => {
+  const rows = recordRows(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'))
+
+  // The module's side has to be read, or a list emptied by a bad edit would leave every comparison
+  // below holding nothing and passing. The page's side cannot be empty in silence: `recordRows`
+  // throws when the section has no table, and a table with no data row reports every record missing
+  // one, which is the repair.
+  assert.ok(RECORDS.length > 0, 'the module lists the records a run is made of')
+  for (const { name, what } of RECORDS) {
+    assert.ok(!what.includes('|') && !what.includes('\n'),
+      'the sentence for ' + name + ' fits one markdown cell: no pipe and no line break')
+  }
+
+  assert.deepEqual(recordDisagreement(recordDrift(rows, RECORDS)), [],
+    'the runbook\'s record table and RECORDS disagree')
 })
 
-// One table's record names: the rows under its own header, so no other table in the runbook can
-// answer for this one.
-function tableRecords (readme) {
-  const lines = readme.split('\n')
-  const header = lines.findIndex(line => line.startsWith('| Record | What it says |'))
-  assert.notEqual(header, -1, 'the runbook carries the record table')
-  const names = []
-  for (let index = header + 2; index < lines.length && lines[index].startsWith('|'); index += 1) {
-    const name = lines[index].match(/^\| `([A-Za-z0-9_]+)` \|/)
+// The table's rows, as the name in the "Record" cell and the sentence beside it. The columns are
+// looked up by their header names, so a table whose cells moved is a finding rather than a row read
+// wrong, and the next table in the runbook is not this one.
+function recordRows (readme) {
+  const lines = section(readme, RECORD_SECTION).split('\n')
+  const header = lines.findIndex(line => line.trimStart().startsWith('|'))
+  assert.notEqual(header, -1, 'the "' + RECORD_SECTION + '" section carries the record table')
+  const columns = cells(lines[header])
+  const nameAt = columns.indexOf('Record')
+  const whatAt = columns.indexOf('What it says')
+  assert.ok(nameAt !== -1 && whatAt !== -1,
+    'the record table has a "Record" column and a "What it says" column: ' + lines[header])
+
+  assert.match(lines[header + 1], /^\|(\s*:?-+:?\s*\|)+$/,
+    'the record table is headed by its separator row: ' + lines[header + 1])
+  const rows = []
+  let index = header + 2
+  for (; index < lines.length && lines[index].trimStart().startsWith('|'); index += 1) {
+    const row = cells(lines[index])
+    assert.equal(row.length, columns.length,
+      'every row of the record table has one cell per column: ' + lines[index])
+    const name = row[nameAt].match(/^`([A-Za-z0-9_]+)`$/)
     assert.ok(name !== null, 'every row of the record table opens with one record name: ' + lines[index])
-    names.push(name[1])
+    rows.push({ name: name[1], what: row[whatAt] })
   }
-  return names
+  // One table, so a second copy of it later in the section cannot sit under the one this reads: the
+  // runbook is a page an operator scrolls, and the stale copy is the one they would find first.
+  const later = lines.slice(index).filter(line => line.trimStart().startsWith('|'))
+  assert.deepEqual(later, [], 'the section carries one table: ' + later.length + ' row(s) sit under it')
+  return rows
 }
+
+// A row's cells: the outer pipes are not cells, and a cell keeps its backticks. This is the split
+// src/ladder/next-rung.js's cells() does, kept local for the reason section() below keeps its copy:
+// one guard's helper is not another guard's, and a false red costs more than two lines.
+function cells (line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim())
+}
+
+// The section a table is documented in, from its heading to the next heading of the same or a higher
+// level. A copy, for the reason test/tooling/dev-lane-proof.test.js gives for keeping its own: a
+// guard that shares a helper with the guard it is modelled on fails when that one is edited, and a
+// false red costs more than six lines.
+function section (text, heading) {
+  const lines = text.split('\n')
+  const start = lines.findIndex(line => /^#+\s/.test(line) && line.replace(/^#+\s+/, '').trim() === heading)
+  assert.notEqual(start, -1, 'the doc has a "' + heading + '" section')
+  const level = lines[start].match(/^#+/)[0].length
+  let end = lines.length
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const next = lines[index].match(/^(#+)\s/)
+    if (next && next[1].length <= level) { end = index; break }
+  }
+  return lines.slice(start, end).join('\n')
+}
+
+// What the two sides disagree about, one list per repair. Order is asked only when both sides hold
+// the same names: a missing name moves everything after it, and a list of moved rows beside it would
+// report one edit twice.
+function recordDrift (rows, records) {
+  const rowOf = new Map(rows.map(row => [row.name, row.what]))
+  const recordOf = new Map(records.map(record => [record.name, record.what]))
+  const missingRow = records.map(record => record.name).filter(name => !rowOf.has(name))
+  const missingRecord = rows.map(row => row.name).filter(name => !recordOf.has(name))
+  const reworded = records
+    .filter(record => rowOf.has(record.name) && rowOf.get(record.name) !== record.what)
+    .map(record => ({ name: record.name, table: rowOf.get(record.name), module: record.what }))
+  const counted = rows.reduce((tally, row) => tally.set(row.name, (tally.get(row.name) ?? 0) + 1), new Map())
+  const duplicateRow = [...counted].filter(([, count]) => count > 1).map(([name]) => name)
+  const sameNames = missingRow.length === 0 && missingRecord.length === 0 && duplicateRow.length === 0
+  const moved = sameNames ? rows.map(row => row.name).filter((name, at) => name !== records[at].name) : []
+  return { missingRow, missingRecord, duplicateRow, reworded, moved }
+}
+
+// The edit each disagreement asks for, one sentence each, naming the record and quoting both sides
+// where there are two. A message that said only "the table and the list disagree" would leave the
+// reader to work out which of the four edits is theirs, and which row.
+function recordDisagreement ({ missingRow, missingRecord, duplicateRow, reworded, moved }) {
+  return [
+    ...missingRow.map(name => RECORD_PAGE + ' has no row for ' + name +
+      ': add one with the name in the Record cell and the sentence beside it'),
+    ...missingRecord.map(name => 'RECORDS lists no record named ' + name +
+      ', which ' + RECORD_PAGE + ' documents: add the entry, or remove the row'),
+    ...duplicateRow.map(name => RECORD_PAGE + ' has more than one row for ' + name +
+      ': a row is one record, and two rows for one record say it twice'),
+    ...reworded.map(({ name, table, module }) => RECORD_PAGE + '\'s cell for ' + name +
+      ' is not the module\'s sentence\n  the table says: ' + table + '\n  RECORDS says: ' + module),
+    ...moved.map(name => RECORD_PAGE + '\'s table is not in RECORDS\'s order at ' + name +
+      ': the list is the order a reader of RECORDS finds them in')
+  ]
+}
+
+// Fixtures, not the tree: the reader and the comparison are held by a page built here, so a drift in
+// the runbook cannot make this case about the drift instead of the guard. Every name in the fixture
+// also appears in the paragraph below its table, which is #830's second hole: a name in the page is
+// not a row. The next section's table is not read either, which is the same hole one bound over.
+test('the record guard names each side to fix, and a name in the page is not a row', () => {
+  const records = [{ name: 'alpha', what: 'the first sentence' }, { name: 'beta', what: 'the second sentence' }]
+  const page = rows => [
+    '#### ' + RECORD_SECTION,
+    '',
+    '| Record | What it says |',
+    '|---|---|',
+    ...rows.map(({ name, what }) => '| `' + name + '` | ' + what + ' |'),
+    '',
+    'The writer names `alpha` and `beta` in this paragraph.',
+    '',
+    '### The next section',
+    '',
+    '| Record | What it says |',
+    '|---|---|',
+    '| `gamma` | a row of another table |'
+  ].join('\n')
+
+  assert.deepEqual(recordDrift(recordRows(page(records)), records),
+    { missingRow: [], missingRecord: [], duplicateRow: [], reworded: [], moved: [] },
+    'the fixture agrees with itself, so each case below is about its own edit')
+
+  const missingRow = recordDrift(recordRows(page(records.slice(0, 1))), records)
+  assert.deepEqual(missingRow.missingRow, ['beta'], 'the paragraph naming beta is not a row for it')
+  assert.match(recordDisagreement(missingRow)[0], /^deploy\/dev\/README\.md has no row for beta/)
+
+  const missingRecord = recordDrift(recordRows(page([...records, { name: 'gamma', what: 'a third sentence' }])), records)
+  assert.deepEqual(missingRecord.missingRecord, ['gamma'])
+  assert.match(recordDisagreement(missingRecord)[0], /^RECORDS lists no record named gamma/)
+
+  const repeated = recordDrift(recordRows(page([...records, records[1]])), records)
+  assert.deepEqual(repeated.duplicateRow, ['beta'])
+  assert.match(recordDisagreement(repeated)[0], /^deploy\/dev\/README\.md has more than one row for beta/)
+
+  const reworded = recordDrift(recordRows(page([records[0], { name: 'beta', what: 'a sentence of the page' }])), records)
+  assert.deepEqual(reworded.reworded.map(({ name }) => name), ['beta'])
+  assert.match(recordDisagreement(reworded)[0],
+    /^deploy\/dev\/README\.md's cell for beta is not the module's sentence\n  the table says: a sentence of the page\n  RECORDS says: the second sentence$/)
+
+  const moved = recordDrift(recordRows(page([records[1], records[0]])), records)
+  assert.deepEqual(moved.moved, ['beta', 'alpha'])
+  assert.match(recordDisagreement(moved)[0], /^deploy\/dev\/README\.md's table is not in RECORDS's order at beta/)
+
+  assert.deepEqual(recordRows(page([{ name: 'alpha', what: 'the first sentence' }])),
+    [{ name: 'alpha', what: 'the first sentence' }],
+    'the reader returns this table\'s rows and no other: the paragraph names beta, and the next section has gamma')
+  assert.throws(() => recordRows(page([{ name: 'alpha', what: 'the first sentence' }])
+    .replace('\n\nThe writer names', '\n| `beta` |\n\nThe writer names')),
+  /one cell per column/, 'a row that is one cell short is a finding, not half a row read')
+  assert.throws(() => recordRows(page(records).replace('| Record | What it says |', '| Name | What it says |')),
+    /"Record" column/, 'a table that lost the Record column is a finding, not rows of empty names')
+
+  // A row indented under the table is still that table's row, as it is in the rendered page. The
+  // header and the rows have to agree about that, or the one shape an operator can add is the one
+  // shape the guard does not read.
+  assert.deepEqual(recordRows(page([records[0]]).replace('\n\nThe writer names', '\n  | `beta` | the second sentence |\n\nThe writer names')),
+    records, 'a row indented under the table is read as a row')
+
+  // A second copy of the table inside the same section is the stale one an operator scrolls into,
+  // so the section is held to one table rather than to its first.
+  assert.throws(() => recordRows(page(records).replace('\n\nThe writer names',
+    '\n\n| `beta` | the second sentence |\n\nThe writer names')),
+  /the section carries one table/, 'a second table in the section is a finding, not a table read twice')
+})
 
 // #829: a picker click writes a dialog at each end of it, and a dialog's records are the
 // operator's proof that a client was shown one. The two senders are read as source, so a line
