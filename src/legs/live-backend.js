@@ -402,6 +402,30 @@ function createBackendLeg ({
   connectLogFields,
   validateTarget = () => true
 }) {
+  // #824: a call-in is one slot, filled once. The core fills every slot its table
+  // declares when it starts (src/service/wire-leg-to-core.js), so a registration a lane
+  // makes before that start is replaced by the core's, and one made after it replaces the
+  // core's. Both were a plain assignment, and the wiring report could see neither: it
+  // measures the leg's shape at the call, so a name present was a name carried whether or
+  // not the handler installed there was the one the core built. The front leg keeps the
+  // same rule for its own slots (src/legs/live-front.js).
+  //
+  // A repeat of the same function is refused too. A registration is a write, not a call,
+  // and a leg that answers the second write with silence is the leg #824 found.
+  const filled = new Set()
+  function fillSlot (name, fn) {
+    if (typeof fn !== 'function') {
+      throw new TypeError(name + ' takes the function a call-in is answered with (#824)')
+    }
+    if (filled.has(name)) {
+      throw new TypeError(name + ' is already filled on this leg, and a call-in is one slot (#824): ' +
+        'the core fills the slots its table declares in its start(), so the first registration stands ' +
+        'and the second is refused rather than replacing a handler nobody could then name')
+    }
+    filled.add(name)
+    return fn
+  }
+
   let frameHandler = null
   let endHandler = null
   let errorHandler = null
@@ -617,9 +641,9 @@ function createBackendLeg ({
   return {
     kind,
     connect,
-    setFrameHandler (fn) { frameHandler = fn },
-    setEndHandler (fn) { endHandler = fn },
-    setErrorHandler (fn) { errorHandler = fn },
+    setFrameHandler (fn) { frameHandler = fillSlot('setFrameHandler', fn) },
+    setEndHandler (fn) { endHandler = fillSlot('setEndHandler', fn) },
+    setErrorHandler (fn) { errorHandler = fillSlot('setErrorHandler', fn) },
     write (name, packet) {
       if (!client) throw new Error('backend leg not connected')
       client.write(name, packet)

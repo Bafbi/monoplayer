@@ -48,6 +48,11 @@
 // carried as `legWiring`, one report per interface, with the names it did not
 // carry on the start record. A lane adds no row to them: it builds a leg and
 // starts a core.
+//
+// #824: a call-in is one slot on the leg, and a setter fills it once. A leg refuses the
+// second registration, so one a lane made by hand before this start() makes the start
+// throw on the slot's name, instead of the core's handler displacing the lane's in
+// silence. The rule and the three registrations are src/service/wire-leg-to-core.js's.
 
 import { bumpBounded } from '../core/bounded-counter.js'
 import { WARM_MARKER } from '../core/state-cache.js'

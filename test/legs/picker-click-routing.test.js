@@ -102,7 +102,7 @@ function records (lines, event) {
 //
 // `rows` is the list the lane offers, handed over as it is, so a test can change it
 // while a dialog is open on the client.
-async function withPickerLane (run, { rows = [{ name: SERVER }], ...legOptions } = {}) {
+async function withPickerLane (run, { rows = [{ name: SERVER }], callIns = {}, ...legOptions } = {}) {
   // The reader answers null for a missing file, and the leg then denies every join
   // `picker_unavailable`: the timeouts would name the dialog rather than the recording.
   assert.notEqual(BASELINE, null,
@@ -133,17 +133,26 @@ async function withPickerLane (run, { rows = [{ name: SERVER }], ...legOptions }
   let bot = null
   try {
     const { port } = await leg.listen()
-    // The core's answers: this login joins the picker, the body its row names is up,
-    // and the landing is the lane's own.
-    leg.setLoginStartHandler(() => ({ allowed: true, picker: true }))
-    // The body is the one the request names, which is the row's body: a core answers
-    // with the body it serves, and the leg opens the channel on that.
-    leg.setSpectateBody(({ body }) => ({ watching: true, body }))
-    leg.setSpectatorAttach(() => ({ watching: true, frames: 0 }))
-    leg.setConnectClaimedBody(() => ({ connected: true, warm: true }))
-    // A leg with no core kicks the client the moment it lands, and a kick is the
-    // lane's refusal rather than this file's subject.
-    leg.setCoreAttach(() => ({ attached: true, replayed: 0 }))
+    // The core's answers, one per call-in: this login joins the picker, the body its row
+    // names is up, and the landing is the lane's own.
+    //
+    // A test that needs a different answer for one of them states it in `callIns` rather
+    // than registering a second time: a call-in is one slot on the leg and the setter
+    // refuses the second registration (#824), so one answer per slot is the rule this
+    // harness keeps for the leg it builds.
+    const answers = {
+      setLoginStartHandler: () => ({ allowed: true, picker: true }),
+      // The body is the one the request names, which is the row's body: a core answers
+      // with the body it serves, and the leg opens the channel on that.
+      setSpectateBody: ({ body }) => ({ watching: true, body }),
+      setSpectatorAttach: () => ({ watching: true, frames: 0 }),
+      setConnectClaimedBody: () => ({ connected: true, warm: true }),
+      // A leg with no core kicks the client the moment it lands, and a kick is the
+      // lane's refusal rather than this file's subject.
+      setCoreAttach: () => ({ attached: true, replayed: 0 }),
+      ...callIns
+    }
+    for (const [name, answer] of Object.entries(answers)) leg[name](answer)
     bot = mc.createClient({
       host: '127.0.0.1', port, username: NAME, version: VERSION, auth: 'offline', keepAlive: false
     })
@@ -286,12 +295,14 @@ test("#618 a landing is handed the textures the client's account sent, and nothi
   // The property an account's hasJoined answer carries, as the account's own.
   const OWN_SKIN = { name: 'textures', value: 'd2F0Y2hlciBza2lu', signature: 'd2F0Y2hlciBzaWc=' }
   const handovers = []
-  await withPickerLane(async ({ leg, lines, click }) => {
-    // The core's answer is the harness's; what this test reads is its argument.
-    leg.setSpectatorAttach(payload => {
-      handovers.push(payload)
-      return { watching: true, frames: 0 }
-    })
+  // The core's answer is this test's, stated once: a call-in is one slot on the leg, so a
+  // second registration would be refused rather than replace the harness's (#824). What
+  // this test reads is the argument that answer is handed.
+  const attach = payload => {
+    handovers.push(payload)
+    return { watching: true, frames: 0 }
+  }
+  await withPickerLane(async ({ lines, click }) => {
     click(verbIdFor('spectate', SERVER))
     await settleUntil(() => handovers.length === 1, 'the spectator landing the leg reported')
     assert.deepEqual(handovers[0].skin, { value: OWN_SKIN.value, signature: OWN_SKIN.signature },
@@ -304,22 +315,22 @@ test("#618 a landing is handed the textures the client's account sent, and nothi
     assert.equal(records(lines, 'attachAllowed')[0].textures, true,
       'the login record says the body it verified carried textures')
     assert.equal(records(lines, 'spectated')[0].skinSupplied, true, 'and the landing records the skin it was handed')
-  }, { profiles: { [NAME]: [OWN_SKIN] } })
+  }, { profiles: { [NAME]: [OWN_SKIN] }, callIns: { setSpectatorAttach: attach } })
 
   // The same lane with nothing supplied is a lane whose sessionserver answered with no
   // property, and the landing is handed null rather than a skin this leg invented.
   const bare = []
-  await withPickerLane(async ({ leg, lines, click }) => {
-    leg.setSpectatorAttach(payload => {
-      bare.push(payload)
-      return { watching: true, frames: 0 }
-    })
+  const bareAttach = payload => {
+    bare.push(payload)
+    return { watching: true, frames: 0 }
+  }
+  await withPickerLane(async ({ lines, click }) => {
     click(verbIdFor('spectate', SERVER))
     await settleUntil(() => bare.length === 1, 'the second spectator landing')
     assert.equal(bare[0].skin, null, 'no property supplied is no skin, never a default this leg made up')
     assert.equal(records(lines, 'attachAllowed')[0].textures, false)
     assert.equal(records(lines, 'spectated')[0].skinSupplied, false)
-  })
+  }, { callIns: { setSpectatorAttach: bareAttach } })
 })
 
 test("#615 a pick naming a server the offer dropped is refused in the pick's words", async () => {
@@ -389,10 +400,11 @@ test('#615 an offer that drops a row under an open dialog refuses that row\'s ve
 // reads the list again and its claim stands, so the Disconnect it clicks is refused by
 // its own claim and by nothing else.
 test('#616 a disconnect refused by a claim is counted in the refusal map', async () => {
+  // A body that is not up: the claim is recorded all the same, and the client is handed
+  // the list again titled with the body that did not answer. The answer the claim dials
+  // with is this test's, stated once at the harness (#824).
+  const dialNothing = () => ({ connected: false, reason: 'body_unreachable' })
   await withPickerLane(async ({ leg, lines, disconnects, clientErrors, click }) => {
-    // A body that is not up: the claim is recorded all the same, and the client is
-    // handed the list again titled with the body that did not answer.
-    leg.setConnectClaimedBody(() => ({ connected: false, reason: 'body_unreachable' }))
     click(verbIdFor('claim', SERVER))
     await settleUntil(() => records(lines, 'pickerClaimRestored').length === 1, 'the claim to stand at the picker')
     assert.equal(leg.metrics.pickerRefusals, 0, 'a claim the lane granted is not a refusal')
@@ -415,7 +427,7 @@ test('#616 a disconnect refused by a claim is counted in the refusal map', async
     assert.equal(refusalText(disconnects), refused.text,
       'the record and the sentence the client reads are one string')
     assert.deepEqual(clientErrors, [])
-  })
+  }, { callIns: { setConnectClaimedBody: dialNothing } })
 })
 
 test('#615 a verb this dialog does not offer is refused in words that name it', async () => {

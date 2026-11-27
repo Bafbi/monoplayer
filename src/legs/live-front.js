@@ -884,6 +884,31 @@ function createFrontLeg ({
     throw new TypeError('onPickerVerb must be null or a function')
   }
 
+  // #824: a call-in is one slot, filled once. Every setter below, and the two attach
+  // setters further down, go through `fillSlot`, and the fact it keeps is this leg's own:
+  // the core fills every slot its table declares when it starts
+  // (src/service/wire-leg-to-core.js), so a registration a lane makes before that start is
+  // replaced by the core's, and one made after it replaces the core's. Both were a plain
+  // assignment, and the wiring report could see neither: it measures the leg's shape at
+  // the call, so a name present was a name carried whether or not the handler installed
+  // there was the one the core built.
+  //
+  // A repeat of the same function is refused too. A registration is a write, not a call,
+  // and a leg that answers the second write with silence is the leg #824 found.
+  const filled = new Set()
+  function fillSlot (name, fn) {
+    if (typeof fn !== 'function') {
+      throw new TypeError(name + ' takes the function a call-in is answered with (#824)')
+    }
+    if (filled.has(name)) {
+      throw new TypeError(name + ' is already filled on this leg, and a call-in is one slot (#824): ' +
+        'the core fills the slots its table declares in its start(), so the first registration stands ' +
+        'and the second is refused rather than replacing a handler nobody could then name')
+    }
+    filled.add(name)
+    return fn
+  }
+
   let loginStartHandler = null // core check 1 call-in (processLoginStart)
   let serverboundHandler = null // core serverbound pipeline
   let detachHandler = null // core detach
@@ -2495,8 +2520,8 @@ function createFrontLeg ({
   // replay. \`coreAttachConfiguring\` runs at beforeLogin, for a client that
   // attaches while the puppet is still in configuration (#16).
   let coreAttachConfiguring = () => ({ attached: false, reason: 'no_core_attached' })
-  function setCoreAttach (fn) { coreAttach = fn }
-  function setCoreAttachConfiguring (fn) { coreAttachConfiguring = fn }
+  function setCoreAttach (fn) { coreAttach = fillSlot('setCoreAttach', fn) }
+  function setCoreAttachConfiguring (fn) { coreAttachConfiguring = fillSlot('setCoreAttachConfiguring', fn) }
 
   function wireServerbound (client) {
     const decoded = { state: null, byName: {} }
@@ -2943,13 +2968,13 @@ function createFrontLeg ({
     listen,
 
     // --- frontLeg interface (docs/product-core.md) ---
-    setLoginStartHandler (fn) { loginStartHandler = fn },
-    setServerboundHandler (fn) { serverboundHandler = fn },
-    setDetachHandler (fn) { detachHandler = fn },
-    setErrorHandler (fn) { errorHandler = fn },
-    setClientSettingsHandler (fn) { clientSettingsHandler = fn },
-    setConfiguringHandler (fn) { configuringHandler = fn },
-    setReconfiguredHandler (fn) { reconfiguredHandler = fn },
+    setLoginStartHandler (fn) { loginStartHandler = fillSlot('setLoginStartHandler', fn) },
+    setServerboundHandler (fn) { serverboundHandler = fillSlot('setServerboundHandler', fn) },
+    setDetachHandler (fn) { detachHandler = fillSlot('setDetachHandler', fn) },
+    setErrorHandler (fn) { errorHandler = fillSlot('setErrorHandler', fn) },
+    setClientSettingsHandler (fn) { clientSettingsHandler = fillSlot('setClientSettingsHandler', fn) },
+    setConfiguringHandler (fn) { configuringHandler = fillSlot('setConfiguringHandler', fn) },
+    setReconfiguredHandler (fn) { reconfiguredHandler = fillSlot('setReconfiguredHandler', fn) },
     startReconfiguration,
     // #87: the frame bytes that end a configuration round, for a restore whose
     // snapshot carries no cached finish frame.
@@ -2959,21 +2984,21 @@ function createFrontLeg ({
     // #258: the body a claim dials. The core wires this when it starts, so a leg
     // built without a core refuses every landing instead of waiting for an answer
     // nobody sends.
-    setConnectClaimedBody (fn) { connectClaimedBody = typeof fn === 'function' ? fn : null },
+    setConnectClaimedBody (fn) { connectClaimedBody = fillSlot('setConnectClaimedBody', fn) },
     // #269: the spectator's two call-ins. The core wires them in its own start(), so
     // a leg built without a core refuses the Spectate verb in words instead of
     // waiting for an answer nobody sends.
-    setSpectateBody (fn) { spectateBodyHandler = typeof fn === 'function' ? fn : null },
-    setSpectatorAttach (fn) { spectatorAttachHandler = typeof fn === 'function' ? fn : null },
-    setSpectatorPose (fn) { spectatorPoseHandler = typeof fn === 'function' ? fn : null },
+    setSpectateBody (fn) { spectateBodyHandler = fillSlot('setSpectateBody', fn) },
+    setSpectatorAttach (fn) { spectatorAttachHandler = fillSlot('setSpectatorAttach', fn) },
+    setSpectatorPose (fn) { spectatorPoseHandler = fillSlot('setSpectatorPose', fn) },
     // #259: the body this lane serves and whether it is up, for the picker's rows.
-    setBodyServed (fn) { bodyServedHandler = typeof fn === 'function' ? fn : null },
+    setBodyServed (fn) { bodyServedHandler = fillSlot('setBodyServed', fn) },
     // #261: the Disconnect verb's answer. The core ends the session, and a lane
     // with no core records the click and ends no body.
-    setDisconnectBody (fn) { disconnectBodyHandler = typeof fn === 'function' ? fn : null },
+    setDisconnectBody (fn) { disconnectBodyHandler = fillSlot('setDisconnectBody', fn) },
     // #259: a spectator's channel ended, so the core can stop relaying a body that
     // nobody is in play on.
-    setSpectatorLeft (fn) { spectatorLeftHandler = typeof fn === 'function' ? fn : null },
+    setSpectatorLeft (fn) { spectatorLeftHandler = fillSlot('setSpectatorLeft', fn) },
     // #269: land one of this leg's connections in a body as its spectator, and answer
     // with what happened. The player is named rather than the socket because the
     // caller is the lane's, not the socket's: #259 wires the picker's Spectate to

@@ -34,12 +34,29 @@
 // it would refuse every client and say nothing.
 //
 // The core applies both tables once, in its start(), so no lane can forget a
-// call-in on the leg it hands the core, and the payload shapes live in one file. A
-// lane that wires a leg it built for something else — src/ladder/loopback.js's two
-// body legs (O59) — says so at the line, and a lane that wants a different
-// registration writes one there too. The report carries no handler: #607 published
-// them for a lane that wrapped a call-in after start(), #683 deleted the last such
-// lane, and #718 removed the field.
+// call-in on the leg it hands the core, and the payload shapes live in one file.
+//
+// #824: a registration is a write into one slot, and a leg keeps one slot per call-in.
+// Three registrations can reach a slot, and the leg's setter block is where each one is
+// decided:
+//   1. the core's, made by these tables in start(). It is the only registration a leg
+//      handed to a core needs.
+//   2. a lane's, before that start(). The core's registration is then the second one, so
+//      start() refuses it and the run fails on the slot's name. This is the case nobody
+//      could see: a report measures the leg's shape at the call, so a name present was a
+//      name carried whether or not the handler installed there was the core's, and the
+//      lane read `missing: []` while its own handler ran nothing.
+//   3. a lane's, after that start(). It refuses at the lane's line, so the report keeps
+//      meaning what it says: the handler in a carried slot is the one the core built.
+//
+// A lane that wires a leg it built for something else — src/ladder/loopback.js's two body
+// legs (O59), and #666's raw funnel — registers on a leg no core is handed, and that one
+// registration is the only one its slot ever takes. A lane with a core registers nothing
+// there: the same setter would refuse it, and the run would say so.
+//
+// The report carries no handler: #607 published them for a lane that wrapped a call-in
+// after start(), #683 deleted the last such lane, #718 removed the field, and #824 is why
+// a replacement after start() is refused rather than performed.
 //
 // A leg that carries none of them is a leg with no core in front of it, which the
 // two pre-auth rungs build on purpose. They never come here.
@@ -354,7 +371,14 @@ export const BACKEND_LEG_CALL_INS = Object.freeze([
 ].map(Object.freeze))
 
 // Hand every declared registration to the leg that carries it, measure every call
-// it answers, and report the rows it lacks either way. The core is required: every
+// it answers, and report the rows it lacks either way.
+//
+// #824: a leg refuses a registration into a slot it has already filled, so a lane's
+// registration made before this call is what this call throws on, naming the slot. That
+// throw is the report of the middle case the header names: the leg's wiring was the
+// lane's, and no list of names could have said so.
+//
+// The core is required: every
 // handler reaches a method of it, and a table applied to the wrong object would
 // register every call-in against nothing. The table is required too, so a leg is
 // never measured against the other interface's rows.
