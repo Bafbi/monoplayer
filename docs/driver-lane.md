@@ -109,9 +109,9 @@ the per-run numbers, the witness record, and quotes the reports and screenshots
 git no longer carries.
 
 `mise run driver:g0` runs the two runs first and verifies what it wrote, so no
-committed report set is needed. It needs a completed unmodded witness in this
-checkout, and it refuses evidence whose newest run finished more than 24 hours
-ago.
+committed report set is needed. It needs an unmodded witness whose every step is
+recorded in this checkout, and it refuses evidence whose newest run finished more
+than 24 hours ago.
 
 ## The unmodded witness lane
 
@@ -121,9 +121,20 @@ node src/driver/run.js --lane unmodded   # writes a manual checklist, exits 1
 
 The driver is a mod, so it can mask a vanilla bug (anti-masking rule). The
 witness run is done once, **by hand, on an unmodded Prism instance**, using the
-checklist the command generates. When every step is honestly recorded, save the
-completed checklist as `testdata/driver-unmodded-witness.json` with
-`completed: true`.
+checklist the command generates. Each row is one step: set its `state` to `ok`
+when you saw it hold, and write what you saw in its `evidence`. Then save the
+checklist as `testdata/driver-unmodded-witness.json` with `completed: true`.
+
+`--verify-g0` reads those rows, not the flag over them, and the refusal names the
+row it stops on. What a row has to record is the checklist's own `how` list, which
+`--lane unmodded` writes beside the rows. The steps are one list,
+`UNMODDED_STEPS` in [src/driver/checks.js](../src/driver/checks.js), which both
+`--lane unmodded` and `--verify-g0` read, so a step cannot leave the checklist
+without leaving the check.
+
+A checklist written before #922 names its rows by `name` and records no step id, so
+the check refuses it. Regenerate the checklist and copy your states and evidence into
+the rows by id: the eight steps have not changed.
 
 Capture the steps with `tools/nath.sh shot <path> gate-b-player-262`. Without a
 driver, that path moves the view to the client's workspace for the capture and
@@ -139,8 +150,9 @@ node src/driver/run.js --verify-g0    # verify only, run nothing
 `mise run driver:g0` composes the gate, the driver build, and `driver:scenario`,
 so a red gate or a stale driver jar stops it before anything runs. Both commands exit 0 **only** when this checkout holds **two consecutive
 passed driver-lane reports whose newest run finished within 24 hours**, and the
-**unmodded witness is completed**. "2/2" means both consecutive runs passed
-every assertion in their reports, and nothing is averaged or carried over.
+**unmodded witness records every step**. "2/2" means both consecutive runs passed
+every assertion in their reports, and nothing is averaged or carried over. The
+witness half is read row by row, in the lane above.
 
 The age window exists because a report set sitting on disk proves nothing on its
 own: before 2026-11-09 the reports were committed, so the check passed without
