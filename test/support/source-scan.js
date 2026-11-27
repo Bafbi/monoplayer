@@ -1,7 +1,7 @@
 // The source scans the guard tests share (#764, #847): every counted refusal site, one
 // declaration's body, every end call's arguments, every call of a name, and the names a
 // block's own depth holds. A guard that reads a source file as text imports one of these,
-// and the brace walk the last three are built on is private to this module.
+// and every walk they are built on is private to this module.
 //
 // One copy, because a scan that stops matching the file it reads keeps passing. #710's
 // rule is that a source scan proves a branch is mentioned and never that it runs; a scan
@@ -41,8 +41,9 @@ export function blockSpan (source, after, what) {
 // alike. A nested literal contributes its own name and none of its keys, so a field inside
 // an object a record carries is not read as a field of the record.
 //
-// A literal written on one line is one field to this reader, whatever its commas say. A case
-// that must read one splits the block itself.
+// A literal written on one line is one field to this reader, whatever its commas say, and the
+// shorthand that closes a multi-line literal carries no comma and is not read. A case that must
+// read either splits the block's body itself (#861).
 export function topLevelNames (body) {
   const names = []
   let inner = 0

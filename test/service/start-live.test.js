@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { tempRoot } from '../support/temp.js'
 import { blockSpan } from '../support/source-scan.js'
+import { tempRoot } from '../support/temp.js'
 
 import {
   allowedServerAddresses,
