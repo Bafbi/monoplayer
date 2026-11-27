@@ -384,6 +384,11 @@ function heartbeatFacts (record, now) {
     // draws, and the label it draws it under is the view's business, not this file's.
     front: pickCounters(record.front),
     sizes: pickCounters(record.sizes),
+    // #833: the core's own group, by the same rule. #743 generalised `front` and
+    // `sizes` and left this one, which is where every counter the process keeps stops
+    // in. Its shape is the one `pickCounters` reads, numbers and one level of map from
+    // a name to a count, so the helper is reused and not widened.
+    metrics: pickCounters(record.metrics),
     chunkBytes: counter(record, 'chunkBytes'),
     journal: pick(record.journal, JOURNAL),
     wire: pick(record.wire, WIRE),

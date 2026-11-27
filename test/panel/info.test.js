@@ -93,6 +93,31 @@ const heartbeat = {
   attached: false,
   warm: true,
   backendLogins: 2,
+  // #833: the core's own group. This is a sample of it rather than all of it, the
+  // declaration's first rows and its last three, carrying one packet name in each map, so
+  // the page's projection is read against a record shaped like the one a pod writes.
+  metrics: {
+    backendFrames: 61_844,
+    configFrames: 412,
+    framesCached: 51_260,
+    framesReplayed: 120,
+    replayFramesRefused: 1,
+    positionsSynthesized: 1,
+    serverboundForwarded: 42,
+    serverboundDropped: 2,
+    serverboundNotAttached: 3,
+    serverboundByName: { held_item_slot: 41, player_loaded: 1 },
+    serverboundDroppedByName: { chat: 2 },
+    chatBlocked: 2,
+    chatRelayed: 118,
+    chatSent: 6,
+    clientboundBlocked: 14,
+    clientboundBlockedByName: { entity_destroy: 9, transfer: 5 },
+    clientboundUnclassified: 0,
+    attaches: 2,
+    denials: 0,
+    frontKicks: 0
+  },
   sizes: { prefix: 360, config: 34, chunks: 166, blocks: 0, entities: 10, inventories: 0, latest: 1, generic: 512 },
   chunkBytes: 2_243_099,
   front: { denied: 0, allowed: 1, attaches: 1, preAuthRefused: 3, preAuthExpired: 0, preAuthInWindow: 0, policyRefused: 0, stateRefused: 0 },
@@ -206,6 +231,10 @@ test('the heartbeat fields are the documented ones, projected by name', () => {
   assert.equal(beat.sizes.chunks, 166)
   assert.equal(beat.chunkBytes, 2_243_099)
   assert.equal(beat.front.preAuthRefused, 3)
+  // #833: the core's counters, projected whole and by the same rule, maps included.
+  assert.equal(beat.metrics.replayFramesRefused, 1)
+  assert.equal(beat.metrics.framesCached, 51_260)
+  assert.deepEqual(beat.metrics.serverboundByName, { held_item_slot: 41, player_loaded: 1 })
   assert.equal(beat.journal.sealed, 3)
   assert.equal(beat.journal.dirBytes, 7_000_000)
   assert.equal(beat.wire.checked, 0)
