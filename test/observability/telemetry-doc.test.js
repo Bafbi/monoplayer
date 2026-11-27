@@ -15,6 +15,7 @@ import { OVERFLOW_KEY, UNKNOWN_KEY } from '../../src/core/bounded-counter.js'
 import { PICK_VERBS } from '../../src/core/picker.js'
 import { DENY_REASONS } from '../../src/custody/attach.js'
 import { pickerClaimOutcome } from '../../src/service/start-live.js'
+import { countedSites, endSites, functionBody } from '../support/source-scan.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DOC = path.join(ROOT, 'docs', 'telemetry.md')
@@ -218,50 +219,9 @@ test('#670 the refusal bound clears every reason the refusal row names', () => {
       'and declare a reason that is no key in the #671 case below')
 })
 
-// #671: one function's body, by brace matching from its own body brace, so a nested object
-// or a template cannot end it early. Both modules this case reads declare their functions
-// at two spaces inside a factory.
-function sourceBody (source, name) {
-  const at = source.indexOf('\n  function ' + name + ' (')
-  assert.notEqual(at, -1, 'the module has the function ' + name)
-  const open = source.indexOf(') {', at) + 2
-  assert.ok(open > 2, name + ' has a body')
-  let depth = 0
-  for (let i = open; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(open + 1, i)
-    }
-  }
-  assert.fail(name + ' closes')
-}
-
 // The snake_case words a piece of source quotes. A reason is one word with no capital in
 // it, which is what tells one from an event name or a record field.
 const quotedWords = text => [...new Set([...text.matchAll(/'([a-z][a-z0-9_]*)'/g)].map(match => match[1]))]
-
-// Every counted refusal site in the leg, as the object text it passes, by brace matching so
-// a record closure inside one site is not mistaken for the end of it. test/legs/picker-numbers.test.js
-// scans the same sites with the same walk, and is the file that pins their order.
-function countedSites (source) {
-  const sites = []
-  for (let at = source.indexOf('refuseAndCount({'); at !== -1; at = source.indexOf('refuseAndCount({', at + 1)) {
-    const from = source.indexOf('{', at)
-    let depth = 0
-    let end = -1
-    for (let i = from; i < source.length; i += 1) {
-      if (source[i] === '{') depth += 1
-      else if (source[i] === '}') {
-        depth -= 1
-        if (depth === 0) { end = i; break }
-      }
-    }
-    assert.notEqual(end, -1, 'the refusal site at byte ' + at + ' closes')
-    sites.push(source.slice(from + 1, end))
-  }
-  return sites
-}
 
 // The words this leg can key its refusal map with: the literals its counted sites pass, and
 // the landing's own closure. Three counted sites pass the answer's reason and one the
@@ -273,7 +233,7 @@ function legWords (source) {
     const named = site.match(/reason:\s*'([a-z][a-z0-9_]*)'/)
     if (named !== null) words.add(named[1])
   }
-  const landing = sourceBody(source, 'landSpectator')
+  const landing = functionBody(source, 'landSpectator')
   for (const call of landing.matchAll(/\brefused\(([^)]*)\)/g)) {
     for (const quoted of call[1].matchAll(/'([a-z][a-z0-9_]*)'/g)) words.add(quoted[1])
   }
@@ -301,10 +261,10 @@ const WRITERS = {
   // the words of the one helper it assigns to `reason`, which is where `body_down` and
   // `body_not_warm` are decided. A log field or a state name in that body is not read.
   'src/service/monoplayer.js': () => {
-    const answer = sourceBody(SERVICE, 'spectateBody')
+    const answer = functionBody(SERVICE, 'spectateBody')
     const reasons = [...new Set([...answer.matchAll(/reason:\s*'([a-z][a-z0-9_]*)'/g)].map(match => match[1]))]
     const helper = answer.match(/const reason = (\w+)\(\)/)
-    return helper === null ? reasons : reasons.concat(quotedWords(sourceBody(SERVICE, helper[1])))
+    return helper === null ? reasons : reasons.concat(quotedWords(functionBody(SERVICE, helper[1])))
   },
   // This leg's counted sites and its one landing closure.
   'src/legs/live-front.js': () => legWords(LIVE_FRONT)
@@ -371,7 +331,7 @@ test('#671 the refusal row names every reason the code writes, and no other', ()
     'not_a_click is the branch that answers nothing, which is why it counts nowhere')
   assert.match(PICKER, /\{ kind: 'ignore',[^}]*reason: 'not_a_pick'/,
     'and not_a_pick is that answer\'s own reason')
-  assert.notEqual(sourceBody(SERVICE, 'spectateBody').match(/const reason = (\w+)\(\)/), null,
+  assert.notEqual(functionBody(SERVICE, 'spectateBody').match(/const reason = (\w+)\(\)/), null,
     'the Spectate answer names two of its reasons through the helper it assigns to reason, and the reader above follows it')
 
   const missingFromPage = setReasons.filter(reason => !pageReasons.includes(reason))
@@ -445,54 +405,8 @@ test('#722 the doc names the sessionserver refusal, its reason, and the counter 
 // #709: the words `configurationEnded`'s `reason` can hold, read off the leg's own end
 // sites. Every end takes three arguments and the reason is the second: a literal at ten
 // sites, and one string concatenation at the eleventh, which is the guard for a verb no lane
-// carries. These two helpers are a third copy of a scanner: endSites is endConfigurationSites
-// in test/legs/picker-numbers.test.js, and argumentsOf is its splitArguments, character for
-// character. #764 names the two this file already shared with that one (countedSites and
-// sourceBody) and not these two, which a comment on it now names.
-function endSites (source) {
-  const sites = []
-  for (let at = source.indexOf('endConfiguration('); at !== -1; at = source.indexOf('endConfiguration(', at + 1)) {
-    // The declaration, which is not a call.
-    if (/function\s+$/.test(source.slice(0, at))) continue
-    const open = source.indexOf('(', at)
-    let depth = 0
-    let end = -1
-    for (let i = open; i < source.length; i += 1) {
-      if (source[i] === '(') depth += 1
-      else if (source[i] === ')') {
-        depth -= 1
-        if (depth === 0) { end = i; break }
-      }
-    }
-    assert.notEqual(end, -1, 'the end site at byte ' + at + ' closes')
-    sites.push({ at, args: source.slice(open + 1, end) })
-  }
-  return sites
-}
-
-// One call's arguments, split at the commas that sit outside brackets, braces and strings.
-// The third argument of an end is a call as often as a name, so a plain split on a comma
-// would cut it in two.
-function argumentsOf (text) {
-  const args = []
-  let depth = 0
-  let quote = null
-  let from = 0
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i]
-    if (quote !== null) {
-      if (char === '\\') i += 1
-      else if (char === quote) quote = null
-      continue
-    }
-    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
-    if (char === '(' || char === '{' || char === '[') depth += 1
-    else if (char === ')' || char === '}' || char === ']') depth -= 1
-    else if (char === ',' && depth === 0) { args.push(text.slice(from, i).trim()); from = i + 1 }
-  }
-  args.push(text.slice(from).trim())
-  return args
-}
+// carries. The scan that reads them is test/support/source-scan.js's, the same one
+// test/legs/picker-numbers.test.js reads the ends with (#764).
 
 // The one end whose word is composed rather than written: the guard for a verb `PICK_VERBS`
 // carries and this leg has no branch for. It is one pattern on the page, because it is one
@@ -504,7 +418,7 @@ const UNBUILT_WORD = 'verb_<verb>_unbuilt'
 function endWords (source) {
   const words = new Set()
   for (const site of endSites(source)) {
-    const reason = argumentsOf(site.args)[1] ?? ''
+    const reason = site.args[1] ?? ''
     if (UNBUILT_SITE.test(reason)) {
       words.add(UNBUILT_WORD)
       continue
