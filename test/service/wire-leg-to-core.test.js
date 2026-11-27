@@ -242,14 +242,76 @@ test('#605 a leg is measured against the table it was handed, and against no oth
     'so the registrations and the dial it does not carry are the holes a wiring mistake reads')
 })
 
+// The register rows of both tables, as the case below walks them (#885). The set is the
+// tables' own, so a row added there is counted without an edit here and no list can leave one
+// out. A `call` row is a member the core reaches itself, which the #818 case reads.
+const REGISTER_ROWS = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]
+  .filter(row => row.kind === 'register')
+
+// Every module under one directory, as absolute paths. It recurses, so a lane in a
+// subdirectory is read too.
+function laneFiles (directory) {
+  const found = []
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name)
+    if (entry.isDirectory()) found.push(...laneFiles(file))
+    else if (entry.name.endsWith('.js')) found.push(file)
+  }
+  return found.sort()
+}
+
+// The lanes, as files and their text (#885). The set is the directory's, for the reason #607's
+// case gives: a module added under src/ladder is a caller too, and a hand-kept list would let it
+// through. The live lane's starter is the one caller outside that directory.
+function laneSources () {
+  const modules = laneFiles(path.join(ROOT, 'src/ladder')).map(file => ({
+    file: path.relative(ROOT, file).split(path.sep).join('/'),
+    source: fs.readFileSync(file, 'utf8')
+  }))
+  return [...modules, { file: 'src/service/start-live.js', source: read('src/service/start-live.js') }]
+}
+
+// Every hand registration of a register row, as the violations a reader acts on (#885). A file
+// the excuse table does not name for the row is held to 0, so the walk covers both tables whole
+// and the table is only the excuses. Comments are stripped: a lane explaining why it spells no
+// such thing wires nothing (test/ladder/rig.test.js:41).
+//
+// The count is of a literal: `.setX(` reads a plain call and an optional one (`.setX(`,
+// `?.setX(`). A member reached through a computed name, or destructured off the leg, is outside
+// a count of source text, which is the trade the file's header names. An assignment over the
+// setter (`leg.setX = fn`) is outside it too, and it also walks past the refusal #824 gave every
+// call-in, so that spelling is #918 rather than a sentence here.
+function handRegistrations (rows, lanes, excused) {
+  const wrong = []
+  for (const { name } of rows) {
+    for (const { file, source } of lanes) {
+      const named = count(code(source), '.' + name + '(')
+      const allowed = excused[name]?.[file] ?? 0
+      if (named === allowed) continue
+      wrong.push(file + ' names ' + name + ' ' + (named === 1 ? 'once' : named + ' times') + ', and ' +
+        (allowed === 0
+          ? 'no row of the excuse table allows it: route the registration through the core\'s start(), or add the row with this file and its count'
+          : 'the row allows ' + allowed))
+    }
+  }
+  return wrong
+}
+
+// The excuses, read against the rows and the files the case walks (#885): an excuse for a row
+// the tables no longer declare, or for a lane the walk no longer reads, is a count nothing
+// holds. That is the hand-kept list one step on.
+function staleExcuses (rows, lanes, excused) {
+  const names = rows.map(row => row.name)
+  const files = lanes.map(lane => lane.file)
+  const claimed = [...new Set(Object.values(excused).flatMap(byFile => Object.keys(byFile)))]
+  return {
+    rows: Object.keys(excused).filter(name => !names.includes(name)),
+    files: claimed.filter(file => !files.includes(file))
+  }
+}
+
 test('#592 the ritual has one home: no lane registers the core\'s call-ins by hand', () => {
   const MODULE = read('src/service/wire-leg-to-core.js')
-  const LANES = {
-    'src/service/start-live.js': read('src/service/start-live.js'),
-    'src/ladder/rig.js': read('src/ladder/rig.js'),
-    'src/ladder/client-parity.js': read('src/ladder/client-parity.js'),
-    'src/ladder/loopback.js': read('src/ladder/loopback.js')
-  }
 
   // The module is the one home, so each row of either table is declared there once per
   // table that names it. The quotes are what tell setCoreAttach from
@@ -271,107 +333,103 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
     }
   }
 
-  // Three of the four attach rows are never a lane's decision, so no lane with a
-  // core may name them.
-  const WIRED_LANES = {
-    'src/service/start-live.js': LANES['src/service/start-live.js'],
-    'src/ladder/rig.js': LANES['src/ladder/rig.js'],
-    'src/ladder/client-parity.js': LANES['src/ladder/client-parity.js']
-  }
-  for (const [file, source] of Object.entries(WIRED_LANES)) {
-    for (const name of ['setCoreAttachConfiguring', 'setConfiguringHandler', 'setClientSettingsHandler']) {
-      assert.equal(count(source, '.' + name + '('), 0,
-        file + ' leaves ' + name + ' to the core: a lane that registers it again has taken the ritual back')
-    }
-  }
+  // The lanes are the directory's and the rows are the tables', so this count covers both
+  // tables whole (#885). The rows are the `register` ones: a `call` row is a member the core
+  // reaches itself, and the #818 case below holds that side.
+  //
+  // #885: the row list and the lane list were both hand-kept. The rows no entry named were
+  // setReconfiguredHandler, setConnectClaimedBody, setSpectateBody, setSpectatorAttach,
+  // setDisconnectBody, setBodyServed, setSpectatorLeft and setSpectatorPose, so a lane that
+  // named one of them was outside a case whose job is coverage, and a row added tomorrow would
+  // have joined them in silence. The lane list held four names, fewer than the walks beside this
+  // case already read.
+  //
+  // src/ladder/loopback.js's raw funnel registers setSpectateBody by hand, and the case passed
+  // because no row named it. That registration is legitimate — a leg no core is handed — and the
+  // excuse table below is where it is said.
+  //
+  // The instrument is still a count, and the file's header says why: the claim is negative ("no
+  // lane registers the row"), so a lane that names the literal is the whole failure. The table
+  // below is only the excuses. The two cases above pin the payload of eleven of these rows at
+  // this seam; the other seven are rows this case counts, and no case here reads what they
+  // reshape.
+  const lanes = laneSources()
+  assert.ok(['src/ladder/rig.js', 'src/ladder/online.js', 'src/ladder/loopback.js']
+    .every(file => lanes.some(lane => lane.file === file)),
+    'the walk found the modules it reads, so a moved directory fails here rather than passing')
 
-  // The online rung joined them in #610: it declined the client-information
-  // call-in, and a rung that declines a row is a rung whose backend sees less
-  // than the product's. It keeps one hand registration, the attach wrapper
-  // below, and nothing else.
-  assert.equal(count(read('src/ladder/online.js'), '.setClientSettingsHandler('), 0,
-    'src/ladder/online.js wires no call-in by hand either: its backend sees the same client information every lane sends')
-
-  // The one rung that stands outside, and the factory's header is why: the two
-  // pre-auth rigs, and #666's raw funnel, build a front leg and no core, so a
-  // setter is all they have to drive. Their calls are theirs, and none is the
-  // ritual.
-  assert.equal(count(LANES['src/ladder/loopback.js'], '.setCoreAttachConfiguring('), 2,
-    'src/ladder/loopback.js keeps the two pre-auth stubs of O48 and O49, which build no core')
-
-  // The core registers nothing by hand either: the two calls are the two tables,
-  // and a lane's copy would have to reappear beside them.
-  const CORE = read('src/service/monoplayer.js')
-  assert.equal(count(CORE, 'wireLegToCore({'), 2,
-    'src/service/monoplayer.js applies one table per leg interface, in start()')
-  for (const table of [FRONT_LEG_CALL_INS, BACKEND_LEG_CALL_INS]) {
-    // A `call` row is one the core makes on the leg, so the call itself is the
-    // point: only a registration has to be absent from the core's body.
-    for (const { name, kind } of table) {
-      if (kind !== 'register') continue
-      assert.equal(count(CORE, '.' + name + '('), 0,
-        'src/service/monoplayer.js registers no call-in by hand: ' + name + ' is a row of a table')
-    }
-  }
-  // #605: the acceptance criterion, as a count rather than a promise.
-  for (const name of ['setFrameHandler', 'setEndHandler', 'setErrorHandler',
-    'setLoginStartHandler', 'setServerboundHandler', 'setDetachHandler']) {
-    assert.equal(count(CORE, '.' + name + '('), 0,
-      'src/service/monoplayer.js leaves ' + name + ' to its table: a registration here is a lane\'s copy of it elsewhere')
-  }
-
-  // #605: the six the core registered by hand are rows too, so no lane names one
-  // either, with two excuses the rung's own header gives. The count is per file
-  // because both are loopback rigs that build a leg and no core, so a setter is all
-  // they have to drive: the frame handler of the two body legs of O59, and #666's
-  // raw-funnel login review. Neither leg is one this core was handed.
+  // The one rung that stands outside, and the factory's header is why: the two pre-auth rigs,
+  // and #666's raw funnel, build a front leg and no core, so a setter is all they have to
+  // drive. Their calls are theirs, and none is the ritual. The two body legs of O59 keep their
+  // own caches, so a lane fills one of their frame handlers.
+  //
+  // #683: setCoreAttach earns no entry. The rig factory used to offer an `attach` hook for a
+  // wrapper around that call-in, and #683 deleted the lanes that took it, because the cut is
+  // the core's event now. A wrapper is the same literal, so the walk below reads it.
   const BY_HAND = {
+    // The two pre-auth stubs of O48 and O49.
+    setCoreAttachConfiguring: { 'src/ladder/loopback.js': 2 },
+    // #666's raw funnel: the login review a picker dialog needs, on a leg no core is handed.
     setLoginStartHandler: { 'src/ladder/loopback.js': 1 },
-    setServerboundHandler: {},
-    setDetachHandler: {},
-    setEndHandler: {},
-    setErrorHandler: {},
+    // #666's raw funnel again: the one verb it serves, and the body that verb names.
+    setSpectateBody: { 'src/ladder/loopback.js': 1 },
+    // The frame handler of O59's two body legs, each reading its own cache.
     setFrameHandler: { 'src/ladder/loopback.js': 1 }
   }
-  for (const [name, excused] of Object.entries(BY_HAND)) {
-    for (const [file, source] of Object.entries(LANES)) {
-      assert.equal(count(source, '.' + name + '('), excused[file] ?? 0,
-        file + ' leaves ' + name + ' to the core: a lane that names one has taken the registration back')
-    }
+
+  const stale = staleExcuses(REGISTER_ROWS, lanes, BY_HAND)
+  assert.deepEqual(stale.rows, [],
+    'the excuse table names ' + stale.rows.join(', ') + ', and the tables declare no such `register` row. ' +
+    'An excuse for a row that is gone is a lane nothing holds (#885)')
+  assert.deepEqual(stale.files, [],
+    'the excuse table excuses ' + stale.files.join(', ') + ', and the walk reads no such file. A lane that ' +
+    'moved leaves a count no assertion reads (#885)')
+
+  const byHand = handRegistrations(REGISTER_ROWS, lanes, BY_HAND)
+  assert.deepEqual(byHand, [],
+    'no lane registers a row of either table by hand: the core applies both tables in its start(), and a ' +
+    'lane\'s own registration is the second one the leg refuses (#592, #824). The rows here are the tables\' ' +
+    '`register` rows, so a row added to a table is counted without an edit to this case (#885). These lanes ' +
+    'take a registration back:\n  ' + byHand.join('\n  '))
+
+  // The walk bites, and the row set is not a list. The row fed here is one no table declares,
+  // because the tree's own lanes are the claim above and a case that only watched them pass
+  // would pass on a walk that counted nothing.
+  const ROW_NO_TABLE_DECLARES = [{ kind: 'register', name: 'setRowNoTableDeclares' }]
+  const SAMPLE = [{ file: 'src/ladder/sample.js', source: 'leg.setRowNoTableDeclares(fn)' }]
+  const bit = handRegistrations(ROW_NO_TABLE_DECLARES, SAMPLE, {})
+  assert.equal(bit.length, 1,
+    'a row a lane names and the excuse table does not allow is one violation, which is the case #885 was about')
+  assert.match(bit[0], /src\/ladder\/sample\.js names setRowNoTableDeclares/,
+    'and the violation names the file and the row, so a reader knows where the registration is')
+  assert.deepEqual(handRegistrations(ROW_NO_TABLE_DECLARES, [{ file: 'src/ladder/sample.js', source: '// leg.setRowNoTableDeclares(fn)' }], {}), [],
+    'and a comment that names the literal wires nothing: the count reads code, as #607\'s walk does')
+  assert.deepEqual(staleExcuses(ROW_NO_TABLE_DECLARES, SAMPLE, { setGoneRow: { 'src/ladder/gone.js': 1 } }),
+    { rows: ['setGoneRow'], files: ['src/ladder/gone.js'] },
+    'an excuse for a row the tables lost, or for a lane the walk lost, is reported rather than left to pass')
+
+  // The core registers nothing by hand either: the two calls are the two tables, and a lane's
+  // copy would have to reappear beside them.
+  const CORE = code(read('src/service/monoplayer.js'))
+  assert.equal(count(CORE, 'wireLegToCore({'), 2,
+    'src/service/monoplayer.js applies one table per leg interface, in start()')
+  for (const { name } of REGISTER_ROWS) {
+    assert.equal(count(CORE, '.' + name + '('), 0,
+      'src/service/monoplayer.js registers no call-in by hand: ' + name + ' is a row of a table')
   }
 
-  // #683: no lane wraps the attach call-in any more. The rig factory used to offer
-  // an `attach` hook for exactly that, and the three lanes that need the cut took
-  // it, each reading the cache snapshot and the pose around the call. The core
-  // publishes the cut of every replay it performs now, so a wrapper here is a lane
-  // taking its own copy again: the defect #607 left and #683 closes.
-  //
-  // The set is the directory, not a list of files, for the reason the case below
-  // gives for the same walk: a module added under src/ladder is a caller too, and a
-  // hand-kept list would let it through.
-  const callers = fs.readdirSync(path.join(ROOT, 'src/ladder'))
-    .filter(name => name.endsWith('.js'))
-    .map(name => 'src/ladder/' + name)
-  callers.push('src/service/start-live.js')
-  assert.ok(callers.includes('src/ladder/rig.js') && callers.includes('src/ladder/online.js'),
-    'the walk found the modules it reads, so a moved directory fails here rather than passing')
-  for (const file of callers) {
-    assert.equal(count(code(read(file)), '.setCoreAttach('), 0,
-      file + ' leaves the attach call-in alone: the cut is the core\'s event, not a wrapper\'s record')
-  }
-
-  // And the lanes that record a cut subscribe to it instead. A file a row does not
-  // name states 0, so a new lane that subscribes fails here until its row says how
-  // many replays it records; a lane that neither wraps nor subscribes records
-  // nothing, and its parity rung fails on the empty cut.
+  // And the lanes that record a cut subscribe to it instead. A file a row does not name states
+  // 0, so a new lane that subscribes fails here until its row says how many replays it records;
+  // a lane that neither registers nor subscribes records nothing, and its parity rung fails on
+  // the empty cut.
   const ATTACH_SUBSCRIBERS = {
     // The main rig's O27 and O28, and the entity rig's O51.
     'src/ladder/loopback.js': 2,
     // N13's cut.
     'src/ladder/online.js': 1
   }
-  for (const file of callers) {
-    assert.equal(count(code(read(file)), ".on('attach'"), ATTACH_SUBSCRIBERS[file] ?? 0,
+  for (const { file, source } of lanes) {
+    assert.equal(count(code(source), ".on('attach'"), ATTACH_SUBSCRIBERS[file] ?? 0,
       file + ' subscribes to the attach event ' + (ATTACH_SUBSCRIBERS[file] ?? 0) + ' times: a lane that records a cut reads the core\'s publish, and one that records none names no event')
   }
 })
@@ -524,22 +582,21 @@ test('#817 the core publishes no wiring report, because its only readers were te
 // The set is the directory, not a list of three files. A module added under
 // src/ladder is a caller too, and a hand-kept list would let it through, which is
 // the "fails loudly" rule in AGENTS.md rather than a claim in prose. The live lane
-// is the one caller outside it, and it registers no wrapper.
+// is the one caller outside it, and it registers no wrapper. The walk is `laneSources`
+// above, so "which files are lanes" is one answer in this file and the ritual case's
+// count and this one cannot disagree about a subdirectory (#885).
 test('#607 no module that builds a core over legs rebuilds the handler\'s argument', () => {
-  const callers = fs.readdirSync(path.join(ROOT, 'src/ladder'))
-    .filter(name => name.endsWith('.js'))
-    .map(name => 'src/ladder/' + name)
-  callers.push('src/service/start-live.js')
-  assert.ok(callers.includes('src/ladder/rig.js') && callers.includes('src/ladder/online.js'),
+  const lanes = laneSources()
+  assert.ok(lanes.some(lane => lane.file === 'src/ladder/rig.js') && lanes.some(lane => lane.file === 'src/ladder/online.js'),
     'the walk found the modules it reads, so an empty or moved directory fails here rather than passing')
 
-  for (const file of callers) {
+  for (const { file, source } of lanes) {
     // The defect's other spelling: a direct call with no includeConfig at all, which
     // rebinds the core's `includeConfig = true` and brings the configuration replay
     // back. Counting only the literal would let that through.
-    assert.equal(count(code(read(file)), '.attachPlayer('), 0,
+    assert.equal(count(code(source), '.attachPlayer('), 0,
       file + ' attaches through the handler the core installed: a direct attachPlayer is a payload of its own')
-    assert.equal(count(code(read(file)), 'includeConfig: false'), 0,
+    assert.equal(count(code(source), 'includeConfig: false'), 0,
       file + ' leaves the attach\'s argument to the table: a caller that writes includeConfig is holding a second copy of the row')
   }
   // The table still names the key. Counted without its value, so lifting the value
