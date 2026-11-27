@@ -8,12 +8,13 @@
 // work without, or one it uses when the leg carries it.
 //
 // A `call` row carries the call's name and no answer shape, and #672 decided that on
-// purpose: the module that answers a call owns what it answers, and a list of names
-// here would be a second home to drift from. The one answer the core passes straight
-// into a published value is `preAuthStats` (the lane snapshot's `preAuth` group,
-// #627), so test/legs/adapters.test.js compares every leg that answers it to
-// `createPreAuthWindow().stats()` in src/core/preauth-window.js. A row that gained a
-// shape here would have to be measured against that module anyway.
+// purpose. A list of names here would be a second home, and a row cannot say which of
+// its answer's fields the core reads. `wireLegToCore` may not call a leg to find out
+// either, because `answerHeldGate` and `chat` are calls with effects. So the fields live
+// where the read is: test/legs/adapters.test.js holds every answering leg to the fields
+// the core reads off its answer, and `preAuthStats` — the one answer a lane snapshot
+// publishes whole (#627) — to `createPreAuthWindow().stats()` in
+// src/core/preauth-window.js.
 //
 // The lanes used to register the front ones by hand. The live lane and the rig
 // copied all four (src/service/start-live.js, src/ladder/rig.js, where the
