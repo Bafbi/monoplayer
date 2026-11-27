@@ -98,6 +98,32 @@ rather than guessing:
   volume stopped before its first write does report `freeBytes` and
   `requiredBytes`, and those rows appear.
 
+**The front leg's counters are drawn whole and not from a list in the panel.** The
+`Front` group is every counter the heartbeat's `front` group carries, in the order the
+record carries them, which is the order `src/legs/live-front.js` declares them in. A
+counter the leg adds is a row on the page with no edit here and no edit in the panel.
+That is the point of #743: the field list the panel kept named only the counters
+somebody had written into it, so a login the sessionserver refused was counted,
+recorded and charted, and never appeared on the card. That row reads `sessionserver
+refused the login`, and the order it appears in is the leg's: the panel imposes none, so
+a row's neighbours are whatever `src/legs/live-front.js` declares beside it. The
+refusal it counts is one an operator tells apart from `pre-auth refused`, which is in
+the same group: that one is this lane turning a login away, and this one is Mojang
+refusing it before the lane reviews the client
+([#722](https://github.com/Bafbi/monoplayer/issues/722)).
+
+A label is a lookup, and it is not a filter. A counter with no entry in it is drawn under
+its own name spaced out, so a bad word costs a reader a label and never a number. A
+counter group holds numbers, and one level of map from a key to a number, which is how
+the picker's refusals by reason are drawn: a group of its own, one row per reason, with
+the reason as the leg wrote it. A string never reaches the page from a counter group,
+whatever the field is called, because a string is where a secret lives and a counter is
+not one.
+
+`Cache` is projected the same way and drawn as one row: `domains` joins whatever domains
+the record holds, so a cache domain the panel has never heard of is still a number on
+the page.
+
 The two groups #415 added to the heartbeat are drawn beside the cache rows: one row
 set per body and one per channel. [telemetry.md](telemetry.md) defines every field of
 both, and the card's labels are its

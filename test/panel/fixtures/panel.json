@@ -138,7 +138,8 @@
           "preAuthExpired": 0,
           "preAuthInWindow": 0,
           "policyRefused": 0,
-          "stateRefused": 0
+          "stateRefused": 0,
+          "sessionVerificationRefused": 2
         },
         "sizes": {
           "prefix": 360,

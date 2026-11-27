@@ -5,12 +5,23 @@
 // and carries that record's own `t`. Nothing here reads the clock for a fact: the
 // clock is used only to say how old a record is, and the page says "old" in words.
 //
-// The projection is a whitelist, field by field. A key the tail carries and this
-// file does not name never reaches the page, which is what keeps a secret out of
-// it even if a future log line grows one: the JSONL is redacted where it is
-// written (src/observability/redact.js), and this file decides what the page may
-// see on top of that. `redact` runs over every string anyway, so a token-shaped
-// value inside a field the panel does display is cleaned twice rather than shown.
+// The projection decides what the page may see, and it does that two ways.
+//
+// A named group is a whitelist, field by field: the list below holds the fields
+// docs/telemetry.md documents for the group, and a key none of them names never
+// reaches the page. `redact` runs over every string it does admit
+// (src/observability/redact.js), so a token-shaped value inside a displayed field is
+// cleaned rather than shown.
+//
+// A counter group is projected by shape (#743). `front` is the front leg's counters
+// and `sizes` is the cache's: a counter is a number, so that is the rule, and a
+// counter the leg grows reaches the page without this file being edited for it. The
+// whitelist that used to stand there named the counters somebody had written into it,
+// so the rest reached the pod log, the journal and OTLP and stopped: a field list that
+// must be edited for every new counter is a list numbers die behind. What the whitelist
+// also guarded — that a secret cannot ride a name this file has never heard of — is
+// now a rule about the group and not about the field: a counter is a number, and a
+// counter group admits no string at all, which is the one place a secret lives.
 //
 // Read-only: nothing here writes a record, a file, or a ConfigMap.
 import { redact } from '../observability/redact.js'
@@ -22,9 +33,12 @@ export const HEARTBEAT_MS = 30_000
 export const STALE_MS = 3 * HEARTBEAT_MS
 // A token inside this window is a puppet that stops serving at its next refresh.
 export const EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000
-// The documented fields of each group. A field outside a list is not rendered.
-const SIZES = ['prefix', 'config', 'chunks', 'blocks', 'entities', 'inventories', 'latest', 'generic']
-const FRONT = ['allowed', 'attaches', 'denied', 'preAuthRefused', 'preAuthExpired', 'preAuthInWindow', 'policyRefused', 'stateRefused']
+// The named groups' fields: the documented ones, field by field. A field outside a
+// list is not rendered. These two keep a list where `front` and `sizes` do not,
+// because their rows are not one per field: the journal group draws three caps the
+// heartbeat does not carry and the shard's name, and the wire group has two documented
+// fields that are not counters, a map and a sentence, which this list drops. #782 is
+// the ticket that says which fields of those two never reach the page.
 const JOURNAL = ['enabled', 'disabledReason', 'dir', 'file', 'frames', 'events', 'bytes', 'sealed',
   'pruned', 'prunedBytes', 'skipped', 'dropped', 'truncated', 'errors', 'dirBytes', 'freeBytes', 'requiredBytes']
 const WIRE = ['checked', 'rejected']
@@ -99,6 +113,31 @@ const finite = value => (typeof value === 'number' && Number.isFinite(value) ? v
 const dayWord = days => (Math.abs(days) === 1 ? 'day' : 'days')
 const counter = (source, name) => (isObject(source) ? finite(source[name]) : null)
 
+// A counter, by shape: a finite number. A string is refused, because a counter is not
+// one and a string is where a secret lives: this is what keeps a secret out of a
+// counter group whose field names this file has never heard of. A boolean is refused
+// for a smaller reason: neither group holds a flag, and a flag a view cannot tell from
+// a count is a shape the page would print wrongly rather than drop (#743).
+const isCounter = value => typeof value === 'number' && Number.isFinite(value)
+
+// The one map a counter group holds: a count per key, which is the front leg's
+// `pickerRefusalsByReason` (#417). The page draws one row per entry, so the entries
+// are kept; a map that is empty, or whose entries are not counters, is a value the
+// page cannot draw and is not one it invents a number for. An empty map is the case
+// the page says nothing about, and it loses nothing by that: the total this map breaks
+// down is a counter beside it, and the total is drawn whatever the map holds.
+function countMap (value) {
+  if (!isObject(value)) return null
+  const entries = Object.entries(value)
+  if (entries.length === 0) return null
+  const out = {}
+  for (const [key, entry] of entries) {
+    if (!isCounter(entry)) return null
+    out[key] = entry
+  }
+  return out
+}
+
 // The named fields of one group, as numbers, booleans, strings, or null. A value
 // of another shape (an object, a list) is dropped rather than stringified: the
 // panel shows the documented fields, and an undocumented object is not one.
@@ -118,6 +157,28 @@ function pick (source, keys) {
       out[key] = null
     } else {
       continue
+    }
+    any = true
+  }
+  return any ? out : null
+}
+
+// One counter group, whole: every field the record carries, in the record's own
+// order, plus the one map of counts it can hold. Null means the record carries no such
+// group, which is a lane older than the group, and the page then says nothing about
+// it. A field of another shape is dropped rather than stringified, which for a group
+// of counters means a string never reaches the page.
+function pickCounters (source) {
+  if (!isObject(source)) return null
+  const out = {}
+  let any = false
+  for (const [key, value] of Object.entries(source)) {
+    if (isCounter(value)) {
+      out[key] = value
+    } else {
+      const counts = countMap(value)
+      if (counts === null) continue
+      out[key] = counts
     }
     any = true
   }
@@ -290,8 +351,10 @@ function heartbeatFacts (record, now) {
     attached: typeof record.attached === 'boolean' ? record.attached : null,
     warm: typeof record.warm === 'boolean' ? record.warm : null,
     backendLogins: counter(record, 'backendLogins'),
-    front: pick(record.front, FRONT),
-    sizes: pick(record.sizes, SIZES),
+    // #743: the two counter groups, whole. A counter the leg adds is a row the page
+    // draws, and the label it draws it under is the view's business, not this file's.
+    front: pickCounters(record.front),
+    sizes: pickCounters(record.sizes),
     chunkBytes: counter(record, 'chunkBytes'),
     journal: pick(record.journal, JOURNAL),
     wire: pick(record.wire, WIRE),
