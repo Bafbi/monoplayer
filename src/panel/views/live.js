@@ -141,28 +141,46 @@ const spaced = name => name
 
 const frontLabel = name => FRONT_LABELS[name] ?? spaced(name)
 
-// The front leg's counters, whole and in the record's own order (#743). The order is
-// the leg's declaration and the page has no second opinion about it, so a counter the
-// leg adds lands where the leg put it.
+// The words the core's counters are drawn under, under the same rule: only the ones
+// the fallback gets wrong. The core counts a client the proxy kicked, and "front kicks"
+// read as though the front were the thing kicked; it counts ghost states answered, and
+// "notice ghosts" read as notices that do not exist. Every other core counter reads as
+// its own name spaced out, which is why this lookup has two entries and no more.
+const CORE_LABELS = {
+  frontKicks: 'clients kicked',
+  noticeGhosts: 'ghost states answered'
+}
+
+const coreLabel = name => CORE_LABELS[name] ?? spaced(name)
+
+// One counter group, whole and in the record's own order (#743, #833). The order is
+// the declaration's and the page has no second opinion about it, so a counter the
+// writer adds lands where it put it.
 //
 // A counter the group holds as a map of counts — the picker's refusals by reason
-// (#417) — is one row per key under a heading of its own, because the reasons are what
-// the operator is reading for. The keys are drawn as the leg wrote them: a reason is a
-// machine's word and not one this file improves.
-function renderFront (front) {
-  if (front === null || front === undefined) return []
+// (#417), the relay's frames by name (#833) — is one row per key under a heading of
+// its own, because the keys are what the operator is reading for. The keys are drawn
+// as the writer wrote them: a reason and a packet name are machine's words and not
+// ones this file improves.
+//
+// The two groups this draws are the leg's and the core's, and neither is a field list:
+// the projection kept every counter the record carried, so this draws every one of them.
+// The two differ in nothing but the title they are drawn under and the words their rows
+// use.
+function renderCounters (counters, title, label) {
+  if (counters === null || counters === undefined) return []
   const rows = []
   const maps = []
-  for (const [name, value] of Object.entries(front)) {
+  for (const [name, value] of Object.entries(counters)) {
     if (value !== null && typeof value === 'object') {
       // A keyed group is named by the record's own word for it, and each key is a row.
-      maps.push(group(frontLabel(name), Object.entries(value).map(([key, entry]) => row(key, count(entry)))))
+      maps.push(group(label(name), Object.entries(value).map(([key, entry]) => row(key, count(entry)))))
       continue
     }
-    rows.push(row(frontLabel(name), count(value)))
+    rows.push(row(label(name), count(value)))
   }
   // group() answers '' for a group with no rows, and '' is what the caller joins.
-  return [group('Front', rows), ...maps]
+  return [group(title, rows), ...maps]
 }
 
 function renderHeartbeat (facts) {
@@ -177,7 +195,11 @@ function renderHeartbeat (facts) {
     row('backend logins', count(heartbeat.backendLogins))
   ]))
 
-  lines.push(...renderFront(heartbeat.front))
+  lines.push(...renderCounters(heartbeat.front, 'Front', frontLabel))
+  // #833: the core's counters, beside the front leg's and not under them. They answer
+  // the other half of the same question: what this process has done since it started.
+  // Before this line the card drew none of them.
+  lines.push(...renderCounters(heartbeat.metrics, 'Core', coreLabel))
 
   const sizes = heartbeat.sizes ?? {}
   const domains = Object.keys(sizes)

@@ -109,7 +109,8 @@ rather than guessing:
 
 **The front leg's counters are drawn whole and not from a list in the panel.** The
 `Front` group is every counter the heartbeat's `front` group carries, in the order the
-record carries them, which is the order `src/legs/live-front.js` declares them in. A
+record carries them, which is the order `src/legs/live-front.js` declares them in. Its map
+of refusals is drawn after them, under a heading of its own, as the core's maps are. A
 counter the leg adds is a row on the page with no edit here and no edit in the panel.
 That is the point of #743: the field list the panel kept named only the counters
 somebody had written into it, so a login the sessionserver refused was counted,
@@ -128,6 +129,51 @@ the picker's refusals by reason are drawn: a group of its own, one row per reaso
 the reason as the leg wrote it. A string never reaches the page from a counter group,
 whatever the field is called, because a string is where a secret lives and a counter is
 not one.
+
+**The core's counters are drawn beside the front leg's, under `Core`.** The group is
+every counter the heartbeat's `metrics` group carries, in the order
+`src/service/monoplayer.js` declares them, with its name-keyed maps drawn after the row
+set, each under a heading of its own. It is where the process keeps what it has done
+since it started, and
+[telemetry.md](telemetry.md) defines its fields, except six it does not name yet
+([#850](https://github.com/Bafbi/monoplayer/issues/850)). Until
+[#833](https://github.com/Bafbi/monoplayer/issues/833) the panel projected eight groups
+and not this one. Every core counter reached the pod log, the journal and OTLP and never
+the card. The refused replay frame an operator went looking for was among them. It is the
+group [#743](https://github.com/Bafbi/monoplayer/issues/743) left behind: `front` and
+`sizes` were generalised to carry whatever the record holds, and the projection is the
+same one, so a counter the service adds is a row here with no edit in the panel and none
+in this page.
+
+Its label lookup is the front group's rule with the core's own words: `frontKicks` reads
+"clients kicked", because "front kicks" reads as though the front were the thing kicked,
+and `noticeGhosts` reads "ghost states answered". Every other core counter is its own
+name spaced out.
+
+**Each name-keyed map is a group of its own.** `serverboundByName`,
+`serverboundDroppedByName` and `clientboundBlockedByName` hold a count per name the
+service counted: a packet name, or `transfer` for the transfer frame the proxy withholds.
+Each map is one row per name under a heading named by the field, and the names are drawn
+as the service wrote them. The picker's refusals by reason are drawn the same way. These
+are the only rows in the group that can grow: a map is bounded by the packet vocabulary
+the client speaks and by the cap the service counts names under (`MAX_NAMES` in
+`src/service/monoplayer.js`), and every name in it is a row, because a count per name is
+what the map is for. A map the record carries empty is drawn nowhere, which is a lane
+that has counted no name yet.
+
+**The core's counters are one row set, and not one heading per family.** This is the
+card's longest row set, and it stays whole for a reason that outlives its length: every
+way of shortening it spends a number. A heading per family does not shorten it by a line,
+because the declaration already puts a family's counters beside each other, so a heading
+would repeat the order rather than add to it. The families the declaration does split,
+such as the transfers' and the notices', are the ones a heading table would have to
+reorder, which is the second opinion about the record's order this page never takes. Such
+a table is also a field list by another name: a counter the service adds lands in a group
+nobody chose, and its number is then drawn in the wrong place. Nothing here is collapsed,
+and nothing is hidden at zero. The stream replaces this region's `innerHTML` every five
+seconds, so a row set the operator folded open would close under their hand, and a
+cumulative counter at zero is the answer "this process has not done it", which a card
+that dropped it would print as the same silence as a counter it had lost.
 
 `Cache` is projected the same way and drawn as one row: `domains` joins whatever domains
 the record holds, so a cache domain the panel has never heard of is still a number on

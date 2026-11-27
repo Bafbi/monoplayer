@@ -1,5 +1,5 @@
-// The heartbeat's groups on the page: the per-body and per-channel ones (#419), and
-// the front leg's counters (#743).
+// The heartbeat's groups on the page: the per-body and per-channel ones (#419), the
+// front leg's counters (#743), and the core's (#833).
 //
 // #415 added `bodies` and `channels` to the heartbeat, and docs/telemetry.md, under
 // "The per-body and per-channel groups", defines every field of both. The panel's
@@ -19,6 +19,12 @@
 // count reached the pod log, the journal and OTLP and stopped. The two counter groups are
 // projected by shape now, not by name: a counter is a number, so a counter nobody named
 // is a row the page draws.
+//
+// #833 is the third group, and the one #743 left behind: the service writes every
+// counter it keeps as the heartbeat's `metrics` group, and the panel's projection named
+// eight groups and not that one, so every core counter stopped at the pod log. The tests below are the shape #743's rule implies — a counter the record
+// carries and this file has never heard of is a row the page draws — pointed at the
+// group where the rule had not been applied.
 //
 // That last rule is why the front half of this file is not shaped like the bodies half.
 // These tests hold the doc's field list against the page in the one direction the doc can
@@ -77,13 +83,26 @@ function facts (heartbeat = {}) {
 // doc writes with a `.*` tail is a map's keys, which the doc states as one row.
 function documented (marker) {
   const found = []
+  // A table row may name its first field in full and the rest as `.field`, which is how
+  // the metrics rows are written, and a reader that took only the fully prefixed name
+  // would hold one field of each row to the page and let the others drop (#833). The group is the first name's own prefix, so a sibling is read under
+  // the row it belongs to and the next table's rows start a group of their own.
+  let group = null
   for (const line of DOC.split('\n')) {
     const cells = line.split('|')
     if (cells.length < 3) continue
     // The Field column only, which is the second cell: the Meaning column names
     // files and metrics in backticks too, and none of those is a field.
-    for (const match of (cells[1] ?? '').matchAll(/`([^`]+)`/g)) {
-      if (match[1].startsWith(marker)) found.push(match[1].slice(marker.length))
+    const names = [...(cells[1] ?? '').matchAll(/`([^`]+)`/g)].map(match => match[1])
+    if (names.length === 0) group = null
+    for (const name of names) {
+      if (name.startsWith('.')) {
+        if (group !== null && group.startsWith(marker)) found.push((group + name.slice(1)).slice(marker.length))
+        continue
+      }
+      const dot = name.indexOf('.')
+      group = dot > 0 ? name.slice(0, dot + 1) : null
+      if (name.startsWith(marker)) found.push(name.slice(marker.length))
     }
   }
   return [...new Set(found)]
@@ -205,6 +224,106 @@ test('#743 a front group shows no string and no map that is not counts', () => {
   assert.equal(card.heartbeat.front.pickerRefusalsByReason, undefined,
     'a map whose values are not counts is a map the page has no row for, and it is not one the page invents')
   assert.doesNotMatch(page, /<dt>access_token<\/dt>|a-token-shaped-secret|<dt>note<\/dt>|<dt>picker enabled<\/dt>/)
+})
+
+test('#833 a core counter nobody named is a row the page draws, under its own name', () => {
+  // The test #743's shape implies, on the group where the rule was missing: neither this
+  // file nor the view holds a list of the group's counters, and the page draws one that
+  // nothing names. `koanCountedByNobody` is the unanticipated key: a counter this
+  // repository does not write anywhere, which the record carried once.
+  const card = facts({ metrics: { replayFramesRefused: 4, koanCountedByNobody: 7 } })
+  assert.equal(card.heartbeat.metrics.koanCountedByNobody, 7,
+    'the projection keeps a core counter this file has no field list for')
+  const page = renderLive(card)
+  assert.match(page, /<dt>replay frames refused<\/dt><dd>4<\/dd>/,
+    'the counter an operator went looking for when #833 was filed')
+  assert.match(page, /<dt>koan counted by nobody<\/dt><dd>7<\/dd>/,
+    'a core counter this file has never heard of is a row, with its own name spaced out as its label')
+})
+
+test('#833 every field docs/telemetry.md names for the metrics group is a row on the page', () => {
+  const named = documented('metrics.')
+  assert.ok(named.length > 0, 'docs/telemetry.md names the metrics group')
+  // The doc writes these rows as `metrics.first`, `.second`, `.third`, so the field
+  // list is the two parsers agreeing: the doc's own spelling, and the record's.
+  const record = {}
+  const numbers = []
+  let next = 201
+  for (const name of named) {
+    if (name.endsWith('.*')) {
+      record[name.slice(0, -2)] = { chat: 901, use_item: 902 }
+      continue
+    }
+    record[name] = next
+    numbers.push([name, next])
+    next += 1
+  }
+  const page = renderLive(facts({ metrics: record }))
+  const start = page.indexOf('<h4>Core</h4>')
+  assert.notEqual(start, -1, 'the card draws the core group')
+  const core = page.slice(start, page.indexOf('<h4>', start + 1))
+  for (const [name, value] of numbers) {
+    assert.ok(core.includes('<dd>' + value + '</dd>'),
+      'docs/telemetry.md names metrics.' + name + ' and the page draws no row for its ' + value)
+  }
+  assert.equal((core.match(/<div>/g) ?? []).length, numbers.length,
+    'one row per counted field: this record carries the doc\'s fields and no others, so a row beside them is a row the doc does not name')
+  assert.match(page, /<h4>serverbound by name<\/h4>[\s\S]{0,200}<dt>chat<\/dt><dd>901<\/dd>/,
+    'a field the doc writes as a map is one row per key, and the key is drawn as the service wrote it')
+})
+
+test('#833 the core rows keep the order the record carries them in', () => {
+  // The order is the service's declaration and the page has no second opinion about
+  // it, so a counter added beside its family lands beside it.
+  const page = renderLive(facts({ metrics: { framesCached: 1, replayFramesRefused: 2, serverboundForwarded: 3 } }))
+  const at = label => page.indexOf('<dt>' + label + '</dt>')
+  assert.ok(at('frames cached') < at('replay frames refused'),
+    'the page kept the record\'s order: frames cached was declared first and is drawn first')
+  assert.ok(at('replay frames refused') < at('serverbound forwarded'),
+    'and the counter declared after it follows it')
+})
+
+test('#833 a core group shows no string and no map that is not counts', () => {
+  // The same rule as the front group, on the group where a leak would be worse: this is
+  // the group the service writes most of its state into. `/api/puppets/<name>` serves
+  // the object asserted here, so a value absent from it is absent from both.
+  const card = facts({
+    metrics: {
+      framesCached: 1,
+      access_token: 'a-token-shaped-secret',
+      note: 'hello',
+      armed: true,
+      serverboundByName: { chat: 'x' }
+    }
+  })
+  const page = renderLive(card)
+  assert.match(page, /<dt>frames cached<\/dt><dd>1<\/dd>/, 'the counters beside them still draw')
+  assert.equal(card.heartbeat.metrics.access_token, undefined, 'a string is not a counter, whatever it is called')
+  assert.equal(card.heartbeat.metrics.note, undefined)
+  assert.equal(card.heartbeat.metrics.armed, undefined, 'a boolean is not a counter either')
+  assert.equal(card.heartbeat.metrics.serverboundByName, undefined,
+    'a map whose values are not counts is a map the page has no row for, and it is not one the page invents')
+  assert.doesNotMatch(page, /a-token-shaped-secret|<dt>note<\/dt>|<dt>armed<\/dt>/)
+  assert.doesNotMatch(JSON.stringify(card), /a-token-shaped-secret/,
+    '/api/puppets/<name> serves this object, so the secret reaches neither the page nor the answer')
+})
+
+test('#833 a core counter whose name reads wrong says the word the lookup gives it', () => {
+  // The lookup is a lookup and not a filter: a counter with no entry is drawn under its
+  // own name spaced out, which is what every core counter but these two does.
+  const page = renderLive(facts({ metrics: { frontKicks: 2, noticeGhosts: 5, lateFramesAfterHandover: 1 } }))
+  assert.match(page, /<dt>clients kicked<\/dt><dd>2<\/dd>/,
+    '"front kicks" read as though the front were the thing kicked')
+  assert.match(page, /<dt>ghost states answered<\/dt><dd>5<\/dd>/)
+  assert.match(page, /<dt>late frames after handover<\/dt><dd>1<\/dd>/, 'and the fallback still draws the rest')
+})
+
+test('#833 a lane older than the metrics group draws no core row', () => {
+  // A deployed lane older than the record's group writes no `metrics` key, and null is
+  // that: the page says nothing rather than drawing a heading over a group of zeros.
+  const card = facts()
+  assert.equal(card.heartbeat.metrics, null)
+  assert.doesNotMatch(renderLive(card), /<h4>Core<\/h4>/)
 })
 
 test('#743 a cache domain nobody named is a number the page still shows', () => {
