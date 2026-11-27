@@ -417,7 +417,8 @@ test('a step declared expected absent carries its tickets and its reason, and no
   for (const step of OPERATOR_STEPS) {
     const declaredHere = step.openUntil !== undefined
     assert.equal(declaredHere, typeof step.because === 'string' && step.because.includes('not-seen'),
-      'step ' + step.id + ' declares a gap if and only if its failure sentence says a witness records it not-seen')
+      'step ' + step.id + ': the declaration and the cell that names it are one fact, so a step whose cell tells the ' +
+      'operator to record it not-seen carries `openUntil`, and a step carrying `openUntil` says so in that cell')
     if (!declaredHere) continue
     const named = [...new Set([...step.because.matchAll(/#(\d+)/g)].map(match => Number(match[1])))]
     assert.deepEqual(named.sort(), [...step.openUntil].sort(),
@@ -438,6 +439,24 @@ test('the witness it generates names the expected gap out of the module, so the 
   assert.equal(lines.length, 1, 'the document names the step a run taken today cannot see, once')
   assert.match(lines[0], /#647 and #645/, 'and the tickets that close it')
   assert.match(lines[0], /not-seen/, 'and the state to record it in')
+})
+
+// The labels the page tells the operator to look for are this module's, and it is the module that
+// prints them: renaming a line would leave the page describing output nobody sees. The table guard
+// reads cells, not paragraphs, so nothing compared the prose that describes these two lines.
+test('the runbook names the lines a gapped proof prints, and the labels come from this module', () => {
+  const page = section(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'), 'Record what you saw')
+  const report = verdict(readingOf(run()))
+
+  const gapped = witnessed()
+  gapped.steps = withStep(gapped, 'spectator-own-body', { state: 'not-seen', evidence: 'a body was drawn in third person' })
+  assert.match(formatVerdict(report, { witnessPath: 'w', witness: gapped }), /^\s+known gap: /m)
+  assert.match(formatVerdict(report, { witnessPath: 'w', witness: witnessed() }), /^\s+stale declaration: /m,
+    'the same report names a declaration the witness outlived')
+
+  for (const label of ['known gap:', 'stale declaration:']) {
+    assert.ok(page.includes(label), 'the runbook tells the operator the line to look for: ' + label)
+  }
 })
 
 // The declaration is `OPERATOR_STEPS`'s fact, so it cannot come from the document: the file is
