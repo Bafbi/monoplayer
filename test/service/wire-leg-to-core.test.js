@@ -23,6 +23,7 @@ import {
   wireLegToCore
 } from '../../src/service/wire-leg-to-core.js'
 import { createFakeBackendLeg, createFakeFrontLeg } from '../../src/legs/fake-legs.js'
+import { createOfflineBackendLeg } from '../../src/legs/live-backend.js'
 import { createOfflineFrontLeg } from '../../src/legs/live-front.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -698,4 +699,52 @@ test('#605 a backend leg missing a call-in is named on the start record, and cha
   assert.equal(blocked.reason, 'leg_has_no_chat',
     'the chat the leg cannot speak is dropped for the reason the report named, and the client is not told otherwise')
   assert.equal(core.metrics.chatSent, 0)
+})
+
+// #887: start() set its flag before it wired the legs, so a wiring a leg refused left
+// the core started and unwired. The first throw is the guard doing its job (#824). The
+// second start() is this case's subject: it returned at the guard, so a caller that
+// caught the first throw had no second chance and no error to read.
+//
+// The leg is the middle registration of src/service/wire-leg-to-core.js's header — a lane
+// filled a call-in while the leg was still the lane's, so the core's registration is the
+// second one. test/legs/call-in-slots.test.js holds that refusal at the wireLegToCore seam;
+// what this case holds is the state the core is left in afterwards.
+test('#887 a start() the wiring refused leaves a core a second start() asks again', () => {
+  const frontLeg = createOfflineFrontLeg({
+    host: '127.0.0.1',
+    port: 0,
+    version: '26.1',
+    offlineWhitelist: [PLAYER],
+    getSnapshotConfig: () => [],
+    wireMode: 'off'
+  })
+  // The lane's own handler, made before any core is handed this leg.
+  frontLeg.setCoreAttach(() => ({ attached: false, reason: 'a_lane_registered_first' }))
+
+  const lines = []
+  // Both legs are the real offline ones, so both refuse a second registration and this
+  // case cannot pass on a double that accepts what a lane's leg rejects.
+  const core = createMonoplayer({
+    config: loadConfig({ attachWhitelist: [PLAYER], puppet: { username: 'GlowSquidye', uuid: null } }),
+    backendLeg: createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, username: 'GlowSquidye' }),
+    frontLeg,
+    clock: { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout },
+    logStream: { write: line => lines.push(JSON.parse(line)) }
+  })
+
+  assert.throws(() => core.start(), /setCoreAttach already holds a handler/,
+    'the wiring refuses on the call-in the lane filled, which is the report #824 exists for')
+  assert.equal(core.started, false,
+    'the flag says the legs are wired, and they are not: it is set after the wiring, so a refused registration leaves it false')
+  assert.equal(core.legWiring, null,
+    'and no report is published, because the two legs were not both wired')
+  assert.deepEqual(lines.filter(line => line.event === 'start'), [],
+    'nor does a start record claim a start that did not happen')
+
+  assert.throws(() => core.start(), /already holds a handler/,
+    'a second start() asks again, instead of returning at the guard on a core with no call-ins. It cannot converge: ' +
+    'the first attempt installed the backend leg\'s call-ins before the front refused, so the retry meets that leg\'s ' +
+    'own refusal. A caller learns the start did not happen; what it does about the lane\'s registration is its line')
+  assert.equal(core.started, false, 'and it leaves the flag false again, so a caller always learns the start did not happen')
 })
