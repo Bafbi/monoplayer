@@ -128,9 +128,11 @@ test('the proof says which half no counter can answer, and never claims it', () 
 })
 
 test('a login is verified and whitelisted before the picker, which is what makes the account list the gate', () => {
-  // The section turns on this: an entry whose UUID nobody owns can never reach a picker. Two
-  // gates hold it, in two places. The whitelist is the core's (src/core/identity.js), called
-  // from the composition root's login path.
+  // The section turns on this: an entry whose UUID nobody owns can never reach a picker.
+  // The whitelist is the core's (src/core/identity.js), called from the composition root's
+  // login path, and it is the review a login on this lane gets (#756). The leg's own check
+  // is the second fact here for the lanes that have no core, which is where it decides:
+  // the socket-free rigs and test/legs/session-verification-refused.test.js (#722).
   //
   // #691: the sessionserver's hasJoined is the leg's, not the core's. This case used to read
   // `await identity.verifySession(payload)` in CORE for that half, and that line lived in
@@ -139,7 +141,7 @@ test('a login is verified and whitelisted before the picker, which is what makes
   // holds it.
   assert.match(CORE, /identity\.reviewLoginStart\(payload\)/, 'the whitelist reviews the login')
   assert.match(FRONT, /'online-mode': onlineMode/, 'on a front leg running its configured mode')
-  assert.match(ATTACH, /function checkVerified[\s\S]*?store\.has\(uuid\)/, 'and its attach check decides on the uuid the client carries')
+  assert.match(ATTACH, /function checkVerified[\s\S]*?store\.has\(uuid\)/, 'and the leg\'s own check decides on the uuid the client carries, for a lane with no core')
   // #756: the core's answer ends the review, and the leg's own check is the fallback for
   // a lane whose core wired no `setLoginStartHandler`. This case pins that order in the
   // text. The count it produces is proven by a run, in
