@@ -16,6 +16,7 @@ import { activity } from '../../src/panel/activity.js'
 import { renderCard } from '../../src/panel/views/card.js'
 import { renderLive } from '../../src/panel/views/live.js'
 import { renderPage } from '../../src/panel/views/page.js'
+import { targetOf } from '../../src/panel/routes/allowed.js'
 
 const puppet = {
   name: 'glowsquidye',
@@ -233,6 +234,31 @@ test('the allowed servers render beside the attach whitelist, with the two write
   assert.ok(card.indexOf('<section class="allowed-block') > liveEnd, 'the block sits outside the live region')
   assert.ok(card.indexOf('<section class="allowed-block') > card.indexOf('<section class="attach-block'),
     'the allowed servers sit beside the attach whitelist')
+})
+
+// #890: the row's address is the removal's path, so a row printed unbracketed is a row whose
+// removal the route refuses. An IPv4 host has one colon and splits either way, which is why
+// this survived three passes over #815; an IPv6 host has several.
+test('an IPv6 allowed server prints the address its own removal takes', () => {
+  const ipv6 = { host: '2001:db8::1', port: 25565 }
+  const written = '[2001:db8::1]:25565'
+  const card = renderCard(puppet, facts(), attachList, {
+    observedAt: '2026-11-18T10:37:24.906Z',
+    resourceVersion: '41222',
+    source: 'control',
+    document: { version: 1, servers: [{ host: ipv6.host, port: ipv6.port, addedAt: null }] }
+  })
+  assert.match(card, /<span class="server">\[2001:db8::1\]:25565<\/span>/,
+    'the row prints the bracketed address, which is the one the picker writes')
+
+  const row = /data-write="remove-server" data-key="([^"]+)" data-name="([^"]+)" action="([^"]+)"/.exec(card)
+  assert.ok(row, 'the removal is in the row')
+  assert.equal(row[1], written, 'the armed confirmation is keyed by the printed address')
+  assert.equal(row[2], written, 'and reads it back to the operator')
+  const path = decodeURIComponent(row[3].slice(row[3].lastIndexOf('/') + 1))
+  assert.equal(path, written, 'the removal path is the printed address')
+  assert.deepEqual(targetOf(path), { target: ipv6 },
+    'and the route reads the address the page printed back as the server it names')
 })
 
 test('the allowed servers tell an empty list, an unread one, and the committed copy apart', () => {

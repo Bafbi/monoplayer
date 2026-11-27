@@ -34,17 +34,24 @@ const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/
 
 const quote = value => JSON.stringify(value ?? null)
 
-// A host a dial can target: a DNS name of at least two labels with no scheme, no
-// port and no trailing dot, or an IPv4 literal. Exported because the write routes
-// (#233, #262) accept the same two shapes in a request body, and a second rule would
-// drift from this one.
+// The host this registry's `backend` field may name: a DNS name of at least two labels
+// with no scheme, no port and no trailing dot, or an IPv4 literal. Narrow on purpose. The
+// backend is a name this cluster resolves to reach the game server a puppet mirrors, and the
+// registry is a Git document a reviewer reads in the diff, so a field that cannot be dialled is
+// refused where the mistake was made.
+//
+// It is not the rule an allowed server's host is judged by, and it has not been since #890. That
+// host is dialled by the proxy at runtime from a list an operator edits on a page, so it takes the
+// service's own rule (`hostRefusal`, #891): a name or an IP address, bare, IPv6 included. One
+// reader decides one document, because a field judged by a rule meant for another document is how
+// one rule ends up spelled twice.
 //
 // An octet is checked for its range, not only its length. `999.999.999.999` matches
 // the four-group shape, and it is also a legal hostname to the rule below, so without
-// the range check a typo becomes a picker row that fails at the socket. Anything the
+// the range check a typo becomes a backend that fails at the socket. Anything the
 // address shape does not match is still judged as a hostname, so no name this cluster
 // resolved before is refused now.
-export function isTargetHost (value) {
+function isTargetHost (value) {
   if (typeof value !== 'string') return false
   if (IPV4.test(value)) return value.split('.').every(octet => Number(octet) <= 255)
   return HOSTNAME.test(value)
