@@ -62,7 +62,6 @@ export const EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1000
 // holds; the rest are picked by name, and the four this card has no row for are here.
 export const ATTACH_DECLINED = {
   pose: 'A position is three coordinates and a look angle, and every other row on the card is a count or a duration. The record carries it for the log and for the parity rung, which compares one client\'s landing against another\'s, so it has a reader: it just has no neighbour here to be compared with.',
-  includeConfig: '`domains.config` answers it, as a number: docs/telemetry.md says that count is 0 when the attach leaves the configuration prefix out, which is the same fact in a shape a reader can compare with the other domains.',
   backendLogins: 'The heartbeat draws this counter already, in its own row set. A second copy under "Last attach" would be one number at a second instant, which reads as a second measurement of it.',
   skippedLegOwned: 'These are the frames a leg writes itself, so the replay skipped them rather than losing them. Beside `replayed` and `refused` a third count would read as a third loss, and this one is not a loss at all.'
 }
@@ -434,6 +433,10 @@ function attachFacts (record) {
     at: time(record.t).at,
     name: typeof record.name === 'string' ? clean(record.name) : null,
     reason: typeof record.reason === 'string' ? clean(record.reason) : null,
+    // The flag an attach carries about itself, drawn as yes or no. `domains.config` cannot
+    // answer it: that count is 0 both when the attach leaves the prefix out and when the
+    // prefix held nothing, which is why the record carries the flag beside it.
+    includeConfig: typeof record.includeConfig === 'boolean' ? record.includeConfig : null,
     replayed: counter(record, 'replayed'),
     // #735: the other half of the delivery #717 split out, which is every frame the leg
     // refused or threw on. The two stay apart and are never added: `replayed` excludes

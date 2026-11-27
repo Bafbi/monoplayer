@@ -223,8 +223,11 @@ test('#834 the card answers every field the doc names, and the doc names every f
     const [group, name] = field.includes('.') ? field.split('.') : [null, field]
     const source = group === null ? card.attach : card.attach[group]
     const value = source === null || source === undefined ? null : source[name]
+    // A flag is drawn as the two words the page shares for one (html.js, yesno), and every
+    // other value as itself.
+    const printed = typeof value === 'boolean' ? (value ? 'yes' : 'no') : String(value)
     return value === null || value === undefined ||
-      !new RegExp('<dd>[^<]*' + String(value) + '(?:[ ,<(]|</dd>)').test(region)
+      !new RegExp('<dd>[^<]*' + printed + '(?:[ ,<(]|</dd>)').test(region)
   })
   assert.deepEqual(unprinted, [],
     'the projection answers these attach fields and the card prints no row for them: ' + unprinted.join(', ') +
@@ -264,7 +267,8 @@ test('#834 a lane that attached before these fields existed draws no row for the
   assert.equal(card.attach.dialogs, null)
   const region = attachRegion(renderLive(card))
   assert.match(region, /<dt>replayed<\/dt><dd>120<\/dd>/)
-  assert.doesNotMatch(region, /<dt>bodies given a spawn<\/dt>|<dt>dialogs held<\/dt>|<dt>positions synthesized<\/dt>/)
+  assert.doesNotMatch(region, /<dt>bodies given a spawn<\/dt>|<dt>dialogs held<\/dt>|<dt>join positions synthesized<\/dt>|<dt>configuration replayed<\/dt>/,
+    'no row for a field the record does not carry')
   assert.doesNotMatch(region, /<h4>Entities<\/h4>|<h4>Held and resent<\/h4>|<h4>Players<\/h4>/,
     'no heading over a group the record does not carry')
 })

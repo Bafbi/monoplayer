@@ -365,18 +365,15 @@ function renderAttach (attach) {
   const domains = attach.domains === null
     ? null
     : Object.keys(attach.domains).map(key => key + ' ' + attach.domains[key]).join(', ')
-  // #834: the counts the attach stream carries beside its delivery numbers, read off the
-  // record's own groups. #213's defect is measured on the first of them, and a count of
-  // bodies without a spawn with no count of bodies beside it is a fault of unknown size,
-  // which is why the pair is one row set. A group the record does not carry is null, and
-  // the row set then draws no heading rather than a row of zeros: a lane older than #218
-  // writes neither of the next two.
-  const entities = attach.entities
   const lines = [heading('Last attach', attach.at)]
   lines.push(group('Attach', [
     row('player', attach.name),
     row('reason', attach.reason),
     row('took', count(attach.tookMs) === null ? null : attach.tookMs + ' ms'),
+    // #834: whether this attach replayed the configuration phase. A client that arrived
+    // during the phase is what the warm and early attaches are for, and the row says which
+    // one this was without the reader decoding `domains.config`, which is 0 either way.
+    row('configuration replayed', yesno(attach.includeConfig)),
     row('replayed', count(attach.replayed)),
     // #735: the other half of the delivery #717 split out, under the record's own word for
     // it. A replay count with no second number reads as a total, which is the half-fact
@@ -404,11 +401,17 @@ function renderAttach (attach) {
     row('join positions synthesized', count(attach.synthesizedPositions)),
     row('domains', domains)
   ]))
+  // #834: the counts the attach stream carries beside its delivery numbers, read off the
+  // record's own groups. #213's defect is measured on the first of them, and a count of
+  // bodies without a spawn with no count of bodies beside it is a fault of unknown size,
+  // which is why the pair is one row set. A group the record does not carry is null, so the
+  // row set then draws no heading rather than a row of zeros: a lane older than #218 writes
+  // neither of the next two.
   lines.push(group('Entities', [
-    row('bodies given a spawn', count(entities?.replayed)),
-    row('bodies without a spawn', count(entities?.withoutSpawn) === null
+    row('bodies given a spawn', count(attach.entities?.replayed)),
+    row('bodies without a spawn', count(attach.entities?.withoutSpawn) === null
       ? null
-      : entities.withoutSpawn + (entities.withoutSpawn === 0 ? '' : ' (a client was told about a body it never saw appear)'))
+      : attach.entities.withoutSpawn + (attach.entities.withoutSpawn === 0 ? '' : ' (a client was told about a body it never saw appear)'))
   ]))
   // #218's shape is the pair: the tab list this client is handed, and the bodies the stream
   // gave one of its players. A listed player the stream gave no body is a player the client

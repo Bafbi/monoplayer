@@ -192,33 +192,38 @@ admitted itself names no body. Those rows say so in words instead of printing a 
 or a blank (#263 D2).
 
 **The `Last attach` card draws the attach stream's delivery, then the counts the record
-carries beside it.** `replayed` is the frames a socket took, `refused` is the frames the
-front leg refused or threw on, and `positions synthesized` is the join position the replay
-invented: `replayed` never counts it, and `refused` counts it when the leg refused it.
+carries beside it.** `replayed` is the frames a socket took. `refused` is the frames the
+front leg refused or threw on. `synthesizedPositions` is the count of join positions the
+replay invented: `replayed` never counts one, and `refused` counts one the leg refused.
 [telemetry.md](telemetry.md) defines all three (#717, #735, #834). None of them is the
-total, and the card never adds or divides them. A refusal is not a fault: the card says
-what the gap is instead of letting a reader take it for a lane to repair
+total, and the card never adds or divides them. A refusal is not a fault, so the card says
+what the gap is rather than letting a reader take it for a lane to repair
 ([the ADR](adr/a-refused-replay-frame-is-not-retried.md)). A record written before `refused`
 existed says which half of the delivery it cannot answer. A record that carries none of the
 three draws no such row.
 
 Under them come the record's own groups, because those are the numbers a reader sets
-against the delivery: the bodies the stream gave a spawn beside the bodies it named in a
-metadata frame with no spawn before it, which is #213's defect measured; the tab list the
-client is handed beside the count of those players that got a body, which is the shape
-[#218](https://github.com/Bafbi/monoplayer/issues/218) describes; and what the dialog
-holder and the pack holder kept and re-sent, which the record calls held and resent. A
-group the record does not carry draws no heading, so a lane older than the group says
-nothing about it rather than drawing zeros.
+against the delivery. The bodies the stream gave a spawn sit beside the bodies it named in
+a metadata frame with no spawn before them, which is #213's defect measured. The tab list
+the client is handed sits beside the count of those players that got a body, which is the
+shape [#218](https://github.com/Bafbi/monoplayer/issues/218) describes. What the dialog
+holder and the pack holder kept and re-sent is a row set of its own, and the record calls
+those held and resent. A group the record does not carry draws no heading, so a lane older
+than the group says nothing rather than drawing zeros.
 
-**Four fields of that record are declared, not drawn.** The position the replay was built
-from, the configuration-prefix flag that `domains.config` already answers as a number, the
-backend login count the heartbeat already draws, and the frames a leg writes itself, which
-the replay skips rather than loses. The declaration sits beside the projection in
-`src/panel/activity.js` with the reason for each (#834). A documented field that is
-neither a row here nor a line there fails the gate, and so does a row the record's doc
-never names, so the next documented field cannot be one this card silently drops, which is
-what [#735](https://github.com/Bafbi/monoplayer/issues/735) was.
+The five groups are drawn whole, by shape and not from a list, so a domain or a body count
+the record grows is a row with no edit here. That is
+[#743](https://github.com/Bafbi/monoplayer/issues/743)'s rule, and the two halves it
+implies are two questions: whether the record's own doc names the field is
+[#868](https://github.com/Bafbi/monoplayer/issues/868)'s, and whether this card draws what
+the doc names is this page's.
+
+**Some fields of that record are declared, not drawn.** The declaration sits beside the
+projection in `src/panel/activity.js`, one line per field with the reason a reader can
+check (#834). A documented field that is neither a row here nor a line there fails the
+gate, and so does a name the projection invents. That is the pair of readings #735 cost a
+reader two files to make, and the page's own reading of the attach record is now checked
+against the doc that defines it.
 
 `account.expiresAt` is projected from the custody cache at each heartbeat, so the
 card's date is at most 30 s old. Inside seven days the card adds a warning
