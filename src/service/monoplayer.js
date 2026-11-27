@@ -496,6 +496,9 @@ export function createMonoplayer ({
     configFrames: 0,
     framesCached: 0,
     framesReplayed: 0,
+    // #717: the replay frames the front leg refused. `framesReplayed` counts the ones a
+    // socket took, so a frame counted here is one no client received.
+    replayFramesRefused: 0,
     positionsSynthesized: 0,
     serverboundForwarded: 0,
     serverboundDropped: 0,
@@ -2431,10 +2434,30 @@ export function createMonoplayer ({
     })
     frontTeleportSeq = synthesized.teleportId
 
-    for (const frame of synthesized.frames) writeSynthFrame(frame)
-    metrics.framesReplayed += synthesized.counts.replayed
+    // #717: `writeSynthFrame` answers whether the front leg took the frame, and the
+    // count follows the answer. A frame it refused is not a replay: it is the refusal,
+    // counted on its own and named on one line, because a client missing a frame
+    // mid-replay holds a hole and nothing else in the record says so. The spectator's
+    // landing already counts what a socket took (`spectateView`'s `written`), though
+    // its `replayed` is still the count it built.
+    let replayed = 0
+    let refused = 0
+    for (const frame of synthesized.frames) {
+      if (!writeSynthFrame(frame)) {
+        refused++
+        log('replayFrameRefused', { name, reason, frame: frame.name })
+        continue
+      }
+      // The invented position is the one frame here `replayed` does not count: it was
+      // never in the cache, and `positionsSynthesized` counts it as invented. The test
+      // is `writeSynthFrame`'s own, because `synthAttach` decides the kind and answers
+      // only the totals.
+      if (frame.synth !== 'position') replayed++
+    }
+    metrics.framesReplayed += replayed
+    metrics.replayFramesRefused += refused
     metrics.positionsSynthesized += synthesized.counts.synthesized
-    telemetry.metric('monoplayer.replay.frames', synthesized.counts.replayed, { player: name })
+    telemetry.metric('monoplayer.replay.frames', replayed, { player: name })
 
     // #18: the human is now the one playing, so their client information goes
     // to the server with the backend cap this session already learned.
@@ -2471,7 +2494,10 @@ export function createMonoplayer ({
     log('attach', {
       name,
       reason,
-      replayed: synthesized.counts.replayed,
+      // #717: the cached frames a socket took, and every frame the leg refused. The
+      // two are disjoint; `positionsSynthesized` says what was invented either way.
+      replayed,
+      refused,
       synthesizedPositions: synthesized.counts.synthesized,
       skippedLegOwned: synthesized.counts.skipped,
       includeConfig,
@@ -2493,21 +2519,27 @@ export function createMonoplayer ({
     // follows moves, publishes nothing here.
     //
     // `snapshot` and `pose` are the two arguments `synthAttach` was handed and
-    // `frames` is what it wrote, so the published cut is the value the replay used
-    // rather than a copy a caller took around the call. `snapshot` is a value and not
-    // a view of the cache: it stays the state this replay was built from as later
-    // traffic arrives (#597 keeps the cache's own reading on `laneState`).
+    // `frames` is the list it built, so the published cut is the value the replay used
+    // rather than a copy a caller took around the call. `frames` stays the replay this
+    // attach was built from, refusals included (#717): a parity rung derives what the
+    // client should have decoded from it, so filtering it would make a client with a
+    // hole match every rung that compares the two. `replayed` and `refused` say which
+    // of those frames left.
+    // `snapshot` is a value and not a view of the cache: it stays the state this
+    // replay was built from as later traffic arrives (#597 keeps the cache's own
+    // reading on `laneState`).
     if (reason === 'attach' || reason === 'early_attach') {
       emit('attach', {
         name,
         reason,
-        replayed: synthesized.counts.replayed,
+        replayed,
+        refused,
         frames: synthesized.frames,
         snapshot: source,
         pose
       })
     }
-    return { attached: true, replayed: synthesized.counts.replayed, frames: synthesized.frames }
+    return { attached: true, replayed, frames: synthesized.frames }
   }
 
 // --- #258: the landing, from the claim to the body ---

@@ -61,8 +61,8 @@ test('#683 the attach event carries the replay\'s own cut, in one shape', () => 
   // decision, and reconnect_due is pinned the same way
   // (test/service/reconnect.test.js:91).
   assert.deepEqual(Object.keys(event).sort(),
-    ['frames', 'name', 'pose', 'reason', 'replayed', 'snapshot'],
-    'the event is the six facts a reader of one replay wants together')
+    ['frames', 'name', 'pose', 'reason', 'refused', 'replayed', 'snapshot'],
+    'the event is the seven facts a reader of one replay wants together')
   assert.equal(event.name, 'Bafbi', 'the client the replay was built for')
   assert.equal(event.reason, 'attach', 'a warm play login, which is the row the handler reaches')
   assert.equal(event.replayed, outcome.replayed, 'the count the record carries, from the same expression')
