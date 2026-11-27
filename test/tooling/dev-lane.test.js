@@ -11,10 +11,13 @@ import { tempRoot } from '../support/temp.js'
 import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 import { uuidRefusalReason } from '../../src/custody/util.js'
+import { whitelistAnswer } from '../../tools/whitelist.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
 const SCRIPT = path.join(ROOT, 'scripts', 'dev-lane.sh')
+// The attach-whitelist judgement, in the file the lint stage parses (#741).
+const JUDGEMENT = path.join(ROOT, 'tools', 'whitelist.mjs')
 const LIVE_NAMESPACE = 'monoplayer'
 const DEV_NAMESPACE = 'monoplayer-dev'
 
@@ -387,8 +390,8 @@ function withoutWhitelist () {
   return space
 }
 
-function run (space, args, env = {}) {
-  const result = spawnSync('bash', [SCRIPT, ...args], {
+function run (space, args, env = {}, script = SCRIPT) {
+  const result = spawnSync('bash', [script, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     env: {
@@ -415,7 +418,15 @@ function run (space, args, env = {}) {
   // even when the script swallowed the status.
   const refused = unmodelled(space.log)
   assert.deepEqual(refused, [], 'the shim modelled every call: ' + refused.join(' | '))
-  return { status: result.status, output: (result.stdout ?? '') + (result.stderr ?? ''), calls }
+  // The streams stay apart as well as joined: a case that pins the bytes an operator
+  // reads has to say which stream carried them.
+  return {
+    status: result.status,
+    output: (result.stdout ?? '') + (result.stderr ?? ''),
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    calls
+  }
 }
 
 // The report `join` writes, read back. Its `state` is the lane's own word for what
@@ -897,16 +908,24 @@ test('the uuid predicate has one home, and every reader asks it', () => {
   //
   // A version check is one of three shapes (an index, a `charAt`, or a comparison against
   // the number), so all three are refused rather than the spelling the tree uses today.
+  //
+  // #741 moved the script's reader into tools/whitelist.mjs, so the case follows it. The
+  // script still asks the one home: it runs that module, and spells no rule of its own.
   const script = fs.readFileSync(SCRIPT, 'utf8')
-  assert.match(script, /await import\([^\n]*\/src\/custody\/util\.js['"]?\)/,
-    'dev-lane.sh imports the judgement from the custody module')
-  assert.match(script, /uuidRefusalReason\(/, 'and calls it, rather than naming it in a comment')
-  assert.doesNotMatch(script, /charAt\(|[!=]==\s*["']4["']|[!=]==\s*4\b/,
-    'and reads no version of its own: the digit sits at a different index in each spelling, which is how one reader let an undashed uuid through')
-  assert.doesNotMatch(script, /\^\[0-9a-f\]\{32\}\$/,
-    'and checks no shape of its own: normalizeUuid is the reader that knows both spellings')
-  assert.doesNotMatch(script, /offlineUuid\(/,
-    'and hashes no name of its own: the name-derived case is part of the same answer, not a second rule')
+  const reader = fs.readFileSync(JUDGEMENT, 'utf8')
+  assert.match(reader, /import \{ uuidRefusalReason \} from '\.\.\/src\/custody\/util\.js'/,
+    'the judgement imports the rule from the custody module')
+  assert.match(reader, /uuidRefusalReason\(/, 'and calls it, rather than naming it in a comment')
+  assert.match(script, /tools\/whitelist\.mjs/,
+    'and dev-lane.sh runs that module, so the lane asks the reader the gate reads')
+  for (const [name, text] of [[SCRIPT, script], [JUDGEMENT, reader]]) {
+    assert.doesNotMatch(text, /charAt\(|[!=]==\s*["']4["']|[!=]==\s*4\b/,
+      name + ' reads no version of its own: the digit sits at a different index in each spelling, which is how one reader let an undashed uuid through')
+    assert.doesNotMatch(text, /\^\[0-9a-f\]\{32\}\$/,
+      name + ' checks no shape of its own: normalizeUuid is the reader that knows both spellings')
+    assert.doesNotMatch(text, /offlineUuid\(/,
+      name + ' hashes no name of its own: the name-derived case is part of the same answer, not a second rule')
+  }
 
   // This file is a reader too, and a guard is the easiest place to spell the rule again.
   const own = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')
@@ -1190,6 +1209,127 @@ test('up says so when the dev list is empty and the live list cannot be read', (
   assert.equal(status, 0, output + '\ncalls: ' + calls.join(' | '))
   assert.match(output, /the dev attach whitelist is empty and the live one could not be read/)
   assert.equal(calls.some(line => line.includes('patch configmap')), false, 'nothing was written from a read that failed')
+})
+
+// --- the judgement itself (#741) ---------------------------------------------
+//
+// The program that reads the document sat in a heredoc in the script, where no stage of
+// the gate read it. The cases below hold it in a file the gate parses, and hold its
+// answers to the bytes `status` printed before it moved.
+
+const STATUS_PREFIX = 'dev-lane: dev namespace monoplayer-dev\n' +
+  'paper-abc 1/1 Running 0 1m\n' +
+  'dev-lane: live monoplayer/monoplayer available replicas: 1\n'
+
+// One lane per whitelist state, with the report the script printed for it before the
+// judgement moved. `document: null` is a ConfigMap that is not there, which is a lane
+// `down` has taken away.
+const STATUS_BYTES = [
+  {
+    name: 'an empty list',
+    document: EMPTY_WHITELIST,
+    report: 'dev-lane: attach whitelist is empty: nobody can attach yet\n'
+  },
+  {
+    name: 'one entry that can authenticate',
+    document: LIVE_WHITELIST,
+    report: 'dev-lane: attach whitelist names 1 entry, and it can authenticate\n' +
+      'dev-lane:   Bafbi 6eb73524-ff88-4a62-a8d0-c63905e7afba can authenticate\n'
+  },
+  {
+    name: 'three entries, one of which can',
+    document: RIG_WHITELIST,
+    report: 'dev-lane: attach whitelist names 3 entries, 1 of which can authenticate\n' +
+      'dev-lane:   Bafbi 6eb73524-ff88-4a62-a8d0-c63905e7afba can authenticate\n' +
+      'dev-lane:   Pilot 62e2a856-7342-3096-b19f-938454443a11 cannot authenticate: its uuid is md5("OfflinePlayer:Pilot"), so no Mojang session answers for it. Remove the entry\n' +
+      'dev-lane:   Watcher e0314eaa-f0cf-36b0-ad18-d19b22fa52c8 cannot authenticate: its uuid is md5("OfflinePlayer:Watcher"), so no Mojang session answers for it. Remove the entry\n'
+  },
+  {
+    name: 'a document nothing can read',
+    document: '{"version":1,"players":[{"uuid":',
+    report: 'dev-lane: attach whitelist could not be read as a document, so nothing here says who can attach\n'
+  },
+  { name: 'no document at all', document: null, report: '' }
+]
+
+test('status prints the same bytes for the same lane', () => {
+  // #741 is a move, not a rewrite: the words an operator reads are part of the
+  // contract. Every status case above matches one sentence, and this one compares the
+  // whole output, so a word gained or lost on the way out is a failure here.
+  for (const { name, document, report } of STATUS_BYTES) {
+    const space = document === null ? withoutWhitelist() : workspace()
+    if (document !== null) {
+      fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), document + '\n')
+    }
+    const { status, stdout, stderr } = run(space, ['status'])
+    assert.equal(status, 0, name + ': ' + stderr)
+    assert.equal(stderr, '', name + ' writes nothing to stderr')
+    assert.equal(stdout, STATUS_PREFIX + report,
+      name + ' prints the bytes it printed before the judgement moved out of the heredoc')
+  }
+})
+
+test('the judgement is a program both lint stages read', () => {
+  // #741's claim, held to the files that own it: the program is a file, and the stage
+  // that parses and the stage that resolves identifiers both walk the tree it sits in.
+  // Both are read here rather than restated, so narrowing either one fails this case
+  // instead of leaving a green that means nothing.
+  // Where the lint stage walks is mise-tasks.test.js's fact; this case holds the program
+  // to it, so the two files cannot disagree about the tree the judgement sits in.
+  const script = fs.readFileSync(SCRIPT, 'utf8')
+  assert.doesNotMatch(script, /<<-?'(NODE|JS)'/,
+    'dev-lane.sh keeps no JavaScript in a heredoc: bash reads a heredoc body as data, so a syntax error there is a green gate. A heredoc carrying data is a different thing')
+  assert.doesNotMatch(script, /--input-type=module/,
+    'and reaches the judgement as a file, not through node -e, whose body no stage parses')
+  assert.equal(path.dirname(JUDGEMENT), path.join(ROOT, 'tools'),
+    'the judgement sits in tools/, which the parse stage walk in mise.toml [tasks.lint] and eslint tools/** in eslint.config.js both reach')
+})
+
+test('the judgement answers three modes, and a document it cannot read is an answer', () => {
+  // The contract the three call sites rest on: a document that cannot be read is
+  // reported, not raised, because a non-zero status is what `die` reads and a document
+  // is not a failure. Each answer is the one the heredoc gave.
+  const report = whitelistAnswer('report', RIG_WHITELIST)
+  assert.equal(report.err, '')
+  assert.match(report.out, /^attach whitelist names 3 entries, 1 of which can authenticate\n/)
+
+  const pruned = whitelistAnswer('prune', RIG_WHITELIST)
+  assert.deepEqual(JSON.parse(pruned.out).players.map(player => player.name), ['Bafbi'],
+    'the entries no login can use are gone')
+  assert.equal(pruned.err.split('\n').filter(Boolean).length, 2, 'and each drop is named on stderr')
+  assert.match(pruned.err,
+    /^dev-lane: dropped Pilot 62e2a856-7342-3096-b19f-938454443a11 from the attach whitelist: its uuid is md5\("OfflinePlayer:Pilot"\)/)
+
+  // Nothing to drop is the document it was given, in the shape it was given: a
+  // compacted copy is never written back over an entry's own spelling.
+  assert.deepEqual(whitelistAnswer('prune', LIVE_WHITELIST), { out: LIVE_WHITELIST, err: '' })
+
+  assert.deepEqual(whitelistAnswer('names', RIG_WHITELIST), { out: 'Bafbi, Pilot, Watcher', err: '' })
+
+  // A document nothing can read: every mode answers, and none of them raises.
+  const truncated = '{"version":1,"players":[{"uuid":'
+  for (const mode of ['report', 'prune', 'names']) {
+    assert.equal(typeof whitelistAnswer(mode, truncated).out, 'string',
+      mode + ' answers a document it could not read')
+  }
+  assert.match(whitelistAnswer('report', truncated).out, /could not be read as a document/)
+  assert.equal(whitelistAnswer('prune', truncated).out, truncated,
+    'prune hands the document back unchanged, so the caller writes nothing from it')
+})
+
+test('status reports through a checkout reached by a symlink', () => {
+  // #741: the script computes `$ROOT` and hands node a path in that tree, and the tool
+  // compares it against its own resolved module URL. A checkout reached through a
+  // symlink made the two spellings differ, so the guard did not run and the report
+  // vanished with exit 0 — a lane with entries reading as a lane with nothing to say.
+  const space = workspace()
+  fs.writeFileSync(path.join(space.fixtures, 'dev-whitelist.json'), RIG_WHITELIST + '\n')
+  const link = path.join(space.dir, 'linked-repo')
+  fs.symlinkSync(ROOT, link, 'dir')
+  const { status, stdout } = run(space, ['status'], {}, path.join(link, 'scripts', 'dev-lane.sh'))
+  assert.equal(status, 0, stdout)
+  assert.match(stdout, /attach whitelist names 3 entries, 1 of which can authenticate/,
+    'the report survives a path the shell computed through a symlink')
 })
 
 test('every rule of the shim is reached by a case', () => {

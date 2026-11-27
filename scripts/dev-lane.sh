@@ -40,7 +40,10 @@
 #             1 the lane did not come up, or a claim's body did not land; 2 setup refused.
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# `pwd -P` and not `pwd`: a tool this script runs compares the path it is handed
+# against its own resolved module URL, so a checkout reached through a symlink needs the
+# physical path here or the comparison fails and the tool answers nothing (#741).
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 DEV_NAMESPACE=${MONOPLAYER_DEV_NAMESPACE:-monoplayer-dev}
 LIVE_NAMESPACE=${MONOPLAYER_CLUSTER_NAMESPACE:-monoplayer}
 LIVE_DEPLOYMENT=${MONOPLAYER_LIVE_DEPLOYMENT:-monoplayer}
@@ -169,97 +172,15 @@ whitelist_is_empty() {
   return 1
 }
 
-# An entry the lane can never admit: the dev front verifies every login against Mojang
-# (deploy/dev/monoplayer.yaml composes no offline legs), and no Mojang account holds a
-# UUID derived from a name. `uuidRefusalReason` in src/custody/util.js answers it (#677,
-# #703), and its docstring says what the answer settles and what it cannot.
-#
-# The loopback rig builds its own controller list from exactly those UUIDs
-# (`pickerWhitelist`, src/ladder/loopback.js), which is how the shape reaches a lane
-# somebody hand-edited: a rig name in a control document is a controller that admits
-# nobody, and a count of entries cannot see it (#677).
-#
-# One program, because reading this document has one home and three callers. `report`
-# prints a UUID decision per entry, which is what `status` shows. `prune` writes the document
-# back without the entries that cannot attach, naming each one it dropped on stderr, and
-# hands back the document it was given when nothing had to go, so an entry keeps the
-# shape it was written with. `names` lists who a document carries, for the message that
-# says which list an apply replaced. `up` is the writer, so `up` removes them.
-whitelist_judgement() {
-  cat <<'NODE'
-const { uuidRefusalReason } = await import(process.env.ROOT + '/src/custody/util.js')
-// `node -e` hands the extra words in argv[1..], with no script path in front of them.
-const [mode, document] = process.argv.slice(1)
-
-const label = player => (typeof player?.name === 'string' && player.name !== '' ? player.name : '(no name)')
-const uuidOf = player => String(player?.uuid ?? '')
-
-// Why no Mojang session can answer for this entry, or null when nothing about its shape
-// stops it. `uuidRefusalReason` answers it, in the module that accepts both spellings a
-// document may carry, so this file judges nothing itself (#703). The name goes with the
-// uuid because it is what makes the answer name the hashed string rather than the version.
-const refusal = player => uuidRefusalReason(uuidOf(player), player?.name)
-
-// A document this program could not read is said out loud: answering "no entries" to it
-// is how a broken control document reads as a lane with nothing to fix.
-let players = []
-let unreadable = false
-try {
-  const parsed = JSON.parse(document ?? '')
-  if (!Array.isArray(parsed.players)) throw new TypeError('no player array')
-  players = parsed.players
-} catch {
-  unreadable = true
-}
-
-// One judgement per entry, computed once, so a mode cannot answer twice from two reads
-// of the same document.
-const judged = players.map(player => ({ player, why: unreadable ? null : refusal(player) }))
-
-if (mode === 'prune') {
-  const dropped = judged.filter(entry => entry.why !== null)
-  if (dropped.length === 0) {
-    process.stdout.write(document)
-  } else {
-    for (const { player, why } of dropped) {
-      process.stderr.write('dev-lane: dropped ' + label(player) + ' ' + uuidOf(player) +
-        ' from the attach whitelist: ' + why + '\n')
-    }
-    process.stdout.write(JSON.stringify({
-      ...JSON.parse(document),
-      players: judged.filter(entry => entry.why === null).map(entry => entry.player)
-    }))
-  }
-} else if (mode === 'names') {
-  process.stdout.write(players.map(player => player.name ?? player.uuid ?? 'unnamed').join(', '))
-} else if (unreadable) {
-  process.stdout.write('attach whitelist could not be read as a document, so nothing here says who can attach\n')
-} else if (players.length === 0) {
-  process.stdout.write('attach whitelist is empty: nobody can attach yet\n')
-} else {
-  // Every mode the script sends is named above, and the last one is the report: a status
-  // command that reaches this branch has to answer something.
-  const usable = judged.filter(entry => entry.why === null).length
-  const plural = players.length === 1 ? 'entry' : 'entries'
-  const summary = usable === players.length
-    ? 'attach whitelist names ' + players.length + ' ' + plural + (players.length === 1 ? ', and it can authenticate' : ', and every one of them can authenticate')
-    : usable === 0
-      ? 'attach whitelist names ' + players.length + ' ' + plural + ', and none of them can authenticate'
-      : 'attach whitelist names ' + players.length + ' ' + plural + ', ' + usable + ' of which can authenticate'
-  const lines = [summary]
-  for (const { player, why } of judged) {
-    lines.push(why === null
-      ? '  ' + label(player) + ' ' + uuidOf(player) + ' can authenticate'
-      : '  ' + label(player) + ' ' + uuidOf(player) + ' cannot authenticate: ' + why + '. Remove the entry')
-  }
-  process.stdout.write(lines.join('\n') + '\n')
-}
-NODE
-}
+# The judgement is tools/whitelist.mjs: one program for the three answers below, in a
+# file the gate parses. Its header says what each mode answers, and why it is a file and
+# not a heredoc here (#741). A document nothing can read is still an answer, so no mode
+# fails on one: a non-zero status means node did not run the file, and that is what
+# `die` reads.
 
 # The one call, so the three answers differ only in the word they send.
 whitelist_judge() {
-  ROOT="$ROOT" node --input-type=module -e "$(whitelist_judgement)" "$@"
+  node "$ROOT/tools/whitelist.mjs" "$@"
 }
 
 # The UUID decisions, in the prefix every other line of the report carries, so the block reads
@@ -276,7 +197,7 @@ whitelist_names() {
 
 # The document this lane may keep, or the one it was handed when nothing had to go.
 whitelist_pruned() {
-  ROOT="$ROOT" node --input-type=module -e "$(whitelist_judgement)" prune "$1"
+  whitelist_judge prune "$1"
 }
 
 # A merge patch of the one key, never an apply of a whole ConfigMap. A client-side
