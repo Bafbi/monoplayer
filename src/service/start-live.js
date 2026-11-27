@@ -95,6 +95,7 @@ import { createTelemetry } from '../observability/telemetry.js'
 import { createJournal } from '../observability/journal.js'
 import { createTransferFollowController } from '../core/transfer-follow.js'
 import { MAX_DEADLINE_MS, PREAUTH_CLOSE_REASON } from '../core/preauth-window.js'
+import { DENY_REASONS } from '../custody/attach.js'
 
 // #134: the skin frame names the puppet's own `player_info` entry, so a lane that
 // cannot name the puppet's UUID writes no frame. The raw cacheDir override
@@ -1379,6 +1380,7 @@ async function runForever ({
   let lastRejected = front.wireStats.rejected
   let lastPreAuthRefused = front.metrics.preAuthRefused
   let lastPreAuthExpired = front.metrics.preAuthExpired
+  let lastSessionVerificationRefused = front.metrics.sessionVerificationRefused
 
   // Heartbeat gauges: the same values the JSONL heartbeat logs, as OTLP gauges.
   // `bodies` is the sample the tick already took, so a gauge and the record beside
@@ -1415,6 +1417,18 @@ async function runForever ({
       telemetry.metric('monoplayer.preauth.expired', preAuthExpired - lastPreAuthExpired,
         { reason: PREAUTH_CLOSE_REASON.DEADLINE })
       lastPreAuthExpired = preAuthExpired
+    }
+    // #722: a login the sessionserver refused. The library performs that check and
+    // ends the connection before the leg reviews it, so no denial of the core's ever
+    // counts this one: the leg's count is the only one there is, and it is sampled
+    // here like the two above. Kept apart from `monoplayer.denials` because those are
+    // the checks this lane decided, and this one is a decision taken inside the
+    // library, on a socket the core never saw.
+    const sessionVerificationRefused = front.metrics.sessionVerificationRefused
+    if (sessionVerificationRefused > lastSessionVerificationRefused) {
+      telemetry.metric('monoplayer.session.refused', sessionVerificationRefused - lastSessionVerificationRefused,
+        { reason: DENY_REASONS.HASJOINED_FAILED })
+      lastSessionVerificationRefused = sessionVerificationRefused
     }
   }
 

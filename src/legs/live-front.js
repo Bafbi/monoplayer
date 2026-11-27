@@ -22,6 +22,10 @@
 //      BEFORE our synchronous beforeLogin hook runs). Offline: the library
 //      sets client.uuid to the vanilla offline UUID (MD5 of
 //      "OfflinePlayer:<name>").
+//   1b. #722: a session the sessionserver refuses never reaches beforeLogin. The
+//      library ends that connection itself, with the one sentence it has, so the
+//      socket's end reason is the whole record of the refusal: the leg counts it and
+//      writes it there, and nothing else on this path does.
 //   2. beforeLogin (synchronous; createServer option): run the core login decision
 //      (fail closed) and the mode's check. No attach slot refuses a second client
 //      here: a lane that offers a picker sends it to the picker, where the claim
@@ -117,6 +121,13 @@ const WIRE_MODES = new Set(['throw', 'warn', 'off'])
 // reconfiguration cannot need more. The bound exists only so a client that
 // never acknowledges cannot grow the leg's memory without limit.
 const MAX_PENDING_RECONFIGURATION_FRAMES = 1024
+// #722: the sentence the library ends a client with when its own sessionserver check
+// refuses the login. It is one fixed string in `minecraft-protocol`'s login handler,
+// written before `options.beforeLogin`, so it is text and not a code: no hook of
+// this leg ran, and nothing but the string reaches it. `loginReviewed` is the other
+// half of the match: the sentence is what the library wrote, and that flag is this
+// leg's own statement that it never reviewed the client.
+const LIBRARY_SESSION_REFUSAL = 'Failed to verify username!'
 
 // Pure configuration-phase interceptor (unit-testable without sockets):
 // wraps a client write so the library's generated configuration resolves to
@@ -716,7 +727,7 @@ function createFrontLeg ({
   // cannot disagree about how many refusals there were. #616: the disconnect's own
   // number is written by that same helper, so a refusing branch has one place to
   // count and not two numbers it must remember.
-  const metrics = { denied: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
+  const metrics = { denied: 0, sessionVerificationRefused: 0, allowed: 0, attaches: 0, pickers: 0, pickerPicks: 0, pickerServerDialogs: 0, pickerVerbs: 0, pickerClaims: 0, pickerRefusals: 0, pickerRefusalsByReason: {}, pickerDisconnects: 0, pickerDisconnectsRefused: 0, claimLandings: 0, claimLanded: 0, claimRestored: 0, policyRefused: 0, stateRefused: 0, configFramesAfterFinish: 0, reconfigurations: 0, reconfigured: 0, reconfigurationFramesFlushed: 0, reconfigurationFramesDropped: 0, preAuthRefused: 0, channelRefused: 0, spectateLandings: 0, spectatorJoins: 0, spectatorFramesDropped: 0, spectatorSettings: 0, spectatorModeWithheld: 0 }
   const clients = new Map() // Client -> { interceptor, channel, picker, loginAt }
   // #269: the channels this leg delivers through (src/core/channels.js). A channel
   // is one connection's delivery of one body: its role, what it has been sent, and
@@ -794,6 +805,13 @@ function createFrontLeg ({
     deadlineMs: preAuthOptions.deadlineMs
   })
   const preAuthOpen = new WeakSet()
+  // #722: whether this leg reviewed the login. The library's session check runs
+  // before `beforeLogin`, so a connection it refuses was never reviewed, and that is
+  // the condition the session-refusal record is written on. The sentence the library
+  // ends with is the other half: it names which of the library's refusals this was.
+  // Read together they cannot count a denial of this leg's, which carries a text of
+  // its own and always has a reviewed login behind it.
+  const loginReviewed = new WeakSet()
   // The window validated the deadline and owns it; the leg reads the effective
   // value back rather than resolving the default a second time.
   const preAuthDeadlineMs = preAuthWindow.stats().deadlineMs
@@ -814,6 +832,36 @@ function createFrontLeg ({
     clearPreAuthDeadline(client)
     if (!preAuthOpen.delete(client)) return
     preAuthWindow.release()
+  }
+
+  // #722: a login the sessionserver refused. The library performs that check inside
+  // its own login handler and ends the connection before `beforeLogin`, so this leg
+  // never reviews the client: `metrics.denied`, the `attachDenied` line and the
+  // service's `monoplayer.denials` sum are all written further down this path, and
+  // none of them is reached. The end reason is the whole of what the refusal leaves,
+  // so the count and the line are written here, together, where that reason is still
+  // in hand (#670).
+  //
+  // The window's own `refused` is a different number and must not move here: that is
+  // the connection cap, which turned nothing away, and its `expired` is the deadline,
+  // which destroyed nothing. This connection was admitted, sat in the window, and left
+  // it when the library ended it.
+  //
+  // The reason is the custody check's own word for a failed `hasJoined`
+  // (`DENY_REASONS.HASJOINED_FAILED`), and the sentence the client was told rides
+  // beside it, because a reader needs both: which check refused the login, and the
+  // only words that client will ever have been given.
+  function recordSessionVerificationRefusal (client, text) {
+    metrics.sessionVerificationRefused++
+    log('sessionVerificationRefused', {
+      username: client?.username ?? null,
+      uuid: client?.uuid ?? null,
+      reason: DENY_REASONS.HASJOINED_FAILED,
+      text,
+      // The running total, as the window's two lines carry theirs: a reader greps one
+      // line and has the count, without reading the heartbeat beside it.
+      refused: metrics.sessionVerificationRefused
+    })
   }
 
   function armPreAuthDeadline (client) {
@@ -944,8 +992,15 @@ function createFrontLeg ({
         }
         // A socket that ends inside the window leaves it here, which covers every
         // denial before the accept. The library emits this from the socket's own
-        // close, so a destroyed socket arrives here too.
-        client.on('end', () => closePreAuthWindow(client))
+        // close, so a destroyed socket arrives here too. It carries the reason the
+        // connection ended with, which is the one thing a refusal the library made
+        // for itself leaves behind (#722).
+        client.on('end', reason => {
+          if (!loginReviewed.has(client) && reason === LIBRARY_SESSION_REFUSAL) {
+            recordSessionVerificationRefusal(client, reason)
+          }
+          closePreAuthWindow(client)
+        })
         wireClient(client)
         if (dumpFramed) {
           // Diagnostic: framer output is framed (and compressed) bytes.
@@ -982,6 +1037,7 @@ function createFrontLeg ({
   // hasJoined (online) or offline UUID assignment (offline) and BEFORE
   // compress + success writes.
   function handleBeforeLogin (client) {
+    loginReviewed.add(client)
     const username = client.username
     const uuid = client.uuid
     // #618: before anything reads the profile, so a lane with properties supplied
