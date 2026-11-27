@@ -375,6 +375,53 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
   }
 })
 
+// #818: a `call` row is a member the core calls on the leg itself, so the row has a call
+// site in the core or it is a name a leg is measured against and nothing reaches. That is
+// the shape #721 found one module over: a declared step whose last caller had been deleted,
+// still read as part of the interface by everyone who opened the page.
+//
+// The register rows have the negative guard above (the core registers no row by hand).
+// This is the positive half, and together they read a row from both sides: a row the core
+// stops calling fails here, and a registration written in the core by hand fails there.
+//
+// The binding is the interface's own. A front row reached through `backendLeg` is a row a
+// leg of the other interface answers, and a shape test is not a call site, which is the
+// hole #818 opened with: `typeof backendLeg.chat === 'function'` asks the leg instead of the
+// report, and this case would not count it.
+const LEG_BINDING = new Map([
+  [FRONT_LEG_CALL_INS, 'frontLeg'],
+  [BACKEND_LEG_CALL_INS, 'backendLeg']
+])
+
+function callSites (source, binding, name) {
+  return count(source, binding + '.' + name + '(') + count(source, binding + '?.' + name + '(')
+}
+
+test('#818 every `call` row is a member the core calls on the leg its table declares', () => {
+  const CORE = code(read('src/service/monoplayer.js'))
+
+  const rows = [...LEG_BINDING].flatMap(([table, binding]) =>
+    table.filter(row => row.kind === 'call').map(row => [binding, row.name]))
+  assert.ok(rows.length > 0,
+    'the tables declare call rows, so this case has a row to walk. An empty walk would pass on an empty table')
+
+  for (const [binding, name] of rows) {
+    assert.ok(callSites(CORE, binding, name) > 0,
+      'src/service/monoplayer.js never calls ' + binding + '.' + name + ', the call row ' + name +
+      ' declares. A row the core stops calling is a member every leg is still measured against and nothing reaches (#721, #818)')
+  }
+
+  // The walk bites, and it reads a call rather than a shape test. Both halves are fed a
+  // string here, because the tree's call sites are the claim above and a case that only
+  // watched them pass would pass on a walk that counted nothing.
+  assert.equal(callSites('backendLeg.chat(text)', 'backendLeg', 'chat'), 1,
+    'a call on the interface\'s own binding is the site a row is held to')
+  assert.equal(callSites("typeof backendLeg.chat === 'function'", 'backendLeg', 'chat'), 0,
+    'a shape test is not a call site: #605 makes the core ask the report what the backend leg carries, and a typeof guard is the second home it replaced')
+  assert.equal(callSites('backendLeg.chat(text)', 'frontLeg', 'chat'), 0,
+    'and the other interface\'s binding answers for its own rows: a front row the core reaches through backendLeg is a row the wrong leg answers')
+})
+
 // #718: the report carries what a reader acts on, and nothing else. It used to
 // carry every handler it installed, so a lane could wrap one call-in after start();
 // #683 deleted the lanes that did, because the attach cut is the core's event now.
