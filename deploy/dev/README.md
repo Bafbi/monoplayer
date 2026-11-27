@@ -433,6 +433,11 @@ kubectl -n monoplayer-dev logs deploy/monoplayer > .reports/dev-log.jsonl
 node src/driver/dev-proof.js --path .reports/dev-log.jsonl --json > .reports/dev-proof.json
 ```
 
+The log is the evidence, and `--json` writes a copy of the reading beside it. The witness records
+which log its frames rows came from in `frames.source`, and `--verify` re-reads that file. Run
+`node src/driver/dev-proof.js --verify --path FILE` to name a log the witness does not, or to
+override the one it does.
+
 The records behind it, and what each one rules out. `RECORDS` in `src/driver/dev-proof.js` is the
 list these come from, and `test/driver/dev-proof.test.js` holds every row of this table to it, name
 and sentence both ways, so a cell here is the module's sentence word for word. No other line of this
@@ -493,7 +498,7 @@ read the copy back:
 
 ```bash
 cp .reports/dev-two-client-witness.json testdata/dev-two-client-witness.json
-node src/driver/dev-proof.js --verify
+node src/driver/dev-proof.js --verify --path .reports/dev-log.jsonl
 ```
 
 `--verify` reads `testdata/dev-two-client-witness.json`, which is why the copy comes first. With
@@ -506,9 +511,21 @@ step of this run, and a row that sits in another step's place. On the steps: a s
 a step whose `evidence` is still the placeholder, and a step you recorded as `not-seen` that nothing
 declares expected to be absent.
 
+`--path` is what makes the frames half a check. `--verify` re-reads the run's rows from that log and
+refuses a row, a field, or a run identity the copy contradicts, naming both values. With no log it
+prints `the frames half was not re-read` and verifies on `frames.passed` alone: that is the run's
+word, not a re-check. The log stays out of git, so re-read the log in the sitting that took the run,
+or the witness carries a claim nobody can repeat.
+
 A wrong `id` fails by name, not by a count. A row that lost one is refused with
 `carries no step id`, and the message names the steps the rows must carry: `puppet-renders`,
 `puppet-walks`, and the rest of the steps above. A reworded `id` is quoted back with the same list.
+
+The `--path` is what makes the frames half a check. `--verify` re-reads the run's rows from that
+log and refuses a row, a field, or a run identity the copy contradicts, naming both values. With no
+log it prints `the frames half was not re-read` and verifies on `frames.passed` alone: that is the
+run's word, not a re-check. The log stays out of git, so re-read the log in the sitting that took
+the run, or the witness carries a claim nobody can repeat.
 
 **A `not-seen` is a finding, unless that step is declared expected to be absent.** The
 declarations are `OPERATOR_STEPS`'s, and the row whose last cell names the tickets that close a gap

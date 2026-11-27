@@ -527,6 +527,92 @@ test('a witness is accepted only when every step is recorded and every frame hel
   assert.match(verifyWitness({ ...witnessed(), completed: false }).reason, /not marked completed/)
 })
 
+// #923: the frames half was one boolean the reader copied into the witness, and the log it came
+// from is gitignored, so a witness could assert the machine half and nothing could contradict it.
+// The witness now names the log it was read from, and `--verify` re-derives the rows from that
+// log instead of believing the copy. Without a log the verdict says so, so nobody reads a pass as
+// a re-check.
+const LOG = '.reports/dev-log.jsonl'
+const lines = records => records.map(record => JSON.stringify(record)).join('\n') + '\n'
+const failedRun = () => lines(run().filter(record => record.frame !== 'spawn_entity'))
+
+test('#923 a witness and the log it names must agree, and the refusal names the row and both values', () => {
+  const document = witnessed()
+
+  const check = verifyWitness(document, { log: { path: LOG, text: failedRun() } })
+  assert.equal(check.ok, false, 'a copy that says the frames passed does not overrule the log')
+  assert.match(check.reason, /the frames half in the witness and in \.reports\/dev-log\.jsonl disagree/,
+    'the refusal names the file it re-read')
+  assert.match(check.reason, /row `body` holds true in the witness and false in the log/,
+    'and the row, with both values')
+  assert.equal(verifyWitness(document, { log: { path: LOG, text: lines(run()) } }).ok, true,
+    'the run the rows were read from verifies')
+})
+
+test('#923 the frames half is re-read from the log, and the verdict names the file it read', () => {
+  const check = verifyWitness(witnessed(), { log: { path: LOG, text: lines(run()) } })
+  assert.deepEqual(check.frames, { reread: true, source: LOG })
+})
+
+test('#923 with no log the frames half is not re-read, and the verdict says so in its own field', () => {
+  const check = verifyWitness(witnessed())
+  assert.equal(check.ok, true, 'a witness whose log is gone still records the human half')
+  assert.deepEqual(check.frames, { reread: false, source: null })
+})
+
+test('#923 a log whose own verdict fails is refused, naming what the witness copied and what the log says', () => {
+  const check = verifyWitness(witnessed(), { log: { path: LOG, text: failedRun() } })
+  assert.match(check.reason, /frames\.passed is true in the witness and false in the log/)
+  assert.match(check.reason, /body/, 'and the row that did not hold is on the same line')
+})
+
+test('#923 a row the log answers and the witness does not carry is named, not counted', () => {
+  const document = witnessed()
+  document.frames = { ...document.frames, rows: document.frames.rows.filter(row => row.id !== 'mode') }
+
+  const check = verifyWitness(document, { log: { path: LOG, text: lines(run()) } })
+  assert.equal(check.ok, false)
+  assert.match(check.reason, /row `mode` is in the log and not in the witness/)
+})
+
+test('#923 the generated witness names the log its rows were read from, and says so when there is none', () => {
+  const report = verdict(readingOf(run()))
+  const fromFile = witnessDocument(report, { now: at(40), source: LOG })
+  assert.equal(fromFile.frames.source, LOG)
+  assert.match(fromFile.how.join(' '), new RegExp('--verify --path ' + escapeRe(LOG)),
+    'and the step it prints re-reads that file')
+
+  const piped = witnessDocument(report, { now: at(40) })
+  assert.equal(piped.frames.source, null, 'a reading from a pipe names no file, rather than implying one')
+  assert.match(piped.how.join(' '), /no log to re-read/,
+    'and the step it prints says this run saved none')
+  assert.doesNotMatch(piped.how.join(' '), /--verify --path \S/,
+    'rather than printing a command that would fail on a path nobody wrote')
+})
+
+test('#923 a row\'s evidence and the failed list are copies too, and the log contradicts both by name', () => {
+  const document = witnessed()
+  const rows = document.frames.rows.map(row => row.id === 'body'
+    ? { ...row, evidence: 'the spawn went out on every socket' }
+    : row)
+  const check = verifyWitness({ ...document, frames: { ...document.frames, rows, failed: ['mode'] } },
+    { log: { path: LOG, text: lines(run()) } })
+
+  assert.equal(check.ok, false)
+  assert.match(check.reason, /row `body`'s evidence is "the spawn went out on every socket" in the witness and/)
+  assert.match(check.reason, /frames\.failed is \[mode\] in the witness and \[\] in the log/)
+})
+
+test('#923 a row recorded twice is named, not read as its last copy', () => {
+  const document = witnessed()
+  const rows = document.frames.rows
+  document.frames = { ...document.frames, rows: [...rows, { ...rows[0], holds: false }] }
+
+  const check = verifyWitness(document, { log: { path: LOG, text: lines(run()) } })
+  assert.equal(check.ok, false)
+  assert.match(check.reason, /row `landed` is in the witness twice/)
+})
+
 // #880: the check was the count. A document with the right number of rows, every one recorded and
 // evidenced, passed no matter which steps those rows were, so one that recorded a step twice and
 // never recorded another verified as a finished proof. These cases vary the names and hold the
@@ -1192,6 +1278,17 @@ function space () {
   }
 }
 
+// #923: the page an operator reads names the field the log is recorded in, the command that re-reads
+// it, and what a pass without one is worth. Each of those is a fact this module now depends on, so
+// the page losing one fails here instead of leaving a reader believing the copy was checked.
+test('#923 the runbook names the log, its field, the command that re-reads it, and what a pass without one is', () => {
+  const proof = section(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'), 'The two-client proof')
+
+  assert.match(proof, /\`frames\.source\`/, 'the witness field that names the log is on the page')
+  assert.match(proof, /dev-proof\.js --verify --path/, 'and the command that re-reads it')
+  assert.match(proof, /the frames half was not re-read/, 'and what a verdict without a log is worth')
+})
+
 test('the command exits 0 on a complete run, 1 when a frame is missing, and 2 without a landing', () => {
   const { log, witness, run: cli } = space()
 
@@ -1242,6 +1339,79 @@ test('--verify refuses an unrecorded witness and accepts a recorded one', () => 
   const recorded = cli('--verify', '--witness', witness)
   assert.equal(recorded.status, 0, recorded.stderr)
   assert.match(recorded.stdout, /#634 VERIFIED/)
+})
+
+// #923 at the command: the frames half is re-read from the run's log, so a witness whose copy says
+// the run passed cannot outlive a log that says it did not.
+test('#923 --verify re-reads the log it is given, and refuses a copy that disagrees by naming the row', () => {
+  const { dir, witness, run: cli } = space()
+  const passing = path.join(dir, 'dev-log.jsonl')
+  const failing = path.join(dir, 'failed-log.jsonl')
+  fs.writeFileSync(passing, lines(run()))
+  fs.writeFileSync(failing, failedRun())
+
+  cli('--path', passing, '--witness', witness)
+  fs.writeFileSync(witness, JSON.stringify(recorded(JSON.parse(fs.readFileSync(witness, 'utf8'))), null, 2))
+
+  const reread = cli('--verify', '--path', passing, '--witness', witness)
+  assert.equal(reread.status, 0, reread.stderr)
+  assert.match(reread.stdout, /the frames half was re-read from .*dev-log\.jsonl/, 'the pass names what it re-read')
+
+  const disagreed = cli('--verify', '--path', failing, '--witness', witness)
+  assert.equal(disagreed.status, 1, 'the log is the evidence, and the copy does not overrule it')
+  assert.match(disagreed.stderr, /^NOT COMPLETE: the frames half in the witness and in .*failed-log\.jsonl disagree/)
+  assert.match(disagreed.stderr, /row `body` holds true in the witness and false in the log/)
+})
+
+test('#923 --verify with no log says in words that the frames half was not re-read', () => {
+  const { dir, witness, run: cli } = space()
+  const file = path.join(dir, 'dev-log.jsonl')
+  fs.writeFileSync(file, lines(run()))
+  cli('--path', file, '--witness', witness)
+  fs.writeFileSync(witness, JSON.stringify(recorded(JSON.parse(fs.readFileSync(witness, 'utf8'))), null, 2))
+  fs.rmSync(file)
+  assert.equal(fs.existsSync(file), false, 'the log was cleaned, which is the case this witness is for')
+
+  const check = cli('--verify', '--witness', witness)
+  assert.equal(check.status, 0, check.stderr)
+  assert.match(check.stdout, /the frames half was not re-read: the witness names .*dev-log\.jsonl, and that file is not here/)
+  assert.match(check.stdout, /not a check/, 'and the pass says the copy is the run\'s word')
+})
+
+test('#923 --verify re-reads the log the witness names while that file is still there', () => {
+  const { witness, log, run: cli } = space()
+  const file = log(run())
+  cli('--path', file, '--witness', witness)
+  fs.writeFileSync(witness, JSON.stringify(recorded(JSON.parse(fs.readFileSync(witness, 'utf8'))), null, 2))
+
+  const check = cli('--verify', '--witness', witness)
+  assert.equal(check.status, 0, check.stderr)
+  assert.match(check.stdout, new RegExp('the frames half was re-read from ' + escapeRe(file)))
+})
+
+test('#923 a --path the operator names and that is not there is refused, not passed as no log', () => {
+  const { dir, witness, run: cli } = space()
+  cli('--path', space().log(run()), '--witness', witness)
+  fs.writeFileSync(witness, JSON.stringify(recorded(JSON.parse(fs.readFileSync(witness, 'utf8'))), null, 2))
+  const gone = path.join(dir, 'gone.jsonl')
+
+  const check = cli('--verify', '--path', gone, '--witness', witness)
+  assert.equal(check.status, 1, 'the operator asked for that log, and it is not there')
+  assert.match(check.stderr, /^NOT COMPLETE: the log --path names is not here: .*gone\.jsonl/,
+    'a file that is gone is not a file that could not be read')
+})
+
+test('#923 the witness records the log its rows were read from, and a pipe leaves it null', () => {
+  const { dir, witness, run: cli } = space()
+  const file = path.join(dir, 'saved-log.jsonl')
+  fs.writeFileSync(file, lines(run()))
+  cli('--path', file, '--witness', witness)
+  assert.equal(JSON.parse(fs.readFileSync(witness, 'utf8')).frames.source, file, 'the file it was given')
+
+  const piped = spawnSync(process.execPath, [CLI, '--json'], { encoding: 'utf8', input: lines(run()) })
+  assert.equal(piped.status, 0, piped.stderr)
+  assert.equal(JSON.parse(piped.stdout).witness.frames.source, null,
+    'a reading from a pipe names no file, rather than implying one')
 })
 
 // #920's whole point, at the command: the document the runbook asks for exits 0, and the reader of

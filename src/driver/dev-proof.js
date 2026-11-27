@@ -30,6 +30,12 @@
 // tickets that close it (#920). Every other one is the finding it was. The polarity is
 // `src/driver/run.js`'s unmodded witness, on purpose: one exit code 1 for "the human half is
 // not recorded", in this same directory, rather than a second meaning for 1.
+//
+// The machine half is re-read, not trusted. The witness records the log its rows came from
+// (`frames.source`) and `--verify` re-derives them from that file, refusing a copy it contradicts
+// by name with both values (#923). The log is gitignored and the witness outlives it, so a verdict
+// with no log to read says in words that the frames half was not re-read: a pass is then the run's
+// word, and the output does not let a reader take it for a check.
 import { pathToFileURL } from 'node:url'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -37,13 +43,14 @@ import { spectatorModeFrames } from '../core/spectator-mode.js'
 
 const USAGE = `usage: kubectl -n monoplayer-dev logs deploy/monoplayer | node src/driver/dev-proof.js
        node src/driver/dev-proof.js --path .reports/dev-log.jsonl [--json] [--witness FILE]
-       node src/driver/dev-proof.js --verify [--witness FILE]
+       node src/driver/dev-proof.js --verify [--path LOG] [--witness FILE]
 
 Reads one run's JSONL records and answers each claim of #634 with the frame-level
 evidence the log holds. A claim only eyes can answer is written to a witness file,
 pending, and --verify refuses until a person has recorded it.
 
-  --path FILE     read a saved record stream instead of stdin
+  --path FILE     read a saved record stream instead of stdin; with --verify, the run's own
+                  log, re-read so the frames half answers for itself
   --json          print the reading as one JSON document
   --witness FILE  the witness document (default ${'.reports/dev-two-client-witness.json'} to write,
                   testdata/dev-two-client-witness.json to verify)
@@ -57,6 +64,12 @@ that is a run that never reached its second client.
 
 A step OPERATOR_STEPS declares expected absent may be recorded not-seen: --verify
 accepts that one gap, names the tickets that close it, and refuses any other.
+
+--verify re-reads the frames half from the run's log and refuses a witness whose
+rows disagree with it, naming the row and both values. The witness names the log
+it was read from (\`frames.source\`), and --path overrides that. With neither, the
+verdict says in words that the frames half was not re-read, so a pass is the
+run's word and not a check.
 `
 
 // The records a run is made of, and what each one settles. One list: the runbook's table is
@@ -432,9 +445,27 @@ export function verdict (reading, rows = claimsOf(reading)) {
   }
 }
 
+// The frames half as the witness keeps it. One builder, used by the document this module writes
+// and by the re-read `--verify` makes from the log, so the copy and the evidence cannot describe
+// one run in two shapes.
+function framesOf (report) {
+  return {
+    body: report.body,
+    spectatorChannel: report.spectatorChannel,
+    driverChannel: report.driverChannel,
+    heartbeatAt: report.heartbeatAt,
+    passed: report.framesPassed,
+    failed: report.failed,
+    rows: report.rows.map(row => ({ id: row.id, holds: row.holds, evidence: row.evidence }))
+  }
+}
+
 // The witness a person completes, in the shape `src/driver/run.js` uses for the unmodded lane:
 // a document that says what is not done, one row per step, and a `completed` only a human sets.
-export function witnessDocument (report, { now = new Date().toISOString() } = {}) {
+// `source` is the log the frames rows were read from, or null for a reading from a pipe: the
+// witness names the artifact it came from, so `--verify` can re-read it instead of trusting the
+// copy (#923).
+export function witnessDocument (report, { now = new Date().toISOString(), source = null } = {}) {
   return {
     lane: WITNESS_LANE,
     issue: 634,
@@ -445,17 +476,17 @@ export function witnessDocument (report, { now = new Date().toISOString() } = {}
       'Stage the lane and drive two clients: deploy/dev/README.md, "The two-client proof".',
       'Read the run: kubectl -n monoplayer-dev logs deploy/monoplayer | node src/driver/dev-proof.js',
       'For each step, keep its id and set state to seen or not-seen, then write what you saw in evidence.',
-      'Set completed true, then: node src/driver/dev-proof.js --verify'
+      // #923: the command names the log this reading came from, and never a path nobody wrote. A
+      // piped reading has no log to name, and the step says so rather than printing a command that
+      // would fail on a file this run never saved.
+      source === null
+        ? 'Set completed true, then run: node src/driver/dev-proof.js --verify. This stream was piped in, so there is no log to re-read: save the next one with --path and the machine half is checkable.'
+        : 'Set completed true, then run: node src/driver/dev-proof.js --verify --path ' + source +
+          '. The machine half is re-read from that file, not taken on this one\'s word.'
     ],
-    frames: {
-      body: report.body,
-      spectatorChannel: report.spectatorChannel,
-      driverChannel: report.driverChannel,
-      heartbeatAt: report.heartbeatAt,
-      passed: report.framesPassed,
-      failed: report.failed,
-      rows: report.rows.map(row => ({ id: row.id, holds: row.holds, evidence: row.evidence }))
-    },
+    // `source` is the log these rows were read from, and it is what `--verify` re-reads. It is null
+    // for a reading piped in, and the verdict says so rather than naming a file nobody saved.
+    frames: { ...framesOf(report), source },
     // One row per step, named by `id`: the row says which step it records, so a document that
     // repeats one step and leaves another unrecorded is refused by name rather than counted (#880).
     steps: OPERATOR_STEPS.map(({ id, claim }) => ({ id, claim, state: 'pending', evidence: '[MANUAL: what you saw]' })),
@@ -483,6 +514,11 @@ const RECORDED_STATES = new Set(['seen', 'not-seen'])
 // A refusal, with the two lists a pass reads kept in the shape: a caller that prints them needs no
 // guard, and a test can assert an empty list rather than an absent key.
 const refuse = reason => ({ ok: false, reason, gaps: [], stale: [] })
+
+// A pass, carrying the human half's gaps and whatever answered the frames half: `reread` true with
+// the log it was re-derived from, or false when the witness's own copy was all there was (#923).
+// One builder, so the two passes cannot describe themselves differently.
+const pass = (human, frames) => ({ ok: true, reason: null, gaps: human.gaps, stale: human.stale, frames })
 
 // A step the module declares expected absent, as the result names it: the step, the sentence the
 // operator read, the tickets that close it, and what they recorded. Both lists the check returns are
@@ -548,9 +584,66 @@ function stepRefusal (steps) {
   return null
 }
 
+// Every field the frames half carries, as the log contradicts it: one sentence per field, with what
+// the witness says and what the log says. #923: a refusal that only says the two disagree sends the
+// reader to diff two documents by hand, and the field that moved is the whole finding. The walk is
+// over `framesOf`'s own object, so a field added to the document is compared without a second list
+// to keep in step; the two lists it carries — the rows and the failed ids — get a sentence per
+// entry instead.
+function frameDisagreements (copy, reread) {
+  const claims = []
+  const derived = framesOf(reread)
+  // The identity of the run first: a log from another run answers these before it answers a row.
+  for (const [key, value] of Object.entries(derived)) {
+    if (key === 'rows' || key === 'failed') continue
+    const at = copy?.[key] ?? null
+    if (at === value) continue
+    claims.push('frames.' + key + ' is ' + JSON.stringify(at) + ' in the witness and ' +
+      JSON.stringify(value) + ' in the log')
+  }
+  const failed = Array.isArray(copy?.failed) ? copy.failed : []
+  if (failed.join(',') !== derived.failed.join(',')) {
+    claims.push('frames.failed is [' + failed.join(', ') + '] in the witness and [' + derived.failed.join(', ') + '] in the log')
+  }
+  const rows = (Array.isArray(copy?.rows) ? copy.rows : []).filter(row => typeof row?.id === 'string')
+  const copied = new Map(rows.map(row => [row.id, row]))
+  // A row recorded twice is named before its value is read: a Map keeps the last one, and a document
+  // that repeats a row and drops another is exactly the shape #880 found in the steps.
+  for (const id of new Set(rows.map(row => row.id).filter((id, at) => rows.findIndex(row => row.id === id) !== at))) {
+    claims.push('row `' + id + '` is in the witness twice')
+  }
+  const answered = new Set(derived.rows.map(row => row.id))
+  for (const row of derived.rows) {
+    if (!copied.has(row.id)) {
+      claims.push('row `' + row.id + '` is in the log and not in the witness')
+      continue
+    }
+    const said = copied.get(row.id)
+    if ((said.holds ?? null) !== row.holds) {
+      claims.push('row `' + row.id + '` holds ' + (said.holds ?? null) + ' in the witness and ' + row.holds + ' in the log')
+    }
+    // The evidence is the sentence the operator read beside the row, so a copy of it that the log
+    // does not answer for is the same finding as a row that moved.
+    if ((said.evidence ?? null) !== row.evidence) {
+      claims.push('row `' + row.id + '`\'s evidence is ' + JSON.stringify(said.evidence ?? null) +
+        ' in the witness and ' + JSON.stringify(row.evidence) + ' in the log')
+    }
+  }
+  for (const id of copied.keys()) {
+    if (!answered.has(id)) claims.push('row `' + id + '` is in the witness and not in the log')
+  }
+  return claims
+}
+
 // What a witness has to say before it counts, and which step stops it. One message per kind of
 // gap, each naming what to write.
-export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
+//
+// `log` is the run's own record stream as `{ path, text }` when one answered for this witness, and
+// null when none did. A log turns the frames half from a claim into a reading: the rows are
+// re-derived from it, and a copy that disagrees is refused by name with both values (#923). No log
+// is not a refusal — the log is gitignored and the witness outlives it — but the result then says
+// `frames.reread` false, so a caller cannot print a pass as if a machine had checked the copy.
+export function verifyWitness (document, { lane = WITNESS_LANE, log = null } = {}) {
   if (document === null || typeof document !== 'object') {
     return refuse('no witness file: run the reader on the lane\'s log first, then record what you saw')
   }
@@ -603,16 +696,31 @@ export function verifyWitness (document, { lane = WITNESS_LANE } = {}) {
         : '. The only not-seen this run accepts is a step declared expected absent: ' + commaAnd(declared.map(step =>
           step.claim + ' (' + closes(step.openUntil) + ')'))))
   }
-  const frames = document.frames ?? {}
-  if (frames.passed !== true) {
-    return refuse('the frames half did not pass in the run this witness records: ' + (frames.failed ?? []).join(', '))
-  }
-  return {
-    ok: true,
-    reason: null,
+  // What the human half answered, built once: both passes carry it, and the only thing that differs
+  // between them is what answered the frames half.
+  const human = {
     gaps: notSeen.map(declaredOf),
     stale: settled.filter(step => step.state === 'seen' && step.openUntil !== null).map(declaredOf)
   }
+  const frames = document.frames ?? {}
+  if (log === null) {
+    if (frames.passed !== true) {
+      return refuse('the frames half did not pass in the run this witness records: ' + (frames.failed ?? []).join(', '))
+    }
+    return pass(human, { reread: false, source: null })
+  }
+  const reread = verdict(readingOf(parseRecords(log.text)))
+  const disagreements = frameDisagreements(frames, reread)
+  if (disagreements.length > 0) {
+    return refuse('the frames half in the witness and in ' + log.path + ' disagree: ' + disagreements.join('; '))
+  }
+  // Agreed, and the run it describes did not pass: the witness records an honest failure, which is
+  // still not a proof. Refused in the words the no-log case uses, naming the rows that did not hold.
+  if (reread.framesPassed !== true) {
+    return refuse('the frames half did not pass in the run this witness records: ' + reread.failed.join(', ') +
+      ' did not hold in ' + log.path)
+  }
+  return pass(human, { reread: true, source: log.path })
 }
 
 export function formatVerdict (report, { witnessPath = null, witness = null } = {}) {
@@ -651,9 +759,40 @@ export function formatVerdict (report, { witnessPath = null, witness = null } = 
   if (witnessPath !== null) {
     lines.push('the half only eyes can answer is ' +
       (witness !== null && verifyWitness(witness).ok ? 'recorded' : 'still pending') +
-      ': ' + witnessPath + ', and node src/driver/dev-proof.js --verify reads it back.')
+      ': ' + witnessPath + ', and node src/driver/dev-proof.js --verify reads the steps back and ' +
+      're-reads the frames half from the log this document names.')
   }
   return lines.join('\n')
+}
+
+// The log a re-read answers from, or the reason there is none. `given` is --path, which the operator
+// asked for, and which a read failure turns into a refusal. `named` is the path the witness recorded
+// itself, and it is expected to be gone once .reports/ is cleaned, so its absence is the no-log case
+// rather than an error: the witness outlives the log by design.
+function logForVerify ({ given, named }) {
+  const wanted = given ?? (typeof named === 'string' && named !== '' ? named : null)
+  if (wanted === null) return { log: null, gone: null, refusal: null }
+  try {
+    return { log: { path: wanted, text: readFileSync(wanted, 'utf8') }, gone: null, refusal: null }
+  } catch (error) {
+    // A file that is gone and a file that cannot be read are two findings, and saying "not here"
+    // about a permission error sends the operator looking for a missing file.
+    const why = error?.code === 'ENOENT'
+      ? 'is not here'
+      : 'could not be read: ' + String(error?.message ?? error)
+    const gone = { path: wanted, why }
+    return given === null ? { log: null, gone, refusal: null } : { log: null, gone, refusal: 'the log --path names ' + why + ': ' + wanted }
+  }
+}
+
+// The one sentence a pass says about the frames half (#923). A frames half that was not re-read is
+// the run's word, and the sentence says so instead of letting a reader take the pass for a check.
+function framesLine (frames, gone) {
+  if (frames.reread) return 'the frames half was re-read from ' + frames.source + ': every row holds there.'
+  return 'the frames half was not re-read: ' +
+    (gone === null ? 'no log answered for it' : 'the witness names ' + gone.path + ', and that file ' + gone.why) +
+    ', so `frames.passed` is the run\'s word in the witness file and not a check. ' +
+    'Re-read the log while it is still there: --verify --path <the run\'s log>.'
 }
 
 function readStream (path) {
@@ -691,13 +830,21 @@ async function main (argv) {
     } catch {
       document = null
     }
-    const verdictOfWitness = verifyWitness(document)
+    // #923: the frames half is read from the run's own log and never from the copy in the witness.
+    // --path names that log; with none, the witness names the one it was read from.
+    const found = logForVerify({ given: options.path, named: document?.frames?.source ?? null })
+    if (found.refusal !== null) {
+      process.stderr.write('NOT COMPLETE: ' + found.refusal + '\n')
+      return 1
+    }
+    const verdictOfWitness = verifyWitness(document, { log: found.log })
     if (!verdictOfWitness.ok) {
       process.stderr.write('NOT COMPLETE: ' + verdictOfWitness.reason + '\n')
       process.stderr.write('Record it: ' + WITNESS_WRITE + ', then copy it to ' + WITNESS_COMMIT + ' and run this again.\n')
       return 1
     }
     process.stdout.write('#634 VERIFIED: the frames reached their sockets and a person recorded what two clients showed.\n')
+    process.stdout.write(framesLine(verdictOfWitness.frames, found.gone) + '\n')
     // #920: the gap the run declares, on the run's own output, so the proof a reader picks up names
     // what it does not show and the ticket that closes it. The exit stays 0: the record the runbook
     // asks an operator to make verifies, which is the whole point of declaring the gap.
@@ -715,7 +862,7 @@ async function main (argv) {
     try {
       witness = JSON.parse(readFileSync(witnessPath, 'utf8'))
     } catch {
-      witness = witnessDocument(report)
+      witness = witnessDocument(report, { source: options.path })
       try {
         mkdirSync(path.dirname(witnessPath), { recursive: true })
         writeFileSync(witnessPath, JSON.stringify(witness, null, 2) + '\n')
@@ -725,7 +872,7 @@ async function main (argv) {
     }
   }
   if (options.json) {
-    process.stdout.write(JSON.stringify({ ...report, witness: witness ?? witnessDocument(report) }, null, 2) + '\n')
+    process.stdout.write(JSON.stringify({ ...report, witness: witness ?? witnessDocument(report, { source: options.path }) }, null, 2) + '\n')
   } else {
     process.stdout.write(formatVerdict(report, { witnessPath, witness }) + '\n')
   }
