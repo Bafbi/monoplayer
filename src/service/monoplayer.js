@@ -2425,12 +2425,40 @@ export function createMonoplayer ({
     // mid-replay holds a hole and nothing else in the record says so. The spectator's
     // landing already counts what a socket took (`spectateView`'s `written`), though
     // its `replayed` is still the count it built.
+    //
+    // #739: a write that throws is the same event for the client, because the frame did
+    // not leave. So it lands in the same counter and on the same line, with the leg's own
+    // message beside it. A second counter for one outcome is a pair of numbers somebody
+    // has to add up, and the presence of `error` already says which way the frame was
+    // lost (`docs/telemetry.md`).
+    //
+    // Attempting the rest of the stream is the decision, and this is where it lives. A
+    // dead socket does not throw on this path: the library returns and the frame is
+    // dropped, and what throws is the writable's own argument check, upstream of the
+    // socket (`Client.writeRaw` in `minecraft-protocol`). So a throw cannot say the
+    // client is gone. Ending the stream on it would infer that from an error which
+    // cannot report it, and `refused` would then say one frame lost out of a stream that
+    // died. Attempting every frame says what the client is actually missing.
+    //
+    // The record below is written either way, which is the half of #739 that leaves no
+    // trace when it is missing. `log('attach', ...)` reports what happened, so it cannot
+    // move above the thing it reports. It is guaranteed instead by containing every throw
+    // above it: this loop, and the four stages after it, which each catch their own leg
+    // call already. A `finally` around the tail would reindent it and change nothing
+    // else, because those four are the only throws it could catch.
     let replayed = 0
     let refused = 0
     for (const frame of synthesized.frames) {
-      if (!writeSynthFrame(frame)) {
+      let taken = false
+      let error = null
+      try {
+        taken = writeSynthFrame(frame)
+      } catch (thrown) {
+        error = String(thrown?.message ?? thrown).slice(0, 200)
+      }
+      if (!taken) {
         refused++
-        log('replayFrameRefused', { name, reason, frame: frame.name })
+        log('replayFrameRefused', { name, reason, frame: frame.name, ...(error === null ? {} : { error }) })
         continue
       }
       // The invented position is the one frame here `replayed` does not count: it was
@@ -2479,8 +2507,9 @@ export function createMonoplayer ({
     log('attach', {
       name,
       reason,
-      // #717: the cached frames a socket took, and every frame the leg refused. The
-      // two are disjoint; `positionsSynthesized` says what was invented either way.
+      // #717: the cached frames a socket took, and every frame that did not reach one:
+      // refused, or thrown on (#739). The two are disjoint. `positionsSynthesized` says
+      // what was invented either way.
       replayed,
       refused,
       synthesizedPositions: synthesized.counts.synthesized,
