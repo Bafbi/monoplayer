@@ -102,7 +102,7 @@ So do not repeat a count, a total, an assertion range, an environment variable l
 
 `README.md` is the tour, `docs/product-core.md` the shipped design, `GLOSSARY.md` the vocabulary. Use the glossary's terms. `docs/architecture.md` is a proposal, not the built design.
 
-Where to look: a decision lives in `src/core/` (pure), the wiring in `src/service/monoplayer.js`, the real I/O in `src/legs/`. The header comment of `src/service/monoplayer.js` lists the adapter interfaces: read the header, then grep.
+Where to look: a decision lives in `src/core/` (pure), the composition root in `src/service/monoplayer.js`, the leg wiring in `src/service/wire-leg-to-core.js`, the real I/O in `src/legs/`. The leg interfaces are under the section "Interface for the live legs" in `docs/product-core.md`, and `test/tooling/product-core-map.test.js` holds them to the calls the composition root makes.
 
 | Path | Holds |
 |---|---|

@@ -179,14 +179,15 @@ data:
   # `whitelistEmpty` and serves nobody until a controller is added
   # (src/service/start-live.js).
   #
-  # Every entry is a UUID a Mojang session answers for, because this front verifies each
-  # login before it shows a picker (src/core/identity.js), and Mojang issues one version:
-  # 4. `mise run dev:up` leaves out an entry of any other version — a name-derived UUID is
-  # the loopback rig's — and names each one it dropped
-  # (#677, deploy/dev/README.md, "The attach whitelist").
+  # Every entry has to be a UUID a Mojang session answers for: the front verifies each
+  # login against Mojang before it shows a picker (src/legs/live-front.js), and the core's
+  # `reviewLoginStart` (src/core/identity.js) then reviews the whitelist. `uuidRefusalReason`
+  # (src/custody/util.js) is the rule an entry is held to.
   #
-  # `mise run dev:up` is the only command in the tree that writes this key, and the
-  # order it decides the list in is deploy/dev/README.md, "The attach whitelist".
+  # `mise run dev:up` is the only command in the tree that writes this key, and it judges
+  # every list it writes with `tools/whitelist.mjs`: it leaves out an entry no login can
+  # use (a name-derived UUID is the loopback rig's) and names each one it dropped. The
+  # order it decides the list in is deploy/dev/README.md, "The attach whitelist" (#677).
   # Every apply writes this document, so an edit here reaches the lane on the next
   # `mise run dev:up`. It is not a secret. `mise run dev:down` deletes this ConfigMap,
   # and the list with it.
