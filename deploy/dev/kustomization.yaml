@@ -1,7 +1,7 @@
 # The dev validation lane (#42). Not registered in Argo CD: nothing here can
 # reach the live lane. `scripts/dev-lane.sh up` applies it; `down` deletes it.
 #
-# `dev-lane.sh up` creates the `dev-rcon` and `ghcr-pull` Secrets first, because
+# `scripts/dev-lane.sh up` creates the `dev-rcon` and `ghcr-pull` Secrets first, because
 # the Paper and proxy pods cannot start without them, and the Secrets are never
 # committed. `scripts/dev-custody.sh up` applies custody.yaml on its own, so the
 # dev account can be bootstrapped onto the volume without a proxy holding it.
