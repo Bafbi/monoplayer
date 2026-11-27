@@ -64,14 +64,18 @@ description = "Syntax-check every source, test, tool, and shell script, resolve 
 # The resolve stage is ESLint with one rule, `no-undef` (eslint.config.js, #540). It
 # is a dev dependency for the same reason as the compiler: the gate runs it and the
 # image never does.
+# It is handed the files git owns, because `pnpm exec eslint` with no file list
+# parses every `.js` and `.mjs` under the working directory, gitignored or not. A
+# throwaway script under `.scratch/` is the placement AGENTS.md asks for, and one
+# of those failed the gate for every worktree of the clone (#846).
 depends = ["install"]
 run = '''
 #!/usr/bin/env bash
 # No stage of this chain reads an argument, so there is nothing to forward. It
 # refuses one instead of dropping it. A run that ignored what it was given would
 # report a check it did not make (#320).
-[ "$#" -eq 0 ] || { echo "lint takes no arguments: it checks every file in src, test and tools" >&2; exit 2; }
-(find src test tools \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check && pnpm exec eslint) || node src/ladder/next-rung.js lint $?
+[ "$#" -eq 0 ] || { echo "lint takes no arguments: it checks the files this repo owns" >&2; exit 2; }
+(find src test tools \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check && bash -n tools/nath.sh tools/driver/install.sh scripts/link-secrets.sh scripts/online-cluster.sh scripts/build-protocollib.sh scripts/dev-lane.sh scripts/dev-custody.sh scripts/gate-lane.sh scripts/observer-report.sh && node tools/panel-css.mjs --check && git ls-files -z --cached --others --exclude-standard -- '*.js' '*.mjs' | xargs -0 -r pnpm exec eslint --no-warn-ignored --no-error-on-unmatched-pattern) || node src/ladder/next-rung.js lint $?
 '''
 
 
