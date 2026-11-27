@@ -12,6 +12,7 @@ import { blockAfter } from '../support/source-scan.js'
 import { tempRoot } from '../support/temp.js'
 
 import {
+  addressName,
   allowedServerAddresses,
   attachWhitelistEntries,
   startControlRecord,
@@ -611,6 +612,13 @@ function objectBody (source, marker) {
   return blockAfter(source, marker, marker + ' in src/service/start-live.js').body
 }
 
+// One row of docs/telemetry.md's start and dial table, by the fields it names. #746's case
+// reads one row and #815's reads another, so the lookup is one rule too.
+function startLiveRow (doc, ...fields) {
+  return doc.split('\n').find(line => line.startsWith('| `startLive`') &&
+    fields.every(field => line.includes('`' + field + '`')))
+}
+
 test('#746 both start records carry the addresses beside the count, and the page names the list', () => {
   // Both records carry one literal between them, so a journal reader learns the servers
   // the log line names. That is what #331 made true for `backend` after it named two.
@@ -624,9 +632,90 @@ test('#746 both start records carry the addresses beside the count, and the page
   // cannot see this key: it would pass with the row naming a list the record stopped
   // writing. This is the case that reads the two together.
   const doc = fs.readFileSync(new URL('../../docs/telemetry.md', import.meta.url), 'utf8')
-  const row = doc.split('\n').find(line => line.startsWith('| `startLive`') && line.includes('`control.allowedServers.servers`'))
+  const row = startLiveRow(doc, 'control.allowedServers.servers')
   assert.ok(row, 'docs/telemetry.md\'s startLive table names control.allowedServers.servers')
   assert.ok(row.includes('`host:port`'), 'and says an entry is the address: ' + row)
+})
+
+// --- #815: one spelling for an address in this record ---
+//
+// #746 made `control.allowedServers.servers` print the address a picker row is named for,
+// so a host holding a colon keeps its brackets (src/core/picker.js, canonicalPickName). The
+// addresses beside it in the same record were template strings, so one record wrote one
+// IPv6 address two ways, and the unbracketed spelling cannot be split back: the host and
+// the port run together.
+//
+// An IPv4 address cannot see this, because it has one colon. These cases are IPv6 for that
+// reason. The record carries two addresses, one for the front and one for the backend. The
+// target a reconnect dialled is the same shape through the same rule, and the scan below
+// holds that.
+const IPV6_FRONT = { host: '2001:db8::1', port: 25565 }
+const IPV6_BACKEND = { host: '2001:db8::2', port: 25566 }
+
+test('#815 an IPv6 front and an IPv6 backend read as the picker writes a row', () => {
+  assert.equal(addressName(IPV6_FRONT.host, IPV6_FRONT.port), '[2001:db8::1]:25565',
+    'the front keeps its brackets, so a reader can split the host from the port')
+  assert.equal(addressName(IPV6_BACKEND.host, IPV6_BACKEND.port), '[2001:db8::2]:25566',
+    'and the backend beside it is the same spelling, not a second one')
+
+  // The defect is two fields of one document disagreeing, so the case reads the two
+  // together: the address the picker offers and the address the front prints.
+  const offered = allowedServerAddresses({
+    servers: [IPV6_FRONT], source: 'control', file: null, reason: null, at: null
+  })
+  assert.deepEqual(offered, [addressName(IPV6_FRONT.host, IPV6_FRONT.port)],
+    'the offered address and the front are one spelling in one record')
+})
+
+test('#815 an address that needs no bracket is written as it always was', () => {
+  assert.equal(addressName('10.0.0.1', 25565), '10.0.0.1:25565', 'an IPv4 host has one colon')
+  assert.equal(addressName('play2.excalia.fr', 25565), 'play2.excalia.fr:25565', 'and so does a name')
+  assert.equal(addressName('[2001:db8::1]', 25565), '[2001:db8::1]:25565',
+    'a host the config already bracketed is not bracketed twice')
+})
+
+test('#815 every address a record joins is spelled by the one rule', () => {
+  // The helper is only half the claim: a site that joins a host and a port itself is the
+  // re-spelling this ticket is about, and it reads green in the cases above. So the record
+  // literals are read, the way #705 reads the journal half.
+  const source = fs.readFileSync(new URL('../../src/service/start-live.js', import.meta.url), 'utf8')
+  const records = [
+    "log('startLive', {",
+    "journal.event('startLive', {",
+    "log('liveReady', {",
+    "journal.event('liveReady', {",
+    "log('backendReconnect', {",
+    "log('backendReconnectFailed', {"
+  ]
+  for (const marker of records) {
+    const body = objectBody(source, marker)
+    assert.match(body, /addressName\(/, marker + ' spells its address with the one rule')
+    assert.doesNotMatch(body, /`\$\{[^`]*\.host\}:\$\{[^`]*\.port\}`/,
+      marker + ' joins a host and a port itself, which is the second spelling')
+  }
+  // A seventh record that joined an address itself must fail here too, so the scan runs over
+  // the file with the rule's own body taken out, not over the six markers above.
+  const rule = blockAfter(source, 'export function addressName', 'the address rule in src/service/start-live.js')
+  const outside = source.slice(0, rule.open) + source.slice(rule.close + 1)
+  assert.doesNotMatch(outside, /\$\{[^`}]*\.host\}:\$\{[^`}]*\.port\}|\.host \+ ':' \+ /,
+    'something outside the rule joins a host and a port itself, in either spelling')
+
+  // `backendAddress` is the one address two records share (#331), so it is where the rule
+  // is called once for both.
+  assert.match(source, /const backendAddress = addressName\(/, 'the shared backend address is the one rule')
+
+  // The page states the spelling, so a reader with no second address to compare against
+  // knows it. #746's list row said it for its own field, and these are the rows beside it. A
+  // record that prints a host and a port as two fields is not here: a reader already has
+  // those apart.
+  const doc = fs.readFileSync(new URL('../../docs/telemetry.md', import.meta.url), 'utf8')
+  const start = startLiveRow(doc, 'front', 'backend')
+  assert.ok(start, 'docs/telemetry.md\'s start and dial table names the start record\'s front and backend')
+  assert.match(start, /keeps its brackets, `\[2001:db8::1\]:25565`/,
+    'and prints the bracketed address it means, not only the word brackets: ' + start)
+  const reconnect = doc.split('\n').find(line => line.startsWith('| `backendReconnect`') && line.includes('| `target` |'))
+  assert.ok(reconnect, 'the table names the address a reconnect dialled')
+  assert.match(reconnect, /keeps its brackets/, 'and spells it the way the start record does: ' + reconnect)
 })
 
 test('#540 a followed target the leg rejects reverts to the server the session settled on', async () => {

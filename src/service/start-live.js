@@ -177,6 +177,17 @@ export function attachWhitelistEntries (uuids) {
   }))
 }
 
+// #815: one spelling for an address a record prints. #746 made the allowed-server list
+// below read as the picker names a row, and the addresses beside it were template strings,
+// so one record wrote one IPv6 address bracketed and unbracketed: `2001:db8::1:25565` has
+// no place a reader can split the host from the port. The rule is the picker's
+// (src/core/picker.js, canonicalPickName), reached through `pickerRows` rather than spelled
+// again here, the way the list below reaches it. A host that holds no colon reads as it
+// always did.
+export function addressName (host, port) {
+  return pickerRows([{ name: host + ':' + port }])[0].name
+}
+
 // #746: the start record counted the allowed servers it offers and named none. It is the
 // defect #601 fixed in the loopback payloads, #677 in the dev lane's report, and #705 one
 // field over in this same record. A count names neither server, so a lane offering two
@@ -889,7 +900,7 @@ export function createReconnectHandler ({
       log('backendReconnect', {
         delayMs,
         attempt,
-        target: `${dialTarget.host}:${dialTarget.port}`,
+        target: addressName(dialTarget.host, dialTarget.port),
         followed: outcome.followed,
         warm: readiness.warm,
         backendLogins: core.session.backendLogins,
@@ -900,7 +911,7 @@ export function createReconnectHandler ({
       log('backendReconnectFailed', {
         delayMs,
         attempt,
-        target: `${dialTarget.host}:${dialTarget.port}`,
+        target: addressName(dialTarget.host, dialTarget.port),
         error: String(error?.message ?? error).slice(0, 300),
         failures: failure.failures,
         state: core.session.state
@@ -1377,8 +1388,9 @@ export async function startLive ({ argv = [], io = process } = {}) {
         accountDir: cfg.puppet.cacheDir
       }
   // #331: one address, written to both records, so the log line and the journal
-  // event cannot name different backends.
-  const backendAddress = `${configuredTarget.host}:${configuredTarget.port}`
+  // event cannot name different backends. #815: and spelled by the one rule, because a
+  // backend on an IPv6 address reads two ways in one record without it.
+  const backendAddress = addressName(configuredTarget.host, configuredTarget.port)
   // #705: one list, so the count a reader greps for and the entries beside it are the
   // same read. `cfg.attachWhitelist` is the list this lane starts with, which is what
   // `whitelistCount` has always counted; a second read of the file here could name an
@@ -1396,7 +1408,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     // between a picker and a refusal, and it is a file that ships with the image.
     picker: cfg.picker,
     pickerBaseline: baseline === null ? null : baseline.version,
-    front: `${cfg.front.host}:${cfg.front.port}`,
+    front: addressName(cfg.front.host, cfg.front.port),
     // #331: one label. The lane starts on the configured backend, and every later
     // target comes from a transfer. So this is both the target it dials first and
     // the one the config document asks for. A reader that wants the configured
@@ -1416,7 +1428,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     chat: cfg.chat,
     transferFollow: cfg.transfer.follow,
     offlineLegs: cfg.offlineLegs === true,
-    front: `${cfg.front.host}:${cfg.front.port}`,
+    front: addressName(cfg.front.host, cfg.front.port),
     backend: backendAddress,
     ...accountLogFields,
     whitelistCount: entriesAtStart.length,
@@ -1475,7 +1487,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
   // The readiness numbers describe a body. A lane that dialled none says
   // `null` rather than `0`, and the boot row says which answer this is.
   log('liveReady', {
-    front: `${bound.host}:${bound.port}`,
+    front: addressName(bound.host, bound.port),
     ...accountLogFields,
     boot: boot.dialled ? 'dialled' : 'skipped',
     // Null, not false: a lane that dialled nothing has no connection to report
@@ -1487,7 +1499,7 @@ export async function startLive ({ argv = [], io = process } = {}) {
     wire: front.wireStats
   })
   journal.event('liveReady', {
-    front: `${bound.host}:${bound.port}`,
+    front: addressName(bound.host, bound.port),
     ...accountLogFields,
     boot: boot.dialled ? 'dialled' : 'skipped',
     configFrames: readiness?.configFrames ?? null,
