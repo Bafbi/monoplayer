@@ -200,6 +200,22 @@ test('#969 a play frame written while the round is opening never reaches the cli
   assert.deepEqual(r.openingSuppressed, [{ name: 'keep_alive' }], 'and the leg is told which frame it was')
 })
 
+test('#969 a round opening does not swallow the sentence that tells the client why it is leaving', () => {
+  // The one writer in this leg that may not go through the funnel is
+  // endConfiguration's disconnect, and the socket ends behind it. A drop there would
+  // be a refusal with no reason, which is the hang that function exists to avoid.
+  const r = rig()
+  r.interceptor.finishFromCore()
+  r.endConfiguration()
+  r.interceptor.reopenConfiguration()
+  r.interceptor.write('start_configuration', {})
+  r.openRound()
+  assert.notEqual(r.interceptor.write('disconnect', { reason: { type: 'string', value: 'picker: no_body' } }), false,
+    'the reason the client is leaving is written while the round is opening')
+  assert.deepEqual(r.writes.map(write => write.name), ['start_configuration', 'disconnect'])
+  assert.deepEqual(r.openingSuppressed, [], 'and nothing was dropped for it')
+})
+
 test('#969 the round drops one tick, it does not stop the keep-alive', () => {
   const r = rig()
   r.interceptor.finishFromCore()

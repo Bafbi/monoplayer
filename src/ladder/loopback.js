@@ -183,8 +183,19 @@ async function freePort () {
 // #601: a leftover count names no frame, so a red that prints one costs a re-run
 // to identify. The five payloads #601 names report the count beside the entries
 // this builds, the way O35 does. The rest still report the count alone.
+//
+// #969: the same receive holds two faults, and the count alone told them apart
+// only to a reader who knew that a numeric `name` is not a name. An entry with a
+// name is a frame the state's table could not consume whole, which is a writer's
+// bytes; an entry with an id is one whose id that table does not define, which is
+// a reader in the wrong state. Both classes are printed here, so every payload
+// that names its frames names the class too.
 function leftoverPayload (received) {
-  return { leftovers: received.leftovers.length, leftoverDetails: received.leftovers.slice() }
+  return {
+    leftovers: received.leftovers.length,
+    leftoverDetails: received.leftovers.slice(),
+    unreadable: received.unreadable.slice()
+  }
 }
 
 export async function runLoopback (argv = process.argv.slice(2)) {
@@ -2071,7 +2082,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         attaches: seamlessCore.metrics.attaches,
         blocks: b5.blockChanges.map(change => change.location),
         ...leftoverPayload(b5),
-        unreadable: b5.unreadable.slice(),
         // #541: `leftoversBeforeHop` says whether the frames arrived on this hop
         // or on an earlier round the same connection went through.
         leftoversBeforeHop: seamlessLeftoverMark,

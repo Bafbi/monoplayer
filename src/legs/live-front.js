@@ -348,11 +348,20 @@ export function createConfigPathInterceptor ({
       // acknowledgment arrives. The library's own keep-alive fires inside the
       // window, on the interval it runs: 9 bytes, the 8 of them a long the
       // configuration table has no id for, which the client records as an
-      // outstanding frame (the offline rung read it as the bare number 44). So
-      // nothing crosses until the answer. A keep-alive is per-leg and the next
-      // tick reaches a client that is in play again; the frames a body needs are
-      // held by writeRawTo, which is the funnel every other writer takes.
-      if (roundOpen !== null && roundOpen() === true) {
+      // outstanding frame (the offline rung read it as the bare number 44). So a
+      // keep-alive waits for the answer: it is per-leg, and the next tick reaches a
+      // client that is in play again.
+      //
+      // A frame that tells the client why it is leaving is the one exception. It
+      // goes out whatever table this leg thinks the client reads, because the
+      // socket ends behind it: a client left without the sentence is the hang
+      // endConfiguration exists to avoid, and a frame it may misread is not.
+      //
+      // This is the library's writer. A frame that arrives through writeRawTo takes
+      // the funnel's own rules instead: the configuration ones are held until the
+      // answer, and the play ones are #972's.
+      const closing = name === 'disconnect' || name === 'kick_disconnect'
+      if (!closing && roundOpen !== null && roundOpen() === true) {
         onRoundOpening?.({ name })
         return false
       }

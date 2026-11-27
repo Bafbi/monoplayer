@@ -87,13 +87,13 @@ export function createBot ({
     names: [], // every clientbound frame: { state, name }
     byState: {}, // state -> [name]
     leftovers: [], // frames whose fullBuffer exceeded the parsed frame
-    // #969: the same receive read as a phase fault rather than a byte fault. A
-    // frame the state's own table does not define reaches this handler as the
-    // number the mapper fell back to, because the id is not in that table. So an
-    // entry with a `name` is a frame the table could not consume whole, and an
-    // entry with an `id` is a frame the client read in a state it was not in. The
-    // first is a relay's bytes; the second is a writer's phase, and the two want
-    // different fixes.
+    // #969: the same receive read as a phase fault rather than a byte fault. When
+    // the id a frame carries is not in the table that frame was read with, the
+    // mapper falls back to the number and this handler sees no name. So an entry
+    // with a `name` is a frame the table could not consume whole; an entry with an
+    // `id` is one whose id that table does not define. The first is a writer's
+    // bytes, the second is a reader in the wrong state, and they want different
+    // fixes.
     unreadable: [],
     success: null, // login success packet, if one arrived
     login: null, // play login packet
@@ -166,7 +166,7 @@ export function createBot ({
     if (leftover !== 0) received.leftovers.push({ state, name, total, leftover })
     // #969: an id this state's table has no name for. Recorded whether or not
     // bytes were left over: a one-byte frame of an id the table does not define
-    // consumes its whole length and is still a frame this client could not read.
+    // consumes its whole length and is still a frame whose id was undefined.
     if (typeof name !== 'string') received.unreadable.push({ state, id: name, total, leftover })
   })
 
