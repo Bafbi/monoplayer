@@ -12,7 +12,7 @@ import { ANY, deadRules, kubectlShim, unmodelled } from '../support/kubectl-shim
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 import { uuidRefusalReason } from '../../src/custody/util.js'
 import { whitelistAnswer } from '../../tools/whitelist.mjs'
-import { commentAbove } from './manifest-reader.js'
+import { commentRuns } from './manifest-reader.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEV = path.join(ROOT, 'deploy', 'dev')
@@ -942,24 +942,25 @@ test('the uuid predicate has one home, and every reader asks it', () => {
   // in prose (#703). A pointer nothing checks is the copy that drifts, so the section that
   // carries the rule is held to the function the way the code is.
   //
-  // Two surfaces carry that rule, and #871 is the second one: the section below, and the comment
-  // beside the value in the manifest. The comment is where a reader looks first, because it sits
-  // on the line they are about to edit, and #723 emptied it of the version by hand with no case
-  // red. A comment that restates a guarded thing is the copy that rots, and it sat on a surface no
-  // case read.
+  // The rule sits in prose in three places: the page's section below, the dev manifest's comment
+  // (#871), and the live seed's comment (#928). A comment is where a reader looks first, because it
+  // sits on the line they are about to edit. #723 emptied the dev one of the version by hand with no
+  // case red. A comment that restates a guarded thing is the copy that rots, and both of these sat
+  // on a surface no case read.
   //
-  // What the two reads cover: 1 section of a page (deploy/dev/README.md, "## The attach
-  // whitelist", from its heading to the next one) and 1 comment run of 1 manifest, the one above
-  // attach-whitelist.json:. That run was 16 lines at 9543912b, a measurement and not a claim.
+  // What the three reads cover: 1 section of a page (deploy/dev/README.md, "## The attach
+  // whitelist", from its heading to the next one), and every comment run of the 2 manifests that
+  // write the attach key. The two manifests are covered whole, because the sweep reads every run
+  // each one writes.
   //
-  // What they do not cover: every other comment run of that manifest, and every other section of
-  // the page. No case reads those for a stated version, so a version written into one would pass.
-  // The pointers in them are surface-pointers.test.js's half, not this one's. That is the limit of
-  // the two reads, said rather than implied.
+  // What they do not cover: every other section of the page, the files under docs/, and every other
+  // manifest in the tree. No case reads any of those for a stated version, so a version written
+  // into one would pass. The pointers in the two manifests are surface-pointers.test.js's half, not
+  // this one's. That is the limit of the three reads, said rather than implied.
   //
-  // One spelling for both reads, because a version is one fact. The pattern the section was held
-  // to before #871 was /nameUUIDFromBytes|version 4|version-4/, which is blind to "version 3", to
-  // a capital "Version 4", and to the spelling #723's comment used, "one version:" wrapping onto
+  // One spelling for all three reads, because a version is one fact. The pattern the section was
+  // held to before #871 was /nameUUIDFromBytes|version 4|version-4/, which is blind to "version 3",
+  // to a capital "Version 4", and to the spelling #723's comment used, "one version:" wrapping onto
   // "4." on the next line.
   //
   // The adjacency class stays off \n, so a match cannot reach from one sentence to a digit in the
@@ -986,18 +987,39 @@ test('the uuid predicate has one home, and every reader asks it', () => {
   assert.doesNotMatch(rules, VERSION,
     'and states no version of its own: the docstring is where the versions are written down')
 
-  // The comment beside the key, read as the surface it is rather than as data. Its pointers are
-  // surface-pointers.test.js's half; this is the fact, and a version stated here is a second copy
-  // of the docstring's, not a note about it.
-  const comment = commentAbove(fs.readFileSync(path.join(DEV, 'monoplayer.yaml'), 'utf8'),
-    'attach-whitelist.json: |', 'deploy/dev/monoplayer.yaml')
-  const stated = comment.text.match(VERSION)
-  if (stated !== null) {
-    const from = comment.lineOf[stated.index]
-    const to = comment.lineOf[stated.index + stated[0].length - 1]
-    assert.fail('deploy/dev/monoplayer.yaml:' + (from === to ? from : from + '-' + to) + ' states "' +
-      stated[0].replace(/\n/g, ' ') + '" in the comment above attach-whitelist.json:, and the ' +
-      'versions have one home: the docstring of uuidRefusalReason in src/custody/util.js (#871)')
+  // Every comment run of every manifest that writes the attach key, read as a surface rather than as
+  // data. A version stated in one is a second copy of the docstring's, not a note about it.
+  //
+  // Every run, not the one above the key. manifest-reader.js gives the reason: the live seed writes
+  // one block for both of its keys above the document (#928). A read aimed at that key line finds an
+  // empty run today, and it would leave a comment added above the key tomorrow read by nothing. A
+  // sweep makes the claim this case can keep, which is that a manifest's prose about this key states
+  // no version anywhere.
+  //
+  // The list is read out of the tree rather than written here, so a third lane's seed is covered on
+  // the day it lands. The needle is the shape the two seeds write the key in.
+  //
+  // `commentRuns` answers [] for a document that writes no comment, which is also what a moved block
+  // would read as. So each file has to show the sweep found a run.
+  const NEEDLE = 'attach-whitelist.json: |'
+  const files = fs.readdirSync(path.join(ROOT, 'deploy'), { recursive: true })
+    .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+    .map(entry => 'deploy/' + entry.split(path.sep).join('/'))
+    .filter(file => fs.readFileSync(path.join(ROOT, file), 'utf8').includes(NEEDLE))
+  assert.ok(files.length > 0, 'a manifest under deploy/ writes ' + NEEDLE + ', and this case reads its prose')
+  for (const file of files) {
+    const runs = commentRuns(fs.readFileSync(path.join(ROOT, file), 'utf8'))
+    assert.ok(runs.length > 0, file + ' writes a comment run, and this case reads every one')
+    for (const run of runs) {
+      const stated = run.text.match(VERSION)
+      if (stated === null) continue
+      const from = run.lineOf[stated.index]
+      const to = run.lineOf[stated.index + stated[0].length - 1]
+      assert.fail(file + ':' + (from === to ? from : from + '-' + to) + ' states "' +
+        stated[0].replace(/\n/g, ' ') + '" in the comment run at lines ' + run.first + '-' + run.last +
+        ', and the versions have one home: the docstring of uuidRefusalReason in ' +
+        'src/custody/util.js (#871, #928)')
+    }
   }
 })
 
