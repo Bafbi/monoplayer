@@ -310,6 +310,18 @@ Two accounts, both in the attach whitelist, and a person at two clients. The fro
 every login against Mojang before it shows a picker, so a client joins as itself: an entry
 whose UUID is not a real account's can never authenticate.
 
+The second account is another person's own Minecraft account, and the list holds the UUID
+Mojang answers for its name, which is the only form the list takes. Ask Mojang for it:
+
+```bash
+curl -s "https://api.mojang.com/users/profiles/minecraft/<name>"
+```
+
+That endpoint is the fallback `src/custody/store.js` resolves a name with. A name the
+loopback rig invented, `Pilot` or `Watcher`, is not an account: its UUID is
+`md5("OfflinePlayer:<name>")`, the shape the rig's own bots log in with
+(`src/legs/offline-identity.js`), and this lane can never verify it.
+
 The list that admits them is the lane's own document. Read it:
 
 ```bash
@@ -341,7 +353,7 @@ Run these three in order. The sections above say what each one does.
 ```bash
 mise run dev:up                          # the Paper, and a proxy that waits for the dev account
 mise run dev:image sha-<commit7>         # the branch under test, from its GHCR build
-mise run dev:status                      # both pods up, and whether the whitelist is empty
+mise run dev:status                      # both pods up, and a verdict per whitelist entry
 ```
 
 `mise run dev:image` needs the branch workflow's image: `mise run image:build` publishes to
@@ -492,6 +504,21 @@ An empty whitelist denies every login. It does not stop the lane: `--start` logs
 
 The whitelist says who may control the proxy, not a token, and the dev lane
 serves the same human.
+
+Every entry has to be a UUID a Mojang session answers for, and Mojang issues one
+version: 4. A version-3 UUID is Java's `nameUUIDFromBytes` of `OfflinePlayer:<name>`
+(`src/legs/offline-identity.js`), which is what a lane with no authentication mints —
+the shape the loopback rig's own controller list carries, for the names its bots use.
+No account owns one.
+
+`mise run dev:up` judges every list it writes: the document in the manifest, the list
+the lane held, and the one it copies from the live lane. It leaves out every entry no
+login can use, whatever its version, and prints the name it dropped. So neither a hand
+edit nor a committed manifest puts a rig name back.
+
+`mise run dev:status` judges each entry and says which ones a login can use. A
+passing line says the UUID is the shape Mojang issues. It cannot say the account
+behind it exists: that answer needs Mojang, and this command asks nobody.
 
 `dev:up` builds the list in one order. The document in this manifest is the
 default: an edit here reaches the lane on the next `up`, and it stands while it
