@@ -451,6 +451,44 @@ export function reportsClientInformation ({ role = null, state = null } = {}) {
 // are exported because the leg itself is reached through a listening socket, and a
 // number that only a listening socket can be asked about is a number no test reads.
 
+// #671: the closed set the refusal map is keyed by. The reasons are still decided where they
+// are decided, in four modules and at this leg's own counted sites, and docs/telemetry.md
+// states the same set for an operator. This is the one list of them, and
+// test/observability/telemetry-doc.test.js holds the three equal in both directions, so a
+// reason added to one side and not the other fails the gate and the failure names the row to
+// edit. #670 and #708 each moved the set inside four hours, which is what nothing catching
+// that looked like.
+//
+// A list and not a module-by-module map: which module decides a reason is that module's fact,
+// and this file has no business stating it.
+export const PICKER_REFUSAL_REASONS = Object.freeze([
+  // A click the board could not read, and a click naming a server the offer does not carry.
+  'unknown_id',
+  'malformed',
+  'unknown_verb',
+  'unknown_server',
+  // `CLAIM_REFUSAL` (src/core/claims.js): the body is another connection's, or this one
+  // already holds a claim.
+  'body_claimed',
+  'claim_held',
+  // The Spectate answer, before the body is handed over.
+  'picker_off',
+  'no_body',
+  'body_not_served',
+  'body_down',
+  'body_not_warm',
+  // This leg: a dialog it could not write, a lane with no row, the Disconnect verb, and every
+  // refusal of the Spectate landing.
+  'empty_offer',
+  'picker_unavailable',
+  'disconnect_claimed',
+  'no_spectator_sink',
+  'unwatchable',
+  'channel_refused',
+  'no_cached_configuration',
+  'finish_failed'
+])
+
 // #438: the rule is src/core/bounded-counter.js, the same one the composition root
 // counts its packet names with, so the two sides cannot drift apart again. The cap
 // below is this leg's own fact.
@@ -458,8 +496,10 @@ export function reportsClientInformation ({ role = null, state = null } = {}) {
 // reason that reaches the cap is a reason an operator's chart shows as `other`,
 // which reads as a reason nobody named.
 // #670: raised from 20, because `empty_offer` joined the set and the two buckets the
-// rule adds past it, `unknown` and `other`, are keys of the same map. The set is
-// docs/telemetry.md's list; this number stays one clear of it.
+// rule adds past it, `unknown` and `other`, are keys of the same map.
+// #671: the set is `PICKER_REFUSAL_REASONS` above, which is docs/telemetry.md's list,
+// so this number stays one clear of the set and those two buckets, and
+// test/observability/telemetry-doc.test.js is what reads it.
 export const MAX_REFUSAL_REASONS = 22
 export function bumpReason (map, reason) {
   return bumpBounded(map, reason, MAX_REFUSAL_REASONS)
