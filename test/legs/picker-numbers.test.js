@@ -9,6 +9,12 @@
 // The seams below are exported for exactly this: the leg itself is reached only
 // through a listening server, and a number that only a listening server can be
 // asked about is a number no test reads.
+//
+// #710: the scan below reads src/legs/live-front.js, so it proves a branch is mentioned and
+// never that it runs. The three picker ends it guards are driven at a real front leg, with
+// the record and the count read off one run of each, in test/legs/picker-ends.test.js. What
+// this file keeps is the half a run cannot make: a site deleted, a sentence composed without
+// its count, and the two words a record and its map are keyed by agreeing.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
