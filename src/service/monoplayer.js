@@ -610,6 +610,8 @@ export function createMonoplayer ({
   const logs = [] // redacted JSON lines, bounded
   const listeners = new Map() // type -> Set<fn>
   const unclassifiedLogged = new Set()
+  // #887: both legs are wired, which is why start() sets it after the wiring and not
+  // before it: a registration a leg refuses leaves this false.
   let started = false
   // #592, #605: what each leg carried when the core wired it, or null before
   // start(). It is the report wireLegToCore gives, one per interface, which the
@@ -3353,7 +3355,6 @@ export function createMonoplayer ({
 
   function start () {
     if (started) return
-    started = true
 
     // #592, #605: the core applies FRONT_LEG_CALL_INS and BACKEND_LEG_CALL_INS here, and
     // in no other place. What a row is, and what a lane does when it needs a different
@@ -3364,6 +3365,14 @@ export function createMonoplayer ({
       backend: wireLegToCore({ core: handle, leg: backendLeg, table: BACKEND_LEG_CALL_INS }),
       front: wireLegToCore({ core: handle, leg: frontLeg, table: FRONT_LEG_CALL_INS })
     }
+
+    // #887: the flag says both legs above are wired, so it is set after the wiring. A
+    // registration a leg refuses (#824) throws out of the assignment above, and leaves no
+    // report and no start record, so a second start() asks again instead of returning at
+    // the guard on a core with none of its call-ins. It cannot converge: the front leg's
+    // refusal is the lane's handler, and the backend leg above keeps what this attempt
+    // registered on it.
+    started = true
 
     // #592: a leg that lacks a call-in is silent otherwise: it answers the attach
     // from its own fallback, in words the lane never reads. The names it did not

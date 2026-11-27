@@ -600,33 +600,31 @@ test('the composition root header keeps no copy of a leg interface (#763)', () =
 // borrowing that file's authority. Its limit is real: a sentence rewritten to keep the event and
 // drop the word "event" fails here, and the repair is to write it in the shape this case reads.
 
-// The block, found by the anchor it sits between rather than by its words: `started = true`
-// sits in start() after the guard it opens with, and `legWiring = {` is the assignment the
-// block explains. The body is
+// The block, found by the line it explains rather than by its words: `legWiring = {` is the
+// assignment the block explains, and the comment lines directly above it are the block. #887
+// moved `started = true` below that assignment, so the flag this case used to anchor on is now
+// the wrong side of it. A block anchored on a line that can move is a sentence to repair, and
+// this one is anchored on the assignment the block is about. The body is
 // test/support/source-scan.js's, so a block moved out of start() is not this block, and the lines
 // are stripped of their marker and joined with a space, so a sentence still reads as one
 // sentence after a wrap, which is how the block states its claims.
 function wiringComment () {
-  const body = functionBody(COMPOSITION_ROOT_SOURCE, 'start')
-  const opened = body.indexOf('started = true')
-  assert.notEqual(opened, -1,
-    'src/service/monoplayer.js says `started = true` in start(), and the comment above the wiring ' +
-    'begins on the line after it. No line says it, so this case cannot find the block it reads (#825).')
-  const closed = body.indexOf('legWiring = {', opened)
-  assert.notEqual(closed, -1,
-    'src/service/monoplayer.js assigns `legWiring = {` after `started = true`, and the comment ' +
-    'between them is the block this case reads. No line says it (#825).')
-  const between = body.slice(opened, closed).split('\n').slice(1)
-  const foreign = between.filter(line => line.trim() !== '' && !line.trimStart().startsWith('//'))
-  assert.deepEqual(foreign, [],
-    'the lines between `started = true` and `legWiring = {` in src/service/monoplayer.js are one ' +
-    'comment block and nothing else, and this case found ' + foreign.length + ', the first: ' +
-    (foreign[0] ?? '') + '. A block with code in it is a block this anchor no longer bounds (#825).')
-  assert.ok(between.some(line => line.trimStart().startsWith('//')),
-    'src/service/monoplayer.js keeps no comment between `started = true` and `legWiring = {`. That ' +
-    'block is where a lane learns what the report gives it, and the two calls below are not ' +
-    'self-explanatory: they apply a table the lane never sees (#825).')
-  return between.map(line => line.replace(/^\s*\/\/ ?/, '')).join(' ')
+  const lines = functionBody(COMPOSITION_ROOT_SOURCE, 'start').split('\n')
+  const at = lines.findIndex(line => line.trimStart().startsWith('legWiring = {'))
+  assert.notEqual(at, -1,
+    'src/service/monoplayer.js assigns `legWiring = {` in start(), and the comment above it is the ' +
+    'block this case reads. No line says it, so this case cannot find the block it reads (#825).')
+  const block = []
+  for (let index = at - 1; index >= 0; index--) {
+    const line = lines[index]
+    if (line.trim() === '' || !line.trimStart().startsWith('//')) break
+    block.unshift(line)
+  }
+  assert.ok(block.length > 0,
+    'src/service/monoplayer.js keeps no comment above `legWiring = {`. That block is where a lane ' +
+    'learns what the report gives it, and the two calls below are not self-explanatory: they apply a ' +
+    'table the lane never sees (#825).')
+  return block.map(line => line.replace(/^\s*\/\/ ?/, '')).join(' ')
 }
 
 // The tables the two calls below the block apply, read off the call sites rather than kept in a
