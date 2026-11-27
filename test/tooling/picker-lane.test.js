@@ -208,4 +208,14 @@ test('the gate runbook states what a spectator row would need', () => {
     'and that a deployed front has no route a rung can read the claims list through')
   assert.match(note, /game mode/, 'the game mode reader the mod does not have is named')
   assert.match(note, /DriverServer\.java/, 'with the file it would be added to')
+
+  // #678: the picker's buttons were said to be "already reachable through the driver's
+  // click op", and no run had shown it. The section now argues it from the 26.2 client's
+  // own code. An argument in a runbook reads as a measurement unless the same section
+  // says what would show it is true, so the section has to name the ticket while the
+  // claim is unproven and the record once it is measured. #720's run retires the first
+  // half of this case and keeps the second.
+  assert.match(note, /#720/, 'the section names the ticket or the record that carries the reading')
+  assert.ok(/no run has shown/.test(note) || /testdata\//.test(note),
+    'the section says the mechanism is unproven, or points at the record that proves it')
 })
