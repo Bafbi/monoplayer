@@ -7,6 +7,15 @@
 // on a leg that carries it (`kind: 'call'`). Either kind is one the core cannot
 // work without, or one it uses when the leg carries it.
 //
+// A `call` row carries the call's name and no answer shape, and #672 decided that on
+// purpose. A list of names here would be a second home, and a row cannot say which of
+// its answer's fields the core reads. `wireLegToCore` may not call a leg to find out
+// either, because `answerHeldGate` and `chat` are calls with effects. So the fields live
+// where the read is: test/legs/adapters.test.js holds every answering leg to the fields
+// the core reads off its answer, and `preAuthStats` — the one answer a lane snapshot
+// publishes whole (#627) — to `createPreAuthWindow().stats()` in
+// src/core/preauth-window.js.
+//
 // The lanes used to register the front ones by hand. The live lane and the rig
 // copied all four (src/service/start-live.js, src/ladder/rig.js, where the
 // loopback rungs reached it), and the parity lane copied three. The rest sat
@@ -36,7 +45,8 @@
 // the core instead.
 // test/service/wire-leg-to-core.test.js reads the report, and
 // test/legs/adapters.test.js holds the real legs to these tables, `reaches` and
-// all.
+// all, plus the members a table cannot name: #672 walks each leg's whole call surface,
+// and every member outside these rows is declared there with the reason it is outside.
 // A row is frozen too, so a reader cannot rewrite a payload shape at run time: the
 // shape is the fact this file is the home of.
 export const FRONT_LEG_CALL_INS = Object.freeze([
@@ -192,7 +202,10 @@ export const FRONT_LEG_CALL_INS = Object.freeze([
   // #627: a read the core makes on this leg, in the backend table's form. The
   // pre-auth window is created inside the leg, so `laneState` asks for its numbers
   // rather than a copy. A leg without this row is named in `missing`, and its
-  // snapshot reports `preAuth` as null.
+  // snapshot reports `preAuth` as null. The names it answers are the window's own
+  // (`stats()`, src/core/preauth-window.js) and this row carries none of them, for the
+  // reason the header gives: test/legs/adapters.test.js compares each answering leg to
+  // that module, so a leg that leaves one name out fails a case rather than a snapshot.
   {
     kind: 'call',
     name: 'preAuthStats',

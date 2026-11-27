@@ -16,6 +16,7 @@ import { createBackendFrameForwarder, createOfflineBackendLeg, MAX_BACKEND_FRAME
 import minecraftData from 'minecraft-data'
 
 import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
+import { createPreAuthWindow } from '../../src/core/preauth-window.js'
 import { createConfigPathInterceptor, createLiveFrontLeg, createOfflineFrontLeg, profileTextures } from '../../src/legs/live-front.js'
 import { BACKEND_LEG_CALL_INS, FRONT_LEG_CALL_INS } from '../../src/service/wire-leg-to-core.js'
 import { synthAttach, LEG_OWNED } from '../../src/core/join-synth.js'
@@ -468,9 +469,10 @@ test('every front leg a lane builds carries the call-ins the core declares', () 
 })
 
 // #627: the leg a live lane builds answers its own pre-auth window, in the policy's
-// names. The offline front shares createFrontLeg, so one case covers the factory. The
-// row in FRONT_LEG_CALL_INS says a leg declares the read; this says what the reading
-// is, which a row cannot: a row carries a name and no return shape.
+// names. The offline front shares createFrontLeg, so one case covers the factory. The row
+// in FRONT_LEG_CALL_INS says a leg declares the read, and this says what the reading is.
+// A row carries a name and no answer shape (#672), so the expectation below is built from
+// src/core/preauth-window.js rather than written out here.
 test('#627 the live front leg answers its own pre-auth window, in the window\'s names', () => {
   const leg = createLiveFrontLeg({
     host: '127.0.0.1',
@@ -484,8 +486,8 @@ test('#627 the live front leg answers its own pre-auth window, in the window\'s 
   const core = startedOn(leg)
 
   assert.deepEqual(leg.preAuthStats(),
-    { inWindow: 0, maxConnections: 5, deadlineMs: 4000, refused: 0, expired: 0 },
-    'the five names src/core/preauth-window.js answers with, from the window this leg was built with, before a socket arrives')
+    createPreAuthWindow({ maxConnections: 5, deadlineMs: 4000 }).stats(),
+    'the window this leg was built with, in the names src/core/preauth-window.js answers with. The module answers, and this case reads it rather than restating the names, so a name added there is a leg that owes it')
   assert.deepEqual(core.laneState().preAuth, leg.preAuthStats(),
     'and the lane snapshot is that reading, passed on rather than summarised')
 })
@@ -503,29 +505,46 @@ test('#605 every backend leg a lane builds carries the call-ins the core declare
 })
 
 // #605: the report names what a leg lacks. This is the other direction, which the
-// report cannot see: a setter a leg carries and no row names is a hook nothing
-// calls, and it reads as part of the interface. Each exception below is a real
-// hook with a reason, and a retired one fails the case rather than lingering.
-const UNWIRED_SETTERS = {
-  'live front leg': {
-    setErrorHandler: 'the front leg logs its own socket errors through this hook; the core registers none, and the backend row of this name is that leg\'s (#667)'
-  },
-  'offline front leg': {
-    setErrorHandler: 'the same hook as the live front leg\'s: both build through one factory (src/legs/live-front.js)'
-  },
-  'fake front leg': {
-    setClient: 'the double\'s test hook, which never crosses to a real leg: Test helpers in src/legs/fake-legs.js'
-  },
-  'real backend leg': {
-    setTarget: '#258: the core hands it the body to dial, which is a dial and not a registration'
-  },
-  'fake backend leg': {
-    setTarget: 'the double records the same dial the real leg makes'
+// report cannot see: a member a leg carries and no row names is a hook nothing
+// calls, and it reads as part of the interface.
+//
+// #672: the walk is the leg's whole call surface, not its `set*` keys. `claimOn`,
+// `preAuthStats`, `write`, `spectate`, `close` and the getters beside them are each
+// reached by a caller, and a guard that reads only the setters leaves the rest of the
+// interface to a reader. Every member is either a row of its table or a line below with
+// the reason it is outside. A line for a member the leg no longer carries fails too, so
+// an exception is a claim rather than a comment.
+//
+// A member a caller reaches by calling it is a method, or a getter, which runs when it
+// is read. A plain value (`kind`) is a label and no caller calls it, so the walk leaves
+// it alone. The chain is walked too: every leg in the tree is an object literal, and a
+// factory that built one from a class would otherwise hide its methods here.
+function callSurface (leg) {
+  const names = new Set()
+  for (let object = leg; object !== null && object !== Object.prototype; object = Object.getPrototypeOf(object)) {
+    for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(object))) {
+      if (typeof descriptor.value === 'function' || typeof descriptor.get === 'function') names.add(name)
+    }
+  }
+  return [...names]
+}
+
+// The drift between a leg's call surface and the lines declared for it, in both
+// directions: a member nothing declares, and a line whose member the leg has lost.
+function memberDrift (label, leg, table) {
+  const inTable = new Set(table.map(row => row.name))
+  const declared = MEMBERS_OUTSIDE_THE_TABLES[label] ?? {}
+  const outside = callSurface(leg).filter(name => !inTable.has(name))
+  return {
+    undeclared: outside.filter(name => declared[name] === undefined),
+    stale: Object.keys(declared).filter(name => !outside.includes(name))
   }
 }
 
-test('#605 a leg carries no setter its table does not name, but the ones declared here', () => {
-  const legs = [
+// Every leg a lane builds or a test hands a core, each with the table its interface is
+// declared in. One list, so the cases below walk one surface.
+function legsCarryingTheTables () {
+  return [
     ['live front leg', createLiveFrontLeg({
       host: '127.0.0.1',
       port: 0,
@@ -539,17 +558,220 @@ test('#605 a leg carries no setter its table does not name, but the ones declare
     ['real backend leg', createOfflineBackendLeg({ host: '127.0.0.1', port: 25565, version: '26.1' }), BACKEND_LEG_CALL_INS],
     ['fake backend leg', createFakeBackendLeg(), BACKEND_LEG_CALL_INS]
   ]
-  for (const [label, leg, table] of legs) {
-    const declared = new Set(table.filter(row => row.kind === 'register').map(row => row.name))
-    const exceptions = UNWIRED_SETTERS[label]
-    const settled = new Set()
-    for (const name of Object.keys(leg).filter(key => key.startsWith('set'))) {
-      if (declared.has(name)) continue
-      assert.ok(exceptions[name] !== undefined,
-        label + ' carries ' + name + ', which no row of its table names: a hook nothing registers belongs in the table or in the exceptions above')
-      settled.add(name)
-    }
-    assert.deepEqual([...settled].sort(), Object.keys(exceptions).sort(),
-      label + ' keeps exactly the setters declared here: an exception for a hook the leg no longer has is a claim a reader cannot check')
+}
+
+// #672: what each leg carries that its table does not name, one line per member with
+// the reason it is outside. The two real front legs build through one factory
+// (src/legs/live-front.js) and each double stands in for the same interface, so what
+// they share is declared once and each list reads as what that leg adds.
+
+// The half of a front leg the core reaches on the leg itself: the delivery it calls
+// rather than registering, and the claim board it reads instead of copying. The delivery
+// is declared in the frontLeg block at the top of src/service/monoplayer.js. The board is
+// the leg's own (#261, #631).
+const FRONT_DELIVERY = {
+  write: 'a clientbound packet to every channel of the body, or to the one `channel` names. The frontLeg block of src/service/monoplayer.js declares it',
+  writeRaw: 'the frame-level half of that delivery, from the same block',
+  end: 'how the core ends every channel of a body, a kick or a denial, from the same block',
+  startReconfiguration: '#22: the core asks the sampling client to re-enter configuration on its own connection, from the same block',
+  finishConfigurationFrame: '#87: the bytes that end a configuration round, for a restore with no cached finish, from the same block',
+  claimOn: '#261: the claim on one body, which the core reads instead of keeping a copy of the board (#631). The leg owns the claims, so the snapshot and the retry path ask it'
+}
+
+// The lane's own surface: the socket it opens and the picker verb. No core calls one.
+const FRONT_LANE = {
+  listen: 'the lane starts and stops this leg\'s own socket. The core is handed a leg that accepts its clients',
+  spectate: '#269: the picker\'s Spectate verb, which a lane calls (src/ladder/loopback.js, src/driver/dev-proof.js) and the core never does',
+  close: 'the socket\'s own ending, which a lane and the rungs that stop it call (src/ladder/*). The core ends a session through `end`'
+}
+
+// The backend leg's half of the same: the delivery the core calls, and the one dial it
+// asks for. The backendLeg block at the top of src/service/monoplayer.js declares them.
+const BACKEND_DELIVERY = {
+  connect: 'the core dials a body through this leg, from the backendLeg block of src/service/monoplayer.js',
+  write: 'a decoded packet the core sends the backend, from the same block',
+  writeRaw: 'the frame-level half of that delivery, from the same block',
+  end: 'the session\'s own ending, from the same block',
+  setTarget: '#258: the core hands it the body to dial, which is a dial and not a registration'
+}
+
+// A reading is a getter that runs when a caller asks for it. Every leg carries some, and
+// no table names one, because a row names a function the core registers or calls.
+function readings (names, reason) {
+  return Object.fromEntries(names.map(name => [name, reason]))
+}
+
+// A double's script hooks drive that double from a test. src/legs/fake-legs.js groups them
+// under "Test helpers", and no src/ module calls one.
+const SCRIPT_HOOK = 'a script hook of the double, which drives it from a test. src/legs/fake-legs.js groups these under "Test helpers", and no src/ module calls one'
+
+// What both real front legs read of themselves, one list because one factory builds both.
+// `channels` is not here: the core reads it, so it has its own line below.
+const FRONT_READINGS = readings(
+  ['listening', 'driver', 'claims', 'metrics', 'checkStoreFile', 'port', 'wireStats', 'lastConfigMode'],
+  'a reading of the lane\'s own state: the socket it listens on, the claims on it and the counters beside it. A lane, a rung or a test asks for one, and no core reaches for any'
+)
+
+// And what both real backend legs read of themselves. `target` is the core\'s read, so it
+// has its own line.
+const BACKEND_READINGS = readings(
+  ['cookieCount', 'client', 'ended'],
+  'a reading of the leg\'s own state: its cookie count, its client and whether it ended. No core reaches for one, and a rung or a test does'
+)
+
+// Both real front legs build through one factory (src/legs/live-front.js), so one
+// declaration covers what both carry.
+const REAL_FRONT_LEG = {
+  ...FRONT_DELIVERY,
+  ...FRONT_LANE,
+  ...FRONT_READINGS,
+  channels: 'the channels this leg holds, one record per connection delivered a body. The core reads it (#636), and no table names a reading, because a row names a function the core registers or calls',
+  setErrorHandler: 'the front leg logs its own socket errors through this hook, which the core registers nowhere. The row of this name on the backend leg is that leg\'s (#667)'
+}
+
+const MEMBERS_OUTSIDE_THE_TABLES = {
+  'live front leg': REAL_FRONT_LEG,
+  'offline front leg': REAL_FRONT_LEG,
+  'fake front leg': {
+    ...FRONT_DELIVERY,
+    ...readings([
+      'channelRecord', 'forgetChannelRecord', 'setClient', 'frames', 'namesOf', 'endReasons',
+      'loginStart', 'spectatorMoved', 'serverbound', 'clientConfiguring', 'clientSettings',
+      'clientDisconnect', 'clientReconfigured', 'reconfigurations', 'claim', 'releaseClaim'
+    ], SCRIPT_HOOK),
+    channels: 'the channels a test planted. The core makes the same read on a real leg (#636)',
+    client: 'the client the double pretends to serve, which a test names'
+  },
+  'real backend leg': {
+    ...BACKEND_DELIVERY,
+    ...BACKEND_READINGS,
+    target: 'the body this leg dialled, which the core reads to bind a frame to a body (syncDialledBody, src/service/monoplayer.js)',
+    close: 'the socket\'s own ending, which a lane and the rungs that stop it call (src/ladder/*, test/legs/backend-close.test.js). The core ends a session through `end`',
+    forwarderStats: 'the leg\'s own frame counters, which src/service/start-live.js prints on its heartbeat line and no core reads'
+  },
+  'fake backend leg': {
+    ...BACKEND_DELIVERY,
+    ...readings([
+      'dialledTargets', 'rawWrites', 'packetWrites', 'spoken', 'heldGateAnswers',
+      'deliver', 'deliverEnd', 'deliverError'
+    ], SCRIPT_HOOK),
+    target: 'the same dial the core reads on the real leg, recorded by the double',
+    ...readings(['connected', 'ended', 'written'], 'the double\'s own reading of what it recorded, which a test asserts on')
+  }
+}
+
+test('#605, #672 a leg carries no member its table does not name, but the ones declared here', () => {
+  // The walk reads the surface it claims to: a method and a getter that the setters filter
+  // could not see, and not the label, which no caller calls.
+  const surface = callSurface(legsCarryingTheTables()[0][1])
+  assert.ok(surface.includes('claimOn') && surface.includes('preAuthStats') && surface.includes('driver'),
+    'the walk reaches the members a caller calls and reads on a real leg')
+  assert.ok(!surface.includes('kind'),
+    'and leaves the label, which is a value rather than a call')
+
+  for (const [label, leg, table] of legsCarryingTheTables()) {
+    const { undeclared, stale } = memberDrift(label, leg, table)
+    assert.deepEqual(undeclared, [],
+      label + ' carries a member that no row names and no line above declares. It belongs in the table, or in the declaration with its reason')
+    assert.deepEqual(stale, [],
+      label + ' declares a member its surface no longer carries outside the table. That line is a claim a reader cannot check')
   }
 })
+
+// #672: the walk is a claim about real legs, so a case reads it in both directions. Each
+// leg here is a double built by its own factory, and nothing about it is invented.
+test('#672 the walk reports a member nothing declares, and a line the leg has lost', () => {
+  const withAnExtraHook = createFakeFrontLeg()
+  withAnExtraHook.aHookNoRowNames = () => {}
+  assert.deepEqual(memberDrift('fake front leg', withAnExtraHook, FRONT_LEG_CALL_INS).undeclared, ['aHookNoRowNames'],
+    'a member added to a real double and named nowhere is what the case above fails on. The walk reads past the setters')
+
+  const withoutClaimOn = createFakeFrontLeg()
+  delete withoutClaimOn.claimOn
+  assert.deepEqual(memberDrift('fake front leg', withoutClaimOn, FRONT_LEG_CALL_INS).stale, ['claimOn'],
+    'and a line whose member the leg no longer carries is reported rather than read as settled')
+})
+
+// #672: a `call` row carries no answer shape, and the table's header gives the reason: the
+// module that answers owns the shape. For the one call row whose answer reaches a published
+// value (#627's `preAuth` group) that module is src/core/preauth-window.js's `stats()`, so
+// the comparison is against it and not against a list here. A name the window adds is a leg
+// that owes it, and a name it does not have is a leg that answers too much.
+function preAuthShapeDrift (leg) {
+  const owed = new Set(Object.keys(createPreAuthWindow().stats()))
+  const answered = new Set(Object.keys(leg.preAuthStats()))
+  return {
+    missing: [...owed].filter(name => !answered.has(name)),
+    extra: [...answered].filter(name => !owed.has(name))
+  }
+}
+
+test('#672 every leg that answers the pre-auth read answers it in the window\'s own names', () => {
+  const answerers = legsCarryingTheTables().filter(([, leg]) => typeof leg.preAuthStats === 'function')
+  assert.equal(answerers.length, 2,
+    'both real front legs answer it and no double does. The two build through one factory, and the doubles\' hole is declared in test/service/wire-leg-to-core.test.js')
+  for (const [label, leg] of answerers) {
+    assert.deepEqual(preAuthShapeDrift(leg), { missing: [], extra: [] },
+      label + ' answers the names src/core/preauth-window.js publishes. A leg that stops answering one of them is this line, not a snapshot that quietly loses it')
+  }
+
+  const short = legsCarryingTheTables()[0][1]
+  short.preAuthStats = () => ({ inWindow: 0, maxConnections: 5, deadlineMs: 4000, refused: 0 })
+  assert.deepEqual(preAuthShapeDrift(short), { missing: ['expired'], extra: [] },
+    'and the comparison bites. A real leg that leaves one name out is caught here, which is the failure a lane snapshot cannot report')
+})
+
+// #672: the pre-auth read is not the only `call` row a leg answers. The fields the core
+// reads off an answer are declared here, one row each. A table row carries no shape (the
+// header of src/service/wire-leg-to-core.js says why), and this is where a leg that
+// answers other fields is caught. The core reads the answer one field at a time, so a leg
+// answering `{ ok, why }` answers nothing and the gate stays held in silence.
+const CALL_ROW_FIELDS = {
+  // #627: the window's own names. The lane snapshot publishes this answer whole, so the
+  // case above compares it to that module in both directions and this line only names the
+  // owner.
+  preAuthStats: () => Object.keys(createPreAuthWindow().stats()),
+  // The detach handoff tests `outcome?.answered !== true` and reads `outcome?.reason`
+  // (src/service/monoplayer.js). The answer also echoes the gate's name and the
+  // connection's click budget, which are the leg's own record and not the core's read.
+  answerHeldGate: () => ['answered', 'reason'],
+  // The human's sentence goes out as the puppet and nothing comes back.
+  chat: () => []
+}
+
+// The fields a leg left out of one answer, against the fields the core reads off it.
+function absentFields (answer, owed) {
+  return owed.filter(field => !(field in Object(answer)))
+}
+
+test('#672 every leg answers a `call` row with the fields the core reads off it', () => {
+  const ASKED = {
+    preAuthStats: [],
+    answerHeldGate: [{ state: 'configuration', name: 'code_of_conduct' }],
+    chat: ['list']
+  }
+  let checked = 0
+  for (const [label, leg, table] of legsCarryingTheTables()) {
+    for (const { kind, name } of table.filter(row => row.kind === 'call')) {
+      assert.ok(CALL_ROW_FIELDS[name] !== undefined,
+        'the tables declare ' + name + ' as a call row now, and no case here says which fields the core reads off its answer')
+      if (typeof leg[name] !== 'function') continue
+      const owed = CALL_ROW_FIELDS[name]()
+      if (owed.length === 0) { checked++; continue }
+      const answer = leg[name](...ASKED[name])
+      assert.deepEqual(absentFields(answer, owed), [],
+        label + ' answers ' + name + ' without a field the core reads off it. Its answer is ' + JSON.stringify(answer))
+      checked++
+    }
+  }
+  assert.ok(checked > 0, 'the walk found the legs that carry a call row')
+
+  // A real double answering the gate with names of its own is what the case above is for:
+  // the core tests `answered !== true` and reads nothing else, so { ok, why } reads as a
+  // held gate and the lane logs a reason the leg never gave.
+  const answeringOtherNames = createFakeBackendLeg()
+  answeringOtherNames.answerHeldGate = () => ({ ok: true, why: 'held' })
+  assert.deepEqual(absentFields(answeringOtherNames.answerHeldGate(), CALL_ROW_FIELDS.answerHeldGate()), ['answered', 'reason'],
+    'a leg that answers { ok, why } answers nothing the core reads')
+})
+
