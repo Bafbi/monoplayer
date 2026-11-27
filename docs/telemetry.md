@@ -499,6 +499,7 @@ That `reason` is the end phase's own word, and not the key of the refusal map. T
 vocabularies name one client from two sides, and they rarely spell the same word:
 
 - For "why was this client ended", read `configurationEnded` and its `reason`.
+  "One command per question" prints the command, and says which source holds it.
 - For "what did the refusal map count", read `front.pickerRefusalsByReason` in the
   heartbeat, and the refusal's own line: `pickerEmpty`, `pickerDialogFailed`,
   `pickerServerDialogFailed`, `pickerVerbRefused`, `pickerPickRefused`,
@@ -697,6 +698,7 @@ node tools/journal.mjs heartbeat --path monoplayer.jsonl
 node tools/journal.mjs names map_chunk --path /tmp/journal
 node tools/journal.mjs tail 1 --name map_chunk --path /tmp/journal
 node tools/journal.mjs window 60 --dir s2c --path /tmp/journal
+node tools/journal.mjs tail 20 --event configurationEnded --path monoplayer.jsonl
 ```
 
 - `manifest` prints one line per shard: hour, time range, line count, byte
@@ -708,8 +710,24 @@ node tools/journal.mjs window 60 --dir s2c --path /tmp/journal
   `count`, `bytes`, `first`, and `last`. The pattern is a substring of the name.
 - `window <seconds>` prints the same rows over the seconds before the newest
   frame in the journal.
-- `--name`, `--dir`, and `--state` narrow every command. `names <pattern>` is
-  `--name` for the summary.
+- `--name`, `--dir`, and `--state` narrow the records `tail` prints and the
+  counts `names` and `window` make. `names <pattern>` is `--name` for the
+  summary. `heartbeat` and `manifest` read no record those flags select.
+- `--event <name>` narrows `tail` to the records whose `event` is exactly that
+  name, which is how "why was this client ended" is one command
+  (`configurationEnded` carries the `reason`). An event is not a frame: it has no
+  direction, name, or state, so `names` and `window` count none of them, and
+  `heartbeat` and `manifest` read no record the flag could narrow. Those four
+  refuse it rather than drop it, and so does a `tail` that holds `--event` beside
+  `--name`, `--dir`, or `--state`: a lifecycle record carries none of the three,
+  so no record could match both.
+- An event name nothing wrote prints nothing on stdout and exits 0, and one line
+  on stderr says which events the source does hold, or that it holds none. The
+  line answers the question the empty stdout raises. It also names the source:
+  the journal holds the events the service writes, and `configurationEnded` is
+  written by the front leg, so it reaches the JSONL log and no shard. A
+  misspelled name therefore reads as an empty answer, and that line is what shows
+  it.
 - `--path` takes the directory, or one shard, which is what the manifest gives
   you. A `.ndjson.gz` shard reads the same as a plain one.
 

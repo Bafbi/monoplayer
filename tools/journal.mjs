@@ -9,7 +9,9 @@
 //
 // The layout, the file names, and the shard order come from
 // src/observability/journal.js; this file only picks records and prints them.
-// Every command accepts --path, --dir, and --state.
+// Every command reads --path. --dir, --state, and --name narrow the records tail
+// prints and the counts names and window make. --event narrows tail alone,
+// because tail is the command that prints records.
 //
 // Records stream, so a full journal never sits in memory. Output is one JSON
 // record per line, so a session pipes it or reads it.
@@ -22,7 +24,13 @@ import { describeShard, readJournal, readManifests, readNdjson } from '../src/ob
 // error, not an empty answer.
 const STATES = ['handshaking', 'status', 'login', 'configuration', 'play']
 
-const USAGE = `usage: node tools/journal.mjs <command> [options]
+// Every option takes a value, so one list is what the parser accepts and what
+// the usage block must name. test/tooling/journal-cli.test.js holds the two
+// equal in both directions: an option accepted here and missing below is a flag
+// a reader never learns, and the reverse is a command line that fails.
+export const OPTIONS = ['path', 'dir', 'state', 'name', 'event']
+
+export const USAGE = `usage: node tools/journal.mjs <command> [options]
 
   tail [n]           the last n records (default 10)
   heartbeat          the last heartbeat record from the JSONL log
@@ -39,6 +47,10 @@ const USAGE = `usage: node tools/journal.mjs <command> [options]
   --name <pattern>   only frames whose name contains the pattern
   --dir <s2c|c2s>    only frames in that direction
   --state <state>    only frames in that protocol state
+  --event <name>     only records whose event is exactly that name, narrowing
+                     tail. An event name nothing wrote prints nothing on stdout
+                     and exits 0; one line on stderr says which events the source
+                     does hold, or that it holds none.
 `
 
 class UsageError extends Error {}
@@ -50,12 +62,12 @@ function usage (message) {
 function parseArgs (argv) {
   const [command, ...rest] = argv
   if (!command) usage('no command given')
-  const options = { path: null, dir: null, state: null, name: null }
+  const options = Object.fromEntries(OPTIONS.map(name => [name, null]))
   const positional = []
 
   for (let index = 0; index < rest.length; index++) {
     const arg = rest[index]
-    if (arg === '--path' || arg === '--dir' || arg === '--state' || arg === '--name') {
+    if (arg.startsWith('--') && OPTIONS.includes(arg.slice(2))) {
       const value = rest[index + 1]
       if (value === undefined) usage(`${arg} needs a value`)
       options[arg.slice(2)] = value
@@ -73,6 +85,24 @@ function parseArgs (argv) {
   if (options.state !== null && !STATES.includes(options.state)) {
     usage(`--state must be one of ${STATES.join(', ')}, not ${options.state}`)
   }
+  if (options.event === '') usage('--event needs an event name')
+  // A frame filter and an event filter select from disjoint sets: a lifecycle
+  // record carries no name, direction, or state, so a command line holding both
+  // matches nothing whatever the source holds.
+  const frameOnly = { name: 'name', dir: 'direction', state: 'state' }
+  if (options.event !== null) {
+    for (const [option, held] of Object.entries(frameOnly)) {
+      if (options[option] !== null) {
+        usage(`--event and --${option} select from different records: an event carries no ${held}`)
+      }
+    }
+  }
+  // Only tail can narrow by an event: the other commands print no record the flag
+  // selects, and one that dropped it would answer a question nobody asked. One
+  // sentence and no table of commands, because a table here would be a second
+  // copy of the set main dispatches, and a command added there would be reported
+  // as unknown by it.
+  if (options.event !== null && command !== 'tail') usage('--event narrows tail')
   return { command, options, positional }
 }
 
@@ -111,7 +141,11 @@ async function * readPath (source) {
   yield * readNdjson(source)
 }
 
+// --event matches the name exactly, and checks it against no list: an event name
+// is written by every call site that records one, so a list here would drift
+// away from them in silence.
 function passesFilters (record, options) {
+  if (options.event && record.event !== options.event) return false
   if (options.name && !String(record.name).includes(options.name)) return false
   if (options.dir && record.dir !== options.dir) return false
   if (options.state && record.state !== options.state) return false
@@ -161,6 +195,16 @@ async function newestFrame (records) {
   return newest
 }
 
+// The event names a source does hold, in one phrase: what an empty answer about
+// one event has to say for itself. The list is capped, because the JSONL log
+// writes a name per lifecycle call and a reader needs the shape, not a census.
+function describeEvents (names, limit = 12) {
+  const sorted = [...names].sort()
+  const shown = sorted.slice(0, limit)
+  const rest = sorted.length - shown.length
+  return shown.join(', ') + (rest > 0 ? `, and ${rest} more` : '')
+}
+
 function positiveInteger (value, label) {
   const number = Number(value)
   if (!Number.isInteger(number) || number < 1) usage(`${label} must be a whole number above zero, not ${value}`)
@@ -176,11 +220,25 @@ export async function main (argv = process.argv.slice(2), io = { stdout: process
     if (command === 'tail') {
       if (positional.length > 1) usage('tail takes at most one count')
       const limit = positional.length === 1 ? positiveInteger(positional[0], 'the count') : 10
+      const source = sourcePath(command, options)
       const kept = []
-      for await (const entry of readPath(sourcePath(command, options))) {
-        if (!passesFilters(entry.record, options)) continue
-        kept.push(entry.record)
+      const events = new Set()
+      for await (const entry of readPath(source)) {
+        const record = entry.record
+        if (record && typeof record.event === 'string') events.add(record.event)
+        if (!passesFilters(record, options)) continue
+        kept.push(record)
         if (kept.length > limit) kept.shift()
+      }
+      // An event name nothing wrote is an answer, so stdout stays empty and the
+      // exit is 0. It is not a good answer on its own: one command reading that
+      // event from the journal directory and one reading it from the JSONL log
+      // print the same nothing, and only one of those sources could have held
+      // it. The sentence on stderr is what tells the two apart.
+      if (kept.length === 0 && options.event) {
+        io.stderr.write(events.size === 0
+          ? `journal: no record with event ${options.event} in ${source}, and the source holds no event at all: the journal keeps the service's events in its own shard, and a lifecycle line the front leg writes reaches the JSONL log (MONOPLAYER_LOG)\n`
+          : `journal: no record with event ${options.event} in ${source}; the source holds ${describeEvents(events)}\n`)
       }
       for (const record of kept) write(JSON.stringify(record))
       return 0
