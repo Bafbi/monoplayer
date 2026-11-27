@@ -15,7 +15,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { loadConfig } from '../../src/service/monoplayer.js'
+import { DEFAULT_CONFIG, loadConfig } from '../../src/service/monoplayer.js'
 import { pickTarget } from '../../src/core/picker.js'
 import { addressName } from '../../src/service/start-live.js'
 
@@ -85,6 +85,12 @@ test('#891 loadConfig refuses a port that is not an integer in its range', () =>
     'a dial to port 0 reaches nothing, whatever the OS makes of a bind to it')
 })
 
+test('#891 the defaults still load, so the rule refuses only what is set', () => {
+  const cfg = loadConfig()
+  assert.deepEqual(cfg.front, { ...DEFAULT_CONFIG.front }, 'an unset document keeps the compiled front')
+  assert.deepEqual(cfg.backend, { ...DEFAULT_CONFIG.backend }, 'and the compiled backend')
+})
+
 test('#891 the front may ask the OS for a port, and that is the one 0', () => {
   // The offline rung and the parity lane bind an ephemeral front (src/ladder/loopback.js),
   // so a config that refuses 0 would refuse the gate's own lane. A listener on 0 answers
@@ -121,5 +127,20 @@ test('#891 an address loadConfig accepts is one a record can split back', () => 
       assert.deepEqual(pickTarget(addressName(cfg.backend.host, cfg.backend.port)), { host, port },
         host + ':' + port + ' survives the spelling a record prints')
     }
+  }
+})
+
+test('#891 an ephemeral front still prints an address a reader can split', () => {
+  // 0 is the one accepted port the picker declines to dial, and a name it declines is
+  // offered as written. #891 was filed on exactly that: the start record wrote
+  // `2001:db8::1:0`, where nothing tells the host from the port. The config accepts 0
+  // because a bind asks the OS for a port, so the spelling has to carry it.
+  for (const host of ['127.0.0.1', 'play2.excalia.fr', '2001:db8::1', '::1']) {
+    const cfg = loadConfig({ front: { host, port: 0 } })
+    const spelled = addressName(cfg.front.host, cfg.front.port)
+    const split = spelled.lastIndexOf(':')
+    assert.equal(spelled.slice(split + 1), '0', host + ':0 keeps its port in the tail: ' + spelled)
+    assert.equal(spelled.slice(0, split), host.includes(':') ? '[' + host + ']' : host,
+      host + ':0 keeps its host on the left, bracketed where a record brackets one: ' + spelled)
   }
 })

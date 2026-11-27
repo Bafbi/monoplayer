@@ -185,7 +185,14 @@ export function attachWhitelistEntries (uuids) {
 // again here, the way the list below reaches it. A host that holds no colon reads as it
 // always did.
 export function addressName (host, port) {
-  return pickerRows([{ name: host + ':' + port }])[0].name
+  // #891: a config's port may be 0, which is a bind asking the OS for one. The picker
+  // declines a pair whose port is outside 1..65535, and a name it declines is offered as
+  // written, so an IPv6 host on an ephemeral port printed run together again. The bracket
+  // below is the picker's own rule (src/core/picker.js, canonicalPickName) applied to the
+  // half the picker refused to read; for a port it accepts, the result is unchanged, and
+  // test/service/start-live.test.js holds the two spellings to each other.
+  const spelledHost = host.includes(':') && !host.startsWith('[') ? '[' + host + ']' : host
+  return pickerRows([{ name: spelledHost + ':' + port }])[0].name
 }
 
 // #746: the start record counted the allowed servers it offers and named none. It is the
@@ -392,12 +399,17 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   const refuseAddress = (variable, raw, reason) => {
     if (reason !== null) throw new TypeError(variable + ' ' + reason + ', got ' + JSON.stringify(raw))
   }
+  // A variable that holds only space is an unset one, the way a blank path is in
+  // src/service/control.js: a deployment template that interpolates an empty value writes
+  // "", and a paste that catches a space is not an address. Read either as a host or a
+  // port and the two keys would disagree about the same blank.
+  const given = value => typeof value === 'string' && value.trim() !== ''
   const front = { ...doc.front }
-  if (env.MONOPLAYER_FRONT_HOST) {
+  if (given(env.MONOPLAYER_FRONT_HOST)) {
     refuseAddress('MONOPLAYER_FRONT_HOST', env.MONOPLAYER_FRONT_HOST, hostRefusal(env.MONOPLAYER_FRONT_HOST))
     front.host = env.MONOPLAYER_FRONT_HOST
   }
-  if (env.MONOPLAYER_FRONT_PORT) {
+  if (given(env.MONOPLAYER_FRONT_PORT)) {
     const port = Number(env.MONOPLAYER_FRONT_PORT)
     // 0 is a bind asking the OS for a port, which the offline rung and the parity lane
     // do; the backend's floor is 1, where a dial reaches nothing.
@@ -406,11 +418,11 @@ export function envOverlay (doc, env = process.env, warn = () => {}) {
   }
   if (Object.keys(front).length) out.front = front
   const backend = { ...doc.backend }
-  if (env.MONOPLAYER_BACKEND_HOST) {
+  if (given(env.MONOPLAYER_BACKEND_HOST)) {
     refuseAddress('MONOPLAYER_BACKEND_HOST', env.MONOPLAYER_BACKEND_HOST, hostRefusal(env.MONOPLAYER_BACKEND_HOST))
     backend.host = env.MONOPLAYER_BACKEND_HOST
   }
-  if (env.MONOPLAYER_BACKEND_PORT) {
+  if (given(env.MONOPLAYER_BACKEND_PORT)) {
     const port = Number(env.MONOPLAYER_BACKEND_PORT)
     refuseAddress('MONOPLAYER_BACKEND_PORT', env.MONOPLAYER_BACKEND_PORT, portRefusal(port))
     backend.port = port

@@ -284,6 +284,8 @@ test('#205 a deadline past what a timer can hold is named and ignored, so a typo
 // front is loopback, and a front left on loopback serves nobody outside the pod.
 test('#891 MONOPLAYER_FRONT_HOST and MONOPLAYER_BACKEND_HOST refuse a value that is not a host', () => {
   for (const variable of ['MONOPLAYER_FRONT_HOST', 'MONOPLAYER_BACKEND_HOST']) {
+    const blank = variable === 'MONOPLAYER_FRONT_HOST' ? 'front' : 'backend'
+    assert.equal(envOverlay({}, { [variable]: ' ' })[blank]?.host, undefined, variable + ' blank sets no host')
     for (const bad of ['play2.excalia.fr:25565', '[::1]', 'play2.excalia.fr:', ' 127.0.0.1']) {
       assert.throws(() => envOverlay({}, { [variable]: bad }), error => {
         assert.match(error.message, new RegExp(variable + ' must be a host'))
@@ -302,9 +304,12 @@ test('#891 MONOPLAYER_FRONT_PORT and MONOPLAYER_BACKEND_PORT refuse a port no so
     const floor = variable === 'MONOPLAYER_FRONT_PORT' ? 0 : 1
     for (const bad of ['2556O', '70000', '-1', '25565.5', '']) {
       if (bad === '') {
-        // An empty variable is an unset one here, as it is for every other name.
-        assert.equal(envOverlay({}, { [variable]: '' })[variable === 'MONOPLAYER_FRONT_PORT' ? 'front' : 'backend']?.port,
-          undefined, variable + ' empty sets no port')
+        // An empty variable is an unset one here, as it is for every other name, and so
+        // is one holding only space: a template that interpolates nothing and a paste
+        // that catches a blank are the same fact.
+        const key = variable === 'MONOPLAYER_FRONT_PORT' ? 'front' : 'backend'
+        assert.equal(envOverlay({}, { [variable]: '' })[key]?.port, undefined, variable + ' empty sets no port')
+        assert.equal(envOverlay({}, { [variable]: ' ' })[key]?.port, undefined, variable + ' blank sets no port')
         continue
       }
       assert.throws(() => envOverlay({}, { [variable]: bad }), error => {
@@ -319,6 +324,14 @@ test('#891 MONOPLAYER_FRONT_PORT and MONOPLAYER_BACKEND_PORT refuse a port no so
   }
   assert.equal(envOverlay({}, { MONOPLAYER_FRONT_PORT: '0' }).front.port, 0,
     'the front may still ask the OS for one')
+})
+
+test('#891 an IPv6 front on an ephemeral port is still spelled where a reader can split it', () => {
+  // #891 was filed on the start record writing `2001:db8::1:0`. The config accepts a
+  // front port of 0, because that is a bind asking the OS for one, so the spelling is
+  // where the defect is closed.
+  assert.equal(addressName('2001:db8::1', 0), '[2001:db8::1]:0',
+    'the host keeps its brackets beside a port the picker declines to dial')
 })
 
 // #229/#264: the control document's compiled switches. Two paths are left, and the
@@ -716,7 +729,7 @@ test('#815 an address that needs no bracket is written as it always was', () => 
   assert.equal(addressName('10.0.0.1', 25565), '10.0.0.1:25565', 'an IPv4 host has one colon')
   assert.equal(addressName('play2.excalia.fr', 25565), 'play2.excalia.fr:25565', 'and so does a name')
   assert.equal(addressName('[2001:db8::1]', 25565), '[2001:db8::1]:25565',
-    'a host the config already bracketed is not bracketed twice')
+    'the rule is idempotent, so a caller that brackets a host itself is not bracketed twice')
 })
 
 test('#815 every address a record joins is spelled by the one rule', () => {
