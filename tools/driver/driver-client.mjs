@@ -23,6 +23,15 @@ if ((op === 'break' || op === 'place') && args.length >= 3) {
   request.z = Number(args[2])
 }
 if ((op === 'break' || op === 'place') && args.length >= 4) request.ms = Number(args[3])
+if (op === 'entities' && args.length >= 1) {
+  // The mod owns the default radius; a caller names one only to change it.
+  const radius = Number(args[0])
+  if (!Number.isFinite(radius) || radius < 0) {
+    console.error('entities takes a radius in blocks, e.g. entities 32')
+    process.exit(1)
+  }
+  request.radius = radius
+}
 if (process.env.GATEB_DRIVER_TOKEN) request.token = process.env.GATEB_DRIVER_TOKEN
 
 const socket = net.createConnection({ host, port }, () => {

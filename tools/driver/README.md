@@ -82,6 +82,7 @@ node tools/driver/driver-client.mjs status
 | `place [x y z] [ms]` | use the selected hotbar item on top of the support block; defaults to the block in front |
 | `screenshot` | save a PNG under `minecraft/screenshots/` and return its path |
 | `skin` | the body texture the client resolved for the player it controls, the same for every `player_info` entry it holds, those entries' textures properties, and the camera mode |
+| `entities [radius]` | one row per entity the client holds in its level, within `radius` blocks of the player it controls (the mod's own default when you name none, reported back as `radius`): the client's entity id, the registry type, the UUID, the name the client draws, the position, the distance, whether it is the local player, and for a player the skin the client resolved for that body |
 | `perspective [first\|third_back\|third_front]` | set the camera mode, so a screenshot shows the body rather than a hand |
 | `inject_player_info` | deliver one clientbound `player_info` frame the caller encoded as hex: the driver decodes it with the client's own stream codec and hands it to the client's own packet listener, so the client validates it as it validates a frame from a server |
 | `respawn` | send the client respawn command (use after a death screen) |
@@ -116,6 +117,80 @@ unsigned), one fresh client each, and writes `.reports/skin-report.json` with th
 texture each case resolved and a third-person screenshot. `--lane skin --case
 signed` runs one of them. The measurement and its answer are in
 [testdata/skin-verdict.md](../../testdata/skin-verdict.md).
+
+## Reading the world (#675)
+
+`skin` answers the tab list: which `player_info` entries the client holds and what
+skin each resolves to. `entities` answers the level: which bodies stand in the
+world that client draws, where, and what skin it resolved for each. The pair is
+deliberate, because neither answers the other's question.
+
+- An entry is not a body. A client holds a `player_info` entry for a player it
+  never spawns, so a run can see a full tab list and an empty world (#632).
+- A row's skin is not the property. The row reports the texture the client
+  resolved for that body, so compare it with the property the proxy wrote before
+  calling the puppet's skin drawn. [src/driver/skin.js](../../src/driver/skin.js)
+  names both kinds.
+- Neither is a witness. Both read one client; what a person sees across two
+  clients is the other half of #634.
+
+The answer, one payload per call. `DriverServer.entityInfo` is the source; this is
+the shape it writes.
+
+```json
+{
+  "dimension": "minecraft:overworld",
+  "radius": 64.0,
+  "center": { "x": 0.5, "y": -60.0, "z": -4.5 },
+  "inLevel": 2,
+  "truncated": false,
+  "entities": [
+    {
+      "id": 12,
+      "type": "minecraft:player",
+      "uuid": "6eb73524-ff88-4a62-a8d0-c63905e7afba",
+      "name": "Bafbi",
+      "pos": { "x": 0.5, "y": -60.0, "z": -4.5 },
+      "distance": 0.0,
+      "local": true,
+      "player": true,
+      "skin": { "body": "minecraft:skins/6523b6e2352be77336c291a64a22cdc1f85ac2a8", "cape": null, "model": "wide", "secure": true }
+    },
+    {
+      "id": 1000000001,
+      "type": "minecraft:player",
+      "uuid": "ea45ba2e-f47d-43ee-9604-b20af90be1f1",
+      "name": "Wiriaw",
+      "pos": { "x": 2.5, "y": -60.0, "z": -4.5 },
+      "distance": 2.0,
+      "local": false,
+      "player": true,
+      "skin": { "body": "minecraft:skins/6523b6e2352be77336c291a64a22cdc1f85ac2a8", "cape": null, "model": "slim", "secure": true }
+    }
+  ]
+}
+```
+
+`inLevel` is how many the client held in its level before the radius filtered it,
+`truncated` says the mod capped the rows this answer carries, and `radius` is the
+number it filtered by, reported back rather than assumed by a caller. `local` marks
+the row this client controls, so the payload carries the player it drives once.
+`name` is the name the client draws: the profile name for a player, the type's name
+otherwise. An id at or above `FIRST_VIRTUAL_ENTITY_ID`
+([src/core/virtual-players.js](../../src/core/virtual-players.js)) is a body the proxy
+minted.
+
+The reader is [src/driver/entities.js](../../src/driver/entities.js):
+`readEntityReading` normalizes the payload, `findEntity` takes a UUID or a client id,
+`entityClaim` answers one UUID as data, and `describeEntity` writes the sentence a
+report quotes — `entity ea45ba2e-… (Wiriaw) exists at (2.5, -60, -4.5), type
+minecraft:player, not me`. `ENTITY_LIMITS` carries the limits above in the words a
+report can quote.
+
+A claim answers in the frame it was read in. `complete: false` is a capped read, which
+cannot say a body is absent, and its sentence says so instead; absence names the radius
+and how many entities the level held, so it never claims a fact about the whole level
+from a filtered read.
 
 ## Menus and screenshots
 
@@ -167,6 +242,9 @@ See [docs/driver-validation.md](../../docs/driver-validation.md).
   caller-built frame with the client's own stream codec and hands the packet to
   the client's own listener, on the client thread. The mod still opens no
   outbound connection and changes nothing the client would otherwise do.
+- `entities` iterates the level's entity collection on the client thread and
+  returns what it holds. It reads no socket, swaps no handler, and touches no
+  render target.
 - No outbound network from the mod.
 - Optional token: set `-Dgateb.driver.token=...` on the client JVM and
   `GATEB_DRIVER_TOKEN` on the client.
