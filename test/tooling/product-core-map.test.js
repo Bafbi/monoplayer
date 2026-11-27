@@ -1,5 +1,5 @@
-// #340, #371, #606: cells of docs/product-core.md, each pinned to the module that owns
-// the fact the cell states.
+// #340, #371, #606, #690, #763: the cells of docs/product-core.md and its leg interface,
+// each pinned to the module that owns the fact it states.
 //
 // The page is a map of where a decision lives. A cell that names half a list sends a
 // reader who needs the other half somewhere else, and nothing failed when it did.
@@ -35,6 +35,13 @@
 //         `startReconfiguration` and `finishConfigurationFrame`, the backend block `target`
 //         and `setTarget`, and neither named the `close()` a teardown awaits. The calls in
 //         src/service/monoplayer.js are the list now, and both blocks are read against it.
+//
+//   #763  #690's fence left the composition root out of the change, so the header of
+//         src/service/monoplayer.js kept its own copy of both blocks, and the shorter one.
+//         Nothing saw it: the cases above cut comments before they read a call, because a
+//         sentence that names a call is not a call. The header points now, at the section
+//         and at this file, and the two cases at the end of this section ask it for that
+//         pointer and for the absence of the block.
 //
 // What is compared is names. No sentence is parsed, because a guard that read English
 // would be a guard that lies about what it checked. The interface section's prose is
@@ -421,7 +428,8 @@ function blockMembers (leg) {
 // The composition root with its line comments cut, because a sentence that names a call is
 // not a call: the file writes `frontLeg.end` in prose, and a guard that counted prose
 // would ask the page for a member on the strength of a comment. Nothing else is read.
-const COMPOSITION_ROOT = read('src/service/monoplayer.js')
+const COMPOSITION_ROOT_SOURCE = read('src/service/monoplayer.js')
+const COMPOSITION_ROOT = COMPOSITION_ROOT_SOURCE
   .split('\n')
   .map(line => line.replace(/\/\/.*$/, ''))
   .join('\n')
@@ -467,6 +475,76 @@ for (const { table, leg, rows, source, build } of INTERFACES) {
       'reader writes a leg from and cannot (#712).')
   })
 }
+
+// --- the composition root's own header (#763) ---
+
+// Every case above reads src/service/monoplayer.js with its comments cut, on purpose: a
+// sentence that names a call is not a call. That cut is also why the header kept a second
+// copy of both interface blocks through #690, and the shorter copy: no case here could see
+// it. So this section reads the comments, and asks them for two things.
+//
+// No sentence is parsed. One case asks the header for two names, the section that lists the
+// members and this file; the other asks it for the shape a pasted interface has, a comment
+// line that carries an indent, and for the assignment that opens either block.
+//
+// That second case catches the shape this copy took, and not every copy a writer could
+// invent: a member list pasted flush to the marker passes it, and prose cannot be told from
+// a list without reading the prose. The limit is stated rather than papered over, because a
+// rule that guessed at English would be the guard that lies.
+//
+// Why the copy goes rather than gets a case of its own: #763's criterion 1 offered either
+// one list or a test comparing two by name. A comparison would have kept two homes for one
+// list, and the repo has paid for that twice (#606, #690). So the header points and the case
+// below asks it for no block, which is the whole fix: there is nothing left to compare.
+
+// The file's leading comment block: every line down to the first line of code. The blocks
+// #763 removed sat in it. The file writes prose flush to the marker, so a comment line that
+// carries an indent is the shape a member list has, and no sentence here has one.
+function compositionHeader () {
+  const head = []
+  for (const line of COMPOSITION_ROOT_SOURCE.split('\n')) {
+    if (!line.trimStart().startsWith('//')) break
+    head.push(line)
+  }
+  return head
+}
+
+// The section's own title, not the page's path: the header names the page twice, and the
+// path alone is satisfied by the sentence that says what is injected. A reader who follows
+// this pointer has to land on the list.
+const SECTION_TITLE = 'Interface for the live legs'
+const GUARD = 'test/tooling/product-core-map.test.js'
+
+test('the composition root header sends a reader who writes a leg to the page and the guard (#763)', () => {
+  const header = compositionHeader().join('\n')
+  for (const where of [SECTION_TITLE, GUARD]) {
+    assert.ok(header.includes(where),
+      'the header of src/service/monoplayer.js does not name ' + where + '. The two adapter interfaces are not ' +
+      'a fact this file owns: the members no call-in table names are the fenced blocks under "Interface for ' +
+      'the live legs" in docs/product-core.md, and ' + GUARD + ' holds those blocks to the calls the core ' +
+      'makes here (#690). The header is the first thing a reader of this file sees, so it is where the pointer ' +
+      'belongs. A header that carries the list instead is the second copy #763 removed.')
+  }
+})
+
+test('the composition root header keeps no copy of a leg interface (#763)', () => {
+  const header = compositionHeader()
+  assert.ok(header.length > 0,
+    'this case read no comment block at the top of src/service/monoplayer.js, so it checked nothing. The ' +
+    'header is the file\'s leading run of comment lines, and it is where #763 removed the second copy of ' +
+    'both interfaces.')
+  const indented = header.filter(line => /^\/\/\s{2,}\S/.test(line))
+  assert.deepEqual(indented, [],
+    'the header of src/service/monoplayer.js indents ' + indented.length + ' comment lines, the first: ' +
+    indented[0] + '. Every line of that block is prose flush to the marker. An indented line is the shape a ' +
+    'pasted interface takes, and this is the copy #690 left behind and #763 removed, three members behind the ' +
+    'page by the time it went. Write the sentence flush, and add a member to the page instead.')
+  const assigned = header.filter(line => /\b(?:frontLeg|backendLeg)\s*=\s*\{/.test(line))
+  assert.deepEqual(assigned, [],
+    'the header of src/service/monoplayer.js assigns ' + assigned.join(', ') + '. That assignment opens the ' +
+    'page\'s two blocks, under "Interface for the live legs" in docs/product-core.md, and a second one here ' +
+    'is the copy #763 removed. Name the page and ' + GUARD + ' instead.')
+})
 
 // The module map's section, read to its next heading so a `src/...js` row in another
 // table of the page cannot answer for a module the map never names. It is the bound

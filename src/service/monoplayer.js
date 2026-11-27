@@ -1,25 +1,23 @@
 // B1 monoplayer core: product-shaped composition root.
 //
 // The protocol spike (src/spike/proxy.js) is frozen; this module is where the product
-// lives. Everything real-scoped is injected: the front-leg and backend-leg
-// adapters (interface below, fakes in src/legs/fake-legs.js) and the
-// clock. With no --start flag the CLI never opens a socket and no Microsoft
-// auth is touched — B1 is the pure core plus fake integration only.
+// lives. Everything real-scoped is injected: the front-leg and backend-leg adapters
+// (fakes in src/legs/fake-legs.js) and the clock. With no --start flag the CLI never
+// opens a socket and no Microsoft auth is touched — B1 is the pure core plus fake
+// integration only.
 //
-// Adapter interfaces (real legs, built in G1/M4, implement these). The call-ins
-// each leg carries, the method of the core each one reaches, and its payload
-// shape are declared in src/service/wire-leg-to-core.js: one table per interface,
-// one row per call-in. This block names what those tables cannot: the rest of
-// each interface, which the core calls on the leg directly.
+// Adapter interfaces (real legs, built in G1/M4, implement these). Neither list is
+// here. The call-ins each leg carries, the method of the core each one reaches, and
+// its payload shape are declared in src/service/wire-leg-to-core.js: one table per
+// interface, one row per call-in.
 //
-//   backendLeg = {
-//     connect(): Promise                          // starts the puppet session
-//     write(name, packet)                         // serverbound, packet level
-//     writeRaw(buffer, meta)                      // serverbound, frame level
-//     target                                      // { host, port }: the address
-//                                                 // the leg is dialled at
-//     end(reason)                                 // deliberate close
-//   }
+// The rest of each interface is the members no row names, which the core or a
+// teardown calls on the leg directly. Those are the two blocks under the section
+// "Interface for the live legs" in docs/product-core.md.
+// test/tooling/product-core-map.test.js holds the blocks to the calls this module
+// makes, to the legs that answer them, and asks each one for `close()`, which no code
+// in this file calls. A list in this comment would be a second home, and the shorter
+// one (#763).
 //
 // The leg owns the signing, because the signature needs the puppet's profile
 // keys and the puppet connection's own last-seen window, and neither belongs to
@@ -28,25 +26,9 @@
 // the first drops the human's chat and counts it, and a leg without the second
 // leaves a configuration gate held when its last client detaches.
 //
-//   frontLeg = {                                  // a body's channels (#269)
-//     channels                                    // the channels this leg holds, as records:
-//                                                 //   { id, body, role, ... }. Read for the
-//                                                 //   driver's channel id, which the core has
-//                                                 //   no other way to name (#636, #525)
-//     write(name, packet, { synth, channel })     // clientbound, packet level
-//     writeRaw(buffer, meta, { channel })         // clientbound, frame level
-//     end(reason)                                 // kick/deny every channel
-//     startReconfiguration({ reason }): { started, reason }  // optional (#22)
-//                                                 // the sampling client re-enters
-//                                                 // configuration on its own
-//                                                 // connection
-//     finishConfigurationFrame(): Buffer          // optional: the bytes that end
-//                                                 // a configuration round, for a
-//                                                 // restore with no cached finish
-//   }
-//
-// A hand-built harness may omit the last two; the core degrades to a state
-// replay at the target's login and logs reconfigurationRestoreNoFinish.
+// A hand-built harness may omit the two optional members the page marks; the core
+// then degrades to a state replay at the target's login and logs
+// reconfigurationRestoreNoFinish.
 //
 // The one call the core makes on this leg that way is a row of
 // FRONT_LEG_CALL_INS: `preAuthStats` (#627), the pre-auth window's own numbers. The
