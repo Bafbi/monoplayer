@@ -26,6 +26,7 @@ import mc from 'minecraft-protocol'
 import { bumpReason, elapsedSince, encodeFrame, MAX_REFUSAL_REASONS } from '../../src/legs/live-front.js'
 import { bumpBounded, OVERFLOW_KEY } from '../../src/core/bounded-counter.js'
 import { pickerDialogParams, pickerRows } from '../../src/core/picker.js'
+import { countedSites, endSites, functionBody, functionSpan } from '../support/source-scan.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE = fs.readFileSync(path.join(ROOT, 'src', 'legs', 'live-front.js'), 'utf8')
@@ -138,29 +139,9 @@ test("#417 a connection's login-to-pick age is its own, and absent when it never
   assert.equal(elapsedSince(1000, 1000), 0, 'and a pick in the same millisecond is 0, which is real')
 })
 
-// Every `refuseAndCount({...})` call in the leg, read by brace matching so a record
-// object nested in one site is not mistaken for the end of it.
-function refusalSites (source) {
-  const sites = []
-  for (let at = source.indexOf('refuseAndCount({'); at !== -1; at = source.indexOf('refuseAndCount({', at + 1)) {
-    const from = source.indexOf('{', at)
-    let depth = 0
-    let end = -1
-    for (let i = from; i < source.length; i += 1) {
-      if (source[i] === '{') depth += 1
-      else if (source[i] === '}') {
-        depth -= 1
-        if (depth === 0) { end = i; break }
-      }
-    }
-    assert.notEqual(end, -1, 'the refusal site at byte ' + at + ' closes')
-    sites.push(source.slice(from + 1, end))
-  }
-  return sites
-}
-
 // The helper's own body: what it writes is the rule, so the guard reads it rather than
-// trusting a comment. One brace scan, below, reads every body this file asks about (#708).
+// trusting a comment. One brace scan, in test/support/source-scan.js, reads every body this
+// file asks about (#708, #764).
 function helperBody (source) {
   return functionBody(source, 'refuseAndCount')
 }
@@ -204,8 +185,8 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
   // click's answer refuses pass the reason the board decided instead of one read from
   // the frame, because the level a click came from is now one of the board's answers
   // rather than a branch in the leg.
-  const sites = refusalSites(SOURCE)
-    .map(refusedReason)
+  const sites = countedSites(SOURCE)
+    .map(site => refusedReason(site.body))
     .sort()
   assert.deepEqual(sites, [
     "'disconnect_claimed'",
@@ -279,22 +260,29 @@ test('#417 every refusal the leg counts is counted once, through one helper', ()
 // no refusal record at all. The fix is not a field on two lines: the helper writes the
 // record, so a site cannot count without telling a reader why.
 test('#670 every counted refusal writes its own record, and the record carries the reason and the sentence', () => {
-  const sites = refusalSites(SOURCE)
-  assert.ok(sites.length >= 10, 'the leg counts ten refusals, and the guard reads each site: ' + sites.length)
+  const sites = countedSites(SOURCE)
+  // #601: the failure names the sites it read, by the byte each starts at, because three of the
+  // ten pass `answer.reason` and a reason alone does not say which one moved.
+  assert.ok(sites.length >= 10, 'the leg counts ten refusals, and the guard reads each site. It read: ' +
+    sites.map(site => 'byte ' + site.at + ': ' + refusedReason(site.body)).join(', '))
   // The scanner looks for the call as it is written today. A site spelled around it, with
-  // a space before the argument or an alias, would pass every assertion below unseen.
-  assert.equal((SOURCE.match(/refuseAndCount\s*\(/g) ?? []).length, sites.length + 1,
-    'every call to the helper is one the scan reads, beside the one that defines it')
+  // a space before the argument or an alias, would pass every assertion below unseen, so a red
+  // here names every call in the file: the one the scan did not read is the fix.
+  const calls = [...SOURCE.matchAll(/refuseAndCount\s*\(/g)].map(match => match.index)
+  assert.equal(calls.length, sites.length + 1,
+    'every call to the helper is one the scan reads, beside the one that defines it. The scan read ' +
+    sites.length + ', and the file calls the helper at ' +
+    calls.map(at => 'byte ' + at + ' ' + JSON.stringify(SOURCE.slice(at, at + 32))).join(', '))
 
   // The record is a closure the helper calls, so the event name stays a literal at the
   // site (#416), and the pair the helper hands over, the reason and the sentence, can only
   // arrive at the site that writes them. A site may take that pair by name instead of
   // spreading it, which is the same rule.
-  const unnamed = sites.filter(site => {
-    const named = site.match(/(^|[^.\w])record:\s*(\w+|\(\s*\{[^}]*\}\s*\))\s*=>/)
+  const unnamed = sites.filter(({ body }) => {
+    const named = body.match(/(^|[^.\w])record:\s*(\w+|\(\s*\{[^}]*\}\s*\))\s*=>/)
     if (named === null) return true
     if (named[2].startsWith('(')) return false
-    return !site.includes('...' + named[2])
+    return !body.includes('...' + named[2])
   })
   assert.deepEqual(unnamed, [],
     'every counted refusal names the record it writes and spreads the pair the helper hands it: ' +
@@ -310,66 +298,18 @@ test('#670 every counted refusal writes its own record, and the record carries t
   // its own line: a reader who greps the record gets the reason and the sentence the
   // client was given, and needs no second record to learn them.
   for (const event of ['pickerDialogFailed', 'pickerServerDialogFailed']) {
-    assert.ok(sites.some(site => site.includes("log('" + event + "'")),
+    assert.ok(sites.some(site => site.body.includes("log('" + event + "'")),
       event + ' is a counted refusal, and its own record carries the reason')
   }
 
   // #670: the empty offer is the second asymmetry. It counts now, so the word the map is
   // keyed by is the record's `reason`, and the offer's own cause rides beside it: that
   // code, not the sentence's word, is what an operator repairs a file from (#372).
-  const empty = sites.filter(site => site.includes("'empty_offer'"))
+  const empty = sites.filter(site => site.body.includes("'empty_offer'"))
   assert.equal(empty.length, 1, 'the lane with no rows counts once, through the helper')
-  assert.match(empty[0], /reason: 'empty_offer'/, 'and it counts under the word the board composes its sentence from')
-  assert.match(empty[0], /offerReason: offer\.reason/, 'while the offer own cause, which names the file to repair, rides beside it')
+  assert.match(empty[0].body, /reason: 'empty_offer'/, 'and it counts under the word the board composes its sentence from')
+  assert.match(empty[0].body, /offerReason: offer\.reason/, 'while the offer own cause, which names the file to repair, rides beside it')
 })
-
-// #708: every `endConfiguration(client, '<reason>', <sentence>)` call in the leg, as its
-// argument list rather than as a line. The sentence is the last argument, and it is a call
-// or a property access as often as a name, so the arguments are split at the commas that sit
-// outside braces, brackets and strings.
-function splitArguments (source) {
-  const args = []
-  let depth = 0
-  let quote = null
-  let from = 0
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i]
-    if (quote !== null) {
-      if (char === '\\') i += 1
-      else if (char === quote) quote = null
-      continue
-    }
-    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
-    if (char === '(' || char === '{' || char === '[') depth += 1
-    else if (char === ')' || char === '}' || char === ']') depth -= 1
-    else if (char === ',' && depth === 0) { args.push(source.slice(from, i).trim()); from = i + 1 }
-  }
-  args.push(source.slice(from).trim())
-  return args
-}
-
-function endConfigurationSites (source) {
-  const sites = []
-  for (let at = source.indexOf('endConfiguration(');
-    at !== -1;
-    at = source.indexOf('endConfiguration(', at + 1)) {
-    // The definition, not a call, and the one spelling that is not a call at all.
-    if (/function\s+$/.test(source.slice(0, at))) continue
-    const open = source.indexOf('(', at)
-    let depth = 0
-    let end = -1
-    for (let i = open; i < source.length; i += 1) {
-      if (source[i] === '(') depth += 1
-      else if (source[i] === ')') {
-        depth -= 1
-        if (depth === 0) { end = i; break }
-      }
-    }
-    assert.notEqual(end, -1, 'the end site at byte ' + at + ' closes')
-    sites.push({ at, args: splitArguments(source.slice(open + 1, end)) })
-  }
-  return sites
-}
 
 // The function the call sits in. The leg's own functions are declared at two spaces inside
 // createFrontLeg, so the nearest of those above the call is its own.
@@ -379,31 +319,8 @@ function enclosingFunction (source, at) {
   return declared[declared.length - 1][1]
 }
 
-// A function's body and where it starts in the source, so an assertion can be made about
-// the text in front of a call rather than about the function as a whole.
-function functionSpan (source, name) {
-  const at = source.indexOf('\n  function ' + name + ' (')
-  assert.notEqual(at, -1, 'the leg has the function ' + name)
-  // The body's brace, not the one a destructured parameter opens.
-  const open = source.indexOf(') {', at) + 2
-  assert.ok(open > 2, name + ' has a body')
-  let depth = 0
-  for (let i = open; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) return { from: open + 1, body: source.slice(open + 1, i) }
-    }
-  }
-  assert.fail(name + ' closes')
-}
-
-function functionBody (source, name) {
-  return functionSpan(source, name).body
-}
-
-// #708: the ends the argument scan above cannot judge on its own are listed here, with
-// what the guard knows about them and how it knows it.
+// #708: the ends the shared scan cannot judge on its own are listed here, with what the
+// guard knows about them and how it knows it.
 //
 // A picker client is ended in three shapes. Eight of them pass a local the counted
 // helper returned in the same function; two pass the `.text` a function handed back
@@ -420,7 +337,7 @@ function functionBody (source, name) {
 // dataflow proof. The count and the record of a counted arm are held by the two guards
 // above, off the same scan, so the three read the one helper between them.
 test('#708 every sentence an ended picker client is given comes from a counted refusal', () => {
-  const sites = endConfigurationSites(SOURCE)
+  const sites = endSites(SOURCE)
   // The ends, in the order they appear in `live-front.js`, each named by the reason its
   // own line records. A new arm reds this list until it is named here.
   assert.deepEqual(sites.map(site => site.args[1]), [
