@@ -94,7 +94,7 @@ config key, no switch. It answers one question that inference could not: why a
 player could not see another player after attaching. It answers it without
 storing a frame.
 
-`name`, `reason`, `tookMs`, `replayed`, `synthesizedPositions`,
+`name`, `reason`, `tookMs`, `replayed`, `refused`, `synthesizedPositions`,
 `skippedLegOwned`, `includeConfig`, `backendLogins`, and `pose` describe the
 attach itself. The rest describe the attach stream, and what the dialog holder
 and the pack holder offered beside it. Every field in the table is a count
@@ -112,7 +112,8 @@ attribute instead.
 | --- | --- | --- |
 | `reason` | label | The path that wrote the record: `attach`, `early_attach`, `transfer`, `reconfigure`, or `transfer_restored`. |
 | `tookMs` | duration, milliseconds | Time `replaySnapshot` took, measured with the clock the core was built with, or `Date.now` when the core has none. |
-| `replayed` | count, frames | Frames the attach stream wrote. The synthesized position is not one of them, and `synthesizedPositions` counts it. |
+| `replayed` | count, frames | Frames the attach stream wrote, which is the frames the front leg took. The synthesized position is not one of them, and `synthesizedPositions` counts it. |
+| `refused` | count, frames | Frames the attach stream offered and the front leg refused, so no socket took one and the client holds a hole where that frame should be (#717). The leg answers false for a connection that holds no socket, a frame its clientbound policy withholds, and a state the client cannot parse (`writeRawTo` in `src/legs/live-front.js`). One `replayFrameRefused` core line names each refused frame, because no metric carries a frame name. `replayed` and `refused` are disjoint, and together they are the replay's cached frames: the synthesized position is in neither. |
 | `domains.config` | count, frames | Frames from the configuration phase. 0 when the attach leaves that prefix out, as the warm and early attaches do. |
 | `domains.prefix` | count, frames | Frames from the join prefix. A state cache that is not warm yet files every play frame here, so this is large before warm and small after. |
 | `domains.chunks` | count, frames | Chunk frames (`map_chunk`, `unload_chunk`). |
@@ -146,7 +147,7 @@ Every sum is cumulative (`aggregationTemporality: 2`) and monotonic. A series ke
 | `monoplayer.frames` | sum | `direction` (`s2c`/`c2s`), `state`, `name`, `result` | Backend frames received and front frames delivered. `result` is `forwarded` or `dropped` on `c2s`, and `forwarded` or `ignored` on `s2c`. |
 | `monoplayer.attaches` | sum | `player` | Successful attach attempts. |
 | `monoplayer.denials` | sum | `reason`, `phase` | Login-start denials. `phase` is `login_start` and no other value: the verify-session denial has had no path since #691. |
-| `monoplayer.replay.frames` | sum | `player` | Frames written by the join replay per attach. |
+| `monoplayer.replay.frames` | sum | `player` | Frames the front leg took from the join replay per attach. A frame it refused is not here: the heartbeat's `replayFramesRefused` counts those, and the attach record carries the same pair. |
 | `monoplayer.skin.frames` | sum | `player` | `player_info` skin entries written, and `player` names the player each entry names. Three kinds (#614, #618): the body's entry names the puppet and is written to every channel of the body on every pass, the driver's own entry names the driving player once per play state, and a spectator's own entry names that spectator and is written once, on its own channel, carrying the skin its account's answer carried. |
 | `monoplayer.wire.rejected` | sum | none | Increase of `front.wireStats.rejected`, sampled at each heartbeat. |
 | `monoplayer.preauth.refused` | sum | `reason` | Increase of `front.preAuthRefused`, sampled at each heartbeat: a front connection refused because the pre-auth window was full (#201). The only reason today is `preauth_connection_cap`, and the front leg's JSONL `preAuthRefused` line is the same refusal with the cap and the count in it. A leg's log does not go through the core, so this sum and that line are the two records of one decision. |
@@ -181,7 +182,7 @@ Every cumulative field counts from the start of the process except the top-level
 | `warm` | gauge | The cache is warm. A reconnect to a new target resets it, so it falls as well as rises. |
 | `backendLogins` | cumulative | Backend logins this process completed. |
 | `metrics.backendFrames`, `.configFrames` | cumulative | Backend frames seen, and the configuration-state share of them. |
-| `metrics.framesCached`, `.framesReplayed`, `.positionsSynthesized` | cumulative | Frames put in the cache, frames replayed on attach, and positions invented for the join. `framesCached` climbing is not resident growth: the chunk ring is bounded, and `sizes` says what is held now. |
+| `metrics.framesCached`, `.framesReplayed`, `.replayFramesRefused`, `.positionsSynthesized` | cumulative | Frames put in the cache, frames the front leg took from the attach replay, frames it refused, and positions invented for the join. `framesReplayed` counts what a socket took, so a frame the leg refused is in `replayFramesRefused` and not there (#717): the record's `replayed` and `refused` are the same pair for one attach. `framesCached` climbing is not resident growth: the chunk ring is bounded, and `sizes` says what is held now. |
 | `metrics.serverboundForwarded`, `.serverboundDropped`, `.serverboundNotAttached`, `.serverboundByName.*`, `.serverboundDroppedByName.*` | cumulative | Client frames relayed to the backend, refused, or dropped because no client was attached, split by frame name. |
 | `metrics.clientboundBlocked`, `.clientboundBlockedByName.*`, `.clientboundUnclassified` | cumulative | Backend frames the proxy withheld from the client, split by name, and the ones it could not classify. |
 | `metrics.chatBlocked`, `.chatRelayed`, `.chatSent` | cumulative | Chat frames blocked, relayed from a client, and sent by the proxy. |
