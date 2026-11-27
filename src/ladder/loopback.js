@@ -44,7 +44,7 @@ import { advancementComplete, applyAdvancementFrames } from './client-state.js'
 import { PARITY_FRAME_NAMES, attachParity, parityReplayNames } from './state-parity.js'
 import { baselineRegistryIds, readConfigurationBaseline } from '../legs/configuration-baseline.js'
 import { chooseDialogAction } from '../core/dialog-codec.js'
-import { pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
+import { addressName, pickIdFor, pickSlug, pickTarget, verbIdFor } from '../core/picker.js'
 import { clientboundPolicy } from '../core/clientbound-policy.js'
 import { createPickerServerReader } from '../service/start-live.js'
 import { FIRST_VIRTUAL_ENTITY_ID, MOVE_INTERVAL_MS } from '../core/virtual-players.js'
@@ -493,7 +493,9 @@ export async function runLoopback (argv = process.argv.slice(2)) {
           await rig.backend.connect()
           log('backendReconnect', {
             delayMs,
-            target: target ? `${target.host}:${target.port}` : null,
+            // #889: the service writes this record with the same field, and one rule spells
+            // it (#815, #892).
+            target: target ? addressName(target.host, target.port) : null,
             backendLogins: rig.core.session.backendLogins
           })
         } catch (error) {

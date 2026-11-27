@@ -107,6 +107,7 @@ import { isPoseFrame } from '../core/relay.js'
 import { createPreAuthWindow } from '../core/preauth-window.js'
 import {
   PICK_VERBS,
+  addressName,
   claimRestoreTitle,
   createPickerBoard,
   pickTarget,
@@ -2037,7 +2038,9 @@ function createFrontLeg ({
       uuid: client.uuid ?? null,
       body: claim.body,
       server: claim.server,
-      target: target === null ? null : target.host + ':' + target.port
+      // #889: the address beside the name it was offered under, spelled by the one rule
+      // (src/core/picker.js), so the record cannot state one address two ways.
+      target: target === null ? null : addressName(target.host, target.port)
     })
     if (target === null) {
       // A row this lane offers but cannot read as an address.

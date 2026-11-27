@@ -43,6 +43,20 @@ test('parseEndpoint reads HOST:PORT and applies the guard', () => {
   assert.throws(() => parseEndpoint('play2.excalia.fr:25565'), /live Excalia fleet/)
 })
 
+// #889: an endpoint is spelled by one rule (src/core/picker.js, addressName), and the same
+// rule reads it back (pickTarget). A bracketed IPv6 host is written the way a URL writes one
+// and dialled without its brackets, so the brackets have to come off here: `createBot` is
+// handed this host and puts it straight on the socket. An IPv4 endpoint cannot see it.
+test('#889 parseEndpoint reads a bracketed IPv6 host back to the address a dial takes', () => {
+  assert.deepEqual(parseEndpoint('[2001:db8::1]:25565'), { host: '2001:db8::1', port: 25565 },
+    'the host reaches the socket without the brackets the rule wrote it with')
+  assert.deepEqual(parseEndpoint('2001:db8::1:25565'), { host: '2001:db8::1', port: 25565 },
+    'and the spelling the rule replaces reads back to the same address')
+  assert.deepEqual(parseEndpoint('[2001:db8::1]:25565'),
+    parseEndpoint('2001:db8::1:25565'),
+    'so the two spellings are one endpoint, which is the whole point of the rule')
+})
+
 test('a pending capability is a declared row with its issue, never a failure', () => {
   const row = classifyFrame({ state: 'play', name: 'player_chat', direct: 1, proxied: 0 })
 

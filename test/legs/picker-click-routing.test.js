@@ -45,7 +45,7 @@ import { createOfflineFrontLeg } from '../../src/legs/live-front.js'
 import { readConfigurationBaseline } from '../../src/legs/configuration-baseline.js'
 import { offlineUuid } from '../../src/legs/offline-identity.js'
 import { buildCustomClickAction } from '../../src/core/dialog-codec.js'
-import { buildPickAnswer, pickIdFor, pickSlug, verbIdFor } from '../../src/core/picker.js'
+import { buildPickAnswer, pickIdFor, pickSlug, pickTarget, verbIdFor } from '../../src/core/picker.js'
 import { CHANNEL_ROLES } from '../../src/core/channels.js'
 
 const VERSION = '26.2'
@@ -263,6 +263,28 @@ test("#615 a claim on the server's own dialog lands the client in the body the f
     assert.equal(leg.metrics.pickerRefusals, 0)
     assert.deepEqual(clientErrors, [])
   })
+})
+
+// #889: one record, one spelling. A claim landing prints the address twice — `server`, the
+// name the picker offers, and `target`, the address the leg dialled — and they are one server.
+// An IPv4 row cannot see the defect, because `host + ':' + port` reads back. An IPv6 host runs
+// together without its brackets, so the record disagreed with itself: the row said
+// `[2001:db8::1]:25565` and the target beside it said `2001:db8::1:25565`.
+test('#889 a claim landing prints an IPv6 target the way it printed the server', async () => {
+  const SERVER_V6 = '[2001:db8::1]:25565'
+  await withPickerLane(async ({ leg, lines, states, clientErrors, click }) => {
+    click(verbIdFor('claim', SERVER_V6))
+    await settleUntil(() => leg.metrics.claimLanded === 1, 'the claim to land the client')
+    await settleUntil(() => states.includes('play'), 'the client in the body it claimed')
+
+    const [landing] = records(lines, 'pickerClaimLanding')
+    assert.equal(landing.server, SERVER_V6, 'the picker offered the row under its brackets')
+    assert.equal(landing.target, SERVER_V6,
+      'the target keeps the brackets the server has, so the host and the port split back')
+    assert.deepEqual(pickTarget(landing.target), { host: '2001:db8::1', port: 25565 },
+      'and the target names the address the row dials, not a second spelling of it')
+    assert.deepEqual(clientErrors, [])
+  }, { rows: [{ name: SERVER_V6 }] })
 })
 
 test("#615 a Spectate on the server's own dialog lands the client as a spectator of that body", async () => {

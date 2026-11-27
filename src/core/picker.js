@@ -108,6 +108,25 @@ function spectatorCount (value) {
   return Number.isInteger(value) && value > 0 ? value : 0
 }
 
+// #815, #889: the one spelling for an address. A host holding a colon keeps its
+// brackets, so the host and the port split back: `2001:db8::1:25565` has no place to
+// split. A host the config already bracketed is not bracketed twice, so the rule is
+// safe to call on its own output, and a host holding no colon reads as it always did.
+//
+// Exported because the records that print a dialled address are not all here, and a
+// leg cannot import the service to reach a spelling (#889). Spelled twice, one address
+// has two spellings in one lane's log and nothing notices (#815). pickTarget is the
+// other half: it reads back what this writes.
+export function addressName (host, port) {
+  const written = host + ':' + port
+  const target = pickTarget(written)
+  // A host and a port the rule cannot read are handed back as they came, because the
+  // caller's own refusal names them and a guess here would invent an address.
+  if (target === null) return written
+  const bracketed = target.host.indexOf(':') === -1 ? target.host : '[' + target.host + ']'
+  return bracketed + ':' + target.port
+}
+
 // #265: the name a row is offered under is the canonical address its claim
 // dials. A claim labels a body with pickSlug(row.name). The per-body state cache is
 // keyed by pickSlug(host + ':' + port) of the dial (src/core/body-caches.js,
@@ -122,8 +141,7 @@ function canonicalPickName (name) {
   // A bracketed IPv6 address is written the way a URL writes one, and the socket
   // layer takes the address without its brackets. The name keeps the brackets, so
   // it parses back to the address it dials.
-  const host = target.host.indexOf(':') === -1 ? target.host : '[' + target.host + ']'
-  return host + ':' + target.port
+  return addressName(target.host, target.port)
 }
 
 export function pickerRows (rows = []) {
