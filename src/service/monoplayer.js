@@ -480,7 +480,9 @@ export function createMonoplayer ({
     framesCached: 0,
     framesReplayed: 0,
     // #717: the replay frames the front leg refused. `framesReplayed` counts the ones a
-    // socket took, so a frame counted here is one no client received.
+    // socket took, so a frame counted here is one no client received. Both counters are the
+    // attach's: a spectator's landing counts its own pair on its record and moves neither
+    // (#737), because one sum over two paths would answer neither question.
     replayFramesRefused: 0,
     positionsSynthesized: 0,
     serverboundForwarded: 0,
@@ -2422,9 +2424,9 @@ export function createMonoplayer ({
     // #717: `writeSynthFrame` answers whether the front leg took the frame, and the
     // count follows the answer. A frame it refused is not a replay: it is the refusal,
     // counted on its own and named on one line, because a client missing a frame
-    // mid-replay holds a hole and nothing else in the record says so. The spectator's
-    // landing already counts what a socket took (`spectateView`'s `written`), though
-    // its `replayed` is still the count it built.
+    // mid-replay holds a hole and nothing else in the record says so. #737: the
+    // spectator's landing carries this same pair, so `replayed` is one count in both
+    // records and `refused` is the other.
     //
     // #739: a write that throws is the same event for the client, because the frame did
     // not leave. So it lands in the same counter and on the same line, with the leg's own
@@ -3034,9 +3036,44 @@ export function createMonoplayer ({
       includeConfig: false
     })
     frontTeleportSeq = synthesized.teleportId
-    let written = 0
+    // #737: the pair the attach record carries (#717, #739), read on this path too, so a
+    // reader comparing the two records does not have to know which meaning each one's
+    // `replayed` holds. `replayed` is the cached frames this socket took, the synthesized
+    // position excluded; `refused` is every frame it did not, the position included; and
+    // `frames` is what it took in all, which is `replayed` plus the position when the
+    // position landed. The count the replay built is neither of these and this record no
+    // longer publishes it: what a client is missing is the refusal, and a frame nobody
+    // received is not a fact about this socket.
+    let frames = 0
+    let replayed = 0
+    let refused = 0
     for (const frame of synthesized.frames) {
-      if (writeSynthFrame(frame, { channel })) written++
+      let taken = false
+      let error = null
+      try {
+        taken = writeSynthFrame(frame, { channel })
+      } catch (thrown) {
+        // #739: a write that throws is the same event for the client, because the frame did
+        // not leave. It lands in the same counter and on the same line, with the leg's own
+        // message beside it, which is the separator the two records share.
+        error = String(thrown?.message ?? thrown).slice(0, 200)
+      }
+      if (!taken) {
+        refused++
+        log('replayFrameRefused', {
+          name,
+          channel,
+          reason: 'spectate',
+          frame: frame.name,
+          ...(error === null ? {} : { error })
+        })
+        continue
+      }
+      frames++
+      // The invented position is the one frame here `replayed` does not count: it was never
+      // in the cache, and the test is `writeSynthFrame`'s own, so this pair counts what the
+      // attach record counts.
+      if (frame.synth !== 'position') replayed++
     }
     // #614: the channel is a channel of the body from here, which is what the held
     // packs are offered on and what the relay counts while it watches. Recorded before
@@ -3089,8 +3126,9 @@ export function createMonoplayer ({
     log('spectateView', {
       name,
       channel,
-      frames: written,
-      replayed: synthesized.counts.replayed,
+      frames,
+      replayed,
+      refused,
       // #635: what this client was told about the puppet's body, beside the frames it was
       // told about the world. A zero here beside a zero in the counters is the report the
       // owner filed.
@@ -3105,8 +3143,8 @@ export function createMonoplayer ({
       state: session.state,
       attached
     })
-    emit('spectate_view', { name, channel, frames: written, modeFrames, virtualFrames, packsOffered, ownSkin })
-    return { watching: true, reason: null, replayed: synthesized.counts.replayed, frames: written, modeFrames, virtualFrames, packsOffered, ownSkin }
+    emit('spectate_view', { name, channel, frames, replayed, refused, modeFrames, virtualFrames, packsOffered, ownSkin })
+    return { watching: true, reason: null, frames, replayed, refused, modeFrames, virtualFrames, packsOffered, ownSkin }
   }
 
   // #259: a spectator's channel closed. Its client is gone, so the relay stops when
