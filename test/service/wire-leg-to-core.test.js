@@ -7,9 +7,10 @@
 // recording core and a recording leg and reads which setter got which payload.
 // Nothing here connects, listens or reads a custody directory.
 //
-// One case is source text, because "the ritual has one home" is not a claim a
-// call can make. It copies the idiom test/ladder/rig.test.js uses for the rig
-// factory (#223): read the file, count the literal, assert the count.
+// Some cases read source text, because "the ritual has one home" is not a claim a call can
+// make, and neither is "which rows the payload cases pin". They copy the idiom
+// test/ladder/rig.test.js uses for the rig factory (#223): read the file, count the
+// literal, assert the count.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -113,7 +114,7 @@ test('#592 the core hands every front call-in to a leg that carries them', () =>
   assert.deepEqual(calls.at(-1), { name: 'bodyServed', args: [] },
     'setBodyServed lands as bodyServed, which takes no payload')
 
-  // #605: the three start() registered by hand until the front table owned them.
+  // #605: the session pipeline start() registered by hand until the front table owned them.
   handlers.get('setLoginStartHandler')({ name: 'Bafbi', uuid: PLAYER })
   assert.deepEqual(calls.at(-1), { name: 'processLoginStart', args: [{ name: 'Bafbi', uuid: PLAYER }] },
     'setLoginStartHandler lands as processLoginStart, which decides and lets the leg answer')
@@ -141,9 +142,10 @@ test('#605 the core hands every backend call-in to a leg that carries them', () 
   assert.deepEqual(wiring.missing, [],
     'a backend leg that carries every row is wired whole')
   // #757, #818: the same reading of the leg's own record the front case makes, so neither
-  // table is the one the partition happens to be checked on, and the empty `missing` above
-  // is every call row of the backend table carried: the delivery, the dial and the two
-  // optional calls.
+  // table is the one the partition happens to be checked on. The empty `missing` above is
+  // every `call` row of the backend table carried: the delivery, the dial, and the calls the
+  // core makes only when the leg has one. That is the table itself, and this sentence is not
+  // where it is counted (#935).
   const registrationRows = BACKEND_LEG_CALL_INS.filter(row => row.kind === 'register').map(row => row.name)
   assert.deepEqual([...handlers.keys()].sort(), registrationRows.sort(),
     'every register row reached the backend leg, and no call row did')
@@ -182,9 +184,9 @@ test('#592 a leg missing a call-in is named, in the order the table declares the
     'both holes are in the one list, in the order the table declares the rows: setCoreAttach comes before setSpectateBody there, and a report that sorted the names would read the other way')
 })
 
-// #605: a backend leg's hole is the report's business too. The two calls are the
-// rows a leg answers rather than registers, and a leg without them was a typeof
-// guard in the core's body until the table took them.
+// #605: a backend leg's hole is the report's business too. The calls this case omits are the
+// rows a leg answers rather than registers, and a leg without one was a typeof guard in the
+// core's body until the table took them.
 test('#605 a backend leg missing a call is named like any other hole', () => {
   const { core } = recordingCore(BACKEND_LEG_CALL_INS)
 
@@ -247,6 +249,18 @@ test('#605 a leg is measured against the table it was handed, and against no oth
 // out. A `call` row is a member the core reaches itself, which the #818 case reads.
 const REGISTER_ROWS = [...FRONT_LEG_CALL_INS, ...BACKEND_LEG_CALL_INS]
   .filter(row => row.kind === 'register')
+
+// The register rows the two payload cases at the top of this file hand to `handlers.get`, read
+// off their text the way every other count in this file reads a source file (#935). #885's rule
+// one level along: the ritual case's sentence spelled "eleven of these rows ... the other seven",
+// so a row added to either table left it wrong with a green gate. The pinned half is these two
+// cases' own pins and the other half is the tables' rows minus it, so both are derived and the
+// sentence states neither number. The caller passes the slice, because a pin a later case makes
+// is not one of these two. Comments are stripped: a sentence that names the call is not a pin
+// (test/ladder/rig.test.js:41).
+function pinnedRows (source) {
+  return [...new Set([...code(source).matchAll(/handlers\.get\('(\w+)'\)/g)].map(match => match[1]))]
+}
 
 // Every module under one directory, as absolute paths. It recurses, so a lane in a
 // subdirectory is read too.
@@ -350,9 +364,10 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
   //
   // The instrument is still a count, and the file's header says why: the claim is negative ("no
   // lane registers the row"), so a lane that names the literal is the whole failure. The table
-  // below is only the excuses. The two cases above pin the payload of eleven of these rows at
-  // this seam; the other seven are rows this case counts, and no case here reads what they
-  // reshape.
+  // below is only the excuses. The two cases above pin the payload of the rows they hand
+  // `handlers.get`, and the rows they pass over are the ones this case counts, with no case here
+  // reading what they reshape: #935 derived both halves from this file, so the sentence states
+  // neither number and the case below is where the two it used to spell are read.
   const lanes = laneSources()
   assert.ok(['src/ladder/rig.js', 'src/ladder/online.js', 'src/ladder/loopback.js']
     .every(file => lanes.some(lane => lane.file === file)),
@@ -435,6 +450,54 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
   }
 })
 
+// #935: the payload split, which the ritual case's sentence used to count. The claim is about
+// this file: which rows the two cases above read a payload for, and which rows no case here
+// reads what they reshape. So the set comes from those two cases' own pins, and the tables say
+// which of those names are rows at all. Neither number is typed anywhere.
+test('#935 the payload cases pin the rows this file names, and the rest have none', () => {
+  const FILE = read('test/service/wire-leg-to-core.test.js')
+  // The walk reads the two payload cases and stops before the third, because a pin another case
+  // makes is not one of theirs and a walk over the whole file would let it move a row out of the
+  // second half with nothing said (#935). The openings are read from column 0, so this case's own
+  // text cannot move the boundary: a search for a case's title would find the search itself.
+  const OPENINGS = [...FILE.matchAll(/^test\('/gm)].map(match => match.index)
+  assert.ok(OPENINGS.length > 2,
+    'the file opens a case after the two payload ones, so the walk has a boundary to stop at')
+  const PAYLOAD_CASES = FILE.slice(OPENINGS[0], OPENINGS[2])
+  const titles = [...PAYLOAD_CASES.matchAll(/^test\('([^']+)'/gm)].map(match => match[1])
+  assert.deepEqual(titles.map(title => title.replace(/^#\d+ /, '')),
+    ['the core hands every front call-in to a leg that carries them', 'the core hands every backend call-in to a leg that carries them'],
+    'the walk reads the two cases that pin a payload, which are the first two in this file: a case inserted above ' +
+    'them or a title changed means this boundary reads the wrong text, and a set it over- or under-claims is the ' +
+    'drift #935 is about')
+  // Every pin in the slice names its row as a literal: a computed name is one this walk cannot
+  // see, and a walk that dropped one would report a pinned row as one no case reads (#935).
+  const reads = count(code(PAYLOAD_CASES), 'handlers.get(')
+  assert.equal([...code(PAYLOAD_CASES).matchAll(/handlers\.get\('(\w+)'\)/g)].length, reads,
+    'the two payload cases name a row at every \`handlers.get\` they write, and this walk reads those names: ' +
+    'a computed one is a pin it would pass over')
+  const names = REGISTER_ROWS.map(row => row.name)
+  const pinned = pinnedRows(PAYLOAD_CASES)
+  const unpinned = names.filter(name => !pinned.includes(name))
+
+  assert.ok(pinned.length > 0,
+    'the two cases above hand a row to `handlers.get`, so this case has a pin to read: a walk that found none would ' +
+    'pass on a rule that counted nothing')
+  assert.deepEqual(pinned.filter(name => !names.includes(name)), [],
+    'the cases above pin the payload of ' + pinned.length + ' register rows of the two tables and of no other name: ' +
+    'a pin on a name no table declares is a payload nothing reshapes (#935)')
+  assert.ok(unpinned.length > 0,
+    'the rows no payload case above reads are ' + unpinned.join(', ') + ', and the ritual case\'s sentence says so without ' +
+    'counting them. A case that pinned every row would leave that sentence claiming a set that is empty (#935)')
+
+  // The walk bites, and both halves are the file's. The source fed here is the two cases plus a
+  // pin the tree does not make, spelled in two pieces so the walk above does not find it.
+  assert.deepEqual(pinnedRows(PAYLOAD_CASES + "\nhandlers.get('" + 'setReconfiguredHandler' + "')\n"),
+    [...pinned, 'setReconfiguredHandler'],
+    'a case that pins one more row moves it out of the second half, which is the edit the old sentence read as a ' +
+    'number going wrong')
+})
+
 // #818: a `call` row is a member the core calls on the leg itself, so the row has a call
 // site in the core or it is a name a leg is measured against and nothing reaches. That is
 // the shape #721 found one module over: a declared step whose last caller had been deleted,
@@ -457,6 +520,14 @@ function callSites (source, binding, name) {
   return count(source, binding + '.' + name + '(') + count(source, binding + '?.' + name + '(')
 }
 
+// A `typeof` test on an interface's own binding (#935): `typeof frontLeg.claimOn` and
+// `typeof frontLeg?.claimOn` are one question, and the read is source text for the reason
+// `callSites` gives.
+function shapeTests (source, binding, name) {
+  return count(source, 'typeof ' + binding + '.' + name + ' ') +
+    count(source, 'typeof ' + binding + '?.' + name + ' ')
+}
+
 test('#818 every `call` row is a member the core calls on the leg its table declares', () => {
   const CORE = code(read('src/service/monoplayer.js'))
 
@@ -473,10 +544,12 @@ test('#818 every `call` row is a member the core calls on the leg its table decl
 
   // The other half of #818's hole. A backend call row is answered by the report
   // (`backendCarries`), so a `typeof` test on one is the second home #605 removed: the
-  // core would ask the leg's shape where the table already answered. The front's three
-  // optional calls are `typeof`-tested on purpose — the header says why, and `laneState`
-  // asks the leg at each read because the report is null until start() — so this half
-  // names the backend's rows only.
+  // core would ask the leg's shape where the table already answered. The front's conditional
+  // calls are `typeof`-tested on purpose: the header of src/service/wire-leg-to-core.js names
+  // them, and the #935 case below derives the set from the table and the core. `laneState` asks
+  // the leg at each read, because the report is null until start(). So this half names the
+  // backend's rows only, and #935 removed the count both sites spelled: it read short by one,
+  // because #627 added `preAuthStats` in a block of its own below the rows #726 added.
   for (const { name, kind } of BACKEND_LEG_CALL_INS) {
     if (kind !== 'call') continue
     assert.equal(count(CORE, 'typeof backendLeg.' + name) + count(CORE, 'typeof backendLeg?.' + name), 0,
@@ -492,6 +565,34 @@ test('#818 every `call` row is a member the core calls on the leg its table decl
     'a shape test is not a call site: #605 makes the core ask the report what the backend leg carries, and a typeof guard is the second home it replaced')
   assert.equal(callSites('backendLeg.chat(text)', 'frontLeg', 'chat'), 0,
     'and the other interface\'s binding answers for its own rows: a front row the core reaches through backendLeg is a row the wrong leg answers')
+})
+
+// #935: the other half of that exemption, and the sentence that used to count it. The front's
+// `call` rows split in two: the delivery, which the core calls with no test because a leg
+// without one throws on the next frame, and the rows the core reaches only when the leg carries
+// them, which it asks about with `typeof` first. The set is the table's and the core's, so a row
+// that changes halves fails here rather than leaving a number in two comments with a green gate.
+test('#935 the front `call` rows the core asks about are the table\'s conditional half', () => {
+  const CORE = code(read('src/service/monoplayer.js'))
+  const rows = FRONT_LEG_CALL_INS.filter(row => row.kind === 'call').map(row => row.name)
+  const asked = rows.filter(name => shapeTests(CORE, 'frontLeg', name) > 0)
+  const delivery = rows.filter(name => !asked.includes(name))
+
+  assert.deepEqual([...asked].sort(),
+    ['claimOn', 'finishConfigurationFrame', 'preAuthStats', 'startReconfiguration'],
+    'src/service/monoplayer.js asks the leg for these rows with `typeof` before it reaches them. The header of ' +
+    'src/service/wire-leg-to-core.js is where that list is written down, so a row that joins or leaves it is ' +
+    'edited there too: the front\'s conditional calls are ' + asked.join(', ') + ' (#935)')
+  assert.deepEqual([...delivery].sort(), ['end', 'write', 'writeRaw'],
+    'and the delivery half is reached with no test, because a leg without one throws on the next frame: ' +
+    delivery.join(', ') + ' are the rows the core sends through')
+
+  // The walk bites: a `typeof` test on a delivery row moves it out of that half, and the read is
+  // the one the sentence rests on rather than a count of members.
+  const GUARDED = CORE + "\nif (typeof frontLeg.write !== 'function') return\n"
+  assert.equal(shapeTests(GUARDED, 'frontLeg', 'write'), 1,
+    'a `typeof` test on a delivery row is the read that moves it into the conditional half, so a failure names ' +
+    'the row rather than counting the members')
 })
 
 // #718: the report carries what a reader acts on, and nothing else. It used to
