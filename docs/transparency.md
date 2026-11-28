@@ -184,12 +184,16 @@ stale UUID therefore looks like a backend that lists the puppet late, until that
 listing arrives: a listed puppet writes `puppetSkinKnown`, and a stale UUID never
 does.
 
-What the proxy says about it, one event per thing that happened:
+What the proxy says about it, one event per thing that happened. A `Fields` cell is the keys the
+record's `log(...)` call sites in `src/service/monoplayer.js` pass, and the `Meaning` cell says which of
+them a site can leave out. `test/tooling/transparency-skin-fields.test.js` reads the cells and the call
+sites against each other in both directions. It also reads these row names against the events the
+service writes, so a record this page leaves out fails there rather than going unstated:
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `puppetSkinKnown` | `uuid`, `signed`, `was`, `value` | A `player_info` frame carried the puppet's own textures property whose value differs from the one held. `was` is the value it replaced, and null the first time. Once per change, not once per frame, so a value the backend repeats after another logs again |
-| `puppetSkinSent` | `name`, `reason`, `signed`, `puppet` | One entry was written to the body's channels, named by `name`. `puppet` says which entry it is: `true` for the body's, naming the puppet, and `false` for the driver's own. Whether the client applied it is the client's business, and only a client reading says. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, `spectate`, or `property_arrived` |
+| `puppetSkinKnown` | `uuid`, `signed`, `was`, `value` | A `player_info` frame carried the puppet's own textures property whose value differs from the one held. `signed` is whether that property carried a signature. `was` is the value it replaced, and null the first time. Once per change, not once per frame, so a value the backend repeats after another logs again |
+| `puppetSkinSent` | `name`, `reason`, `signed`, `puppet` | One entry was written to the body's channels, named by `name`. `signed` is whether the puppet's textures property carried a signature. `puppet` says which entry it is: `true` for the body's, naming the puppet, and `false` for the driver's own. Whether the client applied it is the client's business, and only a client reading says. `reason` is what asked for it: `attach`, `early_attach`, `transfer`, `reconfigure`, `transfer_restored`, `spectate`, or `property_arrived` |
 | `puppetSkinRefused` | `reason`, `error`, `puppet` | The packet could not be built (`packet`), or the leg found no channel of the body to write to (`write_failed`). `error` is absent when nothing threw. An entry that reached nobody is not counted as sent, so the next pass writes it |
 | `puppetSkinWithheld` | `name`, `reason`, `puppet` | A frame could not be written because no profile was named for it: a driver the front gave no UUID or name, on an entry that is the driver's own (`no_identity`). It is read at the replay, at a spectator's landing, and when the property arrived. No later frame repairs that. A missing property is not reported: it normally arrives a moment after the attach, and the frame then goes out under `property_arrived`. A packet or write failure is `puppetSkinRefused` |
 | `puppetSkinUnidentified` | `reason` | A frame carried a skin and the config names no puppet UUID (`no_puppet_uuid`), so the proxy has no entry to attribute it to. Said once per process, and only while `skin.showPuppetSkin` is on, because with it off no frame would be written either |

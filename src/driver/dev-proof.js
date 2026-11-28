@@ -296,6 +296,24 @@ export function readingOf (records) {
   }
 }
 
+// The fields the `puppet-renders` evidence line prints, in the order it prints them. `entryLine`
+// reads this list, so the line and the list are one fact rather than two, and every key here is a
+// field `docs/transparency.md`'s cell for `puppetSkinSent` lists: an operator reads the line into a
+// report they sign, and a key printed from a field the record does not carry reaches them as
+// "signed undefined" (#949). `signed` is the one that sentence is about, and it is a real signal
+// rather than decoration: it says whether the puppet's textures property carried a signature, which
+// is what the runbook's own step tells the operator to read. `test/tooling/transparency-skin-fields.test.js`
+// holds this list to the page's cell, and `test/driver/dev-proof.test.js` holds the line to this list.
+export const ENTRY_FIELDS = Object.freeze(['name', 'signed', 'reason'])
+
+// The line, built from that list: the first field is named by the record and the rest carry their
+// own names, which is how the sentence an operator has read since #634 is spelled.
+function entryLine (entry) {
+  return 'puppetSkinSent: ' + ENTRY_FIELDS
+    .map((field, at) => (at === 0 ? '' : field + ' ') + entry[field])
+    .join(', ')
+}
+
 // The entry the landing pass wrote for the puppet: after the landing, and naming the puppet.
 // `sendPuppetSkin` writes it once for every channel of the body, which is why this is the row
 // that answers for the entry rather than a per-channel record.
@@ -345,7 +363,7 @@ export function claimsOf (reading) {
         ? 'no landing to announce to'
         : (entry === null
             ? 'no puppetSkinSent record after the landing'
-            : 'puppetSkinSent: ' + entry.name + ', signed ' + entry.signed + ', reason ' + entry.reason),
+            : entryLine(entry)),
       spectate === null ? null : entryBecause(reading)),
     row('body', spectate !== null && frames.includes('spawn_entity'),
       spectate === null

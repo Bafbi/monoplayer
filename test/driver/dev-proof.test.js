@@ -17,6 +17,7 @@ import { functionBody } from '../support/source-scan.js'
 
 import {
   CLAIMS,
+  ENTRY_FIELDS,
   OPERATOR_STEPS,
   RECORDS,
   WITNESS_COMMIT,
@@ -175,6 +176,40 @@ test('the body entry is a `puppet` true line written after the landing, not the 
   // not shadow it.
   const both = records.concat([{ ...skinned, name: 'Attach', reason: 'landing', puppet: false, t: at(6) }])
   assert.equal(row('entry', both).holds, true, 'the body\'s line is the entry, and a later driver line does not replace it')
+})
+
+// #949: the evidence line prints three of the record's fields, and nothing tied the printed keys to a
+// list. `ENTRY_FIELDS` is that list and the line is built from it, so a key printed from a field the
+// record does not carry cannot reach a report an operator signs. `test/tooling/transparency-skin-fields.test.js`
+// holds the list to the page's cell; this case holds the line to the list, and the list to the sentence
+// `RECORDS` states for the same record.
+test('the evidence line prints every field of ENTRY_FIELDS, and a false signature is one of them', () => {
+  const records = run()
+  const skinned = records.find(record => record.event === 'puppetSkinSent')
+  assert.ok(ENTRY_FIELDS.length > 0, 'the module names the fields its evidence line prints')
+  // The module states the record's fields twice: `RECORDS`'s sentence, which the runbook prints, and
+  // this list, which the line prints. This is the one place both are read, so a rename reaches both.
+  // One direction, because that sentence also names `puppet`, which the line does not print.
+  const stated = RECORDS.find(record => record.name === 'puppetSkinSent').what
+  for (const field of ENTRY_FIELDS) {
+    assert.ok(stated.includes('`' + field + '`'),
+      'the sentence RECORDS states for puppetSkinSent names ' + field + ': ' + stated)
+  }
+
+  // Every field reaches the line: a field whose value changes the sentence is a field the reader
+  // prints. Read one at a time and off the list rather than off a copy of it, so a fourth field is
+  // asked too, and a line built from a constant fails here rather than passing on the fixture's value.
+  const render = line => claimsOf(readingOf(records.map(record => record === skinned ? line : record)))
+    .find(entry => entry.id === 'entry').evidence
+  const other = field => (typeof skinned[field] === 'boolean' ? !skinned[field] : String(skinned[field]) + '-other')
+  for (const field of ENTRY_FIELDS) {
+    const said = [render(skinned), render({ ...skinned, [field]: other(field) })]
+    assert.notEqual(said[0], said[1], 'the line prints ' + field + ': ' + said[0])
+  }
+  // The false branch is the one no case carried: a property the client cannot verify, which is what
+  // the runbook's own step tells the operator to read this line for.
+  assert.match(render({ ...skinned, signed: false }), /, signed false, /,
+    'a property with no signature says so in the line')
 })
 
 test('an entry the proxy withheld is quoted with the profile it could not name', () => {
