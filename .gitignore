@@ -24,5 +24,10 @@ tools/mc-source/build/
 testdata/*.json
 testdata/*.png
 testdata/*.log
+# The witnesses are the exception (#946). A run's output is what the run made; a
+# witness is what a person saw, signed, and the checks open it: --verify for the
+# dev lane and --verify-g0 for the driver lane. A record one machine keeps proves
+# nothing once the machine is gone, so this line is what lets the copy be committed.
+!testdata/*-witness.json
 tools/observer/.gradle/
 tools/observer/build/

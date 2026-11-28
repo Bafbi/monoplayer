@@ -488,8 +488,9 @@ document that holds it, alongside the frames it read:
 node src/driver/dev-proof.js --path .reports/dev-log.jsonl
 ```
 
-That writes `.reports/dev-two-client-witness.json`. Its steps are the table above, in its order,
-each `pending`. The check reads a row's `id` before anything else, then its `state` and `evidence`:
+That writes the file you edit, `.reports/dev-two-client-witness.json`. Its steps are the table
+above, in its order, each `pending`. The check reads a row's `id` before anything else, then its
+`state` and `evidence`:
 
 - `id`, the step's name and the name `--verify` reads first. Keep it as written.
 - `state`, either `seen` or `not-seen`.
@@ -504,9 +505,15 @@ node src/driver/dev-proof.js --verify --path .reports/dev-log.jsonl
 ```
 
 `--verify` reads `testdata/dev-two-client-witness.json`, which is why the copy comes first. With
-`--verify --witness .reports/dev-two-client-witness.json` it reads the document you edited instead.
-`testdata/driver-unmodded-witness.json` is the driver lane's record of the same kind. Run evidence
-stays out of git, and `.gitignore` is where that rule lives.
+`--verify --witness .reports/dev-two-client-witness.json` it reads the file you edited
+instead.
+
+The two paths have two jobs. `.reports/` is where a run leaves what git does not keep, so the file
+you edit stays there. A record one machine holds proves nothing, so the copy lands where a checkout
+keeps it, in `testdata/`. `.gitignore` ignores a run's `.json` files in `testdata/` itself, and
+states one exception: a `*-witness.json` is a person's signature on a run, and is re-included. Commit the copy,
+`testdata/dev-two-client-witness.json`. The driver lane's unmodded witness is the same kind of record
+under the same rule, and `docs/driver-lane.md` holds its instruction.
 
 It exits 1 and names what stops it. On the rows: a row that lost its `id`, a row whose `id` is no
 step of this run, and a row that sits in another step's place. On the steps: a step still `pending`,

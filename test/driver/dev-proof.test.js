@@ -516,11 +516,13 @@ test('the runbook names the lines a gapped proof prints, and the labels come fro
 // here instead of implied. A field the check *stopped* reading still fails its own case in this file,
 // and that is what keeps the row from being a silent second list.
 //
-// Two fields are asked for by name rather than derived, because neither is a row's: `completed`, the
-// flag the check refuses a document for leaving unset, and `WITNESS_COMMIT`, the file `--verify`
-// opens when it is given no `--witness`. Both are read out of the section's prose and not out of a
+// Three names are asked for rather than derived, because none is a row's: `completed`, the flag the
+// check refuses a document for leaving unset, and the two paths the section states — `WITNESS_WRITE`,
+// the file an operator edits, and `WITNESS_COMMIT`, the copy `--verify` opens when it
+// is given no `--witness` (#946). All three are read out of the section's prose and not out of a
 // command in it: a path named only inside a fenced block is named to a shell, and the operator reading
-// the section is who has to be told. `completed` is the one hard name in this file, and the case
+// the section is who has to be told. The two paths are asked for one at a time, because the finding was
+// a section that named one of them and meant both. `completed` is the one hard name in this file, and the case
 // holds it to the module by asking the check to refuse it: the refusal prints the word, so a renamed
 // flag fails here instead of leaving the page asking for a field nobody reads.
 //
@@ -620,8 +622,9 @@ function howFields (document, fields) {
 // What the two surfaces disagree about, one list per repair: a field the page's list leaves out, a
 // bullet for a field no row carries, a field named twice, a list out of the order the check reads in, a
 // step of the generated document that names no field or names them in another order, a flag the section
-// never states, and a path it never names outside a command.
-function fieldDrift (text, document, { witnessCommit = WITNESS_COMMIT } = {}) {
+// never states, and a path it never names outside a command — one entry per path, because the two
+// paths have two jobs and a section can lose either of them alone (#946).
+function fieldDrift (text, document, { witnessWrite = WITNESS_WRITE, witnessCommit = WITNESS_COMMIT } = {}) {
   const fields = rowFields(document)
   const documentFields = DOCUMENT_FIELDS
   const page = section(text, WITNESS_SECTION)
@@ -650,14 +653,20 @@ function fieldDrift (text, document, { witnessCommit = WITNESS_COMMIT } = {}) {
     howMissing,
     howMoved,
     silent: documentFields.filter(field => !said.includes(field)),
-    unnamedPath: said.includes(witnessCommit) ? [] : [witnessCommit]
+    // #946: the finding was a section that named one path and meant both, so both are asked for. Each
+    // carries the job it has, because the noun in the repair is what tells a reader which sentence to
+    // edit: the file the operator edits, or the copy that is the record.
+    unnamed: [
+      { file: witnessWrite, job: 'the file an operator edits' },
+      { file: witnessCommit, job: 'the copy `--verify` opens when it is given no `--witness`' }
+    ].filter(({ file }) => !said.includes(file))
   }
 }
 
 // The edit each disagreement asks for, one sentence each, naming the field and the side it is on. A
 // message that said only "the page and the witness disagree" would leave the reader to work out which
 // of the eight edits is theirs, and which field.
-function fieldDisagreement ({ missing, unrowed, repeated, moved, howMissing, howMoved, silent, unnamedPath }) {
+function fieldDisagreement ({ missing, unrowed, repeated, moved, howMissing, howMoved, silent, unnamed }) {
   const where = 'deploy/dev/README.md\'s "' + WITNESS_SECTION + '" section'
   return [
     ...missing.map(field => where + ' has no bullet for ' + field +
@@ -676,9 +685,8 @@ function fieldDisagreement ({ missing, unrowed, repeated, moved, howMissing, how
       'those steps, so both surfaces say it once'),
     ...silent.map(field => where + ' never tells the operator to set ' + field +
       ': the check refuses a document that leaves it, and this section is where it is set'),
-    ...unnamedPath.map(file => where + ' does not name ' + file + ' outside a command, and it is the file ' +
-      '`--verify` opens when it is given no `--witness`: name it in the prose, or the copy step is ' +
-      'one a reader invents')
+    ...unnamed.map(({ file, job }) => where + ' does not name ' + file + ' outside a command, and it is ' +
+      job + ': name it in the prose, or the step is one a reader invents')
   ]
 }
 
@@ -686,6 +694,7 @@ function fieldDisagreement ({ missing, unrowed, repeated, moved, howMissing, how
 // the runbook cannot make this case about the drift instead of the guard.
 test('the field comparison reports a missing bullet, a bullet for no field, a field named twice, a moved list, a step naming no field, a step naming them out of order, a silent flag, and a path named only in a command', () => {
   const commit = 'testdata/a-witness.json'
+  const write = '.reports/a-witness.json'
   const document = {
     steps: [{ id: 'a-step', claim: 'a sentence', state: 'pending', evidence: '[MANUAL: what you saw]' }],
     how: ['Keep the `id` and the `state`, then write `evidence`.', 'Set `completed` true, then run it.']
@@ -695,7 +704,7 @@ test('the field comparison reports a missing bullet, a bullet for no field, a fi
   // sentence would pass with every bullet gone, which is the hole the bullet reader closes.
   const asPage = ({
     bullets = ['id', 'state', 'evidence'],
-    said = 'Then set `completed` to `true`, copy it to `' + commit + '`, and read it back.',
+    said = 'That writes `' + write + '`. Then set `completed` to `true`,\ncopy it to `' + commit + '`, and read it back.',
     command = 'node src/driver/dev-proof.js --verify'
   } = {}) => [
     '### ' + WITNESS_SECTION,
@@ -710,7 +719,11 @@ test('the field comparison reports a missing bullet, a bullet for no field, a fi
     command,
     '```'
   ].join('\n')
-  const drift = (over = {}, changed = document) => fieldDrift(asPage(over), changed, { witnessCommit: commit })
+  // Both paths are the fixture's own, so each parameter below is exercised rather than left at the
+  // module's default: a case that only ever passed the copy path could not tell a reader that reads
+  // one parameter from a reader that reads both.
+  const drift = (over = {}, changed = document) =>
+    fieldDrift(asPage(over), changed, { witnessWrite: write, witnessCommit: commit })
 
   assert.deepEqual(fieldDisagreement(drift()), [],
     'the fixture agrees with itself, so each case below is about its own edit')
@@ -739,21 +752,28 @@ test('the field comparison reports a missing bullet, a bullet for no field, a fi
   assert.match(fieldDisagreement(moved)[0],
     /^deploy\/dev\/README\.md's "Record what you saw" section's list is not the order the check reads the fields at state\n  the list says: state, id, evidence\n  a row of the witness writes: id, state, evidence$/)
 
-  const silent = drift({ said: 'Copy it to `' + commit + '` and read it back.' })
+  const silent = drift({ said: 'That writes `' + write + '`. Copy it to `' + commit + '` and read it back.' })
   assert.deepEqual(silent.silent, ['completed'])
   assert.match(fieldDisagreement(silent)[0], /never tells the operator to set completed/)
 
-  const unnamed = drift({ said: 'Then set `completed` to `true`, and read the copy back.' })
-  assert.deepEqual(unnamed.unnamedPath, [commit])
-  assert.match(fieldDisagreement(unnamed)[0], /does not name testdata/)
+  // #946: one path is not the other, and the finding was a section that named the copy and left the
+  // operator guessing where the document is written. Each arm here is that sentence losing one path.
+  const noWrite = drift({ said: 'Then set `completed` to `true`, copy it to `' + commit + '`, and\nread it back.' })
+  assert.deepEqual(noWrite.unnamed.map(one => one.file), [write])
+  assert.match(fieldDisagreement(noWrite)[0],
+    /does not name \.reports\/a-witness\.json outside a command, and it is the file an operator edits/)
+
+  const noCopy = drift({ said: 'That writes `' + write + '`. Then set `completed` to `true`\nand read it back.' })
+  assert.deepEqual(noCopy.unnamed.map(one => one.file), [commit])
+  assert.match(fieldDisagreement(noCopy)[0], /does not name testdata\/a-witness\.json outside a command/)
 
   // A path in the command is a path a shell is told, and the operator reading the section is not one.
   const commandOnly = drift({
-    said: 'Then set `completed` to `true`, and read the copy back.',
+    said: 'That writes `' + write + '`. Then set `completed` to `true` and read the copy back.',
     command: 'cp x ' + commit
   })
-  assert.deepEqual(commandOnly.unnamedPath, [commit])
-  assert.match(fieldDisagreement(commandOnly)[0], /does not name testdata.* outside a command/)
+  assert.deepEqual(commandOnly.unnamed.map(one => one.file), [commit])
+  assert.match(fieldDisagreement(commandOnly)[0], /does not name testdata\/a-witness\.json outside a command/)
 
   const howMissing = drift({}, { ...document, how: ['Keep the `id`, then write `evidence`.', 'Set `completed` true.'] })
   assert.deepEqual(howMissing.howMissing, ['state'])
@@ -765,7 +785,7 @@ test('the field comparison reports a missing bullet, a bullet for no field, a fi
 
   // A second list in the section is the stale copy an operator scrolls into, as a second table is one
   // bound over, so the section is held to one list rather than to its first.
-  assert.throws(() => fieldDrift(asPage() + '\n\n- `later`, a second list.', document, { witnessCommit: commit }),
+  assert.throws(() => fieldDrift(asPage() + '\n\n- `later`, a second list.', document, { witnessWrite: write, witnessCommit: commit }),
     /the section carries one list/, 'a second list in the section is a finding, not a list read twice')
 })
 
@@ -958,6 +978,53 @@ test('#944 the step the witness prints copies the document it wrote, and the cop
   assert.match(ran.stdout, /^known gap: /m, 'the one gap the step declared is the one the run accepted')
   assert.equal(fs.existsSync(path.join(dir, WITNESS_COMMIT)), true,
     'the step writes the copy itself: a reader who follows it copies nothing by hand')
+})
+
+// #946: the copy the last step makes is the record, so the path it names has to be one git sees. It
+// was not: `testdata/*.json` ignored the finished document, so an operator followed the step,
+// `git status` said nothing, and the witness a proof depends on never left that machine. Both paths
+// the step names are held here to the rules that decide it — the copy lands where a checkout holds it,
+// and the file it is written from stays out of git — because the finding was one rule that
+// reached a path no sentence expected it to.
+//
+// The rules are exercised in a throwaway repository seeded with this checkout's `.gitignore`, the way
+// `test/tooling/link-secrets.test.js` does it: a case about the rules reads them, not this worktree's
+// index, and a local `info/exclude` here cannot answer for the tree. `-q` is the question "is this
+// path ignored", and it is the one to ask: `-v` exits 0 for a path a `!` rule matches, so its status
+// says a rule matched and not that the path is ignored. `ruleFor` is read inside a failure message only.
+test('#946 the copy the step names is a path git does not ignore, and the file it is written from is one it does', () => {
+  const rules = path.join(ROOT, '.gitignore')
+  const tree = tempRoot('monoplayer-witness-ignore-')
+  // The repository is asserted into existence: a failed init makes every answer below exit 128, and a
+  // reader would be told the wrong path is tracked.
+  const init = spawnSync('git', ['init', '--quiet', tree], { encoding: 'utf8' })
+  assert.equal(init.status, 0, 'the throwaway repository holds the rules: ' + init.stderr)
+  fs.copyFileSync(rules, path.join(tree, '.gitignore'))
+
+  // The rule that matched, for a message. `-v` names it; only `-q` answers the question, above.
+  const ruleFor = candidate =>
+    spawnSync('git', ['-C', tree, 'check-ignore', '--no-index', '-v', '--', candidate], { encoding: 'utf8' }).stdout.trim()
+  const ignored = candidate => {
+    const { status, stderr } = spawnSync('git', ['-C', tree, 'check-ignore', '--no-index', '-q', '--', candidate], { encoding: 'utf8' })
+    // 0 is ignored and 1 is not: any other status is git failing, which is not an answer.
+    assert.ok(status === 0 || status === 1, 'git answers for ' + candidate + ': ' + stderr)
+    return status === 0
+  }
+
+  assert.equal(ignored(WITNESS_COMMIT), false, WITNESS_COMMIT + ' is ignored by ' +
+    ruleFor(WITNESS_COMMIT) + ', so the copy the last step makes is a record no checkout holds: teach ' +
+    '.gitignore to re-include it, and the copy step in src/driver/dev-proof.js is the sentence that names it')
+
+  // The other path is the one the rule is for, and it stays out of git: a case that only asked the
+  // first question would pass with .reports/ tracked.
+  assert.equal(ignored(WITNESS_WRITE), true, WITNESS_WRITE + ' is tracked, and .reports/ is where a ' +
+    'run leaves what git does not keep: the file an operator edits is WITNESS_WRITE in src/driver/dev-proof.js')
+
+  // The exception is the witness files and nothing else, so a run's report is still a run's to lose:
+  // a case that only asked the two questions above would pass with the whole rule deleted.
+  const report = 'testdata/driver-summary.json'
+  assert.equal(ignored(report), true, report + ' is ignored by ' + ruleFor(report) +
+    ', and a report a run writes stays ignored: the exception is a witness, not every .json under testdata/')
 })
 
 test('#923 a row\'s evidence and the failed list are copies too, and the log contradicts both by name', () => {
