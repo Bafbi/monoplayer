@@ -16,8 +16,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  UNMODDED_LIST_NAME, UNMODDED_PLACEHOLDER, UNMODDED_STATE_OK, UNMODDED_STEPS, UNMODDED_WITNESS_LANE,
-  formatUnmoddedPass, gapLine, staleLine, unmoddedWitness, verifyUnmoddedWitness,
+  GAP_STATE, UNMODDED_LIST_NAME, UNMODDED_PLACEHOLDER, UNMODDED_RECORD_STATES, UNMODDED_STATE_OK,
+  UNMODDED_STEPS, UNMODDED_WITNESS_FILE, UNMODDED_WITNESS_LANE, declaresGap,
+  formatUnmoddedExpectation, formatUnmoddedPass, gapLine, staleLine, unmoddedWitness, verifyUnmoddedWitness,
 } from '../../src/driver/checks.js'
 import { OPERATOR_LIST_NAME } from '../../src/driver/dev-proof.js'
 
@@ -198,7 +199,7 @@ const gapOf = (witness, id) => {
   return { id, claim: step.claim, openUntil: step.openUntil, evidence: row.evidence }
 }
 const notSeen = (witness, over = {}) => witness.steps.map(step => (step.id === DECLARED_STEP
-  ? { ...step, state: 'not-seen', evidence: 'relaunched, and the client reattached at the spawn point', ...over }
+  ? { ...step, state: GAP_STATE, evidence: 'relaunched, and the client reattached at the spawn point', ...over }
   : step))
 
 test('a step its list declares expected absent verifies when it is recorded not-seen, and the checklist names the step', () => {
@@ -287,6 +288,88 @@ test('\`--verify-g0\` refuses with this rule, and no longer on the flag alone', 
   assert.match(RUN, /unmoddedWitness\(\{ server, gateLane \}\)/, 'the checklist the lane writes is the checker\'s own document')
 })
 
+// #960: the refusal's second line is the sentence an operator reads to know what to write, and it
+// named `ok` as the only record. #943 made a `not-seen` a pass on a step the list declares expected
+// absent, so from that change the sentence sent an honest operator back to writing `ok` over a step
+// they did not see — the record the checklist forbids. It is now built beside the rule it describes,
+// out of the states the check accepts and the list that decides which of them apply. The path is the
+// command's, because this module names the file and only the command knows the directory.
+//
+// Every case here reads the whole line, out of the module's constants, the way the pass sentence's
+// case does: a fragment assertion leaves the rest of the sentence free to lose a fact the check
+// refuses a document on. The two exact lines spell their middle, because an exact-output case has to
+// — `lineEnding` is that shared fragment and derives nothing. The list each case reads is built
+// locally rather than taken from UNMODDED_STEPS, so the day a real step declares a gap the pair still
+// reads both worlds instead of going red on the change #943 and #960 exist for.
+const WITNESS_PATH = 'testdata/' + UNMODDED_WITNESS_FILE
+const expectation = (steps, gateLane = LANE) => formatUnmoddedExpectation({ witnessPath: WITNESS_PATH, gateLane, steps })
+const lineEnding = gateLane => ', completed true, and the lane "' + gateLane + '" the summary names.'
+// The records a sentence names, read from UNMODDED_RECORD_STATES rather than from a pair typed here:
+// a record the check takes and the line does not name is the defect #960 was filed about, and the two
+// cases below assert both directions over whatever that list holds.
+const named = line => UNMODDED_RECORD_STATES.filter(record => line.includes('`' + record + '`'))
+// One list per world, built from the module's list so a step added to it reaches these cases: declared
+// where DECLARED_STEP carries `openUntil`, and undeclared where no entry does.
+const undeclaredList = () => UNMODDED_STEPS.map(({ openUntil, ...step }) => step)
+const withRecord = (witness, state) => ({
+  ...witness,
+  steps: witness.steps.map(step => (step.id === DECLARED_STEP ? { ...step, state, evidence: 'what I saw: ' + state } : step))
+})
+
+test('the refusal names both records a declared step accepts, and the checker takes either', () => {
+  const line = expectation(declaredList())
+  assert.equal(line, 'Expected ' + WITNESS_PATH + ' with lane "' + UNMODDED_WITNESS_LANE + '", one row per step ' +
+    'recorded `' + UNMODDED_STATE_OK + '`, or `' + GAP_STATE + '` on a step `' + UNMODDED_LIST_NAME +
+    '` declares expected absent with `openUntil`' + lineEnding(LANE),
+    'the whole sentence, out of the module\'s constants: ' + line)
+  assert.deepEqual(named(line), [...UNMODDED_RECORD_STATES], 'and every record the check takes is named: ' + line)
+  // What the check does with each record the line names, so the sentence and the rule cannot part in
+  // the accepting direction: the same witness, twice, and each record is a verdict that passes.
+  for (const state of named(line)) {
+    const verdict = verifyUnmoddedWitness(withRecord(recorded(), state), { steps: declaredList() })
+    assert.equal(verdict.ok, true, 'the check takes `' + state + '` on the declared step: ' + verdict.reason)
+  }
+})
+
+test('a list declaring no gap is told one record, and the checker refuses the other', () => {
+  const line = expectation(undeclaredList())
+  assert.equal(line, 'Expected ' + WITNESS_PATH + ' with lane "' + UNMODDED_WITNESS_LANE + '", one row per step ' +
+    'recorded `' + UNMODDED_STATE_OK + '`' + lineEnding(LANE),
+    'one record, because this list accepts one: ' + line)
+  assert.deepEqual(named(line), [UNMODDED_STATE_OK], 'and the gap is not offered: ' + line)
+  assert.ok(!line.includes('openUntil'), 'nor the declaration to look for, which nothing declares: ' + line)
+  // The refusing direction: every record the line leaves out is a verdict the check refuses, so a
+  // sentence that dropped one would be describing a document this run will not take.
+  for (const state of UNMODDED_RECORD_STATES.filter(entry => !named(line).includes(entry))) {
+    const verdict = verifyUnmoddedWitness(withRecord(recorded(), state), { steps: undeclaredList() })
+    assert.equal(verdict.ok, false, 'a `' + state + '` the line does not name is refused: ' + verdict.reason)
+  }
+})
+
+test('the line reads the list the check reads, when the caller names none', () => {
+  // src/driver/run.js hands no `steps`, so the default is what an operator is answered with. The
+  // equality below holds the default's output; it cannot hold that the default is UNMODDED_STEPS,
+  // because a list with no declaration would word the same sentence, so the declaration is read here.
+  assert.match(CHECKS, /export function formatUnmoddedExpectation \(\{ witnessPath, gateLane, steps = UNMODDED_STEPS \}\)/,
+    'the default is the list verifyUnmoddedWitness reads by default')
+  assert.equal(formatUnmoddedExpectation({ witnessPath: WITNESS_PATH, gateLane: LANE }), expectation(UNMODDED_STEPS),
+    'and a caller that names no list gets that list\'s sentence')
+})
+
+test('a declaration carrying null is no declaration, on every side of the question', () => {
+  // The two tests of it disagreed before #960 hoisted one out of gapSplit's closure: the split read
+  // null as undeclared and the checklist writer read it as declared, then reached closes(null) and
+  // threw before it printed anything. The one predicate settles it in the direction that refuses
+  // rather than the one that crashes.
+  const nulled = () => UNMODDED_STEPS.map(step => (step.id === DECLARED_STEP ? { ...step, openUntil: null } : step))
+  assert.equal(declaresGap(nulled().find(step => step.id === DECLARED_STEP)), false, 'the predicate reads it as no declaration')
+  assert.deepEqual(named(expectation(nulled())), [UNMODDED_STATE_OK], 'so the line offers one record')
+  const verdict = verifyUnmoddedWitness(withRecord(recorded(), GAP_STATE), { steps: nulled() })
+  assert.equal(verdict.ok, false, 'and the check refuses the gap it does not declare: ' + verdict.reason)
+  assert.ok(!unmoddedWitness({ server: SERVER, steps: nulled() }).limitations.some(entry => entry.includes('expected to be ' + GAP_STATE)),
+    'and the checklist prints no gap line for a step nothing declares')
+})
+
 // #963: the G0 pass printed one sentence and named nothing about the gap it accepted, so a pass over
 // a declared hole read exactly like a pass where every step held — and a declaration its witness had
 // outlived was invisible to everybody. The verdict now carries the two lists and src/driver/checks.js
@@ -357,6 +440,27 @@ test('a declaration its witness outlived is printed, names the list to edit, and
   // what a run can see — the step held — and names the ticket a reviewer checks, which is the answer
   // #963 allows when the state is out of reach.
   assert.doesNotMatch(lines[1], /#647 lands/, 'and it claims nothing about a ticket it cannot read')
+})
+
+test('`--verify-g0` prints the expectation line the module words, and types no record of its own', () => {
+  // The argument is the path the function already resolved, not a second spelling of it: the shorthand
+  // is what makes that checkable, because `witnessPath: 'text'` would read the same to this file.
+  assert.match(RUN, /formatUnmoddedExpectation\(\{ witnessPath, gateLane: summary\.gateLane \}\)/,
+    'the command prints what the module words, and hands it the path and the lane it resolved')
+  // #960's third acceptance: the reason is printed first and the command still exits 1, so the
+  // expectation extends that refusal rather than replacing it.
+  const reasonAt = RUN.indexOf('NOT COMPLETE: ${witnessVerdict.reason}')
+  const expectationAt = RUN.indexOf('formatUnmoddedExpectation({')
+  assert.ok(reasonAt !== -1, 'the check\'s reason is still the first line')
+  assert.ok(expectationAt > reasonAt, 'and the expectation follows it: ' + reasonAt + ' then ' + expectationAt)
+  assert.match(RUN.slice(expectationAt), /^[\s\S]{0,400}?return 1/, 'and the refusal still returns 1')
+  assert.doesNotMatch(RUN, /one row per step recorded/,
+    'the sentence that named one record is gone from the command, not reworded there')
+  // The two constants the typed sentence retyped, banned at the site that retyped them rather than in
+  // the whole command: a later line in run.js that legitimately spells one is not this case's business.
+  const block = RUN.slice(RUN.indexOf('NOT COMPLETE:'), RUN.indexOf('Generate a checklist first'))
+  assert.ok(block.length > 0, 'the refusal block is the span between the reason and the advice')
+  assert.doesNotMatch(block, /"unmodded"|`ok`/, 'and it spells neither constant: ' + block)
 })
 
 test('`--verify-g0` prints the formatter’s lines, words nothing itself, and still exits 0', () => {
