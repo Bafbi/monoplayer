@@ -32,6 +32,7 @@ import { replayFrames } from '../core/join-synth.js'
 import { createOfflineFrontLeg } from '../legs/live-front.js'
 import { createRig } from './rig.js'
 import { createLoopbackLane, droppedReconnect } from './loopback-lane.js'
+import { recordAttachCut } from './online.js'
 import { offlineUuid } from '../legs/offline-identity.js'
 import { sameUuid } from '../custody/util.js'
 import { createWireChecker } from '../core/wire-check.js'
@@ -448,10 +449,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
       throw new Error('the loopback journal did not open: ' + journal.stats().disabledReason)
     }
 
-    // #683: every replay the core performs is published with the cache as it stood
-    // when it was built, so O27 below can check the N13 frame cut against the real
-    // client's decode without this rung taking a copy of its own.
-    const attachCuts = []
     // #21: the gate is answered before the dial resolves, because the fake
     // backend withholds finish_configuration until the accept arrives. It is read
     // at the step between the dial and the warm wait, which is where O32 wants it.
@@ -535,11 +532,17 @@ export async function runLoopback (argv = process.argv.slice(2)) {
         evidence.gate = gateAtConnect
       }
     })
-    // #683: the cut of every attach this lane performed, from the core's own publish:
-    // the snapshot the replay was built from, the pose it was built with, and the
-    // frames it wrote. Registered before the first client exists, because a listener
-    // that arrives after an attach has missed it.
-    main.core.on('attach', event => attachCuts.push(event))
+    // #683: the cut of the first attach this lane performed, from the core's own
+    // publish: the snapshot the replay was built from, the pose it was built with, and
+    // the frames it wrote. Registered before the first client exists, because a
+    // listener that arrives after an attach has missed it.
+    //
+    // #954: the cut belongs to the first attach. O27 and O28 compare the frames a
+    // client decoded against the replay that produced them, and this rig reattaches
+    // later, so the second replay is different frames. recordAttachCut is the rule's
+    // one home, and it is the online rung's too (#934); test/ladder/loopback-cut.test.js
+    // holds this file to it.
+    const attachCutOf = recordAttachCut(main.core)
     fake = main.base
     front = main.front
     backend = main.backend
@@ -836,8 +839,12 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // where K is the number of parity frames the replay sent. The assumption is
     // that the client decodes exactly the replay, in replay order; a real
     // protocol bot is the only place to observe it.
-    const firstCut = attachCuts[0] ?? null
-    const replayedParityNames = firstCut ? parityReplayNames(firstCut.frames) : []
+    //
+    // #954: the cut is read once, here, and O28 reads the same value below. One
+    // attach has happened by now and the reader keeps that one for the rest of the
+    // run, so a second call would be a second name for the same event.
+    const firstAttach = attachCutOf()
+    const replayedParityNames = firstAttach ? parityReplayNames(firstAttach.frames) : []
     const capturedParityNamesSoFar = () => bot1.playNames()
       .filter(name => PARITY_FRAME_NAMES.has(name))
       .slice(0, replayedParityNames.length)
@@ -865,7 +872,6 @@ export async function runLoopback (argv = process.argv.slice(2)) {
     // The cache holds spawn x=0, three +1 deltas, then a correction to x=10. A
     // replay that puts every absolute before every delta applies the deltas on
     // top of the correction and lands at 13 (issue #35).
-    const firstAttach = attachCuts[0] ?? null
     const replayedNames = firstAttach ? parityReplayNames(firstAttach.frames) : []
     if (replayedNames.length > 0) {
       await bot1.waitFor(

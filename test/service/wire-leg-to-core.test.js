@@ -440,8 +440,9 @@ test('#592 the ritual has one home: no lane registers the core\'s call-ins by ha
   // a lane that neither registers nor subscribes records nothing, and its parity rung fails on
   // the empty cut.
   const ATTACH_SUBSCRIBERS = {
-    // The main rig's O27 and O28, and the entity rig's O51.
-    'src/ladder/loopback.js': 2,
+    // The entity rig's O51. The main rig's O27 and O28 read the cut through
+    // recordAttachCut, which owns the subscription (src/ladder/online.js, #954).
+    'src/ladder/loopback.js': 1,
     // N13's cut. This is the lane #683 deleted the attach wrapper from: the 1 counts a
     // subscription to the `attach` event, and BY_HAND above is why it is not a registration.
     'src/ladder/online.js': 1
