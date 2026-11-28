@@ -6,7 +6,7 @@ Monoplayer exports OpenTelemetry logs and metrics over OTLP/HTTP JSON, and write
 
 | Signal | Transport | Content |
 | --- | --- | --- |
-| Logs | OTLP/HTTP JSON, `POST <endpoint>/v1/logs` | Lifecycle events (`start`, `attach`, `detach`, `backendLogin`, denials, shutdown). Never one record per frame. The skin reports through five events: `puppetSkinKnown`, `puppetSkinSent`, `puppetSkinRefused`, `puppetSkinWithheld`, and `puppetSkinUnidentified`. `docs/transparency.md` gives each one's fields. |
+| Logs | OTLP/HTTP JSON, `POST <endpoint>/v1/logs` | Lifecycle events (`start`, `attach`, `detach`, `backendLogin`, denials, shutdown). Never one record per frame. A skin record is one of the `puppetSkin*` and `spectatorSkin*` events, and `docs/transparency.md` gives each one's fields. |
 | Metrics | OTLP/HTTP JSON, `POST <endpoint>/v1/metrics` | Frame counters, attach and denial counters, replay and wire counters, heartbeat gauges. |
 | Journal | Local NDJSON | Every backend and front frame, plus lifecycle events and the heartbeat's `channels` event. |
 
