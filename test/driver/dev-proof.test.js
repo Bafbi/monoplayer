@@ -474,11 +474,13 @@ test('the witness it generates names the expected gap out of the module, so the 
   assert.match(lines[0], /not-seen/, 'and the state to record it in')
 })
 
+const WITNESS_SECTION = 'Record what you saw'
+
 // The labels the page tells the operator to look for are this module's, and it is the module that
 // prints them: renaming a line would leave the page describing output nobody sees. The table guard
 // reads cells, not paragraphs, so nothing compared the prose that describes these two lines.
 test('the runbook names the lines a gapped proof prints, and the labels come from this module', () => {
-  const page = section(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'), 'Record what you saw')
+  const page = section(fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8'), WITNESS_SECTION)
   const report = verdict(readingOf(run()))
 
   const gapped = witnessed()
@@ -490,6 +492,281 @@ test('the runbook names the lines a gapped proof prints, and the labels come fro
   for (const label of ['known gap:', 'stale declaration:']) {
     assert.ok(page.includes(label), 'the runbook tells the operator the line to look for: ' + label)
   }
+})
+
+// #945: the page's list of what to write, held to the row the check reads — #921's cost. #921 was
+// filed because this section said what to do and never named the `id`, so a tidy-up lost it and an
+// honest run was refused with `carries no step id`. The wording was repaired by hand and nothing
+// kept it: the record table and the step table are compared cell by cell, and no cell comparison
+// reaches a paragraph.
+//
+// What this reads, both ways: the bullets under "Record what you saw", in the order they are written,
+// against the keys of the rows `witnessDocument` writes, less `claim`. `claim` is left out
+// because no refusal reads it — it is the label the report prints beside a step, so a page asking the
+// operator to write it would ask for a field the check never looks at. The page's side is read as
+// bullets inside the section and never as the page: for a row's field the list is the only place it
+// can be answered, and a name left in the sentence above it answers for nothing, which is #830's hole
+// one bound over.
+//
+// The order is the row literal's, and that is the one false red this guard can give: reorder the keys
+// of the row `witnessDocument` writes and the page is asked to follow, while the check's own order
+// has not moved. The other way to get an order is a scan of `stepRefusal` and `verifyWitness`
+// for the names they read, and a scan of a function's body reads English — a claim about a name that
+// greps is a claim about a sentence. So the row is the source, as #945 asks, and the limit is written
+// here instead of implied. A field the check *stopped* reading still fails its own case in this file,
+// and that is what keeps the row from being a silent second list.
+//
+// Two fields are asked for by name rather than derived, because neither is a row's: `completed`, the
+// flag the check refuses a document for leaving unset, and `WITNESS_COMMIT`, the file `--verify`
+// opens when it is given no `--witness`. Both are read out of the section's prose and not out of a
+// command in it: a path named only inside a fenced block is named to a shell, and the operator reading
+// the section is who has to be told. `completed` is the one hard name in this file, and the case
+// holds it to the module by asking the check to refuse it: the refusal prints the word, so a renamed
+// flag fails here instead of leaving the page asking for a field nobody reads.
+//
+// The generated document is read too, in the one direction it can be (#944). Its `how` steps are the
+// same instruction to the same operator, and #944's case runs the last of them: that is the path half,
+// and it says nothing about the four words beside it. So every field the page asks for is asked of the
+// document, in the same order. A word the document adds is its own — it writes the command and the
+// placeholder too — so only the names and their order are compared, which is the judgement
+// FAILURE_READS writes down one section over. A field the document names and no row carries is
+// therefore not a finding, and a field it drops is.
+//
+// The red is by construction: delete a bullet, and this fails naming the field.
+test('the runbook\'s "Record what you saw" lists the row\'s fields in the order the check reads them, and the generated steps agree', () => {
+  const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'dev', 'README.md'), 'utf8')
+  const document = witnessDocument(verdict(readingOf(run())))
+
+  // Both sides are read, or a section rewritten as prose would leave the comparison holding two empty
+  // lists and passing: `rowFields` throws on a witness with no row and `fieldBullets` on a section
+  // with no list, and this answers for the third shape, a row whose only key is `claim`.
+  assert.ok(rowFields(document).length > 0, 'a row of the generated witness carries the fields the check reads')
+  assert.deepEqual(fieldDisagreement(fieldDrift(readme, document)), [],
+    'the runbook\'s "Record what you saw" section and the witness disagree')
+
+  // The one name this file writes rather than imports, held to the module the other way: a field the
+  // check no longer refuses a document for leaving is a page asking for something nobody reads, and
+  // the refusal is where the module prints the word for it.
+  const unset = verifyWitness({ ...recorded(document), completed: false })
+  assert.equal(unset.ok, false, 'a document whose flag is unset is refused, so the flag is a field the check reads')
+  for (const field of DOCUMENT_FIELDS) {
+    assert.match(unset.reason, new RegExp(field),
+      'the refusal for an unset ' + field + ' names it: a renamed flag is an edit in verifyWitness, not on the page')
+  }
+})
+
+// The one field the operator writes that no row carries: `completed` is the document's, a flag set
+// by hand, and the section states it in prose rather than in the list above. The check reads two other
+// document fields, `lane` and `frames`, and an operator edits neither. Named here
+// because no row supplies it, for the reason FAILURE_READS is a table in this file: it is a decision
+// about what the guard reads, and the case above holds the name to the module that prints it.
+const DOCUMENT_FIELDS = ['completed']
+
+// The fields the rows of the witness carry, as the rows the module writes them: no list of them here,
+// so a field added to or renamed in `witnessDocument` reaches the page. `claim` is left out
+// because no refusal reads it, and the order is the row's own. Every row, not the first: a field one
+// step carries and the others do not is still a field the operator writes.
+function rowFields (document) {
+  const rows = Array.isArray(document?.steps) ? document.steps : []
+  assert.ok(rows.length > 0, 'the generated witness carries a row, so the page is held to the module\'s fields')
+  return [...new Set(rows.flatMap(row => Object.keys(row)))].filter(field => field !== 'claim')
+}
+
+// The section's list, as the field name each bullet opens with, in its order. Read as one run of
+// bullets inside the section and never as the page, for the reason `recordRows` keeps its own copy
+// of `section`: a name in the sentence above the list answers for nothing, and a second list in
+// the section is the stale copy an operator scrolls into, so the section carries one.
+function fieldBullets (text) {
+  const lines = text.split('\n')
+  const start = lines.findIndex(line => /^- /.test(line))
+  assert.notEqual(start, -1, 'the "' + WITNESS_SECTION + '" section carries the list of fields to write')
+  let end = start
+  while (end < lines.length && /^- /.test(lines[end])) end += 1
+  const later = lines.slice(end).filter(line => /^- /.test(line))
+  assert.deepEqual(later, [], 'the section carries one list: ' + later.length + ' bullet(s) sit under it')
+  return lines.slice(start, end).map(line => {
+    const name = line.match(/^- `([A-Za-z][A-Za-z0-9]*)`/)
+    assert.ok(name !== null, 'every bullet of the list opens with one field name in code: ' + line)
+    return name[1]
+  })
+}
+
+// The section without its commands, which is the half an operator reads. A path named only inside a
+// fenced block is named to a shell, and the person holding the file is not one.
+function prose (text) {
+  const kept = []
+  let inside = false
+  for (const line of text.split('\n')) {
+    if (line.trimStart().startsWith('```')) { inside = !inside; continue }
+    if (!inside) kept.push(line)
+  }
+  return kept.join('\n')
+}
+
+// The fields the document's own steps name, in the order it names them: the operator copies those steps
+// by hand, so the words have to be there, and in the order the rows are written. Split on everything
+// that is not a word rather than matched, so `id` is a word and not the middle of one. A field the
+// document names and no row carries is not this comparison's to report: the steps write a command and a
+// placeholder of their own, and only the names the page asks for are asked of them.
+function howFields (document, fields) {
+  const words = (Array.isArray(document?.how) ? document.how.join('\n') : '').split(/[^A-Za-z0-9]+/)
+  return fields
+    .map(field => ({ field, at: words.indexOf(field) }))
+    .filter(({ at }) => at !== -1)
+    .sort((one, other) => one.at - other.at)
+    .map(({ field }) => field)
+}
+
+// What the two surfaces disagree about, one list per repair: a field the page's list leaves out, a
+// bullet for a field no row carries, a field named twice, a list out of the order the check reads in, a
+// step of the generated document that names no field or names them in another order, a flag the section
+// never states, and a path it never names outside a command.
+function fieldDrift (text, document, { witnessCommit = WITNESS_COMMIT } = {}) {
+  const fields = rowFields(document)
+  const documentFields = DOCUMENT_FIELDS
+  const page = section(text, WITNESS_SECTION)
+  const bullets = fieldBullets(page)
+  const missing = fields.filter(field => !bullets.includes(field))
+  const unrowed = bullets.filter(field => !fields.includes(field))
+  const repeated = [...new Set(bullets.filter((field, at) => bullets.indexOf(field) !== at))]
+  // Order is asked only when the two sides hold the same names, once each: a field left out or named
+  // twice moves everything after it, and a list of moved names beside it would report one edit twice.
+  const sameFields = missing.length === 0 && unrowed.length === 0 && bullets.length === fields.length
+  const moved = sameFields
+    ? bullets.filter((field, at) => field !== fields[at]).map(field => ({ field, said: bullets, writes: fields }))
+    : []
+  // The document's own fields follow the row's, because a row is written first and the flag that
+  // completes the file is set last, on both surfaces.
+  const ordered = [...fields, ...documentFields]
+  const named = howFields(document, ordered)
+  const howMissing = ordered.filter(field => !named.includes(field))
+  const howMoved = howMissing.length === 0 ? named.filter((field, at) => field !== ordered[at]) : []
+  const said = prose(page)
+  return {
+    missing,
+    unrowed,
+    repeated,
+    moved,
+    howMissing,
+    howMoved,
+    silent: documentFields.filter(field => !said.includes(field)),
+    unnamedPath: said.includes(witnessCommit) ? [] : [witnessCommit]
+  }
+}
+
+// The edit each disagreement asks for, one sentence each, naming the field and the side it is on. A
+// message that said only "the page and the witness disagree" would leave the reader to work out which
+// of the eight edits is theirs, and which field.
+function fieldDisagreement ({ missing, unrowed, repeated, moved, howMissing, howMoved, silent, unnamedPath }) {
+  const where = 'deploy/dev/README.md\'s "' + WITNESS_SECTION + '" section'
+  return [
+    ...missing.map(field => where + ' has no bullet for ' + field +
+      ', which a row of the witness carries: name it in the list, in the order the check reads the fields'),
+    ...unrowed.map(field => where + ' asks for ' + field + ', and a row of the witness carries no such field: ' +
+      'the list is the row\'s fields, so state it in the section\'s prose, or add the field to the row'),
+    ...repeated.map(field => where + ' names ' + field + ' in more than one bullet: a field is one line of the ' +
+      'list, and two lines for one field say it twice'),
+    ...moved.map(({ field, said, writes }) => where + '\'s list is not the order the check reads the fields at ' +
+      field + '\n  the list says: ' + said.join(', ') + '\n  a row of the witness writes: ' + writes.join(', ')),
+    ...howMissing.map(field => 'the `how` steps of the generated witness (src/driver/dev-proof.js) do not ' +
+      'name ' + field + ', and ' + where + ' tells the operator to write it: one instruction in two places, ' +
+      'so the side that lost it is the edit'),
+    ...howMoved.map(field => 'the `how` steps of the generated witness (src/driver/dev-proof.js) name ' + field +
+      ' out of the order the rows are written in, and ' + where + ' lists it in that order: a person copies ' +
+      'those steps, so both surfaces say it once'),
+    ...silent.map(field => where + ' never tells the operator to set ' + field +
+      ': the check refuses a document that leaves it, and this section is where it is set'),
+    ...unnamedPath.map(file => where + ' does not name ' + file + ' outside a command, and it is the file ' +
+      '`--verify` opens when it is given no `--witness`: name it in the prose, or the copy step is ' +
+      'one a reader invents')
+  ]
+}
+
+// Fixtures, not the tree: the comparison is held by a page and a document built here, so a drift in
+// the runbook cannot make this case about the drift instead of the guard.
+test('the field comparison reports a missing bullet, a bullet for no field, a field named twice, a moved list, a step naming no field, a step naming them out of order, a silent flag, and a path named only in a command', () => {
+  const commit = 'testdata/a-witness.json'
+  const document = {
+    steps: [{ id: 'a-step', claim: 'a sentence', state: 'pending', evidence: '[MANUAL: what you saw]' }],
+    how: ['Keep the `id` and the `state`, then write `evidence`.', 'Set `completed` true, then run it.']
+  }
+  // The page the guard reads, with the parts a case edits as arguments. The sentence above the list
+  // names the same three fields, because that is the shape the tree holds: a reader that took the
+  // sentence would pass with every bullet gone, which is the hole the bullet reader closes.
+  const asPage = ({
+    bullets = ['id', 'state', 'evidence'],
+    said = 'Then set `completed` to `true`, copy it to `' + commit + '`, and read it back.',
+    command = 'node src/driver/dev-proof.js --verify'
+  } = {}) => [
+    '### ' + WITNESS_SECTION,
+    '',
+    'The check reads a row\'s `id` before anything else, then its `state` and `evidence`:',
+    '',
+    ...bullets.map(field => '- `' + field + '`, what it is.'),
+    '',
+    said,
+    '',
+    '```bash',
+    command,
+    '```'
+  ].join('\n')
+  const drift = (over = {}, changed = document) => fieldDrift(asPage(over), changed, { witnessCommit: commit })
+
+  assert.deepEqual(fieldDisagreement(drift()), [],
+    'the fixture agrees with itself, so each case below is about its own edit')
+  assert.deepEqual(fieldBullets(section(asPage(), WITNESS_SECTION)), ['id', 'state', 'evidence'],
+    'the reader answers with the bullets, and the sentence above them names the same three, which is what makes the next case an edit')
+  assert.doesNotMatch(prose(section(asPage(), WITNESS_SECTION)), /--verify/,
+    'the prose half leaves the command out, which is what the command-only case below rests on')
+
+  const missing = drift({ bullets: ['id', 'evidence'] })
+  assert.deepEqual(missing.missing, ['state'])
+  assert.match(fieldDisagreement(missing)[0], /^deploy\/dev\/README\.md's "Record what you saw" section has no bullet for state/)
+
+  const unrowed = drift({ bullets: ['id', 'state', 'evidence', 'completed'] })
+  assert.deepEqual(unrowed.unrowed, ['completed'])
+  assert.match(fieldDisagreement(unrowed)[0], /asks for completed, and a row of the witness carries no such field/)
+
+  // The arm a set comparison without a duplicate list passes: every field is there, the list is out of
+  // order, and the last bullet is one of them again.
+  const repeated = drift({ bullets: ['state', 'id', 'evidence', 'id'] })
+  assert.deepEqual(repeated.repeated, ['id'])
+  assert.deepEqual(repeated.moved, [], 'a list holding a field twice is the repeat\'s finding, and not two')
+  assert.match(fieldDisagreement(repeated)[0], /names id in more than one bullet/)
+
+  const moved = drift({ bullets: ['state', 'id', 'evidence'] })
+  assert.deepEqual(moved.moved.map(one => one.field), ['state', 'id'])
+  assert.match(fieldDisagreement(moved)[0],
+    /^deploy\/dev\/README\.md's "Record what you saw" section's list is not the order the check reads the fields at state\n  the list says: state, id, evidence\n  a row of the witness writes: id, state, evidence$/)
+
+  const silent = drift({ said: 'Copy it to `' + commit + '` and read it back.' })
+  assert.deepEqual(silent.silent, ['completed'])
+  assert.match(fieldDisagreement(silent)[0], /never tells the operator to set completed/)
+
+  const unnamed = drift({ said: 'Then set `completed` to `true`, and read the copy back.' })
+  assert.deepEqual(unnamed.unnamedPath, [commit])
+  assert.match(fieldDisagreement(unnamed)[0], /does not name testdata/)
+
+  // A path in the command is a path a shell is told, and the operator reading the section is not one.
+  const commandOnly = drift({
+    said: 'Then set `completed` to `true`, and read the copy back.',
+    command: 'cp x ' + commit
+  })
+  assert.deepEqual(commandOnly.unnamedPath, [commit])
+  assert.match(fieldDisagreement(commandOnly)[0], /does not name testdata.* outside a command/)
+
+  const howMissing = drift({}, { ...document, how: ['Keep the `id`, then write `evidence`.', 'Set `completed` true.'] })
+  assert.deepEqual(howMissing.howMissing, ['state'])
+  assert.match(fieldDisagreement(howMissing)[0], /generated witness \(src\/driver\/dev-proof\.js\) do not name state/)
+
+  const howMoved = drift({}, { ...document, how: ['Write `state` and `evidence` first.', 'Keep the `id`, then set `completed`.'] })
+  assert.deepEqual(howMoved.howMoved, ['state', 'evidence', 'id'])
+  assert.match(fieldDisagreement(howMoved)[0], /name state out of the order the rows are written in/)
+
+  // A second list in the section is the stale copy an operator scrolls into, as a second table is one
+  // bound over, so the section is held to one list rather than to its first.
+  assert.throws(() => fieldDrift(asPage() + '\n\n- `later`, a second list.', document, { witnessCommit: commit }),
+    /the section carries one list/, 'a second list in the section is a finding, not a list read twice')
 })
 
 // #963: the report walks the document as it stands, and the document a run writes first holds a
