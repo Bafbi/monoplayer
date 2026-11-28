@@ -541,7 +541,9 @@ first dial and its target warms in five seconds.
   parity frame names equal the first K parity frames the bot decoded, in order.
   N13 on the online rung compares one side of that cut, so a misaligned cut would
   fail a correct cache. The cut is the core's `attach` event (#683), so both sides
-  of it are the replay's own values.
+  of it are the replay's own values, and O27 and O28 read the first attach's cut
+  through `recordAttachCut` (#954), so the rig's later reattach cannot replace the
+  frames they compare.
 - `O28` the replay lands a moved entity where the backend put it. The fake
   spawns entity 99 at x=0, moves it three blocks with delta frames, then corrects
   it to x=10. The bot must decode x=10; a replay that puts every absolute before
