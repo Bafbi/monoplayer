@@ -57,8 +57,12 @@ export const withoutComments = text => text.split('\n')
 // block, because the claim is the value's and the block is what a reader reads for the value.
 //
 // What it does not handle: a block scalar whose content lines start with `#` and stands directly
-// under a key serves its body as prose. No manifest here does that today, and telling the two apart
-// needs a YAML reader this repo does not have.
+// under a key serves its body as prose. Telling the two apart needs a YAML reader this repo does not
+// have, and #1002 carries the manifest that writes the shape.
+//
+// A trailing comment is left in place too. `replicas: 1 # one pod` is data to every export here,
+// because none of them reads past a line's first character. `rules` refuses such a line rather than
+// guess at where the value ends.
 //
 // A document with no comment answers [], which a caller cannot tell from prose that moved. So a
 // guard that sweeps a document asserts it found a run.
