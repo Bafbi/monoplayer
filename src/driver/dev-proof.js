@@ -165,6 +165,11 @@ export const OPERATOR_STEPS = Object.freeze([
   { id: 'drawn-once', record: 'virtualPlayerWritten', claim: 'the driving client is drawn once, not twice: one body, and it is yours' }
 ])
 
+// Two homes for one document, and the split is the point (#946). `WITNESS_WRITE` is the file an
+// operator edits, and `.reports/` is where a run leaves what git does not keep. `WITNESS_COMMIT` is the
+// copy the proof depends on, so it has to be a file a checkout holds: `.gitignore` ignores a run's
+// report files by pattern and re-includes a witness by one, because a record only one machine holds
+// proves nothing once that machine is gone.
 export const WITNESS_LANE = 'dev-two-client'
 export const WITNESS_WRITE = '.reports/dev-two-client-witness.json'
 export const WITNESS_COMMIT = 'testdata/dev-two-client-witness.json'
@@ -476,6 +481,10 @@ function framesOf (report) {
 // beside the command is a copy they can skip (#944). The reader writes `WITNESS_WRITE` and the
 // default reads `WITNESS_COMMIT`, so the step names both and a renamed path reaches it. `source` is
 // the log the frames rows came from, or null for a reading from a pipe, which has no log to name.
+//
+// The copy is the one thing in this step that has to leave the machine, so it lands on a path a
+// checkout holds rather than in `.reports/` (#946): a copy git ignores records nothing, and a reader
+// finds out by watching `git status` stay silent about the thing they were told to keep.
 function finishStep (source) {
   return 'cp ' + WITNESS_WRITE + ' ' + WITNESS_COMMIT + ' && node src/driver/dev-proof.js --verify' +
     (source === null ? '' : ' --path ' + source)
@@ -504,7 +513,10 @@ export function witnessDocument (report, { now = new Date().toISOString(), sourc
       // piped reading has no log to name, and the step says so rather than printing a command that
       // would fail on a file this run never saved.
       'Set completed true, then run: ' + finishStep(source) +
-        '. The copy is the file --verify reads when no --witness is given. ' +
+        // #946: both paths are named here in prose as well as in the command below, so the step says the
+        // same two things the page does: which file is the record, and which one git does not keep.
+        '. The copy at ' + WITNESS_COMMIT + ' is the file to commit, and the file --verify reads when ' +
+        'no --witness is given. The file you edit is ' + WITNESS_WRITE + ', which git ignores. ' +
         (source === null
           ? 'This stream was piped in, so there is no log to re-read: save the next one with --path and the frames half is checkable.'
           : 'The frames half is re-read from that log, not taken on this one\'s word.')
