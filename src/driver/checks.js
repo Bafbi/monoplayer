@@ -294,6 +294,15 @@ export const declaredOf = step => ({ id: step.id, claim: step.claim, openUntil: 
 // third open state would be one line rather than a second set that happens to agree today.
 export const OPEN_STATES = new Set([undefined, 'pending'])
 
+// Whether a step's list entry declares it expected absent (#920, #943): the declaration that makes a
+// `not-seen` a pass, and the one question this module asks of it. Read by the split both witnesses
+// call, by the writer that tells an operator which steps may be recorded absent, and by the refusal's
+// expectation line (#960), which names the records a list accepts. One predicate, so the places
+// that need the answer cannot read it differently. This file's cases import it, and #986 makes
+// src/driver/dev-proof.js its second reader: that lane asks the same question three times today, in
+// the divergent spelling `!== undefined`, which reads a null declaration as a gap where this does not.
+export const declaresGap = step => (step.openUntil ?? null) !== null
+
 // The rows of a settled document, split four ways by whether the step's own list
 // declared it expected absent and what the operator recorded. This is the whole of
 // the rule, and it is the one function both witnesses call: a `not-seen` is the
@@ -310,13 +319,12 @@ export const OPEN_STATES = new Set([undefined, 'pending'])
 // gap the declaration names is not there today. Both passes carry it and neither refuses it — a fix
 // landing must not turn an honest record red (#920) — so a pass names it instead (#963).
 export function gapSplit (settled) {
-  const declares = step => (step.openUntil ?? null) !== null
-  const declared = settled.filter(declares)
+  const declared = settled.filter(declaresGap)
   const notSeen = settled.filter(step => step.state === GAP_STATE)
   return {
     declared,
-    gaps: notSeen.filter(declares),
-    unexpected: notSeen.filter(step => !declares(step)),
+    gaps: notSeen.filter(declaresGap),
+    unexpected: notSeen.filter(step => !declaresGap(step)),
     // Recorded, and not as the gap: an unrecorded row is nobody's declaration outlived. Both callers
     // refuse the open states before they split, so this list is also the one a finished witness makes.
     stale: declared.filter(step => step.state !== GAP_STATE && !OPEN_STATES.has(step.state))
@@ -399,6 +407,12 @@ export const UNMODDED_PLACEHOLDER = '[MANUAL'
 // failing states: a word nobody defined cannot be read as a pass.
 export const UNMODDED_STATE_OK = 'ok'
 
+// Every state a row may carry: the two the check takes, in one list. A state outside it is a
+// refusal whatever it means elsewhere (#943). The list is here so the check, the line an operator is
+// answered with (#960), and the case that holds the two together all read one set: a record added to
+// the rule and not to the sentence fails that case, which is the defect this file was filed about.
+export const UNMODDED_RECORD_STATES = Object.freeze([UNMODDED_STATE_OK, GAP_STATE])
+
 // The document `--lane unmodded` writes: every step pending, every row carrying the
 // placeholder, and `completed` false. Nothing in it is a pass. The operator's own
 // edits are the record, and the check reads those, not this file's prose.
@@ -442,7 +456,7 @@ export function unmoddedWitness ({ server = '', gateLane = '', now = new Date().
       'When every step carries a record — `' + UNMODDED_STATE_OK + '`, or `' + GAP_STATE + '` on a declared step — set completed true and copy this file to testdata/' + UNMODDED_WITNESS_FILE + '.',
       // #943: built from the declaration, so a step declared expected absent reaches this document
       // instead of leaving the operator to discover the rule in a refusal.
-      ...steps.filter(step => step.openUntil !== undefined).map(step =>
+      ...steps.filter(declaresGap).map(step =>
         'The step \'' + step.id + '\' is expected to be ' + GAP_STATE + ' today: ' + closes(step.openUntil) +
         '. Record it ' + GAP_STATE + ' with what you saw, and the check accepts that gap.')
     ]
@@ -576,7 +590,7 @@ export function verifyUnmoddedWitness (document, {
   if (placeholder.length > 0) {
     return refusal('the placeholder `' + UNMODDED_PLACEHOLDER + '` is not evidence: ' + namedIds(placeholder.map(step => step.id)))
   }
-  const unknown = settled.filter(step => step.state !== UNMODDED_STATE_OK && step.state !== GAP_STATE)
+  const unknown = settled.filter(step => !UNMODDED_RECORD_STATES.includes(step.state))
   if (unknown.length > 0) {
     return refusal('not ok: ' + unknown.map(step => '`' + step.id + '` is `' + String(step.state) + '` (' + step.evidence + ')').join('; '))
   }
@@ -598,6 +612,32 @@ export function verifyUnmoddedWitness (document, {
   // lane the two halves were bound by (#939). A refusal carries neither list: it stops before the
   // split, and its `reason` already names the step.
   return { ok: true, reason: null, gaps: gaps.map(declaredOf), stale: stale.map(declaredOf), gateLane: witnessLane }
+}
+
+// The line a refused G0 witness is answered with (#960): what a row of the document has to record, for
+// the witness the operator is holding. It is worded here, beside the rule it describes, because
+// src/driver/run.js cannot be imported by a test and a sentence typed there is a sentence nothing
+// holds. The sentence that named `ok` alone was true until a step of UNMODDED_STEPS declared its first
+// gap, and it goes wrong on the day one does: an operator holding a `not-seen` the check accepts is
+// told to write `ok` over a step they did not see, which is the record the checklist forbids (#943).
+//
+// The records are the ones the check accepts, and which of them apply is the list's own decision:
+// `not-seen` is a pass on a step declared expected absent and on no other, so a list that declares no
+// gap accepts one record and this line names one. The clause names the list rather than the row,
+// because a row cannot carry the declaration — the check overwrites whatever a row says with the
+// list's entry — and a sentence that told an operator to write `openUntil` into a row would be
+// refused for the line it was told to write, which is the defect this ticket is about.
+//
+// `witnessPath` is the caller's, because this module names the file and only the command knows the
+// directory the operator copies it to. `steps` is `UNMODDED_STEPS` for every caller in the tree; it
+// is a parameter so a case can read the line for a list that declares a gap before one does.
+export function formatUnmoddedExpectation ({ witnessPath, gateLane, steps = UNMODDED_STEPS }) {
+  const records = steps.some(declaresGap)
+    ? '`' + UNMODDED_STATE_OK + '`, or `' + GAP_STATE + '` on a step `' + UNMODDED_LIST_NAME +
+      '` declares expected absent with `openUntil`'
+    : '`' + UNMODDED_STATE_OK + '`'
+  return 'Expected ' + witnessPath + ' with lane "' + UNMODDED_WITNESS_LANE + '", one row per step recorded ' +
+    records + ', completed true, and the lane "' + gateLane + '" the summary names.'
 }
 
 // The unmodded half of the G0 command's pass (#963): the sentence, one line per gap it accepted, and

@@ -28,8 +28,8 @@ import { laneOfAddress, laneTargets, resolveGateLane } from './lane.js'
 import { createRcon } from './rcon.js'
 import { DEFAULT_PINS, runDriverLane } from './scenario.js'
 import {
-  verifyG0Evidence, verifyUnmoddedWitness, versionRefusal, unmoddedWitness, formatUnmoddedPass,
-  UNMODDED_WITNESS_FILE,
+  verifyG0Evidence, verifyUnmoddedWitness, versionRefusal, unmoddedWitness, formatUnmoddedExpectation,
+  formatUnmoddedPass, UNMODDED_WITNESS_FILE,
 } from './checks.js'
 import { redactSecrets } from '../observability/secrets.js'
 
@@ -450,8 +450,12 @@ async function verifyG0 (opts) {
   const witnessVerdict = verifyUnmoddedWitness(witness, { gateLane: summary.gateLane, maxAgeMs })
   if (!witnessVerdict.ok) {
     console.error(`NOT COMPLETE: ${witnessVerdict.reason}`)
-    console.error(`Expected ${TESTDATA}/${UNMODDED_WITNESS_FILE} with lane '"unmodded"', one row per step recorded ` +
-      '`ok`, completed true, and the lane "' + summary.gateLane + '" the summary names.')
+    // #960: the sentence is checks.js's, out of the records it accepts and the list that decides which
+    // of them apply, so the record vocabulary on the operator's terminal cannot drift from the rule
+    // the reason above it states. It covers the records, the lane kind the document carries and the
+    // lane the report set names — not the evidence or the date: the reason names each of those when it
+    // is what refused the document.
+    console.error(formatUnmoddedExpectation({ witnessPath, gateLane: summary.gateLane }))
     console.error('Generate a checklist first: node src/driver/run.js --lane unmodded')
     return 1
   }
