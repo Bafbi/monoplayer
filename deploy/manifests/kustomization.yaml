@@ -27,3 +27,7 @@ resources:
 # main references the moving `main` tag. The image workflow rebuilds the
 # `deploy` branch from main and appends an `images:` digest pin there, so this
 # file on main never carries a stale digest.
+
+images:
+  - name: ghcr.io/bafbi/monoplayer
+    digest: sha256:16fded99d02dd2f491c6d005ab7a4a43bb1244aaf34c7d3b97eea8b9c4e39e82
